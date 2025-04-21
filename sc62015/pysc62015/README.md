@@ -55,7 +55,7 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 
 ---
 
-## Opcode Info
+## Opcode Info (INCOMPLETE)
 
 **Notes:**
 
