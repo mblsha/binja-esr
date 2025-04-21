@@ -1,0 +1,18 @@
+{
+    "pluginmetadataversion": 2,
+    "name": "SC6xxxx Architecture Plugin",
+    "type": [
+        "architecture"
+    ],
+    "api": [
+        "python3"
+    ],
+    "platforms": [
+        "Windows",
+        "Linux",
+        "Darwin"
+    ],
+    "version": "1.0",
+    "author": "mblsha",
+    "minimumbinaryninjaversion": 776
+}
