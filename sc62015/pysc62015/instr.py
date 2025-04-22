@@ -1106,12 +1106,18 @@ class DADL(ArithmeticInstruction): pass
 class DSBL(ArithmeticInstruction): pass
 
 class LogicInstruction(Instruction): pass
-class AND(LogicInstruction): pass
-class OR(LogicInstruction): pass
-class XOR(LogicInstruction): pass
-class TEST(LogicInstruction): pass
+class AND(LogicInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.and_expr(1, il_arg1, il_arg2, "Z")
+class OR(LogicInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.or_expr(1, il_arg1, il_arg2, "Z")
+class XOR(LogicInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.xor_expr(1, il_arg1, il_arg2, "Z")
 
 class CompareInstruction(Instruction): pass
+class TEST(CompareInstruction): pass
 class CMP(CompareInstruction): pass
 class CMPW(CompareInstruction): pass
 class CMPP(CompareInstruction): pass
