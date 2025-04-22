@@ -253,9 +253,15 @@ def test_compare_opcodes():
         rendered_str = rendered_str.replace(", ", ",")
         assert rendered_str == s, f"Failed at line {i+1}: {s}"
 
+        # test that no assertions are raised
         info = MockAnalysisInfo()
         instr.analyze(info, 0x1234)
         assert info.length == len(b), f"Failed at line {i+1}: {s}"
 
-        il = MockLowLevelILFunction()
-        instr.lift(il, 0x1234)
+        try:
+            # test that no assertions are raised
+            il = MockLowLevelILFunction()
+            instr.lift(il, 0x1234)
+        except Exception as exc:
+            raise ValueError(f"Failed to lift {b.hex()} at line {i+1}: {s}") from exc
+

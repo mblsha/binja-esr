@@ -43,6 +43,10 @@ class Operand:
     def encode(self, encoder, addr):
         pass
 
+    # expand physical-encoding of operands into virtual printable operands
+    def operands(self):
+        yield self
+
     def lift(self, il):
         return il.unimplemented()
 
@@ -177,15 +181,16 @@ class Instruction:
             yield from ()
         else:
             for operand in self._operands:
-                yield operand
+                for op in operand.operands():
+                    yield op
 
     # physical opcode encoding order
     def operands_coding(self):
         if not self.ops_reversed:
-            return self.operands()
+            return self._operands
         # self.operands() is a generator
         # so we need to convert it to a list
-        ops = list(self.operands())
+        ops = list(self._operands)
         assert len(ops) == 2, "Expected 2 operands"
         return reversed(ops)
 
@@ -556,23 +561,25 @@ class RegPair(Reg3):
 
     def decode(self, decoder, addr):
         self.reg_raw = decoder.unsigned_byte()
-        self.reg1 = self.reg_name((self.reg_raw >> 4) & 7)
-        self.reg2 = self.reg_name(self.reg_raw & 7)
+        self.reg1 = Reg(REG_NAMES[(self.reg_raw >> 4) & 7])
+        self.reg2 = Reg(REG_NAMES[self.reg_raw & 7])
 
         # high-bits of both halves must be zero: 0x80 and 0x08 must not be set
         assert (self.reg_raw & 0x80) == 0, f"Invalid reg1 high bit: {self.reg1}"
         assert (self.reg_raw & 0x08) == 0, f"Invalid reg2 high bit: {self.reg2}"
 
-        # size1 = REG_SIZES[self.reg1]
-        # size2 = REG_SIZES[self.reg2]
-        # if self.size < size1 or self.size < size2:
-        #     raise ValueError(f"Want at least r2, instead got: reg1:{self.reg1} ({size1}), reg2:{self.reg2} ({size2})")
+    def operands(self):
+        yield self.reg1
+        yield self.reg2
 
     def encode(self, encoder, addr):
         encoder.unsigned_byte(self.reg_raw)
 
     def render(self):
-        return [TText(self.reg1), TSep(", "), TText(self.reg2)]
+        result = self.reg1.render()
+        result.append(TSep(", "))
+        result.extend(self.reg2.render())
+        return result
 
 class NOP(Instruction):
      def lift(self, il, addr):
@@ -651,8 +658,19 @@ class MoveInstruction(Instruction):
         raise NotImplementedError("dst() not implemented")
     def src(self):
         raise NotImplementedError("src() not implemented")
-class MV(MoveInstruction): pass # 8-bit move
-class MVW(MoveInstruction): pass # 16-bit move
+
+class MV(MoveInstruction):
+    def dst(self):
+        first, *rest = self.operands()
+        assert len(rest) == 1, f"Expected no extra operands, got: {rest}"
+        return first
+    def src(self):
+        _, second, *rest = self.operands()
+        assert len(rest) == 0, f"Expected no extra operands, got: {rest}"
+        return second
+    def lift(self, il, addr):
+        self.dst().lift_assign(il, self.src().lift(il))
+
 class MVP(MoveInstruction): pass # 20-bit move
 class MVLD(MoveInstruction): pass # Block move decrementing
 class MVL(MoveInstruction): pass
@@ -1320,16 +1338,16 @@ OPCODES = {
     0xC6: (CMPW, Opts(ops=[IMem16(), IMem16()])),
     0xC7: (CMPP, Opts(ops=[IMem20(), IMem20()])),
     0xC8: (MV, Opts(ops=[IMem8(), IMem8()])),
-    0xC9: (MVW, Opts(ops=[IMem16(), IMem16()])),
+    0xC9: (MV, Opts(name="MVW", ops=[IMem16(), IMem16()])),
     0xCA: (MVP, Opts(ops=[IMem20(), IMem20()])),
     0xCB: (MVL, Opts(ops=[IMem8(), IMem8()])),
     0xCC: (MV, Opts(ops=[IMem8(), Imm8()])),
-    0xCD: (MVW, Opts(ops=[IMem16(), Imm16()])),
+    0xCD: (MV, Opts(name="MVW", ops=[IMem16(), Imm16()])),
     0xCE: TCL,
     0xCF: (MVLD, Opts(ops=[IMem8(), IMem8()])),
     # D0h
     0xD0: (MV, Opts(ops=[IMem8(), EMemAddr()])),
-    0xD1: (MVW, Opts(ops=[IMem16(), EMemAddr()])),
+    0xD1: (MV, Opts(name="MVW", ops=[IMem16(), EMemAddr()])),
     0xD2: (MVP, Opts(ops=[IMem20(), EMemAddr()])),
     0xD3: (MVL, Opts(ops=[IMem8(), EMemAddr()])),
     0xD4: (DSBL, Opts(ops=[IMem8(), IMem8()])),
@@ -1337,7 +1355,7 @@ OPCODES = {
     0xD6: (CMPW, Opts(ops_reversed=True, ops=[IMem16(), Reg3()])),
     0xD7: (CMPP, Opts(ops_reversed=True, ops=[IMem20(), Reg3()])),
     0xD8: (MV, Opts(ops=[EMemAddr(), IMem8()])),
-    0xD9: (MVW, Opts(ops=[EMemAddr(), IMem16()])),
+    0xD9: (MV, Opts(name="MVW", ops=[EMemAddr(), IMem16()])),
     0xDA: (MVP, Opts(ops=[EMemAddr(), IMem20()])),
     0xDB: (MVL, Opts(ops=[EMemAddr(), IMem8()])),
     0xDC: (MVP, Opts(ops=[IMem20(), Imm20()])),
