@@ -237,6 +237,9 @@ class ImmOperand(Operand):
     def width(self):
         raise NotImplementedError("width not implemented for ImmOperand")
 
+    def lift(self, il):
+        return il.const(self.width(), self.value)
+
 
 # n: encoded as `n`
 class Imm8(ImmOperand):
@@ -255,9 +258,6 @@ class Imm8(ImmOperand):
 
     def render(self):
         return [TInt(f"{self.value:02X}")]
-
-    def lift(self, il):
-        return il.const(self.width(), self.value)
 
 # mn: encoded as `n m`
 class Imm16(ImmOperand):
@@ -1141,11 +1141,22 @@ class EXP(ExchangeInstruction): pass
 class EXL(ExchangeInstruction): pass
 
 class MiscInstruction(Instruction): pass
+class WAIT(MiscInstruction):
+    def lift(self, il, addr):
+        t = LowLevelILLabel()
+        f = LowLevelILLabel()
+
+        reg = Reg("I")
+        il.mark_label(f)
+        reg.lift_assign(il, il.sub(2, reg.lift(il), il.const(1, 1)))
+        cond = il.compare_equal(2, reg.lift(il), il.const(2, 0))
+        il.append(il.if_expr(cond, t, f))
+        il.mark_label(t)
+
 class PMDF(MiscInstruction): pass
 class SWAP(MiscInstruction): pass
 class HALT(MiscInstruction): pass
 class OFF(MiscInstruction): pass
-class WAIT(MiscInstruction): pass
 class IR(MiscInstruction): pass
 class RESET(MiscInstruction): pass
 class SC(MiscInstruction): pass
