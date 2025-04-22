@@ -1152,12 +1152,23 @@ class POPU(StackPopInstruction): pass
 class PUSHS(StackPushInstruction): pass
 class POPS(StackPopInstruction): pass
 
-class ArithmeticInstruction(Instruction): pass
-class ADD(ArithmeticInstruction): pass
-class ADC(ArithmeticInstruction): pass
+class ArithmeticInstruction(Instruction):
+    def width(self):
+        first, second = self.operands()
+        return first.width()
+class ADD(ArithmeticInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.add(self.width(), il_arg1, il_arg2, 'CZ')
+class ADC(ArithmeticInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.add(self.width(), il_arg1, il.add(self.width(), il_arg2, il.flag('C')), 'CZ')
 class ADCL(ArithmeticInstruction): pass
-class SUB(ArithmeticInstruction): pass
-class SBC(ArithmeticInstruction): pass
+class SUB(ArithmeticInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.sub(self.width(), il_arg1, il_arg2, 'CZ')
+class SBC(ArithmeticInstruction):
+    def lift_operation(self, il, il_arg1, il_arg2):
+        return il.sub(self.width(), il_arg1, il.add(self.width(), il_arg2, il.flag('C')), 'CZ')
 class SBCL(ArithmeticInstruction): pass
 class DADL(ArithmeticInstruction): pass
 class DSBL(ArithmeticInstruction): pass

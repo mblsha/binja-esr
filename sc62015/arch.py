@@ -47,12 +47,12 @@ class SC62015(Architecture):
     flag_write_types = [
         "Z",
         "C",
-        "ZC",
+        "CZ",
     ]
     flags_written_by_flag_write_type = {
         "Z": ["Z"],
         "C": ["C"],
-        "ZC": ["Z", "C"],
+        "CZ": ["Z", "C"],
     }
 
     def get_instruction_info(self, data, addr):
@@ -92,8 +92,7 @@ class SC62015(Architecture):
 
 
 class SC62015CallingConvention(CallingConvention):
-    pass
     # caller_saved_regs = ["R7", "R6"]
     # int_arg_regs = ["R5", "R4", "R3", "R2", "R1", "R0"]
-    # int_return_reg = "R0"
+    int_return_reg = "A"
     # high_int_return_reg = "R1"
