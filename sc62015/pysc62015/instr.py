@@ -559,8 +559,24 @@ class JP_Rel(JumpInstruction):
         dest = addr + self.length() + first.offset_value()
         info.add_branch(BranchType.TrueBranch, dest)
 
-class CallInstruction(Instruction): pass
-class CALL(CallInstruction): pass
+class CALL(Instruction):
+    def dest_addr(self, addr):
+        dest, *rest = self.operands()
+        assert len(rest) == 0, "Expected no extra operands"
+
+        result = dest.value
+        if dest.length() != 3:
+            assert dest.length() == 2
+            result = addr & 0xFF0000 | result
+        return result
+
+    def analyze(self, info, addr):
+        super().analyze(info, addr)
+        info.add_branch(BranchType.CallDestination, self.dest_addr(addr))
+
+    def lift(self, il, addr):
+        il.append(il.call(il.const_pointer(3, self.dest_addr(addr))))
+
 
 class RetInstruction(Instruction):
     def addr_size(self):
@@ -571,6 +587,7 @@ class RetInstruction(Instruction):
         info.add_branch(BranchType.FunctionReturn)
 
     def lift(self, il, addr):
+        # FIXME: should add bitmask for 2-byte pop?
         il.append(il.ret(il.pop(self.addr_size())))
 
 class RET(RetInstruction): pass
