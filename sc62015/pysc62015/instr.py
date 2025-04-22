@@ -358,13 +358,11 @@ class Reg3(Operand):
         return [TText(self.reg)]
 
 
-# External Memory: Absolute Addressing
+# External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
 class EMemAddr(Imm20):
-    """Access external memory using a 20-bit absolute address."""
     def render(self):
-        # Renders as "[0xXXXXX]"
-        return [TText("["), TInt(f"{self.value:05X}"), TText("]")]
+        return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
 
 class OperandHelper: pass
 
@@ -376,11 +374,11 @@ class EMemIMemOffsetHelper(OperandHelper):
         self.offset = offset
 
     def render(self):
-        result = [TText("[")]
+        result = [TBegMem(MemType.EXTERNAL),]
         result.extend(self.imem.render())
         if self.offset:
             result.extend(self.offset.render())
-        result.append(TText("]"))
+        result.append(TEndMem(MemType.EXTERNAL))
         return result
 
 # page 74 of the book
@@ -406,7 +404,7 @@ class EMemRegOffsetHelper(OperandHelper):
         self.offset = offset
 
     def render(self):
-        result = [TText("[")]
+        result = [TBegMem(MemType.EXTERNAL)]
         # switch based on self.mode
         if self.mode == EMemRegMode.SIMPLE:
             result.extend(self.reg.render())
@@ -424,7 +422,7 @@ class EMemRegOffsetHelper(OperandHelper):
             result.extend(self.offset.render())
         else:
             raise ValueError(f"Invalid mode: {self.mode}")
-        result.append(TText("]"))
+        result.append(TEndMem(MemType.EXTERNAL))
         return result
 
 

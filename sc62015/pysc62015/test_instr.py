@@ -61,7 +61,11 @@ def test_emem_reg():
     op = EMemReg()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.SIMPLE
-    assert op.render() == [TText("["), TText("X"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TText("X"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0x04])
@@ -71,7 +75,12 @@ def test_emem_reg():
     op = EMemReg()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.POST_INC
-    assert op.render() == [TText("["), TText("X"), TText("++"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TText("X"),
+        TText("++"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0x24])
@@ -81,7 +90,12 @@ def test_emem_reg():
     op = EMemReg()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.PRE_DEC
-    assert op.render() == [TText("["), TText("--"), TText("X"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TText("--"),
+        TText("X"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0x34])
@@ -92,7 +106,12 @@ def test_emem_reg():
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.POSITIVE_OFFSET
     assert op.offset.value == 0xBB
-    assert op.render() == [TText("["), TText("X"), TInt("+BB"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TText("X"),
+        TInt("+BB"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0x84, 0xBB])
@@ -103,7 +122,12 @@ def test_emem_reg():
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.NEGATIVE_OFFSET
     assert op.offset.value == 0xBB
-    assert op.render() == [TText("["), TText("X"), TInt("-BB"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TText("X"),
+        TInt("-BB"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0xC4, 0xBB])
@@ -115,16 +139,27 @@ def test_emem_imem():
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.SIMPLE
-    assert op.render() == [TText("["), TBegMem(MemType.INTERNAL), TInt("02"),
-                           TEndMem(MemType.INTERNAL), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TBegMem(MemType.INTERNAL),
+        TInt("02"),
+        TEndMem(MemType.INTERNAL),
+        TEndMem(MemType.EXTERNAL),
+    ]
 
     # POSITIVE_OFFSET
     decoder = Decoder(bytearray([0x80, 0x02, 0xBB]))
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.POSITIVE_OFFSET
-    assert op.render() == [TText("["), TBegMem(MemType.INTERNAL), TInt("02"),
-                           TEndMem(MemType.INTERNAL), TInt("+BB"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TBegMem(MemType.INTERNAL),
+        TInt("02"),
+        TEndMem(MemType.INTERNAL),
+        TInt("+BB"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0x80, 0x02, 0xBB])
@@ -134,8 +169,14 @@ def test_emem_imem():
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.NEGATIVE_OFFSET
-    assert op.render() == [TText("["), TBegMem(MemType.INTERNAL), TInt("02"),
-                           TEndMem(MemType.INTERNAL), TInt("-BB"), TText("]")]
+    assert op.render() == [
+        TBegMem(MemType.EXTERNAL),
+        TBegMem(MemType.INTERNAL),
+        TInt("02"),
+        TEndMem(MemType.INTERNAL),
+        TInt("-BB"),
+        TEndMem(MemType.EXTERNAL),
+    ]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
 
