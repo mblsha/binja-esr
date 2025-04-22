@@ -256,6 +256,8 @@ class Imm8(ImmOperand):
     def render(self):
         return [TInt(f"{self.value:02X}")]
 
+    def lift(self, il):
+        return il.const(self.width(), self.value)
 
 # mn: encoded as `n m`
 class Imm16(ImmOperand):
@@ -437,6 +439,12 @@ class Reg3(Operand):
 class EMemAddr(Imm20):
     def render(self):
         return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
+
+    def lift(self, il):
+        return il.load(self.width(), il.const_pointer(3, self.value))
+
+    def lift_assign(self, il, value):
+        il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
 class OperandHelper: pass
 
