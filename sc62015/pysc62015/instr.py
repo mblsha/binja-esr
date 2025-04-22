@@ -613,20 +613,48 @@ class NOP(Instruction):
         il.append(il.nop())
 
 class JumpInstruction(Instruction):
+    def lift_jump_addr(self, il, addr):
+        raise NotImplementedError("lift_jump_addr() not implemented")
+
     def analyze(self, info, addr):
         super().analyze(info, addr)
-        # expect TrueBranch to be handled by subclasses
+        # expect TrueBranch to be handled by subclasses as it might require
+        # llil logic to calculate the address
         info.add_branch(BranchType.FalseBranch, addr + self.length())
+
+
+    def lift(self, il, addr):
+        if_true  = LowLevelILLabel()
+        if_false = LowLevelILLabel()
+
+        if self._cond:
+            zero = il.const(1, 0)
+            one  = il.const(1, 1)
+            flag = il.flag("Z") if "Z" in self._cond else il.flag("C")
+            value = one if "N" in self._cond else zero
+
+            cond = il.compare_equal(1, flag, value)
+            il.append(il.if_expr(cond, if_true, if_false))
+
+        il.mark_label(if_true)
+        il.append(il.jump(self.lift_jump_addr(il, addr)))
+        il.mark_label(if_false)
+
 
 class JP_Abs(JumpInstruction):
     def name(self):
         return super().name() + (self._cond if self._cond else "")
 
-    def analyze(self, info, addr):
-        super().analyze(info, addr)
+    def lift_jump_addr(self, il,  addr):
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
+        return first.lift(il)
 
+    def analyze(self, info, addr):
+        super().analyze(info, addr)
+
+        first, *rest = self.operands()
+        assert len(rest) == 0, "Expected no extra operands"
         if isinstance(first, ImmOperand):
             # absolute address
             dest = first.value
@@ -635,6 +663,11 @@ class JP_Abs(JumpInstruction):
 class JP_Rel(JumpInstruction):
     def name(self):
         return "JR" + (self._cond if self._cond else "")
+
+    def lift_jump_addr(self, il, addr):
+        first, *rest = self.operands()
+        assert len(rest) == 0, "Expected no extra operands"
+        return il.const_pointer(3, addr + self.length() + first.value)
 
     def analyze(self, info, addr):
         super().analyze(info, addr)
@@ -1073,6 +1106,9 @@ class MV_F8(MoveInstruction):
 class PRE(Instruction):
     def name(self):
         return f"PRE{self.opcode:02x}"
+    def lift(self, il, addr):
+        # FIXME: ignore PRE for now
+        pass
 
 class StackInstruction(Instruction):
     def reg(self):
@@ -1117,7 +1153,11 @@ class XOR(LogicInstruction):
         return il.xor_expr(1, il_arg1, il_arg2, "Z")
 
 class CompareInstruction(Instruction): pass
-class TEST(CompareInstruction): pass
+class TEST(CompareInstruction):
+    def lift(self, il, addr):
+        first, second = self.operands()
+        il.append(il.set_flag("Z", il.and_expr(3, first.lift(il), second.lift(il))))
+
 class CMP(CompareInstruction): pass
 class CMPW(CompareInstruction): pass
 class CMPP(CompareInstruction): pass

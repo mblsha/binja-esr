@@ -25,7 +25,7 @@ class MockLowLevelILFunction(LowLevelILFunction):
     def mark_label(self, *args, **kwargs):
         pass
 
-    def if_expr(self, size, cond, t, f):
+    def if_expr(self, cond, t, f):
         pass
 
     def append(self, *args, **kwargs):

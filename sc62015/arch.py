@@ -81,14 +81,14 @@ class SC62015(Architecture):
             log_error(f"SC62015.get_instruction_text() failed at {addr:#x}: {exc}")
 
     def get_instruction_low_level_il(self, data, addr, il):
-        try:
-            if decoded := decode(data, addr, OPCODES):
-                decoded.lift(il, addr)
-                return decoded.length()
-        except Exception as exc:
-            log_error(
-                f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}"
-            )
+        # try:
+        if decoded := decode(data, addr, OPCODES):
+            decoded.lift(il, addr)
+            return decoded.length()
+        # except Exception as exc:
+        #     log_error(
+        #         f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}"
+        #     )
 
 
 class SC62015CallingConvention(CallingConvention):
