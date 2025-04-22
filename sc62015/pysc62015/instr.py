@@ -369,8 +369,9 @@ class RegF(Reg):
     def lift_assign(self, il, value):
         # FIXME: likely wrong
         il.append(il.set_reg(self.reg_size(), LLIL_TEMP(0), value))
-        il.append(il.set_flag("C", il.and_expr(1, LLIL_TEMP(0), il.const(1, 1))))
-        il.append(il.set_flag("Z", il.and_expr(1, LLIL_TEMP(0), il.const(1, 2))))
+        tmp = il.reg(self.reg_size(), LLIL_TEMP(0))
+        il.append(il.set_flag("C", il.and_expr(1, tmp, il.const(1, 1))))
+        il.append(il.set_flag("Z", il.and_expr(1, tmp, il.const(1, 2))))
 
 class Reg3(Operand):
     def __init__(self):
