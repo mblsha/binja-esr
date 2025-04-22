@@ -457,6 +457,12 @@ class Reg3(Operand):
     def render(self):
         return [TReg(self.reg)]
 
+    def lift(self, il):
+        return il.reg(self.width(), self.reg)
+
+    def lift_assign(self, il, value):
+        il.append(il.set_reg(self.width(), self.reg, value))
+
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
 class EMemAddr(Imm20):

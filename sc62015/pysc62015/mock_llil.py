@@ -7,14 +7,22 @@ from dataclasses import dataclass
 from typing import Any, List, Dict
 
 
-class MockArch:
-    def get_reg_index(self, *args, **kwargs):
-        print("get_reg_index", args, kwargs)
-        return 0
+@dataclass
+class MockReg:
+    name: str
 
-    def get_flag_by_name(self, *args, **kwargs):
-        print("get_flag_by_name", args, kwargs)
-        return 0
+
+@dataclass
+class MockFlag:
+    name: str
+
+
+class MockArch:
+    def get_reg_index(self, name):
+        return MockReg(name)
+
+    def get_flag_by_name(self, name):
+        return MockFlag(name)
 
 
 class MockHandle:
@@ -27,7 +35,12 @@ class MockLLIL:
     ops: List[Any]
     meta: Dict[str, Any]
 
-def mlil(op, ops=[], meta={}):
+
+def mreg(name):
+    return MockReg(name)
+
+
+def mllil(op, ops=[], meta={}):
     if meta is None:
         meta = {}
     return MockLLIL(op, ops, meta)

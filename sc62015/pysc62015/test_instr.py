@@ -11,7 +11,7 @@ from .instr import (
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
 from .mock_analysis import MockAnalysisInfo
-from .mock_llil import MockLowLevelILFunction, MockLLIL, mlil
+from .mock_llil import MockLowLevelILFunction, MockLLIL, mllil, mreg
 
 import os
 
@@ -191,12 +191,21 @@ def test_inc_lifting():
     il = MockLowLevelILFunction()
     instr.lift(il, 0x1234)
     assert il.ils == [
-        mlil(
-            "ADD",
-            [mlil("UNIMPL"), mlil("CONST", [1], {"size": 1})],
-            {"size": 1, "flags": "Z"},
-        ),
-        mlil("UNIMPL"),
+        mllil(
+            "SET_REG",
+            [
+                mreg("A"),
+                mllil(
+                    "ADD",
+                    [
+                        mllil("REG", [mreg("A")], {"size": 1}),
+                        mllil("CONST", [1], {"size": 1}),
+                    ],
+                    {"size": 1, "flags": "Z"},
+                ),
+            ],
+            {"flags": 0, "size": 1},
+        )
     ]
 
 
