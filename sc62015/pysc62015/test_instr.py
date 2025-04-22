@@ -8,7 +8,7 @@ from .instr import (
     EMemIMem,
     EMemIMemMode,
 )
-from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType
+from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
 from .analysis import MockAnalysisInfo
 
@@ -39,7 +39,7 @@ def test_mvi():
     assert instr.render() == [
         TInstr("MV"),
         TSep("    "),
-        TText("A"),
+        TReg("A"),
         TSep(", "),
         TInt("AA"),
     ]
@@ -49,7 +49,7 @@ def test_mvi():
     assert instr.render() == [
         TInstr("MV"),
         TSep("    "),
-        TText("IL"),
+        TReg("IL"),
         TSep(", "),
         TInt("AA"),
     ]
@@ -63,7 +63,7 @@ def test_emem_reg():
     assert op.mode == EMemRegMode.SIMPLE
     assert op.render() == [
         TBegMem(MemType.EXTERNAL),
-        TText("X"),
+        TReg("X"),
         TEndMem(MemType.EXTERNAL),
     ]
     encoder = Encoder()
@@ -77,7 +77,7 @@ def test_emem_reg():
     assert op.mode == EMemRegMode.POST_INC
     assert op.render() == [
         TBegMem(MemType.EXTERNAL),
-        TText("X"),
+        TReg("X"),
         TText("++"),
         TEndMem(MemType.EXTERNAL),
     ]
@@ -93,7 +93,7 @@ def test_emem_reg():
     assert op.render() == [
         TBegMem(MemType.EXTERNAL),
         TText("--"),
-        TText("X"),
+        TReg("X"),
         TEndMem(MemType.EXTERNAL),
     ]
     encoder = Encoder()
@@ -108,7 +108,7 @@ def test_emem_reg():
     assert op.offset.value == 0xBB
     assert op.render() == [
         TBegMem(MemType.EXTERNAL),
-        TText("X"),
+        TReg("X"),
         TInt("+BB"),
         TEndMem(MemType.EXTERNAL),
     ]
@@ -124,7 +124,7 @@ def test_emem_reg():
     assert op.offset.value == 0xBB
     assert op.render() == [
         TBegMem(MemType.EXTERNAL),
-        TText("X"),
+        TReg("X"),
         TInt("-BB"),
         TEndMem(MemType.EXTERNAL),
     ]

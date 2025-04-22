@@ -319,7 +319,7 @@ class Reg(Operand):
         self.reg = reg
 
     def render(self):
-        return [TText(self.reg)]
+        return [TReg(self.reg)]
 
 
 class Reg3(Operand):
@@ -355,7 +355,7 @@ class Reg3(Operand):
         encoder.unsigned_byte(byte)
 
     def render(self):
-        return [TText(self.reg)]
+        return [TReg(self.reg)]
 
 
 # External Memory: Absolute Addressing using 20-bit address
@@ -980,10 +980,13 @@ class PRE(Instruction):
         return f"PRE{self.opcode:02x}"
 
 class StackInstruction(Instruction): pass
-class PUSHU(StackInstruction): pass # User stack
-class POPU(StackInstruction): pass # User stack
-class PUSHS(StackInstruction): pass # System stack
-class POPS(StackInstruction): pass # System stack
+class UserStackInstruction(StackInstruction): pass
+class PUSHU(UserStackInstruction): pass
+class POPU(UserStackInstruction): pass
+
+class SystemStackInstruction(StackInstruction): pass
+class PUSHS(SystemStackInstruction): pass
+class POPS(SystemStackInstruction): pass
 
 class ArithmeticInstruction(Instruction): pass
 class ADD(ArithmeticInstruction): pass
