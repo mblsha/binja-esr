@@ -184,10 +184,10 @@ class Instruction:
     def render(self):
         tokens = [TInstr(self.name())]
         if len(self._operands) > 0:
-            tokens.append(TSep(" "))
+            tokens.append(TSep(" " * (6 - len(self.name()))))
         for index, operand in enumerate(self.operands()):
             if index > 0:
-                tokens.append(TSep(","))
+                tokens.append(TSep(", "))
             tokens += operand.render()
         return tokens
 
@@ -522,7 +522,7 @@ class RegPair(Reg3):
         encoder.unsigned_byte(self.reg_raw)
 
     def render(self):
-        return [TText(self.reg1), TSep(","), TText(self.reg2)]
+        return [TText(self.reg1), TSep(", "), TText(self.reg2)]
 
 class NOP(Instruction):
      def lift(self, il, addr):
@@ -642,7 +642,7 @@ class MVL_56(MoveInstruction):
         result.append(TSep(" "))
 
         result.extend(self.dst.render())
-        result.append(TSep(","))
+        result.append(TSep(", "))
 
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         result.extend(op.render())
@@ -685,7 +685,7 @@ class MVL_5E(MoveInstruction):
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         result.extend(op.render())
 
-        result.append(TSep(","))
+        result.append(TSep(", "))
         result.extend(self.src.render())
         return result
 
@@ -730,7 +730,7 @@ class MVL_F3(MoveInstruction):
         result = super().render()
         result.append(TSep(" "))
         result.extend(self.dst.render())
-        result.append(TSep(","))
+        result.append(TSep(", "))
 
         op = EMemIMemOffsetHelper(self.src, self.offset)
         result.extend(op.render())
@@ -780,7 +780,7 @@ class MVL_FB(MoveInstruction):
         op = EMemIMemOffsetHelper(self.dst, self.offset)
         result.extend(op.render())
 
-        result.append(TSep(","))
+        result.append(TSep(", "))
         result.extend(self.src.render())
         return result
 
@@ -824,7 +824,7 @@ class MV_E0(MoveInstruction):
         result = super().render()
         result.append(TSep(" "))
         result.extend(self.dst.render())
-        result.append(TSep(","))
+        result.append(TSep(", "))
 
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         result.extend(op.render())
@@ -871,7 +871,7 @@ class MV_E8(MoveInstruction):
 
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         result.extend(op.render())
-        result.append(TSep(","))
+        result.append(TSep(", "))
 
         result.extend(self.src.render())
         return result
@@ -919,7 +919,7 @@ class MV_F0(MoveInstruction):
         result = super().render()
         result.append(TSep(" "))
         result.extend(self.dst.render())
-        result.append(TSep(","))
+        result.append(TSep(", "))
 
         op = EMemIMemOffsetHelper(self.src, self.offset)
         result.extend(op.render())
@@ -969,7 +969,7 @@ class MV_F8(MoveInstruction):
 
         op = EMemIMemOffsetHelper(self.dst, self.offset)
         result.extend(op.render())
-        result.append(TSep(","))
+        result.append(TSep(", "))
 
         result.extend(self.src.render())
         return result

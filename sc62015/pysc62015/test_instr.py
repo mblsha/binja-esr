@@ -27,10 +27,10 @@ def test_nop():
 def test_jp_abs():
     instr = decode(bytearray([0x02, 0xAA, 0xBB]), 0x1234, OPCODES)
     assert instr.name() == "JP"
-    assert instr.render() == [TInstr("JP"), TSep(" "), TInt("BBAA")]
+    assert instr.render() == [TInstr("JP"), TSep("    "), TInt("BBAA")]
 
     instr = decode(bytearray([0x03, 0xAA, 0xBB, 0x0C]), 0x1234, OPCODES)
-    assert instr.render() == [TInstr("JPF"), TSep(" "), TInt("CBBAA")]
+    assert instr.render() == [TInstr("JPF"), TSep("   "), TInt("CBBAA")]
 
 
 def test_mvi():
@@ -38,9 +38,9 @@ def test_mvi():
     assert instr.name() == "MV"
     assert instr.render() == [
         TInstr("MV"),
-        TSep(" "),
+        TSep("    "),
         TText("A"),
-        TSep(","),
+        TSep(", "),
         TInt("AA"),
     ]
 
@@ -48,9 +48,9 @@ def test_mvi():
     assert instr.name() == "MV"
     assert instr.render() == [
         TInstr("MV"),
-        TSep(" "),
+        TSep("    "),
         TText("IL"),
-        TSep(","),
+        TSep(", "),
         TInt("AA"),
     ]
 
@@ -202,8 +202,11 @@ def test_compare_opcodes():
             raise ValueError(f"Failed to render {b.hex()} at line {i+1}: {s}") from exc
         if not rendered:
             raise ValueError(f"Failed to render {b.hex()} at line {i+1}: {s}")
-        # assert instr.name() == s.split()[0], f"Failed at line {i+1}: {s}"
-        assert asm_str(rendered) == s, f"Failed at line {i+1}: {s}"
+
+        rendered_str = asm_str(rendered)
+        rendered_str = " ".join(rendered_str.split())
+        rendered_str = rendered_str.replace(", ", ",")
+        assert rendered_str == s, f"Failed at line {i+1}: {s}"
 
         info = MockAnalysisInfo()
         instr.analyze(info, 0x1234)
