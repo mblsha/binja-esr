@@ -1,5 +1,5 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from .tokens import Token, TInstr, TText, TSep, TInt, TAddr, TReg
+from .tokens import Token, TInstr, TText, TSep, TInt, TAddr, TReg, TBegMem, TEndMem, MemType
 from .coding import Decoder, Encoder, BufferTooShort
 from .analysis import BranchType
 
@@ -297,17 +297,19 @@ class ImmOffset(Imm8):
 # Read 8 bits from internal memory based on Imm8 address.
 class IMem8(Imm8):
     def render(self):
-        return [TInt(f"({self.value:02X})")]
+        return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"),
+                TEndMem(MemType.INTERNAL)]
 
 # Read 16 bits from internal memory based on Imm8 address.
 class IMem16(Imm8):
     def render(self):
-        return [TInt(f"({self.value:02X})")]
+        return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"),
+                TEndMem(MemType.INTERNAL)]
 
 # Read 20 bits from internal memory based on Imm8 address.
 class IMem20(Imm8):
     def render(self):
-        return [TInt(f"({self.value:02X})")]
+        return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"), TEndMem(MemType.INTERNAL)]
 
 
 # Register operand encoded as part of the instruction opcode

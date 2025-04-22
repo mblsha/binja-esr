@@ -8,7 +8,7 @@ from .instr import (
     EMemIMem,
     EMemIMemMode,
 )
-from .tokens import TInstr, TSep, TText, TInt, asm_str
+from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType
 from .coding import Decoder, Encoder
 from .analysis import MockAnalysisInfo
 
@@ -115,14 +115,16 @@ def test_emem_imem():
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.SIMPLE
-    assert op.render() == [TText("["), TInt("(02)"), TText("]")]
+    assert op.render() == [TText("["), TBegMem(MemType.INTERNAL), TInt("02"),
+                           TEndMem(MemType.INTERNAL), TText("]")]
 
     # POSITIVE_OFFSET
     decoder = Decoder(bytearray([0x80, 0x02, 0xBB]))
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.POSITIVE_OFFSET
-    assert op.render() == [TText("["), TInt("(02)"), TInt("+BB"), TText("]")]
+    assert op.render() == [TText("["), TBegMem(MemType.INTERNAL), TInt("02"),
+                           TEndMem(MemType.INTERNAL), TInt("+BB"), TText("]")]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
     assert encoder.buf == bytearray([0x80, 0x02, 0xBB])
@@ -132,7 +134,8 @@ def test_emem_imem():
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.NEGATIVE_OFFSET
-    assert op.render() == [TText("["), TInt("(02)"), TInt("-BB"), TText("]")]
+    assert op.render() == [TText("["), TBegMem(MemType.INTERNAL), TInt("02"),
+                           TEndMem(MemType.INTERNAL), TInt("-BB"), TText("]")]
     encoder = Encoder()
     op.encode(encoder, 0x1234)
 

@@ -5,6 +5,8 @@ try:
 except ImportError:
     InstructionTextToken = None
 
+import enum
+
 
 def token(kind, text, *data):
     if InstructionTextToken is None:
@@ -108,6 +110,43 @@ class TInt(Token):
         return (InstructionTextTokenType.IntegerToken, str(self.value))
 
 
+class MemType(enum.Enum):
+    INTERNAL = 0
+    EXTERNAL = 1
+
+
+class TBegMem(Token):
+    def __init__(self, mem_type):
+        self.mem_type = mem_type
+
+    def __repr__(self):
+        return "TBegMem({self.mem_type})"
+
+    def __str__(self):
+        if self.mem_type == MemType.EXTERNAL:
+            return "["
+        return "("
+
+    def binja(self):
+        return (InstructionTextTokenType.BeginMemoryOperandToken, self.__str__())
+
+
+class TEndMem(Token):
+    def __init__(self, mem_type):
+        self.mem_type = mem_type
+
+    def __repr__(self):
+        return "TEndMem({self.mem_type})"
+
+    def __str__(self):
+        if self.mem_type == MemType.EXTERNAL:
+            return "]"
+        return ")"
+
+    def binja(self):
+        return (InstructionTextTokenType.EndMemoryOperandToken, self.__str__())
+
+
 class TAddr(Token):
     def __init__(self, value):
         self.value = value
@@ -121,6 +160,7 @@ class TAddr(Token):
     def binja(self):
         return (InstructionTextTokenType.PossibleAddressToken, str(self.value))
 
+
 class TReg(Token):
     def __init__(self, reg):
         self.reg = reg
@@ -133,4 +173,3 @@ class TReg(Token):
 
     def binja(self):
         return (InstructionTextTokenType.RegisterToken, self.reg)
-
