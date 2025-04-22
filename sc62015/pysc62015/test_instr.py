@@ -13,6 +13,8 @@ from .coding import Decoder, Encoder
 from .mock_analysis import MockAnalysisInfo
 from .mock_llil import MockLowLevelILFunction
 
+import os
+
 
 def test_operand():
     op = Operand()
@@ -185,7 +187,8 @@ def test_emem_imem():
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
 def opcode_generator():
-    with open("opcodes.txt") as f:
+    dirname = os.path.dirname(__file__)
+    with open(os.path.join(dirname, "opcodes.txt")) as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
