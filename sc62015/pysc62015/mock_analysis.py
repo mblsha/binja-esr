@@ -1,4 +1,3 @@
-import enum
 from .binja_api import *
 
 from binaryninja.enums import BranchType

@@ -10,7 +10,8 @@ from .instr import (
 )
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
-from .analysis import MockAnalysisInfo
+from .mock_analysis import MockAnalysisInfo
+from .mock_llil import MockLowLevelILFunction
 
 
 def test_operand():
@@ -255,3 +256,6 @@ def test_compare_opcodes():
         info = MockAnalysisInfo()
         instr.analyze(info, 0x1234)
         assert info.length == len(b), f"Failed at line {i+1}: {s}"
+
+        il = MockLowLevelILFunction()
+        instr.lift(il, 0x1234)

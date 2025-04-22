@@ -1,12 +1,19 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
 from .tokens import Token, TInstr, TText, TSep, TInt, TAddr, TReg, TBegMem, TEndMem, MemType
 from .coding import Decoder, Encoder, BufferTooShort
-from .analysis import BranchType
+from .mock_analysis import BranchType
 
 import copy
 from dataclasses import dataclass
 from typing import Optional, List, Literal
 import enum
+
+from .binja_api import *
+from binaryninja.lowlevelil import (
+    LowLevelILLabel,
+    LLIL_TEMP,
+)
+
 
 # mapping to size, page 67 of the book
 REGISTERS = [
@@ -339,6 +346,14 @@ class RegIMR(Reg):
     def reg_size(self):
         return 1
 
+# only makes sense for MV
+class RegB(Reg):
+    def __init__(self):
+        super().__init__("B")
+
+    def reg_size(self):
+        return 1
+
 # only makes sense for PUSHU / POPU / PUSHS / POPS
 class RegF(Reg):
     def __init__(self):
@@ -353,8 +368,9 @@ class RegF(Reg):
 
     def lift_assign(self, il, value):
         # FIXME: likely wrong
-        il.append(il.set_flag("C", il.and_expr(value, il.const(1, 1))))
-        il.append(il.set_flag("Z", il.and_expr(value, il.const(1, 2))))
+        il.append(il.set_reg(self.reg_size(), LLIL_TEMP(0), value))
+        il.append(il.set_flag("C", il.and_expr(1, LLIL_TEMP(0), il.const(1, 1))))
+        il.append(il.set_flag("Z", il.and_expr(1, LLIL_TEMP(0), il.const(1, 2))))
 
 class Reg3(Operand):
     def __init__(self):
@@ -1024,8 +1040,7 @@ class StackPushInstruction(StackInstruction):
 class StackPopInstruction(StackInstruction):
     def lift(self, il, addr):
         r = self.reg()
-        il_value = il.pop(r.reg_size())
-        r.lift_assign(il, il_value)
+        r.lift_assign(il, il.pop(r.reg_size()))
 
 # FIXME: should use U pointer, not S
 class PUSHU(StackPushInstruction): pass
@@ -1214,8 +1229,8 @@ OPCODES = {
     0x71: (AND, Opts(ops=[IMem8(), Imm8()])),
     0x72: (AND, Opts(ops=[EMemAddr(), Imm8()])),
     0x73: (AND, Opts(ops=[IMem8(), Reg("A")])),
-    0x74: (MV, Opts(ops=[Reg("A"), Reg("B")])),
-    0x75: (MV, Opts(ops=[Reg("B"), Reg("A")])),
+    0x74: (MV, Opts(ops=[Reg("A"), RegB()])),
+    0x75: (MV, Opts(ops=[RegB(), Reg("A")])),
     0x76: (AND, Opts(ops=[IMem8(), IMem8()])),
     0x77: (AND, Opts(ops=[Reg("A"), IMem8()])),
     0x78: (OR, Opts(ops=[Reg("A"), Imm8()])),
@@ -1325,7 +1340,7 @@ OPCODES = {
     0xDA: (MVP, Opts(ops=[EMemAddr(), IMem20()])),
     0xDB: (MVL, Opts(ops=[EMemAddr(), IMem8()])),
     0xDC: (MVP, Opts(ops=[IMem20(), Imm20()])),
-    0xDD: (EX, Opts(ops=[Reg("A"), Reg("B")])),
+    0xDD: (EX, Opts(ops=[Reg("A"), RegB()])),
     0xDE: HALT,
     0xDF: OFF,
     # E0h
