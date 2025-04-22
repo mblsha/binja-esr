@@ -1203,8 +1203,12 @@ class DSRL(ShiftRotateInstruction): pass
 class DSLL(ShiftRotateInstruction): pass
 
 class IncDecInstruction(Instruction): pass
-class INC(IncDecInstruction): pass
-class DEC(IncDecInstruction): pass
+class INC(IncDecInstruction):
+    def lift_operation(self, il, il_arg):
+        return il.add(1, il_arg, il.const(1, 1), 'Z')
+class DEC(IncDecInstruction):
+    def lift_operation(self, il, il_arg):
+        return il.sub(1, il_arg, il.const(1, 1), 'Z')
 
 class ExchangeInstruction(Instruction): pass
 class EX(ExchangeInstruction): pass
