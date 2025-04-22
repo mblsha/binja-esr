@@ -80,6 +80,7 @@ def create_instruction(decoder, opcodes):
     cls, opts = definition if isinstance(definition, tuple) else (definition, Opts())
 
     name = opts.name or cls.__name__.split("_")[0]
+    # since the operands are values and not constructors, we need to copy them
     ops = [copy.deepcopy(op) for op in (opts.ops or [])]
     return cls(name, operands=ops, cond=opts.cond, ops_reversed=opts.ops_reversed)
 
@@ -321,6 +322,39 @@ class Reg(Operand):
     def render(self):
         return [TReg(self.reg)]
 
+    def reg_size(self):
+        return REG_SIZES[self.reg]
+
+    def lift(self, il):
+        return il.reg(self.reg_size(), self.reg)
+
+    def lift_assign(self, il, value):
+        il.append(il.set_reg(self.reg_size(), self.reg, value))
+
+# only makes sense for PUSHU / POPU
+class RegIMR(Reg):
+    def __init__(self):
+        super().__init__("IMR")
+
+    def reg_size(self):
+        return 1
+
+# only makes sense for PUSHU / POPU / PUSHS / POPS
+class RegF(Reg):
+    def __init__(self):
+        super().__init__("F")
+
+    def reg_size(self):
+        return 1
+
+    def lift(self, il):
+        # FIXME: likely wrong
+        return il.or_expr(1, il.flag("C"), il.shift_left(1, 1, il.flag("Z")))
+
+    def lift_assign(self, il, value):
+        # FIXME: likely wrong
+        il.append(il.set_flag("C", il.and_expr(value, il.const(1, 1))))
+        il.append(il.set_flag("Z", il.and_expr(value, il.const(1, 2))))
 
 class Reg3(Operand):
     def __init__(self):
@@ -356,7 +390,6 @@ class Reg3(Operand):
 
     def render(self):
         return [TReg(self.reg)]
-
 
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
@@ -979,14 +1012,27 @@ class PRE(Instruction):
     def name(self):
         return f"PRE{self.opcode:02x}"
 
-class StackInstruction(Instruction): pass
-class UserStackInstruction(StackInstruction): pass
-class PUSHU(UserStackInstruction): pass
-class POPU(UserStackInstruction): pass
+class StackInstruction(Instruction):
+    def reg(self):
+        r, *rest = self.operands()
+        assert len(rest) == 0, "Expected no extra operands"
+        return r
+class StackPushInstruction(StackInstruction):
+    def lift(self, il, addr):
+        r = self.reg()
+        il.append(il.push(r.reg_size(), r.lift(il)))
+class StackPopInstruction(StackInstruction):
+    def lift(self, il, addr):
+        r = self.reg()
+        il_value = il.pop(r.reg_size())
+        r.lift_assign(il, il_value)
 
-class SystemStackInstruction(StackInstruction): pass
-class PUSHS(SystemStackInstruction): pass
-class POPS(SystemStackInstruction): pass
+# FIXME: should use U pointer, not S
+class PUSHU(StackPushInstruction): pass
+class POPU(StackPopInstruction): pass
+
+class PUSHS(StackPushInstruction): pass
+class POPS(StackPopInstruction): pass
 
 class ArithmeticInstruction(Instruction): pass
 class ADD(ArithmeticInstruction): pass
@@ -1093,8 +1139,8 @@ OPCODES = {
     0x2B: (PUSHU, Opts(ops=[Reg("I")])),
     0x2C: (PUSHU, Opts(ops=[Reg("X")])),
     0x2D: (PUSHU, Opts(ops=[Reg("Y")])),
-    0x2E: (PUSHU, Opts(ops=[Reg("F")])),
-    0x2F: (PUSHU, Opts(ops=[Reg("IMR")])),
+    0x2E: (PUSHU, Opts(ops=[RegF()])),
+    0x2F: (PUSHU, Opts(ops=[RegIMR()])),
     # 30h
     0x30: PRE,
     0x31: PRE,
@@ -1110,8 +1156,8 @@ OPCODES = {
     0x3B: (POPU, Opts(ops=[Reg("I")])),
     0x3C: (POPU, Opts(ops=[Reg("X")])),
     0x3D: (POPU, Opts(ops=[Reg("Y")])),
-    0x3E: (POPU, Opts(ops=[Reg("F")])),
-    0x3F: (POPU, Opts(ops=[Reg("IMR")])),
+    0x3E: (POPU, Opts(ops=[RegF()])),
+    0x3F: (POPU, Opts(ops=[RegIMR()])),
     # 40h
     0x40: (ADD, Opts(ops=[Reg("A"), Imm8()])),
     0x41: (ADD, Opts(ops=[IMem8(), Imm8()])),
@@ -1128,7 +1174,7 @@ OPCODES = {
     0x4C: (SUB, Opts(ops=[RegPair(size=2)])),
     0x4D: (SUB, Opts(ops=[RegPair(size=3)])),
     0x4E: (SUB, Opts(ops=[RegPair(size=1)])),
-    0x4F: (PUSHS, Opts(ops=[Reg("F")])),
+    0x4F: (PUSHS, Opts(ops=[RegF()])),
     # 50h
     0x50: (ADC, Opts(ops=[Reg("A"), Imm8()])),
     0x51: (ADC, Opts(ops=[IMem8(), Imm8()])),
@@ -1145,7 +1191,7 @@ OPCODES = {
     0x5C: (SBCL, Opts(ops=[IMem8(), IMem8()])),
     0x5D: (SBCL, Opts(ops=[IMem8(), Reg("A")])),
     0x5E: MVL_5E,
-    0x5F: (POPS, Opts(ops=[Reg("F")])),
+    0x5F: (POPS, Opts(ops=[RegF()])),
     # 60h
     0x60: (CMP, Opts(ops=[Reg("A"), Imm8()])),
     0x61: (CMP, Opts(ops=[IMem8(), Imm8()])),
