@@ -11,7 +11,7 @@ from .instr import (
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
 from .mock_analysis import MockAnalysisInfo
-from .mock_llil import MockLowLevelILFunction
+from .mock_llil import MockLowLevelILFunction, MockLLIL, mlil
 
 import os
 
@@ -184,6 +184,22 @@ def test_emem_imem():
     op.encode(encoder, 0x1234)
 
 
+def test_inc_lifting():
+    instr = decode(bytearray([0x6C, 0x00]), 0x1234, OPCODES)
+    assert asm_str(instr.render()) == "INC   A"
+
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+    assert il.ils == [
+        mlil(
+            "ADD",
+            [mlil("UNIMPL"), mlil("CONST", [1], {"size": 1})],
+            {"size": 1, "flags": "Z"},
+        ),
+        mlil("UNIMPL"),
+    ]
+
+
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
 def opcode_generator():
@@ -267,4 +283,3 @@ def test_compare_opcodes():
             instr.lift(il, 0x1234)
         except Exception as exc:
             raise ValueError(f"Failed to lift {b.hex()} at line {i+1}: {s}") from exc
-

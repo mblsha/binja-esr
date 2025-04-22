@@ -34,11 +34,13 @@ REG_NAMES = [reg[0] for reg in REGISTERS]
 REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
 
 # map internal memory to start at this address
+# FIXME: not sure whether it overlaps with the external memory, need testing
+# on real hardware.
 INTERNAL_MEMORY_START = 0xFFFFF + 1
 IMEM_NAMES = {
-    0xEC: "BP", # RAM Base Pointer
-    0xED: "PX", # RAM PX Pointer
-    0xEE: "PY", # RAM PY Pointer
+    0xEC: "BP",  # RAM Base Pointer
+    0xED: "PX",  # RAM PX Pointer
+    0xEE: "PY",  # RAM PY Pointer
     0xEF: "AMC", # ADR Modify Control
     0xF0: "KOL", # Key Output Buffer H
     0xF1: "KOH", # Key Output Buffer L
