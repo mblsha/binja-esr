@@ -9,6 +9,8 @@ from binaryninja.types import Symbol, Type
 from binaryninja.enums import SegmentFlag, SymbolType
 from binaryninja.enums import SymbolType, SegmentFlag, SectionSemantics, Endianness
 
+from .pysc62015.instr import INTERNAL_MEMORY_START, IMEM_NAMES
+
 
 @dataclass
 class Segment:
@@ -16,6 +18,7 @@ class Segment:
     start: int
     length: int
     data_offset: Optional[int]
+    data_length: Optional[int]
     flags: SegmentFlag
     semantics: SectionSemantics
 
@@ -54,24 +57,48 @@ class SC62015View(BinaryView):
                 0xE0000,
                 0x20000,
                 0,
+                None,
                 SegmentFlag.SegmentReadable | SegmentFlag.SegmentExecutable,
                 SectionSemantics.ReadOnlyCodeSectionSemantics,
             )
         )
 
+        segments.append(
+            Segment(
+                f"Internal RAM",
+                INTERNAL_MEMORY_START,
+                0xFF,
+                None,
+                0,
+                SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
+                SectionSemantics.ReadWriteDataSectionSemantics,
+            )
+        )
+
         for s in segments:
-            self.add_auto_segment(s.start, s.length, s.data_offset, s.length, s.flags)
+            data_offset = s.data_offset if s.data_offset is not None else 0
+            data_length = s.data_length if s.data_length is not None else s.length
+            self.add_auto_segment(s.start, s.length, data_offset, data_length, s.flags)
             self.add_auto_section(s.name, s.start, s.length, s.semantics)
+
+        for addr, name in IMEM_NAMES.items():
+            full_addr = INTERNAL_MEMORY_START + addr
+            self.define_data_var(full_addr, f"uint8_t", name)
+
 
         self._interrupt_vector = self.read_int(0xFFFFA, 3)
         self._entry_point = self.read_int(0xFFFFD, 3)
 
-        self.define_auto_symbol(Symbol(SymbolType.FunctionSymbol,
-                                       self._interrupt_vector, 'interrupt_vector'))
+        self.define_auto_symbol(
+            Symbol(
+                SymbolType.FunctionSymbol, self._interrupt_vector, "interrupt_vector"
+            )
+        )
         self.add_function(self._interrupt_vector)
 
-        self.define_auto_symbol(Symbol(SymbolType.FunctionSymbol,
-                                       self._entry_point, 'entry_point'))
+        self.define_auto_symbol(
+            Symbol(SymbolType.FunctionSymbol, self._entry_point, "entry_point")
+        )
         self.add_function(self._entry_point)
 
         return True

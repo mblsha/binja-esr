@@ -33,6 +33,15 @@ REGISTERS = [
 REG_NAMES = [reg[0] for reg in REGISTERS]
 REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
 
+# map internal memory to start at this address
+INTERNAL_MEMORY_START = 0xFFFFF + 1
+IMEM_NAMES = {
+    0xEC: "BP",
+    0xED: "PX",
+    0xEE: "PY",
+    0xFB: "IMR", # FIXME: not sure if this is correct
+}
+
 class Operand:
     def render(self):
         return [TText("unimplemented")]
@@ -225,8 +234,8 @@ class Instruction:
 
 
 class ImmOperand(Operand):
-    def length(self):
-        raise NotImplementedError("Length not implemented for ImmOperand")
+    def width(self):
+        raise NotImplementedError("width not implemented for ImmOperand")
 
 
 # n: encoded as `n`
@@ -235,7 +244,7 @@ class Imm8(ImmOperand):
         super().__init__()
         self.value = None
 
-    def length(self):
+    def width(self):
         return 1
 
     def decode(self, decoder, addr):
@@ -254,7 +263,7 @@ class Imm16(ImmOperand):
         super().__init__()
         self.value = None
 
-    def length(self):
+    def width(self):
         return 2
 
     def decode(self, decoder, addr):
@@ -274,7 +283,7 @@ class Imm20(ImmOperand):
         self.value = None
         self.extra_hi = None
 
-    def length(self):
+    def width(self):
         return 3
 
     def decode(self, decoder, addr):
@@ -313,14 +322,24 @@ class IMem8(Imm8):
         return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"),
                 TEndMem(MemType.INTERNAL)]
 
+    # FIXME: this depends on the PRE
+    def imem_addr(self):
+        return INTERNAL_MEMORY_START + self.value
+
+    def lift(self, il):
+        return il.load(self.width(), il.const_pointer(3, self.imem_addr()))
+
+    def lift_assign(self, il, value):
+        il.append(il.store(self.width(), il.const_pointer(3, self.imem_addr()), value))
+
 # Read 16 bits from internal memory based on Imm8 address.
-class IMem16(Imm8):
+class IMem16(IMem8):
     def render(self):
         return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"),
                 TEndMem(MemType.INTERNAL)]
 
 # Read 20 bits from internal memory based on Imm8 address.
-class IMem20(Imm8):
+class IMem20(IMem8):
     def render(self):
         return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"), TEndMem(MemType.INTERNAL)]
 
@@ -622,8 +641,8 @@ class CALL(Instruction):
         assert len(rest) == 0, "Expected no extra operands"
 
         result = dest.value
-        if dest.length() != 3:
-            assert dest.length() == 2
+        if dest.width() != 3:
+            assert dest.width() == 2
             result = addr & 0xFF0000 | result
         return result
 
