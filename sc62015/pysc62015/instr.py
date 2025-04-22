@@ -36,10 +36,26 @@ REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
 # map internal memory to start at this address
 INTERNAL_MEMORY_START = 0xFFFFF + 1
 IMEM_NAMES = {
-    0xEC: "BP",
-    0xED: "PX",
-    0xEE: "PY",
-    0xFB: "IMR", # FIXME: not sure if this is correct
+    0xEC: "BP", # RAM Base Pointer
+    0xED: "PX", # RAM PX Pointer
+    0xEE: "PY", # RAM PY Pointer
+    0xEF: "AMC", # ADR Modify Control
+    0xF0: "KOL", # Key Output Buffer H
+    0xF1: "KOH", # Key Output Buffer L
+    0xF2: "KIL", # Key Input Buffer
+    0xF3: "EOL", # E Port Output Buffer H
+    0xF4: "EOH", # E Port Output Buffer L
+    0xF5: "EIL", # E Port Input Buffer H
+    0xF6: "EIH", # E Port Input Buffer L
+    0xF7: "UCR", # UART Control Register
+    0xF8: "USR", # UART Status Register
+    0xF9: "RXD", # UART Receive Buffer
+    0xFA: "TXD", # UART Transmit Buffer
+    0xFB: "IMR", # Interrupt Mask Register
+    0xFC: "ISR", # Interrupt Status Register
+    0xFD: "SCR", # System Control Register
+    0xFE: "LCC", # LCD Contrast Control
+    0xFF: "SSR", # System Status Control
 }
 
 class Operand:
@@ -355,29 +371,34 @@ class Reg(Operand):
     def render(self):
         return [TReg(self.reg)]
 
-    def reg_size(self):
+    def width(self):
         return REG_SIZES[self.reg]
 
     def lift(self, il):
-        return il.reg(self.reg_size(), self.reg)
+        return il.reg(self.width(), self.reg)
 
     def lift_assign(self, il, value):
-        il.append(il.set_reg(self.reg_size(), self.reg, value))
+        il.append(il.set_reg(self.width(), self.reg, value))
 
 # only makes sense for PUSHU / POPU
 class RegIMR(Reg):
     def __init__(self):
         super().__init__("IMR")
 
-    def reg_size(self):
+    def width(self):
         return 1
+
+    def operands(self):
+        imem = IMem8()
+        imem.value = 0xFB
+        yield imem
 
 # only makes sense for MV
 class RegB(Reg):
     def __init__(self):
         super().__init__("B")
 
-    def reg_size(self):
+    def width(self):
         return 1
 
 # only makes sense for PUSHU / POPU / PUSHS / POPS
@@ -385,7 +406,7 @@ class RegF(Reg):
     def __init__(self):
         super().__init__("F")
 
-    def reg_size(self):
+    def width(self):
         return 1
 
     def lift(self, il):
@@ -394,8 +415,8 @@ class RegF(Reg):
 
     def lift_assign(self, il, value):
         # FIXME: likely wrong
-        il.append(il.set_reg(self.reg_size(), LLIL_TEMP(0), value))
-        tmp = il.reg(self.reg_size(), LLIL_TEMP(0))
+        il.append(il.set_reg(self.width(), LLIL_TEMP(0), value))
+        tmp = il.reg(self.width(), LLIL_TEMP(0))
         il.append(il.set_flag("C", il.and_expr(1, tmp, il.const(1, 1))))
         il.append(il.set_flag("Z", il.and_expr(1, tmp, il.const(1, 2))))
 
@@ -414,11 +435,11 @@ class Reg3(Operand):
     def reg_idx(cls, name):
         return REG_NAMES.index(name)
 
-    def reg_size(self):
+    def width(self):
         return REG_SIZES[self.reg]
 
     def assert_r3(self):
-        assert self.reg_size() >= 3, f"Want r3 register, got r{self.reg_size()} ({self.reg}) instead"
+        assert self.width() >= 3, f"Want r3 register, got r{self.width()} ({self.reg}) instead"
 
     def decode(self, decoder, addr):
         byte = decoder.unsigned_byte()
@@ -631,7 +652,7 @@ class JumpInstruction(Instruction):
             zero = il.const(1, 0)
             one  = il.const(1, 1)
             flag = il.flag("Z") if "Z" in self._cond else il.flag("C")
-            value = one if "N" in self._cond else zero
+            value = zero if "N" in self._cond else one
 
             cond = il.compare_equal(1, flag, value)
             il.append(il.if_expr(cond, if_true, if_false))
@@ -1118,11 +1139,11 @@ class StackInstruction(Instruction):
 class StackPushInstruction(StackInstruction):
     def lift(self, il, addr):
         r = self.reg()
-        il.append(il.push(r.reg_size(), r.lift(il)))
+        il.append(il.push(r.width(), r.lift(il)))
 class StackPopInstruction(StackInstruction):
     def lift(self, il, addr):
         r = self.reg()
-        r.lift_assign(il, il.pop(r.reg_size()))
+        r.lift_assign(il, il.pop(r.width()))
 
 # FIXME: should use U pointer, not S
 class PUSHU(StackPushInstruction): pass
