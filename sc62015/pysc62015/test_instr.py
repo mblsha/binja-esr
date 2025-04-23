@@ -15,6 +15,7 @@ from .instr import (
     INTERNAL_MEMORY_START,
     UnknownInstruction,
     Reg,
+    PRE,
 )
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
@@ -304,6 +305,10 @@ def test_compare_opcodes():
                 for op in instr.ops:
                     check_no_unimplemented(op)
 
-        if not isinstance(instr, UnknownInstruction):
-            for instr in il.ils:
+        def start_check_lifting(ils):
+            assert len(ils) > 0, f"Failed to lift {b.hex()} at line {i+1}: {s}"
+            for instr in ils:
                 check_no_unimplemented(instr)
+
+        if not isinstance(instr, (UnknownInstruction, PRE)):
+            start_check_lifting(il.ils)

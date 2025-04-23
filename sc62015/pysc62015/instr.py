@@ -7,6 +7,8 @@ import copy
 from dataclasses import dataclass
 from typing import Optional, List, Literal
 import enum
+from contextlib import contextmanager
+
 
 from .binja_api import *
 from binaryninja.lowlevelil import (
@@ -817,6 +819,25 @@ class RegPair(Reg3):
         result.extend(self.reg2.render())
         return result
 
+
+@contextmanager
+def lift_loop(il):
+    if_true = LowLevelILLabel()
+    if_false = LowLevelILLabel()
+
+    loop_reg = Reg("I")
+    il.mark_label(if_false)
+
+    # loop iteration
+    yield
+
+    width = loop_reg.width()
+    loop_reg.lift_assign(il, il.sub(width, loop_reg.lift(il), il.const(1, 1)))
+    cond = il.compare_equal(width, loop_reg.lift(il), il.const(width, 0))
+    il.append(il.if_expr(cond, if_true, if_false))
+    il.mark_label(if_true)
+
+
 class NOP(Instruction):
      def lift(self, il, addr):
         il.append(il.nop())
@@ -1048,24 +1069,27 @@ class DEC(IncDecInstruction):
     def lift_operation(self, il, il_arg):
         return il.sub(1, il_arg, il.const(1, 1), 'Z')
 
-class ExchangeInstruction(Instruction): pass
-class EX(ExchangeInstruction): pass
-class EXW(ExchangeInstruction): pass
-class EXP(ExchangeInstruction): pass
-class EXL(ExchangeInstruction): pass
+class ExchangeInstruction(Instruction):
+    def lift_single_exchange(self, il, addr):
+        first, second = self.operands()
+        width = first.width()
+        il.append(il.set_reg(width, LLIL_TEMP(0), first.lift(il)))
+        first.lift_assign(il, second.lift(il))
+        second.lift_assign(il, il.reg(width, LLIL_TEMP(0)))
+class EX(ExchangeInstruction):
+    def lift(self, il, addr):
+        self.lift_single_exchange(il, addr)
+# uses counter
+class EXL(ExchangeInstruction):
+    def lift(self, il, addr):
+        with lift_loop(il):
+            self.lift_single_exchange(il, addr)
 
 class MiscInstruction(Instruction): pass
 class WAIT(MiscInstruction):
     def lift(self, il, addr):
-        t = LowLevelILLabel()
-        f = LowLevelILLabel()
-
-        reg = Reg("I")
-        il.mark_label(f)
-        reg.lift_assign(il, il.sub(2, reg.lift(il), il.const(1, 1)))
-        cond = il.compare_equal(2, reg.lift(il), il.const(2, 0))
-        il.append(il.if_expr(cond, t, f))
-        il.mark_label(t)
+        with lift_loop(il):
+            pass
 
 class PMDF(MiscInstruction): pass
 class SWAP(MiscInstruction): pass
@@ -1295,8 +1319,8 @@ OPCODES = {
     0xBF: UnknownInstruction,
     # C0h
     0xC0: (EX, Opts(ops=[IMem8(), IMem8()])),
-    0xC1: (EXW, Opts(ops=[IMem16(), IMem16()])),
-    0xC2: (EXP, Opts(ops=[IMem20(), IMem20()])),
+    0xC1: (EX, Opts(name="EXW", ops=[IMem16(), IMem16()])),
+    0xC2: (EX, Opts(name="EXP", ops=[IMem20(), IMem20()])),
     0xC3: (EXL, Opts(ops=[IMem8(), IMem8()])),
     0xC4: (DADL, Opts(ops=[IMem8(), IMem8()])),
     0xC5: (DADL, Opts(ops=[IMem8(), Reg("A")])),
