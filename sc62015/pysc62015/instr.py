@@ -425,6 +425,24 @@ class Reg(Operand):
     def lift_assign(self, il, value):
         il.append(il.set_reg(self.width(), self.reg, value))
 
+class TempReg(Operand):
+    def __init__(self, reg, width=3):
+        super().__init__()
+        self.reg = reg
+        self._width = width
+
+    def render(self):
+        raise NotImplementedError("render() not implemented for TempReg")
+
+    def width(self):
+        return self._width
+
+    def lift(self, il):
+        return il.reg(self.width(), self.reg)
+
+    def lift_assign(self, il, value):
+        il.append(il.set_reg(self.width(), self.reg, value))
+
 # only makes sense for PUSHU / POPU
 class RegIMR(Reg):
     def __init__(self):
@@ -459,10 +477,10 @@ class RegF(Reg):
 
     def lift_assign(self, il, value):
         # FIXME: likely wrong
-        il.append(il.set_reg(self.width(), LLIL_TEMP(0), value))
-        tmp = il.reg(self.width(), LLIL_TEMP(0))
-        il.append(il.set_flag("C", il.and_expr(1, tmp, il.const(1, 1))))
-        il.append(il.set_flag("Z", il.and_expr(1, tmp, il.const(1, 2))))
+        tmp = TempReg(LLIL_TEMP(0), width=self.width())
+        tmp.lift_assign(il, value)
+        il.append(il.set_flag("C", il.and_expr(1, tmp.lift(il), il.const(1, 1))))
+        il.append(il.set_flag("Z", il.and_expr(1, tmp.lift(il), il.const(1, 2))))
 
 class Reg3(Operand):
     def __init__(self):
@@ -587,9 +605,10 @@ class RegIncrementDecrementHelper(OperandHelper):
         if self.mode == EMemRegMode.POST_INC:
             # create LLIL_TEMP to hold the value since we're supposed to
             # increment it after using it
-            il.append(il.set_reg(self.reg.width(), LLIL_TEMP(0), value))
+            tmp = TempReg(LLIL_TEMP(0), width=self.reg.width())
+            tmp.lift_assign(il, value)
             self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(1, 1)))
-            value = il.reg(self.reg.width(), LLIL_TEMP(0))
+            value = tmp.lift(il)
         elif self.mode == EMemRegMode.PRE_DEC:
             self.reg.lift_assign(il, il.sub(self.reg.width(), value, il.const(1, 1)))
         return value
@@ -992,6 +1011,7 @@ class MVL(MoveInstruction):
         return super().lift(il, addr)
 
         dst, src = self.operands()
+        # 0xCB and 0xCF variants use IMem8, IMem8
         assert isinstance(dst, IMem8)
         assert isinstance(src, IMem8)
         with lift_loop(il):
@@ -1101,9 +1121,10 @@ class ExchangeInstruction(Instruction):
     def lift_single_exchange(self, il, addr):
         first, second = self.operands()
         width = first.width()
-        il.append(il.set_reg(width, LLIL_TEMP(0), first.lift(il)))
+        tmp = TempReg(LLIL_TEMP(0), width=width)
+        tmp.lift_assign(il, first.lift(il))
         first.lift_assign(il, second.lift(il))
-        second.lift_assign(il, il.reg(width, LLIL_TEMP(0)))
+        second.lift_assign(il, tmp.lift(il))
 class EX(ExchangeInstruction):
     def lift(self, il, addr):
         self.lift_single_exchange(il, addr)
