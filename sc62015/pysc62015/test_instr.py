@@ -8,6 +8,7 @@ from .instr import (
     EMemIMem,
     EMemIMemMode,
     IMem8,
+    IMemHelper,
     Imm8,
     ImmOffset,
     EMemValueOffsetHelper,
@@ -201,7 +202,7 @@ def test_emem_value_offset_helper_lifting():
                 "ADD.b",
                 [
                     mllil(
-                        "LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB])]
+                        "LOAD", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB])]
                     ),
                     mllil("CONST.b", [0xCD]),
                 ],
@@ -222,6 +223,26 @@ def test_lift_mv():
             [
                 mreg("A"),
                 mllil("CONST.b", [0xCD]),
+            ],
+        )
+    ]
+
+    instr = decode(bytearray([0xC8, 0xAB, 0xCD]), 0x1234, OPCODES)
+    assert asm_str(instr.render()) == "MV    (AB), (CD)"
+
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+    assert il.ils == [
+        mllil(
+            "STORE",
+            [
+                mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB]),
+                mllil(
+                    "LOAD",
+                    [
+                        mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xCD]),
+                    ],
+                ),
             ],
         )
     ]

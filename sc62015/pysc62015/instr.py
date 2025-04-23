@@ -84,6 +84,12 @@ class Operand:
         il.append(il.unimplemented())
 
 
+# used by Operands to help render / lift values
+class OperandHelper(Operand):
+    def render(self):
+        raise NotImplementedError(f"render() not implemented for {self.__class__.__name__} helper")
+
+
 @dataclass
 class Opts:
     # useful when logical operands order is different from physical opcode encoding order
@@ -266,9 +272,9 @@ class ImmOperand(Operand):
 
 # n: encoded as `n`
 class Imm8(ImmOperand):
-    def __init__(self):
+    def __init__(self, value=None):
         super().__init__()
-        self.value = None
+        self.value = value
 
     def width(self):
         return 1
@@ -348,33 +354,58 @@ class ImmOffset(Imm8):
         return il.add(self.width(), value, offset)
 
 
-# Read 8 bits from internal memory based on Imm8 address.
-class IMem8(Imm8):
-    def render(self):
-        return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"),
-                TEndMem(MemType.INTERNAL)]
+class IMemHelper(Operand):
+    def __init__(self, width, value):
+        super().__init__()
+        self._width = width
+        self.value = value
 
-    # FIXME: this depends on the PRE
-    def imem_addr(self):
-        return INTERNAL_MEMORY_START + self.value
+    def width(self):
+        return self.width
+
+    def render(self):
+        result = [TBegMem(MemType.INTERNAL)]
+        result.extend(self.value.render())
+        result.append(TEndMem(MemType.INTERNAL))
+        return result
+
+    def imem_addr(self, il):
+        if isinstance(self.value, ImmOperand):
+            raw_addr = INTERNAL_MEMORY_START + self.value.value
+            return il.const_pointer(3, raw_addr)
+
+        addr = self.value.lift(il)
+        addr = il.add(3, addr, il.const(3, INTERNAL_MEMORY_START))
 
     def lift(self, il):
-        return il.load(self.width(), il.const_pointer(3, self.imem_addr()))
+        return il.load(self.width(), self.imem_addr(il))
 
     def lift_assign(self, il, value):
-        il.append(il.store(self.width(), il.const_pointer(3, self.imem_addr()), value))
+        il.append(il.store(self.width(), self.imem_addr(il), value))
+
+
+# Read 8 bits from internal memory based on Imm8 address.
+class IMem8(Imm8):
+    def helper(self):
+        return IMemHelper(self.width(), Imm8(self.value))
+
+    def render(self):
+        return self.helper().render()
+
+    def operands(self):
+        yield self.helper()
+
+    def lift(self, il):
+        return self.helper().lift(il)
+
+    def lift_assign(self, il, value):
+        return self.helper().lift_assign(il, value)
 
 # Read 16 bits from internal memory based on Imm8 address.
-class IMem16(IMem8):
-    def render(self):
-        return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"),
-                TEndMem(MemType.INTERNAL)]
+class IMem16(IMem8): pass
 
 # Read 20 bits from internal memory based on Imm8 address.
-class IMem20(IMem8):
-    def render(self):
-        return [TBegMem(MemType.INTERNAL), TInt(f"{self.value:02X}"), TEndMem(MemType.INTERNAL)]
-
+class IMem20(IMem8): pass
 
 # Register operand encoded as part of the instruction opcode
 class Reg(Operand):
@@ -403,10 +434,8 @@ class RegIMR(Reg):
         return 1
 
     def operands(self):
-        imem = IMem8()
         # FIXME: use value from the dict
-        imem.value = 0xFB
-        yield imem
+        yield IMem8(0xFB)
 
 # Special case: only makes sense for MV, special case since B is not in the REGISTERS
 class RegB(Reg):
@@ -487,11 +516,6 @@ class EMemAddr(Imm20):
 
     def lift_assign(self, il, value):
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
-
-
-class OperandHelper(Operand):
-    def render(self):
-        raise NotImplementedError(f"render() not implemented for {self.__class__.__name__} helper")
 
 
 class EMemValueOffsetHelper(OperandHelper):
@@ -962,7 +986,18 @@ class MV(MoveInstruction):
         dst, src = self.operands()
         dst.lift_assign(il, src.lift(il))
 
-class MVL(MoveInstruction): pass
+class MVL(MoveInstruction):
+    def lift(self, il, addr):
+        # FIXME: need to finish this
+        return super().lift(il, addr)
+
+        dst, src = self.operands()
+        assert isinstance(dst, IMem8)
+        assert isinstance(src, IMem8)
+        with lift_loop(il):
+            # need to +1 the index
+            dst.lift_assign(il, src.lift(il))
+
 class MVLD(MoveInstruction): pass
 
 class PRE(Instruction):
