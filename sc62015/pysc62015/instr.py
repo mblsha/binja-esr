@@ -958,19 +958,12 @@ class MoveInstruction(Instruction):
         raise NotImplementedError("src() not implemented")
 
 class MV(MoveInstruction):
-    def dst(self):
-        first, *rest = self.operands()
-        assert len(rest) == 1, f"Expected no extra operands, got: {rest}"
-        return first
-    def src(self):
-        _, second, *rest = self.operands()
-        assert len(rest) == 0, f"Expected no extra operands, got: {rest}"
-        return second
     def lift(self, il, addr):
-        self.dst().lift_assign(il, self.src().lift(il))
+        dst, src = self.operands()
+        dst.lift_assign(il, src.lift(il))
 
-class MVLD(MoveInstruction): pass # Block move decrementing
 class MVL(MoveInstruction): pass
+class MVLD(MoveInstruction): pass
 
 class PRE(Instruction):
     def name(self):

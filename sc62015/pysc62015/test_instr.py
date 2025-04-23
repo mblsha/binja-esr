@@ -210,6 +210,23 @@ def test_emem_value_offset_helper_lifting():
     )
 
 
+def test_lift_mv():
+    instr = decode(bytearray([0x08, 0xCD]), 0x1234, OPCODES)
+    assert asm_str(instr.render()) == "MV    A, CD"
+
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+    assert il.ils == [
+        mllil(
+            "SET_REG.b{0}",
+            [
+                mreg("A"),
+                mllil("CONST.b", [0xCD]),
+            ],
+        )
+    ]
+
+
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
 def opcode_generator():
