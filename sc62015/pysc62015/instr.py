@@ -475,7 +475,9 @@ class EMemAddr(Imm20):
     def lift_assign(self, il, value):
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
-class OperandHelper: pass
+class OperandHelper(Operand):
+    def render(self):
+        raise NotImplementedError("render() not implemented for OperandHelper")
 
 class EMemIMemOffsetHelper(OperandHelper):
     # offset could be None
@@ -764,56 +766,45 @@ class MVP(MoveInstruction): pass # 20-bit move
 class MVLD(MoveInstruction): pass # Block move decrementing
 class MVL(MoveInstruction): pass
 
-# page 77 of the book
+class RegIMemOffsetOrder(enum.Enum):
+    DEST_IMEM = 0
+    DEST_REG_OFFSET = 1
+
+# 0x56: page 77 of the book
 # (m), [r3±n]: encoded as `56 (8 r3 | C r3) m n
-class MVL_56(MoveInstruction):
-    def doinit(self):
-        super().doinit()
-        self.reg = None
-        self.dst = None
-        self.mode = None
-        self.offset = None
-
-    def decode(self, decoder, addr):
-        super().decode(decoder, addr)
-        self.reg = Reg3()
-        self.reg.decode(decoder, addr)
-        self.reg.assert_r3()
-
-        self.dst = IMem8()
-        self.dst.decode(decoder, addr)
-
-        self.mode = EMemRegMode(self.reg.high4)
-        assert self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET)
-        self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-        self.offset.decode(decoder, addr)
-
-    def encode(self, encoder, addr):
-        super().encode(encoder, addr)
-        self.reg.encode(encoder, addr)
-        self.dst.encode(encoder, addr)
-        self.offset.encode(encoder, addr)
-
-    def render(self):
-        result = super().render()
-        result.append(TSep(" "))
-
-        result.extend(self.dst.render())
-        result.append(TSep(", "))
-
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        result.extend(op.render())
-        return result
-
-# page 77 of the book
+#
+# 0x5E: page 77 of the book
 # [r3±m], (n): encoded as 5E (8 r3 | C r3) n m
-class MVL_5E(MoveInstruction):
-    def doinit(self):
-        super().doinit()
+#
+# 0xE0: page 75 of the book
+# (n), [r3], : encoded as E0 (0 r3) n
+# (n), [r3++]: encoded as E0 (2 r3) n
+# (n), [--r3]: encoded as E0 (3 r3) n
+# (n), [r3±m]: encoded as E0 (8 r3 | C r3) n m
+#
+# 0xE8: page 75 of the book
+# [r3],   (n): encoded as E8 (0 r3) n
+# [r3++], (n): encoded as E8 (2 r3) n
+# [--r3], (n): encoded as E8 (3 r3) n
+# [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
+class RegIMemOffset(Operand):
+    def __init__(self, order: RegIMemOffsetOrder, allowed_modes:
+                 List[EMemRegMode] = None):
+        self.order = order
+        self.allowed_modes = allowed_modes
         self.reg = None
+        self.imem = None
         self.mode = None
         self.offset = None
-        self.src = None
+
+    def operands(self):
+        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
+        if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
+            yield op
+            yield self.imem
+        else:
+            yield self.imem
+            yield op
 
     def decode(self, decoder, addr):
         super().decode(decoder, addr)
@@ -821,30 +812,24 @@ class MVL_5E(MoveInstruction):
         self.reg.decode(decoder, addr)
         self.reg.assert_r3()
 
-        self.src = IMem8()
-        self.src.decode(decoder, addr)
+        self.imem = IMem8()
+        self.imem.decode(decoder, addr)
 
         self.mode = EMemRegMode(self.reg.high4)
-        assert self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET)
-        self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-        self.offset.decode(decoder, addr)
+        if self.allowed_modes is not None:
+            assert self.mode in self.allowed_modes
+
+        if self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET):
+            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
+            self.offset.decode(decoder, addr)
 
     def encode(self, encoder, addr):
         super().encode(encoder, addr)
         self.reg.encode(encoder, addr)
-        self.src.encode(encoder, addr)
-        self.offset.encode(encoder, addr)
+        self.imem.encode(encoder, addr)
+        if self.offset:
+            self.offset.encode(encoder, addr)
 
-    def render(self):
-        result = super().render()
-        result.append(TSep(" "))
-
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        result.extend(op.render())
-
-        result.append(TSep(", "))
-        result.extend(self.src.render())
-        return result
 
 # page 77 of the book
 # (m), [(n)]:   encoded as F3 00 m n
@@ -938,98 +923,6 @@ class MVL_FB(MoveInstruction):
         result.extend(op.render())
 
         result.append(TSep(", "))
-        result.extend(self.src.render())
-        return result
-
-
-# page 75 of the book
-# (n), [r3], : encoded as E0 (0 r3) n
-# (n), [r3++]: encoded as E0 (2 r3) n
-# (n), [--r3]: encoded as E0 (3 r3) n
-# (n), [r3±m]: encoded as E0 (8 r3 | C r3) n m
-class MV_E0(MoveInstruction):
-    def doinit(self):
-        super().doinit()
-        self.reg = None
-        self.dst = None
-        self.mode = None
-        self.offset = None
-
-    def decode(self, decoder, addr):
-        super().decode(decoder, addr)
-        self.reg = Reg3()
-        self.reg.decode(decoder, addr)
-        self.reg.assert_r3()
-
-        self.dst = IMem8() # FIXME: size is wrong depending on the opcode!
-        self.dst.decode(decoder, addr)
-
-        self.mode = EMemRegMode(self.reg.high4)
-        if self.mode in (EMemRegMode.POSITIVE_OFFSET,
-                         EMemRegMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
-
-    def encode(self, encoder, addr):
-        super().encode(encoder, addr)
-        self.reg.encode(encoder, addr)
-        self.dst.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
-
-    def render(self):
-        result = super().render()
-        result.append(TSep(" "))
-        result.extend(self.dst.render())
-        result.append(TSep(", "))
-
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        result.extend(op.render())
-        return result
-
-# page 75 of the book
-# [r3],   (n): encoded as E8 (0 r3) n
-# [r3++], (n): encoded as E8 (2 r3) n
-# [--r3], (n): encoded as E8 (3 r3) n
-# [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
-class MV_E8(MoveInstruction):
-    def doinit(self):
-        super().doinit()
-        self.reg = None
-        self.mode = None
-        self.offset = None
-        self.src = None
-
-    def decode(self, decoder, addr):
-        super().decode(decoder, addr)
-        self.reg = Reg3()
-        self.reg.decode(decoder, addr)
-        self.reg.assert_r3()
-
-        self.src = IMem8() # FIXME: size is wrong depending on the opcode!
-        self.src.decode(decoder, addr)
-
-        self.mode = EMemRegMode(self.reg.high4)
-        if self.mode in (EMemRegMode.POSITIVE_OFFSET,
-                         EMemRegMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
-
-    def encode(self, encoder, addr):
-        super().encode(encoder, addr)
-        self.reg.encode(encoder, addr)
-        self.src.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
-
-    def render(self):
-        result = super().render()
-        result.append(TSep(" "))
-
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        result.extend(op.render())
-        result.append(TSep(", "))
-
         result.extend(self.src.render())
         return result
 
@@ -1344,7 +1237,8 @@ OPCODES = {
     0x53: (ADC, Opts(ops=[IMem8(), Reg("A")])),
     0x54: (ADCL, Opts(ops=[IMem8(), IMem8()])),
     0x55: (ADCL, Opts(ops=[IMem8(), Reg("A")])),
-    0x56: MVL_56,
+    0x56: (MVL, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM,
+                                        allowed_modes=[EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET])])),
     0x57: (PMDF, Opts(ops=[IMem8(), Reg("A")])),
     0x58: (SBC, Opts(ops=[Reg("A"), Imm8()])),
     0x59: (SBC, Opts(ops=[IMem8(), Imm8()])),
@@ -1352,7 +1246,8 @@ OPCODES = {
     0x5B: (SBC, Opts(ops=[IMem8(), Reg("A")])),
     0x5C: (SBCL, Opts(ops=[IMem8(), IMem8()])),
     0x5D: (SBCL, Opts(ops=[IMem8(), Reg("A")])),
-    0x5E: MVL_5E,
+    0x5E: (MVL, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET,
+                                        allowed_modes=[EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET])])),
     0x5F: (POPS, Opts(ops=[RegF()])),
     # 60h
     0x60: (CMP, Opts(ops=[Reg("A"), Imm8()])),
@@ -1491,9 +1386,11 @@ OPCODES = {
     0xDE: HALT,
     0xDF: OFF,
     # E0h
-    0xE0: (MV_E0, Opts(name="MV")),
-    0xE1: (MV_E0, Opts(name="MVW")),
-    0xE2: (MV_E0, Opts(name="MVP")),
+    0xE0: (MV, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
+    0xE1: (MV, Opts(name="MVW",
+                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
+    0xE2: (MV, Opts(name="MVP",
+                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
     0xE3: (MVL, Opts(ops_reversed=True, ops=[IMem8(),
                                              EMemReg(allowed_modes=[EMemRegMode.POST_INC,
                                                                     EMemRegMode.PRE_DEC])])),
@@ -1501,9 +1398,11 @@ OPCODES = {
     0xE5: (ROR, Opts(ops=[IMem8()])),
     0xE6: (ROL, Opts(ops=[Reg("A")])),
     0xE7: (ROL, Opts(ops=[IMem8()])),
-    0xE8: (MV_E8, Opts(name="MV")),
-    0xE9: (MV_E8, Opts(name="MVW")),
-    0xEA: (MV_E8, Opts(name="MVP")),
+    0xE8: (MV, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
+    0xE9: (MV, Opts(name="MVW",
+                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
+    0xEA: (MV, Opts(name="MVP",
+                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
     0xEB: (MVL, Opts(ops=[EMemReg(), IMem8()])),
     0xEC: (DSLL, Opts(ops=[IMem8()])),
     0xED: (EX, Opts(ops=[RegPair(size=2)])),
