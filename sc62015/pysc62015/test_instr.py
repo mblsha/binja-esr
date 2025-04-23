@@ -282,12 +282,9 @@ def test_compare_opcodes():
         except Exception as exc:
             raise ValueError(f"Failed to lift {b.hex()} at line {i+1}: {s}") from exc
 
-        # FIXME: recursively check all llil instructions so that they
-        # won't contain any unimplemented instructions
         def check_no_unimplemented(instr):
             if isinstance(instr, MockLLIL):
                 if instr.op == "UNIMPL":
-                    return
                     pprint(il.ils)
                     raise ValueError(
                         f"Unimplemented instruction: {instr} for {rendered_str} at line {i+1}"

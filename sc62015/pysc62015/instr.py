@@ -900,7 +900,14 @@ class RET(RetInstruction): pass
 class RETF(RetInstruction):
     def addr_size(self):
         return 3
-class RETI(Instruction): pass
+class RETI(Instruction):
+    def lift(self, il, addr):
+        imr = RegIMR()
+        imr.lift_assign(il, il.pop(1))
+        f = RegF()
+        imr.lift_assign(il, il.pop(1))
+        il.append(il.ret(il.pop(3)))
+
 
 class MoveInstruction(Instruction):
     def dst(self):
