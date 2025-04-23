@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any, List, Dict
 
 
+SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l'}
+
+
 @dataclass
 class MockReg:
     name: str
@@ -33,17 +36,14 @@ class MockHandle:
 class MockLLIL:
     op: str
     ops: List[Any]
-    meta: Dict[str, Any]
 
 
 def mreg(name):
     return MockReg(name)
 
 
-def mllil(op, ops=[], meta={}):
-    if meta is None:
-        meta = {}
-    return MockLLIL(op, ops, meta)
+def mllil(op, ops=[]):
+    return MockLLIL(op, ops)
 
 
 @dataclass
@@ -81,7 +81,12 @@ class MockLowLevelILFunction(LowLevelILFunction):
     def expr(self, *args, **kwargs):
         llil, *ops = args
         del kwargs["source_location"]
+        size = kwargs.get("size", None)
+        flags = kwargs.get("flags", None)
+
         name = llil.name
         # remove the "LLIL_" prefix
         name = name[5:]
-        return MockLLIL(name, ops, kwargs)
+        name = name + SZ_LOOKUP.get(size, "")
+        name = name + f"{{{flags}}}" if flags is not None else name
+        return MockLLIL(name, ops)

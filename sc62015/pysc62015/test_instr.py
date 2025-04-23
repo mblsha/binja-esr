@@ -192,19 +192,17 @@ def test_inc_lifting():
     instr.lift(il, 0x1234)
     assert il.ils == [
         mllil(
-            "SET_REG",
+            "SET_REG.b{0}",
             [
                 mreg("A"),
                 mllil(
-                    "ADD",
+                    "ADD.b{Z}",
                     [
-                        mllil("REG", [mreg("A")], {"size": 1}),
-                        mllil("CONST", [1], {"size": 1}),
+                        mllil("REG.b", [mreg("A")]),
+                        mllil("CONST.b", [1]),
                     ],
-                    {"size": 1, "flags": "Z"},
                 ),
             ],
-            {"flags": 0, "size": 1},
         )
     ]
 
