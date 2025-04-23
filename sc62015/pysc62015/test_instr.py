@@ -12,6 +12,7 @@ from .instr import (
     ImmOffset,
     EMemValueOffsetHelper,
     INTERNAL_MEMORY_START,
+    UnknownInstruction,
 )
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
@@ -19,6 +20,7 @@ from .mock_analysis import MockAnalysisInfo
 from .mock_llil import MockLowLevelILFunction, MockLLIL, mllil, mreg
 
 import os
+from pprint import pprint
 
 
 def test_operand():
@@ -337,3 +339,17 @@ def test_compare_opcodes():
 
         # FIXME: recursively check all llil instructions so that they
         # won't contain any unimplemented instructions
+        def check_no_unimplemented(instr):
+            if isinstance(instr, MockLLIL):
+                if instr.op == "UNIMPL":
+                    pprint(il.ils)
+                    raise ValueError(
+                        f"Unimplemented instruction: {instr} for {rendered_str} at line {i+1}"
+                    )
+
+                for op in instr.ops:
+                    check_no_unimplemented(op)
+
+        if not isinstance(instr, UnknownInstruction):
+            for instr in il.ils:
+                check_no_unimplemented(instr)
