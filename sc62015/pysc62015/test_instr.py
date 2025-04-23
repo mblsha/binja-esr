@@ -7,6 +7,11 @@ from .instr import (
     EMemRegMode,
     EMemIMem,
     EMemIMemMode,
+    IMem8,
+    Imm8,
+    ImmOffset,
+    EMemValueOffsetHelper,
+    INTERNAL_MEMORY_START,
 )
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
@@ -205,6 +210,33 @@ def test_inc_lifting():
             ],
         )
     ]
+
+
+def test_emem_value_offset_helper_lifting():
+    imem = IMem8()
+    imem.value = 0xAB
+
+    offset = ImmOffset("+")
+    offset.value = 0xCD
+
+    h = EMemValueOffsetHelper(imem, offset)
+    assert asm_str(h.render()) == "[(AB)+CD]"
+
+    il = MockLowLevelILFunction()
+    assert h.lift(il) == mllil(
+        "LOAD.b",
+        [
+            mllil(
+                "ADD.b",
+                [
+                    mllil(
+                        "LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB])]
+                    ),
+                    mllil("CONST.b", [0xCD]),
+                ],
+            )
+        ],
+    )
 
 
 # Format:

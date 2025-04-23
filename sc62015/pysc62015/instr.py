@@ -335,6 +335,13 @@ class ImmOffset(Imm8):
     def render(self):
         return [TInt(f"{self.sign}{self.value:02X}")]
 
+    def lift(self, il):
+        raise NotImplementedError("lift() not implemented for ImmOffset")
+
+    def lift_offset(self, il, value):
+        offset = il.const(self.width(), self.offset_value())
+        return il.add(self.width(), value, offset)
+
 
 # Read 8 bits from internal memory based on Imm8 address.
 class IMem8(Imm8):
@@ -392,10 +399,11 @@ class RegIMR(Reg):
 
     def operands(self):
         imem = IMem8()
+        # FIXME: use value from the dict
         imem.value = 0xFB
         yield imem
 
-# only makes sense for MV
+# Special case: only makes sense for MV, special case since B is not in the REGISTERS
 class RegB(Reg):
     def __init__(self):
         super().__init__("B")
@@ -475,24 +483,32 @@ class EMemAddr(Imm20):
     def lift_assign(self, il, value):
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
+
 class OperandHelper(Operand):
     def render(self):
         raise NotImplementedError("render() not implemented for OperandHelper")
 
-class EMemIMemOffsetHelper(OperandHelper):
-    # offset could be None
-    def __init__(self, imem, offset):
+
+class EMemValueOffsetHelper(OperandHelper):
+    def __init__(self, value, offset: Optional[ImmOffset]):
         super().__init__()
-        self.imem = imem
+        self.value = value
         self.offset = offset
 
     def render(self):
         result = [TBegMem(MemType.EXTERNAL)]
-        result.extend(self.imem.render())
+        result.extend(self.value.render())
         if self.offset:
             result.extend(self.offset.render())
         result.append(TEndMem(MemType.EXTERNAL))
         return result
+
+    def lift(self, il):
+        value = self.value.lift(il)
+        if self.offset:
+            value = self.offset.lift_offset(il, value)
+        # FIXME: need to figure out the size to use
+        return il.load(1, value)
 
 # page 74 of the book
 # External Memory: Register Indirect
@@ -509,8 +525,7 @@ class EMemRegMode(enum.Enum):
     NEGATIVE_OFFSET = 0xC
 
 class EMemRegOffsetHelper(OperandHelper):
-    # offset could be None
-    def __init__(self, reg, mode, offset):
+    def __init__(self, reg, mode: EMemRegMode, offset: Optional[ImmOffset]):
         super().__init__()
         self.reg = reg
         self.mode = mode
@@ -668,7 +683,7 @@ class EMemIMem(Imm8):
             self.offset.encode(encoder, addr)
 
     def render(self):
-        op = EMemIMemOffsetHelper(self.imem, self.offset)
+        op = EMemValueOffsetHelper(self.imem, self.offset)
         return op.render()
 
 
@@ -707,10 +722,10 @@ class EMemIMemOffset(Operand):
     def operands(self):
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
             yield self.imem1
-            op = EMemIMemOffsetHelper(self.imem2, self.offset)
+            op = EMemValueOffsetHelper(self.imem2, self.offset)
             yield op
         else:
-            op = EMemIMemOffsetHelper(self.imem1, self.offset)
+            op = EMemValueOffsetHelper(self.imem1, self.offset)
             yield op
             yield self.imem2
 
