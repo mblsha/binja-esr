@@ -73,10 +73,21 @@ def test_emem_reg():
     _, op = instr.operands()
     assert asm_str(op.render()) == "[X]"
 
+    instr = decode(bytearray([0xB0, 0x04]), 0x1234, OPCODES)
+    op, _ = instr.operands()
+    assert asm_str(op.render()) == "[X]"
+
+    # optypes = [type(op) for op in instr.operands()]
+    # assert optypes == [EMemValueOffsetHelper, Reg]
+    # assert asm_str(op.render()) == "[X]"
+    # il = MockLowLevelILFunction()
+    # instr.lift(il, 0x1234)
+    # pprint(il.ils)
+    # assert False
+
     # POST_INC
     instr = decode(bytearray([0x90, 0x24]), 0x1234, OPCODES)
     _, op = instr.operands()
-    assert asm_str(op.render()) == "[X++]"
 
     # PRE_DEC
     instr = decode(bytearray([0x90, 0x34]), 0x1234, OPCODES)

@@ -22,6 +22,8 @@ class MockFlag:
 
 class MockArch:
     def get_reg_index(self, name):
+        if name == 2147483648:
+            return MockReg('TEMP0')
         return MockReg(name)
 
     def get_flag_by_name(self, name):

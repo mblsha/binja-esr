@@ -507,11 +507,19 @@ class EMemValueOffsetHelper(OperandHelper):
         return result
 
     def lift(self, il):
-        value = self.value.lift(il)
+        addr = self.value.lift(il)
         if self.offset:
-            value = self.offset.lift_offset(il, value)
+            addr = self.offset.lift_offset(il, addr)
         # FIXME: need to figure out the size to use
-        return il.load(1, value)
+        return il.load(1, addr)
+
+    def lift_assign(self, il, value):
+        addr = self.value.lift(il)
+        if self.offset:
+            addr = self.offset.lift_offset(il, addr)
+
+        # FIXME: what's the width?
+        il.append(il.store(1, addr, value))
 
 # page 74 of the book
 # External Memory: Register Indirect
@@ -539,7 +547,6 @@ class RegIncrementDecrementHelper(OperandHelper):
         if self.mode == EMemRegMode.SIMPLE:
             result.extend(self.reg.render())
         elif self.mode == EMemRegMode.POST_INC:
-            # FIXME: lifting would require adding a temp variable
             result.extend(self.reg.render())
             result.append(TText("++"))
         elif self.mode == EMemRegMode.PRE_DEC:
@@ -548,6 +555,19 @@ class RegIncrementDecrementHelper(OperandHelper):
         else:
             raise ValueError(f"Invalid mode: {self.mode}")
         return result
+
+    def lift(self, il):
+        value = self.reg.lift(il)
+        if self.mode == EMemRegMode.POST_INC:
+            # create LLIL_TEMP to hold the value since we're supposed to
+            # increment it after using it
+            il.append(il.set_reg(self.reg.width(), LLIL_TEMP(0), value))
+            self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(1, 1)))
+            value = il.reg(self.reg.width(), LLIL_TEMP(0))
+        elif self.mode == EMemRegMode.PRE_DEC:
+            self.reg.lift_assign(il, il.sub(self.reg.width(), value, il.const(1, 1)))
+        return value
+
 
 class EMemRegOffsetHelper(OperandHelper):
     def __init__(self, reg, mode: EMemRegMode, offset: Optional[ImmOffset]):
@@ -1067,6 +1087,7 @@ class UnknownInstruction(Instruction):
 
 
 OPCODES = {
+    # 00h
     0x00: NOP,
     0x01: RETI,
     0x02: (JP_Abs, Opts(ops=[Imm16()])),
