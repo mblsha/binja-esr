@@ -944,6 +944,7 @@ class RETF(RetInstruction):
 class RETI(Instruction):
     def lift(self, il, addr):
         imr = RegIMR()
+        imr, *rest = imr.operands()
         imr.lift_assign(il, il.pop(1))
         f = RegF()
         imr.lift_assign(il, il.pop(1))
@@ -968,7 +969,6 @@ class MV(MoveInstruction):
     def lift(self, il, addr):
         self.dst().lift_assign(il, self.src().lift(il))
 
-class MVP(MoveInstruction): pass # 20-bit move
 class MVLD(MoveInstruction): pass # Block move decrementing
 class MVL(MoveInstruction): pass
 
@@ -1328,7 +1328,7 @@ OPCODES = {
     0xC7: (CMPP, Opts(ops=[IMem20(), IMem20()])),
     0xC8: (MV, Opts(ops=[IMem8(), IMem8()])),
     0xC9: (MV, Opts(name="MVW", ops=[IMem16(), IMem16()])),
-    0xCA: (MVP, Opts(ops=[IMem20(), IMem20()])),
+    0xCA: (MV, Opts(name="MVP", ops=[IMem20(), IMem20()])),
     0xCB: (MVL, Opts(ops=[IMem8(), IMem8()])),
     0xCC: (MV, Opts(ops=[IMem8(), Imm8()])),
     0xCD: (MV, Opts(name="MVW", ops=[IMem16(), Imm16()])),
@@ -1337,7 +1337,7 @@ OPCODES = {
     # D0h
     0xD0: (MV, Opts(ops=[IMem8(), EMemAddr()])),
     0xD1: (MV, Opts(name="MVW", ops=[IMem16(), EMemAddr()])),
-    0xD2: (MVP, Opts(ops=[IMem20(), EMemAddr()])),
+    0xD2: (MV, Opts(name="MVP", ops=[IMem20(), EMemAddr()])),
     0xD3: (MVL, Opts(ops=[IMem8(), EMemAddr()])),
     0xD4: (DSBL, Opts(ops=[IMem8(), IMem8()])),
     0xD5: (DSBL, Opts(ops=[IMem8(), Reg("A")])),
@@ -1345,9 +1345,9 @@ OPCODES = {
     0xD7: (CMPP, Opts(ops_reversed=True, ops=[IMem20(), Reg3()])),
     0xD8: (MV, Opts(ops=[EMemAddr(), IMem8()])),
     0xD9: (MV, Opts(name="MVW", ops=[EMemAddr(), IMem16()])),
-    0xDA: (MVP, Opts(ops=[EMemAddr(), IMem20()])),
+    0xDA: (MV, Opts(name="MVP", ops=[EMemAddr(), IMem20()])),
     0xDB: (MVL, Opts(ops=[EMemAddr(), IMem8()])),
-    0xDC: (MVP, Opts(ops=[IMem20(), Imm20()])),
+    0xDC: (MV, Opts(name="MVP", ops=[IMem20(), Imm20()])),
     0xDD: (EX, Opts(ops=[Reg("A"), RegB()])),
     0xDE: HALT,
     0xDF: OFF,
