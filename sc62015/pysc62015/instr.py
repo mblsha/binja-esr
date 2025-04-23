@@ -487,7 +487,7 @@ class EMemIMemOffsetHelper(OperandHelper):
         self.offset = offset
 
     def render(self):
-        result = [TBegMem(MemType.EXTERNAL),]
+        result = [TBegMem(MemType.EXTERNAL)]
         result.extend(self.imem.render())
         if self.offset:
             result.extend(self.offset.render())
@@ -538,6 +538,70 @@ class EMemRegOffsetHelper(OperandHelper):
         result.append(TEndMem(MemType.EXTERNAL))
         return result
 
+
+class RegIMemOffsetOrder(enum.Enum):
+    DEST_IMEM = 0
+    DEST_REG_OFFSET = 1
+
+# 0x56: page 77 of the book
+# (m), [r3±n]: encoded as `56 (8 r3 | C r3) m n
+#
+# 0x5E: page 77 of the book
+# [r3±m], (n): encoded as 5E (8 r3 | C r3) n m
+#
+# 0xE0: page 75 of the book
+# (n), [r3], : encoded as E0 (0 r3) n
+# (n), [r3++]: encoded as E0 (2 r3) n
+# (n), [--r3]: encoded as E0 (3 r3) n
+# (n), [r3±m]: encoded as E0 (8 r3 | C r3) n m
+#
+# 0xE8: page 75 of the book
+# [r3],   (n): encoded as E8 (0 r3) n
+# [r3++], (n): encoded as E8 (2 r3) n
+# [--r3], (n): encoded as E8 (3 r3) n
+# [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
+class RegIMemOffset(Operand):
+    def __init__(self, order: RegIMemOffsetOrder, allowed_modes:
+                 List[EMemRegMode] = None):
+        self.order = order
+        self.allowed_modes = allowed_modes
+        self.reg = None
+        self.imem = None
+        self.mode = None
+        self.offset = None
+
+    def operands(self):
+        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
+        if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
+            yield op
+            yield self.imem
+        else:
+            yield self.imem
+            yield op
+
+    def decode(self, decoder, addr):
+        super().decode(decoder, addr)
+        self.reg = Reg3()
+        self.reg.decode(decoder, addr)
+        self.reg.assert_r3()
+
+        self.imem = IMem8()
+        self.imem.decode(decoder, addr)
+
+        self.mode = EMemRegMode(self.reg.high4)
+        if self.allowed_modes is not None:
+            assert self.mode in self.allowed_modes
+
+        if self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET):
+            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
+            self.offset.decode(decoder, addr)
+
+    def encode(self, encoder, addr):
+        super().encode(encoder, addr)
+        self.reg.encode(encoder, addr)
+        self.imem.encode(encoder, addr)
+        if self.offset:
+            self.offset.encode(encoder, addr)
 
 class EMemReg(Operand):
     def __init__(self, allowed_modes=None):
@@ -606,6 +670,73 @@ class EMemIMem(Imm8):
     def render(self):
         op = EMemIMemOffsetHelper(self.imem, self.offset)
         return op.render()
+
+
+class EMemIMemOffsetOrder(enum.Enum):
+    DEST_INT_MEM = 0
+    DEST_EXT_MEM = 1
+
+# page 75 of the book
+# (m), [(n)]:   encoded as F0 00 m n
+# (l), [(m)+n]: encoded as F0 80 l m n
+# (l), [(m)-n]: encoded as F0 C0 l m n
+#
+# page 77 of the book
+# (m), [(n)]:   encoded as F3 00 m n
+# (l), [(m)+n]: encoded as F3 80 l m n
+# (l), [(m)-n]: encoded as F3 C0 l m n
+#
+# page 75 of the book
+# [(m)], (n):   encoded as F8 00 m n
+# [(l)+m], (n): encoded as F8 80 l m n
+# [(l)-m], (n): encoded as F8 C0 l m n
+#
+# page 77 of the book
+# [(m)], (n):   encoded as FB 00 m n
+# [(l)+m], (n): encoded as FB 80 l n m
+# [(l)-m], (n): encoded as FB C0 l n m
+class EMemIMemOffset(Operand):
+    def __init__(self, order: EMemIMemOffsetOrder):
+        self.order = order
+        self.mode_imm = None
+        self.mode = None
+        self.imem1 = None
+        self.imem2 = None
+        self.offset = None
+
+    def operands(self):
+        if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
+            yield self.imem1
+            op = EMemIMemOffsetHelper(self.imem2, self.offset)
+            yield op
+        else:
+            op = EMemIMemOffsetHelper(self.imem1, self.offset)
+            yield op
+            yield self.imem2
+
+    def decode(self, decoder, addr):
+        super().decode(decoder, addr)
+        self.mode_imm = Imm8()
+        self.mode_imm.decode(decoder, addr)
+
+        self.imem1 = IMem8()
+        self.imem1.decode(decoder, addr)
+
+        self.imem2 = IMem8()
+        self.imem2.decode(decoder, addr)
+
+        self.mode = EMemIMemMode(self.mode_imm.value)
+        if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
+            self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
+            self.offset.decode(decoder, addr)
+
+    def encode(self, encoder, addr):
+        super().encode(encoder, addr)
+        self.mode_imm.encode(encoder, addr)
+        self.imem1.encode(encoder, addr)
+        self.imem2.encode(encoder, addr)
+        if self.offset:
+            self.offset.encode(encoder, addr)
 
 
 # ADD/SUB can use various-sized register pairs
@@ -765,138 +896,6 @@ class MV(MoveInstruction):
 class MVP(MoveInstruction): pass # 20-bit move
 class MVLD(MoveInstruction): pass # Block move decrementing
 class MVL(MoveInstruction): pass
-
-class RegIMemOffsetOrder(enum.Enum):
-    DEST_IMEM = 0
-    DEST_REG_OFFSET = 1
-
-# 0x56: page 77 of the book
-# (m), [r3±n]: encoded as `56 (8 r3 | C r3) m n
-#
-# 0x5E: page 77 of the book
-# [r3±m], (n): encoded as 5E (8 r3 | C r3) n m
-#
-# 0xE0: page 75 of the book
-# (n), [r3], : encoded as E0 (0 r3) n
-# (n), [r3++]: encoded as E0 (2 r3) n
-# (n), [--r3]: encoded as E0 (3 r3) n
-# (n), [r3±m]: encoded as E0 (8 r3 | C r3) n m
-#
-# 0xE8: page 75 of the book
-# [r3],   (n): encoded as E8 (0 r3) n
-# [r3++], (n): encoded as E8 (2 r3) n
-# [--r3], (n): encoded as E8 (3 r3) n
-# [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
-class RegIMemOffset(Operand):
-    def __init__(self, order: RegIMemOffsetOrder, allowed_modes:
-                 List[EMemRegMode] = None):
-        self.order = order
-        self.allowed_modes = allowed_modes
-        self.reg = None
-        self.imem = None
-        self.mode = None
-        self.offset = None
-
-    def operands(self):
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
-            yield op
-            yield self.imem
-        else:
-            yield self.imem
-            yield op
-
-    def decode(self, decoder, addr):
-        super().decode(decoder, addr)
-        self.reg = Reg3()
-        self.reg.decode(decoder, addr)
-        self.reg.assert_r3()
-
-        self.imem = IMem8()
-        self.imem.decode(decoder, addr)
-
-        self.mode = EMemRegMode(self.reg.high4)
-        if self.allowed_modes is not None:
-            assert self.mode in self.allowed_modes
-
-        if self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
-
-    def encode(self, encoder, addr):
-        super().encode(encoder, addr)
-        self.reg.encode(encoder, addr)
-        self.imem.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
-
-
-class EMemIMemOffsetOrder(enum.Enum):
-    DEST_INT_MEM = 0
-    DEST_EXT_MEM = 1
-
-# page 75 of the book
-# (m), [(n)]:   encoded as F0 00 m n
-# (l), [(m)+n]: encoded as F0 80 l m n
-# (l), [(m)-n]: encoded as F0 C0 l m n
-#
-# page 77 of the book
-# (m), [(n)]:   encoded as F3 00 m n
-# (l), [(m)+n]: encoded as F3 80 l m n
-# (l), [(m)-n]: encoded as F3 C0 l m n
-#
-# page 75 of the book
-# [(m)], (n):   encoded as F8 00 m n
-# [(l)+m], (n): encoded as F8 80 l m n
-# [(l)-m], (n): encoded as F8 C0 l m n
-#
-# page 77 of the book
-# [(m)], (n):   encoded as FB 00 m n
-# [(l)+m], (n): encoded as FB 80 l n m
-# [(l)-m], (n): encoded as FB C0 l n m
-class EMemIMemOffset(Operand):
-    def __init__(self, order: EMemIMemOffsetOrder):
-        self.order = order
-        self.mode_imm = None
-        self.mode = None
-        self.imem1 = None
-        self.imem2 = None
-        self.offset = None
-
-    def operands(self):
-        if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
-            yield self.imem1
-            op = EMemIMemOffsetHelper(self.imem2, self.offset)
-            yield op
-        else:
-            op = EMemIMemOffsetHelper(self.imem1, self.offset)
-            yield op
-            yield self.imem2
-
-    def decode(self, decoder, addr):
-        super().decode(decoder, addr)
-        self.mode_imm = Imm8()
-        self.mode_imm.decode(decoder, addr)
-
-        self.imem1 = IMem8()
-        self.imem1.decode(decoder, addr)
-
-        self.imem2 = IMem8()
-        self.imem2.decode(decoder, addr)
-
-        self.mode = EMemIMemMode(self.mode_imm.value)
-        if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
-
-    def encode(self, encoder, addr):
-        super().encode(encoder, addr)
-        self.mode_imm.encode(encoder, addr)
-        self.imem1.encode(encoder, addr)
-        self.imem2.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
-
 
 class PRE(Instruction):
     def name(self):
