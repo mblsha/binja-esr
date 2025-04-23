@@ -486,7 +486,7 @@ class EMemAddr(Imm20):
 
 class OperandHelper(Operand):
     def render(self):
-        raise NotImplementedError("render() not implemented for OperandHelper")
+        raise NotImplementedError(f"render() not implemented for {self.__class__.__name__} helper")
 
 
 class EMemValueOffsetHelper(OperandHelper):
@@ -524,6 +524,28 @@ class EMemRegMode(enum.Enum):
     POSITIVE_OFFSET = 0x8
     NEGATIVE_OFFSET = 0xC
 
+class RegIncrementDecrementHelper(OperandHelper):
+    def __init__(self, reg, mode):
+        super().__init__()
+        self.reg = reg
+        self.mode = mode
+        assert mode in (EMemRegMode.SIMPLE, EMemRegMode.POST_INC, EMemRegMode.PRE_DEC)
+
+    def render(self):
+        result = []
+        if self.mode == EMemRegMode.SIMPLE:
+            result.extend(self.reg.render())
+        elif self.mode == EMemRegMode.POST_INC:
+            # FIXME: lifting would require adding a temp variable
+            result.extend(self.reg.render())
+            result.append(TText("++"))
+        elif self.mode == EMemRegMode.PRE_DEC:
+            result.append(TText("--"))
+            result.extend(self.reg.render())
+        else:
+            raise ValueError(f"Invalid mode: {self.mode}")
+        return result
+
 class EMemRegOffsetHelper(OperandHelper):
     def __init__(self, reg, mode: EMemRegMode, offset: Optional[ImmOffset]):
         super().__init__()
@@ -531,28 +553,16 @@ class EMemRegOffsetHelper(OperandHelper):
         self.mode = mode
         self.offset = offset
 
-    def render(self):
-        result = [TBegMem(MemType.EXTERNAL)]
-        # switch based on self.mode
-        if self.mode == EMemRegMode.SIMPLE:
-            result.extend(self.reg.render())
-        elif self.mode == EMemRegMode.POST_INC:
-            result.extend(self.reg.render())
-            result.append(TText("++"))
-        elif self.mode == EMemRegMode.PRE_DEC:
-            result.append(TText("--"))
-            result.extend(self.reg.render())
-        elif self.mode in (
-            EMemRegMode.POSITIVE_OFFSET,
-            EMemRegMode.NEGATIVE_OFFSET,
-        ):
-            result.extend(self.reg.render())
-            result.extend(self.offset.render())
+    def operands(self):
+        if self.mode in (EMemRegMode.SIMPLE,
+                         EMemRegMode.POST_INC,
+                         EMemRegMode.PRE_DEC):
+            reg = RegIncrementDecrementHelper(self.reg, self.mode)
         else:
-            raise ValueError(f"Invalid mode: {self.mode}")
-        result.append(TEndMem(MemType.EXTERNAL))
-        return result
+            reg = self.reg
 
+        op = EMemValueOffsetHelper(reg, self.offset)
+        yield op
 
 class RegIMemOffsetOrder(enum.Enum):
     DEST_IMEM = 0
@@ -588,11 +598,13 @@ class RegIMemOffset(Operand):
     def operands(self):
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
-            yield op
+            for o in op.operands():
+                yield o
             yield self.imem
         else:
             yield self.imem
-            yield op
+            for o in op.operands():
+                yield o
 
     def decode(self, decoder, addr):
         super().decode(decoder, addr)
@@ -644,9 +656,10 @@ class EMemReg(Operand):
         if self.offset:
             self.offset.encode(encoder, addr)
 
-    def render(self):
+    def operands(self):
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        return op.render()
+        for o in op.operands():
+            yield o
 
 # page 74 of the book
 # External Memory: Internal Memory indirect
@@ -682,10 +695,9 @@ class EMemIMem(Imm8):
         if self.offset:
             self.offset.encode(encoder, addr)
 
-    def render(self):
+    def operands(self):
         op = EMemValueOffsetHelper(self.imem, self.offset)
-        return op.render()
-
+        yield op
 
 class EMemIMemOffsetOrder(enum.Enum):
     DEST_INT_MEM = 0

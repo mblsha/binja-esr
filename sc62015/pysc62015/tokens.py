@@ -120,7 +120,7 @@ class TBegMem(Token):
         self.mem_type = mem_type
 
     def __repr__(self):
-        return "TBegMem({self.mem_type})"
+        return f"TBegMem({self.mem_type})"
 
     def __str__(self):
         if self.mem_type == MemType.EXTERNAL:
@@ -136,7 +136,7 @@ class TEndMem(Token):
         self.mem_type = mem_type
 
     def __repr__(self):
-        return "TEndMem({self.mem_type})"
+        return f"TEndMem({self.mem_type})"
 
     def __str__(self):
         if self.mem_type == MemType.EXTERNAL:

@@ -64,12 +64,18 @@ def test_mvi():
 
 
 def test_emem_reg():
+    def render(op):
+        r = []
+        for o in op.operands():
+            r.extend(o.render())
+        return r
+
     # SIMPLE
     decoder = Decoder(bytearray([0x04]))
     op = EMemReg()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.SIMPLE
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TReg("X"),
         TEndMem(MemType.EXTERNAL),
@@ -83,7 +89,7 @@ def test_emem_reg():
     op = EMemReg()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.POST_INC
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TReg("X"),
         TText("++"),
@@ -98,7 +104,7 @@ def test_emem_reg():
     op = EMemReg()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.PRE_DEC
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TText("--"),
         TReg("X"),
@@ -114,7 +120,7 @@ def test_emem_reg():
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.POSITIVE_OFFSET
     assert op.offset.value == 0xBB
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TReg("X"),
         TInt("+BB"),
@@ -130,7 +136,7 @@ def test_emem_reg():
     op.decode(decoder, 0x1234)
     assert op.mode == EMemRegMode.NEGATIVE_OFFSET
     assert op.offset.value == 0xBB
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TReg("X"),
         TInt("-BB"),
@@ -142,12 +148,18 @@ def test_emem_reg():
 
 
 def test_emem_imem():
+    def render(op):
+        r = []
+        for o in op.operands():
+            r.extend(o.render())
+        return r
+
     # SIMPLE
     decoder = Decoder(bytearray([0x00, 0x02]))
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.SIMPLE
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TBegMem(MemType.INTERNAL),
         TInt("02"),
@@ -160,7 +172,7 @@ def test_emem_imem():
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.POSITIVE_OFFSET
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TBegMem(MemType.INTERNAL),
         TInt("02"),
@@ -177,7 +189,7 @@ def test_emem_imem():
     op = EMemIMem()
     op.decode(decoder, 0x1234)
     assert op.mode == EMemIMemMode.NEGATIVE_OFFSET
-    assert op.render() == [
+    assert render(op) == [
         TBegMem(MemType.EXTERNAL),
         TBegMem(MemType.INTERNAL),
         TInt("02"),
@@ -322,3 +334,6 @@ def test_compare_opcodes():
             instr.lift(il, 0x1234)
         except Exception as exc:
             raise ValueError(f"Failed to lift {b.hex()} at line {i+1}: {s}") from exc
+
+        # FIXME: recursively check all llil instructions so that they
+        # won't contain any unimplemented instructions
