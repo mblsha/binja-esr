@@ -988,11 +988,22 @@ class CompareInstruction(Instruction): pass
 class TEST(CompareInstruction):
     def lift(self, il, addr):
         first, second = self.operands()
+        # FIXME: does it set the Z flag if any bit is set?
         il.append(il.set_flag("Z", il.and_expr(3, first.lift(il), second.lift(il))))
 
-class CMP(CompareInstruction): pass
-class CMPW(CompareInstruction): pass
-class CMPP(CompareInstruction): pass
+class CMP(CompareInstruction):
+    def width(self):
+        return 1
+    def lift(self, il, addr):
+        first, second = self.operands()
+        # FIXME: what's the proper width?
+        il.append(il.sub(self.width(), first.lift(il), second.lift(il), "CZ"))
+class CMPW(CMP):
+    def width(self):
+        return 2
+class CMPP(CMP):
+    def width(self):
+        return 3
 
 class ShiftRotateInstruction(Instruction): pass
 class ROR(ShiftRotateInstruction): pass
@@ -1035,8 +1046,12 @@ class HALT(MiscInstruction): pass
 class OFF(MiscInstruction): pass
 class IR(MiscInstruction): pass
 class RESET(MiscInstruction): pass
-class SC(MiscInstruction): pass
-class RC(MiscInstruction): pass
+class SC(MiscInstruction):
+    def lift(self, il, addr):
+        il.append(il.set_flag("C", il.const(1, 1)))
+class RC(MiscInstruction):
+    def lift(self, il, addr):
+        il.append(il.set_flag("C", il.const(1, 0)))
 class TCL(MiscInstruction): pass
 
 class UnknownInstruction(Instruction):
