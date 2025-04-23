@@ -207,9 +207,12 @@ class Instruction:
         if self._operands is None:
             yield from ()
         else:
-            for operand in self._operands:
-                for op in operand.operands():
-                    yield op
+            # three levels of indirection SURELY is enough to handle cases
+            # where operands expand to other operands
+            for op1 in self._operands:
+                for op2 in op1.operands():
+                    for op3 in op2.operands():
+                        yield op3
 
     # physical opcode encoding order
     def operands_coding(self):
@@ -598,13 +601,11 @@ class RegIMemOffset(Operand):
     def operands(self):
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
-            for o in op.operands():
-                yield o
+            yield op
             yield self.imem
         else:
             yield self.imem
-            for o in op.operands():
-                yield o
+            yield op
 
     def decode(self, decoder, addr):
         super().decode(decoder, addr)
@@ -658,8 +659,7 @@ class EMemReg(Operand):
 
     def operands(self):
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
-        for o in op.operands():
-            yield o
+        yield op
 
 # page 74 of the book
 # External Memory: Internal Memory indirect
