@@ -383,32 +383,80 @@ class IMemHelper(Operand):
     def lift_assign(self, il, value):
         il.append(il.store(self.width(), self.imem_addr(il), value))
 
+class EMemHelper(Operand):
+    def __init__(self, width, value):
+        super().__init__()
+        self._width = width
+        self.value = value
+
+    def width(self):
+        return self.width
+
+    def render(self):
+        result = [TBegMem(MemType.EXTERNAL)]
+        result.extend(self.value.render())
+        result.append(TEndMem(MemType.EXTERNAL))
+        return result
+
+    def emem_addr(self, il):
+        if isinstance(self.value, ImmOperand):
+            raw_addr = self.value.value
+            return il.const_pointer(3, raw_addr)
+
+        return self.value.lift(il)
+
+    def lift(self, il):
+        return il.load(self.width(), self.emem_addr(il))
+
+    def lift_assign(self, il, value):
+        il.append(il.store(self.width(), self.emem_addr(il), value))
+
+
+class Pointer:
+    def lift_current_addr(self, il):
+        raise NotImplementedError(f"lift_current_addr() not implemented for {type(self)}")
+
+    def memory_helper(self):
+        raise NotImplementedError(f"memory_helper() not implemented for {type(self)}")
 
 # Read 8 bits from internal memory based on Imm8 address.
-class IMem8(Imm8):
-    def helper(self):
+class IMem8(Imm8, Pointer):
+    def width(self):
+        return 1
+
+    def lift_current_addr(self, il):
+        return il.const_pointer(3, INTERNAL_MEMORY_START + self.value)
+
+    def memory_helper(self):
+        return IMemHelper
+
+    def _helper(self):
         return IMemHelper(self.width(), Imm8(self.value))
 
     def render(self):
-        return self.helper().render()
+        return self._helper().render()
 
     # We need to extract the raw address from IMem8 for MVL / MVLD,
     # so can't return the helper directly.
     #
     # def operands(self):
-    #     yield self.helper()
+    #     yield self._helper()
 
     def lift(self, il):
-        return self.helper().lift(il)
+        return self._helper().lift(il)
 
     def lift_assign(self, il, value):
-        return self.helper().lift_assign(il, value)
+        return self._helper().lift_assign(il, value)
 
 # Read 16 bits from internal memory based on Imm8 address.
-class IMem16(IMem8): pass
+class IMem16(IMem8):
+    def width(self):
+        return 2
 
 # Read 20 bits from internal memory based on Imm8 address.
-class IMem20(IMem8): pass
+class IMem20(IMem8):
+    def width(self):
+        return 3
 
 # Register operand encoded as part of the instruction opcode
 class Reg(Operand):
@@ -528,7 +576,13 @@ class Reg3(Operand):
 
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
-class EMemAddr(Imm20):
+class EMemAddr(Imm20, Pointer):
+    def lift_current_addr(self, il):
+        return il.const_pointer(3, self.value)
+
+    def memory_helper(self):
+        return EMemHelper
+
     def render(self):
         return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
 
@@ -539,11 +593,20 @@ class EMemAddr(Imm20):
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
 
-class EMemValueOffsetHelper(OperandHelper):
+class EMemValueOffsetHelper(OperandHelper, Pointer):
     def __init__(self, value, offset: Optional[ImmOffset]):
         super().__init__()
         self.value = value
         self.offset = offset
+
+    def lift_current_addr(self, il):
+        addr = self.value.lift(il)
+        if self.offset:
+            addr = self.offset.lift_offset(il, addr)
+        return addr
+
+    def memory_helper(self):
+        return EMemHelper
 
     def render(self):
         result = [TBegMem(MemType.EXTERNAL)]
@@ -554,19 +617,12 @@ class EMemValueOffsetHelper(OperandHelper):
         return result
 
     def lift(self, il):
-        addr = self.value.lift(il)
-        if self.offset:
-            addr = self.offset.lift_offset(il, addr)
         # FIXME: need to figure out the size to use
-        return il.load(1, addr)
+        return il.load(1, self.lift_current_addr(il))
 
     def lift_assign(self, il, value):
-        addr = self.value.lift(il)
-        if self.offset:
-            addr = self.offset.lift_offset(il, addr)
-
         # FIXME: what's the width?
-        il.append(il.store(1, addr, value))
+        il.append(il.store(1, self.lift_current_addr(il), value))
 
 # page 74 of the book
 # External Memory: Register Indirect
@@ -1009,29 +1065,37 @@ class MV(MoveInstruction):
         dst.lift_assign(il, src.lift(il))
 
 class MVL(MoveInstruction):
+    def modify_addr_il(self, il):
+        return il.add
+
     def lift(self, il, addr):
         # FIXME: need to finish this
         # return super().lift(il, addr)
 
         dst, src = self.operands()
         # 0xCB and 0xCF variants use IMem8, IMem8
-        assert isinstance(dst, IMem8), f"Expected IMem8, got {type(dst)}"
-        assert isinstance(src, IMem8), f"Expected IMem8, got {type(src)}"
-        dst_reg = TempReg(LLIL_TEMP(0), width=dst.width())
-        dst_reg.lift_assign(il, dst.lift(il))
-        src_reg = TempReg(LLIL_TEMP(1), width=src.width())
-        src_reg.lift_assign(il, src.lift(il))
+        # assert isinstance(dst, IMem8), f"Expected IMem8, got {type(dst)}"
+        # assert isinstance(src, IMem8), f"Expected IMem8, got {type(src)}"
+        dst_reg = TempReg(LLIL_TEMP(0))
+        dst_reg.lift_assign(il, dst.lift_current_addr(il))
+        src_reg = TempReg(LLIL_TEMP(1))
+        src_reg.lift_assign(il, src.lift_current_addr(il))
 
         with lift_loop(il):
-            src_mem = IMemHelper(src.width(), src_reg)
-            dst_mem = IMemHelper(dst.width(), dst_reg)
+            # src_mem = IMemHelper(src.width(), src_reg)
+            # dst_mem = IMemHelper(dst.width(), dst_reg)
+            src_mem = src.memory_helper()(1, src_reg)
+            dst_mem = dst.memory_helper()(1, dst_reg)
             dst_mem.lift_assign(il, src_mem.lift(il))
 
             # +1 index
-            dst_reg.lift_assign(il, il.add(dst_reg.width(), dst_reg.lift(il), il.const(1, 1)))
-            src_reg.lift_assign(il, il.add(src_reg.width(), src_reg.lift(il), il.const(1, 1)))
+            func = self.modify_addr_il(il)
+            dst_reg.lift_assign(il, func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1)))
+            src_reg.lift_assign(il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1)))
 
-class MVLD(MoveInstruction): pass
+class MVLD(MVL):
+    def modify_addr_il(self, il):
+        return il.sub
 
 class PRE(Instruction):
     def name(self):
