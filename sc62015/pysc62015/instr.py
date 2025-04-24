@@ -1215,9 +1215,14 @@ class MiscInstruction(Instruction): pass
 class WAIT(MiscInstruction):
     def lift(self, il, addr):
         with lift_loop(il):
+            # Wait is just an idle loop
             pass
 
-class PMDF(MiscInstruction): pass
+class PMDF(MiscInstruction):
+    def lift(self, il, addr):
+        dst, src = self.operands()
+        dst.lift_assign(il, il.add(1, dst.lift(il), src.lift(il)))
+
 class SWAP(MiscInstruction): pass
 class HALT(MiscInstruction): pass
 class OFF(MiscInstruction): pass
