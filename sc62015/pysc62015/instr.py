@@ -392,8 +392,11 @@ class IMem8(Imm8):
     def render(self):
         return self.helper().render()
 
-    def operands(self):
-        yield self.helper()
+    # We need to extract the raw address from IMem8 for MVL / MVLD,
+    # so can't return the helper directly.
+    #
+    # def operands(self):
+    #     yield self.helper()
 
     def lift(self, il):
         return self.helper().lift(il)
@@ -1008,15 +1011,25 @@ class MV(MoveInstruction):
 class MVL(MoveInstruction):
     def lift(self, il, addr):
         # FIXME: need to finish this
-        return super().lift(il, addr)
+        # return super().lift(il, addr)
 
         dst, src = self.operands()
         # 0xCB and 0xCF variants use IMem8, IMem8
-        assert isinstance(dst, IMem8)
-        assert isinstance(src, IMem8)
+        assert isinstance(dst, IMem8), f"Expected IMem8, got {type(dst)}"
+        assert isinstance(src, IMem8), f"Expected IMem8, got {type(src)}"
+        dst_reg = TempReg(LLIL_TEMP(0), width=dst.width())
+        dst_reg.lift_assign(il, dst.lift(il))
+        src_reg = TempReg(LLIL_TEMP(1), width=src.width())
+        src_reg.lift_assign(il, src.lift(il))
+
         with lift_loop(il):
-            # need to +1 the index
-            dst.lift_assign(il, src.lift(il))
+            src_mem = IMemHelper(src.width(), src_reg)
+            dst_mem = IMemHelper(dst.width(), dst_reg)
+            dst_mem.lift_assign(il, src_mem.lift(il))
+
+            # +1 index
+            dst_reg.lift_assign(il, il.add(dst_reg.width(), dst_reg.lift(il), il.const(1, 1)))
+            src_reg.lift_assign(il, il.add(src_reg.width(), src_reg.lift(il), il.const(1, 1)))
 
 class MVLD(MoveInstruction): pass
 
