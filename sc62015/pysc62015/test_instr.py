@@ -198,7 +198,7 @@ def test_emem_value_offset_helper_lifting():
                 "ADD.b",
                 [
                     mllil(
-                        "LOAD", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB])]
+                        "LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB])]
                     ),
                     mllil("CONST.b", [0xCD]),
                 ],
@@ -230,11 +230,11 @@ def test_lift_mv():
     instr.lift(il, 0x1234)
     assert il.ils == [
         mllil(
-            "STORE",
+            "STORE.b",
             [
                 mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xAB]),
                 mllil(
-                    "LOAD",
+                    "LOAD.b",
                     [
                         mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xCD]),
                     ],

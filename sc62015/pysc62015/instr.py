@@ -364,7 +364,7 @@ class IMemHelper(Operand):
         self.value = value
 
     def width(self):
-        return self.width
+        return self._width
 
     def render(self):
         result = [TBegMem(MemType.INTERNAL)]
@@ -379,8 +379,10 @@ class IMemHelper(Operand):
 
         addr = self.value.lift(il)
         addr = il.add(3, addr, il.const(3, INTERNAL_MEMORY_START))
+        return addr
 
     def lift(self, il):
+        addr = self.imem_addr(il)
         return il.load(self.width(), self.imem_addr(il))
 
     def lift_assign(self, il, value):
@@ -393,7 +395,7 @@ class EMemHelper(Operand):
         self.value = value
 
     def width(self):
-        return self.width
+        return self._width
 
     def render(self):
         result = [TBegMem(MemType.EXTERNAL)]
@@ -1172,7 +1174,7 @@ def bcd_add_emul(il, w, a, b):
                            il.compare_unsigned_greater_than(w, s, il.const(w, 0x99)))
     il.append(il.set_flag('C', carry_out))
     # binary flags (Z)
-    il.append(il.set_flag('Z', il.compare_equal(w, result, il.const(w, 0))))
+    il.append(il.set_flag('Z', il.compare_equal(w, result.lift(il), il.const(w, 0))))
     return result
 
 # FIXME: likely extremely wrong
@@ -1209,7 +1211,7 @@ def bcd_sub_emul(il, w, a, b):
         il.compare_unsigned_less_than(w, a, b_ext),
         need_adjust))
     il.append(il.set_flag('C', carry_out))
-    il.append(il.set_flag('Z', il.compare_equal(w, result, il.const(w, 0))))
+    il.append(il.set_flag('Z', il.compare_equal(w, result.lift(il), il.const(w, 0))))
     return result
 
 # FIXME: likely extremely wrong
@@ -1321,6 +1323,7 @@ class CMPP(CMP):
 class ShiftRotateInstruction(Instruction): pass
 class ROR(ShiftRotateInstruction): pass
 class ROL(ShiftRotateInstruction): pass
+
 class SHR(ShiftRotateInstruction): pass
 class SHL(ShiftRotateInstruction): pass
 class DSRL(ShiftRotateInstruction): pass
@@ -1381,6 +1384,7 @@ class HALT(MiscInstruction): pass
 # System Clock Stop; Sub Clock Stop
 class OFF(MiscInstruction): pass
 
+# FIXME: verify on real hardware
 class IR(MiscInstruction):
     def lift(self, il, addr):
         pass
