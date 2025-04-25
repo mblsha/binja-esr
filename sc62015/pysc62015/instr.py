@@ -2,6 +2,7 @@
 from .tokens import Token, TInstr, TText, TSep, TInt, TAddr, TReg, TBegMem, TEndMem, MemType
 from .coding import Decoder, Encoder, BufferTooShort
 from .mock_analysis import BranchType
+from .mock_llil import MockLLIL
 
 import copy
 from dataclasses import dataclass
@@ -386,6 +387,7 @@ class IMemHelper(Operand):
         return il.load(self.width(), self.imem_addr(il))
 
     def lift_assign(self, il, value):
+        assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
         il.append(il.store(self.width(), self.imem_addr(il), value))
 
 class EMemHelper(Operand):
@@ -414,6 +416,7 @@ class EMemHelper(Operand):
         return il.load(self.width(), self.emem_addr(il))
 
     def lift_assign(self, il, value):
+        assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
         il.append(il.store(self.width(), self.emem_addr(il), value))
 
 
@@ -1261,6 +1264,7 @@ def lift_multi_byte(il, op1, op2,
         if bcd:
             fn = bcd_sub_emul if subtract else bcd_add_emul
             res = fn(il, w, a, b)
+            res = res.lift(il)
         else:
             res = opfn(w, a, b, 'CZ')
 
