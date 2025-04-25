@@ -1324,12 +1324,23 @@ class CMPP(CMP):
     def width(self):
         return 3
 
-class ShiftRotateInstruction(Instruction): pass
-class ROR(ShiftRotateInstruction): pass
-class ROL(ShiftRotateInstruction): pass
+# FIXME: verify on real hardware
+class ShiftRotateInstruction(Instruction):
+    def shift_by(self, il):
+        return il.const(1, 1)
+class ROR(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_right(1, il_arg1, self.shift_by(il), 'CZ')
+class SHR(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
+class ROL(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_left(1, il_arg1, self.shift_by(il), 'CZ')
+class SHL(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), 'CZ')
 
-class SHR(ShiftRotateInstruction): pass
-class SHL(ShiftRotateInstruction): pass
 class DSRL(ShiftRotateInstruction): pass
 class DSLL(ShiftRotateInstruction): pass
 

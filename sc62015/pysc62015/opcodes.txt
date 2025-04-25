@@ -846,12 +846,12 @@ E32407: MVL   (07),[X++]
 E33700: MVL   (00),[--S]
 E33707: MVL   (07),[--S]
 
-# E4: ROR   A
-# E500: ROR   (00)
-# E507: ROR   (07)
-# E6: ROL   A
-# E700: ROL   (00)
-# E707: ROL   (07)
+E4: ROR   A
+E500: ROR   (00)
+E507: ROR   (07)
+E6: ROL   A
+E700: ROL   (00)
+E707: ROL   (07)
 
 E80400: MV    [X],(00)
 E80407: MV    [X],(07)
@@ -904,12 +904,12 @@ F300CDAB:   MVL (CD),[(AB)]
 F380ABCDEF: MVL (AB),[(CD)+EF]
 F3C0ABCDEF: MVL (AB),[(CD)-EF]
 
-# F4: SHR   A
-# F500: SHR   (00)
-# F507: SHR   (07)
-# F6: SHL   A
-# F700: SHL   (00)
-# F707: SHL   (07)
+F4: SHR   A
+F500: SHR   (00)
+F507: SHR   (07)
+F6: SHL   A
+F700: SHL   (00)
+F707: SHL   (07)
 
 F800ABCD:   MV  [(AB)],(CD)
 F880ABCDEF: MV  [(AB)+EF],(CD)
