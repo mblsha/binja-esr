@@ -1361,8 +1361,6 @@ class PMDF(MiscInstruction):
         dst.lift_assign(il, il.add(1, dst.lift(il), src.lift(il)))
 
 class SWAP(MiscInstruction): pass
-class HALT(MiscInstruction): pass
-class OFF(MiscInstruction): pass
 class IR(MiscInstruction): pass
 class RESET(MiscInstruction): pass
 class SC(MiscInstruction):
@@ -1371,7 +1369,16 @@ class SC(MiscInstruction):
 class RC(MiscInstruction):
     def lift(self, il, addr):
         il.append(il.set_flag("C", il.const(1, 0)))
+
+# FIXME: what does it do???
+# Divider ← D
 class TCL(MiscInstruction): pass
+
+# System Clock Stop
+class HALT(MiscInstruction): pass
+
+# System Clock Stop; Sub Clock Stop
+class OFF(MiscInstruction): pass
 
 class UnknownInstruction(Instruction):
     def name(self):
