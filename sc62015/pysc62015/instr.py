@@ -1074,16 +1074,12 @@ class MVL(MoveInstruction):
 
         dst, src = self.operands()
         # 0xCB and 0xCF variants use IMem8, IMem8
-        # assert isinstance(dst, IMem8), f"Expected IMem8, got {type(dst)}"
-        # assert isinstance(src, IMem8), f"Expected IMem8, got {type(src)}"
         dst_reg = TempReg(LLIL_TEMP(0))
         dst_reg.lift_assign(il, dst.lift_current_addr(il))
         src_reg = TempReg(LLIL_TEMP(1))
         src_reg.lift_assign(il, src.lift_current_addr(il))
 
         with lift_loop(il):
-            # src_mem = IMemHelper(src.width(), src_reg)
-            # dst_mem = IMemHelper(dst.width(), dst_reg)
             src_mem = src.memory_helper()(1, src_reg)
             dst_mem = dst.memory_helper()(1, dst_reg)
             dst_mem.lift_assign(il, src_mem.lift(il))
@@ -1135,16 +1131,157 @@ class ADD(ArithmeticInstruction):
 class ADC(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
         return il.add(self.width(), il_arg1, il.add(self.width(), il_arg2, il.flag('C')), 'CZ')
-class ADCL(ArithmeticInstruction): pass
 class SUB(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
         return il.sub(self.width(), il_arg1, il_arg2, 'CZ')
 class SBC(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
         return il.sub(self.width(), il_arg1, il.add(self.width(), il_arg2, il.flag('C')), 'CZ')
-class SBCL(ArithmeticInstruction): pass
-class DADL(ArithmeticInstruction): pass
-class DSBL(ArithmeticInstruction): pass
+
+
+# FIXME: likely extremely wrong
+def bcd_add_emul(il, w, a, b):
+    # raw sum
+    s = il.add(w, a, b)
+    # adjust lower nibble if > 9 or carry in
+    low = il.and_expr(w, s, il.const(w, 0xF))
+    need_adjust = il.compare_unsigned_greater_than(w, low, il.const(w, 9))
+    s_adj = il.add(w, s, il.const(w, 6))
+
+    # result = il.if_then_else(need_adjust, s_adj, s)
+    result = TempReg(LLIL_TEMP(10))
+    if_true = LowLevelILLabel()
+    if_false = LowLevelILLabel()
+    after = LowLevelILLabel()
+    il.append(il.if_expr(need_adjust, if_true, if_false))
+
+    il.mark_label(if_true)
+    result.lift_assign(il, s_adj)
+    il.append(il.goto(after))
+
+    il.mark_label(if_false)
+    result.lift_assign(il, s)
+
+    il.mark_label(after)
+
+    # update carry: if raw sum > 0x99 or adjust condition
+    carry_out = il.or_expr(w, need_adjust,
+                           il.compare_unsigned_greater_than(w, s, il.const(w, 0x99)))
+    il.append(il.set_flag('C', carry_out))
+    # binary flags (Z)
+    il.append(il.set_flag('Z', il.compare_equal(w, result, il.const(w, 0))))
+    return result
+
+# FIXME: likely extremely wrong
+def bcd_sub_emul(il, w, a, b):
+    # raw diff with borrow
+    borrow = il.flag('C')
+    b_ext = il.add(w, b, borrow)
+    d = il.sub(w, a, b_ext)
+    # adjust lower nibble if borrow from nibble
+    low_a = il.and_expr(w, a, il.const(w, 0xF))
+    low_b = il.and_expr(w, b_ext, il.const(w, 0xF))
+    need_adjust = il.compare_unsigned_less_than(w, low_a, low_b)
+    d_adj = il.sub(w, d, il.const(w, 6))
+
+    # result = il.if_then_else(need_adjust, d_adj, d)
+    result = TempReg(LLIL_TEMP(10))
+    if_true = LowLevelILLabel()
+    if_false = LowLevelILLabel()
+    after = LowLevelILLabel()
+    il.append(il.if_expr(need_adjust, if_true, if_false))
+
+    il.mark_label(if_true)
+    result.lift_assign(il, d_adj)
+    il.append(il.goto(after))
+
+    il.mark_label(if_false)
+    result.lift_assign(il, d)
+    il.mark_label(after)
+
+    il.mark_label(after)
+
+    # update carry: invert borrow
+    carry_out = il.not_expr(w, il.or_expr(w,
+        il.compare_unsigned_less_than(w, a, b_ext),
+        need_adjust))
+    il.append(il.set_flag('C', carry_out))
+    il.append(il.set_flag('Z', il.compare_equal(w, result, il.const(w, 0))))
+    return result
+
+# FIXME: likely extremely wrong
+# FIXME: re-verify on real hardware
+def lift_multi_byte(il, op1, op2,
+                    clear_carry=False,
+                    reverse=False,
+                    bcd=False,
+                    subtract=False):
+    w = op1.width()
+
+    def make_handlers(op):
+        if isinstance(op, Pointer):
+            # memory operand: use pointer temp
+            ptr = TempReg(LLIL_TEMP(0 if op is op1 else 1), width=3)
+            ptr.lift_assign(il, op.lift_current_addr(il))
+            load = lambda: op.memory_helper()(w, ptr).lift(il)
+            store = lambda val: op.memory_helper()(w, ptr).lift_assign(il, val)
+            def advance():
+                op_il = il.sub if reverse else il.add
+                ptr.lift_assign(il, op_il(3, ptr.lift(il), il.const(3, 1)))
+        else:
+            # register operand: direct
+            load = lambda: op.lift(il)
+            store = lambda val: op.lift_assign(il, val)
+            def advance(): pass
+        return load, store, advance
+
+    load1, store1, adv1 = make_handlers(op1)
+    load2, store2, adv2 = make_handlers(op2)
+
+    if clear_carry:
+        il.append(il.set_flag('C', il.const(1, 0)))
+
+    with lift_loop(il):
+        a = load1(); b = load2()
+
+        # if using subtract with borrow, fold C into operand
+        if subtract:
+            b = il.add(w, b, il.flag('C'))
+            opfn = il.sub
+        else:
+            b = il.sub(w, b, il.flag('C'))
+            opfn = il.add
+
+        # choose BCD or binary op
+        if bcd:
+            fn = bcd_sub_emul if subtract else bcd_add_emul
+            res = fn(il, w, a, b)
+        else:
+            res = opfn(w, a, b, 'CZ')
+
+        store1(res)
+        adv1(); adv2()
+
+class ADCL(ArithmeticInstruction):
+    def lift(self, il, addr):
+        dst, src = self.operands()
+        lift_multi_byte(il, dst, src, clear_carry=True)
+
+class SBCL(ArithmeticInstruction):
+    def lift(self, il, addr):
+        dst, src = self.operands()
+        lift_multi_byte(il, dst, src, subtract=True)
+
+class DADL(ArithmeticInstruction):
+    def lift(self, il, addr):
+        dst, src = self.operands()
+        lift_multi_byte(il, dst, src, clear_carry=True, bcd=True, reverse=True)
+
+class DSBL(ArithmeticInstruction):
+    def lift(self, il, addr):
+        dst, src = self.operands()
+        lift_multi_byte(il, dst, src, bcd=True, subtract=True, reverse=True)
+
 
 class LogicInstruction(Instruction): pass
 class AND(LogicInstruction):

@@ -60,6 +60,10 @@ class MockLabel:
     args: List[Any]
     meta: Dict[str, Any]
 
+@dataclass
+class MockGoto:
+    label: Any
+
 
 class MockLowLevelILFunction(LowLevelILFunction):
     def __init__(self):
@@ -73,6 +77,9 @@ class MockLowLevelILFunction(LowLevelILFunction):
     def mark_label(self, *args, **kwargs):
         # remove source_location from kwargs
         return MockLabel(args, kwargs)
+
+    def goto(self, label):
+        return MockGoto(label)
 
     def if_expr(self, cond, t, f):
         return MockIfExpr(cond, t, f)
