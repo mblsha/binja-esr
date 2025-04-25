@@ -1381,7 +1381,14 @@ class PMDF(MiscInstruction):
         dst, src = self.operands()
         dst.lift_assign(il, il.add(1, dst.lift(il), src.lift(il)))
 
-class SWAP(MiscInstruction): pass
+class SWAP(MiscInstruction):
+    def lift_operation(self, il, il_arg1):
+        low = il.and_expr(1, il_arg1, il.const(1, 0x0F))
+        low = il.shift_left(1, low, il.const(1, 4))
+        high = il.and_expr(1, il_arg1, il.const(1, 0xF0))
+        high = il.shift_right(1, high, il.const(1, 4))
+        return il.or_expr(1, low, high, "Z")
+
 class SC(MiscInstruction):
     def lift(self, il, addr):
         il.append(il.set_flag("C", il.const(1, 1)))
