@@ -9,7 +9,7 @@ from binaryninja.types import Symbol, Type
 from binaryninja.enums import SegmentFlag, SymbolType
 from binaryninja.enums import SymbolType, SegmentFlag, SectionSemantics, Endianness
 
-from .pysc62015.instr import INTERNAL_MEMORY_START, IMEM_NAMES
+from .pysc62015.instr import INTERNAL_MEMORY_START, IMEM_NAMES, INTERRUPT_VECTOR_ADDR, ENTRY_POINT_ADDR
 
 
 @dataclass
@@ -86,8 +86,8 @@ class SC62015View(BinaryView):
             self.define_data_var(full_addr, f"uint8_t", name)
 
 
-        self._interrupt_vector = self.read_int(0xFFFFA, 3)
-        self._entry_point = self.read_int(0xFFFFD, 3)
+        self._interrupt_vector = self.read_int(INTERRUPT_VECTOR_ADDR, 3)
+        self._entry_point = self.read_int(ENTRY_POINT_ADDR, 3)
 
         self.define_auto_symbol(
             Symbol(

@@ -20,6 +20,7 @@ from .instr import (
     TCL,
     HALT,
     OFF,
+    IR,
 )
 from .tokens import TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
 from .coding import Decoder, Encoder
@@ -343,5 +344,5 @@ def test_compare_opcodes():
             for instr in ils:
                 check_no_unimplemented(instr)
 
-        if not isinstance(instr, (UnknownInstruction, PRE, TCL, HALT, OFF)):
+        if not isinstance(instr, (UnknownInstruction, PRE, TCL, HALT, OFF, IR)):
             start_check_lifting(il.ils)

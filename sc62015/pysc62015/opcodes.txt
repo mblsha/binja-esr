@@ -931,5 +931,5 @@ FD00: MV    A,A
 FD01: MV    A,IL
 FD10: MV    IL,A
 FD07: MV    A,S
-# FE: IR
-# FF: RESET
+FE: IR
+FF: RESET

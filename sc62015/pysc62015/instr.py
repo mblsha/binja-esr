@@ -35,6 +35,9 @@ REGISTERS = [
 REG_NAMES = [reg[0] for reg in REGISTERS]
 REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
 
+INTERRUPT_VECTOR_ADDR = 0xFFFFA
+ENTRY_POINT_ADDR = 0xFFFFD
+
 # map internal memory to start at this address
 # FIXME: not sure whether it overlaps with the external memory, need testing
 # on real hardware.
@@ -1361,8 +1364,6 @@ class PMDF(MiscInstruction):
         dst.lift_assign(il, il.add(1, dst.lift(il), src.lift(il)))
 
 class SWAP(MiscInstruction): pass
-class IR(MiscInstruction): pass
-class RESET(MiscInstruction): pass
 class SC(MiscInstruction):
     def lift(self, il, addr):
         il.append(il.set_flag("C", il.const(1, 1)))
@@ -1379,6 +1380,15 @@ class HALT(MiscInstruction): pass
 
 # System Clock Stop; Sub Clock Stop
 class OFF(MiscInstruction): pass
+
+class IR(MiscInstruction):
+    def lift(self, il, addr):
+        pass
+class RESET(MiscInstruction):
+    def lift(self, il, addr):
+        mem = EMemAddr()
+        mem.value = ENTRY_POINT_ADDR
+        il.append(il.jump(mem.lift(il)))
 
 class UnknownInstruction(Instruction):
     def name(self):
