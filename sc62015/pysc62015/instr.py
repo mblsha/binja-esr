@@ -39,9 +39,11 @@ REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
 INTERRUPT_VECTOR_ADDR = 0xFFFFA
 ENTRY_POINT_ADDR = 0xFFFFD
 
+# Hitachi LCD Driver
 SH26_ADDR_START = 0x00000
 SH26_ADDR_END   = 0x3FFFF
 
+# TENRI LCD Segment Driver
 LH5073A1_ADDR_START = 0x40000
 LH5073A1_ADDR_END   = 0x7FFFF
 
@@ -577,6 +579,11 @@ class ImmOffset(Imm8):
         return il.add(self.width(), value, offset)
 
 
+# Internal Memory Addressing Modes:
+# 1. Direct
+# 2. BP-indexed
+# 3. PX/PY-indexed
+# 4. BP-indexed with PX/PY offset
 class IMemHelper(Operand):
     def __init__(self, width, value):
         super().__init__()
@@ -1269,7 +1276,7 @@ class RET(RetInstruction): pass
 class RETF(RetInstruction):
     def addr_size(self):
         return 3
-class RETI(Instruction):
+class RETI(RetInstruction):
     def lift(self, il, addr):
         imr = RegIMR()
         imr, *rest = imr.operands()
@@ -1499,11 +1506,13 @@ class SBCL(ArithmeticInstruction):
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, subtract=True)
 
+# Decimal
 class DADL(ArithmeticInstruction):
     def lift(self, il, addr):
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, clear_carry=True, bcd=True, reverse=True)
 
+# Decimal
 class DSBL(ArithmeticInstruction):
     def lift(self, il, addr):
         dst, src = self.operands()
@@ -1546,19 +1555,22 @@ class CMPP(CMP):
 class ShiftRotateInstruction(Instruction):
     def shift_by(self, il):
         return il.const(1, 1)
+# bit rotation
 class ROR(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
         return il.rotate_right(1, il_arg1, self.shift_by(il), 'CZ')
-class SHR(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
-        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
 class ROL(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
         return il.rotate_left(1, il_arg1, self.shift_by(il), 'CZ')
+# bit shift
 class SHL(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
         return il.rotate_left_carry(1, il_arg1, self.shift_by(il), 'CZ')
+class SHR(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
 
+# digit shift
 class DSRL(ShiftRotateInstruction): pass
 class DSLL(ShiftRotateInstruction): pass
 
@@ -1616,19 +1628,32 @@ class RC(MiscInstruction):
 
 # FIXME: what does it do???
 # Divider ← D
+# FIXME: create intrinsic for this
 class TCL(MiscInstruction): pass
 
 # System Clock Stop
+# Execution can continue past HALT: ON, IRQ, KI pins
+# FIXME: create intrinsic for this
+# USR resets bits 0 to 2/5 to 0
+# SSR bit 2 and USR 3 and 4 are set to 1
 class HALT(MiscInstruction): pass
 
 # System Clock Stop; Sub Clock Stop
+# Execution can continue past OFF: ON, IRQ, KI pins
+# FIXME: create intrinsic for this
 class OFF(MiscInstruction): pass
 
 # FIXME: verify on real hardware
 class IR(MiscInstruction):
     def lift(self, il, addr):
         pass
+# ACM bit 7, UCR + USR bits 0 to 2/5, IMR, SCR, SSR bit 2 are all reset to 0
+# USR bits 3 and 4 are set to 1
 class RESET(MiscInstruction):
+    def analyze(self, info, addr):
+        super().analyze(info, addr)
+        info.add_branch(BranchType.FunctionReturn)
+
     def lift(self, il, addr):
         mem = EMemAddr()
         mem.value = ENTRY_POINT_ADDR
