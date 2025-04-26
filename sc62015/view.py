@@ -9,7 +9,20 @@ from binaryninja.types import Symbol, Type
 from binaryninja.enums import SegmentFlag, SymbolType
 from binaryninja.enums import SymbolType, SegmentFlag, SectionSemantics, Endianness
 
-from .pysc62015.instr import INTERNAL_MEMORY_START, IMEM_NAMES, INTERRUPT_VECTOR_ADDR, ENTRY_POINT_ADDR
+from .pysc62015.instr import (
+    INTERNAL_MEMORY_START,
+    IMEM_NAMES,
+    INTERRUPT_VECTOR_ADDR,
+    ENTRY_POINT_ADDR,
+    SH26_ADDR_START,
+    SH26_ADDR_END,
+    LH5073A1_ADDR_START,
+    LH5073A1_ADDR_END,
+    CE1_ADDR_START,
+    CE1_ADDR_END,
+    CE0_ADDR_START,
+    CE0_ADDR_END,
+)
 
 
 @dataclass
@@ -75,16 +88,66 @@ class SC62015View(BinaryView):
             )
         )
 
+        segments.append(
+            Segment(
+                f"SH26",
+                SH26_ADDR_START,
+                SH26_ADDR_END - SH26_ADDR_START,
+                None,
+                None,
+                SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
+                SectionSemantics.ReadWriteDataSectionSemantics,
+            )
+        )
+
+        segments.append(
+            Segment(
+                f"LH5073A1",
+                LH5073A1_ADDR_START,
+                LH5073A1_ADDR_END - LH5073A1_ADDR_START,
+                None,
+                None,
+                SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
+                SectionSemantics.ReadWriteDataSectionSemantics,
+            )
+        )
+
+        segments.append(
+            Segment(
+                f"CE1",
+                CE1_ADDR_START,
+                CE1_ADDR_END - CE1_ADDR_START,
+                None,
+                None,
+                SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
+                SectionSemantics.ReadWriteDataSectionSemantics,
+            )
+        )
+
+        segments.append(
+            Segment(
+                f"CE0",
+                CE0_ADDR_START,
+                CE0_ADDR_END - CE0_ADDR_START,
+                None,
+                None,
+                SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
+                SectionSemantics.ReadWriteDataSectionSemantics,
+            )
+        )
+
         for s in segments:
             data_offset = s.data_offset if s.data_offset is not None else 0
             data_length = s.data_length if s.data_length is not None else s.length
+            if s.data_offset is None and s.data_length is None:
+                data_offset = 0
+                data_length = 0
             self.add_auto_segment(s.start, s.length, data_offset, data_length, s.flags)
             self.add_auto_section(s.name, s.start, s.length, s.semantics)
 
         for name, addr in IMEM_NAMES.items():
             full_addr = INTERNAL_MEMORY_START + addr
             self.define_data_var(full_addr, f"uint8_t", name)
-
 
         self._interrupt_vector = self.read_int(INTERRUPT_VECTOR_ADDR, 3)
         self._entry_point = self.read_int(ENTRY_POINT_ADDR, 3)
