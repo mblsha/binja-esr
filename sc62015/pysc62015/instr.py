@@ -44,26 +44,26 @@ ENTRY_POINT_ADDR = 0xFFFFD
 # on real hardware.
 INTERNAL_MEMORY_START = 0xFFFFF + 1
 IMEM_NAMES = {
-    0xEC: "BP",  # RAM Base Pointer
-    0xED: "PX",  # RAM PX Pointer
-    0xEE: "PY",  # RAM PY Pointer
-    0xEF: "AMC", # ADR Modify Control
-    0xF0: "KOL", # Key Output Buffer H
-    0xF1: "KOH", # Key Output Buffer L
-    0xF2: "KIL", # Key Input Buffer
-    0xF3: "EOL", # E Port Output Buffer H
-    0xF4: "EOH", # E Port Output Buffer L
-    0xF5: "EIL", # E Port Input Buffer H
-    0xF6: "EIH", # E Port Input Buffer L
-    0xF7: "UCR", # UART Control Register
-    0xF8: "USR", # UART Status Register
-    0xF9: "RXD", # UART Receive Buffer
-    0xFA: "TXD", # UART Transmit Buffer
-    0xFB: "IMR", # Interrupt Mask Register
-    0xFC: "ISR", # Interrupt Status Register
-    0xFD: "SCR", # System Control Register
-    0xFE: "LCC", # LCD Contrast Control
-    0xFF: "SSR", # System Status Control
+   "BP":  0xEC, # RAM Base Pointer
+   "PX":  0xED, # RAM PX Pointer
+   "PY":  0xEE, # RAM PY Pointer
+   "AMC": 0xEF, # ADR Modify Control
+   "KOL": 0xF0, # Key Output Buffer H
+   "KOH": 0xF1, # Key Output Buffer L
+   "KIL": 0xF2, # Key Input Buffer
+   "EOL": 0xF3, # E Port Output Buffer H
+   "EOH": 0xF4, # E Port Output Buffer L
+   "EIL": 0xF5, # E Port Input Buffer H
+   "EIH": 0xF6, # E Port Input Buffer L
+   "UCR": 0xF7, # UART Control Register
+   "USR": 0xF8, # UART Status Register
+   "RXD": 0xF9, # UART Receive Buffer
+   "TXD": 0xFA, # UART Transmit Buffer
+   "IMR": 0xFB, # Interrupt Mask Register
+   "ISR": 0xFC, # Interrupt Status Register
+   "SCR": 0xFD, # System Control Register
+   "LCC": 0xFE, # LCD Contrast Control
+   "SSR": 0xFF, # System Status Control
 }
 
 class Operand:
@@ -511,8 +511,7 @@ class RegIMR(Reg):
         return 1
 
     def operands(self):
-        # FIXME: use value from the dict
-        yield IMem8(0xFB)
+        yield IMem8(IMEM_NAMES["IMR"])
 
 # Special case: only makes sense for MV, special case since B is not in the REGISTERS
 class RegB(Reg):

@@ -81,7 +81,7 @@ class SC62015View(BinaryView):
             self.add_auto_segment(s.start, s.length, data_offset, data_length, s.flags)
             self.add_auto_section(s.name, s.start, s.length, s.semantics)
 
-        for addr, name in IMEM_NAMES.items():
+        for name, addr in IMEM_NAMES.items():
             full_addr = INTERNAL_MEMORY_START + addr
             self.define_data_var(full_addr, f"uint8_t", name)
 
