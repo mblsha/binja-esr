@@ -31,8 +31,8 @@ class SC62015(Architecture):
         "Y": RegisterInfo("Y", 3), # pointer
         "U": RegisterInfo("U", 3), # user stack
         "S": RegisterInfo("S", 3), # system stack
-        "PC": RegisterInfo("PC", 2), # program counter
-        "PS": RegisterInfo("PS", 1), # actually 4 bits, page segment
+        "PC": RegisterInfo("PC", 3), # program counter
+        "PS": RegisterInfo("PC", 1, 2), # actually 4 bits, page segment
     }
     stack_pointer = "S"
 

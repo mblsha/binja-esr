@@ -747,6 +747,13 @@ class RegB(Reg):
     def width(self):
         return 1
 
+class RegPC(Reg):
+    def __init__(self):
+        super().__init__("PC")
+
+    def width(self):
+        return 3
+
 # only makes sense for PUSHU / POPU / PUSHS / POPS
 class RegF(Reg):
     def __init__(self):
@@ -1645,10 +1652,32 @@ class HALT(MiscInstruction): pass
 # FIXME: create intrinsic for this
 class OFF(MiscInstruction): pass
 
-# FIXME: verify on real hardware
+# AKA `INT / Interrupt`
+# 1. Save context to system stack (S-stack), in this strict order:
+#      - PS  (Program Status)
+#      - PC  (Program Counter, high byte first, then low byte)
+#      - FLAG (Status Flags)
+#      - IMR (Interrupt Mask Register at FBH)
+#    (Total pushed = 5 bytes)
+#
+# 2. Load new PC and PS from fixed memory locations:
+#      - PC high-byte loaded from address FFFFBH
+#      - PC low-byte  loaded from address FFFFAH
+#      - PS loaded from address FFFFCH
+#
+# 3. After pushing IMR, bit 7 (IRM) of IMR is forcibly cleared to 0.
 class IR(MiscInstruction):
     def lift(self, il, addr):
-        pass
+        il.append(il.push(3, RegPC().lift(il)))
+        il.append(il.push(1, RegF().lift(il)))
+        il.append(il.push(1, RegIMR().lift(il)))
+        imr = RegIMR()
+        imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
+
+        mem = EMemAddr()
+        mem.value = INTERRUPT_VECTOR_ADDR
+        il.append(il.jump(mem.lift(il)))
+
 # ACM bit 7, UCR + USR bits 0 to 2/5, IMR, SCR, SSR bit 2 are all reset to 0
 # USR bits 3 and 4 are set to 1
 class RESET(MiscInstruction):
