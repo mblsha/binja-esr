@@ -1558,7 +1558,7 @@ class CMPP(CMP):
     def width(self):
         return 3
 
-# FIXME: verify on real hardware
+# FIXME: verify on real hardware, likely wrong
 class ShiftRotateInstruction(Instruction):
     def shift_by(self, il):
         return il.const(1, 1)
@@ -1578,8 +1578,13 @@ class SHR(ShiftRotateInstruction):
         return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
 
 # digit shift
-class DSRL(ShiftRotateInstruction): pass
-class DSLL(ShiftRotateInstruction): pass
+# FIXME: this is very wrong, fix it later
+class DSRL(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
+class DSLL(ShiftRotateInstruction):
+    def lift_operation(self, il, il_arg1):
+        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), 'CZ')
 
 class IncDecInstruction(Instruction): pass
 class INC(IncDecInstruction):
