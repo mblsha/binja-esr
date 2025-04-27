@@ -1627,18 +1627,20 @@ class RC(MiscInstruction):
         il.append(il.set_flag("C", il.const(1, 0)))
 
 # FIXME: what does it do???
+# Timer Clear: sub-CG or main-CG timers are reset when STCL / MTCL of LCC are
+# set.
 # Divider ← D
 # FIXME: create intrinsic for this
 class TCL(MiscInstruction): pass
 
-# System Clock Stop
+# System Clock Stop: halts main-CG of CPU
 # Execution can continue past HALT: ON, IRQ, KI pins
 # FIXME: create intrinsic for this
 # USR resets bits 0 to 2/5 to 0
 # SSR bit 2 and USR 3 and 4 are set to 1
 class HALT(MiscInstruction): pass
 
-# System Clock Stop; Sub Clock Stop
+# System Clock Stop; Sub Clock Stop: main-CG and sub-CG of CPU are stopped
 # Execution can continue past OFF: ON, IRQ, KI pins
 # FIXME: create intrinsic for this
 class OFF(MiscInstruction): pass
@@ -1924,7 +1926,7 @@ OPCODES = {
     0xEA: (MV, Opts(name="MVP",
                     ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
     0xEB: (MVL, Opts(ops=[EMemReg(), IMem8()])),
-    0xEC: (DSLL, Opts(ops=[IMem8()])),
+    0xEC: (DSLL, Opts(ops=[IMem20()])),
     0xED: (EX, Opts(ops=[RegPair(size=2)])),
     0xEE: (SWAP, Opts(ops=[Reg("A")])),
     0xEF: WAIT,
@@ -1941,7 +1943,7 @@ OPCODES = {
     0xF9: (MV, Opts(name='MVW', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
     0xFA: (MV, Opts(name='MVP', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
     0xFB: (MVL, Opts(ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
-    0xFC: (DSRL, Opts(ops=[IMem8()])),
+    0xFC: (DSRL, Opts(ops=[IMem20()])),
     0xFD: (MV, Opts(ops=[RegPair(size=2)])),
     0xFE: IR,
     0xFF: RESET,
