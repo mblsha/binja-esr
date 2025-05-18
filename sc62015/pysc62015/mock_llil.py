@@ -5,11 +5,12 @@ from binaryninja.lowlevelil import (
     LowLevelILFunction,
     LowLevelILLabel,
     ILSourceLocation,
+    ExpressionIndex,
 )
 from binaryninja import Architecture
 from binaryninja.enums import LowLevelILOperation
 from dataclasses import dataclass
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple, Union
 
 
 SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l'}
@@ -43,6 +44,9 @@ class MockHandle:
 class MockLLIL:
     op: str
     ops: List[Any]
+
+
+ExprType = Union[MockLLIL, ExpressionIndex]
 
 
 def mreg(name: str) -> MockReg:
@@ -88,11 +92,11 @@ class MockLowLevelILFunction(LowLevelILFunction):
     def if_expr(self, cond, t, f) -> Any:  # type: ignore
         return MockIfExpr(cond, t, f)
 
-    def append(self, il: Any) -> int:
+    def append(self, il: Any) -> Any:
         self.ils.append(il)
         return len(self.ils) - 1
 
-    def expr(self, *args, **kwargs) -> Any:  # type: ignore
+    def expr(self, *args, **kwargs) -> ExprType:  # type: ignore
         llil, *ops = args
         del kwargs["source_location"]
         size = kwargs.get("size", None)

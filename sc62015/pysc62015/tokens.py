@@ -96,7 +96,7 @@ class TText(Token):
 
 
 class TInt(Token):
-    def __init__(self, value: int) -> None:
+    def __init__(self, value: str) -> None:
         self.value = value
 
     def __repr__(self) -> str:

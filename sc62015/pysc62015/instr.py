@@ -2,19 +2,26 @@
 from .tokens import Token, TInstr, TText, TSep, TInt, TAddr, TReg, TBegMem, TEndMem, MemType
 from .coding import Decoder, Encoder, BufferTooShort
 from .mock_analysis import BranchType
-from .mock_llil import MockLLIL
+from .mock_llil import MockLLIL, ExprType
 
 import copy
 from dataclasses import dataclass
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Generator, Iterator, Dict, Tuple, Union, Type, Literal
 import enum
 from contextlib import contextmanager
 
 
 from .binja_api import *
+from binaryninja import (
+    InstructionInfo,
+)
+from binaryninja.lowlevelil import (
+    LowLevelILFunction,
+)
 from binaryninja.lowlevelil import (
     LowLevelILLabel,
     LLIL_TEMP,
+    ExpressionIndex,
 )
 
 
@@ -289,30 +296,30 @@ IMEM_NAMES = {
 }
 
 class Operand:
-    def render(self):
+    def render(self) -> List[Token]:
         return [TText("unimplemented")]
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         pass
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
         pass
 
     # expand physical-encoding of operands into virtual printable operands
-    def operands(self):
+    def operands(self) -> Generator["Operand", None, None]:
         yield self
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.unimplemented()
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         il.append(value)
         il.append(il.unimplemented())
 
 
 # used by Operands to help render / lift values
 class OperandHelper(Operand):
-    def render(self):
+    def render(self) -> List[Token]:
         raise NotImplementedError(f"render() not implemented for {self.__class__.__name__} helper")
 
 
@@ -328,7 +335,7 @@ class Opts:
     ops: Optional[List[Operand]] = None
 
 
-def iter_encode(iter, addr):
+def iter_encode(iter: List['Instruction'], addr: int) -> bytearray:
     encoder = Encoder()
     for instr in iter:
         instr.encode(encoder, addr)
@@ -336,11 +343,13 @@ def iter_encode(iter, addr):
     return encoder.buf
 
 
-def encode(instr, addr):
+def encode(instr: 'Instruction', addr: int) -> bytearray:
     return iter_encode([instr], addr)
 
 
-def create_instruction(decoder, opcodes):
+InstrOptsType = Tuple[Type['Instruction'], Opts]
+OpcodesType = Union[Type['Instruction'], InstrOptsType]
+def create_instruction(decoder: Decoder, opcodes: Dict[int, OpcodesType]) -> Optional['Instruction']:
     if decoder is None:
         return None
 
@@ -357,7 +366,7 @@ def create_instruction(decoder, opcodes):
     return cls(name, operands=ops, cond=opts.cond, ops_reversed=opts.ops_reversed)
 
 
-def iter_decode(data, addr, opcodes):
+def iter_decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
     decoder = Decoder(data)
     while True:
         try:
@@ -382,13 +391,13 @@ def iter_decode(data, addr, opcodes):
             ) from e
 
 
-def _create_decoder(data, addr, opcodes):
+def _create_decoder(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
     # useful for instruction fusing
     # return fusion(fusion(iter_decode(data, addr, opcodes)))
     return iter_decode(data, addr, opcodes)
 
 
-def decode(data, addr, opcodes):
+def decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Optional['Instruction']:
     try:
         instr, _ = next(_create_decoder(data, addr, opcodes))
 
@@ -401,43 +410,47 @@ def decode(data, addr, opcodes):
 
 
 class Instruction:
-    def __init__(self, name, operands, cond, ops_reversed):
+    opcode: Optional[int]
+    _length: Optional[int]
+
+    def __init__(self, name: str, operands: List[Operand], cond: Optional[str],
+                 ops_reversed: Optional[bool]) -> None:
         self.instr_name = name
-        self.opcode = None
         self.ops_reversed = ops_reversed
         self._operands = operands
         self._cond = cond
-        self._length = None
         self.doinit()
 
-    def doinit(self):
+    def doinit(self) -> None:
         pass
 
-    def length(self):
+    def length(self) -> int:
+        assert self._length is not None, "Length not set"
         return self._length
 
-    def name(self):
+    def name(self) -> str:
         return self.instr_name
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         self.opcode = decoder.unsigned_byte()
         for op in self.operands_coding():
             op.decode(decoder, addr)
 
-    def set_length(self, length):
+    def set_length(self, length: int) -> None:
         self._length = length
 
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.opcode is not None, "Opcode not set"
         encoder.unsigned_byte(self.opcode)
         for op in self.operands_coding():
             op.encode(encoder, addr)
 
-    def fuse(self, sister):
+    def fuse(self, sister: 'Instruction') -> Optional['Instruction']:
         return None
 
     # logical operands order
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
         if self._operands is None:
             yield from ()
         else:
@@ -449,17 +462,17 @@ class Instruction:
                         yield op3
 
     # physical opcode encoding order
-    def operands_coding(self):
+    def operands_coding(self) -> Iterator[Operand]:
         if not self.ops_reversed:
-            return self._operands
+            return iter(self._operands)
         # self.operands() is a generator
         # so we need to convert it to a list
         ops = list(self._operands)
         assert len(ops) == 2, "Expected 2 operands"
         return reversed(ops)
 
-    def render(self):
-        tokens = [TInstr(self.name())]
+    def render(self) -> List[Token]:
+        tokens: List[Token] = [TInstr(self.name())]
         if len(self._operands) > 0:
             tokens.append(TSep(" " * (6 - len(self.name()))))
         for index, operand in enumerate(self.operands()):
@@ -468,13 +481,13 @@ class Instruction:
             tokens += operand.render()
         return tokens
 
-    def display(self, addr):
+    def display(self, addr: int) -> None:
         print(f"{addr:04X}:\t" + "".join(str(token) for token in self.render()))
 
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         info.length += self.length()
 
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         operands = tuple(self.operands())
         if len(operands) == 0:
             il.append(il.unimplemented())
@@ -484,98 +497,108 @@ class Instruction:
             )
             operands[0].lift_assign(il, il_value)
 
-    def lift_operation(self, il, *il_operands):
+    def lift_operation(self, il: LowLevelILFunction, *il_operands:
+                       ExpressionIndex) -> ExpressionIndex:
         return il.unimplemented()
 
 
 class ImmOperand(Operand):
-    def width(self):
+    value: Optional[int]
+
+    def width(self) -> int:
         raise NotImplementedError("width not implemented for ImmOperand")
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+        assert self.value is not None, "Value not set"
         return il.const(self.width(), self.value)
 
 
 # n: encoded as `n`
 class Imm8(ImmOperand):
-    def __init__(self, value=None):
+    def __init__(self, value: Optional[int]=None) -> None:
         super().__init__()
         self.value = value
 
-    def width(self):
+    def width(self) -> int:
         return 1
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         self.value = decoder.unsigned_byte()
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.value is not None, "Value not set"
         encoder.unsigned_byte(self.value)
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TInt(f"{self.value:02X}")]
 
 # mn: encoded as `n m`
 class Imm16(ImmOperand):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.value = None
 
-    def width(self):
+    def width(self) -> int:
         return 2
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         self.value = decoder.unsigned_word_le()
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.value is not None, "Value not set"
         encoder.unsigned_word_le(self.value)
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TInt(f"{self.value:04X}")]
 
 
 # lmn: encoded as `n m l`
 class Imm20(ImmOperand):
-    def __init__(self):
+    extra_hi: Optional[int]
+
+    def __init__(self) -> None:
         super().__init__()
         self.value = None
-        self.extra_hi = None
 
-    def width(self):
+    def width(self) -> int:
         return 3
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         lo = decoder.unsigned_byte()
         mid = decoder.unsigned_byte()
         self.extra_hi = decoder.unsigned_byte()
         hi = self.extra_hi & 0x0F
         self.value = lo | (mid << 8) | (hi << 16)
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.value is not None, "Value not set"
+        assert self.extra_hi is not None, "Extra high byte not set"
         encoder.unsigned_byte(self.value & 0xFF)
         encoder.unsigned_byte((self.value >> 8) & 0xFF)
         encoder.unsigned_byte(self.extra_hi)
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TInt(f"{self.value:05X}")]
 
 
 # Offset sign is encoded as part of the instruction opcode, and the actual
 # offset is Imm8.
 class ImmOffset(Imm8):
-    def __init__(self, sign):
+    def __init__(self, sign: Literal['+', '-']) -> None:
         super().__init__()
         self.sign = sign
 
-    def offset_value(self):
+    def offset_value(self) -> int:
+        assert self.value is not None, "Value not set"
         return -self.value if self.sign == '-' else self.value
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TInt(f"{self.sign}{self.value:02X}")]
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         raise NotImplementedError("lift() not implemented for ImmOffset")
 
-    def lift_offset(self, il, value):
+    def lift_offset(self, il: LowLevelILFunction, value: ExpressionIndex) -> ExpressionIndex:
         offset = il.const(self.width(), self.offset_value())
         return il.add(self.width(), value, offset)
 
@@ -586,22 +609,23 @@ class ImmOffset(Imm8):
 # 3. PX/PY-indexed
 # 4. BP-indexed with PX/PY offset
 class IMemHelper(Operand):
-    def __init__(self, width, value):
+    def __init__(self, width: int, value: Operand) -> None:
         super().__init__()
         self._width = width
         self.value = value
 
-    def width(self):
+    def width(self) -> int:
         return self._width
 
-    def render(self):
-        result = [TBegMem(MemType.INTERNAL)]
+    def render(self) -> List[Token]:
+        result: List[Token] = [TBegMem(MemType.INTERNAL)]
         result.extend(self.value.render())
         result.append(TEndMem(MemType.INTERNAL))
         return result
 
-    def imem_addr(self, il):
+    def imem_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         if isinstance(self.value, ImmOperand):
+            assert self.value.value is not None, "Value not set"
             raw_addr = INTERNAL_MEMORY_START + self.value.value
             return il.const_pointer(3, raw_addr)
 
@@ -609,66 +633,68 @@ class IMemHelper(Operand):
         addr = il.add(3, addr, il.const(3, INTERNAL_MEMORY_START))
         return addr
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         addr = self.imem_addr(il)
         return il.load(self.width(), self.imem_addr(il))
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
         il.append(il.store(self.width(), self.imem_addr(il), value))
 
 class EMemHelper(Operand):
-    def __init__(self, width, value):
+    def __init__(self, width: int, value: Operand) -> None:
         super().__init__()
         self._width = width
         self.value = value
 
-    def width(self):
+    def width(self) -> int:
         return self._width
 
-    def render(self):
-        result = [TBegMem(MemType.EXTERNAL)]
+    def render(self) -> List[Token]:
+        result: List[Token] = [TBegMem(MemType.EXTERNAL)]
         result.extend(self.value.render())
         result.append(TEndMem(MemType.EXTERNAL))
         return result
 
-    def emem_addr(self, il):
+    def emem_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         if isinstance(self.value, ImmOperand):
+            assert self.value.value is not None, "Value not set"
             raw_addr = self.value.value
             return il.const_pointer(3, raw_addr)
 
         return self.value.lift(il)
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(self.width(), self.emem_addr(il))
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
         il.append(il.store(self.width(), self.emem_addr(il), value))
 
 
 class Pointer:
-    def lift_current_addr(self, il):
+    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         raise NotImplementedError(f"lift_current_addr() not implemented for {type(self)}")
 
-    def memory_helper(self):
+    def memory_helper(self) -> Type[Union[IMemHelper, EMemHelper]]:
         raise NotImplementedError(f"memory_helper() not implemented for {type(self)}")
 
 # Read 8 bits from internal memory based on Imm8 address.
 class IMem8(Imm8, Pointer):
-    def width(self):
+    def width(self) -> int:
         return 1
 
-    def lift_current_addr(self, il):
+    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
+        assert self.value is not None, "Value not set"
         return il.const_pointer(3, INTERNAL_MEMORY_START + self.value)
 
-    def memory_helper(self):
+    def memory_helper(self) -> Type[IMemHelper]:
         return IMemHelper
 
-    def _helper(self):
+    def _helper(self) -> IMemHelper:
         return IMemHelper(self.width(), Imm8(self.value))
 
-    def render(self):
+    def render(self) -> List[Token]:
         return self._helper().render()
 
     # We need to extract the raw address from IMem8 for MVL / MVLD,
@@ -677,97 +703,97 @@ class IMem8(Imm8, Pointer):
     # def operands(self):
     #     yield self._helper()
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return self._helper().lift(il)
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         return self._helper().lift_assign(il, value)
 
 # Read 16 bits from internal memory based on Imm8 address.
 class IMem16(IMem8):
-    def width(self):
+    def width(self) -> int:
         return 2
 
 # Read 20 bits from internal memory based on Imm8 address.
 class IMem20(IMem8):
-    def width(self):
+    def width(self) -> int:
         return 3
 
 # Register operand encoded as part of the instruction opcode
 class Reg(Operand):
-    def __init__(self, reg):
+    def __init__(self, reg: str) -> None:
         super().__init__()
         self.reg = reg
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TReg(self.reg)]
 
-    def width(self):
+    def width(self) -> int:
         return REG_SIZES[self.reg]
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.reg(self.width(), self.reg)
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         il.append(il.set_reg(self.width(), self.reg, value))
 
 class TempReg(Operand):
-    def __init__(self, reg, width=3):
+    def __init__(self, reg: int, width: int=3) -> None:
         super().__init__()
         self.reg = reg
         self._width = width
 
-    def render(self):
+    def render(self) -> List[Token]:
         raise NotImplementedError("render() not implemented for TempReg")
 
-    def width(self):
+    def width(self) -> int:
         return self._width
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.reg(self.width(), self.reg)
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         il.append(il.set_reg(self.width(), self.reg, value))
 
 # only makes sense for PUSHU / POPU
 class RegIMR(Reg):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("IMR")
 
-    def width(self):
+    def width(self) -> int:
         return 1
 
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
         yield IMem8(IMEM_NAMES["IMR"])
 
 # Special case: only makes sense for MV, special case since B is not in the REGISTERS
 class RegB(Reg):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("B")
 
-    def width(self):
+    def width(self) -> int:
         return 1
 
 class RegPC(Reg):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("PC")
 
-    def width(self):
+    def width(self) -> int:
         return 3
 
 # only makes sense for PUSHU / POPU / PUSHS / POPS
 class RegF(Reg):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("F")
 
-    def width(self):
+    def width(self) -> int:
         return 1
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: likely wrong
         return il.or_expr(1, il.flag("C"), il.shift_left(1, 1, il.flag("Z")))
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         # FIXME: likely wrong
         tmp = TempReg(LLIL_TEMP(0), width=self.width())
         tmp.lift_assign(il, value)
@@ -775,81 +801,85 @@ class RegF(Reg):
         il.append(il.set_flag("Z", il.and_expr(1, tmp.lift(il), il.const(1, 2))))
 
 class Reg3(Operand):
-    def __init__(self):
+    reg: Optional[str]
+    reg_raw: Optional[int]
+    high4: Optional[int]
+
+    def __init__(self) -> None:
         super().__init__()
-        self.reg = None
-        self.reg_raw = None
-        self.high4 = None
 
     @classmethod
-    def reg_name(cls, idx):
+    def reg_name(cls, idx: int) -> str:
         return REG_NAMES[idx]
 
     @classmethod
-    def reg_idx(cls, name):
+    def reg_idx(cls, name: str) -> int:
         return REG_NAMES.index(name)
 
-    def width(self):
+    def width(self) -> int:
+        assert self.reg is not None, "Register not set"
         return REG_SIZES[self.reg]
 
-    def assert_r3(self):
+    def assert_r3(self) -> None:
         assert self.width() >= 3, f"Want r3 register, got r{self.width()} ({self.reg}) instead"
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         byte = decoder.unsigned_byte()
         self.reg_raw = byte
         self.reg = self.reg_name(byte & 7)
         # store high 4 bits from byte for later reference
         self.high4 = (byte >> 4) & 0x0F
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.reg_raw is not None, "Register raw value not set"
+        assert self.high4 is not None, "High 4 bits not set"
         byte = self.reg_raw | (self.high4 << 4)
         encoder.unsigned_byte(byte)
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TReg(self.reg)]
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.reg(self.width(), self.reg)
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         il.append(il.set_reg(self.width(), self.reg, value))
 
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
 class EMemAddr(Imm20, Pointer):
-    def lift_current_addr(self, il):
+    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.const_pointer(3, self.value)
 
-    def memory_helper(self):
+    def memory_helper(self) -> Type[EMemHelper]:
         return EMemHelper
 
-    def render(self):
+    def render(self) -> List[Token]:
         return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.load(self.width(), il.const_pointer(3, self.value))
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
 
 class EMemValueOffsetHelper(OperandHelper, Pointer):
-    def __init__(self, value, offset: Optional[ImmOffset]):
+    def __init__(self, value: Operand, offset: Optional[ImmOffset]):
         super().__init__()
         self.value = value
         self.offset = offset
 
-    def lift_current_addr(self, il):
+    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         addr = self.value.lift(il)
         if self.offset:
             addr = self.offset.lift_offset(il, addr)
         return addr
 
-    def memory_helper(self):
+    def memory_helper(self) -> Type[EMemHelper]:
         return EMemHelper
 
-    def render(self):
+    def render(self) -> List[Token]:
         result = [TBegMem(MemType.EXTERNAL)]
         result.extend(self.value.render())
         if self.offset:
@@ -857,11 +887,11 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         result.append(TEndMem(MemType.EXTERNAL))
         return result
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: need to figure out the size to use
         return il.load(1, self.lift_current_addr(il))
 
-    def lift_assign(self, il, value):
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         # FIXME: what's the width?
         il.append(il.store(1, self.lift_current_addr(il), value))
 
