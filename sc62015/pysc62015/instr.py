@@ -1221,7 +1221,11 @@ class JP_Abs(JumpInstruction):
     def lift_jump_addr(self, il,  addr):
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
-        return first.lift(il)
+        if first.width() >= 3:
+            return first.lift(il)
+        # need to or the 0xFF0000 to get the full address
+        high_addr = addr & 0xFF0000
+        return il.or_expr(3, first.lift(il), il.const(3, high_addr))
 
     def analyze(self, info, addr):
         super().analyze(info, addr)
@@ -1240,7 +1244,7 @@ class JP_Rel(JumpInstruction):
     def lift_jump_addr(self, il, addr):
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
-        return il.const_pointer(3, addr + self.length() + first.offset_value())
+        return il.const(3, addr + self.length() + first.offset_value())
 
     def analyze(self, info, addr):
         super().analyze(info, addr)

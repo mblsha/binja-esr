@@ -43,23 +43,36 @@ def test_nop():
 
 
 def test_jp_abs():
-    instr = decode(bytearray([0x02, 0xAA, 0xBB]), 0x1234, OPCODES)
+    instr = decode(bytearray([0x02, 0xAA, 0xBB]), 0xCD1234, OPCODES)
     assert instr.name() == "JP"
     assert instr.render() == [TInstr("JP"), TSep("    "), TInt("BBAA")]
+    il = MockLowLevelILFunction()
+    assert instr.lift_jump_addr(il, 0xCD1234) == mllil("OR.l", [
+        mllil("CONST.w", [0xBBAA]),
+        mllil("CONST.l", [0xCD0000]),
+    ])
 
     instr = decode(bytearray([0x03, 0xAA, 0xBB, 0x0C]), 0x1234, OPCODES)
     assert instr.render() == [TInstr("JPF"), TSep("   "), TInt("CBBAA")]
+    assert instr.lift_jump_addr(il, 0x1234) == mllil("CONST.l", [0xCBBAA])
+
+    instr = decode(bytearray([0x15, 0xcd, 0x00]), 0xf0185, OPCODES)
+    assert instr.render() == [TInstr("JPNZ"), TSep("  "), TInt("00CD")]
+    assert instr.lift_jump_addr(il, 0xf0185) == mllil("OR.l", [
+        mllil("CONST.w", [0x00CD]),
+        mllil("CONST.l", [0xf0000]),
+    ])
 
 
 def test_jp_rel():
     instr = decode(bytearray([0x1a, 0x06]), 0xf0163, OPCODES)
     assert instr.name() == "JRNZ"
     il = MockLowLevelILFunction()
-    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST_PTR.l', [0xf0163 + 2 + 6])
+    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST.l', [0xf0163 + 2 + 6])
 
     instr = decode(bytearray([0x1b, 0x06]), 0xf0163, OPCODES)
     assert instr.name() == "JRNZ"
-    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST_PTR.l', [0xf0163 + 2 - 6])
+    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST.l', [0xf0163 + 2 - 6])
 
 
 def test_mvi():
