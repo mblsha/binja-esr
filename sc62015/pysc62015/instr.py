@@ -521,6 +521,16 @@ class HasWidth:
         raise NotImplementedError("width not implemented for HasWidth")
 
 
+# HasOperands is used to indicate that the operand expects other operands to be
+# used instead.
+class HasOperands:
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+        raise NotImplementedError("lift not implemented for HasOperands")
+
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+        raise NotImplementedError("lift_assign not implemented for HasOperands")
+
+
 class ImmOperand(Operand, HasWidth):
     value: Optional[int]
 
@@ -772,7 +782,7 @@ class TempReg(Operand):
         il.append(il.set_reg(self.width(), self.reg, value))
 
 # only makes sense for PUSHU / POPU
-class RegIMR(Reg):
+class RegIMR(HasOperands, Reg):
     def __init__(self) -> None:
         super().__init__("IMR")
 
@@ -968,7 +978,7 @@ class RegIncrementDecrementHelper(OperandHelper):
         return value
 
 
-class EMemRegOffsetHelper(OperandHelper):
+class EMemRegOffsetHelper(HasOperands, OperandHelper):
     def __init__(self, reg: Reg3, mode: EMemRegMode, offset: Optional[ImmOffset]) -> None:
         super().__init__()
         self.reg = reg
@@ -1008,7 +1018,7 @@ class RegIMemOffsetOrder(enum.Enum):
 # [r3++], (n): encoded as E8 (2 r3) n
 # [--r3], (n): encoded as E8 (3 r3) n
 # [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
-class RegIMemOffset(Operand):
+class RegIMemOffset(HasOperands, Operand):
     reg: Optional[Reg3]
     imem: Optional[IMem8]
     mode: Optional[EMemRegMode]
@@ -1057,7 +1067,7 @@ class RegIMemOffset(Operand):
         if self.offset:
             self.offset.encode(encoder, addr)
 
-class EMemReg(Operand):
+class EMemReg(HasOperands, Operand):
     mode: Optional[EMemRegMode]
     offset: Optional[ImmOffset] = None
 
@@ -1099,7 +1109,7 @@ class EMemIMemMode(enum.Enum):
     POSITIVE_OFFSET = 0x80
     NEGATIVE_OFFSET = 0xC0
 
-class EMemIMem(Imm8):
+class EMemIMem(HasOperands, Imm8):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
 
@@ -1150,7 +1160,7 @@ class EMemIMemOffsetOrder(enum.Enum):
 # [(m)], (n):   encoded as FB 00 m n
 # [(l)+m], (n): encoded as FB 80 l n m
 # [(l)-m], (n): encoded as FB C0 l n m
-class EMemIMemOffset(Operand):
+class EMemIMemOffset(HasOperands, Operand):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
 
@@ -1196,7 +1206,7 @@ class EMemIMemOffset(Operand):
 
 
 # ADD/SUB can use various-sized register pairs
-class RegPair(Reg3):
+class RegPair(HasOperands, Reg3):
     reg_raw: Optional[int]
     reg1: Optional[Reg]
     reg2: Optional[Reg]
