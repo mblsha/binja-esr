@@ -32,15 +32,6 @@ def token(kind: str, text: str) -> InstructionTextToken:
         return InstructionTextToken(tokenType, text)
 
 
-def asm(parts: List[Token]) -> List[InstructionTextToken]:
-    # map all tokens using to_binja()
-    return [part.to_binja() for part in parts]
-
-
-def asm_str(parts: List[Token]) -> str:
-    return "".join(str(part) for part in parts)
-
-
 class Token:
     def __eq__(self, other: object) -> bool:
         return repr(self) == repr(other)
@@ -51,6 +42,15 @@ class Token:
     def to_binja(self) -> InstructionTextToken:
         kind, data = self.binja()
         return InstructionTextToken(kind, data)
+
+
+def asm(parts: List[Token]) -> List[InstructionTextToken]:
+    # map all tokens using to_binja()
+    return [part.to_binja() for part in parts]
+
+
+def asm_str(parts: List[Token]) -> str:
+    return "".join(str(part) for part in parts)
 
 
 class TInstr(Token):
