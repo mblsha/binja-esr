@@ -879,6 +879,7 @@ class EMemRegMode(enum.Enum):
     POSITIVE_OFFSET = 0x8
     NEGATIVE_OFFSET = 0xC
 
+# FIXME: need to specify the width for the INC/DEC
 class RegIncrementDecrementHelper(OperandHelper):
     def __init__(self, reg, mode):
         super().__init__()
@@ -955,7 +956,7 @@ class RegIMemOffsetOrder(enum.Enum):
 # [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
 class RegIMemOffset(Operand):
     def __init__(self, order: RegIMemOffsetOrder, allowed_modes:
-                 List[EMemRegMode] = None):
+                 Optional[List[EMemRegMode]] = None):
         self.order = order
         self.allowed_modes = allowed_modes
         self.reg = None

@@ -1,9 +1,7 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/tokens.py
-try:
-    from binaryninja import InstructionTextToken
-    from binaryninja.enums import InstructionTextTokenType
-except ImportError:
-    InstructionTextToken = None
+from .binja_api import *
+from binaryninja import InstructionTextToken
+from binaryninja.enums import InstructionTextTokenType
 
 import enum
 
