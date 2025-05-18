@@ -55,6 +55,7 @@ CE0_ADDR_END   = 0xBFFFF
 # Map internal memory to start at this address, as it's discontinuous with the
 # external memory
 INTERNAL_MEMORY_START = 0xFFFFF + 1
+INTERNAL_MEMORY_LENGTH = 255
 
 IMEM_NAMES = {
     "BP":  0xEC, # RAM Base Pointer

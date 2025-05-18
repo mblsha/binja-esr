@@ -1,7 +1,7 @@
 try:
     import binaryninja
     from .sc62015.arch import SC62015, SC62015CallingConvention
-    from .sc62015.view import SC62015View
+    from .sc62015.view import SC62015RomView, SC62015FullView
 
     arch = SC62015.register()
     arch.register_calling_convention(
@@ -9,7 +9,8 @@ try:
     )
     arch.default_calling_convention = default_cc
 
-    SC62015View.register()
+    SC62015RomView.register()
+    SC62015FullView.register()
 except ModuleNotFoundError:
     pass
 
