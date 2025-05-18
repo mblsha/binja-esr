@@ -1771,8 +1771,8 @@ class IR(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.push(3, RegPC().lift(il)))
         il.append(il.push(1, RegF().lift(il)))
-        il.append(il.push(1, RegIMR().lift(il)))
-        imr = RegIMR()
+        imr, *rest = RegIMR().operands()
+        il.append(il.push(1, imr.lift(il)))
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
 
         mem = EMemAddr()

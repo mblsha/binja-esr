@@ -28,6 +28,7 @@ class MockFlag:
 
 class MockArch:
     def get_reg_index(self, name: object) -> Any:
+        assert name != 'IMR'
         if name == 2147483648:
             return MockReg('TEMP0')
         return MockReg(str(name))
