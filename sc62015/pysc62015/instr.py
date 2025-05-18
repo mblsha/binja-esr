@@ -1464,7 +1464,8 @@ class SBC(ArithmeticInstruction):
 
 # FIXME: likely extremely wrong
 # def bcd_add_emul(il, w, a, b):
-def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> ExpressionIndex:
+def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b:
+                 ExpressionIndex) -> Operand:
     # raw sum
     s = il.add(w, a, b)
     # adjust lower nibble if > 9 or carry in
@@ -1498,7 +1499,8 @@ def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
 
 # FIXME: likely extremely wrong
 # def bcd_sub_emul(il, w, a, b):
-def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> ExpressionIndex:
+def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b:
+                 ExpressionIndex) -> Operand:
     # raw diff with borrow
     borrow = il.flag(CFlag)
     b_ext = il.add(w, b, borrow)
@@ -1542,6 +1544,7 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
                     reverse: bool=False,
                     bcd: bool=False,
                     subtract: bool=False) -> None:
+    assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
     w = op1.width()
 
     def make_handlers(op: Operand) -> Tuple[Callable[[], ExpressionIndex],
@@ -1583,8 +1586,8 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
         # choose BCD or binary op
         if bcd:
             fn = bcd_sub_emul if subtract else bcd_add_emul
-            res = fn(il, w, a, b)
-            res = res.lift(il)
+            fnres = fn(il, w, a, b)
+            res = fnres.lift(il)
         else:
             res = opfn(w, a, b, CZFlag)
 
@@ -1660,19 +1663,23 @@ class ROL(ShiftRotateInstruction):
 # bit shift
 class SHL(ShiftRotateInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
-        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), CZFlag)
+        return il.rotate_left_carry(1, il_arg1, self.shift_by(il),
+                                    il.flag(CFlag), CZFlag)
 class SHR(ShiftRotateInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
-        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), CZFlag)
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il),
+                                     il.flag(CFlag), CZFlag)
 
 # digit shift
 # FIXME: this is very wrong, fix it later
 class DSRL(ShiftRotateInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
-        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), CZFlag)
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il),
+                                     il.flag(CFlag), CZFlag)
 class DSLL(ShiftRotateInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
-        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), CZFlag)
+        return il.rotate_left_carry(1, il_arg1, self.shift_by(il),
+                                    il.flag(CFlag), CZFlag)
 
 class IncDecInstruction(Instruction): pass
 class INC(IncDecInstruction):
@@ -1685,6 +1692,7 @@ class DEC(IncDecInstruction):
 class ExchangeInstruction(Instruction):
     def lift_single_exchange(self, il: LowLevelILFunction, addr: int) -> None:
         first, second = self.operands()
+        assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         width = first.width()
         tmp = TempReg(LLIL_TEMP(0), width=width)
         tmp.lift_assign(il, first.lift(il))
@@ -1716,7 +1724,7 @@ class SWAP(MiscInstruction):
         low = il.and_expr(1, il_arg1, il.const(1, 0x0F))
         low = il.shift_left(1, low, il.const(1, 4))
         high = il.and_expr(1, il_arg1, il.const(1, 0xF0))
-        high = il.shift_right(1, high, il.const(1, 4))
+        high = il.logical_shift_right(1, high, il.const(1, 4))
         return il.or_expr(1, low, high, ZFlag)
 
 class SC(MiscInstruction):
