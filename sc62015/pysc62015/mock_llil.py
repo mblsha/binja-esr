@@ -1,16 +1,14 @@
 # Make LLIL unit-testable.
 
-from .binja_api import *
+from . import binja_api # noqa: F401
 from binaryninja.lowlevelil import (
     LowLevelILFunction,
     LowLevelILLabel,
     ILSourceLocation,
     ExpressionIndex,
 )
-from binaryninja import Architecture
-from binaryninja.enums import LowLevelILOperation
 from dataclasses import dataclass
-from typing import Any, List, Dict, Optional, Tuple, Union
+from typing import Any, List, Optional, Union
 
 
 SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l'}

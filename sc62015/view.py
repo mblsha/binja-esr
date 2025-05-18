@@ -1,4 +1,3 @@
-from struct import unpack
 from dataclasses import dataclass
 from typing import Optional, List
 

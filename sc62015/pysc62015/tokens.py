@@ -1,10 +1,10 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/tokens.py
-from .binja_api import *
+from . import binja_api # noqa: F401
 from binaryninja import InstructionTextToken
 from binaryninja.enums import InstructionTextTokenType
 
 import enum
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 
 def token(kind: str, text: str) -> InstructionTextToken:
@@ -146,6 +146,7 @@ class TEndMem(Token):
         return (InstructionTextTokenType.EndMemoryOperandToken, self.__str__())
 
 
+# FIXME: unused
 class TAddr(Token):
     def __init__(self, value: int) -> None:
         self.value = value

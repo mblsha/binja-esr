@@ -1,6 +1,5 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/coding.py
 import struct
-from typing import Any, List
 
 
 class BufferTooShort(Exception):

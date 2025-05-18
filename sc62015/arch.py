@@ -1,10 +1,9 @@
 from binaryninja import (
     Architecture,
     RegisterInfo,
-    IntrinsicInfo,
+    # IntrinsicInfo,
     InstructionInfo,
     CallingConvention,
-    Settings,
 )
 from binaryninja.enums import Endianness, FlagRole
 from binaryninja.log import log_error
@@ -62,7 +61,7 @@ class SC62015(Architecture):
                 decoded.analyze(info, addr)
                 return info
         except Exception as exc:
-            # log_error(f"SC62015.get_instruction_info() failed at {addr:#x}: {exc}")
+            log_error(f"SC62015.get_instruction_info() failed at {addr:#x}: {exc}")
             pass
 
     def get_instruction_text(self, data, addr):

@@ -1,4 +1,4 @@
-from .binja_api import *
+from . import binja_api # noqa: F401
 
 from binaryninja.enums import BranchType
 from binaryninja import InstructionInfo, Architecture

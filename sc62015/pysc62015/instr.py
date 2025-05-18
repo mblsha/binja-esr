@@ -1,17 +1,17 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from .tokens import Token, TInstr, TText, TSep, TInt, TAddr, TReg, TBegMem, TEndMem, MemType
+from .tokens import Token, TInstr, TText, TSep, TInt, TReg, TBegMem, TEndMem, MemType
 from .coding import Decoder, Encoder, BufferTooShort
 from .mock_analysis import BranchType
-from .mock_llil import MockLLIL, ExprType
+from .mock_llil import MockLLIL
 
 import copy
 from dataclasses import dataclass
-from typing import Optional, List, Literal, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any, Callable
+from typing import Optional, List, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any, Callable
 import enum
 from contextlib import contextmanager
 
 
-from .binja_api import *
+from . import binja_api # noqa: F401
 from binaryninja import (
     InstructionInfo,
 )
@@ -660,7 +660,6 @@ class IMemHelper(Operand):
         return addr
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
-        addr = self.imem_addr(il)
         return il.load(self.width(), self.imem_addr(il))
 
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
@@ -1383,8 +1382,7 @@ class RETI(RetInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         imr, *rest = RegIMR().operands()
         imr.lift_assign(il, il.pop(1))
-        f = RegF()
-        imr.lift_assign(il, il.pop(1))
+        RegF().lift_assign(il, il.pop(1))
         il.append(il.ret(il.pop(3)))
 
 
@@ -1570,16 +1568,21 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
             # memory operand: use pointer temp
             ptr = TempReg(LLIL_TEMP(0 if op is op1 else 1), width=3)
             ptr.lift_assign(il, op.lift_current_addr(il))
-            load = lambda: op.memory_helper()(w, ptr).lift(il)
-            store = lambda val: op.memory_helper()(w, ptr).lift_assign(il, val)
+            def load() -> ExpressionIndex:
+                return op.memory_helper()(w, ptr).lift(il)
+            def store(val: ExpressionIndex) -> None:
+                op.memory_helper()(w, ptr).lift_assign(il, val)
             def advance() -> None:
                 op_il = il.sub if reverse else il.add
                 ptr.lift_assign(il, op_il(3, ptr.lift(il), il.const(3, 1)))
         else:
             # register operand: direct
-            load = lambda: op.lift(il)
-            store = lambda val: op.lift_assign(il, val)
-            def advance() -> None: pass
+            def load() -> ExpressionIndex:
+                return op.lift(il)
+            def store(val: ExpressionIndex) -> None:
+                op.lift_assign(il, val)
+            def advance() -> None:
+                pass
         return load, store, advance
 
     load1, store1, adv1 = make_handlers(op1)
@@ -1589,7 +1592,8 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
         il.append(il.set_flag(CFlag, il.const(1, 0)))
 
     with lift_loop(il):
-        a = load1(); b = load2()
+        a = load1()
+        b = load2()
 
         # if using subtract with borrow, fold C into operand
         if subtract:
@@ -1608,7 +1612,8 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
             res = opfn(w, a, b, CZFlag)
 
         store1(res)
-        adv1(); adv2()
+        adv1()
+        adv2()
 
 class ADCL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:

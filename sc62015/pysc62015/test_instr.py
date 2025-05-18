@@ -5,19 +5,13 @@ from .instr import (
     Instruction,
     JP_Abs,
     JP_Rel,
-    EMemReg,
-    EMemRegMode,
     EMemIMem,
     EMemIMemMode,
     IMem8,
-    IMemHelper,
-    Imm8,
     ImmOffset,
     EMemValueOffsetHelper,
-    EMemRegOffsetHelper,
     INTERNAL_MEMORY_START,
     UnknownInstruction,
-    Reg,
     PRE,
     TCL,
     HALT,
@@ -33,7 +27,7 @@ from .mock_llil import MockLowLevelILFunction, MockLLIL, mllil, mreg
 import os
 from pprint import pprint
 
-from typing import Generator, Tuple, Dict, List, Optional
+from typing import Generator, Tuple, List, Optional
 
 
 def decode(data: bytearray, addr: int) -> Instruction:
