@@ -944,8 +944,9 @@ class EMemRegMode(enum.Enum):
 
 # FIXME: need to specify the width for the INC/DEC
 class RegIncrementDecrementHelper(OperandHelper):
-    def __init__(self, reg: Reg3, mode: EMemRegMode) -> None:
+    def __init__(self, width: int, reg: Reg3, mode: EMemRegMode) -> None:
         super().__init__()
+        self.width = width
         self.reg = reg
         self.mode = mode
         assert mode in (EMemRegMode.SIMPLE, EMemRegMode.POST_INC, EMemRegMode.PRE_DEC)
@@ -971,16 +972,19 @@ class RegIncrementDecrementHelper(OperandHelper):
             # increment it after using it
             tmp = TempReg(LLIL_TEMP(0), width=self.reg.width())
             tmp.lift_assign(il, value)
-            self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(1, 1)))
+            self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(1,
+                                                                              self.width)))
             value = tmp.lift(il)
         elif self.mode == EMemRegMode.PRE_DEC:
-            self.reg.lift_assign(il, il.sub(self.reg.width(), value, il.const(1, 1)))
+            self.reg.lift_assign(il, il.sub(self.reg.width(), value, il.const(1,
+                                                                              self.width)))
         return value
 
 
 class EMemRegOffsetHelper(HasOperands, OperandHelper):
-    def __init__(self, reg: Reg3, mode: EMemRegMode, offset: Optional[ImmOffset]) -> None:
+    def __init__(self, width: int, reg: Reg3, mode: EMemRegMode, offset: Optional[ImmOffset]) -> None:
         super().__init__()
+        self.width = width
         self.reg = reg
         self.mode = mode
         self.offset = offset
@@ -990,7 +994,7 @@ class EMemRegOffsetHelper(HasOperands, OperandHelper):
         if self.mode in (EMemRegMode.SIMPLE,
                          EMemRegMode.POST_INC,
                          EMemRegMode.PRE_DEC):
-            reg = RegIncrementDecrementHelper(self.reg, self.mode)
+            reg = RegIncrementDecrementHelper(self.width, self.reg, self.mode)
         else:
             reg = self.reg
 
@@ -1033,7 +1037,8 @@ class RegIMemOffset(HasOperands, Operand):
         assert self.reg is not None, "Register not set"
         assert self.imem is not None, "IMem not set"
         assert self.mode is not None, "Mode not set"
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
+        # FIXME: is width=1 here?
+        op = EMemRegOffsetHelper(1, self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
             yield op
             yield self.imem
@@ -1071,8 +1076,9 @@ class EMemReg(HasOperands, Operand):
     mode: Optional[EMemRegMode]
     offset: Optional[ImmOffset] = None
 
-    def __init__(self, allowed_modes: Optional[List[EMemRegMode]]=None) -> None:
+    def __init__(self, width: int, allowed_modes: Optional[List[EMemRegMode]]=None) -> None:
         super().__init__()
+        self.width = width
         self.reg = Reg3()
         self.allowed_modes = allowed_modes
 
@@ -1096,7 +1102,7 @@ class EMemReg(HasOperands, Operand):
 
     def operands(self) -> Generator[Operand, None, None]:
         assert self.mode is not None, "Mode not set"
-        op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
+        op = EMemRegOffsetHelper(self.width, self.reg, self.mode, self.offset)
         yield op
 
 # page 74 of the book
@@ -1963,13 +1969,13 @@ OPCODES = {
     0x8E: (MV, Opts(ops=[Reg("U"), EMemAddr()])),
     0x8F: (MV, Opts(ops=[Reg("S"), EMemAddr()])),
     # 90h
-    0x90: (MV, Opts(ops=[Reg("A"), EMemReg()])),
-    0x91: (MV, Opts(ops=[Reg("IL"), EMemReg()])),
-    0x92: (MV, Opts(ops=[Reg("BA"), EMemReg()])),
-    0x93: (MV, Opts(ops=[Reg("I"), EMemReg()])),
-    0x94: (MV, Opts(ops=[Reg("X"), EMemReg()])),
-    0x95: (MV, Opts(ops=[Reg("Y"), EMemReg()])),
-    0x96: (MV, Opts(ops=[Reg("U"), EMemReg()])),
+    0x90: (MV, Opts(ops=[Reg("A"), EMemReg(width=1)])),
+    0x91: (MV, Opts(ops=[Reg("IL"), EMemReg(width=1)])),
+    0x92: (MV, Opts(ops=[Reg("BA"), EMemReg(width=2)])),
+    0x93: (MV, Opts(ops=[Reg("I"), EMemReg(width=2)])),
+    0x94: (MV, Opts(ops=[Reg("X"), EMemReg(width=3)])),
+    0x95: (MV, Opts(ops=[Reg("Y"), EMemReg(width=3)])),
+    0x96: (MV, Opts(ops=[Reg("U"), EMemReg(width=3)])),
     0x97: SC,
     0x98: (MV, Opts(ops=[Reg("A"), EMemIMem()])),
     0x99: (MV, Opts(ops=[Reg("IL"), EMemIMem()])),
@@ -1997,13 +2003,13 @@ OPCODES = {
     0xAE: (MV, Opts(ops=[EMemAddr(), Reg("U")])),
     0xAF: (MV, Opts(ops=[EMemAddr(), Reg("S")])),
     # B0h
-    0xB0: (MV, Opts(ops=[EMemReg(), Reg("A")])),
-    0xB1: (MV, Opts(ops=[EMemReg(), Reg("IL")])),
-    0xB2: (MV, Opts(ops=[EMemReg(), Reg("BA")])),
-    0xB3: (MV, Opts(ops=[EMemReg(), Reg("I")])),
-    0xB4: (MV, Opts(ops=[EMemReg(), Reg("X")])),
-    0xB5: (MV, Opts(ops=[EMemReg(), Reg("Y")])),
-    0xB6: (MV, Opts(ops=[EMemReg(), Reg("U")])),
+    0xB0: (MV, Opts(ops=[EMemReg(width=1), Reg("A")])),
+    0xB1: (MV, Opts(ops=[EMemReg(width=1), Reg("IL")])),
+    0xB2: (MV, Opts(ops=[EMemReg(width=2), Reg("BA")])),
+    0xB3: (MV, Opts(ops=[EMemReg(width=2), Reg("I")])),
+    0xB4: (MV, Opts(ops=[EMemReg(width=3), Reg("X")])),
+    0xB5: (MV, Opts(ops=[EMemReg(width=3), Reg("Y")])),
+    0xB6: (MV, Opts(ops=[EMemReg(width=3), Reg("U")])),
     0xB7: (CMP, Opts(ops=[IMem8(), IMem8()])),
     0xB8: (MV, Opts(ops=[EMemIMem(), Reg("A")])),
     0xB9: (MV, Opts(ops=[EMemIMem(), Reg("IL")])),
@@ -2053,8 +2059,10 @@ OPCODES = {
                     ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
     0xE2: (MV, Opts(name="MVP",
                     ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
+    # FIXME: verify width
     0xE3: (MVL, Opts(ops_reversed=True, ops=[IMem8(),
-                                             EMemReg(allowed_modes=[EMemRegMode.POST_INC,
+                                             EMemReg(width=1,
+                                                     allowed_modes=[EMemRegMode.POST_INC,
                                                                     EMemRegMode.PRE_DEC])])),
     0xE4: (ROR, Opts(ops=[Reg("A")])),
     0xE5: (ROR, Opts(ops=[IMem8()])),
@@ -2065,7 +2073,8 @@ OPCODES = {
                     ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
     0xEA: (MV, Opts(name="MVP",
                     ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
-    0xEB: (MVL, Opts(ops=[EMemReg(), IMem8()])),
+    # FIXME: verify width
+    0xEB: (MVL, Opts(ops=[EMemReg(width=1), IMem8()])),
     0xEC: (DSLL, Opts(ops=[IMem20()])),
     0xED: (EX, Opts(ops=[RegPair(size=2)])),
     0xEE: (SWAP, Opts(ops=[Reg("A")])),
