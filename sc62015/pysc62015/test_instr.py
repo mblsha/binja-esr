@@ -51,6 +51,17 @@ def test_jp_abs():
     assert instr.render() == [TInstr("JPF"), TSep("   "), TInt("CBBAA")]
 
 
+def test_jp_rel():
+    instr = decode(bytearray([0x1a, 0x06]), 0xf0163, OPCODES)
+    assert instr.name() == "JRNZ"
+    il = MockLowLevelILFunction()
+    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST_PTR.l', [0xf0163 + 2 + 6])
+
+    instr = decode(bytearray([0x1b, 0x06]), 0xf0163, OPCODES)
+    assert instr.name() == "JRNZ"
+    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST_PTR.l', [0xf0163 + 2 - 6])
+
+
 def test_mvi():
     instr = decode(bytearray([0x08, 0xAA]), 0x1234, OPCODES)
     assert instr.name() == "MV"

@@ -1240,7 +1240,7 @@ class JP_Rel(JumpInstruction):
     def lift_jump_addr(self, il, addr):
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
-        return il.const_pointer(3, addr + self.length() + first.value)
+        return il.const_pointer(3, addr + self.length() + first.offset_value())
 
     def analyze(self, info, addr):
         super().analyze(info, addr)
