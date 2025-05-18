@@ -500,13 +500,19 @@ class Instruction:
         if len(operands) == 0:
             il.append(il.unimplemented())
         else:
-            il_value = self.lift_operation(
-                il, *(operand.lift(il) for operand in operands)
-            )
+            lifted_operands = [operand.lift(il) for operand in operands]
+            if len(operands) == 1:
+                il_value = self.lift_operation1(il, *lifted_operands)
+            elif len(operands) == 2:
+                il_value = self.lift_operation2(il, *lifted_operands)
+            else:
+                raise NotImplementedError("lift() not implemented for this instruction")
             operands[0].lift_assign(il, il_value)
 
-    def lift_operation(self, il: LowLevelILFunction, *il_operands:
-                       ExpressionIndex) -> ExpressionIndex:
+    def lift_operation1(self, il: LowLevelILFunction, arg1: ExpressionIndex) -> ExpressionIndex:
+        return il.unimplemented()
+
+    def lift_operation2(self, il: LowLevelILFunction, arg1: ExpressionIndex, arg2: ExpressionIndex) -> ExpressionIndex:
         return il.unimplemented()
 
 
@@ -1441,23 +1447,24 @@ class ArithmeticInstruction(Instruction):
         assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         return first.width()
 class ADD(ArithmeticInstruction):
-    def lift_operation(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il.add(self.width(), il_arg1, il_arg2, CZFlag)
 class ADC(ArithmeticInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il.add(self.width(), il_arg1, il.add(self.width(), il_arg2,
                                                     il.flag(CFlag)), CZFlag)
 class SUB(ArithmeticInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il.sub(self.width(), il_arg1, il_arg2, CZFlag)
 class SBC(ArithmeticInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il.sub(self.width(), il_arg1, il.add(self.width(), il_arg2,
                                                     il.flag(CFlag)), CZFlag)
 
 
 # FIXME: likely extremely wrong
-def bcd_add_emul(il, w, a, b):
+# def bcd_add_emul(il, w, a, b):
+def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> ExpressionIndex:
     # raw sum
     s = il.add(w, a, b)
     # adjust lower nibble if > 9 or carry in
@@ -1490,7 +1497,8 @@ def bcd_add_emul(il, w, a, b):
     return result
 
 # FIXME: likely extremely wrong
-def bcd_sub_emul(il, w, a, b):
+# def bcd_sub_emul(il, w, a, b):
+def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> ExpressionIndex:
     # raw diff with borrow
     borrow = il.flag(CFlag)
     b_ext = il.add(w, b, borrow)
@@ -1528,28 +1536,31 @@ def bcd_sub_emul(il, w, a, b):
 
 # FIXME: likely extremely wrong
 # FIXME: re-verify on real hardware
-def lift_multi_byte(il, op1, op2,
-                    clear_carry=False,
-                    reverse=False,
-                    bcd=False,
-                    subtract=False):
+# def lift_multi_byte(il, op1, op2,
+def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
+                    clear_carry: bool=False,
+                    reverse: bool=False,
+                    bcd: bool=False,
+                    subtract: bool=False) -> None:
     w = op1.width()
 
-    def make_handlers(op):
+    def make_handlers(op: Operand) -> Tuple[Callable[[], ExpressionIndex],
+                                           Callable[[ExpressionIndex], None],
+                                           Callable[[], None]]:
         if isinstance(op, Pointer):
             # memory operand: use pointer temp
             ptr = TempReg(LLIL_TEMP(0 if op is op1 else 1), width=3)
             ptr.lift_assign(il, op.lift_current_addr(il))
             load = lambda: op.memory_helper()(w, ptr).lift(il)
             store = lambda val: op.memory_helper()(w, ptr).lift_assign(il, val)
-            def advance():
+            def advance() -> None:
                 op_il = il.sub if reverse else il.add
                 ptr.lift_assign(il, op_il(3, ptr.lift(il), il.const(3, 1)))
         else:
             # register operand: direct
             load = lambda: op.lift(il)
             store = lambda val: op.lift_assign(il, val)
-            def advance(): pass
+            def advance() -> None: pass
         return load, store, advance
 
     load1, store1, adv1 = make_handlers(op1)
@@ -1581,98 +1592,98 @@ def lift_multi_byte(il, op1, op2,
         adv1(); adv2()
 
 class ADCL(ArithmeticInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, clear_carry=True)
 
 class SBCL(ArithmeticInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, subtract=True)
 
 # Decimal
 class DADL(ArithmeticInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, clear_carry=True, bcd=True, reverse=True)
 
 # Decimal
 class DSBL(ArithmeticInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, bcd=True, subtract=True, reverse=True)
 
 
 class LogicInstruction(Instruction): pass
 class AND(LogicInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
-        return il.and_expr(1, il_arg1, il_arg2, "Z")
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
+        return il.and_expr(1, il_arg1, il_arg2, ZFlag)
 class OR(LogicInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
-        return il.or_expr(1, il_arg1, il_arg2, "Z")
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
+        return il.or_expr(1, il_arg1, il_arg2, ZFlag)
 class XOR(LogicInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
-        return il.xor_expr(1, il_arg1, il_arg2, "Z")
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
+        return il.xor_expr(1, il_arg1, il_arg2, ZFlag)
 
 class CompareInstruction(Instruction): pass
 class TEST(CompareInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         first, second = self.operands()
         # FIXME: does it set the Z flag if any bit is set?
-        il.append(il.set_flag("Z", il.and_expr(3, first.lift(il), second.lift(il))))
+        il.append(il.set_flag(ZFlag, il.and_expr(3, first.lift(il), second.lift(il))))
 
 class CMP(CompareInstruction):
-    def width(self):
+    def width(self) -> int:
         return 1
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         first, second = self.operands()
         # FIXME: what's the proper width?
-        il.append(il.sub(self.width(), first.lift(il), second.lift(il), "CZ"))
+        il.append(il.sub(self.width(), first.lift(il), second.lift(il), CZFlag))
 class CMPW(CMP):
-    def width(self):
+    def width(self) -> int:
         return 2
 class CMPP(CMP):
-    def width(self):
+    def width(self) -> int:
         return 3
 
 # FIXME: verify on real hardware, likely wrong
 class ShiftRotateInstruction(Instruction):
-    def shift_by(self, il):
+    def shift_by(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.const(1, 1)
 # bit rotation
 class ROR(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         return il.rotate_right(1, il_arg1, self.shift_by(il), CZFlag)
 class ROL(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         return il.rotate_left(1, il_arg1, self.shift_by(il), CZFlag)
 # bit shift
 class SHL(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         return il.rotate_left_carry(1, il_arg1, self.shift_by(il), CZFlag)
 class SHR(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         return il.rotate_right_carry(1, il_arg1, self.shift_by(il), CZFlag)
 
 # digit shift
 # FIXME: this is very wrong, fix it later
 class DSRL(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         return il.rotate_right_carry(1, il_arg1, self.shift_by(il), CZFlag)
 class DSLL(ShiftRotateInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         return il.rotate_left_carry(1, il_arg1, self.shift_by(il), CZFlag)
 
 class IncDecInstruction(Instruction): pass
 class INC(IncDecInstruction):
-    def lift_operation(self, il, il_arg):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg: ExpressionIndex) -> ExpressionIndex:
         return il.add(1, il_arg, il.const(1, 1), ZFlag)
 class DEC(IncDecInstruction):
-    def lift_operation(self, il, il_arg):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg: ExpressionIndex) -> ExpressionIndex:
         return il.sub(1, il_arg, il.const(1, 1), ZFlag)
 
 class ExchangeInstruction(Instruction):
-    def lift_single_exchange(self, il, addr):
+    def lift_single_exchange(self, il: LowLevelILFunction, addr: int) -> None:
         first, second = self.operands()
         width = first.width()
         tmp = TempReg(LLIL_TEMP(0), width=width)
@@ -1680,40 +1691,40 @@ class ExchangeInstruction(Instruction):
         first.lift_assign(il, second.lift(il))
         second.lift_assign(il, tmp.lift(il))
 class EX(ExchangeInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         self.lift_single_exchange(il, addr)
 # uses counter
 class EXL(ExchangeInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         with lift_loop(il):
             self.lift_single_exchange(il, addr)
 
 class MiscInstruction(Instruction): pass
 class WAIT(MiscInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         with lift_loop(il):
             # Wait is just an idle loop
             pass
 
 class PMDF(MiscInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         dst.lift_assign(il, il.add(1, dst.lift(il), src.lift(il)))
 
 class SWAP(MiscInstruction):
-    def lift_operation(self, il, il_arg1):
+    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
         low = il.and_expr(1, il_arg1, il.const(1, 0x0F))
         low = il.shift_left(1, low, il.const(1, 4))
         high = il.and_expr(1, il_arg1, il.const(1, 0xF0))
         high = il.shift_right(1, high, il.const(1, 4))
-        return il.or_expr(1, low, high, "Z")
+        return il.or_expr(1, low, high, ZFlag)
 
 class SC(MiscInstruction):
-    def lift(self, il, addr):
-        il.append(il.set_flag("C", il.const(1, 1)))
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        il.append(il.set_flag(CFlag, il.const(1, 1)))
 class RC(MiscInstruction):
-    def lift(self, il, addr):
-        il.append(il.set_flag("C", il.const(1, 0)))
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        il.append(il.set_flag(CFlag, il.const(1, 0)))
 
 # FIXME: what does it do???
 # Timer Clear: sub-CG or main-CG timers are reset when STCL / MTCL of LCC are
@@ -1749,7 +1760,7 @@ class OFF(MiscInstruction): pass
 #
 # 3. After pushing IMR, bit 7 (IRM) of IMR is forcibly cleared to 0.
 class IR(MiscInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.push(3, RegPC().lift(il)))
         il.append(il.push(1, RegF().lift(il)))
         il.append(il.push(1, RegIMR().lift(il)))
@@ -1763,17 +1774,17 @@ class IR(MiscInstruction):
 # ACM bit 7, UCR + USR bits 0 to 2/5, IMR, SCR, SSR bit 2 are all reset to 0
 # USR bits 3 and 4 are set to 1
 class RESET(MiscInstruction):
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
         info.add_branch(BranchType.FunctionReturn)
 
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         mem = EMemAddr()
         mem.value = ENTRY_POINT_ADDR
         il.append(il.jump(mem.lift(il)))
 
 class UnknownInstruction(Instruction):
-    def name(self):
+    def name(self) -> str:
         return f"??? ({self.opcode:02X})"
 
 
