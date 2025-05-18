@@ -6,7 +6,7 @@ from .mock_llil import MockLLIL, ExprType
 
 import copy
 from dataclasses import dataclass
-from typing import Optional, List, Literal, Generator, Iterator, Dict, Tuple, Union, Type, Literal
+from typing import Optional, List, Literal, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any, Callable
 import enum
 from contextlib import contextmanager
 
@@ -14,6 +14,10 @@ from contextlib import contextmanager
 from .binja_api import *
 from binaryninja import (
     InstructionInfo,
+)
+from binaryninja.architecture import (
+    RegisterName,
+    FlagName,
 )
 from binaryninja.lowlevelil import (
     LowLevelILFunction,
@@ -28,17 +32,21 @@ from binaryninja.lowlevelil import (
 # mapping to size, page 67 of the book
 REGISTERS = [
     # r1
-    ("A", 1),
-    ("IL", 1),
+    (RegisterName("A"), 1),
+    (RegisterName("IL"), 1),
     # r2
-    ("BA", 2),
-    ("I", 2),
+    (RegisterName("BA"), 2),
+    (RegisterName("I"), 2),
     # r3
-    ("X", 4),  # r4, actually 3 bytes
-    ("Y", 4),  # r4, actually 3 bytes
-    ("U", 4),  # r4, actually 3 bytes
-    ("S", 3),
+    (RegisterName("X"), 4),  # r4, actually 3 bytes
+    (RegisterName("Y"), 4),  # r4, actually 3 bytes
+    (RegisterName("U"), 4),  # r4, actually 3 bytes
+    (RegisterName("S"), 3),
 ]
+
+CFlag = FlagName('C')
+ZFlag = FlagName('Z')
+CZFlag = FlagName('CZ')
 
 REG_NAMES = [reg[0] for reg in REGISTERS]
 REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
@@ -502,11 +510,13 @@ class Instruction:
         return il.unimplemented()
 
 
-class ImmOperand(Operand):
-    value: Optional[int]
-
+class HasWidth:
     def width(self) -> int:
-        raise NotImplementedError("width not implemented for ImmOperand")
+        raise NotImplementedError("width not implemented for HasWidth")
+
+
+class ImmOperand(Operand, HasWidth):
+    value: Optional[int]
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
@@ -721,7 +731,7 @@ class IMem20(IMem8):
 
 # Register operand encoded as part of the instruction opcode
 class Reg(Operand):
-    def __init__(self, reg: str) -> None:
+    def __init__(self, reg: Any) -> None:
         super().__init__()
         self.reg = reg
 
@@ -738,7 +748,7 @@ class Reg(Operand):
         il.append(il.set_reg(self.width(), self.reg, value))
 
 class TempReg(Operand):
-    def __init__(self, reg: int, width: int=3) -> None:
+    def __init__(self, reg: Any, width: int=3) -> None:
         super().__init__()
         self.reg = reg
         self._width = width
@@ -791,17 +801,18 @@ class RegF(Reg):
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         # FIXME: likely wrong
-        return il.or_expr(1, il.flag("C"), il.shift_left(1, 1, il.flag("Z")))
+        zbit = il.shift_left(1, il.flag(ZFlag), il.const(1, 1))
+        return il.or_expr(1, il.flag(CFlag), zbit)
 
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         # FIXME: likely wrong
         tmp = TempReg(LLIL_TEMP(0), width=self.width())
         tmp.lift_assign(il, value)
-        il.append(il.set_flag("C", il.and_expr(1, tmp.lift(il), il.const(1, 1))))
-        il.append(il.set_flag("Z", il.and_expr(1, tmp.lift(il), il.const(1, 2))))
+        il.append(il.set_flag(CFlag, il.and_expr(1, tmp.lift(il), il.const(1, 1))))
+        il.append(il.set_flag(ZFlag, il.and_expr(1, tmp.lift(il), il.const(1, 2))))
 
-class Reg3(Operand):
-    reg: Optional[str]
+class Reg3(Operand, HasWidth):
+    reg: Optional[RegisterName]
     reg_raw: Optional[int]
     high4: Optional[int]
 
@@ -809,11 +820,11 @@ class Reg3(Operand):
         super().__init__()
 
     @classmethod
-    def reg_name(cls, idx: int) -> str:
+    def reg_name(cls, idx: int) -> RegisterName:
         return REG_NAMES[idx]
 
     @classmethod
-    def reg_idx(cls, name: str) -> int:
+    def reg_idx(cls, name: RegisterName) -> int:
         return REG_NAMES.index(name)
 
     def width(self) -> int:
@@ -837,18 +848,22 @@ class Reg3(Operand):
         encoder.unsigned_byte(byte)
 
     def render(self) -> List[Token]:
+        assert self.reg is not None, "Register not set"
         return [TReg(self.reg)]
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+        assert self.reg is not None, "Register not set"
         return il.reg(self.width(), self.reg)
 
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+        assert self.reg is not None, "Register not set"
         il.append(il.set_reg(self.width(), self.reg, value))
 
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
 class EMemAddr(Imm20, Pointer):
     def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
+        assert self.value is not None, "Value not set"
         return il.const_pointer(3, self.value)
 
     def memory_helper(self) -> Type[EMemHelper]:
@@ -858,9 +873,11 @@ class EMemAddr(Imm20, Pointer):
         return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+        assert self.value is not None, "Value not set"
         return il.load(self.width(), il.const_pointer(3, self.value))
 
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+        assert self.value is not None, "Value not set"
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
 
@@ -880,7 +897,7 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         return EMemHelper
 
     def render(self) -> List[Token]:
-        result = [TBegMem(MemType.EXTERNAL)]
+        result: List[Token] = [TBegMem(MemType.EXTERNAL)]
         result.extend(self.value.render())
         if self.offset:
             result.extend(self.offset.render())
@@ -911,13 +928,13 @@ class EMemRegMode(enum.Enum):
 
 # FIXME: need to specify the width for the INC/DEC
 class RegIncrementDecrementHelper(OperandHelper):
-    def __init__(self, reg, mode):
+    def __init__(self, reg: Reg3, mode: EMemRegMode) -> None:
         super().__init__()
         self.reg = reg
         self.mode = mode
         assert mode in (EMemRegMode.SIMPLE, EMemRegMode.POST_INC, EMemRegMode.PRE_DEC)
 
-    def render(self):
+    def render(self) -> List[Token]:
         result = []
         if self.mode == EMemRegMode.SIMPLE:
             result.extend(self.reg.render())
@@ -931,7 +948,7 @@ class RegIncrementDecrementHelper(OperandHelper):
             raise ValueError(f"Invalid mode: {self.mode}")
         return result
 
-    def lift(self, il):
+    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
         value = self.reg.lift(il)
         if self.mode == EMemRegMode.POST_INC:
             # create LLIL_TEMP to hold the value since we're supposed to
@@ -946,13 +963,14 @@ class RegIncrementDecrementHelper(OperandHelper):
 
 
 class EMemRegOffsetHelper(OperandHelper):
-    def __init__(self, reg, mode: EMemRegMode, offset: Optional[ImmOffset]):
+    def __init__(self, reg: Reg3, mode: EMemRegMode, offset: Optional[ImmOffset]) -> None:
         super().__init__()
         self.reg = reg
         self.mode = mode
         self.offset = offset
 
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
+        reg: Operand
         if self.mode in (EMemRegMode.SIMPLE,
                          EMemRegMode.POST_INC,
                          EMemRegMode.PRE_DEC):
@@ -985,16 +1003,20 @@ class RegIMemOffsetOrder(enum.Enum):
 # [--r3], (n): encoded as E8 (3 r3) n
 # [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
 class RegIMemOffset(Operand):
+    reg: Optional[Reg3]
+    imem: Optional[IMem8]
+    mode: Optional[EMemRegMode]
+    offset: Optional[ImmOffset] = None
+
     def __init__(self, order: RegIMemOffsetOrder, allowed_modes:
-                 Optional[List[EMemRegMode]] = None):
+                 Optional[List[EMemRegMode]] = None) -> None:
         self.order = order
         self.allowed_modes = allowed_modes
-        self.reg = None
-        self.imem = None
-        self.mode = None
-        self.offset = None
 
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
+        assert self.reg is not None, "Register not set"
+        assert self.imem is not None, "IMem not set"
+        assert self.mode is not None, "Mode not set"
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
             yield op
@@ -1003,7 +1025,7 @@ class RegIMemOffset(Operand):
             yield self.imem
             yield op
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)
         self.reg = Reg3()
         self.reg.decode(decoder, addr)
@@ -1020,22 +1042,25 @@ class RegIMemOffset(Operand):
             self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
         super().encode(encoder, addr)
+        assert self.reg is not None, "Register not set"
         self.reg.encode(encoder, addr)
+        assert self.imem is not None, "IMem not set"
         self.imem.encode(encoder, addr)
         if self.offset:
             self.offset.encode(encoder, addr)
 
 class EMemReg(Operand):
-    def __init__(self, allowed_modes=None):
+    mode: Optional[EMemRegMode]
+    offset: Optional[ImmOffset] = None
+
+    def __init__(self, allowed_modes: Optional[List[EMemRegMode]]=None) -> None:
         super().__init__()
         self.reg = Reg3()
-        self.mode = None
-        self.offset = None
         self.allowed_modes = allowed_modes
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)
         self.reg.decode(decoder, addr)
         self.reg.assert_r3()
@@ -1047,13 +1072,14 @@ class EMemReg(Operand):
             self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
         # super().encode(encoder, addr)
         self.reg.encode(encoder, addr)
         if self.offset:
             self.offset.encode(encoder, addr)
 
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
+        assert self.mode is not None, "Mode not set"
         op = EMemRegOffsetHelper(self.reg, self.mode, self.offset)
         yield op
 
@@ -1068,15 +1094,15 @@ class EMemIMemMode(enum.Enum):
     NEGATIVE_OFFSET = 0xC0
 
 class EMemIMem(Imm8):
-    def __init__(self):
-        super().__init__()
-        self.mode = None
-        self.imem = None
-        self.offset = None
+    mode: Optional[EMemIMemMode]
+    offset: Optional[ImmOffset] = None
 
-    def decode(self, decoder, addr):
-        super().decode(decoder, addr)
+    def __init__(self) -> None:
+        super().__init__()
         self.imem = IMem8()
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        super().decode(decoder, addr)
         self.imem.decode(decoder, addr)
 
         self.mode = EMemIMemMode(self.value)
@@ -1084,14 +1110,14 @@ class EMemIMem(Imm8):
             self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
         super().encode(encoder, addr)
         self.imem.encode(encoder, addr)
 
         if self.offset:
             self.offset.encode(encoder, addr)
 
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
         op = EMemValueOffsetHelper(self.imem, self.offset)
         yield op
 
@@ -1119,15 +1145,16 @@ class EMemIMemOffsetOrder(enum.Enum):
 # [(l)+m], (n): encoded as FB 80 l n m
 # [(l)-m], (n): encoded as FB C0 l n m
 class EMemIMemOffset(Operand):
-    def __init__(self, order: EMemIMemOffsetOrder):
-        self.order = order
-        self.mode_imm = None
-        self.mode = None
-        self.imem1 = None
-        self.imem2 = None
-        self.offset = None
+    mode: Optional[EMemIMemMode]
+    offset: Optional[ImmOffset] = None
 
-    def operands(self):
+    def __init__(self, order: EMemIMemOffsetOrder) -> None:
+        self.order = order
+        self.mode_imm = Imm8()
+        self.imem1 = IMem8()
+        self.imem2 = IMem8()
+
+    def operands(self) -> Generator[Operand, None, None]:
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
             yield self.imem1
             op = EMemValueOffsetHelper(self.imem2, self.offset)
@@ -1137,7 +1164,7 @@ class EMemIMemOffset(Operand):
             yield op
             yield self.imem2
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)
         self.mode_imm = Imm8()
         self.mode_imm.decode(decoder, addr)
@@ -1153,7 +1180,7 @@ class EMemIMemOffset(Operand):
             self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
         super().encode(encoder, addr)
         self.mode_imm.encode(encoder, addr)
         self.imem1.encode(encoder, addr)
@@ -1164,14 +1191,15 @@ class EMemIMemOffset(Operand):
 
 # ADD/SUB can use various-sized register pairs
 class RegPair(Reg3):
-    def __init__(self, size=None):
+    reg_raw: Optional[int]
+    reg1: Optional[Reg]
+    reg2: Optional[Reg]
+
+    def __init__(self, size: Optional[int]=None) -> None:
         super().__init__()
-        self.reg_raw = None
-        self.reg1 = None
-        self.reg2 = None
         self.size = size
 
-    def decode(self, decoder, addr):
+    def decode(self, decoder: Decoder, addr: int) -> None:
         self.reg_raw = decoder.unsigned_byte()
         self.reg1 = Reg(REG_NAMES[(self.reg_raw >> 4) & 7])
         self.reg2 = Reg(REG_NAMES[self.reg_raw & 7])
@@ -1180,14 +1208,19 @@ class RegPair(Reg3):
         assert (self.reg_raw & 0x80) == 0, f"Invalid reg1 high bit: {self.reg1}"
         assert (self.reg_raw & 0x08) == 0, f"Invalid reg2 high bit: {self.reg2}"
 
-    def operands(self):
+    def operands(self) -> Generator[Operand, None, None]:
+        assert self.reg1 is not None, "Register 1 not set"
+        assert self.reg2 is not None, "Register 2 not set"
         yield self.reg1
         yield self.reg2
 
-    def encode(self, encoder, addr):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.reg_raw is not None, "Register raw value not set"
         encoder.unsigned_byte(self.reg_raw)
 
-    def render(self):
+    def render(self) -> List[Token]:
+        assert self.reg1 is not None, "Register 1 not set"
+        assert self.reg2 is not None, "Register 2 not set"
         result = self.reg1.render()
         result.append(TSep(", "))
         result.extend(self.reg2.render())
@@ -1195,7 +1228,7 @@ class RegPair(Reg3):
 
 
 @contextmanager
-def lift_loop(il):
+def lift_loop(il: LowLevelILFunction) -> Generator[None, None, None]:
     if_true = LowLevelILLabel()
     if_false = LowLevelILLabel()
 
@@ -1213,28 +1246,28 @@ def lift_loop(il):
 
 
 class NOP(Instruction):
-     def lift(self, il, addr):
+     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.nop())
 
 class JumpInstruction(Instruction):
-    def lift_jump_addr(self, il, addr):
+    def lift_jump_addr(self, il: LowLevelILFunction, addr: int) -> ExpressionIndex:
         raise NotImplementedError("lift_jump_addr() not implemented")
 
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
         # expect TrueBranch to be handled by subclasses as it might require
         # llil logic to calculate the address
         info.add_branch(BranchType.FalseBranch, addr + self.length())
 
 
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         if_true  = LowLevelILLabel()
         if_false = LowLevelILLabel()
 
         if self._cond:
             zero = il.const(1, 0)
             one  = il.const(1, 1)
-            flag = il.flag("Z") if "Z" in self._cond else il.flag("C")
+            flag = il.flag(ZFlag) if "Z" in self._cond else il.flag(CFlag)
             value = zero if "N" in self._cond else one
 
             cond = il.compare_equal(1, flag, value)
@@ -1246,81 +1279,86 @@ class JumpInstruction(Instruction):
 
 
 class JP_Abs(JumpInstruction):
-    def name(self):
+    def name(self) -> str:
         return super().name() + (self._cond if self._cond else "")
 
-    def lift_jump_addr(self, il,  addr):
+    def lift_jump_addr(self, il: LowLevelILFunction, addr: int) -> ExpressionIndex:
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
+        assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         if first.width() >= 3:
             return first.lift(il)
-        # need to or the 0xFF0000 to get the full address
         high_addr = addr & 0xFF0000
         return il.or_expr(3, first.lift(il), il.const(3, high_addr))
 
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
 
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
         if isinstance(first, ImmOperand):
             # absolute address
+            assert first.value is not None, "Value not set"
             dest = first.value
             info.add_branch(BranchType.TrueBranch, dest)
 
 class JP_Rel(JumpInstruction):
-    def name(self):
+    def name(self) -> str:
         return "JR" + (self._cond if self._cond else "")
 
-    def lift_jump_addr(self, il, addr):
+    def lift_jump_addr(self, il: LowLevelILFunction, addr: int) -> ExpressionIndex:
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
+        assert isinstance(first, ImmOffset), f"Expected ImmOffset, got {type(first)}"
         return il.const(3, addr + self.length() + first.offset_value())
 
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
+        assert isinstance(first, ImmOffset), f"Expected ImmOffset, got {type(first)}"
         dest = addr + self.length() + first.offset_value()
         info.add_branch(BranchType.TrueBranch, dest)
 
 class CALL(Instruction):
-    def dest_addr(self, addr):
+    def dest_addr(self, addr: int) -> int:
         dest, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
+        assert isinstance(dest, ImmOperand), "Expected ImmOperand"
 
         result = dest.value
+        assert result is not None, "Value not set"
         if dest.width() != 3:
             assert dest.width() == 2
             result = addr & 0xFF0000 | result
         return result
 
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
         info.add_branch(BranchType.CallDestination, self.dest_addr(addr))
 
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.call(il.const_pointer(3, self.dest_addr(addr))))
 
 
 class RetInstruction(Instruction):
-    def addr_size(self):
+    def addr_size(self) -> int:
         return 2
 
-    def analyze(self, info, addr):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
         info.add_branch(BranchType.FunctionReturn)
 
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # FIXME: should add bitmask for 2-byte pop?
         il.append(il.ret(il.pop(self.addr_size())))
 
 class RET(RetInstruction): pass
 class RETF(RetInstruction):
-    def addr_size(self):
+    def addr_size(self) -> int:
         return 3
 class RETI(RetInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         imr = RegIMR()
         imr, *rest = imr.operands()
         imr.lift_assign(il, il.pop(1))
@@ -1330,21 +1368,18 @@ class RETI(RetInstruction):
 
 
 class MoveInstruction(Instruction):
-    def dst(self):
-        raise NotImplementedError("dst() not implemented")
-    def src(self):
-        raise NotImplementedError("src() not implemented")
+    pass
 
 class MV(MoveInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         dst.lift_assign(il, src.lift(il))
 
 class MVL(MoveInstruction):
-    def modify_addr_il(self, il):
+    def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
         return il.add
 
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # FIXME: need to finish this
         # return super().lift(il, addr)
 
@@ -1366,27 +1401,27 @@ class MVL(MoveInstruction):
             src_reg.lift_assign(il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1)))
 
 class MVLD(MVL):
-    def modify_addr_il(self, il):
+    def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
         return il.sub
 
 class PRE(Instruction):
-    def name(self):
+    def name(self) -> str:
         return f"PRE{self.opcode:02x}"
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # FIXME: ignore PRE for now
         pass
 
 class StackInstruction(Instruction):
-    def reg(self):
+    def reg(self) -> Reg:
         r, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
         return r
 class StackPushInstruction(StackInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
         il.append(il.push(r.width(), r.lift(il)))
 class StackPopInstruction(StackInstruction):
-    def lift(self, il, addr):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
         r.lift_assign(il, il.pop(r.width()))
 
@@ -1398,11 +1433,11 @@ class PUSHS(StackPushInstruction): pass
 class POPS(StackPopInstruction): pass
 
 class ArithmeticInstruction(Instruction):
-    def width(self):
+    def width(self) -> int:
         first, second = self.operands()
         return first.width()
 class ADD(ArithmeticInstruction):
-    def lift_operation(self, il, il_arg1, il_arg2):
+    def lift_operation(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il.add(self.width(), il_arg1, il_arg2, 'CZ')
 class ADC(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
