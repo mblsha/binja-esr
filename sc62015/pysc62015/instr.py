@@ -730,7 +730,7 @@ class IMem20(IMem8):
         return 3
 
 # Register operand encoded as part of the instruction opcode
-class Reg(Operand):
+class Reg(Operand, HasWidth):
     def __init__(self, reg: Any) -> None:
         super().__init__()
         self.reg = reg
@@ -1359,8 +1359,7 @@ class RETF(RetInstruction):
         return 3
 class RETI(RetInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        imr = RegIMR()
-        imr, *rest = imr.operands()
+        imr, *rest = RegIMR().operands()
         imr.lift_assign(il, il.pop(1))
         f = RegF()
         imr.lift_assign(il, il.pop(1))
@@ -1384,6 +1383,8 @@ class MVL(MoveInstruction):
         # return super().lift(il, addr)
 
         dst, src = self.operands()
+        assert isinstance(dst, Pointer), f"Expected Pointer, got {type(dst)}"
+        assert isinstance(src, Pointer), f"Expected Pointer, got {type(src)}"
         # 0xCB and 0xCF variants use IMem8, IMem8
         dst_reg = TempReg(LLIL_TEMP(0))
         dst_reg.lift_assign(il, dst.lift_current_addr(il))
@@ -1412,17 +1413,19 @@ class PRE(Instruction):
         pass
 
 class StackInstruction(Instruction):
-    def reg(self) -> Reg:
+    def reg(self) -> Operand:
         r, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
         return r
 class StackPushInstruction(StackInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
+        assert isinstance(r, HasWidth), f"Expected HasWidth, got {type(r)}"
         il.append(il.push(r.width(), r.lift(il)))
 class StackPopInstruction(StackInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
+        assert isinstance(r, HasWidth), f"Expected HasWidth, got {type(r)}"
         r.lift_assign(il, il.pop(r.width()))
 
 # FIXME: should use U pointer, not S
@@ -1435,19 +1438,22 @@ class POPS(StackPopInstruction): pass
 class ArithmeticInstruction(Instruction):
     def width(self) -> int:
         first, second = self.operands()
+        assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         return first.width()
 class ADD(ArithmeticInstruction):
     def lift_operation(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
-        return il.add(self.width(), il_arg1, il_arg2, 'CZ')
+        return il.add(self.width(), il_arg1, il_arg2, CZFlag)
 class ADC(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
-        return il.add(self.width(), il_arg1, il.add(self.width(), il_arg2, il.flag('C')), 'CZ')
+        return il.add(self.width(), il_arg1, il.add(self.width(), il_arg2,
+                                                    il.flag(CFlag)), CZFlag)
 class SUB(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
-        return il.sub(self.width(), il_arg1, il_arg2, 'CZ')
+        return il.sub(self.width(), il_arg1, il_arg2, CZFlag)
 class SBC(ArithmeticInstruction):
     def lift_operation(self, il, il_arg1, il_arg2):
-        return il.sub(self.width(), il_arg1, il.add(self.width(), il_arg2, il.flag('C')), 'CZ')
+        return il.sub(self.width(), il_arg1, il.add(self.width(), il_arg2,
+                                                    il.flag(CFlag)), CZFlag)
 
 
 # FIXME: likely extremely wrong
@@ -1478,15 +1484,15 @@ def bcd_add_emul(il, w, a, b):
     # update carry: if raw sum > 0x99 or adjust condition
     carry_out = il.or_expr(w, need_adjust,
                            il.compare_unsigned_greater_than(w, s, il.const(w, 0x99)))
-    il.append(il.set_flag('C', carry_out))
+    il.append(il.set_flag(CFlag, carry_out))
     # binary flags (Z)
-    il.append(il.set_flag('Z', il.compare_equal(w, result.lift(il), il.const(w, 0))))
+    il.append(il.set_flag(ZFlag, il.compare_equal(w, result.lift(il), il.const(w, 0))))
     return result
 
 # FIXME: likely extremely wrong
 def bcd_sub_emul(il, w, a, b):
     # raw diff with borrow
-    borrow = il.flag('C')
+    borrow = il.flag(CFlag)
     b_ext = il.add(w, b, borrow)
     d = il.sub(w, a, b_ext)
     # adjust lower nibble if borrow from nibble
@@ -1516,8 +1522,8 @@ def bcd_sub_emul(il, w, a, b):
     carry_out = il.not_expr(w, il.or_expr(w,
         il.compare_unsigned_less_than(w, a, b_ext),
         need_adjust))
-    il.append(il.set_flag('C', carry_out))
-    il.append(il.set_flag('Z', il.compare_equal(w, result.lift(il), il.const(w, 0))))
+    il.append(il.set_flag(CFlag, carry_out))
+    il.append(il.set_flag(ZFlag, il.compare_equal(w, result.lift(il), il.const(w, 0))))
     return result
 
 # FIXME: likely extremely wrong
@@ -1550,17 +1556,17 @@ def lift_multi_byte(il, op1, op2,
     load2, store2, adv2 = make_handlers(op2)
 
     if clear_carry:
-        il.append(il.set_flag('C', il.const(1, 0)))
+        il.append(il.set_flag(CFlag, il.const(1, 0)))
 
     with lift_loop(il):
         a = load1(); b = load2()
 
         # if using subtract with borrow, fold C into operand
         if subtract:
-            b = il.add(w, b, il.flag('C'))
+            b = il.add(w, b, il.flag(CFlag))
             opfn = il.sub
         else:
-            b = il.sub(w, b, il.flag('C'))
+            b = il.sub(w, b, il.flag(CFlag))
             opfn = il.add
 
         # choose BCD or binary op
@@ -1569,7 +1575,7 @@ def lift_multi_byte(il, op1, op2,
             res = fn(il, w, a, b)
             res = res.lift(il)
         else:
-            res = opfn(w, a, b, 'CZ')
+            res = opfn(w, a, b, CZFlag)
 
         store1(res)
         adv1(); adv2()
@@ -1636,34 +1642,34 @@ class ShiftRotateInstruction(Instruction):
 # bit rotation
 class ROR(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
-        return il.rotate_right(1, il_arg1, self.shift_by(il), 'CZ')
+        return il.rotate_right(1, il_arg1, self.shift_by(il), CZFlag)
 class ROL(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
-        return il.rotate_left(1, il_arg1, self.shift_by(il), 'CZ')
+        return il.rotate_left(1, il_arg1, self.shift_by(il), CZFlag)
 # bit shift
 class SHL(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
-        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), 'CZ')
+        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), CZFlag)
 class SHR(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
-        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), CZFlag)
 
 # digit shift
 # FIXME: this is very wrong, fix it later
 class DSRL(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
-        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), 'CZ')
+        return il.rotate_right_carry(1, il_arg1, self.shift_by(il), CZFlag)
 class DSLL(ShiftRotateInstruction):
     def lift_operation(self, il, il_arg1):
-        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), 'CZ')
+        return il.rotate_left_carry(1, il_arg1, self.shift_by(il), CZFlag)
 
 class IncDecInstruction(Instruction): pass
 class INC(IncDecInstruction):
     def lift_operation(self, il, il_arg):
-        return il.add(1, il_arg, il.const(1, 1), 'Z')
+        return il.add(1, il_arg, il.const(1, 1), ZFlag)
 class DEC(IncDecInstruction):
     def lift_operation(self, il, il_arg):
-        return il.sub(1, il_arg, il.const(1, 1), 'Z')
+        return il.sub(1, il_arg, il.const(1, 1), ZFlag)
 
 class ExchangeInstruction(Instruction):
     def lift_single_exchange(self, il, addr):
