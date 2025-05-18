@@ -72,7 +72,7 @@ class MockGoto:
 class MockLowLevelILFunction(LowLevelILFunction):
     def __init__(self) -> None:
         # self.handle = MockHandle()
-        self._arch = MockArch()
+        self._arch = MockArch() # type: ignore
         self.ils: List[MockLLIL] = []
 
     def __del__(self) -> None:
@@ -82,8 +82,7 @@ class MockLowLevelILFunction(LowLevelILFunction):
         # remove source_location from kwargs
         return MockLabel(label)
 
-    def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] =
-             None) -> Any: # type: ignore
+    def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] = None) -> Any: # type: ignore
         return MockGoto(label)
 
     def if_expr(self, cond, t, f) -> Any:  # type: ignore

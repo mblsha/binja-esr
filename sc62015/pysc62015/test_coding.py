@@ -1,7 +1,7 @@
 from .coding import Decoder, Encoder
 
 
-def test_decoder():
+def test_decoder() -> None:
     # Test decoding unsigned byte
     decoder = Decoder(bytearray([0x01, 0x02, 0x03, 0x00]))
     assert decoder.unsigned_byte() == 0x01
@@ -37,7 +37,7 @@ def test_decoder():
     assert decoder.signed_word_be() == -32768
 
 
-def test_encoder():
+def test_encoder() -> None:
     # Test encoding unsigned byte
     encoder = Encoder()
     encoder.unsigned_byte(0x01)
