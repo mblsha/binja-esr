@@ -280,6 +280,32 @@ def test_lift_mv() -> None:
     ]
 
 
+def test_pre_roundtrip() -> None:
+    # 3331307dec
+    data = bytearray([0x33, 0x7d, 0xec])
+    instr = decode(data, 0x1234)
+    assert instr._pre == 0x33
+    assert asm_str(instr.render()) == "DEC   (EC)"
+
+    encoder = Encoder()
+    instr.encode(encoder, 0x1234)
+    assert encoder.buf == data
+
+
+def test_lift_pre() -> None:
+    # no PRE: MV IMem8, Imm8
+    instr = decode(bytearray([0xCC, 0xFB, 0x00]), 0xf0102)
+    assert asm_str(instr.render()) == "MV    (FB), 00"
+    assert instr._pre is None
+    assert instr.length() == 3
+
+    # PRE25 + MV IMem8, Imm8
+    instr = decode(bytearray([0x25, 0xCC, 0xFB, 0x00]), 0xf0102)
+    assert asm_str(instr.render()) == "MV    (BP+PX), 00"
+    assert instr._pre == 0x25
+    assert instr.length() == 4
+
+
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
 def opcode_generator() -> Generator[Tuple[Optional[bytearray], Optional[str]], None, None]:

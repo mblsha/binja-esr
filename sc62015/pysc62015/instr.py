@@ -28,6 +28,88 @@ from binaryninja.lowlevelil import (
     ExpressionIndex,
 )
 
+# This table defines the hexadecimal value of the PRE (Prefix) byte required for
+# certain complex internal RAM addressing modes, based on the combination of
+# addressing calculations used for the first and second address components.
+#
+# Rows indicate the addressing mode calculation specified by the first operand
+# byte (e.g., in MV (m) (n), this corresponds to (m)).
+#
+# Columns indicate the addressing mode calculation specified by the second
+# operand byte (e.g., in MV (m) (n), this corresponds to (n)).
+#
+# +---------------+-------+--------+--------+--------+
+# | 1st op \ 2nd  | (n)   | (BP+n) | (PY+n) |(BP+PY) |
+# +---------------+-------+--------+--------+--------+
+# | (n)           | 32H   | 30H    | 33H    | 31H    |
+# +---------------+-------+--------+--------+--------+
+# | (BP+n)        | 22H   |        | 23H    | 21H    |
+# +---------------+-------+--------+--------+--------+
+# | (PX+n)        | 36H   | 34H    | 37H    | 35H    |
+# +---------------+-------+--------+--------+--------+
+# | (BP+PX)       | 26H   | 24H    | 27H    | 25H    |
+# +---------------+-------+--------+--------+--------+
+
+class AddressingMode(enum.Enum):
+    N = '(n)'
+    BP_N = '(BP+n)'
+    PX_N = '(PX+n)'
+    PY_N = '(PY+n)'
+    BP_PX = '(BP+PX)'
+    BP_PY = '(BP+PY)'
+
+PRE_TABLE = {
+    1: {  # 1st operand (row, left)
+        0x32: AddressingMode.N,
+        0x30: AddressingMode.N,
+        0x33: AddressingMode.N,
+        0x31: AddressingMode.N,
+
+        0x22: AddressingMode.BP_N,
+        0x23: AddressingMode.BP_N,
+        0x21: AddressingMode.BP_N,
+
+        0x36: AddressingMode.PX_N,
+        0x34: AddressingMode.PX_N,
+        0x37: AddressingMode.PX_N,
+        0x35: AddressingMode.PX_N,
+
+        0x26: AddressingMode.BP_PX,
+        0x24: AddressingMode.BP_PX,
+        0x27: AddressingMode.BP_PX,
+        0x25: AddressingMode.BP_PX,
+    },
+    2: {  # 2nd operand (column, top)
+        0x32: AddressingMode.N,
+        0x22: AddressingMode.N,
+        0x36: AddressingMode.N,
+        0x26: AddressingMode.N,
+
+        0x30: AddressingMode.BP_N,
+        0x34: AddressingMode.BP_N,
+        0x24: AddressingMode.BP_N,
+
+        0x33: AddressingMode.PY_N,
+        0x23: AddressingMode.PY_N,
+        0x37: AddressingMode.PY_N,
+        0x27: AddressingMode.PY_N,
+
+        0x31: AddressingMode.BP_PY,
+        0x21: AddressingMode.BP_PY,
+        0x35: AddressingMode.BP_PY,
+        0x25: AddressingMode.BP_PY,
+    }
+}
+
+def get_addressing_mode(pre_value: int, operand_index: int) -> AddressingMode:
+    """
+    Returns the addressing mode for the given PRE byte and operand index (1 or 2).
+    """
+    try:
+        return PRE_TABLE[operand_index][pre_value]
+    except KeyError:
+        raise ValueError(f"Unknown PRE value {pre_value:02X}H for operand index {operand_index}")
+
 
 # mapping to size, page 67 of the book
 REGISTERS = [
@@ -304,7 +386,7 @@ IMEM_NAMES = {
 }
 
 class Operand:
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TText("unimplemented")]
 
     def decode(self, decoder: Decoder, addr: int) -> None:
@@ -327,7 +409,7 @@ class Operand:
 
 # used by Operands to help render / lift values
 class OperandHelper(Operand):
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         raise NotImplementedError(f"render() not implemented for {self.__class__.__name__} helper")
 
 
@@ -399,10 +481,31 @@ def iter_decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> 
             ) from e
 
 
+def fusion(iter: Iterator[Tuple['Instruction', int]]) -> Iterator[Tuple['Instruction', int]]:
+    try:
+        instr1, addr1 = next(iter)
+    except StopIteration:
+        return
+    while True:
+        try:
+            instr2, addr2 = next(iter)
+        except (StopIteration, NotImplementedError):
+            yield instr1, addr1
+            break
+
+        if instr12 := instr1.fuse(instr2):
+            yield instr12, addr1
+            try:
+                instr1, addr1 = next(iter)
+            except (StopIteration, NotImplementedError):
+                break
+        else:
+            yield instr1, addr1
+            instr1, addr1 = instr2, addr2
+
+
 def _create_decoder(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
-    # useful for instruction fusing
-    # return fusion(fusion(iter_decode(data, addr, opcodes)))
-    return iter_decode(data, addr, opcodes)
+    return fusion(fusion(iter_decode(data, addr, opcodes)))
 
 
 def decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Optional['Instruction']:
@@ -420,6 +523,7 @@ def decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Optio
 class Instruction:
     opcode: Optional[int]
     _length: Optional[int]
+    _pre: Optional[int] = None
 
     def __init__(self, name: str, operands: List[Operand], cond: Optional[str],
                  ops_reversed: Optional[bool]) -> None:
@@ -450,6 +554,8 @@ class Instruction:
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.opcode is not None, "Opcode not set"
+        if self._pre is not None:
+            encoder.unsigned_byte(self._pre)
         encoder.unsigned_byte(self.opcode)
         for op in self.operands_coding():
             op.encode(encoder, addr)
@@ -480,13 +586,19 @@ class Instruction:
         return reversed(ops)
 
     def render(self) -> List[Token]:
+        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+
         tokens: List[Token] = [TInstr(self.name())]
         if len(self._operands) > 0:
             tokens.append(TSep(" " * (6 - len(self.name()))))
+
         for index, operand in enumerate(self.operands()):
             if index > 0:
                 tokens.append(TSep(", "))
-            tokens += operand.render()
+            assert index < 2, "Expected up to 2 operands"
+            mode = dst_mode if index == 0 else src_mode
+            tokens += operand.render(mode)
         return tokens
 
     def display(self, addr: int) -> None:
@@ -555,7 +667,7 @@ class Imm8(ImmOperand):
         assert self.value is not None, "Value not set"
         encoder.unsigned_byte(self.value)
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TInt(f"{self.value:02X}")]
 
 # mn: encoded as `n m`
@@ -574,7 +686,7 @@ class Imm16(ImmOperand):
         assert self.value is not None, "Value not set"
         encoder.unsigned_word_le(self.value)
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TInt(f"{self.value:04X}")]
 
 
@@ -603,7 +715,7 @@ class Imm20(ImmOperand):
         encoder.unsigned_byte((self.value >> 8) & 0xFF)
         encoder.unsigned_byte(self.extra_hi)
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TInt(f"{self.value:05X}")]
 
 
@@ -618,7 +730,7 @@ class ImmOffset(Imm8):
         assert self.value is not None, "Value not set"
         return -self.value if self.sign == '-' else self.value
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TInt(f"{self.sign}{self.value:02X}")]
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
@@ -643,12 +755,38 @@ class IMemHelper(Operand):
     def width(self) -> int:
         return self._width
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         result: List[Token] = [TBegMem(MemType.INTERNAL)]
-        result.extend(self.value.render())
+        if pre is None or pre == AddressingMode.N:
+            result.extend(self.value.render())
+        else:
+            match pre:
+                case AddressingMode.BP_N:
+                    result.append(TText("BP"))
+                    result.append(TSep("+"))
+                    result.extend(self.value.render())
+                case AddressingMode.PX_N:
+                    result.append(TText("PX"))
+                    result.append(TSep("+"))
+                    result.extend(self.value.render())
+                case AddressingMode.PY_N:
+                    result.append(TText("PY"))
+                    result.append(TSep("+"))
+                    result.extend(self.value.render())
+                case AddressingMode.BP_PX:
+                    result.append(TText("BP"))
+                    result.append(TSep("+"))
+                    result.append(TText("PX"))
+                case AddressingMode.BP_PY:
+                    result.append(TText("BP"))
+                    result.append(TSep("+"))
+                    result.append(TText("PY"))
+                case _:
+                    raise NotImplementedError(f"Unknown addressing mode {pre}")
         result.append(TEndMem(MemType.INTERNAL))
         return result
 
+    # FIXME: handle all the AddressingModes
     def imem_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         if isinstance(self.value, ImmOperand):
             assert self.value.value is not None, "Value not set"
@@ -675,7 +813,7 @@ class EMemHelper(Operand):
     def width(self) -> int:
         return self._width
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         result: List[Token] = [TBegMem(MemType.EXTERNAL)]
         result.extend(self.value.render())
         result.append(TEndMem(MemType.EXTERNAL))
@@ -709,6 +847,7 @@ class IMem8(Imm8, Pointer):
     def width(self) -> int:
         return 1
 
+    # FIXME: need to use IMemHelper
     def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const_pointer(3, INTERNAL_MEMORY_START + self.value)
@@ -719,8 +858,8 @@ class IMem8(Imm8, Pointer):
     def _helper(self) -> IMemHelper:
         return IMemHelper(self.width(), Imm8(self.value))
 
-    def render(self) -> List[Token]:
-        return self._helper().render()
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
+        return self._helper().render(pre)
 
     # We need to extract the raw address from IMem8 for MVL / MVLD,
     # so can't return the helper directly.
@@ -750,7 +889,7 @@ class Reg(Operand, HasWidth):
         super().__init__()
         self.reg = reg
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TReg(self.reg)]
 
     def width(self) -> int:
@@ -768,7 +907,7 @@ class TempReg(Operand):
         self.reg = reg
         self._width = width
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         raise NotImplementedError("render() not implemented for TempReg")
 
     def width(self) -> int:
@@ -862,7 +1001,7 @@ class Reg3(Operand, HasWidth):
         byte = self.reg_raw | (self.high4 << 4)
         encoder.unsigned_byte(byte)
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         assert self.reg is not None, "Register not set"
         return [TReg(self.reg)]
 
@@ -884,7 +1023,7 @@ class EMemAddr(Imm20, Pointer):
     def memory_helper(self) -> Type[EMemHelper]:
         return EMemHelper
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
 
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
@@ -911,7 +1050,7 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
     def memory_helper(self) -> Type[EMemHelper]:
         return EMemHelper
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         result: List[Token] = [TBegMem(MemType.EXTERNAL)]
         result.extend(self.value.render())
         if self.offset:
@@ -950,7 +1089,7 @@ class RegIncrementDecrementHelper(OperandHelper):
         self.mode = mode
         assert mode in (EMemRegMode.SIMPLE, EMemRegMode.POST_INC, EMemRegMode.PRE_DEC)
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         result = []
         if self.mode == EMemRegMode.SIMPLE:
             result.extend(self.reg.render())
@@ -1239,7 +1378,7 @@ class RegPair(HasOperands, Reg3):
         assert self.reg_raw is not None, "Register raw value not set"
         encoder.unsigned_byte(self.reg_raw)
 
-    def render(self) -> List[Token]:
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         assert self.reg1 is not None, "Register 1 not set"
         assert self.reg2 is not None, "Register 2 not set"
         result = self.reg1.render()
@@ -1428,9 +1567,13 @@ class MVLD(MVL):
 class PRE(Instruction):
     def name(self) -> str:
         return f"PRE{self.opcode:02x}"
-    def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        # FIXME: ignore PRE for now
-        pass
+
+    def fuse(self, sister: 'Instruction') -> Optional['Instruction']:
+        if isinstance(sister, PRE):
+            return None
+        sister._pre = self.opcode
+        sister.set_length(self.length() + sister.length())
+        return sister
 
 class StackInstruction(Instruction):
     def reg(self) -> Operand:

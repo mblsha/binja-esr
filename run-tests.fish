@@ -5,8 +5,8 @@ cd sc62015
 
 function build_and_run
   ruff check
-  pytest -vv
   mypy pysc62015
+  pytest -vv
 end
 
 build_and_run
