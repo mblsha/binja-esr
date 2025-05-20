@@ -280,6 +280,17 @@ def test_lift_mv() -> None:
     ]
 
 
+def test_invalid_instruction() -> None:
+    data = bytearray([0x4d, 0x4d])
+    try:
+        decode(data, 0x1234)
+    except ValueError as exc:
+        assert str(exc) == "Failed to decode 4d4d at 0x1234"
+        pass
+    else:
+        assert False, "Expected Exception"
+
+
 def test_pre_roundtrip() -> None:
     # 3331307dec
     data = bytearray([0x33, 0x7d, 0xec])

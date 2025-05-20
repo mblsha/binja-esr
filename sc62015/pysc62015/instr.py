@@ -28,6 +28,9 @@ from binaryninja.lowlevelil import (
     ExpressionIndex,
 )
 
+class InvalidInstruction(Exception):
+    pass
+
 # This table defines the hexadecimal value of the PRE (Prefix) byte required for
 # certain complex internal RAM addressing modes, based on the combination of
 # addressing calculations used for the first and second address components.
@@ -473,6 +476,8 @@ def iter_decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> 
             yield instr, addr
             addr += instr.length()
         except BufferTooShort:
+            break
+        except InvalidInstruction:
             break
         except AssertionError as e:
             raise AssertionError(
@@ -986,7 +991,10 @@ class Reg3(Operand, HasWidth):
         return REG_SIZES[self.reg]
 
     def assert_r3(self) -> None:
-        assert self.width() >= 3, f"Want r3 register, got r{self.width()} ({self.reg}) instead"
+        try:
+            assert self.width() >= 3, f"Want r3 register, got r{self.width()} ({self.reg}) instead"
+        except AssertionError as e:
+            raise InvalidInstruction("Invalid register for r3 instruction") from e
 
     def decode(self, decoder: Decoder, addr: int) -> None:
         byte = decoder.unsigned_byte()
@@ -1079,6 +1087,12 @@ class EMemRegMode(enum.Enum):
     PRE_DEC = 0x3
     POSITIVE_OFFSET = 0x8
     NEGATIVE_OFFSET = 0xC
+
+def get_emem_reg_mode(val: Optional[int], addr: int) -> EMemRegMode:
+    try:
+        return EMemRegMode(val)
+    except Exception:
+        raise InvalidInstruction(f"Invalid EMemRegMode {val:02X} at address {addr:#06x}")
 
 # FIXME: need to specify the width for the INC/DEC
 class RegIncrementDecrementHelper(OperandHelper):
@@ -1193,7 +1207,7 @@ class RegIMemOffset(HasOperands, Operand):
         self.imem = IMem8()
         self.imem.decode(decoder, addr)
 
-        self.mode = EMemRegMode(self.reg.high4)
+        self.mode = get_emem_reg_mode(self.reg.high4, addr)
         if self.allowed_modes is not None:
             assert self.mode in self.allowed_modes
 
@@ -1224,7 +1238,7 @@ class EMemReg(HasOperands, Operand):
         super().decode(decoder, addr)
         self.reg.decode(decoder, addr)
         self.reg.assert_r3()
-        self.mode = EMemRegMode(self.reg.high4)
+        self.mode = get_emem_reg_mode(self.reg.high4, addr)
         if self.allowed_modes is not None:
             assert self.mode in self.allowed_modes, f"Invalid mode: {self.mode}, allowed: {self.allowed_modes}"
 
@@ -1253,6 +1267,12 @@ class EMemIMemMode(enum.Enum):
     POSITIVE_OFFSET = 0x80
     NEGATIVE_OFFSET = 0xC0
 
+def get_emem_imem_mode(val: Optional[int], addr: int) -> EMemIMemMode:
+    try:
+        return EMemIMemMode(val)
+    except Exception:
+        raise InvalidInstruction(f"Invalid EMemIMemMode {val:02X} at {addr:04X}")
+
 class EMemIMem(HasOperands, Imm8):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
@@ -1265,7 +1285,7 @@ class EMemIMem(HasOperands, Imm8):
         super().decode(decoder, addr)
         self.imem.decode(decoder, addr)
 
-        self.mode = EMemIMemMode(self.value)
+        self.mode = get_emem_imem_mode(self.value, addr)
         if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
             self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
@@ -1335,7 +1355,7 @@ class EMemIMemOffset(HasOperands, Operand):
         self.imem2 = IMem8()
         self.imem2.decode(decoder, addr)
 
-        self.mode = EMemIMemMode(self.mode_imm.value)
+        self.mode = get_emem_imem_mode(self.mode_imm.value, addr)
         if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
             self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
@@ -1364,9 +1384,12 @@ class RegPair(HasOperands, Reg3):
         self.reg1 = Reg(REG_NAMES[(self.reg_raw >> 4) & 7])
         self.reg2 = Reg(REG_NAMES[self.reg_raw & 7])
 
-        # high-bits of both halves must be zero: 0x80 and 0x08 must not be set
-        assert (self.reg_raw & 0x80) == 0, f"Invalid reg1 high bit: {self.reg1}"
-        assert (self.reg_raw & 0x08) == 0, f"Invalid reg2 high bit: {self.reg2}"
+        try:
+            # high-bits of both halves must be zero: 0x80 and 0x08 must not be set
+            assert (self.reg_raw & 0x80) == 0, f"Invalid reg1 high bit: {self.reg_raw:02X}"
+            assert (self.reg_raw & 0x08) == 0, f"Invalid reg2 high bit: {self.reg_raw:02X}"
+        except AssertionError as e:
+            raise InvalidInstruction(f"Invalid reg pair at {addr:04X}") from e
 
     def operands(self) -> Generator[Operand, None, None]:
         assert self.reg1 is not None, "Register 1 not set"
