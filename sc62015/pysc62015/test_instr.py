@@ -329,24 +329,26 @@ def test_lift_pre() -> None:
     assert instr._pre == 0x25
     assert instr.length() == 4
 
-    # FIXME
-    # il = MockLowLevelILFunction()
-    # instr.lift(il, 0xf0102)
-    # assert il.ils == [
-    #     mllil(
-    #         "STORE.b",
-    #         [
-    #             mllil(
-    #                 "ADD.b",
-    #                 [
-    #                     mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xFB]),
-    #                     mllil("REG.b", [mreg("PX")]),
-    #                 ],
-    #             ),
-    #             mllil("CONST.b", [0x00]),
-    #         ],
-    #     )
-    # ]
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0xf0102)
+    assert il.ils == [
+        mllil(
+            "STORE.b",
+            [
+                mllil(
+                    "ADD.l",
+                    [
+                        mllil("ADD.b", [
+                            mllil("LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xEC])]),
+                            mllil("LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xED])]),
+                        ]),
+                        mllil("CONST.l", [INTERNAL_MEMORY_START]),
+                    ],
+                ),
+                mllil("CONST.b", [0x00]),
+            ],
+        )
+    ]
 
 
 # Format:

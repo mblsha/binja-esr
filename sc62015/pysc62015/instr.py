@@ -402,10 +402,11 @@ class Operand:
     def operands(self) -> Generator["Operand", None, None]:
         yield self
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         return il.unimplemented()
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         il.append(value)
         il.append(il.unimplemented())
 
@@ -613,23 +614,29 @@ class Instruction:
         info.length += self.length()
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+
         operands = tuple(self.operands())
         if len(operands) == 0:
             il.append(il.unimplemented())
         else:
-            lifted_operands = [operand.lift(il) for operand in operands]
+            op1 = operands[0].lift(il, dst_mode)
             if len(operands) == 1:
-                il_value = self.lift_operation1(il, *lifted_operands)
+                il_value = self.lift_operation1(il, op1)
             elif len(operands) == 2:
-                il_value = self.lift_operation2(il, *lifted_operands)
+                op2 = operands[1].lift(il, src_mode)
+                il_value = self.lift_operation2(il, op1, op2)
             else:
                 raise NotImplementedError("lift() not implemented for this instruction")
-            operands[0].lift_assign(il, il_value)
+            operands[0].lift_assign(il, il_value, dst_mode)
 
     def lift_operation1(self, il: LowLevelILFunction, arg1: ExpressionIndex) -> ExpressionIndex:
+        raise NotImplementedError(f"lift_operation1() not implemented for {self.__class__.__name__} instruction")
         return il.unimplemented()
 
     def lift_operation2(self, il: LowLevelILFunction, arg1: ExpressionIndex, arg2: ExpressionIndex) -> ExpressionIndex:
+        raise NotImplementedError(f"lift_operation2() not implemented for {self.__class__.__name__} instruction")
         return il.unimplemented()
 
 
@@ -641,17 +648,18 @@ class HasWidth:
 # HasOperands is used to indicate that the operand expects other operands to be
 # used instead.
 class HasOperands:
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         raise NotImplementedError("lift not implemented for HasOperands")
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         raise NotImplementedError("lift_assign not implemented for HasOperands")
 
 
 class ImmOperand(Operand, HasWidth):
     value: Optional[int]
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const(self.width(), self.value)
 
@@ -738,7 +746,7 @@ class ImmOffset(Imm8):
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TInt(f"{self.sign}{self.value:02X}")]
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         raise NotImplementedError("lift() not implemented for ImmOffset")
 
     def lift_offset(self, il: LowLevelILFunction, value: ExpressionIndex) -> ExpressionIndex:
@@ -825,14 +833,13 @@ class IMemHelper(Operand):
         offset = self._imem_offset(il, pre)
         return il.add(3, offset, il.const(3, INTERNAL_MEMORY_START))
 
-    # FIXME: pass pre
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.load(self.width(), self.imem_addr(il, None))
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
+        return il.load(self.width(), self.imem_addr(il, pre))
 
-    # FIXME: pass pre
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
-        il.append(il.store(self.width(), self.imem_addr(il, None), value))
+        il.append(il.store(self.width(), self.imem_addr(il, pre), value))
 
 class EMemHelper(Operand):
     def __init__(self, width: int, value: Operand) -> None:
@@ -857,10 +864,11 @@ class EMemHelper(Operand):
 
         return self.value.lift(il)
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         return il.load(self.width(), self.emem_addr(il))
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
         il.append(il.store(self.width(), self.emem_addr(il), value))
 
@@ -897,11 +905,12 @@ class IMem8(Imm8, Pointer):
     # def operands(self):
     #     yield self._helper()
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return self._helper().lift(il)
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
+        return self._helper().lift(il, pre)
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
-        return self._helper().lift_assign(il, value)
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
+        return self._helper().lift_assign(il, value, pre)
 
 # Read 16 bits from internal memory based on Imm8 address.
 class IMem16(IMem8):
@@ -925,10 +934,11 @@ class Reg(Operand, HasWidth):
     def width(self) -> int:
         return REG_SIZES[self.reg]
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         return il.reg(self.width(), self.reg)
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         il.append(il.set_reg(self.width(), self.reg, value))
 
 class TempReg(Operand):
@@ -943,10 +953,11 @@ class TempReg(Operand):
     def width(self) -> int:
         return self._width
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         return il.reg(self.width(), self.reg)
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         il.append(il.set_reg(self.width(), self.reg, value))
 
 # only makes sense for PUSHU / POPU
@@ -983,12 +994,13 @@ class RegF(Reg):
     def width(self) -> int:
         return 1
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         # FIXME: likely wrong
         zbit = il.shift_left(1, il.flag(ZFlag), il.const(1, 1))
         return il.or_expr(1, il.flag(CFlag), zbit)
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         # FIXME: likely wrong
         tmp = TempReg(LLIL_TEMP(0), width=self.width())
         tmp.lift_assign(il, value)
@@ -1038,11 +1050,12 @@ class Reg3(Operand, HasWidth):
         assert self.reg is not None, "Register not set"
         return [TReg(self.reg)]
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         assert self.reg is not None, "Register not set"
         return il.reg(self.width(), self.reg)
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         assert self.reg is not None, "Register not set"
         il.append(il.set_reg(self.width(), self.reg, value))
 
@@ -1059,11 +1072,12 @@ class EMemAddr(Imm20, Pointer):
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.load(self.width(), il.const_pointer(3, self.value))
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         assert self.value is not None, "Value not set"
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
@@ -1091,11 +1105,12 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         result.append(TEndMem(MemType.EXTERNAL))
         return result
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         # FIXME: need to figure out the size to use
         return il.load(1, self.lift_current_addr(il))
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
+                    Optional[AddressingMode] = None) -> None:
         # FIXME: what's the width?
         il.append(il.store(1, self.lift_current_addr(il), value))
 
@@ -1142,7 +1157,7 @@ class RegIncrementDecrementHelper(OperandHelper):
             raise ValueError(f"Invalid mode: {self.mode}")
         return result
 
-    def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         value = self.reg.lift(il)
         if self.mode == EMemRegMode.POST_INC:
             # create LLIL_TEMP to hold the value since we're supposed to
@@ -1577,9 +1592,8 @@ class MoveInstruction(Instruction):
     pass
 
 class MV(MoveInstruction):
-    def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst, src = self.operands()
-        dst.lift_assign(il, src.lift(il))
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
+        return il_arg2
 
 class MVL(MoveInstruction):
     def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
@@ -1807,11 +1821,13 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
         adv2()
 
 class ADCL(ArithmeticInstruction):
+    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, clear_carry=True)
 
 class SBCL(ArithmeticInstruction):
+    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         lift_multi_byte(il, dst, src, subtract=True)
@@ -1842,6 +1858,7 @@ class XOR(LogicInstruction):
 
 class CompareInstruction(Instruction): pass
 class TEST(CompareInstruction):
+    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         first, second = self.operands()
         # FIXME: does it set the Z flag if any bit is set?
@@ -1850,6 +1867,7 @@ class TEST(CompareInstruction):
 class CMP(CompareInstruction):
     def width(self) -> int:
         return 1
+    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         first, second = self.operands()
         # FIXME: what's the proper width?
@@ -1927,9 +1945,9 @@ class WAIT(MiscInstruction):
             pass
 
 class PMDF(MiscInstruction):
-    def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst, src = self.operands()
-        dst.lift_assign(il, il.add(1, dst.lift(il), src.lift(il)))
+    # FIXME: verify
+    def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
+        return il.add(1, il_arg1, il_arg2)
 
 class SWAP(MiscInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
