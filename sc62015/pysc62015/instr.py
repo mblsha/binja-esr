@@ -762,52 +762,77 @@ class IMemHelper(Operand):
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         result: List[Token] = [TBegMem(MemType.INTERNAL)]
-        if pre is None or pre == AddressingMode.N:
-            result.extend(self.value.render())
-        else:
-            match pre:
-                case AddressingMode.BP_N:
-                    result.append(TText("BP"))
-                    result.append(TSep("+"))
-                    result.extend(self.value.render())
-                case AddressingMode.PX_N:
-                    result.append(TText("PX"))
-                    result.append(TSep("+"))
-                    result.extend(self.value.render())
-                case AddressingMode.PY_N:
-                    result.append(TText("PY"))
-                    result.append(TSep("+"))
-                    result.extend(self.value.render())
-                case AddressingMode.BP_PX:
-                    result.append(TText("BP"))
-                    result.append(TSep("+"))
-                    result.append(TText("PX"))
-                case AddressingMode.BP_PY:
-                    result.append(TText("BP"))
-                    result.append(TSep("+"))
-                    result.append(TText("PY"))
-                case _:
-                    raise NotImplementedError(f"Unknown addressing mode {pre}")
+        match pre:
+            case None | AddressingMode.N:
+                result.extend(self.value.render())
+            case AddressingMode.BP_N:
+                result.append(TText("BP"))
+                result.append(TSep("+"))
+                result.extend(self.value.render())
+            case AddressingMode.PX_N:
+                result.append(TText("PX"))
+                result.append(TSep("+"))
+                result.extend(self.value.render())
+            case AddressingMode.PY_N:
+                result.append(TText("PY"))
+                result.append(TSep("+"))
+                result.extend(self.value.render())
+            case AddressingMode.BP_PX:
+                result.append(TText("BP"))
+                result.append(TSep("+"))
+                result.append(TText("PX"))
+            case AddressingMode.BP_PY:
+                result.append(TText("BP"))
+                result.append(TSep("+"))
+                result.append(TText("PY"))
+            case _:
+                raise NotImplementedError(f"Unknown addressing mode {pre}")
         result.append(TEndMem(MemType.INTERNAL))
         return result
 
-    # FIXME: handle all the AddressingModes
-    def imem_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
-        if isinstance(self.value, ImmOperand):
+    def _n_offset(self, il: LowLevelILFunction) -> ExpressionIndex:
+        return self.value.lift(il)
+
+    # they're not real registers, but we treat them as such
+    @staticmethod
+    def _reg_value(name: str, il: LowLevelILFunction) -> ExpressionIndex:
+        addr = IMEM_NAMES[name]
+        return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
+
+    def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
+        match pre:
+            case None | AddressingMode.N:
+                return self._n_offset(il)
+            case AddressingMode.BP_N:
+                return il.add(1, self._reg_value("BP", il), self._n_offset(il))
+            case AddressingMode.PX_N:
+                return il.add(1, self._reg_value("PX", il), self._n_offset(il))
+            case AddressingMode.PY_N:
+                return il.add(1, self._reg_value("PY", il), self._n_offset(il))
+            case AddressingMode.BP_PX:
+                return il.add(1, self._reg_value("BP", il), self._reg_value("PX", il))
+            case AddressingMode.BP_PY:
+                return il.add(1, self._reg_value("BP", il), self._reg_value("PY", il))
+            case _:
+                raise NotImplementedError(f"Unknown addressing mode {pre}")
+
+    def imem_addr(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
+        if isinstance(self.value, ImmOperand) and (pre is None or pre == AddressingMode.N):
             assert self.value.value is not None, "Value not set"
             raw_addr = INTERNAL_MEMORY_START + self.value.value
             return il.const_pointer(3, raw_addr)
 
-        addr = self.value.lift(il)
-        addr = il.add(3, addr, il.const(3, INTERNAL_MEMORY_START))
-        return addr
+        offset = self._imem_offset(il, pre)
+        return il.add(3, offset, il.const(3, INTERNAL_MEMORY_START))
 
+    # FIXME: pass pre
     def lift(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return il.load(self.width(), self.imem_addr(il))
+        return il.load(self.width(), self.imem_addr(il, None))
 
+    # FIXME: pass pre
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex) -> None:
         assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
-        il.append(il.store(self.width(), self.imem_addr(il), value))
+        il.append(il.store(self.width(), self.imem_addr(il, None), value))
 
 class EMemHelper(Operand):
     def __init__(self, width: int, value: Operand) -> None:

@@ -310,11 +310,43 @@ def test_lift_pre() -> None:
     assert instr._pre is None
     assert instr.length() == 3
 
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0xf0102)
+    assert il.ils == [
+        mllil(
+            "STORE.b",
+            [
+                mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xFB]),
+                mllil("CONST.b", [0x00]),
+            ],
+        )
+    ]
+
+
     # PRE25 + MV IMem8, Imm8
     instr = decode(bytearray([0x25, 0xCC, 0xFB, 0x00]), 0xf0102)
     assert asm_str(instr.render()) == "MV    (BP+PX), 00"
     assert instr._pre == 0x25
     assert instr.length() == 4
+
+    # FIXME
+    # il = MockLowLevelILFunction()
+    # instr.lift(il, 0xf0102)
+    # assert il.ils == [
+    #     mllil(
+    #         "STORE.b",
+    #         [
+    #             mllil(
+    #                 "ADD.b",
+    #                 [
+    #                     mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xFB]),
+    #                     mllil("REG.b", [mreg("PX")]),
+    #                 ],
+    #             ),
+    #             mllil("CONST.b", [0x00]),
+    #         ],
+    #     )
+    # ]
 
 
 # Format:
