@@ -36,6 +36,9 @@ class AsmTransformer(Transformer):
     def line(self, items: List[Any]) -> LineNode:
         # line: label? statement? NEWLINE | NEWLINE
         out: LineNode = {}
+        if not items:
+            return out
+
         if len(items) == 2:
             out["label"] = cast(str, items[0])
             out["statement"] = cast(Union[SectionNode, DataDirectiveNode, InstructionNode], items[1])

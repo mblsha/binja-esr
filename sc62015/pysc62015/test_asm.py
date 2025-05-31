@@ -1,9 +1,9 @@
 from .asm import asm_parser
 from lark import Tree, Token
-from typing import Any, Callable, List, Union
+from typing import Any, Callable, List, Union, Tuple
 
 
-def get_token_tuples(text) -> list:
+def get_token_tuples(text: str) -> List[Tuple[str, str]]:
     # Returns a list of (type, value) for easy assertion
     return [(token.type, token.value) for token in asm_parser.lex(text)]
 
