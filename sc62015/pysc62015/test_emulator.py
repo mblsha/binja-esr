@@ -1,6 +1,7 @@
 from .emulator import (
     Registers,
     RegisterName,
+    Emulator,
 )
 # from typing import Dict, List, Union, Optional
 
@@ -45,4 +46,21 @@ def test_registers() -> None:
     assert regs.get(RegisterName.F) == 3  # FC + FZ bits set
 
 
+def test_decode_instruction() -> None:
+    memory = bytearray([0x00] * 255)
+    def read_mem(addr: int) -> int:
+        if addr < len(memory):
+            return memory[addr]
+        raise IndexError(f"Address out of bounds: {addr:04X}")
+    def write_mem(addr: int, value: int) -> None:
+        assert 0 <= value < 256, "Value must be a byte (0-255)"
+        if addr < len(memory):
+            memory[addr] = value & 0xFF
+        else:
+            raise IndexError("Address out of bounds")
+    cpu = Emulator()
+    cpu.read_mem = read_mem
+    cpu.write_mem = write_mem
 
+    instr = cpu.execute_instruction(0x00)
+    assert instr is not None, "Instruction should not be None"

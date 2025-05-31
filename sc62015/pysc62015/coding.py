@@ -1,5 +1,6 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/coding.py
 import struct
+from typing import Callable
 
 
 class BufferTooShort(Exception):
@@ -28,7 +29,7 @@ class Decoder:
         items = struct.unpack_from(fmt, self.buf, self.pos)
         self.pos += size
         if len(items) == 1:
-            return items[0] # type: ignore
+            return items[0]  # type: ignore
         else:
             raise ValueError("Unpacking more than one item is not supported")
             return items
@@ -36,20 +37,41 @@ class Decoder:
     def unsigned_byte(self) -> int:
         return self._unpack("B")
 
-    def signed_byte(self) -> int:
-        return self._unpack("b")
-
     def unsigned_word_le(self) -> int:
         return self._unpack("H")
 
-    def unsigned_word_be(self) -> int:
-        return self._unpack(">H")
 
-    def signed_word_le(self) -> int:
-        return self._unpack("h")
+# FetchDecoder is similar to Decoder but uses a read_mem function to fetch memory
+class FetchDecoder(Decoder):
+    MAX_ADDR = 0xFFFFF + 0xFF
 
-    def signed_word_be(self) -> int:
-        return self._unpack(">h")
+    def __init__(self, read_mem: Callable[[int], int]) -> None:
+        self.read_mem = read_mem
+        self.pos = 0
+
+    def get_pos(self) -> int:
+        return self.pos
+
+    def peek(self, offset: int) -> int:
+        if self.pos + offset > self.MAX_ADDR:
+            raise BufferTooShort
+        return self.read_mem(self.pos + offset)
+
+    def _unpack(self, fmt: str) -> int:
+        size = struct.calcsize(fmt)
+        if self.pos + size > self.MAX_ADDR:
+            raise BufferTooShort
+
+        fmt = "<" + fmt if fmt[0] != ">" else fmt
+        items = struct.unpack_from(
+            fmt, bytearray(self.read_mem(self.pos + i) for i in range(size))
+        )
+        self.pos += size
+        if len(items) == 1:
+            return items[0]  # type: ignore
+        else:
+            raise ValueError("Unpacking more than one item is not supported")
+            return items
 
 
 class Encoder:
@@ -65,17 +87,5 @@ class Encoder:
     def unsigned_byte(self, value: int) -> None:
         self._pack("B", value)
 
-    def signed_byte(self, value: int) -> None:
-        self._pack("b", value)
-
     def unsigned_word_le(self, value: int) -> None:
         self._pack("H", value)
-
-    def unsigned_word_be(self, value: int) -> None:
-        self._pack(">H", value)
-
-    def signed_word_le(self, value: int) -> None:
-        self._pack("h", value)
-
-    def signed_word_be(self, value: int) -> None:
-        self._pack(">h", value)

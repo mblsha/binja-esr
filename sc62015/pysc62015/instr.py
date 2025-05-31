@@ -460,14 +460,13 @@ def create_instruction(decoder: Decoder, opcodes: Dict[int, OpcodesType]) -> Opt
     return cls(name, operands=ops, cond=opts.cond, ops_reversed=opts.ops_reversed)
 
 
-def iter_decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
-    decoder = Decoder(data)
+def iter_decode(decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
     while True:
         try:
             instr = create_instruction(decoder, opcodes)
             if instr is None:
                 raise NotImplementedError(
-                    f"Cannot decode opcode {data[decoder.pos]:#04x} "
+                    f"Cannot decode opcode "
                     f"at address {addr + decoder.pos:#06x}"
                 )
             start_pos = decoder.get_pos()
@@ -510,13 +509,13 @@ def fusion(iter: Iterator[Tuple['Instruction', int]]) -> Iterator[Tuple['Instruc
             instr1, addr1 = instr2, addr2
 
 
-def _create_decoder(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
-    return fusion(fusion(iter_decode(data, addr, opcodes)))
+def _create_decoder(decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]) -> Iterator[Tuple['Instruction', int]]:
+    return fusion(fusion(iter_decode(decoder, addr, opcodes)))
 
 
-def decode(data: bytearray, addr: int, opcodes: Dict[int, OpcodesType]) -> Optional['Instruction']:
+def decode(decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]) -> Optional['Instruction']:
     try:
-        instr, _ = next(_create_decoder(data, addr, opcodes))
+        instr, _ = next(_create_decoder(decoder, addr, opcodes))
 
         return instr
     except StopIteration:

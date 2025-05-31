@@ -31,7 +31,8 @@ from typing import Generator, Tuple, List, Optional
 
 
 def decode(data: bytearray, addr: int) -> Instruction:
-    instr = decode_instr(data, addr, OPCODES) # type: ignore
+    decoder = Decoder(data)
+    instr = decode_instr(decoder, addr, OPCODES) # type: ignore
     if instr is None:
         raise ValueError(f"Failed to decode {data.hex()} at {addr:#x}")
     return instr

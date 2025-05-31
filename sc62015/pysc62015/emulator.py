@@ -1,13 +1,11 @@
-from typing import Dict, Set, Callable
+from typing import Dict, Set, Callable, Any
 import enum
+from .coding import FetchDecoder
 
-# from .instr import (
-#     decode as decode_sc62015_instr,
-#     OPCODES as SC62015_OPCODES,
-#     Instruction as SC62015Instruction,
-#     Opts as SC62015Opts,
-#     Instruction as SC62015InstrCls,  # For type hint
-# )
+from .instr import (
+    decode,
+    OPCODES,
+)
 # from .mock_llil import MockLowLevelILFunction, MockLLIL, MockReg, MockFlag
 
 
@@ -91,6 +89,7 @@ class Registers:
     def set(self, reg: RegisterName, value: int) -> None:
         if reg in self.BASE:
             self._values[reg] = value & (1 << (REGISTER_SIZE[reg] * 8)) - 1
+            return
 
         match reg:
             case RegisterName.A:
@@ -130,6 +129,11 @@ class Emulator:
     def __init__(self) -> None:
         self.regs = Registers()
 
-    def execute_instruction(self, address: int) -> None:
+    def execute_instruction(self, address: int) -> Any:
         self.regs.set(RegisterName.PC, address)
+        def fecher(offset: int) -> int:
+           return self.read_mem(self.regs.get(RegisterName.PC) + offset)
+        decoder = FetchDecoder(fecher)
+        instr = decode(decoder, address, OPCODES)
+        return instr
         # FIXME: Implement instruction execution logic
