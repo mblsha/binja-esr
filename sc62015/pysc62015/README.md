@@ -24,6 +24,29 @@
 
 ---
 
+## CPU Registers
+
+An overview of the SC62015 CPU registers:
+
+| Register | Size (bits) | Description                               | Notes                                                                 |
+| :------- | :---------- | :---------------------------------------- | :-------------------------------------------------------------------- |
+| `A`      | 8           | Accumulator                               | Low byte of `BA`.                                                     |
+| `B`      | 8           | General Purpose / BA High Byte            | High byte of `BA`.                                                    |
+| **`BA`** | **16**      | **16-bit Register (B:A)**                 | Composite: `B` (MSB), `A` (LSB).                                      |
+| `IL`     | 8           | Index Register Low                        | Low byte of `I`.                                                      |
+| `IH`     | 8           | Index Register High                       | High byte of `I`.                                                     |
+| **`I`**  | **16**      | **Index Register (IH:IL)**                | Composite: `IH` (MSB), `IL` (LSB).                                    |
+| **`X`**  | **24**      | **Index Register X**                      | General purpose 24-bit register, often used for addressing.           |
+| **`Y`**  | **24**      | **Index Register Y**                      | General purpose 24-bit register, often used for addressing.           |
+| **`U`**  | **24**      | **User Stack Pointer**                    | Points to the top of the user stack in external RAM.                  |
+| **`S`**  | **24**      | **System Stack Pointer**                  | Points to the top of the system stack in external RAM. Used for `CALL`/`RET` and interrupts. |
+| **`PC`** | **20**      | **Program Counter**                       | Holds the 20-bit address of the next instruction. Stored in 3 bytes.  |
+| **`F`**  | **8**       | **Flags Register**                        | Contains status flags reflecting results of arithmetic/logic operations. |
+| ↳ `C`    | 1           | Carry Flag                                | Part of `F` (bit 0). Set on arithmetic carry-out or borrow-in.        |
+| ↳ `Z`    | 1           | Zero Flag                                 | Part of `F` (bit 1). Set if an operation result is zero.              |
+
+---
+
 ## Register Encoding Table
 
 This table shows the mapping between register names, their size category (`r₁` to `r₄`), and the 3-bit binary code used to represent them in instruction opcodes.
