@@ -1,0 +1,51 @@
+%import common.CNAME           // identifier (label, section, etc.)
+%import common.INT             // integer
+%import common.WS_INLINE
+%import common.NEWLINE
+%import common.WS
+%import common.ESCAPED_STRING  // for string literals
+
+COMMENT: /;.*/
+%ignore COMMENT
+%ignore WS
+
+start: line*
+line: label? statement? NEWLINE
+    | NEWLINE
+
+label: CNAME ":"
+
+statement: section_decl
+         | data_directive
+         | instruction
+
+section_decl: "SECTION" WS CNAME WS_INLINE*
+
+data_directive: defb_directive
+              | defw_directive
+              | defl_directive
+              | defs_directive
+              | defm_directive
+
+defb_directive: "defb" WS defb_arg ("," defb_arg)*
+defb_arg: NUMBER
+defw_directive: "defw" WS defw_arg ("," defw_arg)*
+defw_arg: NUMBER
+defl_directive: "defl" WS defl_arg ("," defl_arg)*
+defl_arg: NUMBER
+defs_directive: "defs" WS NUMBER
+defm_directive: "defm" WS string_literal
+
+instruction: INSTRUCTION
+INSTRUCTION: /[a-zA-Z]{2,5}(\s+[^\n;]*)?/
+
+expression: atom (OP atom)*
+string_literal: ESCAPED_STRING
+atom: CNAME | NUMBER
+
+NUMBER: INT | HEX | BIN
+HEX: ("0x" /[0-9a-fA-F]+/ | /[0-9a-fA-F]+[hH]/)
+BIN: ("0b" /[01]+/ | /[01]+[bB]/)
+
+OP: "+" | "-" | "*" | "/" | "AND" | "OR"
+
