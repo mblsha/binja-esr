@@ -31,6 +31,8 @@ class MockArch:
 
         if name == 2147483648:
             return MockReg('TEMP0')
+        elif name == 2147483649:
+            return MockReg('TEMP1')
         return MockReg(str(name))
 
     def get_flag_by_name(self, name: str) -> Any:
@@ -80,6 +82,18 @@ class MockLabel(MockLLIL):
         self.label = label
 
 @dataclass
+class MockIntrinsic(MockLLIL):
+    name: str
+    outputs: Any
+    params: Any
+
+    def __init__(self, name: str, outputs: Any, params: Any) -> None:
+        super().__init__('INTRINSIC', [])
+        self.name = name
+        self.outputs = outputs
+        self.params = params
+
+@dataclass
 class MockGoto:
     label: Any
 
@@ -104,6 +118,9 @@ class MockLowLevelILFunction(LowLevelILFunction):
 
     def if_expr(self, cond, t, f) -> Any:  # type: ignore
         return MockIfExpr(cond, t, f)
+
+    def intrinsic(self, outputs, name: str, params) -> Any:  # type: ignore
+        return MockIntrinsic(name, outputs, params)
 
     def append(self, il: Any) -> Any:
         self.ils.append(il)

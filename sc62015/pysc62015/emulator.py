@@ -1,4 +1,4 @@
-from typing import Dict, Set, Callable, Optional, Any
+from typing import Dict, Set, Callable, Optional, Any, cast
 import enum
 from .coding import FetchDecoder
 
@@ -13,6 +13,7 @@ from .mock_llil import (
     SUFFIX_SZ,
     MockLabel,
     MockIfExpr,
+    MockIntrinsic,
 )
 
 
@@ -193,6 +194,10 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
     else:
         size = None
 
+    if isinstance(llil, MockIntrinsic):
+        intrinsic = cast(MockIntrinsic, llil)
+        op = f"INTRINSIC_{intrinsic.name}"
+
     f = EVAL_LLIL.get(op)
     if f is None:
         raise NotImplementedError(f"Eval for {op} not implemented")
@@ -328,6 +333,13 @@ def eval_or(
     return int(op1) | int(op2)
 
 
+def eval_xor(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return int(op1) ^ int(op2)
+
+
 def eval_pop(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
@@ -434,6 +446,59 @@ def eval_lsl(
     return int(op1) << int(op2)
 
 
+def eval_ror(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size == 1
+    val, r = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = 8  # Assuming 8-bit rotation for simplicity
+    return (val >> r) | (val << (width - r))
+
+
+def eval_rol(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> int:
+    assert size == 1
+    val, r = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = 8  # Assuming 8-bit rotation for simplicity
+    return (val << r) | (val >> (width - r))
+
+
+def eval_rrc(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> int:
+    # RRC is similar to ROR but with the carry bit
+    assert size == 1
+    val, r, carry = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = 8  # Assuming 8-bit rotation for simplicity
+    # FIXME
+    return ((val >> r) | (carry << (width - r))) & 0xFF
+
+
+def eval_rlc(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> int:
+    # RLC is similar to ROL but with the carry bit
+    assert size == 1
+    val, r, carry = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = 8  # Assuming 8-bit rotation for simplicity
+    # FIXME
+    return ((val << r) | (carry >> (width - r))) & 0xFF
+
+
+def eval_intrinsic_tcl(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    pass
+
+
+def eval_intrinsic_halt(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    state.halted = True
+
+
+def eval_intrinsic_off(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    # This is a no-op in the emulator context, but could be used for debugging or logging
+    state.halted = True
+
+
 EVAL_LLIL: Dict[str, EvalLLILType] = {
     "CONST": eval_const,
     "CONST_PTR": eval_const_ptr,
@@ -443,6 +508,7 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "SET_FLAG": eval_set_flag,
     "AND": eval_and,
     "OR": eval_or,
+    "XOR": eval_xor,
     "POP": eval_pop,
     "PUSH": eval_push,
     "NOP": eval_nop,
@@ -456,4 +522,11 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "SUB": eval_sub,
     "CMP_E": eval_cmp_e,
     "LSL": eval_lsl,
+    "ROR": eval_ror,
+    "RRC": eval_rlc,
+    "ROL": eval_rol,
+    "RLC": eval_rlc,
+    "INTRINSIC_TCL": eval_intrinsic_tcl,
+    "INTRINSIC_HALT": eval_intrinsic_halt,
+    "INTRINSIC_OFF": eval_intrinsic_off,
 }

@@ -1,7 +1,7 @@
 from binaryninja import (
     Architecture,
     RegisterInfo,
-    # IntrinsicInfo,
+    IntrinsicInfo,
     InstructionInfo,
     CallingConvention,
 )
@@ -21,17 +21,17 @@ class SC62015(Architecture):
     # registers from page 32 of the book
     regs = {
         "BA": RegisterInfo("BA", 2),
-        "A": RegisterInfo("BA", 1, 1), # accumulator
-        "B": RegisterInfo("BA", 1, 0), # axiliary
-        "I": RegisterInfo("I", 2), # counter
+        "A": RegisterInfo("BA", 1, 1),  # accumulator
+        "B": RegisterInfo("BA", 1, 0),  # axiliary
+        "I": RegisterInfo("I", 2),  # counter
         "IL": RegisterInfo("I", 1, 1),
         "IH": RegisterInfo("I", 1, 0),
-        "X": RegisterInfo("X", 3), # pointer
-        "Y": RegisterInfo("Y", 3), # pointer
-        "U": RegisterInfo("U", 3), # user stack
-        "S": RegisterInfo("S", 3), # system stack
-        "PC": RegisterInfo("PC", 3), # program counter
-        "PS": RegisterInfo("PC", 1, 2), # actually 4 bits, page segment
+        "X": RegisterInfo("X", 3),  # pointer
+        "Y": RegisterInfo("Y", 3),  # pointer
+        "U": RegisterInfo("U", 3),  # user stack
+        "S": RegisterInfo("S", 3),  # system stack
+        "PC": RegisterInfo("PC", 3),  # program counter
+        "PS": RegisterInfo("PC", 1, 2),  # actually 4 bits, page segment
     }
     stack_pointer = "S"
 
@@ -52,6 +52,12 @@ class SC62015(Architecture):
         "Z": ["Z"],
         "C": ["C"],
         "CZ": ["Z", "C"],
+    }
+
+    intrinsics = {
+        "TCL": IntrinsicInfo(inputs=[], outputs=[]),
+        "HALT": IntrinsicInfo(inputs=[], outputs=[]),
+        "OFF": IntrinsicInfo(inputs=[], outputs=[]),
     }
 
     def get_instruction_info(self, data, addr):

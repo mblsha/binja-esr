@@ -17,6 +17,7 @@ from binaryninja import (
 )
 from binaryninja.architecture import (
     RegisterName,
+    IntrinsicName,
     FlagName,
 )
 from binaryninja.lowlevelil import (
@@ -113,6 +114,9 @@ def get_addressing_mode(pre_value: int, operand_index: int) -> AddressingMode:
     except KeyError:
         raise ValueError(f"Unknown PRE value {pre_value:02X}H for operand index {operand_index}")
 
+TCLIntrinsic = IntrinsicName("TCL")
+HALTIntrinsic = IntrinsicName("HALT")
+OFFIntrinsic = IntrinsicName("OFF")
 
 # mapping to size, page 67 of the book
 REGISTERS = [
@@ -1978,20 +1982,23 @@ class RC(MiscInstruction):
 # Timer Clear: sub-CG or main-CG timers are reset when STCL / MTCL of LCC are
 # set.
 # Divider ← D
-# FIXME: create intrinsic for this
-class TCL(MiscInstruction): pass
+class TCL(MiscInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        il.append(il.intrinsic([], TCLIntrinsic, []))
 
 # System Clock Stop: halts main-CG of CPU
 # Execution can continue past HALT: ON, IRQ, KI pins
-# FIXME: create intrinsic for this
 # USR resets bits 0 to 2/5 to 0
 # SSR bit 2 and USR 3 and 4 are set to 1
-class HALT(MiscInstruction): pass
+class HALT(MiscInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        il.append(il.intrinsic([], HALTIntrinsic, []))
 
 # System Clock Stop; Sub Clock Stop: main-CG and sub-CG of CPU are stopped
 # Execution can continue past OFF: ON, IRQ, KI pins
-# FIXME: create intrinsic for this
-class OFF(MiscInstruction): pass
+class OFF(MiscInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        il.append(il.intrinsic([], OFFIntrinsic, []))
 
 # AKA `INT / Interrupt`
 # 1. Save context to system stack (S-stack), in this strict order:
