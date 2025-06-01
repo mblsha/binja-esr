@@ -40,10 +40,18 @@ class RegisterName(enum.Enum):
     FC = "FC"  # Carry
     FZ = "FZ"  # Zero
     F = "F"
-    # Temp Registers
+    # Temp Registers, 0-10
     TEMP0 = "TEMP0"
     TEMP1 = "TEMP1"
-    TEMP10 = "TEMP10"
+    TEMP2 = "TEMP2"
+    TEMP3 = "TEMP3"
+    TEMP4 = "TEMP4"
+    TEMP5 = "TEMP5"
+    TEMP6 = "TEMP6"
+    TEMP7 = "TEMP7"
+    TEMP8 = "TEMP8"
+    TEMP9 = "TEMP9"
+
 
 
 REGISTER_SIZE: Dict[RegisterName, int] = {
@@ -63,7 +71,14 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.F: 1,  # 8-bit (general flags register)
     RegisterName.TEMP0: 3,
     RegisterName.TEMP1: 3,
-    RegisterName.TEMP10: 3,
+    RegisterName.TEMP2: 3,
+    RegisterName.TEMP3: 3,
+    RegisterName.TEMP4: 3,
+    RegisterName.TEMP5: 3,
+    RegisterName.TEMP6: 3,
+    RegisterName.TEMP7: 3,
+    RegisterName.TEMP8: 3,
+    RegisterName.TEMP9: 3,
 }
 
 
@@ -79,7 +94,14 @@ class Registers:
         RegisterName.F,
         RegisterName.TEMP0,
         RegisterName.TEMP1,
-        RegisterName.TEMP10,
+        RegisterName.TEMP2,
+        RegisterName.TEMP3,
+        RegisterName.TEMP4,
+        RegisterName.TEMP5,
+        RegisterName.TEMP6,
+        RegisterName.TEMP7,
+        RegisterName.TEMP8,
+        RegisterName.TEMP9,
     }
 
     def __init__(self) -> None:
@@ -445,7 +467,7 @@ def eval_lsl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
     assert size
-    val, count = [eval(op, regs, memory, state) for op in llil.ops]
+    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
     width = size * 8
     if count == 0:
         return val

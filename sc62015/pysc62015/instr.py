@@ -118,6 +118,18 @@ TCLIntrinsic = IntrinsicName("TCL")
 HALTIntrinsic = IntrinsicName("HALT")
 OFFIntrinsic = IntrinsicName("OFF")
 
+# Use distinct temporary registers for various operations in order to avoid
+# overlap in case of multiple operations being performed in the same instruction.
+TempRegF = LLIL_TEMP(0)
+TempIncDecHelper = LLIL_TEMP(1)
+TempMvlSrc = LLIL_TEMP(2)
+TempMvlDst = LLIL_TEMP(3)
+TempBcdAddEmul = LLIL_TEMP(4)
+TempBcdSubEmul = LLIL_TEMP(5)
+TempMultiByte1 = LLIL_TEMP(6)
+TempMultiByte2 = LLIL_TEMP(7)
+TempExchange = LLIL_TEMP(8)
+
 # mapping to size, page 67 of the book
 REGISTERS = [
     # r1
@@ -831,6 +843,12 @@ class IMemHelper(Operand):
                 raise NotImplementedError(f"Unknown addressing mode {pre}")
 
     def imem_addr(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
+        if isinstance(self.value, (TempReg)):
+            if pre is None or pre == AddressingMode.N:
+                # The register is assumed to hold the complete address.
+                # No further addition of INTERNAL_MEMORY_START.
+                return self.value.lift(il)
+
         if isinstance(self.value, ImmOperand) and (pre is None or pre == AddressingMode.N):
             assert self.value.value is not None, "Value not set"
             raw_addr = INTERNAL_MEMORY_START + self.value.value
@@ -880,7 +898,7 @@ class EMemHelper(Operand):
 
 
 class Pointer:
-    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
         raise NotImplementedError(f"lift_current_addr() not implemented for {type(self)}")
 
     def memory_helper(self) -> Type[Union[IMemHelper, EMemHelper]]:
@@ -892,7 +910,7 @@ class IMem8(Imm8, Pointer):
         return 1
 
     # FIXME: need to use IMemHelper
-    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const_pointer(3, INTERNAL_MEMORY_START + self.value)
 
@@ -1008,7 +1026,7 @@ class RegF(Reg):
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
                     Optional[AddressingMode] = None) -> None:
         # FIXME: likely wrong
-        tmp = TempReg(LLIL_TEMP(0), width=self.width())
+        tmp = TempReg(TempRegF, width=self.width())
         tmp.lift_assign(il, value)
         il.append(il.set_flag(CFlag, il.and_expr(1, tmp.lift(il), il.const(1, 1))))
         il.append(il.set_flag(ZFlag, il.and_expr(1, tmp.lift(il), il.const(1, 2))))
@@ -1075,7 +1093,7 @@ class EMemAddr(Imm20, Pointer):
     def width(self) -> int:
         return self._width
 
-    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const_pointer(3, self.value)
 
@@ -1102,7 +1120,8 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         self.value = value
         self.offset = offset
 
-    def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
+    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
+        # FIXME: need to respect the side_effects flag
         addr = self.value.lift(il)
         if self.offset:
             addr = self.offset.lift_offset(il, addr)
@@ -1171,12 +1190,13 @@ class RegIncrementDecrementHelper(OperandHelper):
             raise ValueError(f"Invalid mode: {self.mode}")
         return result
 
+    # FIXME: should allow to disable side_effects
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None) -> ExpressionIndex:
         value = self.reg.lift(il)
         if self.mode == EMemRegMode.POST_INC:
             # create LLIL_TEMP to hold the value since we're supposed to
             # increment it after using it
-            tmp = TempReg(LLIL_TEMP(0), width=self.reg.width())
+            tmp = TempReg(TempIncDecHelper, width=self.reg.width())
             tmp.lift_assign(il, value)
             self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(1,
                                                                               self.width)))
@@ -1630,10 +1650,10 @@ class MVL(MoveInstruction):
         assert isinstance(dst, Pointer), f"Expected Pointer, got {type(dst)}"
         assert isinstance(src, Pointer), f"Expected Pointer, got {type(src)}"
         # 0xCB and 0xCF variants use IMem8, IMem8
-        dst_reg = TempReg(LLIL_TEMP(0))
-        dst_reg.lift_assign(il, dst.lift_current_addr(il))
-        src_reg = TempReg(LLIL_TEMP(1))
-        src_reg.lift_assign(il, src.lift_current_addr(il))
+        dst_reg = TempReg(TempMvlDst)
+        dst_reg.lift_assign(il, dst.lift_current_addr(il, side_effects=False))
+        src_reg = TempReg(TempMvlSrc)
+        src_reg.lift_assign(il, src.lift_current_addr(il, side_effects=False))
 
         with lift_loop(il):
             src_mem = src.memory_helper()(1, src_reg)
@@ -1644,6 +1664,11 @@ class MVL(MoveInstruction):
             func = self.modify_addr_il(il)
             dst_reg.lift_assign(il, func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1)))
             src_reg.lift_assign(il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1)))
+
+            # in case we have POST_INC or PRE_DEC, we need to update the
+            # register by lifting it and not assigning it
+            dst.lift_current_addr(il)
+            src.lift_current_addr(il)
 
 class MVLD(MVL):
     def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
@@ -1716,7 +1741,7 @@ def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b:
     s_adj = il.add(w, s, il.const(w, 6))
 
     # result = il.if_then_else(need_adjust, s_adj, s)
-    result = TempReg(LLIL_TEMP(10))
+    result = TempReg(TempBcdAddEmul)
     if_true = LowLevelILLabel()
     if_false = LowLevelILLabel()
     after = LowLevelILLabel()
@@ -1754,7 +1779,7 @@ def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b:
     d_adj = il.sub(w, d, il.const(w, 6))
 
     # result = il.if_then_else(need_adjust, d_adj, d)
-    result = TempReg(LLIL_TEMP(10))
+    result = TempReg(TempBcdSubEmul)
     if_true = LowLevelILLabel()
     if_false = LowLevelILLabel()
     after = LowLevelILLabel()
@@ -1794,7 +1819,8 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
                                            Callable[[], None]]:
         if isinstance(op, Pointer):
             # memory operand: use pointer temp
-            ptr = TempReg(LLIL_TEMP(0 if op is op1 else 1), width=3)
+            # ptr = TempReg(LLIL_TEMP(0 if op is op1 else 1), width=3)
+            ptr = TempReg(TempMultiByte1 if op is op1 else TempMultiByte2, width=3)
             ptr.lift_assign(il, op.lift_current_addr(il))
             def load() -> ExpressionIndex:
                 return op.memory_helper()(w, ptr).lift(il)
@@ -1947,7 +1973,7 @@ class ExchangeInstruction(Instruction):
         first, second = self.operands()
         assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         width = first.width()
-        tmp = TempReg(LLIL_TEMP(0), width=width)
+        tmp = TempReg(TempExchange, width=width)
         tmp.lift_assign(il, first.lift(il))
         first.lift_assign(il, second.lift(il))
         second.lift_assign(il, tmp.lift(il))

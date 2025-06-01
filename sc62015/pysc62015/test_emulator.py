@@ -4,7 +4,7 @@ from .emulator import (
     Emulator,
     Memory,
 )
-from .instr import MAX_ADDR
+from .instr import MAX_ADDR, INTERNAL_MEMORY_START
 from .mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List
@@ -68,11 +68,15 @@ def _make_cpu_and_mem(
 
     def read_mem(addr: int) -> int:
         reads.append(addr)
+        if addr < 0 or addr >= len(raw):
+            raise IndexError(f"Read address {addr:04x} out of bounds")
         return raw[addr]
 
     def write_mem(addr: int, value: int) -> None:
         writes.append((addr, value))
         print(f"Writing {value:02x} to address {addr:04x}")
+        if addr < 0 or addr >= len(raw):
+            raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
 
     cpu = Emulator(Memory(read_mem, write_mem))
@@ -381,6 +385,68 @@ def test_rol_ror_a() -> None:
     assert cpu.regs.get(RegisterName.FZ) == 0
 
 
+def test_mvl_emem_reg_post_inc_to_imem() -> None:
+    initial_x_val = 0x1000
+    loop_count = 3
+    dest_imem_addr_start = 0x50
+    emem_data_start_addr = initial_x_val
+    source_data_bytes = [0xAA, 0xBB, 0xCC]
+
+    init_ext_mem_data = {
+        emem_data_start_addr + i: val for i, val in enumerate(source_data_bytes)
+    }
+    cpu, raw, reads, writes = _make_cpu_and_mem(
+        MAX_ADDR, init_ext_mem_data, bytes.fromhex("E32450")
+    )
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "MVL   (50), [X++]"
+
+    cpu.regs.set(RegisterName.I, loop_count)
+    cpu.regs.set(RegisterName.X, initial_x_val)
+
+    debug_instruction(cpu, 0x00)
+    cpu.execute_instruction(0x00)
+
+    assert writes == [
+        (INTERNAL_MEMORY_START + dest_imem_addr_start + 0, 0xAA),
+        (INTERNAL_MEMORY_START + dest_imem_addr_start + 1, 0xBB),
+        (INTERNAL_MEMORY_START + dest_imem_addr_start + 2, 0xCC),
+    ]
+
+    assert cpu.regs.get(RegisterName.I) == 0
+    # FIXME: side_effects is currently not correctly handled for MVL
+    # assert cpu.regs.get(RegisterName.X) == initial_x_val + loop_count
+
+
+def test_mvld_imem_to_imem() -> None:
+    loop_count = 3
+    src_imem_start = 0xA0
+    dst_imem_start = 0x50
+
+    initial_imem_setup = {
+        INTERNAL_MEMORY_START + src_imem_start - 0: 0x11,
+        INTERNAL_MEMORY_START + src_imem_start - 1: 0x22,
+        INTERNAL_MEMORY_START + src_imem_start - 2: 0x33,
+    }
+
+    cpu, _, _, writes = _make_cpu_and_mem(
+        MAX_ADDR, initial_imem_setup, bytes.fromhex("CF50A0")
+    )
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "MVLD  (50), (A0)"
+
+    cpu.regs.set(RegisterName.I, loop_count)
+
+    debug_instruction(cpu, 0x00)
+    cpu.execute_instruction(0x00)
+
+    assert cpu.regs.get(RegisterName.I) == 0
+
+    assert writes == [
+        (INTERNAL_MEMORY_START + dst_imem_start - 0, 0x11),
+        (INTERNAL_MEMORY_START + dst_imem_start - 1, 0x22),
+        (INTERNAL_MEMORY_START + dst_imem_start - 2, 0x33),
+    ]
+
+
 def test_decode_all_opcodes() -> None:
     raw_memory = bytearray([0x00] * MAX_ADDR)
 
@@ -403,6 +469,8 @@ def test_decode_all_opcodes() -> None:
             raw_memory[addr] = value
 
         skip = False
+        # FIXME: need to ensure they're covered by specific tests that set up
+        # the memory and registers properly.
         ignore_instructions = ["???", "ADCL", "MVL", "SBCL", "DADL", "DSBL"]
         for ignore in ignore_instructions:
             if s and s.startswith(ignore):

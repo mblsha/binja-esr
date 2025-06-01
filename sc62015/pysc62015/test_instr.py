@@ -8,6 +8,12 @@ from .instr import (
     EMemIMem,
     EMemIMemMode,
     IMem8,
+    IMemHelper,
+    IMEM_NAMES,
+    TempReg,
+    AddressingMode,
+    Reg,
+    Imm8,
     ImmOffset,
     EMemValueOffsetHelper,
     INTERNAL_MEMORY_START,
@@ -19,10 +25,24 @@ from .instr import (
     IR,
 )
 from .instr import decode as decode_instr
-from .tokens import Token, TInstr, TSep, TText, TInt, asm_str, TBegMem, TEndMem, MemType, TReg
+from .tokens import (
+    Token,
+    TInstr,
+    TSep,
+    TText,
+    TInt,
+    asm_str,
+    TBegMem,
+    TEndMem,
+    MemType,
+    TReg,
+)
 from .coding import Decoder, Encoder
 from .mock_analysis import MockAnalysisInfo
 from .mock_llil import MockLowLevelILFunction, MockLLIL, mllil, mreg
+from binaryninja.lowlevelil import (
+    LLIL_TEMP,
+)
 
 import os
 from pprint import pprint
@@ -32,11 +52,10 @@ from typing import Generator, Tuple, List, Optional
 
 def decode(data: bytearray, addr: int) -> Instruction:
     decoder = Decoder(data)
-    instr = decode_instr(decoder, addr, OPCODES) # type: ignore
+    instr = decode_instr(decoder, addr, OPCODES)  # type: ignore
     if instr is None:
         raise ValueError(f"Failed to decode {data.hex()} at {addr:#x}")
     return instr
-
 
 
 def test_operand() -> None:
@@ -56,36 +75,42 @@ def test_jp_abs() -> None:
     assert instr.render() == [TInstr("JP"), TSep("    "), TInt("BBAA")]
     il = MockLowLevelILFunction()
     assert isinstance(instr, JP_Abs)
-    assert instr.lift_jump_addr(il, 0xCD1234) == mllil("OR.l", [
-        mllil("CONST.w", [0xBBAA]),
-        mllil("CONST.l", [0xCD0000]),
-    ])
+    assert instr.lift_jump_addr(il, 0xCD1234) == mllil(
+        "OR.l",
+        [
+            mllil("CONST.w", [0xBBAA]),
+            mllil("CONST.l", [0xCD0000]),
+        ],
+    )
 
     instr = decode(bytearray([0x03, 0xAA, 0xBB, 0x0C]), 0x1234)
     assert isinstance(instr, JP_Abs)
     assert instr.render() == [TInstr("JPF"), TSep("   "), TInt("CBBAA")]
     assert instr.lift_jump_addr(il, 0x1234) == mllil("CONST.l", [0xCBBAA])
 
-    instr = decode(bytearray([0x15, 0xcd, 0x00]), 0xf0185)
+    instr = decode(bytearray([0x15, 0xCD, 0x00]), 0xF0185)
     assert isinstance(instr, JP_Abs)
     assert instr.render() == [TInstr("JPNZ"), TSep("  "), TInt("00CD")]
-    assert instr.lift_jump_addr(il, 0xf0185) == mllil("OR.l", [
-        mllil("CONST.w", [0x00CD]),
-        mllil("CONST.l", [0xf0000]),
-    ])
+    assert instr.lift_jump_addr(il, 0xF0185) == mllil(
+        "OR.l",
+        [
+            mllil("CONST.w", [0x00CD]),
+            mllil("CONST.l", [0xF0000]),
+        ],
+    )
 
 
 def test_jp_rel() -> None:
-    instr = decode(bytearray([0x1a, 0x06]), 0xf0163)
+    instr = decode(bytearray([0x1A, 0x06]), 0xF0163)
     assert instr.name() == "JRNZ"
     il = MockLowLevelILFunction()
     assert isinstance(instr, JP_Rel)
-    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST.l', [0xf0163 + 2 + 6])
+    assert instr.lift_jump_addr(il, 0xF0163) == mllil("CONST.l", [0xF0163 + 2 + 6])
 
-    instr = decode(bytearray([0x1b, 0x06]), 0xf0163)
+    instr = decode(bytearray([0x1B, 0x06]), 0xF0163)
     assert instr.name() == "JRNZ"
     assert isinstance(instr, JP_Rel)
-    assert instr.lift_jump_addr(il, 0xf0163) == mllil('CONST.l', [0xf0163 + 2 - 6])
+    assert instr.lift_jump_addr(il, 0xF0163) == mllil("CONST.l", [0xF0163 + 2 - 6])
 
 
 def test_mvi() -> None:
@@ -244,6 +269,240 @@ def test_emem_value_offset_helper_lifting() -> None:
     )
 
 
+class TestIMemHelperLifting:
+    def _get_imem_addr_llil(
+        self, helper: IMemHelper, pre_mode: Optional[AddressingMode] = None
+    ) -> MockLLIL:
+        il = MockLowLevelILFunction()
+        # The imem_addr method returns an ExpressionIndex, which in MockLLIL is the MockLLIL itself
+        # or an index if append was used. For direct calls like this, it should be the MockLLIL.
+        addr_expr = helper.imem_addr(il, pre_mode)
+        # If imem_addr directly returns an expression (like const_pointer or reg),
+        # it won't be in il.ils. If it builds an expression (like add), it might be.
+        # For simplicity, we'll assume addr_expr is the primary result.
+        # If it complexly appends to il.ils, this might need adjustment.
+        # However, imem_addr is designed to *return* the address expression.
+        assert isinstance(
+            addr_expr, MockLLIL
+        ), f"Expected MockLLIL, got {type(addr_expr)}"
+        return addr_expr
+
+    def test_imem_helper_direct_n_mode(self) -> None:
+        # IMemHelper for (0x10)
+        helper = IMemHelper(width=1, value=Imm8(0x10))
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.N)
+        expected_llil = mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x10])
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_direct_no_pre(self) -> None:
+        # IMemHelper for (0x25) with pre=None (should default to N mode behavior for Imm8)
+        helper = IMemHelper(width=1, value=Imm8(0x25))
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=None)
+        expected_llil = mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x25])
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_bp_plus_n_mode(self) -> None:
+        # IMemHelper for (BP+0x05), assuming BP holds 0x02
+        # Setup: mock that BP (IMEM[0xEC]) contains 0x02
+        # The helper itself doesn't know BP's value, its `value` is Imm8(0x05)
+        # The lifting of `_reg_value("BP", il)` will produce the LOAD for BP
+        helper = IMemHelper(width=1, value=Imm8(0x05))  # n = 0x05
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.BP_N)
+
+        # Expected: add.l( add.b( load.b( const_ptr.l(IMEM_START + BP_ADDR) ), const.b(0x05) ), const_ptr.l(IMEM_START) )
+        # Simplified due to const_ptr in _imem_offset for the base of the offset calculation:
+        # add.l ( add.b ( load.b (const_ptr.l (IMEM_START + 0xEC)) , const.b(0x05) ), const.l (IMEM_START) )
+        # Note: The final `add` combines the 8-bit offset with INTERNAL_MEMORY_START.
+        # The `_imem_offset` calculates `BP + n` as an 8-bit value.
+        # `imem_addr` then adds `INTERNAL_MEMORY_START` to this.
+
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                )
+                            ],
+                        ),  # BP value
+                        mllil("CONST.b", [0x05]),  # n
+                    ],
+                ),
+                mllil(
+                    "CONST.l", [INTERNAL_MEMORY_START]
+                ),  # Add base for internal memory
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_px_plus_n_mode(self) -> None:
+        # IMemHelper for (PX+0x0A)
+        helper = IMemHelper(width=1, value=Imm8(0x0A))  # n = 0x0A
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.PX_N)
+
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                )
+                            ],
+                        ),  # PX value
+                        mllil("CONST.b", [0x0A]),  # n
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_py_plus_n_mode(self) -> None:
+        # IMemHelper for (PY+0x03)
+        helper = IMemHelper(width=1, value=Imm8(0x03))  # n = 0x03
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.PY_N)
+
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                )
+                            ],
+                        ),  # PY value
+                        mllil("CONST.b", [0x03]),  # n
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_bp_plus_px_mode(self) -> None:
+        # IMemHelper for (BP+PX). The Imm8 value is often 0 or ignored in this mode.
+        helper = IMemHelper(
+            width=1, value=Imm8(0x00)
+        )  # n is ignored by _imem_offset for this pre
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.BP_PX)
+
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                )
+                            ],
+                        ),  # BP value
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                )
+                            ],
+                        ),  # PX value
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_bp_plus_py_mode(self) -> None:
+        # IMemHelper for (BP+PY)
+        helper = IMemHelper(width=1, value=Imm8(0x00))
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.BP_PY)
+
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                )
+                            ],
+                        ),  # BP value
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                )
+                            ],
+                        ),  # PY value
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_temp_reg_value_no_pre(self) -> None:
+        # This tests the case where IMemHelper's value is a TempReg,
+        # which is assumed to ALREADY hold the full internal memory address.
+        # Example: TempReg(TEMP0) holds INTERNAL_MEMORY_START + 0x30
+
+        temp_reg_operand = TempReg(LLIL_TEMP(0), width=3)
+        helper = IMemHelper(width=1, value=temp_reg_operand)
+
+        # When pre_mode is None, and value is a Reg/TempReg, it should just lift the reg.
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=None)
+
+        # Expected: REG.l (TEMP0). No additional INTERNAL_MEMORY_START should be added.
+        expected_llil = mllil("REG.l", [mreg("TEMP0")])
+        assert addr_llil == expected_llil
+
+    def test_imem_helper_actual_reg_value_no_pre(self) -> None:
+        # Similar to TempReg, but with an actual CPU register (e.g. X)
+        # Actual Regs aren't supposed to hold full addresses ever.
+
+        actual_reg_operand = Reg("X")  # X is 3 bytes (REG_SIZES['X'])
+        helper = IMemHelper(width=1, value=actual_reg_operand)
+
+        addr_llil = self._get_imem_addr_llil(helper, pre_mode=None)
+
+        expected_llil = mllil("ADD.l", [
+            mllil("REG.l", [mreg("X")]),
+            mllil("CONST.l", [INTERNAL_MEMORY_START])
+        ])
+        assert addr_llil == expected_llil
+
+
+
 def test_lift_mv() -> None:
     instr = decode(bytearray([0x08, 0xCD]), 0x1234)
     assert asm_str(instr.render()) == "MV    A, CD"
@@ -282,7 +541,7 @@ def test_lift_mv() -> None:
 
 
 def test_invalid_instruction() -> None:
-    data = bytearray([0x4d, 0x4d])
+    data = bytearray([0x4D, 0x4D])
     try:
         decode(data, 0x1234)
     except ValueError as exc:
@@ -294,7 +553,7 @@ def test_invalid_instruction() -> None:
 
 def test_pre_roundtrip() -> None:
     # 3331307dec
-    data = bytearray([0x33, 0x7d, 0xec])
+    data = bytearray([0x33, 0x7D, 0xEC])
     instr = decode(data, 0x1234)
     assert instr._pre == 0x33
     assert asm_str(instr.render()) == "DEC   (EC)"
@@ -306,13 +565,13 @@ def test_pre_roundtrip() -> None:
 
 def test_lift_pre() -> None:
     # no PRE: MV IMem8, Imm8
-    instr = decode(bytearray([0xCC, 0xFB, 0x00]), 0xf0102)
+    instr = decode(bytearray([0xCC, 0xFB, 0x00]), 0xF0102)
     assert asm_str(instr.render()) == "MV    (FB), 00"
     assert instr._pre is None
     assert instr.length() == 3
 
     il = MockLowLevelILFunction()
-    instr.lift(il, 0xf0102)
+    instr.lift(il, 0xF0102)
     assert il.ils == [
         mllil(
             "STORE.b",
@@ -323,15 +582,14 @@ def test_lift_pre() -> None:
         )
     ]
 
-
     # PRE25 + MV IMem8, Imm8
-    instr = decode(bytearray([0x25, 0xCC, 0xFB, 0x00]), 0xf0102)
+    instr = decode(bytearray([0x25, 0xCC, 0xFB, 0x00]), 0xF0102)
     assert asm_str(instr.render()) == "MV    (BP+PX), 00"
     assert instr._pre == 0x25
     assert instr.length() == 4
 
     il = MockLowLevelILFunction()
-    instr.lift(il, 0xf0102)
+    instr.lift(il, 0xF0102)
     assert il.ils == [
         mllil(
             "STORE.b",
@@ -339,10 +597,29 @@ def test_lift_pre() -> None:
                 mllil(
                     "ADD.l",
                     [
-                        mllil("ADD.b", [
-                            mllil("LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xEC])]),
-                            mllil("LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xED])]),
-                        ]),
+                        mllil(
+                            "ADD.b",
+                            [
+                                mllil(
+                                    "LOAD.b",
+                                    [
+                                        mllil(
+                                            "CONST_PTR.l",
+                                            [INTERNAL_MEMORY_START + 0xEC],
+                                        )
+                                    ],
+                                ),
+                                mllil(
+                                    "LOAD.b",
+                                    [
+                                        mllil(
+                                            "CONST_PTR.l",
+                                            [INTERNAL_MEMORY_START + 0xED],
+                                        )
+                                    ],
+                                ),
+                            ],
+                        ),
                         mllil("CONST.l", [INTERNAL_MEMORY_START]),
                     ],
                 ),
@@ -354,7 +631,9 @@ def test_lift_pre() -> None:
 
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
-def opcode_generator() -> Generator[Tuple[Optional[bytearray], Optional[str]], None, None]:
+def opcode_generator() -> (
+    Generator[Tuple[Optional[bytearray], Optional[str]], None, None]
+):
     dirname = os.path.dirname(__file__)
     with open(os.path.join(dirname, "opcodes.txt")) as f:
         for line in f:

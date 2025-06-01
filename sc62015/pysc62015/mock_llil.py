@@ -29,11 +29,11 @@ class MockArch:
     def get_reg_index(self, name: object) -> Any:
         assert name != "IMR"
 
-        if name == 2147483648:
-            return MockReg("TEMP0")
-        elif name == 2147483649:
-            return MockReg("TEMP1")
-        return MockReg(str(name))
+        if isinstance(name, int):
+            result = MockReg(f"TEMP{name - 2147483648}")
+        else:
+            result = MockReg(str(name))
+        return result
 
     def get_flag_by_name(self, name: str) -> Any:
         return MockFlag(name)
