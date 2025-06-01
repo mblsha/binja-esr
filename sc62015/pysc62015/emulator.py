@@ -175,8 +175,10 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
 
     flagssplit = op.split("{")
     if len(flagssplit) > 1:
-        # flags = flagssplit[1].rstrip("}")
+        flags = flagssplit[1].rstrip("}")
         op = flagssplit[0]
+    else:
+        flags = None
 
     opsplit = op.split(".")
     op = opsplit[0]
@@ -189,8 +191,20 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
     if f is None:
         raise NotImplementedError(f"Eval for {op} not implemented")
 
-    # FIXME: update the flags if `flags` is not None
-    return f(llil, size, regs, memory, state)
+    result = f(llil, size, regs, memory, state)
+    if flags is not None and flags != "0":
+        if "Z" in flags:
+            zero_mask = (1 << (size * 8)) - 1
+            print(f"Setting FZ to {int(result & zero_mask == 0)}")
+            regs.set(RegisterName.FZ, int(result & zero_mask == 0))
+        if "C" in flags:
+            over_limit = int(result > (1 << (size * 8)) - 1)
+            under_limit = int(result < 0)
+            carry_flag = int(over_limit or under_limit)
+            print(f"Setting FC to {carry_flag}")
+            regs.set(RegisterName.FC, carry_flag)
+        pass
+    return result
 
 
 class Emulator:
@@ -302,7 +316,7 @@ def eval_store(
 ) -> None:
     assert size
     dest, value = [eval(i, regs, memory, state) for i in llil.ops]
-    print(f'storing {value:02x} to address {dest:04x}')
+    print(f"storing {value:02x} to address {dest:04x}")
     memory.write_bytes(size, dest, value)
 
 
@@ -339,6 +353,22 @@ def eval_call(
     regs.set(RegisterName.PC, addr)
 
 
+def eval_add(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return int(op1) + int(op2)
+
+
+def eval_sub(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return int(op1) - int(op2)
+
+
 EVAL_LLIL: Dict[str, EvalLLILType] = {
     "CONST": eval_const,
     "CONST_PTR": eval_const_ptr,
@@ -355,4 +385,6 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "RET": eval_ret,
     "JUMP": eval_jump,
     "CALL": eval_call,
+    "ADD": eval_add,
+    "SUB": eval_sub,
 }

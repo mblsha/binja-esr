@@ -139,8 +139,6 @@ def test_store_to_external_memory() -> None:
 
     cpu.regs.set(RegisterName.BA, 0x1234)
     cpu.execute_instruction(0x00)
-
-    debug_instruction(cpu, 0x00)
     assert writes == [(0x20, 0x34), (0x21, 0x12)]  # Little-endian order
 
     # 3-byte register store to external memory
@@ -150,6 +148,44 @@ def test_store_to_external_memory() -> None:
     cpu.regs.set(RegisterName.X, 0x010203)
     cpu.execute_instruction(0x00)
     assert writes == [(0x20, 0x03), (0x21, 0x02), (0x22, 0x01)]  # Little-endian order
+
+
+def test_add() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4001"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "ADD   A, 01"
+
+    cpu.regs.set(RegisterName.A, 0x10)
+    cpu.execute_instruction(0x00)
+    assert writes == []
+    assert cpu.regs.get(RegisterName.A) == 0x11
+    assert cpu.regs.get(RegisterName.FZ) == 0  # Zero flag not set
+    assert cpu.regs.get(RegisterName.FC) == 0  # Carry flag not set
+
+    cpu.regs.set(RegisterName.A, 0xFF)
+    cpu.execute_instruction(0x00)
+    debug_instruction(cpu, 0x00)
+    assert cpu.regs.get(RegisterName.A) == 0x00  # Wraps around
+    assert cpu.regs.get(RegisterName.FZ) == 1  # Zero flag set
+    assert cpu.regs.get(RegisterName.FC) == 1  # Carry flag set
+
+
+def test_sub() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4801"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "SUB   A, 01"
+
+    cpu.regs.set(RegisterName.A, 0x10)
+    cpu.execute_instruction(0x00)
+    assert writes == []
+    assert cpu.regs.get(RegisterName.A) == 0x0F
+    assert cpu.regs.get(RegisterName.FZ) == 0  # Zero flag not set
+    assert cpu.regs.get(RegisterName.FC) == 0  # Carry flag not set
+
+    cpu.regs.set(RegisterName.A, 0x00)
+    cpu.execute_instruction(0x00)
+    debug_instruction(cpu, 0x00)
+    assert cpu.regs.get(RegisterName.A) == 0xFF  # Wraps around
+    assert cpu.regs.get(RegisterName.FZ) == 0  # Zero flag not set
+    assert cpu.regs.get(RegisterName.FC) == 1  # Carry flag set
 
 
 def test_decode_all_opcodes() -> None:
