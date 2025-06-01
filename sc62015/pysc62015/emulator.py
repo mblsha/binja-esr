@@ -195,6 +195,10 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
         raise NotImplementedError(f"Eval for {op} not implemented")
 
     result = f(llil, size, regs, memory, state)
+
+    # NOTE We must handle flags here, as depending on the context some operations
+    # may not set flags, while others do. This also minimizes the number of
+    # places where we need to check for flags.
     if flags is not None and flags != "0":
         if "Z" in flags:
             assert size
@@ -441,42 +445,59 @@ def eval_lsl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
     assert size
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) << int(op2)
+    val, count = [eval(op, regs, memory, state) for op in llil.ops]
+    width = size * 8
+    if count == 0:
+        return val
+
+    new_carry_out = (val >> (width - count)) & 1 if count <= width else 0
+    return (val << count) & ((1 << width) - 1) | (new_carry_out << width)
 
 
 def eval_ror(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
     assert size == 1
-    val, r = [int(eval(op, regs, memory, state)) for op in llil.ops]
-    width = 8  # Assuming 8-bit rotation for simplicity
-    return (val >> r) | (val << (width - r))
+    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = size * 8
+    new_carry_out = val & 1
+    result = (val >> count) | (val << (width - count))
+    result &= (1 << width) - 1  # Ensure we don't overflow the width
+    return result | (new_carry_out << width)
 
 
-def eval_rol(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> int:
+def eval_rol(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
     assert size == 1
-    val, r = [int(eval(op, regs, memory, state)) for op in llil.ops]
-    width = 8  # Assuming 8-bit rotation for simplicity
-    return (val << r) | (val >> (width - r))
+    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = size * 8
+    msb = val >> (width - count)
+    new_carry_out = msb & 1
+    return (val << count) | msb | (new_carry_out << width)
 
 
-def eval_rrc(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> int:
+def eval_rrc(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
     # RRC is similar to ROR but with the carry bit
     assert size == 1
-    val, r, carry = [int(eval(op, regs, memory, state)) for op in llil.ops]
-    width = 8  # Assuming 8-bit rotation for simplicity
-    # FIXME
-    return ((val >> r) | (carry << (width - r))) & 0xFF
+    val, count, carry_in = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    assert count == 1
+    width = size * 8
+    new_carry_out = val & 1 # LSB of val
+    return (val >> count) | (carry_in << (width - count)) | (new_carry_out << width)
 
 
-def eval_rlc(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> int:
+def eval_rlc(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
     # RLC is similar to ROL but with the carry bit
     assert size == 1
-    val, r, carry = [int(eval(op, regs, memory, state)) for op in llil.ops]
-    width = 8  # Assuming 8-bit rotation for simplicity
-    # FIXME
-    return ((val << r) | (carry >> (width - r))) & 0xFF
+    val, count, carry_in = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = size * 8
+    new_carry_out = (val >> (width - 1)) & 1 # MSB of val
+    return (val << 1) | carry_in | (new_carry_out << width)
 
 
 def eval_intrinsic_tcl(
@@ -522,7 +543,7 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "CMP_E": eval_cmp_e,
     "LSL": eval_lsl,
     "ROR": eval_ror,
-    "RRC": eval_rlc,
+    "RRC": eval_rrc,
     "ROL": eval_rol,
     "RLC": eval_rlc,
     "INTRINSIC_TCL": eval_intrinsic_tcl,

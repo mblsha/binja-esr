@@ -252,7 +252,7 @@ def test_call_ret() -> None:
     cpu.regs.set(RegisterName.S, 0x30)  # Set stack pointer to a valid location
     cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.PC) == 0x20
-    assert cpu.regs.get(RegisterName.S) == 0x2e
+    assert cpu.regs.get(RegisterName.S) == 0x2E
     assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
     writes.clear()
 
@@ -280,6 +280,105 @@ def test_callf_retf() -> None:
     assert cpu.regs.get(RegisterName.S) == 0x30
     assert writes == []
 
+
+def test_shl_shr_a() -> None:
+    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("F6"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "SHL   A"
+
+    # Case 1: A = 0x55 (01010101), FC = 0
+    cpu.regs.set(RegisterName.A, 0x55)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.A) == 0xAA  # 01010101 << 1 | 0 = 10101010
+    assert cpu.regs.get(RegisterName.FC) == 0  # MSB of 0x55 was 0
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    # Case 2: A = 0xAA (10101010), FC = 1
+    cpu.regs.set(RegisterName.A, 0xAA)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.execute_instruction(0x00)
+    assert (
+        cpu.regs.get(RegisterName.A) == 0x55
+    )  # 10101010 << 1 | 1 = 010101010 | 1 = 01010101
+    assert cpu.regs.get(RegisterName.FC) == 1  # MSB of 0xAA was 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    # Case 3: A = 0x80 (10000000), FC = 0, result 0
+    cpu.regs.set(RegisterName.A, 0x80)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.A) == 0x00  # (10000000 << 1) | 0 = 00000000
+    assert cpu.regs.get(RegisterName.FC) == 1  # MSB of 0x80 was 1
+    assert cpu.regs.get(RegisterName.FZ) == 1
+
+    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("F4"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "SHR   A"
+
+    # Case 1: A = 0x55 (01010101), FC = 0
+    cpu.regs.set(RegisterName.A, 0x55)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.A) == 0x2A  # 01010101 >> 1 | (0 << 7) = 00101010
+    assert cpu.regs.get(RegisterName.FC) == 1  # LSB of 0x55 was 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    # Case 2: A = 0xAA (10101010), FC = 1
+    cpu.regs.set(RegisterName.A, 0xAA)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.execute_instruction(0x00)
+    assert (
+        cpu.regs.get(RegisterName.A) == 0xD5
+    )  # 10101010 >> 1 | (1 << 7) = 01010101 | 10000000 = 11010101
+    assert cpu.regs.get(RegisterName.FC) == 0  # LSB of 0xAA was 0
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    # Case 3: A = 0x01 (00000001), FC = 0, result 0
+    cpu.regs.set(RegisterName.A, 0x01)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.A) == 0x00  # (00000001 >> 1) | (0 << 7) = 00000000
+    assert cpu.regs.get(RegisterName.FC) == 1  # LSB of 0x01 was 1
+    assert cpu.regs.get(RegisterName.FZ) == 1
+
+
+def test_rol_ror_a() -> None:
+    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("E6"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "ROL   A"
+
+    # Case 1: A = 0x55 (01010101)
+    cpu.regs.set(RegisterName.A, 0x55)
+    cpu.execute_instruction(0x00)
+    # MSB is 0. (01010101 << 1) | 0 = 10101010
+    assert cpu.regs.get(RegisterName.A) == 0xAA
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    # Case 2: A = 0xAA (10101010)
+    cpu.regs.set(RegisterName.A, 0xAA)
+    cpu.execute_instruction(0x00)
+    # MSB is 1. (10101010 << 1) | 1 = 010101010 | 1 = 01010101
+    assert cpu.regs.get(RegisterName.A) == 0x55
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("E4"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "ROR   A"
+
+    # Case 1: A = 0x55 (01010101)
+    cpu.regs.set(RegisterName.A, 0x55)
+    cpu.execute_instruction(0x00)
+    # LSB is 1. (01010101 >> 1) | (1 << 7) = 00101010 | 10000000 = 10101010
+    assert cpu.regs.get(RegisterName.A) == 0xAA
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+
+    # Case 2: A = 0xAA (10101010)
+    cpu.regs.set(RegisterName.A, 0xAA)
+    cpu.execute_instruction(0x00)
+    # LSB is 0. (10101010 >> 1) | (0 << 7) = 01010101
+    assert cpu.regs.get(RegisterName.A) == 0x55
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == 0
 
 
 def test_decode_all_opcodes() -> None:
