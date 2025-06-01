@@ -14,6 +14,7 @@ from .mock_llil import (
     MockLabel,
     MockIfExpr,
     MockIntrinsic,
+    MockGoto,
 )
 from binaryninja import (
     InstructionInfo,
@@ -40,7 +41,7 @@ class RegisterName(enum.Enum):
     FC = "FC"  # Carry
     FZ = "FZ"  # Zero
     F = "F"
-    # Temp Registers, 0-10
+    # Temp Registe
     TEMP0 = "TEMP0"
     TEMP1 = "TEMP1"
     TEMP2 = "TEMP2"
@@ -51,7 +52,8 @@ class RegisterName(enum.Enum):
     TEMP7 = "TEMP7"
     TEMP8 = "TEMP8"
     TEMP9 = "TEMP9"
-
+    TEMP10 = "TEMP10"
+    TEMP11 = "TEMP11"
 
 
 REGISTER_SIZE: Dict[RegisterName, int] = {
@@ -79,6 +81,8 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.TEMP7: 3,
     RegisterName.TEMP8: 3,
     RegisterName.TEMP9: 3,
+    RegisterName.TEMP10: 3,
+    RegisterName.TEMP11: 3,
 }
 
 
@@ -102,6 +106,8 @@ class Registers:
         RegisterName.TEMP7,
         RegisterName.TEMP8,
         RegisterName.TEMP9,
+        RegisterName.TEMP10,
+        RegisterName.TEMP11,
     }
 
     def __init__(self) -> None:
@@ -288,6 +294,14 @@ class Emulator:
                 pc_llil = label_to_index[target_label]
                 continue
 
+            # 3) Handle GOTO (unconditional jump within the lifted IL block)
+            if isinstance(node, MockGoto):
+                assert (
+                    node.label in label_to_index
+                ), f"Unknown goto target label {node.label}"
+                pc_llil = label_to_index[node.label]
+                continue
+
             # 4) Otherwise, it’s a “normal” MockLLIL (CONST, REG, ADD, JUMP, etc.)
             self.eval(node)
             pc_llil += 1
@@ -463,6 +477,15 @@ def eval_cmp_e(
     return int(op1) == int(op2)
 
 
+def eval_cmp_ugt(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    # Unsigned greater than comparison
+    return int(op1) > int(op2)
+
+
 def eval_lsl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
@@ -474,6 +497,22 @@ def eval_lsl(
 
     new_carry_out = (val >> (width - count)) & 1 if count <= width else 0
     return (val << count) & ((1 << width) - 1) | (new_carry_out << width)
+
+
+def eval_lsr(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size is not None
+    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    width = size * 8
+    if count == 0:
+        return val
+
+    # LSR typically fills with 0s from the left
+    new_carry_out = (val >> (count - 1)) & 1 if count > 0 and count <= width else 0 # LSB shifted out
+    result = val >> count
+    return result | (new_carry_out << width) # Include carry out for flag processing
+
 
 
 def eval_ror(
@@ -507,7 +546,7 @@ def eval_rrc(
     val, count, carry_in = [int(eval(op, regs, memory, state)) for op in llil.ops]
     assert count == 1
     width = size * 8
-    new_carry_out = val & 1 # LSB of val
+    new_carry_out = val & 1  # LSB of val
     return (val >> count) | (carry_in << (width - count)) | (new_carry_out << width)
 
 
@@ -518,7 +557,7 @@ def eval_rlc(
     assert size == 1
     val, count, carry_in = [int(eval(op, regs, memory, state)) for op in llil.ops]
     width = size * 8
-    new_carry_out = (val >> (width - 1)) & 1 # MSB of val
+    new_carry_out = (val >> (width - 1)) & 1  # MSB of val
     return (val << 1) | carry_in | (new_carry_out << width)
 
 
@@ -563,7 +602,9 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "ADD": eval_add,
     "SUB": eval_sub,
     "CMP_E": eval_cmp_e,
+    "CMP_UGT": eval_cmp_ugt,
     "LSL": eval_lsl,
+    "LSR": eval_lsr,
     "ROR": eval_ror,
     "RRC": eval_rrc,
     "ROL": eval_rol,

@@ -124,11 +124,15 @@ TempRegF = LLIL_TEMP(0)
 TempIncDecHelper = LLIL_TEMP(1)
 TempMvlSrc = LLIL_TEMP(2)
 TempMvlDst = LLIL_TEMP(3)
-TempBcdAddEmul = LLIL_TEMP(4)
-TempBcdSubEmul = LLIL_TEMP(5)
-TempMultiByte1 = LLIL_TEMP(6)
-TempMultiByte2 = LLIL_TEMP(7)
-TempExchange = LLIL_TEMP(8)
+TempMultiByte1 = LLIL_TEMP(4)
+TempMultiByte2 = LLIL_TEMP(5)
+TempExchange = LLIL_TEMP(6)
+TempBcdAddEmul = LLIL_TEMP(7)
+TempBcdSubEmul = LLIL_TEMP(8)
+TempBcdLowNibbleProcessing = LLIL_TEMP(9)
+TempBcdHighNibbleProcessing = LLIL_TEMP(10)
+TempOverallZeroAcc = LLIL_TEMP(11)
+
 
 # mapping to size, page 67 of the book
 REGISTERS = [
@@ -1730,169 +1734,261 @@ class SBC(ArithmeticInstruction):
                                                     il.flag(CFlag)), CZFlag)
 
 
-# FIXME: likely extremely wrong
-# def bcd_add_emul(il, w, a, b):
-def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b:
-                 ExpressionIndex) -> Operand:
-    # raw sum
-    s = il.add(w, a, b)
-    # adjust lower nibble if > 9 or carry in
-    low = il.and_expr(w, s, il.const(w, 0xF))
-    need_adjust = il.compare_unsigned_greater_than(w, low, il.const(w, 9))
-    s_adj = il.add(w, s, il.const(w, 6))
+def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> Operand:
+    assert w == 1, "BCD add currently only supports 1-byte operands"
 
-    # result = il.if_then_else(need_adjust, s_adj, s)
-    result = TempReg(TempBcdAddEmul)
-    if_true = LowLevelILLabel()
-    if_false = LowLevelILLabel()
-    after = LowLevelILLabel()
-    il.append(il.if_expr(need_adjust, if_true, if_false))
+    # Incoming CFlag is the BCD carry from the previous byte's BCD addition
+    incoming_carry = il.flag(CFlag)
 
-    il.mark_label(if_true)
-    result.lift_assign(il, s_adj)
-    il.append(il.goto(after))
+    # Low nibble addition: (a & 0xF) + (b & 0xF) + incoming_carry_byte
+    a_low = il.and_expr(1, a, il.const(1, 0x0F))
+    b_low = il.and_expr(1, b, il.const(1, 0x0F))
+    sum_low_nibbles_val = il.add(1, a_low, b_low)
+    sum_low_with_carry_val = il.add(1, sum_low_nibbles_val, incoming_carry) # Max val 9+9+1 = 19 (0x13)
 
-    il.mark_label(if_false)
-    result.lift_assign(il, s)
+    # Adjust if low nibble sum > 9
+    temp_sum_low_final_reg = TempReg(TempBcdLowNibbleProcessing, width=1)
+    adj_low_needed = il.compare_unsigned_greater_than(1, sum_low_with_carry_val, il.const(1, 9))
+    sum_low_adjusted_val = il.add(1, sum_low_with_carry_val, il.const(1, 0x06))
 
-    il.mark_label(after)
+    label_adj_low_true = LowLevelILLabel()
+    label_adj_low_false = LowLevelILLabel()
+    label_after_adj_low = LowLevelILLabel()
+    il.append(il.if_expr(adj_low_needed, label_adj_low_true, label_adj_low_false))
+    il.mark_label(label_adj_low_true)
+    temp_sum_low_final_reg.lift_assign(il, sum_low_adjusted_val)
+    il.append(il.goto(label_after_adj_low))
+    il.mark_label(label_adj_low_false)
+    temp_sum_low_final_reg.lift_assign(il, sum_low_with_carry_val)
+    il.mark_label(label_after_adj_low)
 
-    # update carry: if raw sum > 0x99 or adjust condition
-    carry_out = il.or_expr(w, need_adjust,
-                           il.compare_unsigned_greater_than(w, s, il.const(w, 0x99)))
-    il.append(il.set_flag(CFlag, carry_out))
-    # binary flags (Z)
-    il.append(il.set_flag(ZFlag, il.compare_equal(w, result.lift(il), il.const(w, 0))))
-    return result
+    current_sum_low_final = temp_sum_low_final_reg.lift(il)
+    result_low_nibble_val = il.and_expr(1, current_sum_low_final, il.const(1, 0x0F))
+    carry_to_high_nibble_val = il.logical_shift_right(1, current_sum_low_final, il.const(1, 4)) # 0 or 1
 
-# FIXME: likely extremely wrong
-# def bcd_sub_emul(il, w, a, b):
-def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b:
-                 ExpressionIndex) -> Operand:
-    # raw diff with borrow
-    borrow = il.flag(CFlag)
-    b_ext = il.add(w, b, borrow)
-    d = il.sub(w, a, b_ext)
-    # adjust lower nibble if borrow from nibble
-    low_a = il.and_expr(w, a, il.const(w, 0xF))
-    low_b = il.and_expr(w, b_ext, il.const(w, 0xF))
-    need_adjust = il.compare_unsigned_less_than(w, low_a, low_b)
-    d_adj = il.sub(w, d, il.const(w, 6))
+    # High nibble addition: (a >> 4) + (b >> 4) + carry_to_high_nibble_val
+    a_high = il.logical_shift_right(1, a, il.const(1, 4))
+    b_high = il.logical_shift_right(1, b, il.const(1, 4))
+    sum_high_nibbles_val = il.add(1, a_high, b_high)
+    sum_high_with_carry_val = il.add(1, sum_high_nibbles_val, carry_to_high_nibble_val) # Max 9+9+1 = 19 (0x13)
 
-    # result = il.if_then_else(need_adjust, d_adj, d)
-    result = TempReg(TempBcdSubEmul)
-    if_true = LowLevelILLabel()
-    if_false = LowLevelILLabel()
-    after = LowLevelILLabel()
-    il.append(il.if_expr(need_adjust, if_true, if_false))
+    # Adjust if high nibble sum > 9
+    temp_sum_high_final_reg = TempReg(TempBcdHighNibbleProcessing, width=1)
+    adj_high_needed = il.compare_unsigned_greater_than(1, sum_high_with_carry_val, il.const(1, 9))
+    sum_high_adjusted_val = il.add(1, sum_high_with_carry_val, il.const(1, 0x06))
 
-    il.mark_label(if_true)
-    result.lift_assign(il, d_adj)
-    il.append(il.goto(after))
+    label_adj_high_true = LowLevelILLabel()
+    label_adj_high_false = LowLevelILLabel()
+    label_after_adj_high = LowLevelILLabel()
+    il.append(il.if_expr(adj_high_needed, label_adj_high_true, label_adj_high_false))
+    il.mark_label(label_adj_high_true)
+    temp_sum_high_final_reg.lift_assign(il, sum_high_adjusted_val)
+    il.append(il.goto(label_after_adj_high))
+    il.mark_label(label_adj_high_false)
+    temp_sum_high_final_reg.lift_assign(il, sum_high_with_carry_val)
+    il.mark_label(label_after_adj_high)
 
-    il.mark_label(if_false)
-    result.lift_assign(il, d)
-    il.mark_label(after)
+    current_sum_high_final = temp_sum_high_final_reg.lift(il)
+    result_high_nibble_val = il.and_expr(1, current_sum_high_final, il.const(1, 0x0F))
+    new_bcd_carry_out_byte_val = il.logical_shift_right(1, current_sum_high_final, il.const(1, 4)) # 0 or 1
 
-    il.mark_label(after)
+    result_byte_val = il.or_expr(1, il.shift_left(1, result_high_nibble_val, il.const(1, 4)), result_low_nibble_val)
 
-    # update carry: invert borrow
-    carry_out = il.not_expr(w, il.or_expr(w,
-        il.compare_unsigned_less_than(w, a, b_ext),
-        need_adjust))
-    il.append(il.set_flag(CFlag, carry_out))
-    il.append(il.set_flag(ZFlag, il.compare_equal(w, result.lift(il), il.const(w, 0))))
-    return result
+    output_reg = TempReg(TempBcdAddEmul, width=1)
+    output_reg.lift_assign(il, result_byte_val)
+    il.append(il.set_flag(CFlag, new_bcd_carry_out_byte_val))
+    # Z flag for current byte (overall Z handled by lift_multi_byte)
+    il.append(il.set_flag(ZFlag, il.compare_equal(1, result_byte_val, il.const(1,0))))
 
-# FIXME: likely extremely wrong
-# FIXME: re-verify on real hardware
-# def lift_multi_byte(il, op1, op2,
+    return output_reg
+
+def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> Operand:
+    assert w == 1, "BCD sub currently only supports 1-byte operands"
+
+    incoming_borrow = il.flag(CFlag) # 0 for no borrow, 1 for borrow
+
+    # Low nibble subtraction: (a_low) - (b_low) - incoming_borrow
+    a_low = il.and_expr(1, a, il.const(1, 0x0F))
+    b_low = il.and_expr(1, b, il.const(1, 0x0F))
+
+    sub_val_low = il.add(1, b_low, incoming_borrow) # bL + Cin
+    temp_sub_low_val = il.sub(1, a_low, sub_val_low)
+
+    # Check for borrow from low nibble
+    borrow_from_low_val = il.compare_signed_less_than(1, temp_sub_low_val, il.const(1, 0))
+
+    final_low_nibble_reg = TempReg(TempBcdLowNibbleProcessing, width=1)
+    adj_val_low = il.sub(1, temp_sub_low_val, il.const(1, 0x06)) # Subtract 6 if borrow
+
+    label_adj_low_true_s = LowLevelILLabel()
+    label_adj_low_false_s = LowLevelILLabel()
+    label_after_adj_low_s = LowLevelILLabel()
+    il.append(il.if_expr(borrow_from_low_val, label_adj_low_true_s, label_adj_low_false_s))
+    il.mark_label(label_adj_low_true_s)
+    final_low_nibble_reg.lift_assign(il, adj_val_low)
+    il.append(il.goto(label_after_adj_low_s))
+    il.mark_label(label_adj_low_false_s)
+    final_low_nibble_reg.lift_assign(il, temp_sub_low_val)
+    il.mark_label(label_after_adj_low_s)
+
+    result_low_nibble_val = il.and_expr(1, final_low_nibble_reg.lift(il), il.const(1, 0x0F))
+
+    # High nibble subtraction: (a_high) - (b_high) - borrow_from_low_val
+    a_high = il.logical_shift_right(1, a, il.const(1, 4))
+    b_high = il.logical_shift_right(1, b, il.const(1, 4))
+
+    sub_val_high = il.add(1, b_high, borrow_from_low_val) # bH + borrow_low
+    temp_sub_high_val = il.sub(1, a_high, sub_val_high)
+
+    new_bcd_borrow_out_byte_val = il.compare_signed_less_than(1, temp_sub_high_val, il.const(1, 0))
+    final_high_nibble_reg = TempReg(TempBcdHighNibbleProcessing, width=1)
+    adj_val_high = il.sub(1, temp_sub_high_val, il.const(1, 0x06))
+
+    label_adj_high_true_s = LowLevelILLabel()
+    label_adj_high_false_s = LowLevelILLabel()
+    label_after_adj_high_s = LowLevelILLabel()
+    il.append(il.if_expr(new_bcd_borrow_out_byte_val, label_adj_high_true_s, label_adj_high_false_s))
+    il.mark_label(label_adj_high_true_s)
+    final_high_nibble_reg.lift_assign(il, adj_val_high)
+    il.append(il.goto(label_after_adj_high_s))
+    il.mark_label(label_adj_high_false_s)
+    final_high_nibble_reg.lift_assign(il, temp_sub_high_val)
+    il.mark_label(label_after_adj_high_s)
+
+    result_high_nibble_val = il.and_expr(1, final_high_nibble_reg.lift(il), il.const(1, 0x0F))
+    result_byte_val = il.or_expr(1, il.shift_left(1, result_high_nibble_val, il.const(1, 4)), result_low_nibble_val)
+
+    output_reg = TempReg(TempBcdSubEmul, width=1)
+    output_reg.lift_assign(il, result_byte_val)
+    il.append(il.set_flag(CFlag, new_bcd_borrow_out_byte_val)) # C=1 if borrow
+    il.append(il.set_flag(ZFlag, il.compare_equal(1, result_byte_val, il.const(1,0))))
+
+    return output_reg
+
+
 def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
                     clear_carry: bool=False,
                     reverse: bool=False,
                     bcd: bool=False,
                     subtract: bool=False) -> None:
     assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
-    w = op1.width()
+    w = op1.width() # This is the width of the individual elements being processed (e.g., 1 for byte)
 
-    def make_handlers(op: Operand) -> Tuple[Callable[[], ExpressionIndex],
-                                           Callable[[ExpressionIndex], None],
-                                           Callable[[], None]]:
+    # Helper to create load/store/advance logic for operands
+    def make_handlers(op: Operand, is_dest_op: bool) -> Tuple[Callable[[], ExpressionIndex],
+                                                     Callable[[ExpressionIndex], None],
+                                                     Callable[[], None]]:
         if isinstance(op, Pointer):
-            # memory operand: use pointer temp
-            # ptr = TempReg(LLIL_TEMP(0 if op is op1 else 1), width=3)
-            ptr = TempReg(TempMultiByte1 if op is op1 else TempMultiByte2, width=3)
-            ptr.lift_assign(il, op.lift_current_addr(il))
+            # Temp reg to hold the iterating pointer for memory operands
+            ptr_temp_reg_const = TempMultiByte1 if is_dest_op else TempMultiByte2
+            ptr = TempReg(ptr_temp_reg_const, width=3) # Addresses are 3 bytes (20/24 bit)
+
+            # Initialize the pointer temp reg with the initial address from the operand
+            # side_effects=False for source, potentially True for dest if pre/post inc/dec
+            ptr.lift_assign(il, op.lift_current_addr(il, side_effects=is_dest_op))
+
             def load() -> ExpressionIndex:
+                # Use width 'w' (e.g. 1 for byte) for memory load/store element size
                 return op.memory_helper()(w, ptr).lift(il)
             def store(val: ExpressionIndex) -> None:
                 op.memory_helper()(w, ptr).lift_assign(il, val)
             def advance() -> None:
-                op_il = il.sub if reverse else il.add
-                ptr.lift_assign(il, op_il(3, ptr.lift(il), il.const(3, 1)))
-        else:
-            # register operand: direct
+                op_il_math = il.sub if reverse else il.add
+                # Advance pointer by element width 'w'
+                ptr.lift_assign(il, op_il_math(3, ptr.lift(il), il.const(3, w))) # ptr is 3 bytes
+        else: # Register operand
             def load() -> ExpressionIndex:
                 return op.lift(il)
             def store(val: ExpressionIndex) -> None:
                 op.lift_assign(il, val)
-            def advance() -> None:
+            def advance() -> None: # No advancement for direct register operands in a loop
                 pass
         return load, store, advance
 
-    load1, store1, adv1 = make_handlers(op1)
-    load2, store2, adv2 = make_handlers(op2)
+    load1, store1, adv1 = make_handlers(op1, True) # op1 is destination
+    load2, store2, adv2 = make_handlers(op2, False) # op2 is source
 
     if clear_carry:
         il.append(il.set_flag(CFlag, il.const(1, 0)))
 
-    with lift_loop(il):
+    overall_zero_acc_reg = TempReg(TempOverallZeroAcc, width=w)
+    overall_zero_acc_reg.lift_assign(il, il.const(w, 0))
+
+    with lift_loop(il): # loop_reg is 'I', controls number of iterations (bytes)
         a = load1()
         b = load2()
+        res: ExpressionIndex
 
-        # if using subtract with borrow, fold C into operand
-        if subtract:
-            b = il.add(w, b, il.flag(CFlag))
-            opfn = il.sub
-        else:
-            b = il.sub(w, b, il.flag(CFlag))
-            opfn = il.add
-
-        # choose BCD or binary op
         if bcd:
-            fn = bcd_sub_emul if subtract else bcd_add_emul
-            fnres = fn(il, w, a, b)
-            res = fnres.lift(il)
-        else:
-            res = opfn(w, a, b, CZFlag)
+            if subtract: # DSBL
+                fnres = bcd_sub_emul(il, w, a, b)
+                res = fnres.lift(il)
+            else: # DADL
+                fnres = bcd_add_emul(il, w, a, b)
+                res = fnres.lift(il)
+        else: # Binary: ADCL, SBCL
+            if subtract: # SBCL: A - B - CFlag_in == A - (B + CFlag_in)
+                res = il.sub(w, a, il.add(w, b, il.flag(CFlag)), CZFlag)
+            else: # ADCL: A + B + CFlag_in
+                # The il.add with 3 operands (a,b,carry) is add_carry.
+                # Or, if il.add only takes 2, use nested: il.add(w, a, il.add(w, b, il.flag(CFlag)), CZFlag)
+                # Assuming MockLLIL's add for now; needs verification for carry handling.
+                # Binja `add` doesn't take carry_in. `adc` does.
+                # The MockLLIL `add` can take CZFlag which implies it sets carry/zero.
+                # To perform A+B+Cin, it should be il.add(w, a, il.add(w, b, il.flag(CFlag), "0"), CZFlag)
+                # or il.adc(w, a, b, il.flag(CFlag), CZFlag) if adc exists
+                # The provided `ADC` instruction uses: il.add(width, arg1, il.add(width, arg2, il.flag(CFlag)), CZFlag)
+                # This structure is correct for A+B+Carry.
+                res = il.add(w, a, il.add(w, b, il.flag(CFlag)), CZFlag)
+
 
         store1(res)
+        overall_zero_acc_reg.lift_assign(il, il.or_expr(w, overall_zero_acc_reg.lift(il), res))
+
         adv1()
         adv2()
 
+        # For pointer operands that have side effects like X++, lift them again to apply effect
+        # This is tricky because lift_current_addr might not be designed for repeated calls with side-effects
+        # The make_handlers already captures initial state. The side-effects of ++/-- on original Reg3
+        # operands are handled by their specific EMemRegMode.POST_INC/PRE_DEC logic when they are
+        # part of `op.lift_current_addr(il, side_effects=True)`.
+        # This happens when `ptr.lift_assign(il, op.lift_current_addr(il, side_effects=is_dest_op))` is called.
+        # For operations like MVL (m),[X++], X is updated *after* all bytes are transferred.
+        # The current loop structure updates temp pointers. The original X in Reg("X") is not touched by adv1/adv2.
+        # This might be an issue for instructions like MVL [X++], (m) where X must be updated.
+        # However, for ADCL/DADL, operands are (m), (n) or (m), A.
+        # (m) and (n) are IMem8, which don't have post-increment side effects themselves.
+        # The loop counter 'I' is handled by lift_loop.
+
+    # After loop, set the final Zero flag based on the accumulator
+    il.append(il.set_flag(ZFlag, il.compare_equal(w, overall_zero_acc_reg.lift(il), il.const(w, 0))))
+    # Carry flag (FC) is set by the last byte's operation due to CZFlag or bcd_op setting it.
+
+
 class ADCL(ArithmeticInstruction):
-    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
-        lift_multi_byte(il, dst, src, clear_carry=True)
+        # ADCL uses the incoming carry flag for the first byte.
+        lift_multi_byte(il, dst, src, clear_carry=False)
 
 class SBCL(ArithmeticInstruction):
-    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
-        lift_multi_byte(il, dst, src, subtract=True)
+        # SBCL uses the incoming carry (borrow) flag for the first byte.
+        lift_multi_byte(il, dst, src, subtract=True, clear_carry=False)
 
-# Decimal
 class DADL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
+        # DADL does not use incoming carry for the first byte (implicitly 0).
         lift_multi_byte(il, dst, src, clear_carry=True, bcd=True, reverse=True)
 
-# Decimal
 class DSBL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
-        lift_multi_byte(il, dst, src, bcd=True, subtract=True, reverse=True)
+        # DSBL uses the incoming carry (borrow) flag for the first byte.
+        lift_multi_byte(il, dst, src, bcd=True, subtract=True, reverse=True, clear_carry=False)
 
 
 class LogicInstruction(Instruction): pass
