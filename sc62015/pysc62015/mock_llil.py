@@ -1,6 +1,6 @@
 # Make LLIL unit-testable.
 
-from . import binja_api # noqa: F401
+from . import binja_api  # noqa: F401
 from binaryninja.lowlevelil import (
     LowLevelILFunction,
     LowLevelILLabel,
@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
 
-SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l', 4:'.error'}
-SUFFIX_SZ = {'b': 1, 'w': 2, 'l': 3}
+SZ_LOOKUP = {1: ".b", 2: ".w", 3: ".l", 4: ".error"}
+SUFFIX_SZ = {"b": 1, "w": 2, "l": 3}
 
 
 @dataclass
@@ -27,12 +27,12 @@ class MockFlag:
 
 class MockArch:
     def get_reg_index(self, name: object) -> Any:
-        assert name != 'IMR'
+        assert name != "IMR"
 
         if name == 2147483648:
-            return MockReg('TEMP0')
+            return MockReg("TEMP0")
         elif name == 2147483649:
-            return MockReg('TEMP1')
+            return MockReg("TEMP1")
         return MockReg(str(name))
 
     def get_flag_by_name(self, name: str) -> Any:
@@ -48,6 +48,27 @@ class MockLLIL:
     op: str
     ops: List[Any]
 
+    def width(self) -> Optional[int]:
+        op = self.op.split("{")[0]
+        opsplit = op.split(".")
+        op = opsplit[0]
+        if len(opsplit) > 1:
+            size = SUFFIX_SZ[opsplit[1]]
+        else:
+            size = None
+        return size
+
+    def flags(self) -> Optional[str]:
+        flagssplit = self.op.split("{")
+        if len(flagssplit) > 1:
+            flags = flagssplit[1].rstrip("}")
+        else:
+            flags = None
+        return flags
+
+    def bare_op(self) -> str:
+        return self.op.split("{")[0].split(".")[0]
+
 
 ExprType = Union[MockLLIL, ExpressionIndex]
 
@@ -56,7 +77,7 @@ def mreg(name: str) -> MockReg:
     return MockReg(name)
 
 
-def mllil(op: str, ops:List[object]=[]) -> MockLLIL:
+def mllil(op: str, ops: List[object] = []) -> MockLLIL:
     return MockLLIL(op, ops)
 
 
@@ -67,7 +88,7 @@ class MockIfExpr(MockLLIL):
     f: Any
 
     def __init__(self, cond: Any, t: Any, f: Any) -> None:
-        super().__init__('IF', [])
+        super().__init__("IF", [])
         self.cond = cond
         self.t = t
         self.f = f
@@ -78,8 +99,9 @@ class MockLabel(MockLLIL):
     label: LowLevelILLabel
 
     def __init__(self, label: LowLevelILLabel) -> None:
-        super().__init__('LABEL', [])
+        super().__init__("LABEL", [])
         self.label = label
+
 
 @dataclass
 class MockIntrinsic(MockLLIL):
@@ -88,10 +110,11 @@ class MockIntrinsic(MockLLIL):
     params: Any
 
     def __init__(self, name: str, outputs: Any, params: Any) -> None:
-        super().__init__('INTRINSIC', [])
+        super().__init__("INTRINSIC", [])
         self.name = name
         self.outputs = outputs
         self.params = params
+
 
 @dataclass
 class MockGoto:
@@ -101,7 +124,7 @@ class MockGoto:
 class MockLowLevelILFunction(LowLevelILFunction):
     def __init__(self) -> None:
         # self.handle = MockHandle()
-        self._arch = MockArch() # type: ignore
+        self._arch = MockArch()  # type: ignore
         self.ils: List[MockLLIL] = []
 
     def __del__(self) -> None:
@@ -113,7 +136,7 @@ class MockLowLevelILFunction(LowLevelILFunction):
         self.append(result)
         return result
 
-    def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] = None) -> Any: # type: ignore
+    def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] = None) -> Any:  # type: ignore
         return MockGoto(label)
 
     def if_expr(self, cond, t, f) -> Any:  # type: ignore

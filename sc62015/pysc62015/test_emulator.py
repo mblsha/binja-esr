@@ -243,8 +243,46 @@ def test_pushs_pops() -> None:
     assert cpu.regs.get(RegisterName.FC) == 0
 
 
+def test_call_ret() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("042000"))
+    raw[0x20] = 0x06
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "CALL  0020"
+    assert asm_str(cpu.decode_instruction(0x20).render()) == "RET"
+
+    cpu.regs.set(RegisterName.S, 0x30)  # Set stack pointer to a valid location
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.PC) == 0x20
+    assert cpu.regs.get(RegisterName.S) == 0x2e
+    assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
+    writes.clear()
+
+    cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
+    assert cpu.regs.get(RegisterName.PC) == 0x03
+    assert cpu.regs.get(RegisterName.S) == 0x30
+    assert writes == []
+
+
+def test_callf_retf() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("05200000"))
+    raw[0x20] = 0x07
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "CALLF 00020"
+    assert asm_str(cpu.decode_instruction(0x20).render()) == "RETF"
+
+    cpu.regs.set(RegisterName.S, 0x30)  # Set stack pointer to a valid location
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.PC) == 0x20
+    assert cpu.regs.get(RegisterName.S) == 0x2D
+    assert writes == [(0x2D, 0x04), (0x2E, 0x00), (0x2F, 0x00)]
+    writes.clear()
+
+    cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
+    assert cpu.regs.get(RegisterName.PC) == 0x04
+    assert cpu.regs.get(RegisterName.S) == 0x30
+    assert writes == []
+
+
+
 def test_decode_all_opcodes() -> None:
-    # return
     raw_memory = bytearray([0x00] * MAX_ADDR)
 
     # enumerate all opcodes, want index for each opcode

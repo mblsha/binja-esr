@@ -1,6 +1,7 @@
 from typing import Dict, Set, Callable, Optional, Any, cast
 import enum
 from .coding import FetchDecoder
+from dataclasses import dataclass
 
 from .instr import (
     decode,
@@ -10,10 +11,12 @@ from .instr import (
 from .mock_llil import (
     MockLowLevelILFunction,
     MockLLIL,
-    SUFFIX_SZ,
     MockLabel,
     MockIfExpr,
     MockIntrinsic,
+)
+from binaryninja import (
+    InstructionInfo,
 )
 
 
@@ -170,6 +173,7 @@ class Memory:
             self.write_byte(address + i, byte_value)
 
 
+@dataclass
 class State:
     halted: bool = False
 
@@ -178,21 +182,9 @@ EvalLLILType = Callable[[MockLLIL, Optional[int], Registers, Memory, State], Any
 
 
 def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
-    op = llil.op
-
-    flagssplit = op.split("{")
-    if len(flagssplit) > 1:
-        flags = flagssplit[1].rstrip("}")
-        op = flagssplit[0]
-    else:
-        flags = None
-
-    opsplit = op.split(".")
-    op = opsplit[0]
-    if len(opsplit) > 1:
-        size = SUFFIX_SZ[opsplit[1]]
-    else:
-        size = None
+    op = llil.bare_op()
+    flags = llil.flags()
+    size = llil.width()
 
     if isinstance(llil, MockIntrinsic):
         intrinsic = cast(MockIntrinsic, llil)
@@ -238,6 +230,11 @@ class Emulator:
 
         il = MockLowLevelILFunction()
         instr.lift(il, address)
+
+        info = InstructionInfo()
+        instr.analyze(info, address)
+        # set PC to the next instruction
+        self.regs.set(RegisterName.PC, address + info.length)
 
         # Build a map: LowLevelILLabel → index in il.ils
         label_to_index: Dict[Any, int] = {}
@@ -393,6 +390,8 @@ def eval_ret(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> None:
     addr = eval(llil.ops[0], regs, memory, state)
+    if llil.ops[0].width() == 2:
+        addr = regs.get(RegisterName.PC) & 0xFF0000 | addr
     regs.set(RegisterName.PC, addr)
 
 
@@ -407,10 +406,10 @@ def eval_call(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> None:
     addr = eval(llil.ops[0], regs, memory, state)
-    # FIXME: we should increment the return address by the size of the instruction
+    # expect the execute_instruction to advance PC to after the CALL instruction
     ret_addr = regs.get(RegisterName.PC)
-    memory.write_bytes(3, regs.get(RegisterName.S), ret_addr)
-    regs.set(RegisterName.S, regs.get(RegisterName.S) + 3)
+    memory.write_bytes(3, regs.get(RegisterName.S) - 3, ret_addr)
+    regs.set(RegisterName.S, regs.get(RegisterName.S) - 3)
     regs.set(RegisterName.PC, addr)
 
 

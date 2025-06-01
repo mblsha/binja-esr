@@ -1558,11 +1558,14 @@ class JP_Rel(JumpInstruction):
         info.add_branch(BranchType.TrueBranch, dest)
 
 class CALL(Instruction):
-    def dest_addr(self, addr: int) -> int:
+    def _dest(self) -> ImmOperand:
         dest, *rest = self.operands()
         assert len(rest) == 0, "Expected no extra operands"
         assert isinstance(dest, ImmOperand), "Expected ImmOperand"
+        return dest
 
+    def dest_addr(self, addr: int) -> int:
+        dest = self._dest()
         result = dest.value
         assert result is not None, "Value not set"
         if dest.width() != 3:
@@ -1575,7 +1578,13 @@ class CALL(Instruction):
         info.add_branch(BranchType.CallDestination, self.dest_addr(addr))
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        il.append(il.call(il.const_pointer(3, self.dest_addr(addr))))
+        dest = self._dest()
+        if dest.width() == 3:
+            il.append(il.call(il.const_pointer(3, self.dest_addr(addr))))
+            return
+        # manually push 2 bytes of address + self.length()
+        il.append(il.push(2, il.const(2, addr + self.length())))
+        il.append(il.jump(il.const_pointer(3, self.dest_addr(addr))))
 
 
 class RetInstruction(Instruction):
