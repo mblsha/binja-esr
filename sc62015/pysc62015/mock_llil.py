@@ -12,6 +12,7 @@ from typing import Any, List, Optional, Union
 
 
 SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l'}
+SUFFIX_SZ = {'b': 1, 'w': 2, 'l': 3}
 
 
 @dataclass
@@ -58,15 +59,25 @@ def mllil(op: str, ops:List[object]=[]) -> MockLLIL:
 
 
 @dataclass
-class MockIfExpr:
+class MockIfExpr(MockLLIL):
     cond: Any
     t: Any
     f: Any
 
+    def __init__(self, cond, t, f) -> None:
+        super().__init__('IF', [])
+        self.cond = cond
+        self.t = t
+        self.f = f
+
 
 @dataclass
-class MockLabel:
+class MockLabel(MockLLIL):
     label: LowLevelILLabel
+
+    def __init__(self, label: LowLevelILLabel) -> None:
+        super().__init__('LABEL', [])
+        self.label = label
 
 @dataclass
 class MockGoto:
@@ -84,7 +95,9 @@ class MockLowLevelILFunction(LowLevelILFunction):
 
     def mark_label(self, label: LowLevelILLabel) -> Any:
         # remove source_location from kwargs
-        return MockLabel(label)
+        result = MockLabel(label)
+        self.append(result)
+        return result
 
     def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] = None) -> Any: # type: ignore
         return MockGoto(label)

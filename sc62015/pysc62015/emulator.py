@@ -1,12 +1,13 @@
-from typing import Dict, Set, Callable, Any
+from typing import Dict, Set, Callable, Optional, Any
 import enum
 from .coding import FetchDecoder
 
 from .instr import (
     decode,
     OPCODES,
+    Instruction,
 )
-# from .mock_llil import MockLowLevelILFunction, MockLLIL, MockReg, MockFlag
+from .mock_llil import MockLowLevelILFunction, MockLLIL, SUFFIX_SZ
 
 
 class RegisterName(enum.Enum):
@@ -29,6 +30,10 @@ class RegisterName(enum.Enum):
     FC = "FC"  # Carry
     FZ = "FZ"  # Zero
     F = "F"
+    # Temp Registers
+    TEMP0 = "TEMP0"
+    TEMP1 = "TEMP1"
+    TEMP10 = "TEMP10"
 
 
 REGISTER_SIZE: Dict[RegisterName, int] = {
@@ -46,6 +51,9 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.FC: 1,  # 1-bit
     RegisterName.FZ: 1,  # 1-bit
     RegisterName.F: 1,  # 8-bit (general flags register)
+    RegisterName.TEMP0: 3,
+    RegisterName.TEMP1: 3,
+    RegisterName.TEMP10: 3,
 }
 
 
@@ -59,6 +67,9 @@ class Registers:
         RegisterName.S,
         RegisterName.PC,
         RegisterName.F,
+        RegisterName.TEMP0,
+        RegisterName.TEMP1,
+        RegisterName.TEMP10,
     }
 
     def __init__(self) -> None:
@@ -122,18 +133,223 @@ class Registers:
                 )
 
 
+ReadMemType = Callable[[int], int]
+WriteMemType = Callable[[int, int], None]
+
+
+class Memory:
+    def __init__(self, read_mem: ReadMemType, write_mem: WriteMemType) -> None:
+        self.read_mem = read_mem
+        self.write_mem = write_mem
+
+    def read_byte(self, address: int) -> int:
+        return self.read_mem(address)
+
+    def write_byte(self, address: int, value: int) -> None:
+        assert 0 <= value < 256, "Value must be a byte (0-255)"
+        self.write_mem(address, value & 0xFF)
+
+    def read_bytes(self, address: int, size: int) -> int:
+        assert 0 < size <= 3, "Size must be between 1 and 3 bytes"
+        value = 0
+        for i in range(size):
+            value |= self.read_byte(address + i) << (i * 8)
+        return value
+
+    def write_bytes(self, size: int, address: int, value: int) -> None:
+        assert 0 < size <= 3
+        if size >= 3:
+            self.write_byte(address, (value >> 16) & 0xFF)
+            address += 1
+            value >>= 8
+        if size >= 2:
+            self.write_byte(address, (value >> 8) & 0xFF)
+            address += 1
+            value >>= 8
+        self.write_byte(address, value & 0xFF)
+
+
+class State:
+    halted: bool = False
+
+
+EvalLLILType = Callable[[MockLLIL, Optional[int], Registers, Memory, State], Any]
+
+
+def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
+    op = llil.op
+
+    flagssplit = op.split("{")
+    if len(flagssplit) > 1:
+        flags = flagssplit[1].rstrip("}")
+        op = flagssplit[0]
+
+    opsplit = op.split(".")
+    op = opsplit[0]
+    if len(opsplit) > 1:
+        size = SUFFIX_SZ[opsplit[1]]
+    else:
+        size = None
+
+    f = EVAL_LLIL.get(op)
+    if f is None:
+        raise NotImplementedError(f"Eval for {op} not implemented")
+    # FIXME: update the flags if `flags` is not None
+    return f(llil, size, regs, memory, state)
+
+
 class Emulator:
-    read_mem: Callable[[int], int]
-    write_mem: Callable[[int, int], None]
-
-    def __init__(self) -> None:
+    def __init__(self, memory: Memory) -> None:
         self.regs = Registers()
+        self.memory = memory
+        self.state = State()
 
-    def execute_instruction(self, address: int) -> Any:
-        self.regs.set(RegisterName.PC, address)
+    def decode_instruction(self, address: int) -> Optional[Instruction]:
         def fecher(offset: int) -> int:
-           return self.read_mem(self.regs.get(RegisterName.PC) + offset)
+            return self.memory.read_byte(address + offset)
+
         decoder = FetchDecoder(fecher)
-        instr = decode(decoder, address, OPCODES)
-        return instr
-        # FIXME: Implement instruction execution logic
+        return decode(decoder, address, OPCODES)
+
+    def execute_instruction(self, address: int) -> None:
+        self.regs.set(RegisterName.PC, address)
+        instr = self.decode_instruction(address)
+        assert instr is not None, f"Failed to decode instruction at {address:04X}"
+
+        il = MockLowLevelILFunction()
+        instr.lift(il, address)
+        for llil in il.ils:
+            self.eval(llil)
+
+    def eval(self, llil: MockLLIL) -> Any:
+        return eval(llil, self.regs, self.memory, self.state)
+
+
+def eval_const(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    return llil.ops[0]
+
+
+def eval_const_ptr(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    return llil.ops[0]
+
+
+def eval_reg(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    reg = RegisterName(llil.ops[0].name)
+    return regs.get(reg)
+
+
+def eval_set_reg(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    reg = RegisterName(llil.ops[0].name)
+    value = eval(llil.ops[1], regs, memory, state)
+    regs.set(reg, value)
+
+
+def eval_flag(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    flag = RegisterName(f"F{llil.ops[0].name}")
+    return regs.get(flag)
+
+
+def eval_set_flag(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    flag = RegisterName(f"F{llil.ops[0].name}")
+    value = eval(llil.ops[1], regs, memory, state)
+    regs.set(flag, value != 0)
+
+
+def eval_and(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return op1 and op2
+
+
+def eval_or(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return op1 or op2
+
+
+def eval_pop(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    addr = regs.get(RegisterName.S)
+    result = memory.read_bytes(addr, size)
+    regs.set(RegisterName.S, addr + size)
+    return result
+
+
+def eval_nop(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    # NOP does nothing
+    pass
+
+
+def eval_store(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    dest, value = [eval(i, regs, memory, state) for i in llil.ops]
+    memory.write_bytes(size, dest, value)
+
+
+def eval_load(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    addr = eval(llil.ops[0], regs, memory, state)
+    return memory.read_bytes(addr, size)
+
+
+def eval_ret(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    addr = eval(llil.ops[0], regs, memory, state)
+    regs.set(RegisterName.PC, addr)
+
+
+def eval_jump(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    addr = eval(llil.ops[0], regs, memory, state)
+    regs.set(RegisterName.PC, addr)
+
+
+def eval_call(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    addr = eval(llil.ops[0], regs, memory, state)
+    # FIXME: we should increment the return address by the size of the instruction
+    ret_addr = regs.get(RegisterName.PC)
+    memory.write_bytes(3, regs.get(RegisterName.S), ret_addr)
+    regs.set(RegisterName.S, regs.get(RegisterName.S) + 3)
+    regs.set(RegisterName.PC, addr)
+
+
+EVAL_LLIL: Dict[str, EvalLLILType] = {
+    "CONST": eval_const,
+    "CONST_PTR": eval_const_ptr,
+    "REG": eval_reg,
+    "SET_REG": eval_set_reg,
+    "FLAG": eval_flag,
+    "SET_FLAG": eval_set_flag,
+    "AND": eval_and,
+    "OR": eval_or,
+    "POP": eval_pop,
+    "NOP": eval_nop,
+    "STORE": eval_store,
+    "LOAD": eval_load,
+    "RET": eval_ret,
+    "JUMP": eval_jump,
+    "CALL": eval_call,
+}
