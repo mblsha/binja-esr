@@ -4,11 +4,12 @@ from .emulator import (
     Emulator,
     Memory,
 )
-from .instr import MAX_ADDR, INTERNAL_MEMORY_START
+from .instr import MAX_ADDR, INTERNAL_MEMORY_START, IMEM_NAMES
 from .mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, NamedTuple, Optional
 from .tokens import asm_str
+import pytest
 
 
 def test_registers() -> None:
@@ -445,6 +446,227 @@ def test_mvld_imem_to_imem() -> None:
         (INTERNAL_MEMORY_START + dst_imem_start - 1, 0x22),
         (INTERNAL_MEMORY_START + dst_imem_start - 2, 0x33),
     ]
+
+
+class PreTestCase(NamedTuple):
+    test_id: str  # Descriptive name for the test case
+    instr_bytes: bytes  # The full instruction byte sequence (PRE + MV + operands)
+    init_memory_state: Dict[int, int]  # Initial values in memory {address: value}
+    init_register_state: Dict[
+        RegisterName, int
+    ]  # Initial register values {reg_name: value}
+    expected_asm_str: str  # Expected assembly string after decoding
+    expected_pre_val_in_instr: int  # The PRE byte value itself, as stored in the decoded instr
+
+    # For tests like MV A, (mem_source)
+    expected_A_val_after: Optional[int] = None
+
+    # For tests like MV (mem_dest), A
+    expected_mem_writes_after: Optional[
+        List[Tuple[int, int]]
+    ] = None  # List of (address, value)
+
+
+def get_pre_test_cases() -> List[PreTestCase]:
+    # Operand 'n' in (n), (BP+n), etc.
+    N_OPERAND_VAL = 0x05
+
+    # Value to write to memory or load into A
+    OPERAND_A_VAL = 0x77
+    OPERAND_MEM_VAL = 0xCC  # Value initially in memory if A is being loaded
+
+    # Initial values for internal RAM pointer registers
+    BP_REG_VAL = 0x10
+    PX_REG_VAL = 0x20
+    PY_REG_VAL = 0x30
+
+    # Base opcodes for MV instructions involving one internal memory operand and register A
+    MV_MEM_DEST_A_SRC_OPCODE = 0xA0  # MV (n), A
+    MV_A_DEST_MEM_SRC_OPCODE = 0x80  # MV A, (n)
+
+    STATIC_PRE_TEST_CASES: List[PreTestCase] = [
+        # --- Test Group: PRE affecting 1st operand (Destination) ---
+        # Example: MV (dest_mode), A
+        PreTestCase(
+            test_id="PRE_0x32_Op1_N_MV_(n)_A",
+            instr_bytes=bytes([0x32, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]),
+            init_memory_state={},  # No BP/PX/PY needed for (n)
+            init_register_state={RegisterName.A: OPERAND_A_VAL},
+            expected_asm_str=f"MV    ({N_OPERAND_VAL:02X}), A",
+            expected_pre_val_in_instr=0x32,
+            expected_mem_writes_after=[
+                (INTERNAL_MEMORY_START + N_OPERAND_VAL, OPERAND_A_VAL)
+            ],
+        ),
+        PreTestCase(
+            test_id="PRE_0x22_Op1_BP_N_MV_(BP+n)_A",
+            instr_bytes=bytes([0x22, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]),
+            init_memory_state={
+                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
+            },
+            init_register_state={RegisterName.A: OPERAND_A_VAL},
+            expected_asm_str=f"MV    (BP+{N_OPERAND_VAL:02X}), A",
+            expected_pre_val_in_instr=0x22,
+            expected_mem_writes_after=[
+                (
+                    INTERNAL_MEMORY_START + ((BP_REG_VAL + N_OPERAND_VAL) & 0xFF),
+                    OPERAND_A_VAL,
+                )
+            ],
+        ),
+        PreTestCase(
+            test_id="PRE_0x36_Op1_PX_N_MV_(PX+n)_A",
+            instr_bytes=bytes([0x36, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]),
+            init_memory_state={
+                INTERNAL_MEMORY_START + IMEM_NAMES["PX"]: PX_REG_VAL,
+            },
+            init_register_state={RegisterName.A: OPERAND_A_VAL},
+            expected_asm_str=f"MV    (PX+{N_OPERAND_VAL:02X}), A",
+            expected_pre_val_in_instr=0x36,
+            expected_mem_writes_after=[
+                (
+                    INTERNAL_MEMORY_START + ((PX_REG_VAL + N_OPERAND_VAL) & 0xFF),
+                    OPERAND_A_VAL,
+                )
+            ],
+        ),
+        PreTestCase(
+            test_id="PRE_0x26_Op1_BP_PX_MV_(BP+PX)_A",
+            instr_bytes=bytes(
+                [0x26, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]
+            ),  # N_OPERAND_VAL is present but ignored by (BP+PX) mode for destination calculation
+            init_memory_state={
+                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
+                INTERNAL_MEMORY_START + IMEM_NAMES["PX"]: PX_REG_VAL,
+            },
+            init_register_state={RegisterName.A: OPERAND_A_VAL},
+            expected_asm_str="MV    (BP+PX), A",
+            expected_pre_val_in_instr=0x26,
+            expected_mem_writes_after=[
+                (
+                    INTERNAL_MEMORY_START + ((BP_REG_VAL + PX_REG_VAL) & 0xFF),
+                    OPERAND_A_VAL,
+                )
+            ],
+        ),
+        # --- Test Group: PRE affecting 2nd operand (Source) ---
+        # Example: MV A, (src_mode)
+        PreTestCase(
+            test_id="PRE_0x32_Op2_N_MV_A_(n)",
+            instr_bytes=bytes([0x32, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
+            init_memory_state={
+                INTERNAL_MEMORY_START + N_OPERAND_VAL: OPERAND_MEM_VAL,
+            },
+            init_register_state={RegisterName.A: 0x00},  # To ensure A gets overwritten
+            expected_asm_str=f"MV    A, ({N_OPERAND_VAL:02X})",
+            expected_pre_val_in_instr=0x32,
+            expected_A_val_after=OPERAND_MEM_VAL,
+        ),
+        PreTestCase(
+            test_id="PRE_0x30_Op2_BP_N_MV_A_(BP+n)",  # 0x30 for 2nd op (BP+n) if 1st op is (n)
+            instr_bytes=bytes([0x30, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
+            init_memory_state={
+                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
+                INTERNAL_MEMORY_START
+                + ((BP_REG_VAL + N_OPERAND_VAL) & 0xFF): OPERAND_MEM_VAL,
+            },
+            init_register_state={RegisterName.A: 0x00},
+            expected_asm_str=f"MV    A, (BP+{N_OPERAND_VAL:02X})",
+            expected_pre_val_in_instr=0x30,
+            expected_A_val_after=OPERAND_MEM_VAL,
+        ),
+        PreTestCase(
+            test_id="PRE_0x33_Op2_PY_N_MV_A_(PY+n)",  # 0x33 for 2nd op (PY+n) if 1st op is (n)
+            instr_bytes=bytes([0x33, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
+            init_memory_state={
+                INTERNAL_MEMORY_START + IMEM_NAMES["PY"]: PY_REG_VAL,
+                INTERNAL_MEMORY_START
+                + ((PY_REG_VAL + N_OPERAND_VAL) & 0xFF): OPERAND_MEM_VAL,
+            },
+            init_register_state={RegisterName.A: 0x00},
+            expected_asm_str=f"MV    A, (PY+{N_OPERAND_VAL:02X})",
+            expected_pre_val_in_instr=0x33,
+            expected_A_val_after=OPERAND_MEM_VAL,
+        ),
+        PreTestCase(
+            test_id="PRE_0x31_Op2_BP_PY_MV_A_(BP+PY)",  # 0x31 for 2nd op (BP+PY) if 1st op is (n)
+            instr_bytes=bytes(
+                [0x31, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]
+            ),  # N_OPERAND_VAL ignored for (BP+PY) source
+            init_memory_state={
+                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
+                INTERNAL_MEMORY_START + IMEM_NAMES["PY"]: PY_REG_VAL,
+                INTERNAL_MEMORY_START
+                + ((BP_REG_VAL + PY_REG_VAL) & 0xFF): OPERAND_MEM_VAL,
+            },
+            init_register_state={RegisterName.A: 0x00},
+            expected_asm_str="MV    A, (BP+PY)",
+            expected_pre_val_in_instr=0x31,
+            expected_A_val_after=OPERAND_MEM_VAL,
+        ),
+    ]
+    return STATIC_PRE_TEST_CASES
+
+
+@pytest.mark.parametrize(
+    "tc",  # tc (test_case) will be an instance of PreTestCase
+    get_pre_test_cases(),
+    ids=[
+        case.test_id for case in get_pre_test_cases()
+    ],  # Use test_id for readable test names
+)
+def test_pre_addressing_modes(tc: PreTestCase) -> None:
+    cpu, raw_memory_array, logged_reads, logged_writes = _make_cpu_and_mem(
+        MAX_ADDR,
+        tc.init_memory_state,
+        tc.instr_bytes,
+    )
+
+    for reg, val in tc.init_register_state.items():
+        cpu.regs.set(reg, val)
+
+    # --- Decode and Verify Assembly and PRE Byte ---
+    decoded_instr = cpu.decode_instruction(0x00)  # Instructions are at address 0x00
+    assert (
+        decoded_instr is not None
+    ), f"Test '{tc.test_id}': Failed to decode instruction bytes: {tc.instr_bytes.hex()}"
+
+    assert decoded_instr._pre == tc.expected_pre_val_in_instr, (
+        f"Test '{tc.test_id}': Decoded instruction's _pre value (0x{decoded_instr._pre:02X if decoded_instr._pre is not None else 'None'}) "
+        f"does not match expected PRE byte (0x{tc.expected_pre_val_in_instr:02X})"
+    )
+
+    actual_asm_string = asm_str(decoded_instr.render())
+    assert actual_asm_string == tc.expected_asm_str, (
+        f"Test '{tc.test_id}': Assembly string mismatch.\n"
+        f"  Expected: '{tc.expected_asm_str}'\n"
+        f"  Actual  : '{actual_asm_string}'"
+    )
+
+    # debug_instruction(cpu, 0x00)
+    cpu.execute_instruction(0x00)
+
+    if tc.expected_A_val_after is not None:
+        # This is a "MV A, (mem_src)" type test
+        loaded_value_in_a = cpu.regs.get(RegisterName.A)
+        assert loaded_value_in_a == tc.expected_A_val_after, (
+            f"Test '{tc.test_id}': Expected Register A to be 0x{tc.expected_A_val_after:02X}, "
+            f"but got 0x{loaded_value_in_a:02X}"
+        )
+
+    if tc.expected_mem_writes_after is not None:
+        # This is a "MV (mem_dest), A" type test
+        assert logged_writes == tc.expected_mem_writes_after, (
+            f"Test '{tc.test_id}': Memory writes mismatch.\n"
+            f"  Expected: {tc.expected_mem_writes_after}\n"
+            f"  Actual  : {logged_writes}"
+        )
+        # Also verify the content in the raw_memory_array for writes
+        for addr, val in tc.expected_mem_writes_after:
+            assert raw_memory_array[addr] == val, (
+                f"Test '{tc.test_id}': Memory content at 0x{addr:04X} is 0x{raw_memory_array[addr]:02X}, "
+                f"expected 0x{val:02X}"
+            )
 
 
 def test_decode_all_opcodes() -> None:
