@@ -7,7 +7,7 @@ from .instr import (
     OPCODES,
     Instruction,
 )
-from .mock_llil import MockLowLevelILFunction, MockLLIL, SUFFIX_SZ
+from .mock_llil import MockLowLevelILFunction, MockLLIL, SUFFIX_SZ, MockLabel, MockIfExpr
 
 
 class RegisterName(enum.Enum):
@@ -194,10 +194,12 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
     result = f(llil, size, regs, memory, state)
     if flags is not None and flags != "0":
         if "Z" in flags:
+            assert size
             zero_mask = (1 << (size * 8)) - 1
             print(f"Setting FZ to {int(result & zero_mask == 0)}")
             regs.set(RegisterName.FZ, int(result & zero_mask == 0))
         if "C" in flags:
+            assert size
             over_limit = int(result > (1 << (size * 8)) - 1)
             under_limit = int(result < 0)
             carry_flag = int(over_limit or under_limit)
@@ -227,8 +229,37 @@ class Emulator:
 
         il = MockLowLevelILFunction()
         instr.lift(il, address)
-        for llil in il.ils:
-            self.eval(llil)
+
+        # Build a map: LowLevelILLabel → index in il.ils
+        label_to_index: Dict[Any, int] = {}
+        for idx, node in enumerate(il.ils):
+            if isinstance(node, MockLabel):
+                label_to_index[node.label] = idx
+
+        # Now iterate *with* label‐aware control flow:
+        pc_llil = 0
+        while pc_llil < len(il.ils):
+            node = il.ils[pc_llil]
+
+            # 1) Skip over plain labels:
+            if isinstance(node, MockLabel):
+                pc_llil += 1
+                continue
+
+            # 2) Handle an IF‐expression:
+            if isinstance(node, MockIfExpr):
+                # Evaluate the condition
+                cond_val = self.eval(node.cond)
+                # If non‐zero: jump to the “true” label; else to the “false” label
+                target_label = node.t if cond_val else node.f
+                assert target_label in label_to_index, f"Unknown label {target_label}"
+                pc_llil = label_to_index[target_label]
+                continue
+
+            # 4) Otherwise, it’s a “normal” MockLLIL (CONST, REG, ADD, JUMP, etc.)
+            self.eval(node)
+            pc_llil += 1
+
 
     def eval(self, llil: MockLLIL) -> Any:
         return eval(llil, self.regs, self.memory, self.state)
@@ -284,14 +315,14 @@ def eval_and(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) and int(op2)
+    return int(op1) & int(op2)
 
 
 def eval_or(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) or int(op2)
+    return int(op1) | int(op2)
 
 
 def eval_pop(
@@ -304,11 +335,25 @@ def eval_pop(
     return result
 
 
+def eval_push(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> None:
+    assert size
+    value = eval(llil.ops[0], regs, memory, state)
+    addr = regs.get(RegisterName.S) - size
+    memory.write_bytes(size, addr, value)
+    regs.set(RegisterName.S, addr)
+
+
 def eval_nop(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> None:
     # NOP does nothing
     pass
+
+
+def eval_unimpl(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
+    raise NotImplementedError(f"Low-level IL operation {llil.op} is not implemented")
 
 
 def eval_store(
@@ -368,6 +413,19 @@ def eval_sub(
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
     return int(op1) - int(op2)
 
+def eval_cmp_e(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> None:
+    assert size
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return int(op1) == int(op2)
+
+
+def eval_lsl(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    return int(op1) << int(op2)
+
 
 EVAL_LLIL: Dict[str, EvalLLILType] = {
     "CONST": eval_const,
@@ -379,7 +437,9 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "AND": eval_and,
     "OR": eval_or,
     "POP": eval_pop,
+    "PUSH": eval_push,
     "NOP": eval_nop,
+    "UNIMPL": eval_unimpl,
     "STORE": eval_store,
     "LOAD": eval_load,
     "RET": eval_ret,
@@ -387,4 +447,6 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "CALL": eval_call,
     "ADD": eval_add,
     "SUB": eval_sub,
+    "CMP_E": eval_cmp_e,
+    "LSL": eval_lsl,
 }

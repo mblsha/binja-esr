@@ -188,6 +188,61 @@ def test_sub() -> None:
     assert cpu.regs.get(RegisterName.FC) == 1  # Carry flag set
 
 
+def test_pushs_pops() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4F"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHS F"
+
+    cpu.regs.set(RegisterName.F, 0x0)
+    cpu.regs.set(RegisterName.S, 0x20)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1F
+    assert writes == [(0x1F, 0x0)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.FZ, 1)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1E
+    assert writes == [(0x1E, 0x2)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.FZ, 0)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1D
+    assert writes == [(0x1D, 0x1)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.FZ, 1)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1C
+    assert writes == [(0x1C, 0x3)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.F, 0)
+    raw[0] = 0x5F  # Change to POPS instruction
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "POPS  F"
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1D
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert cpu.regs.get(RegisterName.FC) == 1
+
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1E
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert cpu.regs.get(RegisterName.FC) == 1
+
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x1F
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert cpu.regs.get(RegisterName.FC) == 0
+
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.S) == 0x20
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert cpu.regs.get(RegisterName.FC) == 0
+
+
 def test_decode_all_opcodes() -> None:
     return
     raw_memory = bytearray([0x00] * MAX_ADDR)
@@ -217,5 +272,9 @@ def test_decode_all_opcodes() -> None:
         try:
             cpu.execute_instruction(address)
         except Exception as e:
+            # if UNIMPL its not an error, just not implemented
+            if b == bytearray([0x20]):
+                continue
+
             debug_instruction(cpu, address)
             raise ValueError(f"Failed to evaluate {s} at line {i+1}") from e
