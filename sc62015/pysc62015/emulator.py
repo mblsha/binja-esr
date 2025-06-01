@@ -181,7 +181,7 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
 
     flagssplit = op.split("{")
     if len(flagssplit) > 1:
-        flags = flagssplit[1].rstrip("}")
+        # flags = flagssplit[1].rstrip("}")
         op = flagssplit[0]
 
     opsplit = op.split(".")
@@ -194,6 +194,7 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
     f = EVAL_LLIL.get(op)
     if f is None:
         raise NotImplementedError(f"Eval for {op} not implemented")
+
     # FIXME: update the flags if `flags` is not None
     return f(llil, size, regs, memory, state)
 
@@ -209,7 +210,7 @@ class Emulator:
             return self.memory.read_byte(address + offset)
 
         decoder = FetchDecoder(fecher)
-        return decode(decoder, address, OPCODES)
+        return decode(decoder, address, OPCODES)  # type: ignore
 
     def execute_instruction(self, address: int) -> None:
         self.regs.set(RegisterName.PC, address)
@@ -228,13 +229,17 @@ class Emulator:
 def eval_const(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
-    return llil.ops[0]
+    result = llil.ops[0]
+    assert isinstance(result, int)
+    return result
 
 
 def eval_const_ptr(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
-    return llil.ops[0]
+    result = llil.ops[0]
+    assert isinstance(result, int)
+    return result
 
 
 def eval_reg(
@@ -269,21 +274,22 @@ def eval_set_flag(
 
 def eval_and(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
+) -> int:
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return op1 and op2
+    return int(op1) and int(op2)
 
 
 def eval_or(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
+) -> int:
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return op1 or op2
+    return int(op1) or int(op2)
 
 
 def eval_pop(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
+    assert size
     addr = regs.get(RegisterName.S)
     result = memory.read_bytes(addr, size)
     regs.set(RegisterName.S, addr + size)
@@ -300,6 +306,7 @@ def eval_nop(
 def eval_store(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> None:
+    assert size
     dest, value = [eval(i, regs, memory, state) for i in llil.ops]
     memory.write_bytes(size, dest, value)
 
@@ -307,6 +314,7 @@ def eval_store(
 def eval_load(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
+    assert size
     addr = eval(llil.ops[0], regs, memory, state)
     return memory.read_bytes(addr, size)
 

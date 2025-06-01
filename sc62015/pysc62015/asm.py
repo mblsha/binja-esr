@@ -48,7 +48,7 @@ class AsmTransformer(Transformer):
             if isinstance(item, str):  # label only
                 out["label"] = item
             elif isinstance(item, dict):
-                out["statement"] = item
+                out["statement"] = item  # type: ignore
         return out
 
     def label(self, items: List[Token]) -> str:

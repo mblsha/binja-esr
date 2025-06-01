@@ -64,7 +64,7 @@ class MockIfExpr(MockLLIL):
     t: Any
     f: Any
 
-    def __init__(self, cond, t, f) -> None:
+    def __init__(self, cond: Any, t: Any, f: Any) -> None:
         super().__init__('IF', [])
         self.cond = cond
         self.t = t

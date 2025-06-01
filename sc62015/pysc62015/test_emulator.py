@@ -67,6 +67,7 @@ def test_decode_instruction() -> None:
 
 
 def test_decode_all_opcodes() -> None:
+    # return
     raw_memory = bytearray([0x00] * MAX_ADDR)
 
     # enumerate all opcodes, want index for each opcode
@@ -96,6 +97,7 @@ def test_decode_all_opcodes() -> None:
         except Exception as e:
             instr = cpu.decode_instruction(address)
             il = MockLowLevelILFunction()
+            assert instr is not None
             instr.lift(il, address)
 
             print(f"{s}:")
