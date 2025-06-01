@@ -7,7 +7,13 @@ from .instr import (
     OPCODES,
     Instruction,
 )
-from .mock_llil import MockLowLevelILFunction, MockLLIL, SUFFIX_SZ, MockLabel, MockIfExpr
+from .mock_llil import (
+    MockLowLevelILFunction,
+    MockLLIL,
+    SUFFIX_SZ,
+    MockLabel,
+    MockIfExpr,
+)
 
 
 class RegisterName(enum.Enum):
@@ -196,14 +202,12 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
         if "Z" in flags:
             assert size
             zero_mask = (1 << (size * 8)) - 1
-            print(f"Setting FZ to {int(result & zero_mask == 0)}")
             regs.set(RegisterName.FZ, int(result & zero_mask == 0))
         if "C" in flags:
             assert size
             over_limit = int(result > (1 << (size * 8)) - 1)
             under_limit = int(result < 0)
             carry_flag = int(over_limit or under_limit)
-            print(f"Setting FC to {carry_flag}")
             regs.set(RegisterName.FC, carry_flag)
         pass
     return result
@@ -259,7 +263,6 @@ class Emulator:
             # 4) Otherwise, it’s a “normal” MockLLIL (CONST, REG, ADD, JUMP, etc.)
             self.eval(node)
             pc_llil += 1
-
 
     def eval(self, llil: MockLLIL) -> Any:
         return eval(llil, self.regs, self.memory, self.state)
@@ -335,7 +338,9 @@ def eval_pop(
     return result
 
 
-def eval_push(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> None:
+def eval_push(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> None:
     assert size
     value = eval(llil.ops[0], regs, memory, state)
     addr = regs.get(RegisterName.S) - size
@@ -361,7 +366,6 @@ def eval_store(
 ) -> None:
     assert size
     dest, value = [eval(i, regs, memory, state) for i in llil.ops]
-    print(f"storing {value:02x} to address {dest:04x}")
     memory.write_bytes(size, dest, value)
 
 
@@ -413,7 +417,10 @@ def eval_sub(
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
     return int(op1) - int(op2)
 
-def eval_cmp_e(llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State) -> None:
+
+def eval_cmp_e(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
     assert size
     op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
     return int(op1) == int(op2)

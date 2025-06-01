@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
 
-SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l'}
+SZ_LOOKUP = {1:'.b', 2:'.w', 3:'.l', 4:'.error'}
 SUFFIX_SZ = {'b': 1, 'w': 2, 'l': 3}
 
 

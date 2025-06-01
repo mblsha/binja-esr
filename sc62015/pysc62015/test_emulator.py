@@ -244,7 +244,7 @@ def test_pushs_pops() -> None:
 
 
 def test_decode_all_opcodes() -> None:
-    return
+    # return
     raw_memory = bytearray([0x00] * MAX_ADDR)
 
     # enumerate all opcodes, want index for each opcode
@@ -269,6 +269,8 @@ def test_decode_all_opcodes() -> None:
         cpu = Emulator(memory)
 
         address = 0x00
+        cpu.regs.set(RegisterName.S, 0x1000)  # Set stack pointer to a valid location
+        cpu.regs.set(RegisterName.U, 0x2000)  # Set stack pointer to a valid location
         try:
             cpu.execute_instruction(address)
         except Exception as e:

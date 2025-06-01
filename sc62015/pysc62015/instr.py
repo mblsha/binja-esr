@@ -134,7 +134,7 @@ ZFlag = FlagName('Z')
 CZFlag = FlagName('CZ')
 
 REG_NAMES = [reg[0] for reg in REGISTERS]
-REG_SIZES = {reg[0]: reg[1] for reg in REGISTERS}
+REG_SIZES = {reg[0]: min(3, reg[1]) for reg in REGISTERS}
 
 # 1MB address space + 256 bytes of internal memory
 MAX_ADDR = 0xFFFFF + 0xFF
