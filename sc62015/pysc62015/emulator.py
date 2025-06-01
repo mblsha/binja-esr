@@ -158,15 +158,9 @@ class Memory:
 
     def write_bytes(self, size: int, address: int, value: int) -> None:
         assert 0 < size <= 3
-        if size >= 3:
-            self.write_byte(address, (value >> 16) & 0xFF)
-            address += 1
-            value >>= 8
-        if size >= 2:
-            self.write_byte(address, (value >> 8) & 0xFF)
-            address += 1
-            value >>= 8
-        self.write_byte(address, value & 0xFF)
+        for i in range(size):
+            byte_value = (value >> (i * 8)) & 0xFF
+            self.write_byte(address + i, byte_value)
 
 
 class State:
@@ -205,7 +199,7 @@ class Emulator:
         self.memory = memory
         self.state = State()
 
-    def decode_instruction(self, address: int) -> Optional[Instruction]:
+    def decode_instruction(self, address: int) -> Instruction:
         def fecher(offset: int) -> int:
             return self.memory.read_byte(address + offset)
 
@@ -308,6 +302,7 @@ def eval_store(
 ) -> None:
     assert size
     dest, value = [eval(i, regs, memory, state) for i in llil.ops]
+    print(f'storing {value:02x} to address {dest:04x}')
     memory.write_bytes(size, dest, value)
 
 

@@ -1064,6 +1064,13 @@ class Reg3(Operand, HasWidth):
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
 class EMemAddr(Imm20, Pointer):
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self._width = width
+
+    def width(self) -> int:
+        return self._width
+
     def lift_current_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const_pointer(3, self.value)
@@ -1081,6 +1088,7 @@ class EMemAddr(Imm20, Pointer):
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
                     Optional[AddressingMode] = None) -> None:
         assert self.value is not None, "Value not set"
+        # FIXME: should use width of value
         il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
 
 
@@ -2007,7 +2015,7 @@ class IR(MiscInstruction):
         il.append(il.push(1, imr.lift(il)))
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
 
-        mem = EMemAddr()
+        mem = EMemAddr(width=3)
         mem.value = INTERRUPT_VECTOR_ADDR
         il.append(il.jump(mem.lift(il)))
 
@@ -2019,7 +2027,7 @@ class RESET(MiscInstruction):
         info.add_branch(BranchType.FunctionReturn)
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        mem = EMemAddr()
+        mem = EMemAddr(width=3)
         mem.value = ENTRY_POINT_ADDR
         il.append(il.jump(mem.lift(il)))
 
@@ -2136,15 +2144,15 @@ OPCODES = {
     # 60h
     0x60: (CMP, Opts(ops=[Reg("A"), Imm8()])),
     0x61: (CMP, Opts(ops=[IMem8(), Imm8()])),
-    0x62: (CMP, Opts(ops=[EMemAddr(), Imm8()])),
+    0x62: (CMP, Opts(ops=[EMemAddr(width=1), Imm8()])),
     0x63: (CMP, Opts(ops=[IMem8(), Reg("A")])),
     0x64: (TEST, Opts(ops=[Reg("A"), Imm8()])),
     0x65: (TEST, Opts(ops=[IMem8(), Imm8()])),
-    0x66: (TEST, Opts(ops=[EMemAddr(), Imm8()])),
+    0x66: (TEST, Opts(ops=[EMemAddr(width=1), Imm8()])),
     0x67: (TEST, Opts(ops=[IMem8(), Reg("A")])),
     0x68: (XOR, Opts(ops=[Reg("A"), Imm8()])),
     0x69: (XOR, Opts(ops=[IMem8(), Imm8()])),
-    0x6A: (XOR, Opts(ops=[EMemAddr(), Imm8()])),
+    0x6A: (XOR, Opts(ops=[EMemAddr(width=1), Imm8()])),
     0x6B: (XOR, Opts(ops=[IMem8(), Reg("A")])),
     0x6C: (INC, Opts(ops=[Reg3()])),
     0x6D: (INC, Opts(ops=[IMem8()])),
@@ -2153,7 +2161,7 @@ OPCODES = {
     # 70h
     0x70: (AND, Opts(ops=[Reg("A"), Imm8()])),
     0x71: (AND, Opts(ops=[IMem8(), Imm8()])),
-    0x72: (AND, Opts(ops=[EMemAddr(), Imm8()])),
+    0x72: (AND, Opts(ops=[EMemAddr(width=1), Imm8()])),
     0x73: (AND, Opts(ops=[IMem8(), Reg("A")])),
     0x74: (MV, Opts(ops=[Reg("A"), RegB()])),
     0x75: (MV, Opts(ops=[RegB(), Reg("A")])),
@@ -2161,7 +2169,7 @@ OPCODES = {
     0x77: (AND, Opts(ops=[Reg("A"), IMem8()])),
     0x78: (OR, Opts(ops=[Reg("A"), Imm8()])),
     0x79: (OR, Opts(ops=[IMem8(), Imm8()])),
-    0x7A: (OR, Opts(ops=[EMemAddr(), Imm8()])),
+    0x7A: (OR, Opts(ops=[EMemAddr(width=1), Imm8()])),
     0x7B: (OR, Opts(ops=[IMem8(), Reg("A")])),
     0x7C: (DEC, Opts(ops=[Reg3()])),
     0x7D: (DEC, Opts(ops=[IMem8()])),
@@ -2176,14 +2184,14 @@ OPCODES = {
     0x85: (MV, Opts(ops=[Reg("Y"), IMem20()])),
     0x86: (MV, Opts(ops=[Reg("U"), IMem20()])),
     0x87: (MV, Opts(ops=[Reg("S"), IMem20()])),
-    0x88: (MV, Opts(ops=[Reg("A"), EMemAddr()])),
-    0x89: (MV, Opts(ops=[Reg("IL"), EMemAddr()])),
-    0x8A: (MV, Opts(ops=[Reg("BA"), EMemAddr()])),
-    0x8B: (MV, Opts(ops=[Reg("I"), EMemAddr()])),
-    0x8C: (MV, Opts(ops=[Reg("X"), EMemAddr()])),
-    0x8D: (MV, Opts(ops=[Reg("Y"), EMemAddr()])),
-    0x8E: (MV, Opts(ops=[Reg("U"), EMemAddr()])),
-    0x8F: (MV, Opts(ops=[Reg("S"), EMemAddr()])),
+    0x88: (MV, Opts(ops=[Reg("A"), EMemAddr(width=1)])),
+    0x89: (MV, Opts(ops=[Reg("IL"), EMemAddr(width=1)])),
+    0x8A: (MV, Opts(ops=[Reg("BA"), EMemAddr(width=2)])),
+    0x8B: (MV, Opts(ops=[Reg("I"), EMemAddr(width=2)])),
+    0x8C: (MV, Opts(ops=[Reg("X"), EMemAddr(width=3)])),
+    0x8D: (MV, Opts(ops=[Reg("Y"), EMemAddr(width=3)])),
+    0x8E: (MV, Opts(ops=[Reg("U"), EMemAddr(width=3)])),
+    0x8F: (MV, Opts(ops=[Reg("S"), EMemAddr(width=3)])),
     # 90h
     0x90: (MV, Opts(ops=[Reg("A"), EMemReg(width=1)])),
     0x91: (MV, Opts(ops=[Reg("IL"), EMemReg(width=1)])),
@@ -2210,14 +2218,14 @@ OPCODES = {
     0xA5: (MV, Opts(ops=[IMem20(), Reg("Y")])),
     0xA6: (MV, Opts(ops=[IMem20(), Reg("U")])),
     0xA7: (MV, Opts(ops=[IMem20(), Reg("S")])),
-    0xA8: (MV, Opts(ops=[EMemAddr(), Reg("A")])),
-    0xA9: (MV, Opts(ops=[EMemAddr(), Reg("IL")])),
-    0xAA: (MV, Opts(ops=[EMemAddr(), Reg("BA")])),
-    0xAB: (MV, Opts(ops=[EMemAddr(), Reg("I")])),
-    0xAC: (MV, Opts(ops=[EMemAddr(), Reg("X")])),
-    0xAD: (MV, Opts(ops=[EMemAddr(), Reg("Y")])),
-    0xAE: (MV, Opts(ops=[EMemAddr(), Reg("U")])),
-    0xAF: (MV, Opts(ops=[EMemAddr(), Reg("S")])),
+    0xA8: (MV, Opts(ops=[EMemAddr(width=1), Reg("A")])),
+    0xA9: (MV, Opts(ops=[EMemAddr(width=1), Reg("IL")])),
+    0xAA: (MV, Opts(ops=[EMemAddr(width=2), Reg("BA")])),
+    0xAB: (MV, Opts(ops=[EMemAddr(width=2), Reg("I")])),
+    0xAC: (MV, Opts(ops=[EMemAddr(width=3), Reg("X")])),
+    0xAD: (MV, Opts(ops=[EMemAddr(width=3), Reg("Y")])),
+    0xAE: (MV, Opts(ops=[EMemAddr(width=3), Reg("U")])),
+    0xAF: (MV, Opts(ops=[EMemAddr(width=3), Reg("S")])),
     # B0h
     0xB0: (MV, Opts(ops=[EMemReg(width=1), Reg("A")])),
     0xB1: (MV, Opts(ops=[EMemReg(width=1), Reg("IL")])),
@@ -2253,18 +2261,18 @@ OPCODES = {
     0xCE: TCL,
     0xCF: (MVLD, Opts(ops=[IMem8(), IMem8()])),
     # D0h
-    0xD0: (MV, Opts(ops=[IMem8(), EMemAddr()])),
-    0xD1: (MV, Opts(name="MVW", ops=[IMem16(), EMemAddr()])),
-    0xD2: (MV, Opts(name="MVP", ops=[IMem20(), EMemAddr()])),
-    0xD3: (MVL, Opts(ops=[IMem8(), EMemAddr()])),
+    0xD0: (MV, Opts(ops=[IMem8(), EMemAddr(width=1)])),
+    0xD1: (MV, Opts(name="MVW", ops=[IMem16(), EMemAddr(width=2)])),
+    0xD2: (MV, Opts(name="MVP", ops=[IMem20(), EMemAddr(width=3)])),
+    0xD3: (MVL, Opts(ops=[IMem8(), EMemAddr(width=1)])),
     0xD4: (DSBL, Opts(ops=[IMem8(), IMem8()])),
     0xD5: (DSBL, Opts(ops=[IMem8(), Reg("A")])),
     0xD6: (CMPW, Opts(ops_reversed=True, ops=[IMem16(), Reg3()])),
     0xD7: (CMPP, Opts(ops_reversed=True, ops=[IMem20(), Reg3()])),
-    0xD8: (MV, Opts(ops=[EMemAddr(), IMem8()])),
-    0xD9: (MV, Opts(name="MVW", ops=[EMemAddr(), IMem16()])),
-    0xDA: (MV, Opts(name="MVP", ops=[EMemAddr(), IMem20()])),
-    0xDB: (MVL, Opts(ops=[EMemAddr(), IMem8()])),
+    0xD8: (MV, Opts(ops=[EMemAddr(width=1), IMem8()])),
+    0xD9: (MV, Opts(name="MVW", ops=[EMemAddr(width=2), IMem16()])),
+    0xDA: (MV, Opts(name="MVP", ops=[EMemAddr(width=3), IMem20()])),
+    0xDB: (MVL, Opts(ops=[EMemAddr(width=1), IMem8()])),
     0xDC: (MV, Opts(name="MVP", ops=[IMem20(), Imm20()])),
     0xDD: (EX, Opts(ops=[Reg("A"), RegB()])),
     0xDE: HALT,
