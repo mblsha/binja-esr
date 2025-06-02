@@ -1,5 +1,3 @@
-# pysc62015/emulator.py
-
 from typing import Dict, Set, Callable, Optional, Any, cast, Tuple, TypedDict
 import enum
 from .coding import FetchDecoder
