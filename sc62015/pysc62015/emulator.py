@@ -54,6 +54,7 @@ class RegisterName(enum.Enum):
     TEMP9 = "TEMP9"
     TEMP10 = "TEMP10"
     TEMP11 = "TEMP11"
+    TEMP12 = "TEMP12"
 
 
 REGISTER_SIZE: Dict[RegisterName, int] = {
@@ -83,6 +84,7 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.TEMP9: 3,
     RegisterName.TEMP10: 3,
     RegisterName.TEMP11: 3,
+    RegisterName.TEMP12: 3,
 }
 
 
@@ -108,6 +110,7 @@ class Registers:
         RegisterName.TEMP9,
         RegisterName.TEMP10,
         RegisterName.TEMP11,
+        RegisterName.TEMP12,
     }
 
     def __init__(self) -> None:
@@ -486,6 +489,15 @@ def eval_cmp_ugt(
     return int(op1) > int(op2)
 
 
+def eval_cmp_slt(
+    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
+) -> int:
+    assert size is not None, "CMP_SLT requires a size."
+    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
+    # Signed less than comparison
+    return int(op1 < op2)
+
+
 def eval_lsl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> int:
@@ -603,6 +615,7 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "SUB": eval_sub,
     "CMP_E": eval_cmp_e,
     "CMP_UGT": eval_cmp_ugt,
+    "CMP_SLT": eval_cmp_slt,
     "LSL": eval_lsl,
     "LSR": eval_lsr,
     "ROR": eval_ror,

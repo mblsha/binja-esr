@@ -132,6 +132,7 @@ TempBcdSubEmul = LLIL_TEMP(8)
 TempBcdLowNibbleProcessing = LLIL_TEMP(9)
 TempBcdHighNibbleProcessing = LLIL_TEMP(10)
 TempOverallZeroAcc = LLIL_TEMP(11)
+TempLoopByteResult = LLIL_TEMP(12)
 
 
 # mapping to size, page 67 of the book
@@ -1867,12 +1868,11 @@ def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
 
 
 def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
-                    clear_carry: bool=False,
-                    reverse: bool=False,
-                    bcd: bool=False,
-                    subtract: bool=False) -> None:
+                    clear_carry: bool = False,
+                    reverse: bool = False,
+                    bcd: bool = False,
+                    subtract: bool = False) -> None:
     assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
-    w = op1.width() # This is the width of the individual elements being processed (e.g., 1 for byte)
 
     # Helper to create load/store/advance logic for operands
     def make_handlers(op: Operand, is_dest_op: bool) -> Tuple[Callable[[], ExpressionIndex],
@@ -1889,8 +1889,10 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
 
             def load() -> ExpressionIndex:
                 # Use width 'w' (e.g. 1 for byte) for memory load/store element size
+                assert isinstance(op, Pointer)
                 return op.memory_helper()(w, ptr).lift(il)
             def store(val: ExpressionIndex) -> None:
+                assert isinstance(op, Pointer)
                 op.memory_helper()(w, ptr).lift_assign(il, val)
             def advance() -> None:
                 op_il_math = il.sub if reverse else il.add
@@ -1905,8 +1907,10 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
                 pass
         return load, store, advance
 
-    load1, store1, adv1 = make_handlers(op1, True) # op1 is destination
-    load2, store2, adv2 = make_handlers(op2, False) # op2 is source
+    w = op1.width()
+
+    load1, store1, adv1 = make_handlers(op1, True)
+    load2, store2, adv2 = make_handlers(op2, False)
 
     if clear_carry:
         il.append(il.set_flag(CFlag, il.const(1, 0)))
@@ -1914,56 +1918,66 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
     overall_zero_acc_reg = TempReg(TempOverallZeroAcc, width=w)
     overall_zero_acc_reg.lift_assign(il, il.const(w, 0))
 
+    # TempReg to store the result of the current byte's main arithmetic operation
+    byte_op_result_holder = TempReg(TempLoopByteResult, width=w)
+
     with lift_loop(il): # loop_reg is 'I', controls number of iterations (bytes)
-        a = load1()
-        b = load2()
-        res: ExpressionIndex
+        a = load1() # ExpressionIndex for current byte of op1
+        b = load2() # ExpressionIndex for current byte of op2
+
+        # This will hold the evaluated result of the current byte's operation
+        # before it's stored or used in overall_zero_acc.
+        current_byte_calculated_value_expr: ExpressionIndex
 
         if bcd:
+            # BCD operations are complex; they read il.flag(CFlag) internally for incoming carry,
+            # perform BCD arithmetic, set CFlag and ZFlag (for the byte) based on BCD logic,
+            # and return an Operand (specifically a TempReg like TempBcdAddEmul or TempBcdSubEmul)
+            # which holds the BCD result of the current byte.
+            bcd_op_result_operand: Operand
             if subtract: # DSBL
-                fnres = bcd_sub_emul(il, w, a, b)
-                res = fnres.lift(il)
+                bcd_op_result_operand = bcd_sub_emul(il, w, a, b)
             else: # DADL
-                fnres = bcd_add_emul(il, w, a, b)
-                res = fnres.lift(il)
+                bcd_op_result_operand = bcd_add_emul(il, w, a, b)
+
+            # The expression for the result of this byte's BCD operation
+            current_byte_calculated_value_expr = bcd_op_result_operand.lift(il)
+            # No need to assign to byte_op_result_holder if flags are fully set by bcd_emul
+            # and result is self-contained in its returned TempReg.
+            # The flags (C and Z for the byte) are set by set_flag calls within bcd_xxx_emul.
         else: # Binary: ADCL, SBCL
-            if subtract: # SBCL: A - B - CFlag_in == A - (B + CFlag_in)
-                res = il.sub(w, a, il.add(w, b, il.flag(CFlag)), CZFlag)
-            else: # ADCL: A + B + CFlag_in
-                # The il.add with 3 operands (a,b,carry) is add_carry.
-                # Or, if il.add only takes 2, use nested: il.add(w, a, il.add(w, b, il.flag(CFlag)), CZFlag)
-                # Assuming MockLLIL's add for now; needs verification for carry handling.
-                # Binja `add` doesn't take carry_in. `adc` does.
-                # The MockLLIL `add` can take CZFlag which implies it sets carry/zero.
-                # To perform A+B+Cin, it should be il.add(w, a, il.add(w, b, il.flag(CFlag), "0"), CZFlag)
-                # or il.adc(w, a, b, il.flag(CFlag), CZFlag) if adc exists
-                # The provided `ADC` instruction uses: il.add(width, arg1, il.add(width, arg2, il.flag(CFlag)), CZFlag)
-                # This structure is correct for A+B+Carry.
-                res = il.add(w, a, il.add(w, b, il.flag(CFlag)), CZFlag)
+            # These operations use il.flag(CFlag) for incoming carry and set CZFlag for outgoing.
+            main_op_llil: ExpressionIndex
 
+            # Capture the incoming carry flag *before* this byte's main operation
+            initial_c_flag_expr = il.flag(CFlag)
 
-        store1(res)
-        overall_zero_acc_reg.lift_assign(il, il.or_expr(w, overall_zero_acc_reg.lift(il), res))
+            if subtract: # SBCL: m = m - n - C_in. Implemented as m - (n + C_in)
+                         # The inner add (n + C_in) must NOT alter flags.
+                term_to_subtract = il.add(w, b, initial_c_flag_expr)
+                main_op_llil = il.sub(w, a, term_to_subtract, CZFlag) # This SUB sets C and Z flags
+            else: # ADCL: m = m + n + C_in. Implemented as m + (n + C_in)
+                  # The inner add (n + C_in) must NOT alter flags.
+                term_to_add = il.add(w, b, initial_c_flag_expr)
+                main_op_llil = il.add(w, a, term_to_add, CZFlag) # This ADD sets C and Z flags
+
+            # Execute the main operation and store its result in byte_op_result_holder.
+            # The flags (C and Z) are set when main_op_llil is evaluated as part of this set_reg.
+            byte_op_result_holder.lift_assign(il, main_op_llil)
+            current_byte_calculated_value_expr = byte_op_result_holder.lift(il) # = REG(TempLoopByteResult)
+
+        # Store the result for the current byte using the calculated value
+        store1(current_byte_calculated_value_expr)
+
+        # Accumulate for overall Zero flag check. This OR must not affect C/Z flags.
+        overall_zero_acc_reg.lift_assign(il, il.or_expr(w, overall_zero_acc_reg.lift(il), current_byte_calculated_value_expr))
 
         adv1()
         adv2()
 
-        # For pointer operands that have side effects like X++, lift them again to apply effect
-        # This is tricky because lift_current_addr might not be designed for repeated calls with side-effects
-        # The make_handlers already captures initial state. The side-effects of ++/-- on original Reg3
-        # operands are handled by their specific EMemRegMode.POST_INC/PRE_DEC logic when they are
-        # part of `op.lift_current_addr(il, side_effects=True)`.
-        # This happens when `ptr.lift_assign(il, op.lift_current_addr(il, side_effects=is_dest_op))` is called.
-        # For operations like MVL (m),[X++], X is updated *after* all bytes are transferred.
-        # The current loop structure updates temp pointers. The original X in Reg("X") is not touched by adv1/adv2.
-        # This might be an issue for instructions like MVL [X++], (m) where X must be updated.
-        # However, for ADCL/DADL, operands are (m), (n) or (m), A.
-        # (m) and (n) are IMem8, which don't have post-increment side effects themselves.
-        # The loop counter 'I' is handled by lift_loop.
-
     # After loop, set the final Zero flag based on the accumulator
     il.append(il.set_flag(ZFlag, il.compare_equal(w, overall_zero_acc_reg.lift(il), il.const(w, 0))))
-    # Carry flag (FC) is set by the last byte's operation due to CZFlag or bcd_op setting it.
+    # The Carry flag (FC) will hold the carry/borrow from the last byte's operation.
 
 
 class ADCL(ArithmeticInstruction):

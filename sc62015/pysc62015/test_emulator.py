@@ -718,22 +718,24 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=0,
         expected_FZ_after=0,
     ),
+
+    AdclDadlTestCase(
+        test_id="ADCL_(m)_(n)_I1_NoCarryIn_CarryOut",
+        instr_bytes=bytes([0x54, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0xF0,
+            INTERNAL_MEMORY_START + 0x20: 0x20,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="ADCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x10],  # 0xF0 + 0x20 = 0x110 -> 0x10
+        expected_I_after=0,
+        expected_FC_after=1,
+        expected_FZ_after=0,
+    ),
+
     # FIXME: failing
-    # AdclDadlTestCase(
-    #     test_id="ADCL_(m)_(n)_I1_NoCarryIn_CarryOut",
-    #     instr_bytes=bytes([0x54, 0x10, 0x20]),
-    #     init_memory_state={
-    #         INTERNAL_MEMORY_START + 0x10: 0xF0,
-    #         INTERNAL_MEMORY_START + 0x20: 0x20,
-    #     },
-    #     init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-    #     expected_asm_str="ADCL  (10), (20)",
-    #     expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-    #     expected_m_values_after=[0x10],  # 0xF0 + 0x20 = 0x110 -> 0x10
-    #     expected_I_after=0,
-    #     expected_FC_after=1,
-    #     expected_FZ_after=0,
-    # ),
     # AdclDadlTestCase(
     #     test_id="ADCL_(m)_(n)_I1_NoCarryIn_ZeroResult_CarryOut",
     #     instr_bytes=bytes([0x54, 0x10, 0x20]),
@@ -749,25 +751,28 @@ adcl_test_cases: List[AdclDadlTestCase] = [
     #     expected_FC_after=1,
     #     expected_FZ_after=1,
     # ),
-    # AdclDadlTestCase(
-    #     test_id="ADCL_(m)_(n)_I2_CarryPropagate_OverallNonZero",
-    #     instr_bytes=bytes([0x54, 0x10, 0x20]),  # ADCL (10), (20)
-    #     init_memory_state={
-    #         INTERNAL_MEMORY_START + 0x10: 0xFF,
-    #         INTERNAL_MEMORY_START + 0x11: 0x01,  # (m)
-    #         INTERNAL_MEMORY_START + 0x20: 0x01,
-    #         INTERNAL_MEMORY_START + 0x21: 0x02,  # (n)
-    #     },
-    #     init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
-    #     expected_asm_str="ADCL  (10), (20)",
-    #     expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-    #     # Byte 0: 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
-    #     # Byte 1: 0x01 + 0x02 + 1 = 0x04  -> mem[0x11]=0x04, FC=0
-    #     expected_m_values_after=[0x00, 0x04],
-    #     expected_I_after=0,
-    #     expected_FC_after=0,  # From last byte op
-    #     expected_FZ_after=0,  # Overall: (0x00 | 0x04) != 0
-    # ),
+
+    AdclDadlTestCase(
+        test_id="ADCL_(m)_(n)_I2_CarryPropagate_OverallNonZero",
+        instr_bytes=bytes([0x54, 0x10, 0x20]),  # ADCL (10), (20)
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0xFF,
+            INTERNAL_MEMORY_START + 0x11: 0x01,  # (m)
+            INTERNAL_MEMORY_START + 0x20: 0x01,
+            INTERNAL_MEMORY_START + 0x21: 0x02,  # (n)
+        },
+        init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
+        expected_asm_str="ADCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        # Byte 0: 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
+        # Byte 1: 0x01 + 0x02 + 1 = 0x04  -> mem[0x11]=0x04, FC=0
+        expected_m_values_after=[0x00, 0x04],
+        expected_I_after=0,
+        expected_FC_after=0,  # From last byte op
+        expected_FZ_after=0,  # Overall: (0x00 | 0x04) != 0
+    ),
+
+    # FIXME: failing
     # AdclDadlTestCase(
     #     test_id="ADCL_(m)_(n)_I2_OverallZero",
     #     instr_bytes=bytes([0x54, 0x10, 0x20]),
@@ -787,6 +792,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
     #     expected_FC_after=1,
     #     expected_FZ_after=1,  # Overall: (0x00 | 0x00) == 0
     # ),
+
     # --- ADCL (m), A ---
     AdclDadlTestCase(
         test_id="ADCL_(m)_A_I1_NoCarryIn_NoCarryOut",
@@ -804,28 +810,27 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=0,
         expected_FZ_after=0,
     ),
-    # FIXME: failing
-    # AdclDadlTestCase(
-    #     test_id="ADCL_(m)_A_I2_CarryPropagate",
-    #     instr_bytes=bytes([0x55, 0x10]),
-    #     init_memory_state={
-    #         INTERNAL_MEMORY_START + 0x10: 0xFF,
-    #         INTERNAL_MEMORY_START + 0x11: 0x01,
-    #     },
-    #     init_register_state={
-    #         RegisterName.A: 0x01,
-    #         RegisterName.I: 2,
-    #         RegisterName.FC: 0,
-    #     },
-    #     expected_asm_str="ADCL  (10), A",
-    #     expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-    #     # Byte 0: mem[0x10]=0xFF, A=0x01. 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
-    #     # Byte 1: mem[0x11]=0x01, A=0x01. 0x01 + 0x01 + 1 = 0x03  -> mem[0x11]=0x03, FC=0
-    #     expected_m_values_after=[0x00, 0x03],
-    #     expected_I_after=0,
-    #     expected_FC_after=0,
-    #     expected_FZ_after=0,  # Overall: (0x00 | 0x03) != 0
-    # ),
+    AdclDadlTestCase(
+        test_id="ADCL_(m)_A_I2_CarryPropagate",
+        instr_bytes=bytes([0x55, 0x10]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0xFF,
+            INTERNAL_MEMORY_START + 0x11: 0x01,
+        },
+        init_register_state={
+            RegisterName.A: 0x01,
+            RegisterName.I: 2,
+            RegisterName.FC: 0,
+        },
+        expected_asm_str="ADCL  (10), A",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        # Byte 0: mem[0x10]=0xFF, A=0x01. 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
+        # Byte 1: mem[0x11]=0x01, A=0x01. 0x01 + 0x01 + 1 = 0x03  -> mem[0x11]=0x03, FC=0
+        expected_m_values_after=[0x00, 0x03],
+        expected_I_after=0,
+        expected_FC_after=0,
+        expected_FZ_after=0,  # Overall: (0x00 | 0x03) != 0
+    ),
 ]
 
 
@@ -1065,6 +1070,456 @@ def test_dadl_instruction(tc: AdclDadlTestCase) -> None:
     ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
 
 
+# Add this to test_emulator.py
+
+
+class SbclDsblTestCase(NamedTuple):
+    test_id: str
+    instr_bytes: bytes
+    init_memory_state: Dict[int, int]  # Includes internal mem values for operands
+    init_register_state: Dict[RegisterName, int]  # Includes A, I, FC
+    expected_asm_str: str
+    # For (m) which is the destination
+    # For SBCL (forward): LSB address of (m). Values are [LSB, MSB, ...]
+    # For DSBL (reverse): MSB address of (m). Values are [MSB, LSB, ...]
+    expected_m_addr_start: int
+    expected_m_values_after: List[int]  # Byte values written to (m)
+    expected_I_after: int
+    expected_FC_after: int  # FC=1 if borrow occurred, 0 otherwise for SUB/SBC based
+    expected_FZ_after: int
+
+
+# SBCL Tests
+# Opcode 0x5C: SBCL (m), (n)
+# Opcode 0x5D: SBCL (m), A
+# SBCL is a forward operation (addresses for (m) and (n) increment)
+sbcl_test_cases: List[SbclDsblTestCase] = [
+    # --- SBCL (m), (n) ---
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_(n)_I1_NoBorrowIn_NoBorrowOut",
+        instr_bytes=bytes([0x5C, 0x10, 0x20]),  # SBCL (10), (20)
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x55,
+            INTERNAL_MEMORY_START + 0x20: 0x22,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="SBCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # LSB address
+        expected_m_values_after=[0x33],  # 0x55 - 0x22 - 0 = 0x33
+        expected_I_after=0,
+        expected_FC_after=0,  # No borrow
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_(n)_I1_WithBorrowIn_NoBorrowOut",
+        instr_bytes=bytes([0x5C, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x55,
+            INTERNAL_MEMORY_START + 0x20: 0x22,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Borrow In
+        expected_asm_str="SBCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x32],  # 0x55 - 0x22 - 1 = 0x32
+        expected_I_after=0,
+        expected_FC_after=0,  # No borrow
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_(n)_I1_NoBorrowIn_BorrowOut",
+        instr_bytes=bytes([0x5C, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x10,
+            INTERNAL_MEMORY_START + 0x20: 0x20,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="SBCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0xF0],  # 0x10 - 0x20 - 0 = 0xF0 (borrow)
+        expected_I_after=0,
+        expected_FC_after=1,  # Borrow occurred
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_(n)_I1_NoBorrowIn_ZeroResult",
+        instr_bytes=bytes([0x5C, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x20,
+            INTERNAL_MEMORY_START + 0x20: 0x20,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="SBCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x00],  # 0x20 - 0x20 - 0 = 0x00
+        expected_I_after=0,
+        expected_FC_after=0,  # No borrow
+        expected_FZ_after=1,  # Zero result
+    ),
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_(n)_I2_BorrowPropagate_OverallNonZero",
+        instr_bytes=bytes([0x5C, 0x10, 0x20]),  # SBCL (10), (20)
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x00,  # LSB of (m)
+            INTERNAL_MEMORY_START + 0x11: 0x50,  # MSB of (m) -> (m) = 0x5000
+            INTERNAL_MEMORY_START + 0x20: 0x01,  # LSB of (n)
+            INTERNAL_MEMORY_START + 0x21: 0x20,  # MSB of (n) -> (n) = 0x2001
+        },
+        init_register_state={
+            RegisterName.I: 2,
+            RegisterName.FC: 0,
+        },  # No initial borrow
+        expected_asm_str="SBCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # LSB addr of (m)
+        # Byte 0 (LSB, addrs 0x10, 0x20): m[0x10]=0x00, n[0x20]=0x01. 0x00 - 0x01 - 0 = 0xFF. mem[0x10]=0xFF, FC=1 (borrow)
+        # Byte 1 (MSB, addrs 0x11, 0x21): m[0x11]=0x50, n[0x21]=0x20. 0x50 - 0x20 - 1(borrow_in) = 0x2F. mem[0x11]=0x2F, FC=0
+        expected_m_values_after=[0xFF, 0x2F],  # LSB, MSB for (m) area
+        expected_I_after=0,
+        expected_FC_after=0,  # From last byte op
+        expected_FZ_after=0,  # Overall: (0xFF | 0x2F) != 0
+    ),
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_(n)_I2_OverallZero_WithBorrowOut",
+        instr_bytes=bytes([0x5C, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x00,  # LSB of (m)
+            INTERNAL_MEMORY_START + 0x11: 0x00,  # MSB of (m) -> (m) = 0x0000
+            INTERNAL_MEMORY_START + 0x20: 0x00,  # LSB of (n)
+            INTERNAL_MEMORY_START + 0x21: 0x00,  # MSB of (n) -> (n) = 0x0000
+        },
+        init_register_state={
+            RegisterName.I: 2,
+            RegisterName.FC: 1,
+        },  # Initial Borrow In (e.g. from 0 - 0 - 1)
+        expected_asm_str="SBCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        # Byte 0: 0x00 - 0x00 - 1 = 0xFF. mem[0x10]=0xFF, FC=1
+        # Byte 1: 0x00 - 0x00 - 1 = 0xFF. mem[0x11]=0xFF, FC=1
+        expected_m_values_after=[0xFF, 0xFF],
+        expected_I_after=0,
+        expected_FC_after=1,  # Borrow from last op
+        expected_FZ_after=0,  # Overall is 0xFFFF, not zero
+    ),
+    # --- SBCL (m), A ---
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_A_I1_NoBorrowIn_NoBorrowOut",
+        instr_bytes=bytes([0x5D, 0x10]),  # SBCL (10), A
+        init_memory_state={INTERNAL_MEMORY_START + 0x10: 0xAA},
+        init_register_state={
+            RegisterName.A: 0x55,
+            RegisterName.I: 1,
+            RegisterName.FC: 0,
+        },
+        expected_asm_str="SBCL  (10), A",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x55],  # 0xAA - 0x55 - 0 = 0x55
+        expected_I_after=0,
+        expected_FC_after=0,
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="SBCL_(m)_A_I2_BorrowPropagate",
+        instr_bytes=bytes([0x5D, 0x10]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x00,  # LSB m
+            INTERNAL_MEMORY_START + 0x11: 0x30,  # MSB m -> m=0x3000
+        },
+        init_register_state={
+            RegisterName.A: 0x01,  # A will be source for each byte
+            RegisterName.I: 2,
+            RegisterName.FC: 0,
+        },
+        expected_asm_str="SBCL  (10), A",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        # Byte 0 (LSB, m_addr 0x10): m[0x10]=0x00, A=0x01. 0x00 - 0x01 - 0 = 0xFF. mem[0x10]=0xFF, FC=1
+        # Byte 1 (MSB, m_addr 0x11): m[0x11]=0x30, A=0x01. 0x30 - 0x01 - 1 = 0x2E. mem[0x11]=0x2E, FC=0
+        expected_m_values_after=[0xFF, 0x2E],
+        expected_I_after=0,
+        expected_FC_after=0,
+        expected_FZ_after=0,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tc", sbcl_test_cases, ids=[case.test_id for case in sbcl_test_cases]
+)
+def test_sbcl_instruction(tc: SbclDsblTestCase) -> None:
+    cpu, raw_memory_array, _, logged_writes = _make_cpu_and_mem(
+        MAX_ADDR, tc.init_memory_state, tc.instr_bytes
+    )
+
+    for reg, val in tc.init_register_state.items():
+        cpu.regs.set(reg, val)
+
+    decoded_instr = cpu.decode_instruction(0x00)
+    assert decoded_instr is not None, f"Test '{tc.test_id}': Failed to decode"
+    actual_asm_str = asm_str(decoded_instr.render())
+    assert (
+        actual_asm_str == tc.expected_asm_str
+    ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+
+    # debug_instruction(cpu, 0x00)
+    cpu.execute_instruction(0x00)
+
+    for i, expected_val in enumerate(tc.expected_m_values_after):
+        actual_val = raw_memory_array[tc.expected_m_addr_start + i]
+        assert (
+            actual_val == expected_val
+        ), f"Test '{tc.test_id}': Memory mismatch at offset {i} from LSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+
+    expected_writes_to_m = [
+        (tc.expected_m_addr_start + i, val)
+        for i, val in enumerate(tc.expected_m_values_after)
+    ]
+    actual_writes_to_m = sorted(
+        [
+            w
+            for w in logged_writes
+            if tc.expected_m_addr_start
+            <= w[0]
+            < tc.expected_m_addr_start + len(tc.expected_m_values_after)
+        ]
+    )
+    assert actual_writes_to_m == sorted(
+        expected_writes_to_m
+    ), f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+
+    assert (
+        cpu.regs.get(RegisterName.I) == tc.expected_I_after
+    ), f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
+    assert (
+        cpu.regs.get(RegisterName.FC) == tc.expected_FC_after
+    ), f"Test '{tc.test_id}': Flag C (Borrow). Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    assert (
+        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
+    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+
+
+# DSBL Tests
+# Opcode 0xD4: DSBL (m), (n)
+# Opcode 0xD5: DSBL (m), A  -- Note: Readme has (n),A but consistent with DADL, (m) is first operand, thus dest
+# DSBL is a reverse operation (addresses for (m) and (n) decrement)
+dsbl_test_cases: List[SbclDsblTestCase] = [
+    # --- DSBL (m), (n) ---
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_(n)_I1_NoBorrowIn_SimpleBCD",
+        instr_bytes=bytes(
+            [0xD4, 0x10, 0x20]
+        ),  # DSBL (10), (20) -> (m) ends at 0x10, (n) ends at 0x20
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x55,  # BCD 55 for (m)
+            INTERNAL_MEMORY_START + 0x20: 0x22,  # BCD 22 for (n)
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},  # No borrow in
+        expected_asm_str="DSBL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START
+        + 0x10,  # MSB (and LSB in this case) address of (m)
+        expected_m_values_after=[0x33],  # BCD 55 - BCD 22 = BCD 33
+        expected_I_after=0,
+        expected_FC_after=0,  # No borrow out
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_(n)_I1_WithBorrowIn_SimpleBCD",
+        instr_bytes=bytes([0xD4, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x55,
+            INTERNAL_MEMORY_START + 0x20: 0x22,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Borrow In
+        expected_asm_str="DSBL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x32],  # BCD 55 - BCD 22 - 1 = BCD 32
+        expected_I_after=0,
+        expected_FC_after=0,  # No borrow out
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_(n)_I1_NoBorrowIn_LowNibbleBorrow",
+        instr_bytes=bytes([0xD4, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x23,  # BCD 23
+            INTERNAL_MEMORY_START + 0x20: 0x05,  # BCD 05
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="DSBL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x18],  # BCD 23 - BCD 05 = BCD 18
+        expected_I_after=0,
+        expected_FC_after=0,  # No overall borrow
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_(n)_I1_NoBorrowIn_HighNibbleBorrow_OverallBorrow",
+        instr_bytes=bytes([0xD4, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x10,  # BCD 10
+            INTERNAL_MEMORY_START + 0x20: 0x20,  # BCD 20
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="DSBL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[
+            0x90
+        ],  # BCD 10 - BCD 20 = BCD -10 -> BCD 90 with borrow
+        expected_I_after=0,
+        expected_FC_after=1,  # Overall borrow
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_(n)_I1_NoBorrowIn_ZeroResult",
+        instr_bytes=bytes([0xD4, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x25,
+            INTERNAL_MEMORY_START + 0x20: 0x25,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="DSBL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x00],  # BCD 25 - BCD 25 = BCD 00
+        expected_I_after=0,
+        expected_FC_after=0,
+        expected_FZ_after=1,
+    ),
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_(n)_I2_BCDBorrowPropagate",
+        instr_bytes=bytes(
+            [0xD4, 0x11, 0x21]
+        ),  # DSBL (11), (21) -> m_end=0x11, n_end=0x21
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x11: 0x00,  # LSB of (m)
+            INTERNAL_MEMORY_START + 0x10: 0x20,  # MSB of (m) -> (m) = BCD 2000
+            INTERNAL_MEMORY_START + 0x21: 0x01,  # LSB of (n)
+            INTERNAL_MEMORY_START + 0x20: 0x00,  # MSB of (n) -> (n) = BCD 0001
+        },
+        init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
+        expected_asm_str="DSBL  (11), (21)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # MSB addr of (m)
+        # Byte 0 (LSB, m_addr 0x11, n_addr 0x21): m[0x11]=0x00, n[0x21]=0x01. BCD 00 - BCD 01 - 0 = BCD 99. mem[0x11]=0x99, FC_out=1 (borrow)
+        # Byte 1 (MSB, m_addr 0x10, n_addr 0x20): m[0x10]=0x20, n[0x20]=0x00. BCD 20 - BCD 00 - 1(borrow_in) = BCD 19. mem[0x10]=0x19, FC_out=0
+        expected_m_values_after=[0x19, 0x99],  # MSB, LSB for (m) area
+        expected_I_after=0,
+        expected_FC_after=0,  # From last byte op
+        expected_FZ_after=0,  # Overall: (0x1999) != 0
+    ),
+    # --- DSBL (m), A ---
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_A_I1_SimpleBCD",
+        instr_bytes=bytes([0xD5, 0x10]),  # DSBL (10), A -> m_end=0x10
+        init_memory_state={INTERNAL_MEMORY_START + 0x10: 0x78},  # BCD 78 for (m)
+        init_register_state={
+            RegisterName.A: 0x12,  # BCD 12 for A
+            RegisterName.I: 1,
+            RegisterName.FC: 0,
+        },
+        expected_asm_str="DSBL  (10), A",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x66],  # BCD 78 - BCD 12 = BCD 66
+        expected_I_after=0,
+        expected_FC_after=0,
+        expected_FZ_after=0,
+    ),
+    SbclDsblTestCase(
+        test_id="DSBL_(m)_A_I2_BCDBorrowPropagate",
+        instr_bytes=bytes([0xD5, 0x11]),  # DSBL (11), A -> m_end=0x11
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x11: 0x00,  # LSB of (m)
+            INTERNAL_MEMORY_START + 0x10: 0x01,  # MSB of (m) -> (m) = BCD 0100
+        },
+        init_register_state={
+            RegisterName.A: 0x01,  # BCD 01 for A (used for each byte)
+            RegisterName.I: 2,
+            RegisterName.FC: 0,
+        },
+        expected_asm_str="DSBL  (11), A",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # MSB addr of (m)
+        # Byte 0 (LSB, m_addr 0x11): m[0x11]=0x00, A=0x01. BCD 00 - BCD 01 - 0 = BCD 99. mem[0x11]=0x99, FC_out=1
+        # Byte 1 (MSB, m_addr 0x10): m[0x10]=0x01, A=0x01. BCD 01 - BCD 01 - 1 = BCD 99. mem[0x10]=0x99, FC_out=1
+        expected_m_values_after=[0x99, 0x99],  # MSB, LSB
+        expected_I_after=0,
+        expected_FC_after=1,  # Borrow from last op
+        expected_FZ_after=0,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tc", dsbl_test_cases, ids=[case.test_id for case in dsbl_test_cases]
+)
+def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
+    cpu, raw_memory_array, _, logged_writes = _make_cpu_and_mem(
+        MAX_ADDR, tc.init_memory_state, tc.instr_bytes
+    )
+
+    for reg, val in tc.init_register_state.items():
+        cpu.regs.set(reg, val)
+
+    decoded_instr = cpu.decode_instruction(0x00)
+    assert decoded_instr is not None, f"Test '{tc.test_id}': Failed to decode"
+    actual_asm_str = asm_str(decoded_instr.render())
+    assert (
+        actual_asm_str == tc.expected_asm_str
+    ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+
+    # debug_instruction(cpu, 0x00)
+    cpu.execute_instruction(0x00)
+
+    # DSBL processes memory in reverse, (m) operand in instruction is the LSB/end address.
+    # tc.expected_m_addr_start is the MSB address for verification.
+    # tc.expected_m_values_after is [MSB_val, ..., LSB_val].
+    for i, expected_val in enumerate(tc.expected_m_values_after):
+        actual_val = raw_memory_array[
+            tc.expected_m_addr_start + i
+        ]  # Iterates from MSB_addr
+        assert (
+            actual_val == expected_val
+        ), f"Test '{tc.test_id}': Memory mismatch at offset {i} from MSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+
+    # Verify logged writes. Addresses are written from LSB_addr_m downwards.
+    num_bytes = len(tc.expected_m_values_after)
+    # The (m) operand in the instruction is the LSB address.
+    # For DSBL (11), (21), (m) operand is 0x11.
+    # expected_m_addr_start is the MSB start for verification (e.g. 0x10 if I=2, m_operand=0x11)
+    # So, LSB addr of (m) = expected_m_addr_start + num_bytes - 1
+    lsb_address_m = tc.expected_m_addr_start + num_bytes - 1
+
+    expected_writes_to_m = []
+    for i in range(num_bytes):
+        # Address iterates from lsb_address_m down to msb_address_m
+        addr = lsb_address_m - i
+        # Values in tc.expected_m_values_after are [MSB, ..., LSB]
+        # So, for addr = lsb_address_m, we need value at index num_bytes - 1 - i
+        val_idx_in_expected = num_bytes - 1 - i
+        expected_writes_to_m.append(
+            (addr, tc.expected_m_values_after[val_idx_in_expected])
+        )
+
+    actual_writes_to_m = sorted(
+        [
+            w
+            for w in logged_writes
+            if tc.expected_m_addr_start <= w[0] < tc.expected_m_addr_start + num_bytes
+        ]
+    )  # Filter and sort actual writes
+
+    # Sort expected_writes_to_m because the order of processing is LSB->MSB for writes,
+    # but comparison should be order-agnostic if elements are correct or sorted if order matters.
+    # Here, we sort both to compare contents.
+    assert actual_writes_to_m == sorted(
+        expected_writes_to_m
+    ), f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected (sorted): {sorted(expected_writes_to_m)}\nGot (sorted): {actual_writes_to_m}"
+
+    assert (
+        cpu.regs.get(RegisterName.I) == tc.expected_I_after
+    ), f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
+    assert (
+        cpu.regs.get(RegisterName.FC) == tc.expected_FC_after
+    ), f"Test '{tc.test_id}': Flag C (Borrow). Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    assert (
+        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
+    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+
+
 def test_decode_all_opcodes() -> None:
     raw_memory = bytearray([0x00] * MAX_ADDR)
 
@@ -1091,6 +1546,7 @@ def test_decode_all_opcodes() -> None:
         # the memory and registers properly.
         # MVL: done
         # ADCL, DADL: done
+        # SBCL, DSBL: done
         ignore_instructions = ["???", "MVL", "ADCL", "DADL", "SBCL", "DSBL"]
         for ignore in ignore_instructions:
             if s and s.startswith(ignore):
