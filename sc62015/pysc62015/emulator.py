@@ -1,4 +1,6 @@
-from typing import Dict, Set, Callable, Optional, Any, cast
+# pysc62015/emulator.py
+
+from typing import Dict, Set, Callable, Optional, Any, cast, Tuple, TypedDict
 import enum
 from .coding import FetchDecoder
 from dataclasses import dataclass
@@ -55,6 +57,7 @@ class RegisterName(enum.Enum):
     TEMP10 = "TEMP10"
     TEMP11 = "TEMP11"
     TEMP12 = "TEMP12"
+    TEMP13 = "TEMP13"
 
 
 REGISTER_SIZE: Dict[RegisterName, int] = {
@@ -85,6 +88,7 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.TEMP10: 3,
     RegisterName.TEMP11: 3,
     RegisterName.TEMP12: 3,
+    RegisterName.TEMP13: 3,
 }
 
 
@@ -111,6 +115,7 @@ class Registers:
         RegisterName.TEMP10,
         RegisterName.TEMP11,
         RegisterName.TEMP12,
+        RegisterName.TEMP13,
     }
 
     def __init__(self) -> None:
@@ -208,41 +213,56 @@ class Memory:
 class State:
     halted: bool = False
 
+class ResultFlags(TypedDict, total=False):
+    C: Optional[int]
+    Z: Optional[int]
 
-EvalLLILType = Callable[[MockLLIL, Optional[int], Registers, Memory, State], Any]
+EvalLLILType = Callable[[MockLLIL, Optional[int], Registers, Memory, State], Tuple[Optional[int], Optional[ResultFlags]]]
 
 
-def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Any:
-    op = llil.bare_op()
-    flags = llil.flags()
+def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Tuple[Optional[int], Optional[ResultFlags]]:
+    op_name_bare = llil.bare_op()
+    llil_flags_spec = llil.flags()  # e.g., "CZ", "Z", or None
     size = llil.width()
+    current_op_name_for_eval = op_name_bare # Will be updated for intrinsics
 
     if isinstance(llil, MockIntrinsic):
         intrinsic = cast(MockIntrinsic, llil)
-        op = f"INTRINSIC_{intrinsic.name}"
+        current_op_name_for_eval = f"INTRINSIC_{intrinsic.name}"
 
-    f = EVAL_LLIL.get(op)
+    f = EVAL_LLIL.get(current_op_name_for_eval)
     if f is None:
-        raise NotImplementedError(f"Eval for {op} not implemented")
+        raise NotImplementedError(f"Eval for {current_op_name_for_eval} not implemented")
 
-    result = f(llil, size, regs, memory, state)
+    result_value, op_defined_flags = f(llil, size, regs, memory, state)
 
-    # NOTE We must handle flags here, as depending on the context some operations
-    # may not set flags, while others do. This also minimizes the number of
-    # places where we need to check for flags.
-    if flags is not None and flags != "0":
-        if "Z" in flags:
-            assert size
-            zero_mask = (1 << (size * 8)) - 1
-            regs.set(RegisterName.FZ, int(result & zero_mask == 0))
-        if "C" in flags:
-            assert size
-            over_limit = int(result > (1 << (size * 8)) - 1)
-            under_limit = int(result < 0)
-            carry_flag = int(over_limit or under_limit)
-            regs.set(RegisterName.FC, carry_flag)
-        pass
-    return result
+    if llil_flags_spec is not None and llil_flags_spec != "0":
+        if "Z" in llil_flags_spec:
+            assert size is not None, f"FZ flag setting requires size for instruction {current_op_name_for_eval}"
+            if op_defined_flags and op_defined_flags.get("Z") is not None:
+                regs.set(RegisterName.FZ, op_defined_flags["Z"])
+            else:
+                if isinstance(result_value, int):
+                    zero_mask = (1 << (size * 8)) - 1
+                    regs.set(RegisterName.FZ, int((result_value & zero_mask) == 0))
+
+        if "C" in llil_flags_spec:
+            assert size is not None, f"FC flag setting requires size for instruction {current_op_name_for_eval}"
+            if op_defined_flags and op_defined_flags.get("C") is not None:
+                regs.set(RegisterName.FC, op_defined_flags["C"])
+            else:
+                if isinstance(result_value, int):
+                    unsigned_max_for_size = (1 << (size * 8)) - 1
+                    carry_flag_val = 0
+                    if op_name_bare.startswith("SUB") or op_name_bare.startswith("CMP") or op_name_bare.startswith("SBC"):
+                        if result_value < 0:
+                            carry_flag_val = 1
+                    else:
+                        if result_value > unsigned_max_for_size:
+                            carry_flag_val = 1
+                    regs.set(RegisterName.FC, carry_flag_val)
+
+    return result_value, op_defined_flags
 
 
 class Emulator:
@@ -268,36 +288,37 @@ class Emulator:
 
         info = InstructionInfo()
         instr.analyze(info, address)
-        # set PC to the next instruction
-        self.regs.set(RegisterName.PC, address + info.length)
 
-        # Build a map: LowLevelILLabel → index in il.ils
+        # MyPy Fix for line 244: Cast info.length to int.
+        # Although type-hinted as int, MyPy might not be able to prove it in all contexts.
+        current_instr_length = cast(int, info.length)
+        assert current_instr_length is not None, "InstructionInfo.length was not set by analyze()"
+        self.regs.set(RegisterName.PC, address + current_instr_length)
+
+
         label_to_index: Dict[Any, int] = {}
         for idx, node in enumerate(il.ils):
             if isinstance(node, MockLabel):
                 label_to_index[node.label] = idx
 
-        # Now iterate *with* label‐aware control flow:
         pc_llil = 0
         while pc_llil < len(il.ils):
             node = il.ils[pc_llil]
 
-            # 1) Skip over plain labels:
             if isinstance(node, MockLabel):
                 pc_llil += 1
                 continue
 
-            # 2) Handle an IF‐expression:
             if isinstance(node, MockIfExpr):
-                # Evaluate the condition
-                cond_val = self.eval(node.cond)
-                # If non‐zero: jump to the “true” label; else to the “false” label
+                # MyPy Fix for line 253: Ensure node.cond is MockLLIL for eval
+                assert isinstance(node.cond, MockLLIL), "Condition for IF expression must be MockLLIL"
+                cond_val, _ = self.eval(node.cond)
+                assert cond_val is not None, "Condition for IF expression evaluated to None"
                 target_label = node.t if cond_val else node.f
                 assert target_label in label_to_index, f"Unknown label {target_label}"
                 pc_llil = label_to_index[target_label]
                 continue
 
-            # 3) Handle GOTO (unconditional jump within the lifted IL block)
             if isinstance(node, MockGoto):
                 assert (
                     node.label in label_to_index
@@ -305,291 +326,507 @@ class Emulator:
                 pc_llil = label_to_index[node.label]
                 continue
 
-            # 4) Otherwise, it’s a “normal” MockLLIL (CONST, REG, ADD, JUMP, etc.)
+            assert isinstance(node, MockLLIL), f"Expected MockLLIL, got {type(node)}"
             self.eval(node)
             pc_llil += 1
 
-    def eval(self, llil: MockLLIL) -> Any:
+    def eval(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
         return eval(llil, self.regs, self.memory, self.state)
 
 
 def eval_const(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
+) -> Tuple[int, Optional[ResultFlags]]:
     result = llil.ops[0]
     assert isinstance(result, int)
-    return result
+    return result, None
 
 
 def eval_const_ptr(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
+) -> Tuple[int, Optional[ResultFlags]]:
     result = llil.ops[0]
     assert isinstance(result, int)
-    return result
+    return result, None
 
 
 def eval_reg(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    reg = RegisterName(llil.ops[0].name)
-    return regs.get(reg)
+) -> Tuple[int, Optional[ResultFlags]]:
+    reg_name_enum = RegisterName(llil.ops[0].name)
+    return regs.get(reg_name_enum), None
 
 
 def eval_set_reg(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    reg = RegisterName(llil.ops[0].name)
-    value = eval(llil.ops[1], regs, memory, state)
-    regs.set(reg, value)
+) -> Tuple[None, Optional[ResultFlags]]:
+    reg_name_enum = RegisterName(llil.ops[0].name)
+    # Ensure llil.ops[1] is MockLLIL for eval
+    assert isinstance(llil.ops[1], MockLLIL), "Source operand for SET_REG must be MockLLIL"
+    value_to_set, _ = eval(llil.ops[1], regs, memory, state)
+    assert value_to_set is not None, "Value for SET_REG cannot be None"
+    regs.set(reg_name_enum, value_to_set)
+    return None, None
 
 
 def eval_flag(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    flag = RegisterName(f"F{llil.ops[0].name}")
-    return regs.get(flag)
+) -> Tuple[int, Optional[ResultFlags]]:
+    flag_name_enum = RegisterName(f"F{llil.ops[0].name}")
+    return regs.get(flag_name_enum), None
 
 
 def eval_set_flag(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    flag = RegisterName(f"F{llil.ops[0].name}")
-    value = eval(llil.ops[1], regs, memory, state)
-    regs.set(flag, value != 0)
+) -> Tuple[None, Optional[ResultFlags]]:
+    flag_name_enum = RegisterName(f"F{llil.ops[0].name}")
+    assert isinstance(llil.ops[1], MockLLIL), "Source operand for SET_FLAG must be MockLLIL"
+    value_to_set, _ = eval(llil.ops[1], regs, memory, state)
+    assert value_to_set is not None, "Value for SET_FLAG cannot be None"
+    regs.set(flag_name_enum, value_to_set != 0)
+    return None, None
 
 
 def eval_and(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) & int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+    result = int(op1_val) & int(op2_val)
+    return result, {'Z': 1 if result == 0 else 0, 'C': 0}
 
 
 def eval_or(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) | int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+    result = int(op1_val) | int(op2_val)
+    return result, {'Z': 1 if result == 0 else 0, 'C': 0}
 
 
 def eval_xor(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) ^ int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+    result = int(op1_val) ^ int(op2_val)
+    return result, {'Z': 1 if result == 0 else 0, 'C': 0}
 
 
 def eval_pop(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
+) -> Tuple[int, Optional[ResultFlags]]:
     assert size
     addr = regs.get(RegisterName.S)
     result = memory.read_bytes(addr, size)
     regs.set(RegisterName.S, addr + size)
-    return result
+    return result, None
 
 
 def eval_push(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
+) -> Tuple[None, Optional[ResultFlags]]:
     assert size
-    value = eval(llil.ops[0], regs, memory, state)
+    assert isinstance(llil.ops[0], MockLLIL)
+    value_to_push, _ = eval(llil.ops[0], regs, memory, state)
+    assert value_to_push is not None
     addr = regs.get(RegisterName.S) - size
-    memory.write_bytes(size, addr, value)
+    memory.write_bytes(size, addr, value_to_push)
     regs.set(RegisterName.S, addr)
+    return None, None
 
 
 def eval_nop(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    # NOP does nothing
-    pass
+) -> Tuple[None, Optional[ResultFlags]]:
+    return None, None
 
 
 def eval_unimpl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
+) -> Tuple[None, Optional[ResultFlags]]:
     raise NotImplementedError(f"Low-level IL operation {llil.op} is not implemented")
 
 
 def eval_store(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
+) -> Tuple[None, Optional[ResultFlags]]:
     assert size
-    dest, value = [eval(i, regs, memory, state) for i in llil.ops]
-    memory.write_bytes(size, dest, value)
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    dest_addr, _ = eval(llil.ops[0], regs, memory, state)
+    value_to_store, _ = eval(llil.ops[1], regs, memory, state)
+    assert dest_addr is not None and value_to_store is not None
+    memory.write_bytes(size, dest_addr, value_to_store)
+    return None, None
 
 
 def eval_load(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
+) -> Tuple[int, Optional[ResultFlags]]:
     assert size
-    addr = eval(llil.ops[0], regs, memory, state)
-    return memory.read_bytes(addr, size)
+    assert isinstance(llil.ops[0], MockLLIL)
+    addr, _ = eval(llil.ops[0], regs, memory, state)
+    assert addr is not None
+    return memory.read_bytes(addr, size), None
 
 
 def eval_ret(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    addr = eval(llil.ops[0], regs, memory, state)
-    if llil.ops[0].width() == 2:
-        addr = regs.get(RegisterName.PC) & 0xFF0000 | addr
-    regs.set(RegisterName.PC, addr)
+) -> Tuple[None, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL)
+    addr_val, _ = eval(llil.ops[0], regs, memory, state)
+    assert isinstance(addr_val, int), f"Address for RET must be an integer, got {type(addr_val)}"
+
+    effective_addr = addr_val
+    # Check if the source of the address (llil.ops[0]) is a MockLLIL object and has a width method
+    if isinstance(llil.ops[0], MockLLIL) and llil.ops[0].width() == 2:
+        # This logic is for architectures where a 16-bit return address is popped and
+        # combined with a page/segment register or parts of the current PC.
+        # For SC62015, RET pops 2 bytes, RETF pops 3.
+        # If addr_val is 16-bit from POP.w, it needs to be expanded to 20-bit.
+        # The exact mechanism (e.g. which page) depends on arch specifics.
+        # A common behavior is to use the page of PC at time of CALL.
+        # Here, we use page of PC at time of RET. This might not be universally correct.
+        # The value from `regs.get(RegisterName.PC)` is PC of (RET instruction + length of RET).
+        effective_addr = (regs.get(RegisterName.PC) & 0xFF0000) | addr_val
+
+    regs.set(RegisterName.PC, effective_addr)
+    return None, None
 
 
 def eval_jump(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    addr = eval(llil.ops[0], regs, memory, state)
+) -> Tuple[None, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL)
+    addr, _ = eval(llil.ops[0], regs, memory, state)
+    assert isinstance(addr, int), f"Address for JUMP must be an integer, got {type(addr)}"
     regs.set(RegisterName.PC, addr)
+    return None, None
 
 
 def eval_call(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    addr = eval(llil.ops[0], regs, memory, state)
-    # expect the execute_instruction to advance PC to after the CALL instruction
+) -> Tuple[None, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL)
+    addr, _ = eval(llil.ops[0], regs, memory, state)
+    assert isinstance(addr, int), f"Address for CALL must be an integer, got {type(addr)}"
+
     ret_addr = regs.get(RegisterName.PC)
-    memory.write_bytes(3, regs.get(RegisterName.S) - 3, ret_addr)
-    regs.set(RegisterName.S, regs.get(RegisterName.S) - 3)
+
+    # Determine push size for return address
+    # SC62015: CALL mn (2-byte target) pushes 2 bytes; CALLF lmn (3-byte target) pushes 3 bytes.
+    # This distinction should ideally be made during lifting.
+    # If llil.ops[0] (target addr expr) resulted from a 16-bit const, it's likely a short CALL.
+    push_size = 3 # Default for CALLF / system stack operations
+    if llil.ops[0].op == "CONST_PTR.w" or \
+       (llil.ops[0].op == "CONST.w") or \
+       (llil.ops[0].op == "OR.l" and llil.ops[0].ops[0].op == "CONST.w"): # Heuristic for CALL mn
+        push_size = 2
+
+    stack_addr = regs.get(RegisterName.S) - push_size
+    # Ensure ret_addr is masked correctly for the push size
+    if push_size == 2:
+        memory.write_bytes(push_size, stack_addr, ret_addr & 0xFFFF)
+    else: # push_size == 3
+        memory.write_bytes(push_size, stack_addr, ret_addr & 0xFFFFF)
+
+    regs.set(RegisterName.S, stack_addr)
     regs.set(RegisterName.PC, addr)
+    return None, None
 
 
 def eval_add(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) + int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+
+    result_full = int(op1_val) + int(op2_val)
+
+    width_bits = size * 8
+    mask = (1 << width_bits) - 1
+    result_masked = result_full & mask
+
+    flag_z = 1 if result_masked == 0 else 0
+    flag_c = 1 if result_full > mask else 0
+
+    return result_masked, {'C': flag_c, 'Z': flag_z}
 
 
 def eval_sub(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) - int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+
+    result_full = int(op1_val) - int(op2_val)
+
+    width_bits = size * 8
+    mask = (1 << width_bits) - 1
+    result_masked = result_full & mask
+
+    flag_z = 1 if result_masked == 0 else 0
+    flag_c = 1 if result_full < 0 else 0
+
+    return result_masked, {'C': flag_c, 'Z': flag_z}
 
 
 def eval_cmp_e(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    return int(op1) == int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+    return int(int(op1_val) == int(op2_val)), None
 
 
 def eval_cmp_ugt(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    # Unsigned greater than comparison
-    return int(op1) > int(op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+    return int(int(op1_val) > int(op2_val)), None
 
+def to_signed(value: int, size_bytes: int) -> int:
+    width_bits = size_bytes * 8
+    mask = (1 << width_bits) - 1
+    sign_bit_mask = 1 << (width_bits - 1)
+    value &= mask
+    if (value & sign_bit_mask) != 0:
+        return value - (1 << width_bits)
+    return value
 
 def eval_cmp_slt(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size is not None, "CMP_SLT requires a size."
-    op1, op2 = [eval(op, regs, memory, state) for op in llil.ops]
-    # Signed less than comparison
-    return int(op1 < op2)
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None, "Size must be provided for signed comparison"
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    op1_val, _ = eval(llil.ops[0], regs, memory, state)
+    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    assert op1_val is not None and op2_val is not None
+
+    signed_op1 = to_signed(int(op1_val), size)
+    signed_op2 = to_signed(int(op2_val), size)
+
+    return int(signed_op1 < signed_op2), None
 
 
 def eval_lsl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size
-    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
-    width = size * 8
-    if count == 0:
-        return val
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    val_expr, count_expr = llil.ops
+    val, _ = eval(val_expr, regs, memory, state)
+    count, _ = eval(count_expr, regs, memory, state)
+    assert val is not None and count is not None
+    val = int(val)
+    count = int(count)
 
-    new_carry_out = (val >> (width - count)) & 1 if count <= width else 0
-    return (val << count) & ((1 << width) - 1) | (new_carry_out << width)
+    width = size * 8
+    mask = (1 << width) - 1
+
+    if count == 0:
+        arith_result = val & mask
+        return arith_result, {'C': 0, 'Z': 1 if arith_result == 0 else 0}
+
+    carry_out = 0
+    if count <= width and width > 0: # Ensure width > 0 for shift
+        carry_out = (val >> (width - count)) & 1
+
+    arith_result = (val << count) & mask
+    zero_flag = 1 if arith_result == 0 else 0
+
+    return arith_result, {'C': carry_out, 'Z': zero_flag}
 
 
 def eval_lsr(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
+) -> Tuple[int, Optional[ResultFlags]]:
     assert size is not None
-    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    val_expr, count_expr = llil.ops
+    val, _ = eval(val_expr, regs, memory, state)
+    count, _ = eval(count_expr, regs, memory, state)
+    assert val is not None and count is not None
+    val = int(val)
+    count = int(count)
+
     width = size * 8
+
     if count == 0:
-        return val
+        arith_result = val & ((1 << width) -1 if width > 0 else 0)
+        return arith_result, {'C': 0, 'Z': 1 if arith_result == 0 else 0}
 
-    # LSR typically fills with 0s from the left
-    new_carry_out = (val >> (count - 1)) & 1 if count > 0 and count <= width else 0 # LSB shifted out
-    result = val >> count
-    return result | (new_carry_out << width) # Include carry out for flag processing
+    carry_out = 0
+    if count > 0 and count <= width and width > 0 :
+         carry_out = (val >> (count - 1)) & 1
 
+    arith_result = val >> count
+    zero_flag_val = arith_result & ((1 << width) - 1 if width > 0 else 0)
+    zero_flag = 1 if zero_flag_val == 0 else 0
+
+    return arith_result, {'C': carry_out, 'Z': zero_flag}
 
 
 def eval_ror(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size == 1
-    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    val_expr, count_expr = llil.ops
+    val, _ = eval(val_expr, regs, memory, state)
+    count, _ = eval(count_expr, regs, memory, state)
+    assert val is not None and count is not None
+    val = int(val)
+    count = int(count)
+
     width = size * 8
-    new_carry_out = val & 1
-    result = (val >> count) | (val << (width - count))
-    result &= (1 << width) - 1  # Ensure we don't overflow the width
-    return result | (new_carry_out << width)
+    mask = (1 << width) - 1 if width > 0 else 0
+
+    if width == 0:
+        return val & mask, {'C': 0, 'Z': 1 if (val & mask) == 0 else 0}
+
+    count %= width
+    if count == 0:
+        arith_result = val & mask
+        return arith_result, {'C': val & 1, 'Z': 1 if arith_result == 0 else 0}
+
+    shifted_part = val >> count
+    rotated_part = val << (width - count)
+    arith_result = (shifted_part | rotated_part) & mask
+
+    carry_out = (val >> (count - 1)) & 1
+    zero_flag = 1 if arith_result == 0 else 0
+
+    return arith_result, {'C': carry_out, 'Z': zero_flag}
 
 
 def eval_rol(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    assert size == 1
-    val, count = [int(eval(op, regs, memory, state)) for op in llil.ops]
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+    val_expr, count_expr = llil.ops
+    val, _ = eval(val_expr, regs, memory, state)
+    count, _ = eval(count_expr, regs, memory, state)
+    assert val is not None and count is not None
+    val = int(val)
+    count = int(count)
+
     width = size * 8
-    msb = val >> (width - count)
-    new_carry_out = msb & 1
-    return (val << count) | msb | (new_carry_out << width)
+    mask = (1 << width) - 1 if width > 0 else 0
+
+    if width == 0:
+        return val & mask, {'C': 0, 'Z': 1 if (val & mask) == 0 else 0}
+
+    count %= width
+    if count == 0:
+        arith_result = val & mask
+        return arith_result, {'C': (val >> (width - 1)) & 1 if width > 0 else 0, 'Z': 1 if arith_result == 0 else 0}
+
+    shifted_part = (val << count)
+    rotated_part = (val >> (width - count))
+    arith_result = (shifted_part | rotated_part) & mask
+
+    carry_out = (val >> (width - count)) & 1
+    zero_flag = 1 if arith_result == 0 else 0
+
+    return arith_result, {'C': carry_out, 'Z': zero_flag}
 
 
 def eval_rrc(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    # RRC is similar to ROR but with the carry bit
-    assert size == 1
-    val, count, carry_in = [int(eval(op, regs, memory, state)) for op in llil.ops]
-    assert count == 1
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL) and isinstance(llil.ops[2], MockLLIL)
+    val_expr, count_expr, carry_in_expr = llil.ops
+    val, _ = eval(val_expr, regs, memory, state)
+    count_val, _ = eval(count_expr, regs, memory, state)
+    carry_in, _ = eval(carry_in_expr, regs, memory, state)
+    assert val is not None and count_val is not None and carry_in is not None
+    val = int(val)
+    count = int(count_val)
+    carry_in = int(carry_in)
+
     width = size * 8
-    new_carry_out = val & 1  # LSB of val
-    return (val >> count) | (carry_in << (width - count)) | (new_carry_out << width)
+    mask = (1 << width) - 1 if width > 0 else 0
+    assert count == 1, "RRC count should be 1 for standard definition"
+
+    if width == 0:
+        return val & mask, {'C':0, 'Z':1 if (val & mask) == 0 else 0}
+
+    new_carry_out = val & 1
+    arith_result = (val >> count) | (carry_in << (width - count))
+    arith_result &= mask
+
+    zero_flag = 1 if arith_result == 0 else 0
+    return arith_result, {'C': new_carry_out, 'Z': zero_flag}
 
 
 def eval_rlc(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> int:
-    # RLC is similar to ROL but with the carry bit
-    assert size == 1
-    val, count, carry_in = [int(eval(op, regs, memory, state)) for op in llil.ops]
+) -> Tuple[int, Optional[ResultFlags]]:
+    assert size is not None
+    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL) and isinstance(llil.ops[2], MockLLIL)
+    val_expr, count_expr, carry_in_expr = llil.ops
+    val, _ = eval(val_expr, regs, memory, state)
+    count_val, _ = eval(count_expr, regs, memory, state)
+    carry_in, _ = eval(carry_in_expr, regs, memory, state)
+    assert val is not None and count_val is not None and carry_in is not None
+    val = int(val)
+    count = int(count_val)
+    carry_in = int(carry_in)
+
     width = size * 8
-    new_carry_out = (val >> (width - 1)) & 1  # MSB of val
-    return (val << 1) | carry_in | (new_carry_out << width)
+    mask = (1 << width) - 1 if width > 0 else 0
+    assert count == 1, "RLC count should be 1 for standard definition"
+
+    if width == 0:
+        return val & mask, {'C':0, 'Z':1 if (val & mask) == 0 else 0}
+
+    new_carry_out = (val >> (width - 1)) & 1 if width > 0 else 0
+    arith_result = (val << count) | carry_in
+    arith_result &= mask
+
+    zero_flag = 1 if arith_result == 0 else 0
+    return arith_result, {'C': new_carry_out, 'Z': zero_flag}
 
 
 def eval_intrinsic_tcl(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    pass
+) -> Tuple[None, Optional[ResultFlags]]:
+    return None, None
 
 
 def eval_intrinsic_halt(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
+) -> Tuple[None, Optional[ResultFlags]]:
     state.halted = True
+    return None, None
 
 
 def eval_intrinsic_off(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> None:
-    # This is a no-op in the emulator context, but could be used for debugging or logging
+) -> Tuple[None, Optional[ResultFlags]]:
     state.halted = True
+    return None, None
 
 
 EVAL_LLIL: Dict[str, EvalLLILType] = {

@@ -133,6 +133,7 @@ TempBcdLowNibbleProcessing = LLIL_TEMP(9)
 TempBcdHighNibbleProcessing = LLIL_TEMP(10)
 TempOverallZeroAcc = LLIL_TEMP(11)
 TempLoopByteResult = LLIL_TEMP(12)
+TempBcdDigitCarry = LLIL_TEMP(13)
 
 
 # mapping to size, page 67 of the book
@@ -2061,15 +2062,98 @@ class SHR(ShiftRotateInstruction):
                                      il.flag(CFlag), CZFlag)
 
 # digit shift
-# FIXME: this is very wrong, fix it later
-class DSRL(ShiftRotateInstruction):
-    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
-        return il.rotate_right_carry(1, il_arg1, self.shift_by(il),
-                                     il.flag(CFlag), CZFlag)
-class DSLL(ShiftRotateInstruction):
-    def lift_operation1(self, il: LowLevelILFunction, il_arg1: ExpressionIndex) -> ExpressionIndex:
-        return il.rotate_left_carry(1, il_arg1, self.shift_by(il),
-                                    il.flag(CFlag), CZFlag)
+class DSLL(Instruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        imem_op, = self.operands()
+        # Ensure the operand is IMem8 as corrected in OPCODES
+        assert isinstance(imem_op, IMem8), f"DSLL operand should be IMem8, got {type(imem_op)}"
+
+        # current_addr_reg holds the internal memory address (e.g., 0x100000 + n_offset)
+        # For DSLL, (n) is the MSB address.
+        current_addr_reg = TempReg(TempMultiByte1, width=3) # Addresses are 3 bytes (20/24 bit)
+        current_addr_reg.lift_assign(il, imem_op.lift_current_addr(il, side_effects=False))
+
+        # digit_carry_reg stores the high nibble of T (current byte) to be OR'd
+        # into the low nibble of S (shifted byte) in the next (less significant) iteration.
+        digit_carry_reg = TempReg(TempBcdDigitCarry, width=1)
+        # The first S is (T_low << 4) | 0. So initial carry is 0.
+        digit_carry_reg.lift_assign(il, il.const(1, 0))
+
+        overall_zero_acc_reg = TempReg(TempOverallZeroAcc, width=1)
+        overall_zero_acc_reg.lift_assign(il, il.const(1, 0))
+
+        mem_accessor = IMemHelper(width=1, value=current_addr_reg) # For load/store via current_addr_reg
+
+        with lift_loop(il): # loop_reg is 'I', decrements from initial value
+            current_byte_T = mem_accessor.lift(il)
+
+            # S = (T_low_nibble << 4) | digit_carry_from_PREVIOUS_T_high_nibble
+            T_low_nibble = il.and_expr(1, current_byte_T, il.const(1, 0x0F))
+            T_high_nibble = il.logical_shift_right(1, current_byte_T, il.const(1, 4))
+            # T_high_nibble = il.and_expr(1, T_high_nibble, il.const(1, 0x0F)) # Mask if needed
+
+            shifted_byte_S = il.or_expr(1,
+                                        il.shift_left(1, T_low_nibble, il.const(1, 4)),
+                                        digit_carry_reg.lift(il))
+
+            mem_accessor.lift_assign(il, shifted_byte_S)
+
+            # Update digit_carry_reg with T_high_nibble for the next iteration
+            digit_carry_reg.lift_assign(il, T_high_nibble)
+
+            overall_zero_acc_reg.lift_assign(il, il.or_expr(1, overall_zero_acc_reg.lift(il), shifted_byte_S))
+
+            # Decrement address pointer for DSLL (MSB to LSB)
+            current_addr_reg.lift_assign(il, il.sub(3, current_addr_reg.lift(il), il.const(3, 1)))
+
+        il.append(il.set_flag(ZFlag, il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0))))
+        # FC is not affected.
+
+class DSRL(Instruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        imem_op, = self.operands()
+        assert isinstance(imem_op, IMem8), f"DSRL operand should be IMem8, got {type(imem_op)}"
+
+        # For DSRL, (n) is the LSB address.
+        current_addr_reg = TempReg(TempMultiByte1, width=3)
+        current_addr_reg.lift_assign(il, imem_op.lift_current_addr(il, side_effects=False))
+
+        # digit_carry_reg stores the low nibble of T (current byte) to be OR'd
+        # into the high nibble of S (shifted byte) in the next (more significant) iteration.
+        digit_carry_reg = TempReg(TempBcdDigitCarry, width=1)
+        # The first S is T >> 4. So initial carry is 0.
+        digit_carry_reg.lift_assign(il, il.const(1, 0))
+
+        overall_zero_acc_reg = TempReg(TempOverallZeroAcc, width=1)
+        overall_zero_acc_reg.lift_assign(il, il.const(1, 0))
+
+        mem_accessor = IMemHelper(width=1, value=current_addr_reg)
+
+        with lift_loop(il):
+            current_byte_T = mem_accessor.lift(il)
+
+            # S = T_high_nibble | (digit_carry_from_PREVIOUS_T_low_nibble << 4)
+            T_low_nibble = il.and_expr(1, current_byte_T, il.const(1, 0x0F))
+            T_high_nibble = il.logical_shift_right(1, current_byte_T, il.const(1, 4))
+            # T_high_nibble = il.and_expr(1, T_high_nibble, il.const(1, 0x0F))
+
+            shifted_byte_S = il.or_expr(1,
+                                        T_high_nibble,
+                                        il.shift_left(1, digit_carry_reg.lift(il), il.const(1, 4)))
+
+            mem_accessor.lift_assign(il, shifted_byte_S)
+
+            # Update digit_carry_reg with T_low_nibble for the next iteration
+            digit_carry_reg.lift_assign(il, T_low_nibble)
+
+            overall_zero_acc_reg.lift_assign(il, il.or_expr(1, overall_zero_acc_reg.lift(il), shifted_byte_S))
+
+            # Increment address pointer for DSRL (LSB to MSB)
+            current_addr_reg.lift_assign(il, il.add(3, current_addr_reg.lift(il), il.const(3, 1)))
+
+        il.append(il.set_flag(ZFlag, il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0))))
+        # FC is not affected.
+
 
 class IncDecInstruction(Instruction): pass
 class INC(IncDecInstruction):
@@ -2452,7 +2536,7 @@ OPCODES = {
                     ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
     # FIXME: verify width
     0xEB: (MVL, Opts(ops=[EMemReg(width=1), IMem8()])),
-    0xEC: (DSLL, Opts(ops=[IMem20()])),
+    0xEC: (DSLL, Opts(ops=[IMem8()])),
     0xED: (EX, Opts(ops=[RegPair(size=2)])),
     0xEE: (SWAP, Opts(ops=[Reg("A")])),
     0xEF: WAIT,
@@ -2469,7 +2553,7 @@ OPCODES = {
     0xF9: (MV, Opts(name='MVW', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
     0xFA: (MV, Opts(name='MVP', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
     0xFB: (MVL, Opts(ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
-    0xFC: (DSRL, Opts(ops=[IMem20()])),
+    0xFC: (DSRL, Opts(ops=[IMem8()])),
     0xFD: (MV, Opts(ops=[RegPair(size=2)])),
     0xFE: IR,
     0xFF: RESET,

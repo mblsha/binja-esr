@@ -872,9 +872,8 @@ EB0400: MVL   [X],(00)
 EB0407: MVL   [X],(07)
 EB0700: MVL   [S],(00)
 EB0707: MVL   [S],(07)
-# FIXME: implement
-# EC00: DSLL  (00)
-# EC07: DSLL  (07)
+EC00: DSLL  (00)
+EC07: DSLL  (07)
 ED00: EX    A,A
 ED11: EX    IL,IL
 ED07: EX    A,S
@@ -927,9 +926,8 @@ FB00ABCD:   MVL [(AB)],(CD)
 FB80ABCDEF: MVL [(AB)+EF],(CD)
 FBC0ABCDEF: MVL [(AB)-EF],(CD)
 
-# FIXME: implement
-# FC00: DSRL  (00)
-# FC07: DSRL  (07)
+FC00: DSRL  (00)
+FC07: DSRL  (07)
 FD00: MV    A,A
 FD01: MV    A,IL
 FD10: MV    IL,A

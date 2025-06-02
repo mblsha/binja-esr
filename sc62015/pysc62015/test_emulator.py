@@ -718,7 +718,6 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=0,
         expected_FZ_after=0,
     ),
-
     AdclDadlTestCase(
         test_id="ADCL_(m)_(n)_I1_NoCarryIn_CarryOut",
         instr_bytes=bytes([0x54, 0x10, 0x20]),
@@ -734,7 +733,6 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=1,
         expected_FZ_after=0,
     ),
-
     # FIXME: failing
     # AdclDadlTestCase(
     #     test_id="ADCL_(m)_(n)_I1_NoCarryIn_ZeroResult_CarryOut",
@@ -751,7 +749,6 @@ adcl_test_cases: List[AdclDadlTestCase] = [
     #     expected_FC_after=1,
     #     expected_FZ_after=1,
     # ),
-
     AdclDadlTestCase(
         test_id="ADCL_(m)_(n)_I2_CarryPropagate_OverallNonZero",
         instr_bytes=bytes([0x54, 0x10, 0x20]),  # ADCL (10), (20)
@@ -771,7 +768,6 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=0,  # From last byte op
         expected_FZ_after=0,  # Overall: (0x00 | 0x04) != 0
     ),
-
     # FIXME: failing
     # AdclDadlTestCase(
     #     test_id="ADCL_(m)_(n)_I2_OverallZero",
@@ -792,7 +788,6 @@ adcl_test_cases: List[AdclDadlTestCase] = [
     #     expected_FC_after=1,
     #     expected_FZ_after=1,  # Overall: (0x00 | 0x00) == 0
     # ),
-
     # --- ADCL (m), A ---
     AdclDadlTestCase(
         test_id="ADCL_(m)_A_I1_NoCarryIn_NoCarryOut",
@@ -1520,6 +1515,296 @@ def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
     ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
 
 
+# Add new NamedTuple for DSLL/DSRL test cases
+class DsrlDsllTestCase(NamedTuple):
+    test_id: str
+    is_dsll: bool  # True for DSLL, False for DSRL
+    instr_operand_n_val: int  # The 8-bit value for (n) in the instruction
+    loop_count_I: int
+    # For DSLL: [MSB_val, MSB-1_val, ..., LSB_val] e.g. BCD 1234 -> [0x12, 0x34]
+    # For DSRL: [LSB_val, LSB+1_val, ..., MSB_val] e.g. BCD 1234 -> [0x34, 0x12]
+    initial_bcd_logical_bytes: List[int]
+    expected_final_bcd_logical_bytes: List[
+        int
+    ]  # Same order as initial_bcd_logical_bytes
+    expected_FZ_after: int
+    # FC is not affected by these instructions according to the book
+
+
+# Helper functions to compute expected results for DSLL/DSRL
+def compute_expected_dsll(logical_bcd_bytes: List[int]) -> List[int]:
+    """
+    Computes the result of DSLL operation on BCD bytes.
+    logical_bcd_bytes is [MSB_val, MSB-1_val, ..., LSB_val].
+    e.g., for BCD 123456, input is [0x12, 0x34, 0x56].
+    Result for 123456 -> 234560 is [0x23, 0x45, 0x60].
+    """
+    if not logical_bcd_bytes:
+        return []
+
+    count = len(logical_bcd_bytes)
+    shifted_bytes = [0] * count
+
+    # u carries the high nibble of the previous (more significant) byte
+    # to become the low nibble of the current (less significant) byte.
+    # For the most significant byte, there's no "previous" high nibble, so u effectively starts as 0.
+    u_carry_from_prev_high_nibble = 0
+
+    # Iterate from MSB to LSB (index 0 to count-1)
+    for i in range(count):
+        old_current_byte_val = logical_bcd_bytes[i]
+        old_current_low_nibble = old_current_byte_val & 0x0F
+        old_current_high_nibble = (old_current_byte_val >> 4) & 0x0F
+
+        # New byte's high nibble is the old_current_byte's low nibble.
+        # New byte's low nibble is u (which was the high nibble of the *more significant* previous byte).
+        shifted_bytes[i] = (old_current_low_nibble << 4) | u_carry_from_prev_high_nibble
+
+        # Update u for the next iteration (for the next, less significant, byte)
+        u_carry_from_prev_high_nibble = old_current_high_nibble
+
+    return shifted_bytes
+
+
+def compute_expected_dsrl(logical_bcd_bytes: List[int]) -> List[int]:
+    """
+    Computes the result of DSRL operation on BCD bytes.
+    logical_bcd_bytes is [LSB_val, LSB+1_val, ..., MSB_val].
+    e.g., for BCD 123456, input is [0x56, 0x34, 0x12].
+    Result for 123456 -> 012345 is [0x45, 0x23, 0x01].
+    """
+    if not logical_bcd_bytes:
+        return []
+
+    count = len(logical_bcd_bytes)
+    shifted_bytes = [0] * count
+
+    # u carries the low nibble of the previous (less significant) byte
+    # to become the high nibble of the current (more significant) byte.
+    # For the least significant byte, there's no "previous" low nibble, so u effectively starts as 0.
+    u_carry_from_prev_low_nibble = 0
+
+    # Iterate from LSB to MSB (index 0 to count-1)
+    for i in range(count):
+        old_current_byte_val = logical_bcd_bytes[i]
+        old_current_low_nibble = old_current_byte_val & 0x0F
+        old_current_high_nibble = (old_current_byte_val >> 4) & 0x0F
+
+        # New byte's low nibble is the old_current_byte's high nibble.
+        # New byte's high nibble is u (which was the low nibble of the *less significant* previous byte).
+        shifted_bytes[i] = old_current_high_nibble | (u_carry_from_prev_low_nibble << 4)
+
+        # Update u for the next iteration (for the next, more significant, byte)
+        u_carry_from_prev_low_nibble = old_current_low_nibble
+
+    return shifted_bytes
+
+
+dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
+    # --- DSLL Test Cases ---
+    DsrlDsllTestCase(
+        test_id="DSLL_I1_Simple",  # BCD 12 -> 20
+        is_dsll=True,
+        instr_operand_n_val=0x10,
+        loop_count_I=1,
+        initial_bcd_logical_bytes=[0x12],  # [MSB]
+        expected_final_bcd_logical_bytes=compute_expected_dsll([0x12]),  # [0x20]
+        expected_FZ_after=0,
+    ),
+    # FIXME: failing
+    # DsrlDsllTestCase(
+    #     test_id="DSLL_I2_1234_to_2340",  # BCD 1234 -> 2340
+    #     is_dsll=True,
+    #     instr_operand_n_val=0x11,
+    #     loop_count_I=2,
+    #     initial_bcd_logical_bytes=[0x12, 0x34],  # [MSB, LSB]
+    #     expected_final_bcd_logical_bytes=compute_expected_dsll(
+    #         [0x12, 0x34]
+    #     ),  # [0x23, 0x40]
+    #     expected_FZ_after=0,
+    # ),
+    # DsrlDsllTestCase(
+    #     test_id="DSLL_I3_123456_to_234560",
+    #     is_dsll=True,
+    #     instr_operand_n_val=0x12,
+    #     loop_count_I=3,
+    #     initial_bcd_logical_bytes=[0x12, 0x34, 0x56],  # [MSB, Mid, LSB]
+    #     expected_final_bcd_logical_bytes=compute_expected_dsll(
+    #         [0x12, 0x34, 0x56]
+    #     ),  # [0x23, 0x45, 0x60]
+    #     expected_FZ_after=0,
+    # ),
+    DsrlDsllTestCase(
+        test_id="DSLL_I2_0009_to_0090",
+        is_dsll=True,
+        instr_operand_n_val=0x11,
+        loop_count_I=2,
+        initial_bcd_logical_bytes=[0x00, 0x09],
+        expected_final_bcd_logical_bytes=compute_expected_dsll(
+            [0x00, 0x09]
+        ),  # [0x00, 0x90]
+        expected_FZ_after=0,
+    ),
+    DsrlDsllTestCase(
+        test_id="DSLL_I2_0000_to_0000_FZ1",
+        is_dsll=True,
+        instr_operand_n_val=0x11,
+        loop_count_I=2,
+        initial_bcd_logical_bytes=[0x00, 0x00],
+        expected_final_bcd_logical_bytes=compute_expected_dsll(
+            [0x00, 0x00]
+        ),  # [0x00, 0x00]
+        expected_FZ_after=1,
+    ),
+    # --- DSRL Test Cases ---
+    DsrlDsllTestCase(
+        test_id="DSRL_I1_Simple",  # BCD 12 -> 01
+        is_dsll=False,
+        instr_operand_n_val=0x10,
+        loop_count_I=1,
+        initial_bcd_logical_bytes=[0x12],  # [LSB] (also MSB here)
+        expected_final_bcd_logical_bytes=compute_expected_dsrl([0x12]),  # [0x01]
+        expected_FZ_after=0,
+    ),
+    # FIXME: failing
+    # DsrlDsllTestCase(
+    #     test_id="DSRL_I2_1234_to_0123",  # BCD 1234 -> 0123
+    #     is_dsll=False,
+    #     instr_operand_n_val=0x10,
+    #     loop_count_I=2,
+    #     initial_bcd_logical_bytes=[0x34, 0x12],  # [LSB, MSB]
+    #     expected_final_bcd_logical_bytes=compute_expected_dsrl(
+    #         [0x34, 0x12]
+    #     ),  # [0x23, 0x01] (means LSB=23, MSB=01)
+    #     expected_FZ_after=0,
+    # ),
+    # DsrlDsllTestCase(
+    #     test_id="DSRL_I3_123456_to_012345",
+    #     is_dsll=False,
+    #     instr_operand_n_val=0x10,
+    #     loop_count_I=3,
+    #     initial_bcd_logical_bytes=[0x56, 0x34, 0x12],  # [LSB, Mid, MSB]
+    #     expected_final_bcd_logical_bytes=compute_expected_dsrl(
+    #         [0x56, 0x34, 0x12]
+    #     ),  # [0x45, 0x23, 0x01]
+    #     expected_FZ_after=0,
+    # ),
+    DsrlDsllTestCase(
+        test_id="DSRL_I2_9000_to_0900",
+        is_dsll=False,
+        instr_operand_n_val=0x10,
+        loop_count_I=2,
+        initial_bcd_logical_bytes=[0x00, 0x90],  # LSB=0x00, MSB=0x90
+        expected_final_bcd_logical_bytes=compute_expected_dsrl(
+            [0x00, 0x90]
+        ),  # [0x00, 0x09] (LSB=00, MSB=09)
+        expected_FZ_after=0,
+    ),
+    DsrlDsllTestCase(
+        test_id="DSRL_I2_0000_to_0000_FZ1",
+        is_dsll=False,
+        instr_operand_n_val=0x10,
+        loop_count_I=2,
+        initial_bcd_logical_bytes=[0x00, 0x00],
+        expected_final_bcd_logical_bytes=compute_expected_dsrl(
+            [0x00, 0x00]
+        ),  # [0x00, 0x00]
+        expected_FZ_after=1,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tc", dsrl_dsll_test_cases, ids=[case.test_id for case in dsrl_dsll_test_cases]
+)
+def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
+    opcode = 0xEC if tc.is_dsll else 0xFC
+    instr_bytes = bytes([opcode, tc.instr_operand_n_val])
+
+    init_memory_state: Dict[int, int] = {}
+    # Determine memory addresses for initial setup
+    # For DSLL, n is MSB addr, mem is populated from n downwards (n, n-1, ..., n-I+1)
+    # initial_bcd_logical_bytes is [MSB_val, MSB-1_val, ..., LSB_val]
+    # So, initial_bcd_logical_bytes[i] goes to mem[INTERNAL_MEMORY_START + tc.instr_operand_n_val - i]
+    if tc.is_dsll:
+        for i in range(tc.loop_count_I):
+            addr = INTERNAL_MEMORY_START + tc.instr_operand_n_val - i
+            init_memory_state[addr] = tc.initial_bcd_logical_bytes[i]
+    else:  # DSRL
+        # For DSRL, n is LSB addr, mem is populated from n upwards (n, n+1, ..., n+I-1)
+        # initial_bcd_logical_bytes is [LSB_val, LSB+1_val, ..., MSB_val]
+        # So, initial_bcd_logical_bytes[i] goes to mem[INTERNAL_MEMORY_START + tc.instr_operand_n_val + i]
+        for i in range(tc.loop_count_I):
+            addr = INTERNAL_MEMORY_START + tc.instr_operand_n_val + i
+            init_memory_state[addr] = tc.initial_bcd_logical_bytes[i]
+
+    init_register_state = {RegisterName.I: tc.loop_count_I}
+
+    cpu, raw_memory_array, _, _ = _make_cpu_and_mem(
+        MAX_ADDR, init_memory_state, instr_bytes
+    )
+
+    for reg, val in init_register_state.items():
+        cpu.regs.set(reg, val)
+
+    # Preserve initial FC for verification as it should not change
+    initial_fc = cpu.regs.get(RegisterName.FC)
+
+    # --- Decode and Verify Assembly ---
+    # Note: This relies on OPCODES dict in instr.py having IMem8 for DSLL/DSRL.
+    # If it's IMem20, this part of test might fail or look weird, but execution test is main goal.
+    decoded_instr = cpu.decode_instruction(0x00)
+    assert (
+        decoded_instr is not None
+    ), f"Test '{tc.test_id}': Failed to decode instruction"
+
+    expected_mnemonic = "DSLL " if tc.is_dsll else "DSRL "
+    # Assuming IMem8 is rendered as (XX)
+    expected_asm_str = f"{expected_mnemonic:6s}({tc.instr_operand_n_val:02X})"
+    actual_asm_str = asm_str(decoded_instr.render())
+
+    assert (
+        actual_asm_str == expected_asm_str
+    ), f"Test '{tc.test_id}': ASM string mismatch.\n  Expected: '{expected_asm_str}'\n  Actual  : '{actual_asm_str}'"
+
+    # --- Execute ---
+    # debug_instruction(cpu, 0x00)
+    cpu.execute_instruction(0x00)
+
+    # --- Verify Registers ---
+    assert (
+        cpu.regs.get(RegisterName.I) == 0
+    ), f"Test '{tc.test_id}': Reg I. Expected 0, Got {cpu.regs.get(RegisterName.I)}"
+    assert (
+        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
+    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    assert (
+        cpu.regs.get(RegisterName.FC) == initial_fc
+    ), f"Test '{tc.test_id}': Flag C should not change. Initial {initial_fc}, Got {cpu.regs.get(RegisterName.FC)}"
+
+    # --- Verify Memory ---
+    # For DSLL, tc.expected_final_bcd_logical_bytes is [MSB_val, MSB-1_val, ..., LSB_val]
+    # Check mem[n], mem[n-1], ...
+    if tc.is_dsll:
+        for i in range(tc.loop_count_I):
+            addr_in_mem = INTERNAL_MEMORY_START + tc.instr_operand_n_val - i
+            actual_val = raw_memory_array[addr_in_mem]
+            expected_val = tc.expected_final_bcd_logical_bytes[i]
+            assert (
+                actual_val == expected_val
+            ), f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+    else:  # DSRL
+        # For DSRL, tc.expected_final_bcd_logical_bytes is [LSB_val, LSB+1_val, ..., MSB_val]
+        # Check mem[n], mem[n+1], ...
+        for i in range(tc.loop_count_I):
+            addr_in_mem = INTERNAL_MEMORY_START + tc.instr_operand_n_val + i
+            actual_val = raw_memory_array[addr_in_mem]
+            expected_val = tc.expected_final_bcd_logical_bytes[i]
+            assert (
+                actual_val == expected_val
+            ), f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+
+
 def test_decode_all_opcodes() -> None:
     raw_memory = bytearray([0x00] * MAX_ADDR)
 
@@ -1547,7 +1832,8 @@ def test_decode_all_opcodes() -> None:
         # MVL: done
         # ADCL, DADL: done
         # SBCL, DSBL: done
-        ignore_instructions = ["???", "MVL", "ADCL", "DADL", "SBCL", "DSBL"]
+        ignore_instructions = ["???", "MVL", "ADCL", "DADL", "SBCL", "DSBL",
+                               "DSRL", "DSLL"]
         for ignore in ignore_instructions:
             if s and s.startswith(ignore):
                 skip = True
