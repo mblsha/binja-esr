@@ -21,7 +21,14 @@ from binaryninja import (
 )
 
 
+NUM_TEMP_REGISTERS = 14
+
+
 class RegisterName(enum.Enum):
+    """CPU register names."""
+
+    _ignore_ = ["_i"]
+
     # 8-bit
     A = "A"
     B = "B"
@@ -41,21 +48,10 @@ class RegisterName(enum.Enum):
     FC = "FC"  # Carry
     FZ = "FZ"  # Zero
     F = "F"
-    # Temp Registe
-    TEMP0 = "TEMP0"
-    TEMP1 = "TEMP1"
-    TEMP2 = "TEMP2"
-    TEMP3 = "TEMP3"
-    TEMP4 = "TEMP4"
-    TEMP5 = "TEMP5"
-    TEMP6 = "TEMP6"
-    TEMP7 = "TEMP7"
-    TEMP8 = "TEMP8"
-    TEMP9 = "TEMP9"
-    TEMP10 = "TEMP10"
-    TEMP11 = "TEMP11"
-    TEMP12 = "TEMP12"
-    TEMP13 = "TEMP13"
+    # Temp Register
+    for _i in range(NUM_TEMP_REGISTERS):
+        locals()[f"TEMP{_i}"] = f"TEMP{_i}"
+    del _i
 
 
 REGISTER_SIZE: Dict[RegisterName, int] = {
@@ -73,20 +69,7 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.FC: 1,  # 1-bit
     RegisterName.FZ: 1,  # 1-bit
     RegisterName.F: 1,  # 8-bit (general flags register)
-    RegisterName.TEMP0: 3,
-    RegisterName.TEMP1: 3,
-    RegisterName.TEMP2: 3,
-    RegisterName.TEMP3: 3,
-    RegisterName.TEMP4: 3,
-    RegisterName.TEMP5: 3,
-    RegisterName.TEMP6: 3,
-    RegisterName.TEMP7: 3,
-    RegisterName.TEMP8: 3,
-    RegisterName.TEMP9: 3,
-    RegisterName.TEMP10: 3,
-    RegisterName.TEMP11: 3,
-    RegisterName.TEMP12: 3,
-    RegisterName.TEMP13: 3,
+    **{getattr(RegisterName, f"TEMP{i}"): 3 for i in range(NUM_TEMP_REGISTERS)},
 }
 
 
@@ -100,21 +83,7 @@ class Registers:
         RegisterName.S,
         RegisterName.PC,
         RegisterName.F,
-        RegisterName.TEMP0,
-        RegisterName.TEMP1,
-        RegisterName.TEMP2,
-        RegisterName.TEMP3,
-        RegisterName.TEMP4,
-        RegisterName.TEMP5,
-        RegisterName.TEMP6,
-        RegisterName.TEMP7,
-        RegisterName.TEMP8,
-        RegisterName.TEMP9,
-        RegisterName.TEMP10,
-        RegisterName.TEMP11,
-        RegisterName.TEMP12,
-        RegisterName.TEMP13,
-    }
+    } | {getattr(RegisterName, f"TEMP{i}") for i in range(NUM_TEMP_REGISTERS)}
 
     def __init__(self) -> None:
         self._values: Dict[RegisterName, int] = {reg: 0 for reg in self.BASE}

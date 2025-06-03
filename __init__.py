@@ -1,5 +1,4 @@
 try:
-    import binaryninja
     from .sc62015.arch import SC62015, SC62015CallingConvention
     from .sc62015.view import SC62015RomView, SC62015FullView
 
