@@ -10,8 +10,6 @@ try:
 
     SC62015RomView.register()
     SC62015FullView.register()
-except ModuleNotFoundError:
-    pass
 
 
 # from .Z80Arch import Z80
