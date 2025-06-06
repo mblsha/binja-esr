@@ -180,18 +180,25 @@ class Memory:
 class State:
     halted: bool = False
 
+
 class ResultFlags(TypedDict, total=False):
     C: Optional[int]
     Z: Optional[int]
 
-EvalLLILType = Callable[[MockLLIL, Optional[int], Registers, Memory, State], Tuple[Optional[int], Optional[ResultFlags]]]
+
+EvalLLILType = Callable[
+    [MockLLIL, Optional[int], Registers, Memory, State],
+    Tuple[Optional[int], Optional[ResultFlags]],
+]
 
 
-def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Tuple[Optional[int], Optional[ResultFlags]]:
+def eval(
+    llil: MockLLIL, regs: Registers, memory: Memory, state: State
+) -> Tuple[Optional[int], Optional[ResultFlags]]:
     op_name_bare = llil.bare_op()
     llil_flags_spec = llil.flags()  # e.g., "CZ", "Z", or None
     size = llil.width()
-    current_op_name_for_eval = op_name_bare # Will be updated for intrinsics
+    current_op_name_for_eval = op_name_bare  # Will be updated for intrinsics
 
     if isinstance(llil, MockIntrinsic):
         intrinsic = cast(MockIntrinsic, llil)
@@ -199,35 +206,47 @@ def eval(llil: MockLLIL, regs: Registers, memory: Memory, state: State) -> Tuple
 
     f = EVAL_LLIL.get(current_op_name_for_eval)
     if f is None:
-        raise NotImplementedError(f"Eval for {current_op_name_for_eval} not implemented")
+        raise NotImplementedError(
+            f"Eval for {current_op_name_for_eval} not implemented"
+        )
 
     result_value, op_defined_flags = f(llil, size, regs, memory, state)
 
     if llil_flags_spec is not None and llil_flags_spec != "0":
         if "Z" in llil_flags_spec:
-            assert size is not None, f"FZ flag setting requires size for instruction {current_op_name_for_eval}"
-            if op_defined_flags and op_defined_flags.get("Z") is not None:
-                regs.set(RegisterName.FZ, op_defined_flags["Z"])
-            else:
-                if isinstance(result_value, int):
-                    zero_mask = (1 << (size * 8)) - 1
-                    regs.set(RegisterName.FZ, int((result_value & zero_mask) == 0))
+            # We must set FZ based on either op_defined_flags or result_value
+            fz_val_to_set: Optional[int] = None
+            if op_defined_flags:
+                fz_val_to_set = op_defined_flags.get("Z")
+
+            if fz_val_to_set is not None:
+                regs.set(RegisterName.FZ, fz_val_to_set)
+            elif isinstance(result_value, int):
+                assert (
+                    size is not None
+                ), f"FZ flag setting from result_value requires size for {current_op_name_for_eval}"
+                zero_mask = (1 << (size * 8)) - 1
+                regs.set(RegisterName.FZ, int((result_value & zero_mask) == 0))
+            # If neither, FZ is not set by this explicit mechanism (might be implicitly correct or an oversight in arch spec)
 
         if "C" in llil_flags_spec:
-            assert size is not None, f"FC flag setting requires size for instruction {current_op_name_for_eval}"
-            if op_defined_flags and op_defined_flags.get("C") is not None:
-                regs.set(RegisterName.FC, op_defined_flags["C"])
-            else:
-                if isinstance(result_value, int):
-                    unsigned_max_for_size = (1 << (size * 8)) - 1
-                    carry_flag_val = 0
-                    if op_name_bare.startswith("SUB") or op_name_bare.startswith("CMP") or op_name_bare.startswith("SBC"):
-                        if result_value < 0:
-                            carry_flag_val = 1
-                    else:
-                        if result_value > unsigned_max_for_size:
-                            carry_flag_val = 1
-                    regs.set(RegisterName.FC, carry_flag_val)
+            # We must set FC based on either op_defined_flags or result_value
+            fc_val_to_set: Optional[int] = None
+            if op_defined_flags:
+                fc_val_to_set = op_defined_flags.get("C")
+
+            if fc_val_to_set is not None:
+                regs.set(RegisterName.FC, fc_val_to_set)
+            elif isinstance(result_value, int):
+                assert (
+                    size is not None
+                ), f"FC flag setting from result_value requires size for {current_op_name_for_eval}"
+                unsigned_max_for_size = (1 << (size * 8)) - 1
+                carry_flag_val = 0
+                if result_value > unsigned_max_for_size:  # Unsigned overflow
+                    carry_flag_val = 1
+                regs.set(RegisterName.FC, carry_flag_val)
+            # If neither, FC is not set by this explicit mechanism.
 
     return result_value, op_defined_flags
 
@@ -259,9 +278,10 @@ class Emulator:
         # MyPy Fix for line 244: Cast info.length to int.
         # Although type-hinted as int, MyPy might not be able to prove it in all contexts.
         current_instr_length = cast(int, info.length)
-        assert current_instr_length is not None, "InstructionInfo.length was not set by analyze()"
+        assert (
+            current_instr_length is not None
+        ), "InstructionInfo.length was not set by analyze()"
         self.regs.set(RegisterName.PC, address + current_instr_length)
-
 
         label_to_index: Dict[Any, int] = {}
         for idx, node in enumerate(il.ils):
@@ -278,9 +298,13 @@ class Emulator:
 
             if isinstance(node, MockIfExpr):
                 # MyPy Fix for line 253: Ensure node.cond is MockLLIL for eval
-                assert isinstance(node.cond, MockLLIL), "Condition for IF expression must be MockLLIL"
+                assert isinstance(
+                    node.cond, MockLLIL
+                ), "Condition for IF expression must be MockLLIL"
                 cond_val, _ = self.eval(node.cond)
-                assert cond_val is not None, "Condition for IF expression evaluated to None"
+                assert (
+                    cond_val is not None
+                ), "Condition for IF expression evaluated to None"
                 target_label = node.t if cond_val else node.f
                 assert target_label in label_to_index, f"Unknown label {target_label}"
                 pc_llil = label_to_index[target_label]
@@ -329,7 +353,9 @@ def eval_set_reg(
 ) -> Tuple[None, Optional[ResultFlags]]:
     reg_name_enum = RegisterName(llil.ops[0].name)
     # Ensure llil.ops[1] is MockLLIL for eval
-    assert isinstance(llil.ops[1], MockLLIL), "Source operand for SET_REG must be MockLLIL"
+    assert isinstance(
+        llil.ops[1], MockLLIL
+    ), "Source operand for SET_REG must be MockLLIL"
     value_to_set, _ = eval(llil.ops[1], regs, memory, state)
     assert value_to_set is not None, "Value for SET_REG cannot be None"
     regs.set(reg_name_enum, value_to_set)
@@ -347,7 +373,9 @@ def eval_set_flag(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[None, Optional[ResultFlags]]:
     flag_name_enum = RegisterName(f"F{llil.ops[0].name}")
-    assert isinstance(llil.ops[1], MockLLIL), "Source operand for SET_FLAG must be MockLLIL"
+    assert isinstance(
+        llil.ops[1], MockLLIL
+    ), "Source operand for SET_FLAG must be MockLLIL"
     value_to_set, _ = eval(llil.ops[1], regs, memory, state)
     assert value_to_set is not None, "Value for SET_FLAG cannot be None"
     regs.set(flag_name_enum, value_to_set != 0)
@@ -362,7 +390,7 @@ def eval_and(
     op2_val, _ = eval(llil.ops[1], regs, memory, state)
     assert op1_val is not None and op2_val is not None
     result = int(op1_val) & int(op2_val)
-    return result, {'Z': 1 if result == 0 else 0, 'C': 0}
+    return result, {"Z": 1 if result == 0 else 0, "C": 0}
 
 
 def eval_or(
@@ -373,7 +401,7 @@ def eval_or(
     op2_val, _ = eval(llil.ops[1], regs, memory, state)
     assert op1_val is not None and op2_val is not None
     result = int(op1_val) | int(op2_val)
-    return result, {'Z': 1 if result == 0 else 0, 'C': 0}
+    return result, {"Z": 1 if result == 0 else 0, "C": 0}
 
 
 def eval_xor(
@@ -384,7 +412,7 @@ def eval_xor(
     op2_val, _ = eval(llil.ops[1], regs, memory, state)
     assert op1_val is not None and op2_val is not None
     result = int(op1_val) ^ int(op2_val)
-    return result, {'Z': 1 if result == 0 else 0, 'C': 0}
+    return result, {"Z": 1 if result == 0 else 0, "C": 0}
 
 
 def eval_pop(
@@ -449,7 +477,9 @@ def eval_ret(
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL)
     addr_val, _ = eval(llil.ops[0], regs, memory, state)
-    assert isinstance(addr_val, int), f"Address for RET must be an integer, got {type(addr_val)}"
+    assert isinstance(
+        addr_val, int
+    ), f"Address for RET must be an integer, got {type(addr_val)}"
 
     effective_addr = addr_val
     # Check if the source of the address (llil.ops[0]) is a MockLLIL object and has a width method
@@ -473,7 +503,9 @@ def eval_jump(
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL)
     addr, _ = eval(llil.ops[0], regs, memory, state)
-    assert isinstance(addr, int), f"Address for JUMP must be an integer, got {type(addr)}"
+    assert isinstance(
+        addr, int
+    ), f"Address for JUMP must be an integer, got {type(addr)}"
     regs.set(RegisterName.PC, addr)
     return None, None
 
@@ -483,7 +515,9 @@ def eval_call(
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL)
     addr, _ = eval(llil.ops[0], regs, memory, state)
-    assert isinstance(addr, int), f"Address for CALL must be an integer, got {type(addr)}"
+    assert isinstance(
+        addr, int
+    ), f"Address for CALL must be an integer, got {type(addr)}"
 
     ret_addr = regs.get(RegisterName.PC)
 
@@ -491,17 +525,19 @@ def eval_call(
     # SC62015: CALL mn (2-byte target) pushes 2 bytes; CALLF lmn (3-byte target) pushes 3 bytes.
     # This distinction should ideally be made during lifting.
     # If llil.ops[0] (target addr expr) resulted from a 16-bit const, it's likely a short CALL.
-    push_size = 3 # Default for CALLF / system stack operations
-    if llil.ops[0].op == "CONST_PTR.w" or \
-       (llil.ops[0].op == "CONST.w") or \
-       (llil.ops[0].op == "OR.l" and llil.ops[0].ops[0].op == "CONST.w"): # Heuristic for CALL mn
+    push_size = 3  # Default for CALLF / system stack operations
+    if (
+        llil.ops[0].op == "CONST_PTR.w"
+        or (llil.ops[0].op == "CONST.w")
+        or (llil.ops[0].op == "OR.l" and llil.ops[0].ops[0].op == "CONST.w")
+    ):  # Heuristic for CALL mn
         push_size = 2
 
     stack_addr = regs.get(RegisterName.S) - push_size
     # Ensure ret_addr is masked correctly for the push size
     if push_size == 2:
         memory.write_bytes(push_size, stack_addr, ret_addr & 0xFFFF)
-    else: # push_size == 3
+    else:  # push_size == 3
         memory.write_bytes(push_size, stack_addr, ret_addr & 0xFFFFF)
 
     regs.set(RegisterName.S, stack_addr)
@@ -527,7 +563,7 @@ def eval_add(
     flag_z = 1 if result_masked == 0 else 0
     flag_c = 1 if result_full > mask else 0
 
-    return result_masked, {'C': flag_c, 'Z': flag_z}
+    return result_masked, {"C": flag_c, "Z": flag_z}
 
 
 def eval_sub(
@@ -548,7 +584,7 @@ def eval_sub(
     flag_z = 1 if result_masked == 0 else 0
     flag_c = 1 if result_full < 0 else 0
 
-    return result_masked, {'C': flag_c, 'Z': flag_z}
+    return result_masked, {"C": flag_c, "Z": flag_z}
 
 
 def eval_cmp_e(
@@ -570,6 +606,7 @@ def eval_cmp_ugt(
     assert op1_val is not None and op2_val is not None
     return int(int(op1_val) > int(op2_val)), None
 
+
 def to_signed(value: int, size_bytes: int) -> int:
     width_bits = size_bytes * 8
     mask = (1 << width_bits) - 1
@@ -578,6 +615,7 @@ def to_signed(value: int, size_bytes: int) -> int:
     if (value & sign_bit_mask) != 0:
         return value - (1 << width_bits)
     return value
+
 
 def eval_cmp_slt(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
@@ -611,16 +649,16 @@ def eval_lsl(
 
     if count == 0:
         arith_result = val & mask
-        return arith_result, {'C': 0, 'Z': 1 if arith_result == 0 else 0}
+        return arith_result, {"C": 0, "Z": 1 if arith_result == 0 else 0}
 
     carry_out = 0
-    if count <= width and width > 0: # Ensure width > 0 for shift
+    if count <= width and width > 0:  # Ensure width > 0 for shift
         carry_out = (val >> (width - count)) & 1
 
     arith_result = (val << count) & mask
     zero_flag = 1 if arith_result == 0 else 0
 
-    return arith_result, {'C': carry_out, 'Z': zero_flag}
+    return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
 def eval_lsr(
@@ -638,18 +676,18 @@ def eval_lsr(
     width = size * 8
 
     if count == 0:
-        arith_result = val & ((1 << width) -1 if width > 0 else 0)
-        return arith_result, {'C': 0, 'Z': 1 if arith_result == 0 else 0}
+        arith_result = val & ((1 << width) - 1 if width > 0 else 0)
+        return arith_result, {"C": 0, "Z": 1 if arith_result == 0 else 0}
 
     carry_out = 0
-    if count > 0 and count <= width and width > 0 :
-         carry_out = (val >> (count - 1)) & 1
+    if count > 0 and count <= width and width > 0:
+        carry_out = (val >> (count - 1)) & 1
 
     arith_result = val >> count
     zero_flag_val = arith_result & ((1 << width) - 1 if width > 0 else 0)
     zero_flag = 1 if zero_flag_val == 0 else 0
 
-    return arith_result, {'C': carry_out, 'Z': zero_flag}
+    return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
 def eval_ror(
@@ -668,12 +706,12 @@ def eval_ror(
     mask = (1 << width) - 1 if width > 0 else 0
 
     if width == 0:
-        return val & mask, {'C': 0, 'Z': 1 if (val & mask) == 0 else 0}
+        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
     count %= width
     if count == 0:
         arith_result = val & mask
-        return arith_result, {'C': val & 1, 'Z': 1 if arith_result == 0 else 0}
+        return arith_result, {"C": val & 1, "Z": 1 if arith_result == 0 else 0}
 
     shifted_part = val >> count
     rotated_part = val << (width - count)
@@ -682,7 +720,7 @@ def eval_ror(
     carry_out = (val >> (count - 1)) & 1
     zero_flag = 1 if arith_result == 0 else 0
 
-    return arith_result, {'C': carry_out, 'Z': zero_flag}
+    return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
 def eval_rol(
@@ -701,28 +739,35 @@ def eval_rol(
     mask = (1 << width) - 1 if width > 0 else 0
 
     if width == 0:
-        return val & mask, {'C': 0, 'Z': 1 if (val & mask) == 0 else 0}
+        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
     count %= width
     if count == 0:
         arith_result = val & mask
-        return arith_result, {'C': (val >> (width - 1)) & 1 if width > 0 else 0, 'Z': 1 if arith_result == 0 else 0}
+        return arith_result, {
+            "C": (val >> (width - 1)) & 1 if width > 0 else 0,
+            "Z": 1 if arith_result == 0 else 0,
+        }
 
-    shifted_part = (val << count)
-    rotated_part = (val >> (width - count))
+    shifted_part = val << count
+    rotated_part = val >> (width - count)
     arith_result = (shifted_part | rotated_part) & mask
 
     carry_out = (val >> (width - count)) & 1
     zero_flag = 1 if arith_result == 0 else 0
 
-    return arith_result, {'C': carry_out, 'Z': zero_flag}
+    return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
 def eval_rrc(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[int, Optional[ResultFlags]]:
     assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL) and isinstance(llil.ops[2], MockLLIL)
+    assert (
+        isinstance(llil.ops[0], MockLLIL)
+        and isinstance(llil.ops[1], MockLLIL)
+        and isinstance(llil.ops[2], MockLLIL)
+    )
     val_expr, count_expr, carry_in_expr = llil.ops
     val, _ = eval(val_expr, regs, memory, state)
     count_val, _ = eval(count_expr, regs, memory, state)
@@ -737,21 +782,25 @@ def eval_rrc(
     assert count == 1, "RRC count should be 1 for standard definition"
 
     if width == 0:
-        return val & mask, {'C':0, 'Z':1 if (val & mask) == 0 else 0}
+        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
     new_carry_out = val & 1
     arith_result = (val >> count) | (carry_in << (width - count))
     arith_result &= mask
 
     zero_flag = 1 if arith_result == 0 else 0
-    return arith_result, {'C': new_carry_out, 'Z': zero_flag}
+    return arith_result, {"C": new_carry_out, "Z": zero_flag}
 
 
 def eval_rlc(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[int, Optional[ResultFlags]]:
     assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL) and isinstance(llil.ops[2], MockLLIL)
+    assert (
+        isinstance(llil.ops[0], MockLLIL)
+        and isinstance(llil.ops[1], MockLLIL)
+        and isinstance(llil.ops[2], MockLLIL)
+    )
     val_expr, count_expr, carry_in_expr = llil.ops
     val, _ = eval(val_expr, regs, memory, state)
     count_val, _ = eval(count_expr, regs, memory, state)
@@ -766,14 +815,14 @@ def eval_rlc(
     assert count == 1, "RLC count should be 1 for standard definition"
 
     if width == 0:
-        return val & mask, {'C':0, 'Z':1 if (val & mask) == 0 else 0}
+        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
     new_carry_out = (val >> (width - 1)) & 1 if width > 0 else 0
     arith_result = (val << count) | carry_in
     arith_result &= mask
 
     zero_flag = 1 if arith_result == 0 else 0
-    return arith_result, {'C': new_carry_out, 'Z': zero_flag}
+    return arith_result, {"C": new_carry_out, "Z": zero_flag}
 
 
 def eval_intrinsic_tcl(
