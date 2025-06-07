@@ -209,36 +209,42 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("EE"),
         init_regs={RegisterName.A: 0x12, RegisterName.FC: 0, RegisterName.FZ: 1},
         expected_regs={RegisterName.A: 0x21, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="SWAP  A",
     ),
     InstructionTestCase(
         test_id="SWAP_A_non_zero_FC_unaffected",
         instr_bytes=bytes.fromhex("EE"),
         init_regs={RegisterName.A: 0xAB, RegisterName.FC: 1, RegisterName.FZ: 1},
         expected_regs={RegisterName.A: 0xBA, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="SWAP  A",
     ),
     InstructionTestCase(
         test_id="SWAP_A_zero_to_zero_sets_FZ",
         instr_bytes=bytes.fromhex("EE"),
         init_regs={RegisterName.A: 0x00, RegisterName.FC: 1, RegisterName.FZ: 0},
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},
+        expected_asm_str="SWAP  A",
     ),
     InstructionTestCase(
         test_id="SWAP_A_edge_case_F0",
         instr_bytes=bytes.fromhex("EE"),
         init_regs={RegisterName.A: 0xF0, RegisterName.FC: 0, RegisterName.FZ: 1},
         expected_regs={RegisterName.A: 0x0F, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="SWAP  A",
     ),
     InstructionTestCase(
         test_id="SWAP_A_edge_case_0F",
         instr_bytes=bytes.fromhex("EE"),
         init_regs={RegisterName.A: 0x0F, RegisterName.FC: 0, RegisterName.FZ: 1},
         expected_regs={RegisterName.A: 0xF0, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="SWAP  A",
     ),
     InstructionTestCase(
         test_id="SWAP_A_edge_case_FF",
         instr_bytes=bytes.fromhex("EE"),
         init_regs={RegisterName.A: 0xFF, RegisterName.FC: 1, RegisterName.FZ: 1},
         expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="SWAP  A",
     ),
     # --- MVL/MVLD Edge Cases ---
     # FIXME: failing
@@ -275,6 +281,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x52: 0xAA,
             INTERNAL_MEMORY_START + 0x53: 0xAA,
         },
+        expected_asm_str="MVL   (51), (50)",
     ),
     InstructionTestCase(
         test_id="MVLD_imem_overlap_bwd_correct",
@@ -294,6 +301,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x50: 0xBB,
             INTERNAL_MEMORY_START + 0x4F: 0xCC,
         },
+        expected_asm_str="MVLD  (51), (50)",
     ),
     # FIXME: failing
     # InstructionTestCase(
