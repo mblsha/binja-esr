@@ -86,6 +86,7 @@ class Assembler:
 
         mnemonic = (instr_opts.name or instr_class.__name__.split("_")[0]).upper()
         provided_ops = instr_opts.ops or []
+        provided_cond = instr_opts.cond
 
         if mnemonic not in self._reverse_opcodes:
             raise AssemblerError(f"Unknown mnemonic: {mnemonic}")
@@ -93,6 +94,9 @@ class Assembler:
         # For the unambiguous grammar, we can match on class and operand representation
         for template in self._reverse_opcodes[mnemonic]:
             if template["class"] is not instr_class:
+                continue
+
+            if provided_cond is not None and template["opts"].cond != provided_cond:
                 continue
 
             template_ops = template["opts"].ops or []
