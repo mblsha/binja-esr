@@ -123,6 +123,10 @@ instruction: "NOP"i -> nop
            | cmpp_imem_imem
            | cmpw_imem_reg
            | cmpp_imem_reg
+           | test_a_imm
+           | test_imem_imm
+           | test_emem_imm
+           | test_imem_a
 
 jp_reg.2: "JP"i reg
 jp_imem.2: "JP"i imem_operand
@@ -203,6 +207,11 @@ cmpw_imem_imem.1: "CMPW"i imem_operand "," imem_operand
 cmpp_imem_imem.1: "CMPP"i imem_operand "," imem_operand
 cmpw_imem_reg.2: "CMPW"i imem_operand "," reg
 cmpp_imem_reg.2: "CMPP"i imem_operand "," reg
+
+test_a_imm.1: "TEST"i _A "," expression
+test_imem_imm.1: "TEST"i imem_operand "," expression
+test_emem_imm.1: "TEST"i emem_addr "," expression
+test_imem_a.2: "TEST"i imem_operand "," _A
 
 
 // --- Data Directives ---

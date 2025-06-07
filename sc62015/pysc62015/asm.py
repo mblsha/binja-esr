@@ -39,6 +39,7 @@ from .instr import (
     DADL,
     DSBL,
     PMDF,
+    TEST,
     CMP,
     CMPW,
     CMPP,
@@ -937,6 +938,35 @@ class AsmTransformer(Transformer):
         r.high4 = 0
         return {
             "instruction": {"instr_class": CMPP, "instr_opts": Opts(ops=[m, r])}
+        }
+
+    def test_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": TEST, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def test_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": TEST, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def test_emem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": TEST, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def test_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": TEST, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
     def def_arg(self, items: List[Any]) -> str:

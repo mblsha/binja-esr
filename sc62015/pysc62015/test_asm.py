@@ -895,6 +895,43 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- TEST Instruction Tests ---
+    AssemblerTestCase(
+        test_id="test_a_imm",
+        asm_code="TEST A, 0x55",
+        expected_ti="""
+            @0000
+            64 55
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="test_imem_imm",
+        asm_code="TEST (0x10), 0x01",
+        expected_ti="""
+            @0000
+            65 10 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="test_emem_imm",
+        asm_code="TEST [0x12345], 0x02",
+        expected_ti="""
+            @0000
+            66 45 23 01 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="test_imem_a",
+        asm_code="TEST (0x20), A",
+        expected_ti="""
+            @0000
+            67 20
+            q
+        """,
+    ),
 ]
 
 

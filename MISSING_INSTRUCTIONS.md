@@ -17,10 +17,7 @@ Only a few `MV` forms are parsed today (`MV A,B`, `MV B,A`, and `MV (imem),(imem
 All jump, call, and return instructions are now supported by the assembler.
 
 ## 4. Logical and Compare Instructions
-Logical, test, and compare instructions are still partially unimplemented:
-
-- **Test**: `TEST` in all forms.
-- **Compare**: all forms now implemented.
+All logical, test, and compare instructions are now implemented by the assembler.
 
 ## 5. Increment, Decrement, and Exchange Instructions
 `EX A,B` and memory-to-memory forms are implemented. Missing variants include:
