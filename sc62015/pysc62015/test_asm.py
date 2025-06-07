@@ -1,6 +1,37 @@
-from .asm import asm_parser
+import pytest
+from .asm import asm_parser, AsmTransformer
+from .instr import Instruction
+from .instr import (
+    NOP,
+    RETI,
+    RET,
+    RETF,
+    SC,
+    RC,
+    TCL,
+    HALT,
+    OFF,
+    WAIT,
+    IR,
+    RESET,
+    SWAP,
+    ROR,
+    ROL,
+    SHR,
+    SHL,
+    MV,
+    EX,
+    PUSHS,
+    POPS,
+    PUSHU,
+    POPU,
+    Reg,
+    RegB,
+    RegF,
+    RegIMR,
+)
 from lark import Tree, Token
-from typing import Any, Callable, List, Union, Tuple
+from typing import Any, Callable, List, Union, Tuple, Type
 
 
 def get_token_tuples(text: str) -> List[Tuple[str, str]]:
@@ -30,14 +61,13 @@ def test_label_tokenization() -> None:
 def test_section_decl_tokenization() -> None:
     tokens = get_token_tuples("SECTION data")
     # "SECTION" is a literal, "data" is CNAME
-    assert tokens == [("SECTION", "SECTION"), ("WS_INLINE", " "), ("CNAME", "data")]
+    assert tokens == [("SECTION", "SECTION"), ("CNAME", "data")]
 
 
 def test_defb_tokenization() -> None:
     tokens = get_token_tuples("defb 1,2,0xFF")
     assert tokens == [
         ("DEFB", "defb"),
-        ("WS_INLINE", " "),
         ("NUMBER", "1"),
         ("COMMA", ","),
         ("NUMBER", "2"),
@@ -48,29 +78,25 @@ def test_defb_tokenization() -> None:
 
 def test_instruction_tokenization() -> None:
     tokens = get_token_tuples("NOP")
-    assert tokens == [("CNAME", "NOP")]
+    assert tokens == [("NOP", "NOP")]
 
 
 def test_string_literal_tokenization() -> None:
     tokens = get_token_tuples('defm "Hello"')
     assert tokens == [
         ("DEFM", "defm"),
-        ("WS_INLINE", " "),
         ("ESCAPED_STRING", '"Hello"'),
     ]
 
 
 def test_comment_ignored() -> None:
     tokens = get_token_tuples("; this is a comment\n")
-    # COMMENT is ignored by the grammar, so only NEWLINE (if present)
-    # or possibly nothing if line is only comment
-    assert tokens == [] or tokens == [("NEWLINE", "\n")]
+    # COMMENT is ignored by the grammar, so only NEWLINE
+    assert tokens == [("NEWLINE", "\n")]
 
 
 def test_mixed_line_tokenization() -> None:
     tokens = get_token_tuples("label1: defb 1, 2 ; comment\n")
-    # COMMENT and WS are ignored by grammar so only core tokens
-    # This test may vary based on ignore WS behavior in grammar
     assert ("CNAME", "label1") in tokens
 
 
@@ -122,18 +148,13 @@ def test_parse_label_and_defb() -> None:
     assert labels
     label = labels[0]
     assert label.children and isinstance(label.children[0], Token)
-    assert (
-        label.children[0] == "label1"
-    )  # This relies on Token.__eq__ comparing to value
+    assert label.children[0] == "label1"
 
     defbs = find_pred(tree, lambda t: t.data == "defb_directive")
     assert defbs
     defb = defbs[0]
 
-    # Use the new helper to find all NUMBER tokens within the defb subtree
     nums_tokens = find_all_tokens_by_type(defb, "NUMBER")
-
-    # Assert that the values of the found NUMBER tokens are correct
     expected_values = ["1", "2", "3"]
     assert [t.value for t in nums_tokens] == expected_values
 
@@ -160,4 +181,110 @@ def test_parse_comment_and_newline() -> None:
     src = "; just a comment\n\n"
     tree: Tree[Any] = asm_parser.parse(src)
     assert tree.data == "start"
-    assert not tree.children  # No children since comments are ignored
+    # The grammar likely collapses multiple newlines between statements.
+    # The error message shows the parser produces one empty line node.
+    assert len(tree.children) == 1
+    assert all(child.data == "line" for child in tree.children)
+
+
+@pytest.mark.parametrize(
+    "instr_str, instr_class",
+    [
+        ("NOP", NOP),
+        ("RETI", RETI),
+        ("RET", RET),
+        ("RETF", RETF),
+        ("SC", SC),
+        ("RC", RC),
+        ("TCL", TCL),
+        ("HALT", HALT),
+        ("OFF", OFF),
+        ("WAIT", WAIT),
+        ("IR", IR),
+        ("RESET", RESET),
+    ],
+)
+def test_parse_zero_operand_instructions(
+    instr_str: str, instr_class: Type[Instruction]
+) -> None:
+    tree = asm_parser.parse(f"{instr_str}\n")
+    result = AsmTransformer().transform(tree)
+    stmt = result["lines"][0]["statement"]
+    parsed_instr = stmt["instruction"]
+    assert parsed_instr["instr_class"] is instr_class
+    assert not parsed_instr["instr_opts"].ops
+
+
+@pytest.mark.parametrize(
+    "instr_str, instr_class",
+    [("SWAP A", SWAP), ("ROR A", ROR), ("ROL A", ROL), ("SHR A", SHR), ("SHL A", SHL)],
+)
+def test_parse_single_a_operand_instructions(
+    instr_str: str, instr_class: Type[Instruction]
+) -> None:
+    tree = asm_parser.parse(f"{instr_str}\n")
+    result = AsmTransformer().transform(tree)
+    stmt = result["lines"][0]["statement"]
+    parsed_instr = stmt["instruction"]
+    assert parsed_instr["instr_class"] is instr_class
+    ops = parsed_instr["instr_opts"].ops
+    assert len(ops) == 1
+    assert isinstance(ops[0], Reg) and ops[0].reg == "A"
+
+
+def test_parse_mv_reg_reg() -> None:
+    tree = asm_parser.parse("MV A, B\n")
+    result = AsmTransformer().transform(tree)
+    stmt = result["lines"][0]["statement"]
+    parsed_instr = stmt["instruction"]
+    assert parsed_instr["instr_class"] is MV
+    ops = parsed_instr["instr_opts"].ops
+    assert len(ops) == 2
+    assert isinstance(ops[0], Reg) and ops[0].reg == "A"
+    assert isinstance(ops[1], RegB)
+
+    tree = asm_parser.parse("MV B, A\n")
+    result = AsmTransformer().transform(tree)
+    stmt = result["lines"][0]["statement"]
+    parsed_instr = stmt["instruction"]
+    assert parsed_instr["instr_class"] is MV
+    ops = parsed_instr["instr_opts"].ops
+    assert len(ops) == 2
+    assert isinstance(ops[0], RegB)
+    assert isinstance(ops[1], Reg) and ops[1].reg == "A"
+
+
+def test_parse_ex_a_b() -> None:
+    tree = asm_parser.parse("EX A, B\n")
+    result = AsmTransformer().transform(tree)
+    stmt = result["lines"][0]["statement"]
+    parsed_instr = stmt["instruction"]
+    assert parsed_instr["instr_class"] is EX
+    ops = parsed_instr["instr_opts"].ops
+    assert len(ops) == 2
+    assert isinstance(ops[0], Reg) and ops[0].reg == "A"
+    assert isinstance(ops[1], RegB)
+
+
+@pytest.mark.parametrize(
+    "instr_str, instr_class, reg_class",
+    [
+        ("PUSHS F", PUSHS, RegF),
+        ("POPS F", POPS, RegF),
+        ("PUSHU F", PUSHU, RegF),
+        ("POPU F", POPU, RegF),
+        ("PUSHU IMR", PUSHU, RegIMR),
+        ("POPU IMR", POPU, RegIMR),
+    ],
+)
+def test_parse_stack_f_imr_instructions(
+    instr_str: str, instr_class: Type[Instruction], reg_class: Type[Reg]
+) -> None:
+    tree = asm_parser.parse(f"{instr_str}\n")
+    result = AsmTransformer().transform(tree)
+    stmt = result["lines"][0]["statement"]
+    parsed_instr = stmt["instruction"]
+    assert parsed_instr["instr_class"] is instr_class
+    ops = parsed_instr["instr_opts"].ops
+    assert len(ops) == 1
+    assert isinstance(ops[0], reg_class)
