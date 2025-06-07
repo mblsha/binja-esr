@@ -20,7 +20,7 @@ All jump, call, and return instructions are now supported by the assembler.
 Logical, test, and compare instructions are still partially unimplemented:
 
 - **Test**: `TEST` in all forms.
-- **Compare**: `CMP`, `CMPW`, `CMPP`.
+- **Compare**: all forms now implemented.
 
 ## 5. Increment, Decrement, and Exchange Instructions
 `EX A,B` and memory-to-memory forms are implemented. Missing variants include:
