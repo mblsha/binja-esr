@@ -2078,20 +2078,34 @@ class XOR(LogicInstruction):
 
 class CompareInstruction(Instruction): pass
 class TEST(CompareInstruction):
-    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
         first, second = self.operands()
         # FIXME: does it set the Z flag if any bit is set?
-        il.append(il.set_flag(ZFlag, il.and_expr(3, first.lift(il), second.lift(il))))
+        il.append(
+            il.set_flag(
+                ZFlag,
+                il.and_expr(3, first.lift(il, dst_mode), second.lift(il, src_mode)),
+            )
+        )
 
 class CMP(CompareInstruction):
     def width(self) -> int:
         return 1
-    # FIXME: IMem8 pre needs to be handled
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
         first, second = self.operands()
         # FIXME: what's the proper width?
-        il.append(il.sub(self.width(), first.lift(il), second.lift(il), CZFlag))
+        il.append(
+            il.sub(
+                self.width(),
+                first.lift(il, dst_mode),
+                second.lift(il, src_mode),
+                CZFlag,
+            )
+        )
 class CMPW(CMP):
     def width(self) -> int:
         return 2

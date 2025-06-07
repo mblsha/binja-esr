@@ -41,7 +41,7 @@ from .tokens import (
 )
 from .coding import Decoder, Encoder
 from .mock_analysis import MockAnalysisInfo
-from .mock_llil import MockLowLevelILFunction, MockLLIL, mllil, mreg
+from .mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
 from binaryninja.lowlevelil import (
     LLIL_TEMP,
 )
@@ -754,6 +754,90 @@ def test_lift_pre() -> None:
             [
                 mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0xFB]),
                 mllil("CONST.b", [0x00]),
+            ],
+        )
+    ]
+
+
+def test_cmp_with_pre() -> None:
+    # PRE30 + CMP (n),(m) => first operand (n), second (BP+m)
+    instr = decode(bytearray([0x30, 0xB7, 0x12, 0x34]), 0x2000)
+    assert asm_str(instr.render()) == "CMP   (12), (BP+34)"
+    assert instr._pre == 0x30
+
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x2000)
+    assert il.ils == [
+        mllil(
+            "SUB.b{CZ}",
+            [
+                mllil("LOAD.b", [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x12])]),
+                mllil(
+                    "LOAD.b",
+                    [
+                        mllil(
+                            "ADD.l",
+                            [
+                                mllil(
+                                    "ADD.b",
+                                    [
+                                        mllil(
+                                            "LOAD.b",
+                                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]])],
+                                        ),
+                                        mllil("CONST.b", [0x34]),
+                                    ],
+                                ),
+                                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+                            ],
+                        )
+                    ],
+                ),
+            ],
+        )
+    ]
+
+
+def test_test_with_pre() -> None:
+    # PRE22 + TEST (n),00 => operand uses BP indexed addressing
+    instr = decode(bytearray([0x22, 0x65, 0x12, 0x07]), 0x2000)
+    assert asm_str(instr.render()) == "TEST  (BP+12), 07"
+    assert instr._pre == 0x22
+
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x2000)
+    assert il.ils == [
+        mllil(
+            "SET_FLAG",
+            [
+                MockFlag("Z"),
+                mllil(
+                    "AND.l",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "ADD.l",
+                                    [
+                                        mllil(
+                                            "ADD.b",
+                                            [
+                                                mllil(
+                                                    "LOAD.b",
+                                                    [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]])],
+                                                ),
+                                                mllil("CONST.b", [0x12]),
+                                            ],
+                                        ),
+                                        mllil("CONST.l", [INTERNAL_MEMORY_START]),
+                                    ],
+                                )
+                            ],
+                        ),
+                        mllil("CONST.b", [0x07]),
+                    ],
+                ),
             ],
         )
     ]
