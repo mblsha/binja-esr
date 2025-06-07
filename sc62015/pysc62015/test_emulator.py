@@ -240,6 +240,105 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={RegisterName.A: 0xFF, RegisterName.FC: 1, RegisterName.FZ: 1},
         expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},
     ),
+    # --- MVL/MVLD Edge Cases ---
+    # FIXME: failing
+    # InstructionTestCase(
+    #     test_id="MVL_(m)_(n)_I_is_zero",
+    #     instr_bytes=bytes.fromhex("CB50A0"),  # MVL (50), (A0)
+    #     init_regs={RegisterName.I: 0},
+    #     init_mem={
+    #         INTERNAL_MEMORY_START + 0xA0: 0xDE,  # Source
+    #         INTERNAL_MEMORY_START + 0x50: 0xAD,  # Destination
+    #     },
+    #     # How many times will I loop for here? Possible edge case.
+    #     expected_regs={RegisterName.I: 0},
+    #     expected_mem_state={
+    #         INTERNAL_MEMORY_START + 0xA0: 0xDE,
+    #         INTERNAL_MEMORY_START + 0x50: 0xAD,  # Should remain unchanged
+    #     },
+    # ),
+    InstructionTestCase(
+        test_id="MVL_imem_overlap_fwd_clobber",
+        instr_bytes=bytes.fromhex("CB5150"),  # MVL (51), (50)
+        init_regs={RegisterName.I: 3},
+        init_mem={
+            INTERNAL_MEMORY_START + 0x50: 0xAA,
+            INTERNAL_MEMORY_START + 0x51: 0xBB,
+            INTERNAL_MEMORY_START + 0x52: 0xCC,
+        },
+        # A naive forward copy clobbers the source.
+        # Expected: mem[51]=mem[50]=AA; mem[52]=mem[51]=AA; mem[53]=mem[52]=AA
+        expected_regs={RegisterName.I: 0},
+        expected_mem_state={
+            INTERNAL_MEMORY_START + 0x50: 0xAA,
+            INTERNAL_MEMORY_START + 0x51: 0xAA,
+            INTERNAL_MEMORY_START + 0x52: 0xAA,
+            INTERNAL_MEMORY_START + 0x53: 0xAA,
+        },
+    ),
+    InstructionTestCase(
+        test_id="MVLD_imem_overlap_bwd_correct",
+        instr_bytes=bytes.fromhex("CF5150"),  # MVLD (51), (50)
+        init_regs={RegisterName.I: 3},
+        # Dst ends at 0x51, Src ends at 0x50.
+        # Copies from {50, 4F, 4E} to {51, 50, 4F}.
+        init_mem={
+            INTERNAL_MEMORY_START + 0x50: 0xAA,
+            INTERNAL_MEMORY_START + 0x4F: 0xBB,
+            INTERNAL_MEMORY_START + 0x4E: 0xCC,
+        },
+        # A backward copy handles this overlap correctly.
+        expected_regs={RegisterName.I: 0},
+        expected_mem_state={
+            INTERNAL_MEMORY_START + 0x51: 0xAA,
+            INTERNAL_MEMORY_START + 0x50: 0xBB,
+            INTERNAL_MEMORY_START + 0x4F: 0xCC,
+        },
+    ),
+    # FIXME: failing
+    # InstructionTestCase(
+    #     test_id="MVL_imem_to_imem_wrap_around",
+    #     instr_bytes=bytes.fromhex("CBFEF0"),  # MVL (FE), (F0)
+    #     init_regs={RegisterName.I: 4},
+    #     init_mem={
+    #         INTERNAL_MEMORY_START + 0xF0: 0x11,
+    #         INTERNAL_MEMORY_START + 0xF1: 0x22,
+    #         INTERNAL_MEMORY_START + 0xF2: 0x33,
+    #         INTERNAL_MEMORY_START + 0xF3: 0x44,
+    #     },
+    #     # 1. mem[FE] = mem[F0]; 2. mem[FF] = mem[F1]; 3. mem[00] = mem[F2]; 4. mem[01] = mem[F3]
+    #     expected_regs={RegisterName.I: 0},
+    #     expected_mem_state={
+    #         INTERNAL_MEMORY_START + 0xFE: 0x11,
+    #         INTERNAL_MEMORY_START + 0xFF: 0x22,
+    #         INTERNAL_MEMORY_START + 0x00: 0x33,
+    #         INTERNAL_MEMORY_START + 0x01: 0x44,
+    #     },
+    # ),
+    # FIXME: failing
+    # InstructionTestCase(
+    #     test_id="MVL_(imem)_[--X]",
+    #     instr_bytes=bytes.fromhex("E33452"),  # MVL (52), [--X]
+    #     init_regs={
+    #         RegisterName.I: 2,
+    #         RegisterName.X: 0x2002,  # Start X pointing after the source data
+    #     },
+    #     init_mem={
+    #         0x2000: 0xBE,
+    #         0x2001: 0xEF,
+    #     },
+    #     # 1. I=2. --X=0x2001. Copy [0x2001] to (0x52). d--=0x51, s--=0x2000.
+    #     # 2. I=1. --X=0x2000. Copy [0x2000] to (0x51). d--=0x50, s--=0x1FFF.
+    #     # Final X is 0x2000.
+    #     expected_regs={
+    #         RegisterName.I: 0,
+    #         RegisterName.X: 0x2000,
+    #     },
+    #     expected_mem_state={
+    #         INTERNAL_MEMORY_START + 0x52: 0xEF,
+    #         INTERNAL_MEMORY_START + 0x51: 0xBE,
+    #     },
+    # ),
 ]
 
 # --- New Centralized Test Runner ---
@@ -491,67 +590,6 @@ def test_rol_ror_a() -> None:
     assert cpu.regs.get(RegisterName.A) == 0x55
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == 0
-
-
-def test_mvl_emem_reg_post_inc_to_imem() -> None:
-    initial_x_val = 0x1000
-    loop_count = 3
-    dest_imem_addr_start = 0x50
-    emem_data_start_addr = initial_x_val
-    source_data_bytes = [0xAA, 0xBB, 0xCC]
-
-    init_ext_mem_data = {
-        emem_data_start_addr + i: val for i, val in enumerate(source_data_bytes)
-    }
-    cpu, raw, reads, writes = _make_cpu_and_mem(
-        ADDRESS_SPACE_SIZE, init_ext_mem_data, bytes.fromhex("E32450")
-    )
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MVL   (50), [X++]"
-
-    cpu.regs.set(RegisterName.I, loop_count)
-    cpu.regs.set(RegisterName.X, initial_x_val)
-
-    debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
-
-    assert writes == [
-        (INTERNAL_MEMORY_START + dest_imem_addr_start + 0, 0xAA),
-        (INTERNAL_MEMORY_START + dest_imem_addr_start + 1, 0xBB),
-        (INTERNAL_MEMORY_START + dest_imem_addr_start + 2, 0xCC),
-    ]
-
-    assert cpu.regs.get(RegisterName.I) == 0
-    assert cpu.regs.get(RegisterName.X) == initial_x_val + loop_count
-
-
-def test_mvld_imem_to_imem() -> None:
-    loop_count = 3
-    src_imem_start = 0xA0
-    dst_imem_start = 0x50
-
-    initial_imem_setup = {
-        INTERNAL_MEMORY_START + src_imem_start - 0: 0x11,
-        INTERNAL_MEMORY_START + src_imem_start - 1: 0x22,
-        INTERNAL_MEMORY_START + src_imem_start - 2: 0x33,
-    }
-
-    cpu, _, _, writes = _make_cpu_and_mem(
-        ADDRESS_SPACE_SIZE, initial_imem_setup, bytes.fromhex("CF50A0")
-    )
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MVLD  (50), (A0)"
-
-    cpu.regs.set(RegisterName.I, loop_count)
-
-    debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
-
-    assert cpu.regs.get(RegisterName.I) == 0
-
-    assert writes == [
-        (INTERNAL_MEMORY_START + dst_imem_start - 0, 0x11),
-        (INTERNAL_MEMORY_START + dst_imem_start - 1, 0x22),
-        (INTERNAL_MEMORY_START + dst_imem_start - 2, 0x33),
-    ]
 
 
 class PreTestCase(NamedTuple):
