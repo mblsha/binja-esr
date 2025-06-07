@@ -116,6 +116,7 @@ class InstructionTestCase:
     expected_mem_writes: Optional[List[Tuple[int, int]]] = None
     expected_mem_state: Dict[int, int] = field(default_factory=dict)
     initial_pc: int = 0x00
+    expected_asm_str: Optional[str] = None
 
 
 instruction_test_cases: List[InstructionTestCase] = [
@@ -125,18 +126,21 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("88100000"),
         init_mem={0x10: 0xAB},
         expected_regs={RegisterName.A: 0xAB},
+        expected_asm_str="MV    A, [00010]",
     ),
     InstructionTestCase(
         test_id="MV_BA_from_ext_mem",
         instr_bytes=bytes.fromhex("8A200000"),
         init_mem={0x20: 0x12, 0x21: 0x34},
         expected_regs={RegisterName.BA: 0x3412},
+        expected_asm_str="MV    BA, [00020]",
     ),
     InstructionTestCase(
         test_id="MV_X_from_ext_mem",
         instr_bytes=bytes.fromhex("8C300000"),
         init_mem={0x30: 0x01, 0x31: 0x02, 0x32: 0x03},
         expected_regs={RegisterName.X: 0x030201},
+        expected_asm_str="MV    X, [00030]",
     ),
     InstructionTestCase(
         test_id="MV_A_to_ext_mem",
@@ -144,6 +148,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={RegisterName.A: 0xCD},
         expected_mem_writes=[(0x20, 0xCD)],
         expected_mem_state={0x20: 0xCD},
+        expected_asm_str="MV    [00020], A",
     ),
     InstructionTestCase(
         test_id="MV_BA_to_ext_mem",
@@ -151,6 +156,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={RegisterName.BA: 0x1234},
         expected_mem_writes=[(0x20, 0x34), (0x21, 0x12)],
         expected_mem_state={0x20: 0x34, 0x21: 0x12},
+        expected_asm_str="MV    [00020], BA",
     ),
     InstructionTestCase(
         test_id="MV_X_to_ext_mem",
@@ -158,6 +164,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={RegisterName.X: 0x010203},
         expected_mem_writes=[(0x20, 0x03), (0x21, 0x02), (0x22, 0x01)],
         expected_mem_state={0x20: 0x03, 0x21: 0x02, 0x22: 0x01},
+        expected_asm_str="MV    [00020], X",
     ),
     # --- ADD Instructions ---
     InstructionTestCase(
@@ -165,12 +172,14 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("4001"),
         init_regs={RegisterName.A: 0x10},
         expected_regs={RegisterName.A: 0x11, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="ADD   A, 01",
     ),
     InstructionTestCase(
         test_id="ADD_A_imm_carry_zero",
         instr_bytes=bytes.fromhex("4001"),
         init_regs={RegisterName.A: 0xFF},
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},
+        expected_asm_str="ADD   A, 01",
     ),
     # --- SUB Instructions ---
     InstructionTestCase(
@@ -178,18 +187,21 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("4801"),
         init_regs={RegisterName.A: 0x10},
         expected_regs={RegisterName.A: 0x0F, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="SUB   A, 01",
     ),
     InstructionTestCase(
         test_id="SUB_A_imm_borrow",
         instr_bytes=bytes.fromhex("4801"),
         init_regs={RegisterName.A: 0x00},
         expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="SUB   A, 01",
     ),
     InstructionTestCase(
         test_id="SUB_A_imm_zero",
         instr_bytes=bytes.fromhex("4801"),
         init_regs={RegisterName.A: 0x01},
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},
+        expected_asm_str="SUB   A, 01",
     ),
 ]
 
@@ -213,10 +225,19 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
     for reg, val in case.init_regs.items():
         cpu.regs.set(reg, val)
 
-    # 2. Execution Phase
-    cpu.execute_instruction(case.initial_pc)
+    # 2. Decode Phase - verify disassembly if expected
+    decoded = cpu.decode_instruction(case.initial_pc)
+    actual_asm = asm_str(decoded.render())
+    if case.expected_asm_str is not None:
+        assert actual_asm == case.expected_asm_str, (
+            f"[{case.test_id}] Assembly mismatch:\n"
+            f"  Expected: '{case.expected_asm_str}'\n"
+            f"  Actual  : '{actual_asm}'"
+        )
 
-    # 3. Assertion Phase
+    # 3. Execution Phase
+    cpu.execute_instruction(case.initial_pc)
+    # 4. Assertion Phase
     # Check register states
     for reg, expected_val in case.expected_regs.items():
         actual_val = cpu.regs.get(reg)
