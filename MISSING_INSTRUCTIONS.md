@@ -23,10 +23,10 @@ Logical, test, and compare instructions are still partially unimplemented:
 - **Compare**: `CMP`, `CMPW`, `CMPP`.
 
 ## 5. Increment, Decrement, and Exchange Instructions
-`EX A,B` and memory-to-memory forms are implemented. Missing variants include:
+`EX A,B`, register-to-register forms, and memory-to-memory forms are implemented.
+Missing variants include:
 
-- **Exchange**: register-to-register forms beyond `A,B`, and register-to-memory
-  combinations for `EX`, `EXW`, `EXP`, `EXL`.
+- **Exchange**: register-to-memory combinations for `EX`, `EXW`, `EXP`, `EXL`.
 
 ## 6. Shift and Rotate Instructions
 The grammar supports the accumulator forms (`ROR A`, `ROL A`, `SHR A`, `SHL A`) but omits:
