@@ -417,8 +417,7 @@ def test_mvl_emem_reg_post_inc_to_imem() -> None:
     ]
 
     assert cpu.regs.get(RegisterName.I) == 0
-    # FIXME: side_effects is currently not correctly handled for MVL
-    # assert cpu.regs.get(RegisterName.X) == initial_x_val + loop_count
+    assert cpu.regs.get(RegisterName.X) == initial_x_val + loop_count
 
 
 def test_mvld_imem_to_imem() -> None:
@@ -736,22 +735,21 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=1,
         expected_FZ_after=0,
     ),
-    # FIXME: failing
-    # AdclDadlTestCase(
-    #     test_id="ADCL_(m)_(n)_I1_NoCarryIn_ZeroResult_CarryOut",
-    #     instr_bytes=bytes([0x54, 0x10, 0x20]),
-    #     init_memory_state={
-    #         INTERNAL_MEMORY_START + 0x10: 0xAA,
-    #         INTERNAL_MEMORY_START + 0x20: 0x56,
-    #     },
-    #     init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-    #     expected_asm_str="ADCL  (10), (20)",
-    #     expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-    #     expected_m_values_after=[0x00],  # 0xAA + 0x56 = 0x100 -> 0x00
-    #     expected_I_after=0,
-    #     expected_FC_after=1,
-    #     expected_FZ_after=1,
-    # ),
+    AdclDadlTestCase(
+        test_id="ADCL_(m)_(n)_I1_NoCarryIn_ZeroResult_CarryOut",
+        instr_bytes=bytes([0x54, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0xAA,
+            INTERNAL_MEMORY_START + 0x20: 0x56,
+        },
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
+        expected_asm_str="ADCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        expected_m_values_after=[0x00],  # 0xAA + 0x56 = 0x100 -> 0x00
+        expected_I_after=0,
+        expected_FC_after=1,
+        expected_FZ_after=1,
+    ),
     AdclDadlTestCase(
         test_id="ADCL_(m)_(n)_I2_CarryPropagate_OverallNonZero",
         instr_bytes=bytes([0x54, 0x10, 0x20]),  # ADCL (10), (20)
@@ -771,26 +769,25 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FC_after=0,  # From last byte op
         expected_FZ_after=0,  # Overall: (0x00 | 0x04) != 0
     ),
-    # FIXME: failing
-    # AdclDadlTestCase(
-    #     test_id="ADCL_(m)_(n)_I2_OverallZero",
-    #     instr_bytes=bytes([0x54, 0x10, 0x20]),
-    #     init_memory_state={
-    #         INTERNAL_MEMORY_START + 0x10: 0xFF,
-    #         INTERNAL_MEMORY_START + 0x11: 0xFF,  # (m)
-    #         INTERNAL_MEMORY_START + 0x20: 0x01,
-    #         INTERNAL_MEMORY_START + 0x21: 0x00,  # (n)
-    #     },
-    #     init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
-    #     expected_asm_str="ADCL  (10), (20)",
-    #     expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-    #     # Byte 0: 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
-    #     # Byte 1: 0xFF + 0x00 + 1 = 0x100 -> mem[0x11]=0x00, FC=1
-    #     expected_m_values_after=[0x00, 0x00],
-    #     expected_I_after=0,
-    #     expected_FC_after=1,
-    #     expected_FZ_after=1,  # Overall: (0x00 | 0x00) == 0
-    # ),
+    AdclDadlTestCase(
+        test_id="ADCL_(m)_(n)_I2_OverallZero",
+        instr_bytes=bytes([0x54, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0xFF,
+            INTERNAL_MEMORY_START + 0x11: 0xFF,  # (m)
+            INTERNAL_MEMORY_START + 0x20: 0x01,
+            INTERNAL_MEMORY_START + 0x21: 0x00,  # (n)
+        },
+        init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
+        expected_asm_str="ADCL  (10), (20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        # Byte 0: 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
+        # Byte 1: 0xFF + 0x00 + 1 = 0x100 -> mem[0x11]=0x00, FC=1
+        expected_m_values_after=[0x00, 0x00],
+        expected_I_after=0,
+        expected_FC_after=1,
+        expected_FZ_after=1,  # Overall: (0x00 | 0x00) == 0
+    ),
     # --- ADCL (m), A ---
     AdclDadlTestCase(
         test_id="ADCL_(m)_A_I1_NoCarryIn_NoCarryOut",
@@ -1548,10 +1545,10 @@ def compute_expected_dsll(logical_bcd_bytes: List[int]) -> List[int]:
     count = len(logical_bcd_bytes)
     shifted_bytes = [0] * count
 
-    # u carries the high nibble of the previous (more significant) byte
+    # u carries the LOW nibble of the previous (more significant) byte
     # to become the low nibble of the current (less significant) byte.
-    # For the most significant byte, there's no "previous" high nibble, so u effectively starts as 0.
-    u_carry_from_prev_high_nibble = 0
+    # For the most significant byte, there's no "previous" byte, so u starts as 0.
+    u_carry_from_prev_low_nibble = 0
 
     # Iterate from MSB to LSB (index 0 to count-1)
     for i in range(count):
@@ -1560,11 +1557,11 @@ def compute_expected_dsll(logical_bcd_bytes: List[int]) -> List[int]:
         old_current_high_nibble = (old_current_byte_val >> 4) & 0x0F
 
         # New byte's high nibble is the old_current_byte's low nibble.
-        # New byte's low nibble is u (which was the high nibble of the *more significant* previous byte).
-        shifted_bytes[i] = (old_current_low_nibble << 4) | u_carry_from_prev_high_nibble
+        # New byte's low nibble is u (which was the LOW nibble of the previous byte).
+        shifted_bytes[i] = (old_current_low_nibble << 4) | u_carry_from_prev_low_nibble
 
-        # Update u for the next iteration (for the next, less significant, byte)
-        u_carry_from_prev_high_nibble = old_current_high_nibble
+        # Update u for the next iteration using the low nibble of the current byte
+        u_carry_from_prev_low_nibble = old_current_low_nibble
 
     return shifted_bytes
 
@@ -1582,10 +1579,10 @@ def compute_expected_dsrl(logical_bcd_bytes: List[int]) -> List[int]:
     count = len(logical_bcd_bytes)
     shifted_bytes = [0] * count
 
-    # u carries the low nibble of the previous (less significant) byte
+    # u carries the HIGH nibble of the previous (less significant) byte
     # to become the high nibble of the current (more significant) byte.
-    # For the least significant byte, there's no "previous" low nibble, so u effectively starts as 0.
-    u_carry_from_prev_low_nibble = 0
+    # For the least significant byte, there's no "previous" byte, so u starts as 0.
+    u_carry_from_prev_high_nibble = 0
 
     # Iterate from LSB to MSB (index 0 to count-1)
     for i in range(count):
@@ -1594,11 +1591,11 @@ def compute_expected_dsrl(logical_bcd_bytes: List[int]) -> List[int]:
         old_current_high_nibble = (old_current_byte_val >> 4) & 0x0F
 
         # New byte's low nibble is the old_current_byte's high nibble.
-        # New byte's high nibble is u (which was the low nibble of the *less significant* previous byte).
-        shifted_bytes[i] = old_current_high_nibble | (u_carry_from_prev_low_nibble << 4)
+        # New byte's high nibble is u (which was the HIGH nibble of the previous byte).
+        shifted_bytes[i] = old_current_high_nibble | (u_carry_from_prev_high_nibble << 4)
 
-        # Update u for the next iteration (for the next, more significant, byte)
-        u_carry_from_prev_low_nibble = old_current_low_nibble
+        # Update u for the next iteration using the high nibble of the current byte
+        u_carry_from_prev_high_nibble = old_current_high_nibble
 
     return shifted_bytes
 
@@ -1614,29 +1611,28 @@ dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
         expected_final_bcd_logical_bytes=compute_expected_dsll([0x12]),  # [0x20]
         expected_FZ_after=0,
     ),
-    # FIXME: failing
-    # DsrlDsllTestCase(
-    #     test_id="DSLL_I2_1234_to_2340",  # BCD 1234 -> 2340
-    #     is_dsll=True,
-    #     instr_operand_n_val=0x11,
-    #     loop_count_I=2,
-    #     initial_bcd_logical_bytes=[0x12, 0x34],  # [MSB, LSB]
-    #     expected_final_bcd_logical_bytes=compute_expected_dsll(
-    #         [0x12, 0x34]
-    #     ),  # [0x23, 0x40]
-    #     expected_FZ_after=0,
-    # ),
-    # DsrlDsllTestCase(
-    #     test_id="DSLL_I3_123456_to_234560",
-    #     is_dsll=True,
-    #     instr_operand_n_val=0x12,
-    #     loop_count_I=3,
-    #     initial_bcd_logical_bytes=[0x12, 0x34, 0x56],  # [MSB, Mid, LSB]
-    #     expected_final_bcd_logical_bytes=compute_expected_dsll(
-    #         [0x12, 0x34, 0x56]
-    #     ),  # [0x23, 0x45, 0x60]
-    #     expected_FZ_after=0,
-    # ),
+    DsrlDsllTestCase(
+        test_id="DSLL_I2_1234_to_2340",  # BCD 1234 -> 2340
+        is_dsll=True,
+        instr_operand_n_val=0x11,
+        loop_count_I=2,
+        initial_bcd_logical_bytes=[0x12, 0x34],  # [MSB, LSB]
+        expected_final_bcd_logical_bytes=compute_expected_dsll(
+            [0x12, 0x34]
+        ),  # [0x23, 0x40]
+        expected_FZ_after=0,
+    ),
+    DsrlDsllTestCase(
+        test_id="DSLL_I3_123456_to_234560",
+        is_dsll=True,
+        instr_operand_n_val=0x12,
+        loop_count_I=3,
+        initial_bcd_logical_bytes=[0x12, 0x34, 0x56],  # [MSB, Mid, LSB]
+        expected_final_bcd_logical_bytes=compute_expected_dsll(
+            [0x12, 0x34, 0x56]
+        ),  # [0x23, 0x45, 0x60]
+        expected_FZ_after=0,
+    ),
     DsrlDsllTestCase(
         test_id="DSLL_I2_0009_to_0090",
         is_dsll=True,
@@ -1669,29 +1665,28 @@ dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
         expected_final_bcd_logical_bytes=compute_expected_dsrl([0x12]),  # [0x01]
         expected_FZ_after=0,
     ),
-    # FIXME: failing
-    # DsrlDsllTestCase(
-    #     test_id="DSRL_I2_1234_to_0123",  # BCD 1234 -> 0123
-    #     is_dsll=False,
-    #     instr_operand_n_val=0x10,
-    #     loop_count_I=2,
-    #     initial_bcd_logical_bytes=[0x34, 0x12],  # [LSB, MSB]
-    #     expected_final_bcd_logical_bytes=compute_expected_dsrl(
-    #         [0x34, 0x12]
-    #     ),  # [0x23, 0x01] (means LSB=23, MSB=01)
-    #     expected_FZ_after=0,
-    # ),
-    # DsrlDsllTestCase(
-    #     test_id="DSRL_I3_123456_to_012345",
-    #     is_dsll=False,
-    #     instr_operand_n_val=0x10,
-    #     loop_count_I=3,
-    #     initial_bcd_logical_bytes=[0x56, 0x34, 0x12],  # [LSB, Mid, MSB]
-    #     expected_final_bcd_logical_bytes=compute_expected_dsrl(
-    #         [0x56, 0x34, 0x12]
-    #     ),  # [0x45, 0x23, 0x01]
-    #     expected_FZ_after=0,
-    # ),
+    DsrlDsllTestCase(
+        test_id="DSRL_I2_1234_to_0123",  # BCD 1234 -> 0123
+        is_dsll=False,
+        instr_operand_n_val=0x10,
+        loop_count_I=2,
+        initial_bcd_logical_bytes=[0x34, 0x12],  # [LSB, MSB]
+        expected_final_bcd_logical_bytes=compute_expected_dsrl(
+            [0x34, 0x12]
+        ),  # [0x23, 0x01] (means LSB=23, MSB=01)
+        expected_FZ_after=0,
+    ),
+    DsrlDsllTestCase(
+        test_id="DSRL_I3_123456_to_012345",
+        is_dsll=False,
+        instr_operand_n_val=0x10,
+        loop_count_I=3,
+        initial_bcd_logical_bytes=[0x56, 0x34, 0x12],  # [LSB, Mid, MSB]
+        expected_final_bcd_logical_bytes=compute_expected_dsrl(
+            [0x56, 0x34, 0x12]
+        ),  # [0x45, 0x23, 0x01]
+        expected_FZ_after=0,
+    ),
     DsrlDsllTestCase(
         test_id="DSRL_I2_9000_to_0900",
         is_dsll=False,
