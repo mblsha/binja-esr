@@ -47,8 +47,20 @@ instruction: "NOP"i -> nop
            | jp_imem
            | jp_abs
            | jpf_abs
+           | jpz_abs
+           | jpnz_abs
+           | jpc_abs
+           | jpnc_abs
            | "JR"i "+" expression -> jr_plus
            | "JR"i "-" expression -> jr_minus
+           | jrz_plus
+           | jrz_minus
+           | jrnz_plus
+           | jrnz_minus
+           | jrc_plus
+           | jrc_minus
+           | jrnc_plus
+           | jrnc_minus
            | "INC"i reg -> inc_reg
            | "INC"i imem_operand -> inc_imem
            | "DEC"i reg -> dec_reg
@@ -103,6 +115,18 @@ jp_reg.2: "JP"i reg
 jp_imem.2: "JP"i imem_operand
 jp_abs.1: "JP"i expression
 jpf_abs.1: "JPF"i expression
+jpz_abs.1: "JPZ"i expression
+jpnz_abs.1: "JPNZ"i expression
+jpc_abs.1: "JPC"i expression
+jpnc_abs.1: "JPNC"i expression
+jrz_plus.1: "JRZ"i "+" expression
+jrz_minus.1: "JRZ"i "-" expression
+jrnz_plus.1: "JRNZ"i "+" expression
+jrnz_minus.1: "JRNZ"i "-" expression
+jrc_plus.1: "JRC"i "+" expression
+jrc_minus.1: "JRC"i "-" expression
+jrnc_plus.1: "JRNC"i "+" expression
+jrnc_minus.1: "JRNC"i "-" expression
 
 and_imem_a.2: "AND"i imem_operand "," _A
 and_a_imem.2: "AND"i _A "," imem_operand

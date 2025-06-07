@@ -530,6 +530,114 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    AssemblerTestCase(
+        test_id="jpz_abs",
+        asm_code="JPZ 0x1234",
+        expected_ti="""
+            @0000
+            14 34 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jpnz_abs",
+        asm_code="JPNZ 0x1234",
+        expected_ti="""
+            @0000
+            15 34 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jpc_abs",
+        asm_code="JPC 0x1234",
+        expected_ti="""
+            @0000
+            16 34 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jpnc_abs",
+        asm_code="JPNC 0x1234",
+        expected_ti="""
+            @0000
+            17 34 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrz_plus",
+        asm_code="JRZ +0x05",
+        expected_ti="""
+            @0000
+            18 05
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrz_minus",
+        asm_code="JRZ -0x02",
+        expected_ti="""
+            @0000
+            19 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrnz_plus",
+        asm_code="JRNZ +0x05",
+        expected_ti="""
+            @0000
+            1A 05
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrnz_minus",
+        asm_code="JRNZ -0x02",
+        expected_ti="""
+            @0000
+            1B 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrc_plus",
+        asm_code="JRC +0x05",
+        expected_ti="""
+            @0000
+            1C 05
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrc_minus",
+        asm_code="JRC -0x02",
+        expected_ti="""
+            @0000
+            1D 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrnc_plus",
+        asm_code="JRNC +0x05",
+        expected_ti="""
+            @0000
+            1E 05
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jrnc_minus",
+        asm_code="JRNC -0x02",
+        expected_ti="""
+            @0000
+            1F 02
+            q
+        """,
+    ),
     # --- PMDF Instruction Tests ---
     AssemblerTestCase(
         test_id="pmdf_imem_imm",
