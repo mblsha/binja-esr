@@ -32,7 +32,7 @@ instruction: "NOP"i -> nop
            | "SHL"i _A -> shl_a
            | "MV"i _A "," _B -> mv_a_b
            | "MV"i _B "," _A -> mv_b_a
-           | "EX"i _A "," _B -> ex_a_b
+           | ex_a_b
            | "PUSHS"i _F -> pushs_f
            | "POPS"i _F -> pops_f
            | "PUSHU"i _F -> pushu_f
@@ -67,6 +67,7 @@ instruction: "NOP"i -> nop
            | "DEC"i imem_operand -> dec_imem
            | "MV"i imem_operand "," imem_operand -> mv_imem_imem
            | "EX"i imem_operand "," imem_operand -> ex_imem_imem
+           | "EX"i reg "," reg -> ex_reg_reg
            | "EXW"i imem_operand "," imem_operand -> exw_imem_imem
            | "EXP"i imem_operand "," imem_operand -> exp_imem_imem
            | "EXL"i imem_operand "," imem_operand -> exl_imem_imem
@@ -123,6 +124,8 @@ instruction: "NOP"i -> nop
            | cmpp_imem_imem
            | cmpw_imem_reg
            | cmpp_imem_reg
+
+ex_a_b.2: "EX"i _A "," _B
 
 jp_reg.2: "JP"i reg
 jp_imem.2: "JP"i imem_operand

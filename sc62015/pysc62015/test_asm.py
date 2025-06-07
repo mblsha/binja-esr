@@ -813,6 +813,15 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    AssemblerTestCase(
+        test_id="ex_reg_reg_simple",
+        asm_code="EX X, Y",
+        expected_ti="""
+            @0000
+            ED 45
+            q
+        """,
+    ),
     # --- CMP Instruction Tests ---
     AssemblerTestCase(
         test_id="cmp_a_imm",
