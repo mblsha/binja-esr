@@ -166,6 +166,31 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_state={0x20: 0x03, 0x21: 0x02, 0x22: 0x01},
         expected_asm_str="MV    [00020], X",
     ),
+    # External memory via register pointer
+    InstructionTestCase(
+        test_id="MV_A_from_emem_reg",
+        instr_bytes=bytes.fromhex("9004"),
+        init_regs={RegisterName.X: 0x0040},
+        init_mem={0x40: 0xAA},
+        expected_regs={RegisterName.A: 0xAA},
+        expected_asm_str="MV    A, [X]",
+    ),
+    InstructionTestCase(
+        test_id="MV_BA_from_emem_reg",
+        instr_bytes=bytes.fromhex("9204"),
+        init_regs={RegisterName.X: 0x0050},
+        init_mem={0x50: 0x11, 0x51: 0x22},
+        expected_regs={RegisterName.BA: 0x2211},
+        expected_asm_str="MV    BA, [X]",
+    ),
+    InstructionTestCase(
+        test_id="MV_X_to_emem_reg",
+        instr_bytes=bytes.fromhex("B405"),
+        init_regs={RegisterName.X: 0x010203, RegisterName.Y: 0x0060},
+        expected_mem_writes=[(0x60, 0x03), (0x61, 0x02), (0x62, 0x01)],
+        expected_mem_state={0x60: 0x03, 0x61: 0x02, 0x62: 0x01},
+        expected_asm_str="MV    [Y], X",
+    ),
     # --- ADD Instructions ---
     InstructionTestCase(
         test_id="ADD_A_imm_simple",
