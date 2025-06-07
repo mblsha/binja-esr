@@ -494,6 +494,223 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- ROR/ROL/SHR/SHL Memory Instruction Tests ---
+    AssemblerTestCase(
+        test_id="ror_imem_n",
+        asm_code="ROR (0x10)",
+        expected_ti="""
+            @0000
+            E5 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="ror_imem_bp_n",
+        asm_code="ROR (BP+0x10)",
+        expected_ti="""
+            @0000
+            E5 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="ror_imem_px_n",
+        asm_code="ROR (PX+0x10)",
+        expected_ti="""
+            @0000
+            E5 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="ror_imem_py_n",
+        asm_code="ROR (PY+0x10)",
+        expected_ti="""
+            @0000
+            E5 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="ror_imem_bp_px",
+        asm_code="ROR (BP+PX)",
+        expected_ti="""
+            @0000
+            E5
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="ror_imem_bp_py",
+        asm_code="ROR (BP+PY)",
+        expected_ti="""
+            @0000
+            E5
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="rol_imem_n",
+        asm_code="ROL (0x11)",
+        expected_ti="""
+            @0000
+            E7 11
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="rol_imem_bp_n",
+        asm_code="ROL (BP+0x11)",
+        expected_ti="""
+            @0000
+            E7 11
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="rol_imem_px_n",
+        asm_code="ROL (PX+0x11)",
+        expected_ti="""
+            @0000
+            E7 11
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="rol_imem_py_n",
+        asm_code="ROL (PY+0x11)",
+        expected_ti="""
+            @0000
+            E7 11
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="rol_imem_bp_px",
+        asm_code="ROL (BP+PX)",
+        expected_ti="""
+            @0000
+            E7
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="rol_imem_bp_py",
+        asm_code="ROL (BP+PY)",
+        expected_ti="""
+            @0000
+            E7
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shr_imem_n",
+        asm_code="SHR (0x12)",
+        expected_ti="""
+            @0000
+            F5 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shr_imem_bp_n",
+        asm_code="SHR (BP+0x12)",
+        expected_ti="""
+            @0000
+            F5 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shr_imem_px_n",
+        asm_code="SHR (PX+0x12)",
+        expected_ti="""
+            @0000
+            F5 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shr_imem_py_n",
+        asm_code="SHR (PY+0x12)",
+        expected_ti="""
+            @0000
+            F5 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shr_imem_bp_px",
+        asm_code="SHR (BP+PX)",
+        expected_ti="""
+            @0000
+            F5
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shr_imem_bp_py",
+        asm_code="SHR (BP+PY)",
+        expected_ti="""
+            @0000
+            F5
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shl_imem_n",
+        asm_code="SHL (0x13)",
+        expected_ti="""
+            @0000
+            F7 13
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shl_imem_bp_n",
+        asm_code="SHL (BP+0x13)",
+        expected_ti="""
+            @0000
+            F7 13
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shl_imem_px_n",
+        asm_code="SHL (PX+0x13)",
+        expected_ti="""
+            @0000
+            F7 13
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shl_imem_py_n",
+        asm_code="SHL (PY+0x13)",
+        expected_ti="""
+            @0000
+            F7 13
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shl_imem_bp_px",
+        asm_code="SHL (BP+PX)",
+        expected_ti="""
+            @0000
+            F7
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="shl_imem_bp_py",
+        asm_code="SHL (BP+PY)",
+        expected_ti="""
+            @0000
+            F7
+            q
+        """,
+    ),
     # --- JP/JR Instruction Tests ---
     AssemblerTestCase(
         test_id="jp_abs",
