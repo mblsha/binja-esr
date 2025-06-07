@@ -45,3 +45,6 @@ try:
 # arch.register_calling_convention(
 #     ParametersInRegistersCallingConvention(arch, "default")
 # )
+
+except Exception:
+    pass

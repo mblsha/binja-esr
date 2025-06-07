@@ -1,29 +1,34 @@
+from __future__ import annotations
+
+from typing import Iterable
+
+
 class Token(str):
-    def __new__(cls, type_, value):
+    def __new__(cls, type_: str, value: str) -> "Token":
         obj = str.__new__(cls, value)
         obj.type = type_
         obj.value = value
         return obj
 
-    def __class_getitem__(cls, item):
+    def __class_getitem__(cls, item: object) -> type["Token"]:
         return cls
 
 class Tree:
-    def __init__(self, data, children=None):
+    def __init__(self, data: str, children: list[object] | None = None) -> None:
         self.data = data
         self.children = children or []
 
-    def __class_getitem__(cls, item):
+    def __class_getitem__(cls, item: object) -> type["Tree"]:
         return cls
 
 class Transformer:
     pass
 
 class Lark:
-    def __init__(self, grammar: str, parser: str = 'earley', maybe_placeholders: bool = False):
+    def __init__(self, grammar: str, parser: str = "earley", maybe_placeholders: bool = False) -> None:
         pass
 
-    def lex(self, text: str):
+    def lex(self, text: str) -> Iterable[Token]:
         import re
         pos = 0
         while pos < len(text):
@@ -80,7 +85,7 @@ class Lark:
                     continue
                 pos += 1
 
-    def parse(self, text: str):
+    def parse(self, text: str) -> Tree:
         tokens = list(self.lex(text))
         idx = 0
         children = []
