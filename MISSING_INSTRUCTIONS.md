@@ -11,12 +11,7 @@ Only a few `MV` forms are parsed today (`MV A,B`, `MV B,A`, and `MV (imem),(imem
 - **Block and Multi-byte Moves** – instructions such as `MVW`, `MVP`, `MVL`, `MVLD`.
 - **Register to Register Moves** – generic forms like `MV r2, r'2` or `MV r3, r'3`.
 
-## 2. Arithmetic Instructions
-Basic addition (`ADD`) and subtraction (`SUB`) instructions are now supported in
-the assembler. The remaining missing set includes:
-
-- **BCD Arithmetic**: *(all implemented)*
-- **Packed BCD Modify**: `PMDF`.
+## 2. Arithmetic Instructions: supposedly all implemented
 
 ## 3. Program Flow Instructions
 Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:
