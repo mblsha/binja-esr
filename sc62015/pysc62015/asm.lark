@@ -58,10 +58,18 @@ instruction: "NOP"i -> nop
            | add_imem_imm
            | add_a_imem
            | add_imem_a
+           | adc_a_imm
+           | adc_imem_imm
+           | adc_a_imem
+           | adc_imem_a
            | sub_a_imm
            | sub_imem_imm
            | sub_a_imem
            | sub_imem_a
+           | sbc_a_imm
+           | sbc_imem_imm
+           | sbc_a_imem
+           | sbc_imem_a
 
 and_imem_a.2: "AND"i imem_operand "," _A
 and_a_imem.2: "AND"i _A "," imem_operand
@@ -75,10 +83,20 @@ add_imem_imm.1: "ADD"i imem_operand "," expression
 add_a_imem.2: "ADD"i _A "," imem_operand
 add_imem_a.2: "ADD"i imem_operand "," _A
 
+adc_a_imm.1: "ADC"i _A "," expression
+adc_imem_imm.1: "ADC"i imem_operand "," expression
+adc_a_imem.2: "ADC"i _A "," imem_operand
+adc_imem_a.2: "ADC"i imem_operand "," _A
+
 sub_a_imm.1: "SUB"i _A "," expression
 sub_imem_imm.1: "SUB"i imem_operand "," expression
 sub_a_imem.2: "SUB"i _A "," imem_operand
 sub_imem_a.2: "SUB"i imem_operand "," _A
+
+sbc_a_imm.1: "SBC"i _A "," expression
+sbc_imem_imm.1: "SBC"i imem_operand "," expression
+sbc_a_imem.2: "SBC"i _A "," imem_operand
+sbc_imem_a.2: "SBC"i imem_operand "," _A
 
 
 // --- Data Directives ---
