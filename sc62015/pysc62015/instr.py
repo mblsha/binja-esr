@@ -7,7 +7,7 @@ from .constants import INTERNAL_MEMORY_START
 
 import copy
 from dataclasses import dataclass
-from typing import Optional, List, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any, Callable
+from typing import Optional, List, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any, Callable, cast
 import enum
 from contextlib import contextmanager
 
@@ -722,7 +722,7 @@ class IMemOperand(Operand, HasWidth):
         # The 'n' value is encoded only if the mode requires it.
         if self.mode in [AddressingMode.N, AddressingMode.BP_N, AddressingMode.PX_N, AddressingMode.PY_N]:
             assert self.n_val is not None
-            encoder.unsigned_byte(self.n_val) # Assumes n_val is already an int
+            encoder.unsigned_byte(cast(int, self.n_val))  # Assumes n_val is already an int
 
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
         return self.helper.lift(il, self.mode, side_effects)
@@ -877,11 +877,18 @@ class IMemHelper(Operand):
     @staticmethod
     def _reg_value(name: str, il: LowLevelILFunction) -> ExpressionIndex:
         addr = IMEM_NAMES[name]
-        return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
+        return il.load(1, il.const_pointer(4, INTERNAL_MEMORY_START + addr))
 
     def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
-        assert isinstance(self.value, IMemOperand)
-        n_lifted = il.const(1, self.value.n_val) if self.value.n_val is not None else il.const(1, 0)
+        n_val: Union[str, int] = 0
+        if isinstance(self.value, ImmOperand):
+            if self.value.value is not None:
+                n_val = self.value.value
+        elif isinstance(self.value, IMemOperand):
+            if self.value.n_val is not None:
+                n_val = self.value.n_val
+
+        n_lifted = il.const(1, int(n_val))
 
         match pre:
             case None | AddressingMode.N:
@@ -900,11 +907,14 @@ class IMemHelper(Operand):
                 raise NotImplementedError(f"Unknown addressing mode {pre}")
 
     def imem_addr(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
-        if isinstance(self.value, (TempReg)):
+        if isinstance(self.value, TempReg):
             if pre is None or pre == AddressingMode.N:
                 # The register is assumed to hold the complete address.
-                # No further addition of INTERNAL_MEMORY_START.
                 return self.value.lift(il)
+
+        if isinstance(self.value, Reg):
+            if pre is None or pre == AddressingMode.N:
+                return il.add(3, self.value.lift(il), il.const_pointer(3, INTERNAL_MEMORY_START))
 
         if isinstance(self.value, ImmOperand) and (pre is None or pre == AddressingMode.N):
             assert self.value.value is not None, "Value not set"
@@ -946,7 +956,7 @@ class EMemHelper(Operand):
         return self.value.lift(il)
 
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
-        return il.load(self.width(), self.emem_addr(il))
+        return il.load(self.width(), self.emem_addr(il),)
 
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
                     Optional[AddressingMode] = None) -> None:

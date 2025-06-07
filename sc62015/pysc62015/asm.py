@@ -241,11 +241,11 @@ class AsmTransformer(Transformer):
     def atom(self, items: List[Any]) -> str:
         # This will return a number as a string, or a symbol name.
         # The assembler will resolve it later.
-        return items[0]
+        return str(items[0])
 
     def expression(self, items: List[Any]) -> str:
         # For now, expressions are just atoms.
-        return items[0]
+        return str(items[0])
 
     # --- Internal Memory Operand Rules ---
 
@@ -269,7 +269,7 @@ class AsmTransformer(Transformer):
 
     def imem_operand(self, items: List[Any]) -> IMemOperand:
         # This rule just passes through the IMemOperand object created by the more specific rules.
-        return items[0]
+        return cast(IMemOperand, items[0])
 
     # --- Instruction Rules ---
 
@@ -291,8 +291,3 @@ class AsmTransformer(Transformer):
     def CNAME(self, token: Token) -> str:
         return str(token)
 
-    def atom(self, items: List[Any]) -> str:
-        return str(items[0])
-
-    def expression(self, items: List[Any]) -> List[Any]:
-        return items
