@@ -125,7 +125,6 @@ REVERSE_PRE_TABLE: Dict[Tuple[AddressingMode, AddressingMode], int] = {
     (AddressingMode.N,     AddressingMode.BP_PY): 0x31,
     (AddressingMode.BP_N,  AddressingMode.BP_PY): 0x21,
     (AddressingMode.PX_N,  AddressingMode.BP_PY): 0x35,
-    (AddressingMode.BP_PX, AddressingMode.BP_PY): 0x25,
 }
 
 
@@ -914,7 +913,7 @@ class IMemHelper(Operand):
 
         if isinstance(self.value, Reg):
             if pre is None or pre == AddressingMode.N:
-                return il.add(3, self.value.lift(il), il.const_pointer(3, INTERNAL_MEMORY_START))
+                return il.add(3, self.value.lift(il), il.const(3, INTERNAL_MEMORY_START))
 
         if isinstance(self.value, ImmOperand) and (pre is None or pre == AddressingMode.N):
             assert self.value.value is not None, "Value not set"

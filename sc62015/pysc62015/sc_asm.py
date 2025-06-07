@@ -8,7 +8,7 @@ from plumbum import cli  # type: ignore[import-untyped]
 # Assuming the provided library files are in a package named 'sc62015'
 from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from .coding import Encoder
-from .instr import Instruction, OPCODES, Opts, IMemOperand
+from .instr import Instruction, OPCODES, Opts, IMemOperand, IMem8
 
 # A simple cache for the reverse lookup table
 REVERSE_OPCODES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
@@ -87,15 +87,20 @@ class Assembler:
             template_ops = template["opts"].ops or []
 
             # Compare operands. Using repr is a simple way for the basic operand types.
-            if len(provided_ops) == len(template_ops) and all(
-                repr(p_op) == repr(t_op)
-                for p_op, t_op in zip(provided_ops, template_ops)
-            ):
-                instr = instr_class(
-                    name=mnemonic,
-                    operands=provided_ops,
-                    cond=template["opts"].cond,
-                    ops_reversed=template["opts"].ops_reversed,
+            if len(provided_ops) == len(template_ops):
+                converted_match = True
+                for p_op, t_op in zip(provided_ops, template_ops):
+                    if isinstance(t_op, IMem8) and isinstance(p_op, IMemOperand):
+                        continue
+                    if repr(p_op) != repr(t_op):
+                        converted_match = False
+                        break
+                if converted_match:
+                    instr = instr_class(
+                        name=mnemonic,
+                        operands=provided_ops,
+                        cond=template["opts"].cond,
+                        ops_reversed=template["opts"].ops_reversed,
                 )
                 instr.opcode = template["opcode"]
 
