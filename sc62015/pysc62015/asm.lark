@@ -41,6 +41,10 @@ instruction: "NOP"i -> nop
            | "POPU"i _IMR -> popu_imr
            | "CALL"i expression -> call
            | "CALLF"i expression -> callf
+           | "INC"i reg -> inc_reg
+           | "INC"i imem_operand -> inc_imem
+           | "DEC"i reg -> dec_reg
+           | "DEC"i imem_operand -> dec_imem
            | "MV"i imem_operand "," imem_operand -> mv_imem_imem
 
 
