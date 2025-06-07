@@ -299,6 +299,80 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- ADC Instruction Tests ---
+    AssemblerTestCase(
+        test_id="adc_a_imm",
+        asm_code="ADC A, 0x01",
+        expected_ti="""
+            @0000
+            50 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="adc_imem_imm",
+        asm_code="ADC (0x10), 0x02",
+        expected_ti="""
+            @0000
+            51 10 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="adc_a_imem",
+        asm_code="ADC A, (0x20)",
+        expected_ti="""
+            @0000
+            52 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="adc_imem_a",
+        asm_code="ADC (0x30), A",
+        expected_ti="""
+            @0000
+            53 30
+            q
+        """,
+    ),
+    # --- SBC Instruction Tests ---
+    AssemblerTestCase(
+        test_id="sbc_a_imm",
+        asm_code="SBC A, 0x01",
+        expected_ti="""
+            @0000
+            58 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sbc_imem_imm",
+        asm_code="SBC (0x10), 0x02",
+        expected_ti="""
+            @0000
+            59 10 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sbc_a_imem",
+        asm_code="SBC A, (0x20)",
+        expected_ti="""
+            @0000
+            5A 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sbc_imem_a",
+        asm_code="SBC (0x30), A",
+        expected_ti="""
+            @0000
+            5B 30
+            q
+        """,
+    ),
 ]
 
 

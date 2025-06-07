@@ -28,7 +28,9 @@ from .instr import (
     POPU,
     AND,
     ADD,
+    ADC,
     SUB,
+    SBC,
     CALL,
     Imm16,
     Imm20,
@@ -417,6 +419,33 @@ class AsmTransformer(Transformer):
             "instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
+    def adc_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": ADC, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def adc_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": ADC, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def adc_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": ADC, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def adc_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": ADC, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
     def sub_a_imm(self, items: List[Any]) -> InstructionNode:
         imm = Imm8()
         imm.value = items[0]
@@ -442,6 +471,33 @@ class AsmTransformer(Transformer):
         op1 = items[0]
         return {
             "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def sbc_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": SBC, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def sbc_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": SBC, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def sbc_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": SBC, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def sbc_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": SBC, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
     def def_arg(self, items: List[Any]) -> str:
