@@ -9,7 +9,7 @@ from plumbum import cli  # type: ignore[import-untyped]
 # Assuming the provided library files are in a package named 'sc62015'
 from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from .coding import Encoder
-from .instr import Instruction, OPCODES, Opts, IMemOperand, IMem8
+from .instr import Instruction, OPCODES, Opts, IMemOperand, IMem8, ImmOperand, Imm20, Reg3
 
 # A simple cache for the reverse lookup table
 REVERSE_OPCODES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
@@ -93,6 +93,11 @@ class Assembler:
                 for p_op, t_op in zip(provided_ops, template_ops):
                     if isinstance(t_op, IMem8) and isinstance(p_op, IMemOperand):
                         continue
+                    if isinstance(t_op, ImmOperand) and isinstance(p_op, ImmOperand):
+                        if type(p_op) is type(t_op):
+                            continue
+                    if isinstance(t_op, Reg3) and isinstance(p_op, Reg3):
+                        continue
                     if repr(p_op) != repr(t_op):
                         converted_match = False
                         break
@@ -121,6 +126,8 @@ class Assembler:
                                 setattr(op, "value", 0)
                         if hasattr(op, "extra_hi") and getattr(op, "value", None) is not None:
                             setattr(op, "extra_hi", (int(getattr(op, "value")) >> 16) & 0xFF)
+                        if isinstance(op, Imm20) and isinstance(op.value, int):
+                            op.extra_hi = (op.value >> 16) & 0xFF
 
                     encoder = Encoder()
                     try:
@@ -243,6 +250,13 @@ class Assembler:
                     setattr(op, "value", val)
                     if hasattr(op, "extra_hi"):
                         setattr(op, "extra_hi", (val >> 16) & 0xFF)
+                if hasattr(op, "value"):
+                    val = getattr(op, "value")
+                    if isinstance(val, str):
+                        val = self._evaluate_operand(val)
+                        setattr(op, "value", val)
+                    if isinstance(op, Imm20) and isinstance(val, int):
+                        op.extra_hi = (val >> 16) & 0xFF
             encoder = Encoder()
             instr.encode(encoder, self.current_address)
             return encoder.buf

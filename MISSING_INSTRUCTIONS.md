@@ -21,12 +21,11 @@ No arithmetic operations are present in the grammar. The missing set includes:
 - **Packed BCD Modify**: `PMDF`.
 
 ## 3. Program Flow Instructions
-Besides `RET`, `RETI`, and `RETF`, jump and call instructions are absent:
+Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:
 
 - **Unconditional Jumps**: `JP`, `JR` and their far or register forms.
 - **Conditional Jumps**: `JPZ`, `JPNZ`, `JPC`, `JPNC`.
 - **Conditional Relative Jumps**: `JRZ`, `JRNZ`, `JRC`, `JRNC`.
-- **Calls**: `CALL`, `CALLF`.
 
 ## 4. Logical and Compare Instructions
 Logical, test, and compare instructions are largely unimplemented:
@@ -38,8 +37,6 @@ Logical, test, and compare instructions are largely unimplemented:
 ## 5. Increment, Decrement, and Exchange Instructions
 Only `EX A,B` is implemented. Missing variants include:
 
-- **Increment**: `INC` for registers and memory locations.
-- **Decrement**: `DEC` for registers and memory locations.
 - **Exchange**: `EX`, `EXW`, `EXP`, `EXL` with register and memory operands.
 
 ## 6. Shift and Rotate Instructions
