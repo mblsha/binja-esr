@@ -1235,9 +1235,9 @@ class RegIncrementDecrementHelper(OperandHelper):
             value = tmp.lift(il)
 
         if self.mode == EMemRegMode.PRE_DEC:
-            sub = il.sub(self.reg.width(), value, il.const(1, self.width))
+            value = il.sub(self.reg.width(), value, il.const(1, self.width))
             if side_effects:
-                self.reg.lift_assign(il, sub)
+                self.reg.lift_assign(il, value)
 
         return value
 
