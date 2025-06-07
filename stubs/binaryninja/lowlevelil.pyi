@@ -6,10 +6,10 @@ def LLIL_TEMP(n: int) -> ExpressionIndex:
     ...
 
 class LowLevelILFunction:
-    def expr(self, *args: Any, size: int | None, flags: Any | None = None) -> Any:
+    def expr(self, *args: Any, size: int | None, flags: Any | None = None) -> ExpressionIndex:
         ...
 
-    def __getattr__(self, name: str) -> Callable[..., Any]:
+    def __getattr__(self, name: str) -> Callable[..., ExpressionIndex]:
         ...
 
 class LowLevelILLabel:
