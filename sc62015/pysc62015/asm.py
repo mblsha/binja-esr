@@ -27,6 +27,8 @@ from .instr import (
     PUSHU,
     POPU,
     AND,
+    OR,
+    XOR,
     ADD,
     SUB,
     CALL,
@@ -450,6 +452,88 @@ class AsmTransformer(Transformer):
         op1 = items[0]
         return {
             "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def or_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": OR, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def or_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": OR, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def or_emem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": OR, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def or_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": OR, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def or_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": OR, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def or_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": OR, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def xor_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def xor_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def xor_emem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def xor_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def xor_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def xor_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[op1, op2])}
         }
 
     def def_arg(self, items: List[Any]) -> str:

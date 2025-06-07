@@ -325,6 +325,116 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- OR Instruction Tests ---
+    AssemblerTestCase(
+        test_id="or_a_imm",
+        asm_code="OR A, 0x55",
+        expected_ti="""
+            @0000
+            78 55
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="or_imem_imm",
+        asm_code="OR (0x10), 0x01",
+        expected_ti="""
+            @0000
+            79 10 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="or_emem_imm",
+        asm_code="OR [0x12345], 0x02",
+        expected_ti="""
+            @0000
+            7A 45 23 01 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="or_imem_a",
+        asm_code="OR (0x20), A",
+        expected_ti="""
+            @0000
+            7B 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="or_a_imem",
+        asm_code="OR A, (0x30)",
+        expected_ti="""
+            @0000
+            7F 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="or_imem_imem",
+        asm_code="OR (0x40), (0x50)",
+        expected_ti="""
+            @0000
+            7E 40 50
+            q
+        """,
+    ),
+    # --- XOR Instruction Tests ---
+    AssemblerTestCase(
+        test_id="xor_a_imm",
+        asm_code="XOR A, 0x55",
+        expected_ti="""
+            @0000
+            68 55
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="xor_imem_imm",
+        asm_code="XOR (0x10), 0x01",
+        expected_ti="""
+            @0000
+            69 10 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="xor_emem_imm",
+        asm_code="XOR [0x12345], 0x02",
+        expected_ti="""
+            @0000
+            6A 45 23 01 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="xor_imem_a",
+        asm_code="XOR (0x20), A",
+        expected_ti="""
+            @0000
+            6B 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="xor_a_imem",
+        asm_code="XOR A, (0x30)",
+        expected_ti="""
+            @0000
+            6F 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="xor_imem_imem",
+        asm_code="XOR (0x40), (0x50)",
+        expected_ti="""
+            @0000
+            6E 40 50
+            q
+        """,
+    ),
 ]
 
 
