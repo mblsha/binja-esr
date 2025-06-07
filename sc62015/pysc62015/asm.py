@@ -57,6 +57,7 @@ from .instr import (
     RegB,
     RegF,
     RegIMR,
+    RegPair,
     IMemOperand,
     Imm8,
     EMemAddr,
@@ -547,6 +548,17 @@ class AsmTransformer(Transformer):
         op1, op2 = items
         return {
             "instruction": {"instr_class": EX, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def ex_reg_reg(self, items: List[Any]) -> InstructionNode:
+        reg1 = cast(Reg, items[0])
+        reg2 = cast(Reg, items[1])
+        rp = RegPair(size=2)
+        rp.reg1 = reg1
+        rp.reg2 = reg2
+        rp.reg_raw = (RegPair.reg_idx(reg1.reg) << 4) | RegPair.reg_idx(reg2.reg)
+        return {
+            "instruction": {"instr_class": EX, "instr_opts": Opts(ops=[rp])}
         }
 
     def exw_imem_imem(self, items: List[Any]) -> InstructionNode:
