@@ -30,6 +30,10 @@ instruction: "NOP"i -> nop
            | "ROL"i _A -> rol_a
            | "SHR"i _A -> shr_a
            | "SHL"i _A -> shl_a
+           | "ROR"i imem_operand -> ror_imem
+           | "ROL"i imem_operand -> rol_imem
+           | "SHR"i imem_operand -> shr_imem
+           | "SHL"i imem_operand -> shl_imem
            | "MV"i _A "," _B -> mv_a_b
            | "MV"i _B "," _A -> mv_b_a
            | ex_a_b
@@ -188,6 +192,11 @@ dsbl_imem_a.2:    "DSBL"i imem_operand "," _A
 
 dsll_imem.1: "DSLL"i imem_operand
 dsrl_imem.1: "DSRL"i imem_operand
+
+ror_imem.1: "ROR"i imem_operand
+rol_imem.1: "ROL"i imem_operand
+shr_imem.1: "SHR"i imem_operand
+shl_imem.1: "SHL"i imem_operand
 
 pmdf_imem_imm.1: "PMDF"i imem_operand "," expression
 pmdf_imem_a.2:   "PMDF"i imem_operand "," _A

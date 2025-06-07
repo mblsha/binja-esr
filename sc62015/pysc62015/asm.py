@@ -217,6 +217,22 @@ class AsmTransformer(Transformer):
     def shl_a(self, _: List[Any]) -> InstructionNode:
         return {"instruction": {"instr_class": SHL, "instr_opts": Opts(ops=[Reg("A")])}}
 
+    def ror_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {"instruction": {"instr_class": ROR, "instr_opts": Opts(ops=[op])}}
+
+    def rol_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {"instruction": {"instr_class": ROL, "instr_opts": Opts(ops=[op])}}
+
+    def shr_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {"instruction": {"instr_class": SHR, "instr_opts": Opts(ops=[op])}}
+
+    def shl_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {"instruction": {"instr_class": SHL, "instr_opts": Opts(ops=[op])}}
+
     def mv_a_b(self, _: List[Any]) -> InstructionNode:
         return {
             "instruction": {
