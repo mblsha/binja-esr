@@ -1,0 +1,3 @@
+[submodule "third-party/lark"]
+	path = third-party/lark
+	url = https://github.com/lark-parser/lark
