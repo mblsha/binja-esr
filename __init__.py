@@ -1,4 +1,7 @@
-try:
+import importlib.util
+
+if importlib.util.find_spec("binaryninja") is not None:
+    # we want to only run this on a real Binary Ninja installation
     from .sc62015.arch import SC62015, SC62015CallingConvention
     from .sc62015.view import SC62015RomView, SC62015FullView
 
@@ -45,3 +48,4 @@ try:
 # arch.register_calling_convention(
 #     ParametersInRegistersCallingConvention(arch, "default")
 # )
+
