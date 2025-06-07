@@ -4,6 +4,14 @@ class Architecture:
     def __getitem__(self, name: str) -> "Architecture":
         ...
 
-RegisterName = str
-IntrinsicName = str
-FlagName = str
+
+class RegisterName(str):
+    ...
+
+
+class IntrinsicName(str):
+    ...
+
+
+class FlagName(str):
+    ...
