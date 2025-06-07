@@ -902,8 +902,15 @@ class EMemHelper(Operand):
 
 
 class Pointer:
-    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
-        raise NotImplementedError(f"lift_current_addr() not implemented for {type(self)}")
+    def lift_current_addr(
+        self,
+        il: LowLevelILFunction,
+        pre: Optional[AddressingMode] = None,
+        side_effects: bool = True,
+    ) -> ExpressionIndex:
+        raise NotImplementedError(
+            f"lift_current_addr() not implemented for {type(self)}"
+        )
 
     def memory_helper(self) -> Type[Union[IMemHelper, EMemHelper]]:
         raise NotImplementedError(f"memory_helper() not implemented for {type(self)}")
@@ -914,9 +921,13 @@ class IMem8(Imm8, Pointer):
         return 1
 
     # FIXME: need to use IMemHelper
-    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
-        assert self.value is not None, "Value not set"
-        return il.const_pointer(3, INTERNAL_MEMORY_START + self.value)
+    def lift_current_addr(
+        self,
+        il: LowLevelILFunction,
+        pre: Optional[AddressingMode] = None,
+        side_effects: bool = True,
+    ) -> ExpressionIndex:
+        return self._helper().imem_addr(il, pre)
 
     def memory_helper(self) -> Type[IMemHelper]:
         return IMemHelper
@@ -1095,7 +1106,12 @@ class EMemAddr(Imm20, Pointer):
     def width(self) -> int:
         return self._width
 
-    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
+    def lift_current_addr(
+        self,
+        il: LowLevelILFunction,
+        pre: Optional[AddressingMode] = None,
+        side_effects: bool = True,
+    ) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const_pointer(3, self.value)
 
@@ -1122,8 +1138,13 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         self.value = value
         self.offset = offset
 
-    def lift_current_addr(self, il: LowLevelILFunction, side_effects: bool = True) -> ExpressionIndex:
-        addr = self.value.lift(il, pre=None, side_effects=side_effects)
+    def lift_current_addr(
+        self,
+        il: LowLevelILFunction,
+        pre: Optional[AddressingMode] = None,
+        side_effects: bool = True,
+    ) -> ExpressionIndex:
+        addr = self.value.lift_current_addr(il, pre=pre, side_effects=side_effects) if isinstance(self.value, Pointer) else self.value.lift(il, pre=pre, side_effects=side_effects)
         if self.offset:
             addr = self.offset.lift_offset(il, addr)
         return addr
@@ -1139,14 +1160,25 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         result.append(TEndMem(MemType.EXTERNAL))
         return result
 
-    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
+    def lift(
+        self,
+        il: LowLevelILFunction,
+        pre: Optional[AddressingMode] = None,
+        side_effects: bool = True,
+    ) -> ExpressionIndex:
         # FIXME: need to figure out the size to use, currently hardcoded to 1
-        return il.load(1, self.lift_current_addr(il, side_effects=side_effects))
+        return il.load(1, self.lift_current_addr(il, pre=pre, side_effects=side_effects))
 
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
-                    Optional[AddressingMode] = None) -> None:
+    def lift_assign(
+        self,
+        il: LowLevelILFunction,
+        value: ExpressionIndex,
+        pre: Optional[AddressingMode] = None,
+    ) -> None:
         # FIXME: what's the width? Hardcoded to 1.
-        il.append(il.store(1, self.lift_current_addr(il, side_effects=True), value))
+        il.append(
+            il.store(1, self.lift_current_addr(il, pre=pre, side_effects=True), value)
+        )
 
 # page 74 of the book
 # External Memory: Register Indirect
@@ -1654,9 +1686,16 @@ class MVL(MoveInstruction):
         assert isinstance(src, Pointer), f"Expected Pointer, got {type(src)}"
         # 0xCB and 0xCF variants use IMem8, IMem8
         dst_reg = TempReg(TempMvlDst)
-        dst_reg.lift_assign(il, dst.lift_current_addr(il, side_effects=False))
+        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+
+        dst_reg.lift_assign(
+            il, dst.lift_current_addr(il, pre=dst_mode, side_effects=False)
+        )
         src_reg = TempReg(TempMvlSrc)
-        src_reg.lift_assign(il, src.lift_current_addr(il, side_effects=False))
+        src_reg.lift_assign(
+            il, src.lift_current_addr(il, pre=src_mode, side_effects=False)
+        )
 
         with lift_loop(il):
             src_mem = src.memory_helper()(1, src_reg)
@@ -1670,8 +1709,8 @@ class MVL(MoveInstruction):
 
             # in case we have POST_INC or PRE_DEC, we need to update the
             # register by lifting it and not assigning it
-            dst.lift_current_addr(il)
-            src.lift_current_addr(il)
+            dst.lift_current_addr(il, pre=dst_mode)
+            src.lift_current_addr(il, pre=src_mode)
 
 class MVLD(MVL):
     def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
@@ -1864,17 +1903,29 @@ def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
     return output_reg
 
 
-def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
-                    clear_carry: bool = False,
-                    reverse: bool = False,
-                    bcd: bool = False,
-                    subtract: bool = False) -> None:
+def lift_multi_byte(
+    il: LowLevelILFunction,
+    op1: Operand,
+    op2: Operand,
+    clear_carry: bool = False,
+    reverse: bool = False,
+    bcd: bool = False,
+    subtract: bool = False,
+    pre: Optional[int] = None,
+) -> None:
     assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
 
+    dst_mode = get_addressing_mode(pre, 1) if pre else None
+    src_mode = get_addressing_mode(pre, 2) if pre else None
+
     # Helper to create load/store/advance logic for operands
-    def make_handlers(op: Operand, is_dest_op: bool) -> Tuple[Callable[[], ExpressionIndex],
-                                                     Callable[[ExpressionIndex], None],
-                                                     Callable[[], None]]:
+    def make_handlers(
+        op: Operand,
+        is_dest_op: bool,
+        mode: Optional[AddressingMode],
+    ) -> Tuple[Callable[[], ExpressionIndex],
+                     Callable[[ExpressionIndex], None],
+                     Callable[[], None]]:
         if isinstance(op, Pointer):
             # Temp reg to hold the iterating pointer for memory operands
             ptr_temp_reg_const = TempMultiByte1 if is_dest_op else TempMultiByte2
@@ -1882,7 +1933,10 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
 
             # Initialize the pointer temp reg with the initial address from the operand
             # side_effects=False for source, potentially True for dest if pre/post inc/dec
-            ptr.lift_assign(il, op.lift_current_addr(il, side_effects=is_dest_op))
+            ptr.lift_assign(
+                il,
+                op.lift_current_addr(il, pre=mode, side_effects=is_dest_op),
+            )
 
             def load() -> ExpressionIndex:
                 # Use width 'w' (e.g. 1 for byte) for memory load/store element size
@@ -1906,8 +1960,8 @@ def lift_multi_byte(il: LowLevelILFunction, op1: Operand, op2: Operand,
 
     w = op1.width()
 
-    load1, store1, adv1 = make_handlers(op1, True)
-    load2, store2, adv2 = make_handlers(op2, False)
+    load1, store1, adv1 = make_handlers(op1, True, dst_mode)
+    load2, store2, adv2 = make_handlers(op2, False, src_mode)
 
     if clear_carry:
         il.append(il.set_flag(CFlag, il.const(1, 0)))
@@ -1981,25 +2035,34 @@ class ADCL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         # ADCL uses the incoming carry flag for the first byte.
-        lift_multi_byte(il, dst, src, clear_carry=False)
+        lift_multi_byte(il, dst, src, clear_carry=False, pre=self._pre)
 
 class SBCL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         # SBCL uses the incoming carry (borrow) flag for the first byte.
-        lift_multi_byte(il, dst, src, subtract=True, clear_carry=False)
+        lift_multi_byte(il, dst, src, subtract=True, clear_carry=False, pre=self._pre)
 
 class DADL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         # DADL does not use incoming carry for the first byte (implicitly 0).
-        lift_multi_byte(il, dst, src, clear_carry=True, bcd=True, reverse=True)
+        lift_multi_byte(il, dst, src, clear_carry=True, bcd=True, reverse=True, pre=self._pre)
 
 class DSBL(ArithmeticInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
         # DSBL uses the incoming carry (borrow) flag for the first byte.
-        lift_multi_byte(il, dst, src, bcd=True, subtract=True, reverse=True, clear_carry=False)
+        lift_multi_byte(
+            il,
+            dst,
+            src,
+            bcd=True,
+            subtract=True,
+            reverse=True,
+            clear_carry=False,
+            pre=self._pre,
+        )
 
 
 class LogicInstruction(Instruction): pass
@@ -2067,8 +2130,11 @@ class DSLL(Instruction):
         # current_addr_reg holds the internal memory address (e.g.,
         # INTERNAL_MEMORY_START + n_offset)
         # For DSLL, (n) is the MSB address.
-        current_addr_reg = TempReg(TempMultiByte1, width=3) # Addresses are 3 bytes (20/24 bit)
-        current_addr_reg.lift_assign(il, imem_op.lift_current_addr(il, side_effects=False))
+        current_addr_reg = TempReg(TempMultiByte1, width=3)  # Addresses are 3 bytes (20/24 bit)
+        mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        current_addr_reg.lift_assign(
+            il, imem_op.lift_current_addr(il, pre=mode, side_effects=False)
+        )
 
         # digit_carry_reg stores the high nibble of T (current byte) to be OR'd
         # into the low nibble of S (shifted byte) in the next (less significant) iteration.
@@ -2113,7 +2179,10 @@ class DSRL(Instruction):
 
         # For DSRL, (n) is the LSB address.
         current_addr_reg = TempReg(TempMultiByte1, width=3)
-        current_addr_reg.lift_assign(il, imem_op.lift_current_addr(il, side_effects=False))
+        mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        current_addr_reg.lift_assign(
+            il, imem_op.lift_current_addr(il, pre=mode, side_effects=False)
+        )
 
         # digit_carry_reg stores the low nibble of T (current byte) to be OR'd
         # into the high nibble of S (shifted byte) in the next (more significant) iteration.
