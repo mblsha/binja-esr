@@ -22,6 +22,7 @@ from .instr import (
     SHL,
     MV,
     EX,
+    EXL,
     PUSHS,
     POPS,
     PUSHU,
@@ -536,6 +537,30 @@ class AsmTransformer(Transformer):
         op1, op2 = items
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def ex_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": EX, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def exw_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": EX, "instr_opts": Opts(name="EXW", ops=[op1, op2])}
+        }
+
+    def exp_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": EX, "instr_opts": Opts(name="EXP", ops=[op1, op2])}
+        }
+
+    def exl_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": EXL, "instr_opts": Opts(ops=[op1, op2])}
         }
 
     def and_a_imm(self, items: List[Any]) -> InstructionNode:
