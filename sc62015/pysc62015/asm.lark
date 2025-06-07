@@ -86,6 +86,18 @@ instruction: "NOP"i -> nop
            | dsbl_imem_a
            | pmdf_imem_imm
            | pmdf_imem_a
+           | or_imem_a
+           | or_a_imem
+           | or_a_imm
+           | or_imem_imm
+           | or_emem_imm
+           | or_imem_imem
+           | xor_imem_a
+           | xor_a_imem
+           | xor_a_imm
+           | xor_imem_imm
+           | xor_emem_imm
+           | xor_imem_imem
 
 jp_reg.2: "JP"i reg
 jp_imem.2: "JP"i imem_operand
@@ -130,6 +142,20 @@ dsbl_imem_a.2:    "DSBL"i imem_operand "," _A
 
 pmdf_imem_imm.1: "PMDF"i imem_operand "," expression
 pmdf_imem_a.2:   "PMDF"i imem_operand "," _A
+
+or_imem_a.2: "OR"i imem_operand "," _A
+or_a_imem.2: "OR"i _A "," imem_operand
+or_a_imm.1: "OR"i _A "," expression
+or_imem_imm.1: "OR"i imem_operand "," expression
+or_emem_imm.1: "OR"i emem_addr "," expression
+or_imem_imem.1: "OR"i imem_operand "," imem_operand
+
+xor_imem_a.2: "XOR"i imem_operand "," _A
+xor_a_imem.2: "XOR"i _A "," imem_operand
+xor_a_imm.1: "XOR"i _A "," expression
+xor_imem_imm.1: "XOR"i imem_operand "," expression
+xor_emem_imm.1: "XOR"i emem_addr "," expression
+xor_imem_imem.1: "XOR"i imem_operand "," imem_operand
 
 
 // --- Data Directives ---
