@@ -43,6 +43,12 @@ instruction: "NOP"i -> nop
            | "POPU"i reg -> popu_reg
            | "CALL"i expression -> call
            | "CALLF"i expression -> callf
+           | jp_reg
+           | jp_imem
+           | jp_abs
+           | jpf_abs
+           | "JR"i "+" expression -> jr_plus
+           | "JR"i "-" expression -> jr_minus
            | "INC"i reg -> inc_reg
            | "INC"i imem_operand -> inc_imem
            | "DEC"i reg -> dec_reg
@@ -70,6 +76,11 @@ instruction: "NOP"i -> nop
            | sbc_imem_imm
            | sbc_a_imem
            | sbc_imem_a
+
+jp_reg.2: "JP"i reg
+jp_imem.2: "JP"i imem_operand
+jp_abs.1: "JP"i expression
+jpf_abs.1: "JPF"i expression
 
 and_imem_a.2: "AND"i imem_operand "," _A
 and_a_imem.2: "AND"i _A "," imem_operand
