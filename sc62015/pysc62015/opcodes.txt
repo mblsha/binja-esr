@@ -877,8 +877,7 @@ EC07: DSLL  (07)
 ED00: EX    A,A
 ED11: EX    IL,IL
 ED07: EX    A,S
-# FIXME: implement
-# EE: SWAP  A
+EE: SWAP  A
 EF: WAIT
 
 F0000000:   MV  (00),[(00)]
