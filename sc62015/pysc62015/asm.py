@@ -253,7 +253,14 @@ class AsmTransformer(Transformer):
         return IMemOperand(AddressingMode.N, n=items[0])
 
     def imem_bp_n(self, items: List[Any]) -> IMemOperand:
-        return IMemOperand(AddressingMode.BP_N, n=items[0])
+        value = items[0]
+        if isinstance(value, str):
+            upper = value.upper()
+            if upper == "PX":
+                return IMemOperand(AddressingMode.BP_PX)
+            if upper == "PY":
+                return IMemOperand(AddressingMode.BP_PY)
+        return IMemOperand(AddressingMode.BP_N, n=value)
 
     def imem_px_n(self, items: List[Any]) -> IMemOperand:
         return IMemOperand(AddressingMode.PX_N, n=items[0])
