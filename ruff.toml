@@ -1,3 +1,6 @@
+
+extend-exclude = ['third-party/lark']
+
 [lint]
 ignore = ['F405', 'E701']
 
