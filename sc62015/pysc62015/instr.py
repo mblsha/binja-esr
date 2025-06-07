@@ -127,6 +127,18 @@ REVERSE_PRE_TABLE: Dict[Tuple[AddressingMode, AddressingMode], int] = {
     (AddressingMode.PX_N,  AddressingMode.BP_PY): 0x35,
 }
 
+# Lookup table for instructions that operate on a single internal
+# memory operand requiring a PRE prefix.  The mapping is based on the
+# addressing mode used for that operand.  Simple `(n)` addressing does
+# not require a prefix and therefore isn't included here.
+SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
+    AddressingMode.BP_N:  0x22,
+    AddressingMode.PX_N:  0x36,
+    AddressingMode.PY_N:  0x33,
+    AddressingMode.BP_PX: 0x26,
+    AddressingMode.BP_PY: 0x31,
+}
+
 
 def get_addressing_mode(pre_value: int, operand_index: int) -> AddressingMode:
     """
@@ -1743,19 +1755,7 @@ class MoveInstruction(Instruction):
     pass
 
 class MV(MoveInstruction):
-    def encode(self, encoder: Encoder, addr: int) -> None:
-        # Handle special case for imem-to-imem moves that need a PRE byte
-        op1, op2 = self.operands()
-        if isinstance(op1, IMemOperand) and isinstance(op2, IMemOperand):
-            pre_key = (op1.mode, op2.mode)
-            pre_byte = REVERSE_PRE_TABLE.get(pre_key)
-            if pre_byte is None:
-                raise ValueError(f"Invalid addressing mode combination for MV: {op1.mode.value} and {op2.mode.value}")
-            self._pre = pre_byte
-            self.opcode = 0xC8 # Base opcode for MV (m),(n)
-            # Fall through to the generic Instruction.encode
-
-        super().encode(encoder, addr)
+    pass
 
     def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il_arg2
