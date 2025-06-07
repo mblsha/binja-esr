@@ -17,5 +17,5 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install -e .[dev]
       - run: ruff check
-      - run: mypy sc62015/pysc62015 || true
+      - run: python scripts/run_mypy.py
       - run: pytest -q
