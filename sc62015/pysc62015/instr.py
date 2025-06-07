@@ -2361,6 +2361,19 @@ class ExchangeInstruction(Instruction):
         tmp.lift_assign(il, first.lift(il))
         first.lift_assign(il, second.lift(il))
         second.lift_assign(il, tmp.lift(il))
+
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        op1, op2 = self.operands()
+        if isinstance(op1, IMemOperand) and isinstance(op2, IMemOperand):
+            pre_key = (op1.mode, op2.mode)
+            pre_byte = REVERSE_PRE_TABLE.get(pre_key)
+            if pre_byte is None:
+                raise ValueError(
+                    f"Invalid addressing mode combination for {self.name()}: {op1.mode.value} and {op2.mode.value}"
+                )
+            self._pre = pre_byte
+
+        super().encode(encoder, addr)
 class EX(ExchangeInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         self.lift_single_exchange(il, addr)

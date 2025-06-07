@@ -659,6 +659,52 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- Exchange Instruction Tests ---
+    AssemblerTestCase(
+        test_id="ex_imem_imem_simple",
+        asm_code="EX (0x10), (0x20)",
+        expected_ti="""
+            @0000
+            32 C0 10 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="ex_imem_imem_complex",
+        asm_code="EX (BP+0x10), (PY+0x20)",
+        expected_ti="""
+            @0000
+            23 C0 10 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="exw_imem_imem_simple",
+        asm_code="EXW (0x30), (0x40)",
+        expected_ti="""
+            @0000
+            32 C1 30 40
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="exp_imem_imem_simple",
+        asm_code="EXP (0x50), (0x60)",
+        expected_ti="""
+            @0000
+            32 C2 50 60
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="exl_imem_imem_simple",
+        asm_code="EXL (0x70), (0x80)",
+        expected_ti="""
+            @0000
+            32 C3 70 80
+            q
+        """,
+    ),
 ]
 
 

@@ -54,6 +54,10 @@ instruction: "NOP"i -> nop
            | "DEC"i reg -> dec_reg
            | "DEC"i imem_operand -> dec_imem
            | "MV"i imem_operand "," imem_operand -> mv_imem_imem
+           | "EX"i imem_operand "," imem_operand -> ex_imem_imem
+           | "EXW"i imem_operand "," imem_operand -> exw_imem_imem
+           | "EXP"i imem_operand "," imem_operand -> exp_imem_imem
+           | "EXL"i imem_operand "," imem_operand -> exl_imem_imem
            | and_imem_a
            | and_a_imem
            | and_a_imm
