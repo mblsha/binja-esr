@@ -160,6 +160,18 @@ assembler_test_cases: List[AssemblerTestCase] = [
         test_id="mv_imem_imem_invalid_combo",
         asm_code='MV (BP+PX), (BP+PY)'
     ),
+    AssemblerTestCase(
+        test_id="call_and_callf",
+        asm_code="""
+            CALL 0xAABB
+            CALLF 0xAABBCC
+        """,
+        expected_ti="""
+            @0000
+            04 BB AA 05 CC BB AA
+            q
+        """,
+    ),
 ]
 
 

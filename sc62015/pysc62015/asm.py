@@ -26,6 +26,9 @@ from .instr import (
     POPS,
     PUSHU,
     POPU,
+    CALL,
+    Imm16,
+    Imm20,
     Reg,
     RegB,
     RegF,
@@ -228,6 +231,26 @@ class AsmTransformer(Transformer):
     def popu_imr(self, _: List[Any]) -> InstructionNode:
         return {
             "instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[RegIMR()])}
+        }
+
+    def call(self, items: List[Any]) -> InstructionNode:
+        imm = Imm16()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": CALL,
+                "instr_opts": Opts(ops=[imm]),
+            }
+        }
+
+    def callf(self, items: List[Any]) -> InstructionNode:
+        imm = Imm20()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": CALL,
+                "instr_opts": Opts(name="CALLF", ops=[imm]),
+            }
         }
 
     def reg(self, items: List[Token]) -> Reg:
