@@ -38,6 +38,8 @@ from .instr import (
     SBCL,
     DADL,
     DSBL,
+    DSLL,
+    DSRL,
     PMDF,
     CMP,
     CMPW,
@@ -774,6 +776,18 @@ class AsmTransformer(Transformer):
         op1 = items[0]
         return {
             "instruction": {"instr_class": DSBL, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def dsll_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {
+            "instruction": {"instr_class": DSLL, "instr_opts": Opts(ops=[op])}
+        }
+
+    def dsrl_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {
+            "instruction": {"instr_class": DSRL, "instr_opts": Opts(ops=[op])}
         }
 
     def pmdf_imem_imm(self, items: List[Any]) -> InstructionNode:
