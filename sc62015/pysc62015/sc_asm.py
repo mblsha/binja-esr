@@ -9,7 +9,17 @@ from plumbum import cli  # type: ignore[import-untyped]
 # Assuming the provided library files are in a package named 'sc62015'
 from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from .coding import Encoder
-from .instr import Instruction, OPCODES, Opts, IMemOperand, IMem8, ImmOperand, Imm20, Reg3
+from .instr import (
+    Instruction,
+    OPCODES,
+    Opts,
+    IMemOperand,
+    IMem8,
+    ImmOperand,
+    Imm20,
+    ImmOffset,
+    Reg3,
+)
 
 # A simple cache for the reverse lookup table
 REVERSE_OPCODES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
@@ -93,7 +103,16 @@ class Assembler:
                 for p_op, t_op in zip(provided_ops, template_ops):
                     if isinstance(t_op, IMem8) and isinstance(p_op, IMemOperand):
                         continue
-                    if isinstance(t_op, ImmOperand) and isinstance(p_op, ImmOperand):
+                    if isinstance(t_op, ImmOffset) and isinstance(p_op, ImmOffset):
+                        if t_op.sign != p_op.sign:
+                            converted_match = False
+                            break
+                        continue
+                    if (
+                        isinstance(t_op, ImmOperand)
+                        and isinstance(p_op, ImmOperand)
+                        and not isinstance(t_op, ImmOffset)
+                    ):
                         if type(p_op) is type(t_op):
                             continue
                     if isinstance(t_op, Reg3) and isinstance(p_op, Reg3):

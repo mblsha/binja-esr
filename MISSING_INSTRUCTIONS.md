@@ -22,7 +22,7 @@ the assembler. The remaining missing set includes:
 ## 3. Program Flow Instructions
 Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:
 
-- **Unconditional Jumps**: `JP`, `JR` and their far or register forms.
+- **Unconditional Jumps**: far or register forms of `JP` and `JR`.
 - **Conditional Jumps**: `JPZ`, `JPNZ`, `JPC`, `JPNC`.
 - **Conditional Relative Jumps**: `JRZ`, `JRNZ`, `JRC`, `JRNC`.
 

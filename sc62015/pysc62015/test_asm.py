@@ -399,6 +399,61 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- JP/JR Instruction Tests ---
+    AssemblerTestCase(
+        test_id="jp_abs",
+        asm_code="JP 0x1234",
+        expected_ti="""
+            @0000
+            02 34 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jpf_abs",
+        asm_code="JPF 0xABCDE",
+        expected_ti="""
+            @0000
+            03 DE BC 0A
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jp_imem",
+        asm_code="JP (0x10)",
+        expected_ti="""
+            @0000
+            10 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jp_reg",
+        asm_code="JP S",
+        expected_ti="""
+            @0000
+            11 07
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jr_plus",
+        asm_code="JR +0x05",
+        expected_ti="""
+            @0000
+            12 05
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jr_minus",
+        asm_code="JR -0x02",
+        expected_ti="""
+            @0000
+            13 02
+            q
+        """,
+    ),
 ]
 
 

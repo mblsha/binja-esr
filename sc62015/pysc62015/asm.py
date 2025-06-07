@@ -32,8 +32,12 @@ from .instr import (
     SUB,
     SBC,
     CALL,
+    JP_Abs,
+    JP_Rel,
     Imm16,
     Imm20,
+    ImmOffset,
+    IMem20,
     INC,
     DEC,
     Reg3,
@@ -270,6 +274,54 @@ class AsmTransformer(Transformer):
                 "instr_opts": Opts(name="CALLF", ops=[imm]),
             }
         }
+
+    def jp_abs(self, items: List[Any]) -> InstructionNode:
+        imm = Imm16()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(ops=[imm]),
+            }
+        }
+
+    def jpf_abs(self, items: List[Any]) -> InstructionNode:
+        imm = Imm20()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(name="JPF", ops=[imm]),
+            }
+        }
+
+    def jp_reg(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        return {
+            "instruction": {"instr_class": JP_Abs, "instr_opts": Opts(ops=[r])}}
+
+    def jp_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        imm = IMem20()
+        imm.value = op.n_val
+        return {
+            "instruction": {"instr_class": JP_Abs, "instr_opts": Opts(ops=[imm])}}
+
+    def jr_plus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("+")
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": JP_Rel, "instr_opts": Opts(ops=[imm])}}
+
+    def jr_minus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("-")
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": JP_Rel, "instr_opts": Opts(ops=[imm])}}
 
     def inc_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
