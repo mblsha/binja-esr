@@ -27,6 +27,8 @@ from .instr import (
     PUSHU,
     POPU,
     AND,
+    ADD,
+    SUB,
     CALL,
     Imm16,
     Imm20,
@@ -386,6 +388,60 @@ class AsmTransformer(Transformer):
         op1, op2 = items
         return {
             "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def add_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def add_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def add_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def add_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def sub_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def sub_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def sub_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def sub_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
     def def_arg(self, items: List[Any]) -> str:
