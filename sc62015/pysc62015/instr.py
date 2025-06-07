@@ -787,6 +787,7 @@ class Imm20(ImmOperand):
     def __init__(self) -> None:
         super().__init__()
         self.value = None
+        self.extra_hi = None
 
     def width(self) -> int:
         return 3

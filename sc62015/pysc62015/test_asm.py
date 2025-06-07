@@ -177,6 +177,54 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """
     ),
+    AssemblerTestCase(  
+        test_id="call_and_callf",
+        asm_code="""
+            CALL 0xAABB
+            CALLF 0xAABBCC
+        """,
+        expected_ti="""
+            @0000
+            04 BB AA 05 CC BB AA
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="inc_reg",
+        asm_code="INC A",
+        expected_ti="""
+            @0000
+            6C 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="inc_imem",
+        asm_code="INC (0x10)",
+        expected_ti="""
+            @0000
+            6D 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="dec_reg",
+        asm_code="DEC S",
+        expected_ti="""
+            @0000
+            7C 07
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="dec_imem",
+        asm_code="DEC (0x20)",
+        expected_ti="""
+            @0000
+            7D 20
+            q
+        """,
+    ),
 ]
 
 
