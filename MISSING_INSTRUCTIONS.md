@@ -37,8 +37,6 @@ None of the logical, test, or compare operations are handled:
 ## 5. Increment, Decrement, and Exchange Instructions
 Only `EX A,B` is implemented. Missing variants include:
 
-- **Increment**: `INC` for registers and memory locations.
-- **Decrement**: `DEC` for registers and memory locations.
 - **Exchange**: `EX`, `EXW`, `EXP`, `EXL` with register and memory operands.
 
 ## 6. Shift and Rotate Instructions

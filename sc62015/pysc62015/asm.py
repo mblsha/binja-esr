@@ -29,6 +29,9 @@ from .instr import (
     CALL,
     Imm16,
     Imm20,
+    INC,
+    DEC,
+    Reg3,
     Reg,
     RegB,
     RegF,
@@ -252,6 +255,30 @@ class AsmTransformer(Transformer):
                 "instr_opts": Opts(name="CALLF", ops=[imm]),
             }
         }
+
+    def inc_reg(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        return {"instruction": {"instr_class": INC, "instr_opts": Opts(ops=[r])}}
+
+    def inc_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {"instruction": {"instr_class": INC, "instr_opts": Opts(ops=[op])}}
+
+    def dec_reg(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        return {"instruction": {"instr_class": DEC, "instr_opts": Opts(ops=[r])}}
+
+    def dec_imem(self, items: List[Any]) -> InstructionNode:
+        op = cast(IMemOperand, items[0])
+        return {"instruction": {"instr_class": DEC, "instr_opts": Opts(ops=[op])}}
 
     def reg(self, items: List[Token]) -> Reg:
         reg_name = str(items[0]).upper()
