@@ -47,10 +47,5 @@ The grammar supports the accumulator forms (`ROR A`, `ROL A`, `SHR A`, `SHL A`) 
 - **Decimal Shifts**: `DSRL`, `DSLL`.
 
 ## 7. Stack Instructions
-Stack operations are limited to the `F` and `IMR` registers. Missing user stack operations include:
-
-- `PUSHU r`
-- `POPU r`
-
-for `A`, `IL`, `BA`, `I`, `X`, and `Y`.
+All user stack operations are now supported in the assembler.
 
