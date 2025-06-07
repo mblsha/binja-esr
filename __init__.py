@@ -10,8 +10,9 @@ def module_exists(module_name):
         return False
 
 
-if module_exists("binaryninja"):
-    # we want to only run this on a real Binary Ninja installation
+# we want to only run this on a real Binary Ninja installation,
+# and expect __package__ to be set by Binary Ninja.
+if module_exists("binaryninja") and __package__:
     from .sc62015.arch import SC62015, SC62015CallingConvention
     from .sc62015.view import SC62015RomView, SC62015FullView
 

@@ -7,9 +7,11 @@ from binaryninja.enums import SegmentFlag, SectionSemantics, SymbolType, Endiann
 from binaryninja.types import Symbol
 
 # Import architecture-specific constants
-from .pysc62015.instr import (
+from .pysc62015.constants import (
     INTERNAL_MEMORY_START,
     INTERNAL_MEMORY_LENGTH,
+)
+from .pysc62015.instr import (
     IMEM_NAMES,
     INTERRUPT_VECTOR_ADDR,
     ENTRY_POINT_ADDR,
