@@ -32,7 +32,7 @@ Missing variants include:
 The grammar supports the accumulator forms (`ROR A`, `ROL A`, `SHR A`, `SHL A`) but omits:
 
 - **Memory Forms**: `ROR (n)`, `ROL (n)`, `SHR (n)`, `SHL (n)`.
-- **Decimal Shifts**: `DSRL`, `DSLL`.
+- **Decimal Shifts**: *(implemented)*
 
 ## 7. Stack Instructions
 All user stack operations are now supported in the assembler.
