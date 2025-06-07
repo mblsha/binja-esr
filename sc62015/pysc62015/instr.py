@@ -106,6 +106,29 @@ PRE_TABLE = {
     }
 }
 
+REVERSE_PRE_TABLE: Dict[Tuple[AddressingMode, AddressingMode], int] = {
+    # 1st Op \ 2nd Op: (n)
+    (AddressingMode.N,     AddressingMode.N):     0x32,
+    (AddressingMode.BP_N,  AddressingMode.N):     0x22,
+    (AddressingMode.PX_N,  AddressingMode.N):     0x36,
+    (AddressingMode.BP_PX, AddressingMode.N):     0x26,
+    # 1st Op \ 2nd Op: (BP+n)
+    (AddressingMode.N,     AddressingMode.BP_N):  0x30,
+    (AddressingMode.PX_N,  AddressingMode.BP_N):  0x34,
+    (AddressingMode.BP_PX, AddressingMode.BP_N):  0x24,
+    # 1st Op \ 2nd Op: (PY+n)
+    (AddressingMode.N,     AddressingMode.PY_N):  0x33,
+    (AddressingMode.BP_N,  AddressingMode.PY_N):  0x23,
+    (AddressingMode.PX_N,  AddressingMode.PY_N):  0x37,
+    (AddressingMode.BP_PX, AddressingMode.PY_N):  0x27,
+    # 1st Op \ 2nd Op: (BP+PY)
+    (AddressingMode.N,     AddressingMode.BP_PY): 0x31,
+    (AddressingMode.BP_N,  AddressingMode.BP_PY): 0x21,
+    (AddressingMode.PX_N,  AddressingMode.BP_PY): 0x35,
+    (AddressingMode.BP_PX, AddressingMode.BP_PY): 0x25,
+}
+
+
 def get_addressing_mode(pre_value: int, operand_index: int) -> AddressingMode:
     """
     Returns the addressing mode for the given PRE byte and operand index (1 or 2).
@@ -678,6 +701,36 @@ class HasOperands:
         raise NotImplementedError("lift_assign not implemented for HasOperands")
 
 
+class IMemOperand(Operand, HasWidth):
+    def __init__(self, mode: AddressingMode, n: Optional[Union[str, int]] = None):
+        self.mode = mode
+        self.n_val = n
+        self.helper = IMemHelper(width=1, value=self)
+
+    def __repr__(self) -> str:
+        return f"IMemOperand(mode={self.mode}, n={self.n_val})"
+
+    def width(self) -> int:
+        return 1
+
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
+        # The 'pre' argument is ignored here because the operand itself
+        # already knows its addressing mode.
+        return self.helper.render(pre=self.mode)
+
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        # The 'n' value is encoded only if the mode requires it.
+        if self.mode in [AddressingMode.N, AddressingMode.BP_N, AddressingMode.PX_N, AddressingMode.PY_N]:
+            assert self.n_val is not None
+            encoder.unsigned_byte(self.n_val) # Assumes n_val is already an int
+
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
+        return self.helper.lift(il, self.mode, side_effects)
+
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre: Optional[AddressingMode] = None) -> None:
+        self.helper.lift_assign(il, value, self.mode)
+
+
 class ImmOperand(Operand, HasWidth):
     value: Optional[int]
 
@@ -820,9 +873,6 @@ class IMemHelper(Operand):
         result.append(TEndMem(MemType.INTERNAL))
         return result
 
-    def _n_offset(self, il: LowLevelILFunction) -> ExpressionIndex:
-        return self.value.lift(il)
-
     # they're not real registers, but we treat them as such
     @staticmethod
     def _reg_value(name: str, il: LowLevelILFunction) -> ExpressionIndex:
@@ -830,15 +880,18 @@ class IMemHelper(Operand):
         return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
 
     def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
+        assert isinstance(self.value, IMemOperand)
+        n_lifted = il.const(1, self.value.n_val) if self.value.n_val is not None else il.const(1, 0)
+
         match pre:
             case None | AddressingMode.N:
-                return self._n_offset(il)
+                return n_lifted
             case AddressingMode.BP_N:
-                return il.add(1, self._reg_value("BP", il), self._n_offset(il))
+                return il.add(1, self._reg_value("BP", il), n_lifted)
             case AddressingMode.PX_N:
-                return il.add(1, self._reg_value("PX", il), self._n_offset(il))
+                return il.add(1, self._reg_value("PX", il), n_lifted)
             case AddressingMode.PY_N:
-                return il.add(1, self._reg_value("PY", il), self._n_offset(il))
+                return il.add(1, self._reg_value("PY", il), n_lifted)
             case AddressingMode.BP_PX:
                 return il.add(1, self._reg_value("BP", il), self._reg_value("PX", il))
             case AddressingMode.BP_PY:
@@ -1675,6 +1728,20 @@ class MoveInstruction(Instruction):
     pass
 
 class MV(MoveInstruction):
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        # Handle special case for imem-to-imem moves that need a PRE byte
+        op1, op2 = self.operands()
+        if isinstance(op1, IMemOperand) and isinstance(op2, IMemOperand):
+            pre_key = (op1.mode, op2.mode)
+            pre_byte = REVERSE_PRE_TABLE.get(pre_key)
+            if pre_byte is None:
+                raise ValueError(f"Invalid addressing mode combination for MV: {op1.mode.value} and {op2.mode.value}")
+            self._pre = pre_byte
+            self.opcode = 0xC8 # Base opcode for MV (m),(n)
+            # Fall through to the generic Instruction.encode
+
+        super().encode(encoder, addr)
+
     def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il_arg2
 

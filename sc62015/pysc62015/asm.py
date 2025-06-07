@@ -30,6 +30,8 @@ from .instr import (
     RegB,
     RegF,
     RegIMR,
+    IMemOperand,
+    AddressingMode,
 )
 
 import os
@@ -226,6 +228,55 @@ class AsmTransformer(Transformer):
     def popu_imr(self, _: List[Any]) -> InstructionNode:
         return {
             "instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[RegIMR()])}
+        }
+
+    def reg(self, items: List[Token]) -> Reg:
+        reg_name = str(items[0]).upper()
+        # Specific register types are handled by their rules (_A, _B, etc.)
+        # This is a fallback for general-purpose registers.
+        if reg_name == "B":
+            return RegB()
+        return Reg(reg_name)
+
+    def atom(self, items: List[Any]) -> str:
+        # This will return a number as a string, or a symbol name.
+        # The assembler will resolve it later.
+        return items[0]
+
+    def expression(self, items: List[Any]) -> str:
+        # For now, expressions are just atoms.
+        return items[0]
+
+    # --- Internal Memory Operand Rules ---
+
+    def imem_n(self, items: List[Any]) -> IMemOperand:
+        return IMemOperand(AddressingMode.N, n=items[0])
+
+    def imem_bp_n(self, items: List[Any]) -> IMemOperand:
+        return IMemOperand(AddressingMode.BP_N, n=items[0])
+
+    def imem_px_n(self, items: List[Any]) -> IMemOperand:
+        return IMemOperand(AddressingMode.PX_N, n=items[0])
+
+    def imem_py_n(self, items: List[Any]) -> IMemOperand:
+        return IMemOperand(AddressingMode.PY_N, n=items[0])
+
+    def imem_bp_px(self, items: List[Any]) -> IMemOperand:
+        return IMemOperand(AddressingMode.BP_PX)
+
+    def imem_bp_py(self, items: List[Any]) -> IMemOperand:
+        return IMemOperand(AddressingMode.BP_PY)
+
+    def imem_operand(self, items: List[Any]) -> IMemOperand:
+        # This rule just passes through the IMemOperand object created by the more specific rules.
+        return items[0]
+
+    # --- Instruction Rules ---
+
+    def mv_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[op1, op2])}
         }
 
     def def_arg(self, items: List[Any]) -> str:

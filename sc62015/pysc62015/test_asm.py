@@ -122,6 +122,44 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """
     ),
+    # --- Tests for PRE byte generation in MV instructions ---
+    AssemblerTestCase(
+        test_id="mv_imem_imem_simple_pre",
+        asm_code='MV (0x10), (0x20)',
+        # Should generate PRE=0x32, then MV=0xC8, then operands
+        expected_ti="""
+            @0000
+            32 C8 10 20
+            q
+        """
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_imem_complex_pre_1",
+        asm_code='MV (BP+0x10), (PY+0x20)',
+        # Should generate PRE=0x23, then MV=0xC8, then operands
+        expected_ti="""
+            @0000
+            23 C8 10 20
+            q
+        """
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_imem_complex_pre_2",
+        asm_code="""
+            MV (BP+PX), (BP+0x30)
+        """,
+        # Should generate PRE=0x24, then MV=0xC8, then operands.
+        # Note: (BP+PX) has no operand byte.
+        expected_ti="""
+            @0000
+            24 C8 30
+            q
+        """
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_imem_invalid_combo",
+        asm_code='MV (BP+PX), (BP+PY)'
+    ),
 ]
 
 
@@ -139,6 +177,12 @@ def test_assembler_e2e(case: AssemblerTestCase) -> None:
     source_code = dedent(case.asm_code)
     expected_ihex = dedent(case.expected_ihex).strip() if case.expected_ihex else ""
     expected_ti = dedent(case.expected_ti).strip() if case.expected_ti else ""
+
+    if "invalid" in case.test_id:
+        with pytest.raises(AssemblerError) as exc_info:
+            assembler.assemble(source_code)
+        assert "Invalid addressing mode combination" in str(exc_info.value)
+        return
 
     try:
         bin_file = assembler.assemble(source_code)

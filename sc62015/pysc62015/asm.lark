@@ -48,15 +48,39 @@ defl_directive: "defl"i def_arg ("," def_arg)*
 defs_directive: "defs"i NUMBER
 defm_directive: "defm"i string_literal
 
-?def_arg: atom | string_literal
-?atom: NUMBER | CNAME
+?def_arg: expression | string_literal
+?expression: atom
 string_literal: ESCAPED_STRING
+
+
+// --- Operands ---
+reg: CNAME
+atom: NUMBER | CNAME
+
+imem_operand: imem_n
+            | imem_bp_n
+            | imem_px_n
+            | imem_py_n
+            | imem_bp_px
+            | imem_bp_py
+
+imem_n:     "(" expression ")"
+imem_bp_n:  "(" _BP "+" expression ")"
+imem_px_n:  "(" _PX "+" expression ")"
+imem_py_n:  "(" _PY "+" expression ")"
+imem_bp_px: "(" _BP "+" _PX ")"
+imem_bp_py: "(" _BP "+" _PY ")"
+
 
 // --- Terminals with higher priority ---
 _A: "A"i
 _B: "B"i
 _F: "F"i
 _IMR: "IMR"i
+_BP: "BP"i
+_PX: "PX"i
+_PY: "PY"i
+
 
 // --- Common Terminals ---
 NUMBER: /0x[0-9a-fA-F]+/i | /[0-9]+/
