@@ -70,6 +70,10 @@ instruction: "NOP"i -> nop
            | sbc_imem_imm
            | sbc_a_imem
            | sbc_imem_a
+           | adcl_imem_imem
+           | adcl_imem_a
+           | sbcl_imem_imem
+           | sbcl_imem_a
 
 and_imem_a.2: "AND"i imem_operand "," _A
 and_a_imem.2: "AND"i _A "," imem_operand
@@ -97,6 +101,11 @@ sbc_a_imm.1: "SBC"i _A "," expression
 sbc_imem_imm.1: "SBC"i imem_operand "," expression
 sbc_a_imem.2: "SBC"i _A "," imem_operand
 sbc_imem_a.2: "SBC"i imem_operand "," _A
+
+adcl_imem_imem.2: "ADCL"i imem_operand "," imem_operand
+adcl_imem_a.2:    "ADCL"i imem_operand "," _A
+sbcl_imem_imem.2: "SBCL"i imem_operand "," imem_operand
+sbcl_imem_a.2:    "SBCL"i imem_operand "," _A
 
 
 // --- Data Directives ---

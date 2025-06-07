@@ -399,6 +399,44 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- ADCL Instruction Tests ---
+    AssemblerTestCase(
+        test_id="adcl_imem_imem",
+        asm_code="ADCL (0x10), (0x20)",
+        expected_ti="""
+            @0000
+            54 10 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="adcl_imem_a",
+        asm_code="ADCL (0x30), A",
+        expected_ti="""
+            @0000
+            55 30
+            q
+        """,
+    ),
+    # --- SBCL Instruction Tests ---
+    AssemblerTestCase(
+        test_id="sbcl_imem_imem",
+        asm_code="SBCL (0x40), (0x50)",
+        expected_ti="""
+            @0000
+            5C 40 50
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sbcl_imem_a",
+        asm_code="SBCL (0x60), A",
+        expected_ti="""
+            @0000
+            5D 60
+            q
+        """,
+    ),
 ]
 
 
