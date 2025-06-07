@@ -25,6 +25,7 @@ class MockFlag:
     name: str
 
 
+# we cannot use real Architecture (it requires a Binary Ninja license)
 class MockArch:
     def get_reg_index(self, name: object) -> Any:
         assert name != "IMR"
