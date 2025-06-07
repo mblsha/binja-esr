@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import copy
 from typing import Dict, List, Any, cast
 
 import bincopy  # type: ignore[import-untyped]
@@ -104,8 +105,26 @@ class Assembler:
                     )
                     instr.opcode = template["opcode"]
 
+                    # Use a copy for length calculation so that symbolic
+                    # operands remain unresolved for pass two.
+                    instr_for_size = copy.deepcopy(instr)
+                    for op in instr_for_size.operands():
+                        if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
+                            try:
+                                op.n_val = int(op.n_val, 0)
+                            except ValueError:
+                                op.n_val = 0
+                        if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
+                            try:
+                                setattr(op, "value", int(getattr(op, "value"), 0))
+                            except ValueError:
+                                setattr(op, "value", 0)
+
                     encoder = Encoder()
-                    instr.encode(encoder, 0)  # address doesn't matter for size
+                    try:
+                        instr_for_size.encode(encoder, 0)  # address doesn't matter
+                    except ValueError as e:
+                        raise AssemblerError(str(e)) from e
                     instr.set_length(len(encoder.buf))
 
                     return instr
