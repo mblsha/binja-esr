@@ -877,7 +877,7 @@ class IMemHelper(Operand):
     @staticmethod
     def _reg_value(name: str, il: LowLevelILFunction) -> ExpressionIndex:
         addr = IMEM_NAMES[name]
-        return il.load(1, il.const_pointer(4, INTERNAL_MEMORY_START + addr))
+        return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
 
     def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
         n_val: Union[str, int] = 0
