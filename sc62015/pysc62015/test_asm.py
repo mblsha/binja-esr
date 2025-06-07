@@ -437,6 +437,25 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- PMDF Instruction Tests ---
+    AssemblerTestCase(
+        test_id="pmdf_imem_imm",
+        asm_code="PMDF (0x70), 0x03",
+        expected_ti="""
+            @0000
+            47 70 03
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="pmdf_imem_a",
+        asm_code="PMDF (0x80), A",
+        expected_ti="""
+            @0000
+            57 80
+            q
+        """,
+    ),
 ]
 
 

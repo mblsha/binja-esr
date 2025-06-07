@@ -16,7 +16,6 @@ Basic addition (`ADD`) and subtraction (`SUB`) instructions are now supported in
 the assembler. The remaining missing set includes:
 
 - **BCD Arithmetic**: `DADL`, `DSBL`.
-- **Packed BCD Modify**: `PMDF`.
 
 ## 3. Program Flow Instructions
 Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:

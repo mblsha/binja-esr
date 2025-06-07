@@ -33,6 +33,7 @@ from .instr import (
     SBC,
     ADCL,
     SBCL,
+    PMDF,
     CALL,
     Imm16,
     Imm20,
@@ -532,6 +533,20 @@ class AsmTransformer(Transformer):
         op1 = items[0]
         return {
             "instruction": {"instr_class": SBCL, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def pmdf_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": PMDF, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def pmdf_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": PMDF, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
     def def_arg(self, items: List[Any]) -> str:
