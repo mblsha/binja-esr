@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import copy
-from typing import Dict, List, Any, cast
+from typing import Dict, List, Any, Optional, cast
 
 import bincopy  # type: ignore[import-untyped]
 from plumbum import cli  # type: ignore[import-untyped]
@@ -19,6 +19,9 @@ from .instr import (
     Imm20,
     ImmOffset,
     Reg3,
+    REVERSE_PRE_TABLE,
+    SINGLE_OPERAND_PRE_LOOKUP,
+    AddressingMode,
 )
 
 # A simple cache for the reverse lookup table
@@ -133,9 +136,36 @@ class Assembler:
                     )
                     instr.opcode = template["opcode"]
 
+                    # Determine if a PRE prefix byte is required based on
+                    # internal memory operands.
+                    operands_list = list(instr.operands())
+                    imem_ops = [op for op in operands_list if isinstance(op, IMemOperand)]
+
+                    pre_byte: Optional[int] = None
+                    if len(imem_ops) == 2:
+                        pre_byte = REVERSE_PRE_TABLE.get((imem_ops[0].mode, imem_ops[1].mode))
+                        if pre_byte is None:
+                            raise AssemblerError(
+                                f"Invalid addressing mode combination for {mnemonic}: "
+                                f"{imem_ops[0].mode.value} and {imem_ops[1].mode.value}"
+                            )
+                    elif len(imem_ops) == 1:
+                        mode = imem_ops[0].mode
+                        if mode != AddressingMode.N:
+                            pre_byte = SINGLE_OPERAND_PRE_LOOKUP.get(mode)
+                            if pre_byte is None:
+                                raise AssemblerError(
+                                    f"Unsupported addressing mode {mode.value} for {mnemonic}"
+                                )
+
+                    if pre_byte is not None:
+                        instr._pre = pre_byte
+
                     # Use a copy for length calculation so that symbolic
                     # operands remain unresolved for pass two.
                     instr_for_size = copy.deepcopy(instr)
+                    if pre_byte is not None:
+                        instr_for_size._pre = pre_byte
                     for op in instr_for_size.operands():
                         if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
                             try:
