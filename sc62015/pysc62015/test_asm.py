@@ -198,8 +198,8 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
         expected_ti="""
             @0000
-            70 55 71 10 01 72 45 23 01 02 73 20 77 30 76 40
-            50
+            70 55 71 10 01 72 45 23 01 02 73 20 77 30 32 76
+            40 50
             q
         """
     ),
@@ -230,6 +230,15 @@ assembler_test_cases: List[AssemblerTestCase] = [
         expected_ti="""
             @0000
             6D 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="inc_px_n",
+        asm_code="INC (PX+0xEC)",
+        expected_ti="""
+            @0000
+            36 6D EC
             q
         """,
     ),
@@ -276,6 +285,15 @@ assembler_test_cases: List[AssemblerTestCase] = [
         expected_ti="""
             @0000
             42 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="add_a_bp_n",
+        asm_code="ADD A, (BP+0x50)",
+        expected_ti="""
+            @0000
+            22 42 50
             q
         """,
     ),
@@ -405,7 +423,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADCL (0x10), (0x20)",
         expected_ti="""
             @0000
-            54 10 20
+            32 54 10 20
             q
         """,
     ),
@@ -424,7 +442,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SBCL (0x40), (0x50)",
         expected_ti="""
             @0000
-            5C 40 50
+            32 5C 40 50
             q
         """,
     ),
@@ -443,7 +461,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DADL (0x10), (0x20)",
         expected_ti="""
             @0000
-            C4 10 20
+            32 C4 10 20
             q
         """,
     ),
@@ -462,7 +480,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DSBL (0x40), (0x50)",
         expected_ti="""
             @0000
-            D4 40 50
+            32 D4 40 50
             q
         """,
     ),
@@ -509,7 +527,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (BP+0x10)",
         expected_ti="""
             @0000
-            E5 10
+            22 E5 10
             q
         """,
     ),
@@ -518,7 +536,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (PX+0x10)",
         expected_ti="""
             @0000
-            E5 10
+            36 E5 10
             q
         """,
     ),
@@ -527,7 +545,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (PY+0x10)",
         expected_ti="""
             @0000
-            E5 10
+            33 E5 10
             q
         """,
     ),
@@ -536,7 +554,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (BP+PX)",
         expected_ti="""
             @0000
-            E5
+            26 E5
             q
         """,
     ),
@@ -545,7 +563,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (BP+PY)",
         expected_ti="""
             @0000
-            E5
+            31 E5
             q
         """,
     ),
@@ -563,7 +581,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (BP+0x11)",
         expected_ti="""
             @0000
-            E7 11
+            22 E7 11
             q
         """,
     ),
@@ -572,7 +590,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (PX+0x11)",
         expected_ti="""
             @0000
-            E7 11
+            36 E7 11
             q
         """,
     ),
@@ -581,7 +599,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (PY+0x11)",
         expected_ti="""
             @0000
-            E7 11
+            33 E7 11
             q
         """,
     ),
@@ -590,7 +608,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (BP+PX)",
         expected_ti="""
             @0000
-            E7
+            26 E7
             q
         """,
     ),
@@ -599,7 +617,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (BP+PY)",
         expected_ti="""
             @0000
-            E7
+            31 E7
             q
         """,
     ),
@@ -617,7 +635,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (BP+0x12)",
         expected_ti="""
             @0000
-            F5 12
+            22 F5 12
             q
         """,
     ),
@@ -626,7 +644,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (PX+0x12)",
         expected_ti="""
             @0000
-            F5 12
+            36 F5 12
             q
         """,
     ),
@@ -635,7 +653,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (PY+0x12)",
         expected_ti="""
             @0000
-            F5 12
+            33 F5 12
             q
         """,
     ),
@@ -644,7 +662,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (BP+PX)",
         expected_ti="""
             @0000
-            F5
+            26 F5
             q
         """,
     ),
@@ -653,7 +671,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (BP+PY)",
         expected_ti="""
             @0000
-            F5
+            31 F5
             q
         """,
     ),
@@ -671,7 +689,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (BP+0x13)",
         expected_ti="""
             @0000
-            F7 13
+            22 F7 13
             q
         """,
     ),
@@ -680,7 +698,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (PX+0x13)",
         expected_ti="""
             @0000
-            F7 13
+            36 F7 13
             q
         """,
     ),
@@ -689,7 +707,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (PY+0x13)",
         expected_ti="""
             @0000
-            F7 13
+            33 F7 13
             q
         """,
     ),
@@ -698,7 +716,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (BP+PX)",
         expected_ti="""
             @0000
-            F7
+            26 F7
             q
         """,
     ),
@@ -707,7 +725,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (BP+PY)",
         expected_ti="""
             @0000
-            F7
+            31 F7
             q
         """,
     ),
@@ -944,7 +962,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="OR (0x40), (0x50)",
         expected_ti="""
             @0000
-            7E 40 50
+            32 7E 40 50
             q
         """,
     ),
@@ -999,7 +1017,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="XOR (0x40), (0x50)",
         expected_ti="""
             @0000
-            6E 40 50
+            32 6E 40 50
             q
         """,
     ),
@@ -1096,11 +1114,20 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
     ),
     AssemblerTestCase(
+        test_id="cmp_bp_py_a",
+        asm_code="CMP (BP+PY), A",
+        expected_ti="""
+            @0000
+            31 63
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="cmp_imem_imem",
         asm_code="CMP (0x40), (0x50)",
         expected_ti="""
             @0000
-            B7 40 50
+            32 B7 40 50
             q
         """,
     ),
