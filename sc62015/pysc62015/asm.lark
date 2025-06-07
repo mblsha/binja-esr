@@ -36,7 +36,7 @@ instruction: "NOP"i -> nop
            | "SHL"i imem_operand -> shl_imem
            | "MV"i _A "," _B -> mv_a_b
            | "MV"i _B "," _A -> mv_b_a
-           | ex_a_b
+           | "EX"i _A "," _B -> ex_a_b
            | "PUSHS"i _F -> pushs_f
            | "POPS"i _F -> pops_f
            | "PUSHU"i _F -> pushu_f
@@ -47,24 +47,24 @@ instruction: "NOP"i -> nop
            | "POPU"i reg -> popu_reg
            | "CALL"i expression -> call
            | "CALLF"i expression -> callf
-           | jp_reg
-           | jp_imem
-           | jp_abs
-           | jpf_abs
-           | jpz_abs
-           | jpnz_abs
-           | jpc_abs
-           | jpnc_abs
+           | "JP"i reg -> jp_reg
+           | "JP"i imem_operand -> jp_imem
+           | "JP"i expression -> jp_abs
+           | "JPF"i expression -> jpf_abs
+           | "JPZ"i expression -> jpz_abs
+           | "JPNZ"i expression -> jpnz_abs
+           | "JPC"i expression -> jpc_abs
+           | "JPNC"i expression -> jpnc_abs
            | "JR"i "+" expression -> jr_plus
            | "JR"i "-" expression -> jr_minus
-           | jrz_plus
-           | jrz_minus
-           | jrnz_plus
-           | jrnz_minus
-           | jrc_plus
-           | jrc_minus
-           | jrnc_plus
-           | jrnc_minus
+           | "JRZ"i "+" expression -> jrz_plus
+           | "JRZ"i "-" expression -> jrz_minus
+           | "JRNZ"i "+" expression -> jrnz_plus
+           | "JRNZ"i "-" expression -> jrnz_minus
+           | "JRC"i "+" expression -> jrc_plus
+           | "JRC"i "-" expression -> jrc_minus
+           | "JRNC"i "+" expression -> jrnc_plus
+           | "JRNC"i "-" expression -> jrnc_minus
            | "INC"i reg -> inc_reg
            | "INC"i imem_operand -> inc_imem
            | "DEC"i reg -> dec_reg
@@ -75,160 +75,66 @@ instruction: "NOP"i -> nop
            | "EXW"i imem_operand "," imem_operand -> exw_imem_imem
            | "EXP"i imem_operand "," imem_operand -> exp_imem_imem
            | "EXL"i imem_operand "," imem_operand -> exl_imem_imem
-           | and_imem_a
-           | and_a_imem
-           | and_a_imm
-           | and_imem_imm
-           | and_emem_imm
-           | and_imem_imem
-           | add_a_imm
-           | add_imem_imm
-           | add_a_imem
-           | add_imem_a
-           | adc_a_imm
-           | adc_imem_imm
-           | adc_a_imem
-           | adc_imem_a
-           | sub_a_imm
-           | sub_imem_imm
-           | sub_a_imem
-           | sub_imem_a
-           | sbc_a_imm
-           | sbc_imem_imm
-           | sbc_a_imem
-           | sbc_imem_a
-           | adcl_imem_imem
-           | adcl_imem_a
-           | sbcl_imem_imem
-           | sbcl_imem_a
-           | dadl_imem_imem
-           | dadl_imem_a
-           | dsbl_imem_imem
-           | dsbl_imem_a
-           | dsll_imem
-           | dsrl_imem
-           | pmdf_imem_imm
-           | pmdf_imem_a
-           | or_imem_a
-           | or_a_imem
-           | or_a_imm
-           | or_imem_imm
-           | or_emem_imm
-           | or_imem_imem
-           | xor_imem_a
-           | xor_a_imem
-           | xor_a_imm
-           | xor_imem_imm
-           | xor_emem_imm
-           | xor_imem_imem
-           | cmp_a_imm
-           | cmp_imem_imm
-           | cmp_emem_imm
-           | cmp_imem_a
-           | cmp_imem_imem
-           | cmpw_imem_imem
-           | cmpp_imem_imem
-           | cmpw_imem_reg
-           | cmpp_imem_reg
-           | test_a_imm
-           | test_imem_imm
-           | test_emem_imm
-           | test_imem_a
+           | "AND"i imem_operand "," _A -> and_imem_a
+           | "AND"i _A "," imem_operand -> and_a_imem
+           | "AND"i _A "," expression -> and_a_imm
+           | "AND"i imem_operand "," expression -> and_imem_imm
+           | "AND"i emem_addr "," expression -> and_emem_imm
+           | "AND"i imem_operand "," imem_operand -> and_imem_imem
+           | "ADD"i _A "," expression -> add_a_imm
+           | "ADD"i imem_operand "," expression -> add_imem_imm
+           | "ADD"i _A "," imem_operand -> add_a_imem
+           | "ADD"i imem_operand "," _A -> add_imem_a
+           | "ADC"i _A "," expression -> adc_a_imm
+           | "ADC"i imem_operand "," expression -> adc_imem_imm
+           | "ADC"i _A "," imem_operand -> adc_a_imem
+           | "ADC"i imem_operand "," _A -> adc_imem_a
+           | "SUB"i _A "," expression -> sub_a_imm
+           | "SUB"i imem_operand "," expression -> sub_imem_imm
+           | "SUB"i _A "," imem_operand -> sub_a_imem
+           | "SUB"i imem_operand "," _A -> sub_imem_a
+           | "SBC"i _A "," expression -> sbc_a_imm
+           | "SBC"i imem_operand "," expression -> sbc_imem_imm
+           | "SBC"i _A "," imem_operand -> sbc_a_imem
+           | "SBC"i imem_operand "," _A -> sbc_imem_a
+           | "ADCL"i imem_operand "," imem_operand -> adcl_imem_imem
+           | "ADCL"i imem_operand "," _A -> adcl_imem_a
+           | "SBCL"i imem_operand "," imem_operand -> sbcl_imem_imem
+           | "SBCL"i imem_operand "," _A -> sbcl_imem_a
+           | "DADL"i imem_operand "," imem_operand -> dadl_imem_imem
+           | "DADL"i imem_operand "," _A -> dadl_imem_a
+           | "DSBL"i imem_operand "," imem_operand -> dsbl_imem_imem
+           | "DSBL"i imem_operand "," _A -> dsbl_imem_a
+           | "DSLL"i imem_operand -> dsll_imem
+           | "DSRL"i imem_operand -> dsrl_imem
+           | "PMDF"i imem_operand "," expression -> pmdf_imem_imm
+           | "PMDF"i imem_operand "," _A -> pmdf_imem_a
+           | "OR"i imem_operand "," _A -> or_imem_a
+           | "OR"i _A "," imem_operand -> or_a_imem
+           | "OR"i _A "," expression -> or_a_imm
+           | "OR"i imem_operand "," expression -> or_imem_imm
+           | "OR"i emem_addr "," expression -> or_emem_imm
+           | "OR"i imem_operand "," imem_operand -> or_imem_imem
+           | "XOR"i imem_operand "," _A -> xor_imem_a
+           | "XOR"i _A "," imem_operand -> xor_a_imem
+           | "XOR"i _A "," expression -> xor_a_imm
+           | "XOR"i imem_operand "," expression -> xor_imem_imm
+           | "XOR"i emem_addr "," expression -> xor_emem_imm
+           | "XOR"i imem_operand "," imem_operand -> xor_imem_imem
+           | "CMP"i _A "," expression -> cmp_a_imm
+           | "CMP"i imem_operand "," expression -> cmp_imem_imm
+           | "CMP"i emem_addr "," expression -> cmp_emem_imm
+           | "CMP"i imem_operand "," _A -> cmp_imem_a
+           | "CMP"i imem_operand "," imem_operand -> cmp_imem_imem
+           | "CMPW"i imem_operand "," imem_operand -> cmpw_imem_imem
+           | "CMPP"i imem_operand "," imem_operand -> cmpp_imem_imem
+           | "CMPW"i imem_operand "," reg -> cmpw_imem_reg
+           | "CMPP"i imem_operand "," reg -> cmpp_imem_reg
+           | "TEST"i _A "," expression -> test_a_imm
+           | "TEST"i imem_operand "," expression -> test_imem_imm
+           | "TEST"i emem_addr "," expression -> test_emem_imm
+           | "TEST"i imem_operand "," _A -> test_imem_a
 
-ex_a_b.2: "EX"i _A "," _B
-
-jp_reg.2: "JP"i reg
-jp_imem.2: "JP"i imem_operand
-jp_abs.1: "JP"i expression
-jpf_abs.1: "JPF"i expression
-jpz_abs.1: "JPZ"i expression
-jpnz_abs.1: "JPNZ"i expression
-jpc_abs.1: "JPC"i expression
-jpnc_abs.1: "JPNC"i expression
-jrz_plus.1: "JRZ"i "+" expression
-jrz_minus.1: "JRZ"i "-" expression
-jrnz_plus.1: "JRNZ"i "+" expression
-jrnz_minus.1: "JRNZ"i "-" expression
-jrc_plus.1: "JRC"i "+" expression
-jrc_minus.1: "JRC"i "-" expression
-jrnc_plus.1: "JRNC"i "+" expression
-jrnc_minus.1: "JRNC"i "-" expression
-
-and_imem_a.2: "AND"i imem_operand "," _A
-and_a_imem.2: "AND"i _A "," imem_operand
-and_a_imm.1: "AND"i _A "," expression
-and_imem_imm.1: "AND"i imem_operand "," expression
-and_emem_imm.1: "AND"i emem_addr "," expression
-and_imem_imem.1: "AND"i imem_operand "," imem_operand
-
-add_a_imm.1: "ADD"i _A "," expression
-add_imem_imm.1: "ADD"i imem_operand "," expression
-add_a_imem.2: "ADD"i _A "," imem_operand
-add_imem_a.2: "ADD"i imem_operand "," _A
-
-adc_a_imm.1: "ADC"i _A "," expression
-adc_imem_imm.1: "ADC"i imem_operand "," expression
-adc_a_imem.2: "ADC"i _A "," imem_operand
-adc_imem_a.2: "ADC"i imem_operand "," _A
-
-sub_a_imm.1: "SUB"i _A "," expression
-sub_imem_imm.1: "SUB"i imem_operand "," expression
-sub_a_imem.2: "SUB"i _A "," imem_operand
-sub_imem_a.2: "SUB"i imem_operand "," _A
-
-sbc_a_imm.1: "SBC"i _A "," expression
-sbc_imem_imm.1: "SBC"i imem_operand "," expression
-sbc_a_imem.2: "SBC"i _A "," imem_operand
-sbc_imem_a.2: "SBC"i imem_operand "," _A
-
-adcl_imem_imem.2: "ADCL"i imem_operand "," imem_operand
-adcl_imem_a.2:    "ADCL"i imem_operand "," _A
-sbcl_imem_imem.2: "SBCL"i imem_operand "," imem_operand
-sbcl_imem_a.2:    "SBCL"i imem_operand "," _A
-dadl_imem_imem.2: "DADL"i imem_operand "," imem_operand
-dadl_imem_a.2:    "DADL"i imem_operand "," _A
-dsbl_imem_imem.2: "DSBL"i imem_operand "," imem_operand
-dsbl_imem_a.2:    "DSBL"i imem_operand "," _A
-
-dsll_imem.1: "DSLL"i imem_operand
-dsrl_imem.1: "DSRL"i imem_operand
-
-ror_imem.1: "ROR"i imem_operand
-rol_imem.1: "ROL"i imem_operand
-shr_imem.1: "SHR"i imem_operand
-shl_imem.1: "SHL"i imem_operand
-
-pmdf_imem_imm.1: "PMDF"i imem_operand "," expression
-pmdf_imem_a.2:   "PMDF"i imem_operand "," _A
-
-or_imem_a.2: "OR"i imem_operand "," _A
-or_a_imem.2: "OR"i _A "," imem_operand
-or_a_imm.1: "OR"i _A "," expression
-or_imem_imm.1: "OR"i imem_operand "," expression
-or_emem_imm.1: "OR"i emem_addr "," expression
-or_imem_imem.1: "OR"i imem_operand "," imem_operand
-
-xor_imem_a.2: "XOR"i imem_operand "," _A
-xor_a_imem.2: "XOR"i _A "," imem_operand
-xor_a_imm.1: "XOR"i _A "," expression
-xor_imem_imm.1: "XOR"i imem_operand "," expression
-xor_emem_imm.1: "XOR"i emem_addr "," expression
-xor_imem_imem.1: "XOR"i imem_operand "," imem_operand
-
-cmp_a_imm.1: "CMP"i _A "," expression
-cmp_imem_imm.1: "CMP"i imem_operand "," expression
-cmp_emem_imm.1: "CMP"i emem_addr "," expression
-cmp_imem_a.2: "CMP"i imem_operand "," _A
-cmp_imem_imem.1: "CMP"i imem_operand "," imem_operand
-cmpw_imem_imem.1: "CMPW"i imem_operand "," imem_operand
-cmpp_imem_imem.1: "CMPP"i imem_operand "," imem_operand
-cmpw_imem_reg.2: "CMPW"i imem_operand "," reg
-cmpp_imem_reg.2: "CMPP"i imem_operand "," reg
-
-test_a_imm.1: "TEST"i _A "," expression
-test_imem_imm.1: "TEST"i imem_operand "," expression
-test_emem_imm.1: "TEST"i emem_addr "," expression
-test_imem_a.2: "TEST"i imem_operand "," _A
 
 
 // --- Data Directives ---
@@ -266,13 +172,13 @@ emem_operand: emem_addr
 
 
 // --- Terminals with higher priority ---
-_A: "A"i
-_B: "B"i
-_F: "F"i
-_IMR: "IMR"i
-_BP: "BP"i
-_PX: "PX"i
-_PY: "PY"i
+_A.2: "A"i
+_B.2: "B"i
+_F.2: "F"i
+_IMR.2: "IMR"i
+_BP.2: "BP"i
+_PX.2: "PX"i
+_PY.2: "PY"i
 
 
 // --- Common Terminals ---
