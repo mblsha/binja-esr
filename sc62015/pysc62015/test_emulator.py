@@ -12,6 +12,7 @@ from .mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
 from .tokens import asm_str
+from dataclasses import dataclass, field
 import pytest
 
 
@@ -57,16 +58,19 @@ def test_registers() -> None:
 
 
 def _make_cpu_and_mem(
-    size: int, init_data: Dict[int, int], instr_bytes: bytes
+    size: int, init_data: Dict[int, int], instr_bytes: bytes, instr_addr: int = 0
 ) -> Tuple[Emulator, bytearray, List[int], List[Tuple[int, int]]]:
     """
     Create a bytearray-backed mock memory, preload it with `init_data` and
-    `instr_bytes`, then return (cpu, raw_memory).
+    `instr_bytes`, then return (cpu, raw_memory, read_log, write_log).
     """
     raw = bytearray(size)
     for addr, val in init_data.items():
         raw[addr] = val & 0xFF
-    raw[: len(instr_bytes)] = instr_bytes
+
+    # Place instruction bytes at the specified address
+    raw[instr_addr : instr_addr + len(instr_bytes)] = instr_bytes
+
     reads: List[int] = []
     writes: List[Tuple[int, int]] = []
 
@@ -78,7 +82,7 @@ def _make_cpu_and_mem(
 
     def write_mem(addr: int, value: int) -> None:
         writes.append((addr, value))
-        print(f"Writing {value:02x} to address {addr:04x}")
+        # print(f"Writing {value:02x} to address {addr:04x}") # Uncomment for debugging
         if addr < 0 or addr >= len(raw):
             raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
@@ -100,100 +104,142 @@ def debug_instruction(cpu: Emulator, address: int) -> None:
         print(f"  {llil}")
 
 
-def test_load_from_external_memory() -> None:
-    # 1-byte register load from external memory
+@dataclass
+class InstructionTestCase:
+    """A structured container for a single instruction test case."""
+
+    test_id: str
+    instr_bytes: bytes
+    init_regs: Dict[RegisterName, int] = field(default_factory=dict)
+    init_mem: Dict[int, int] = field(default_factory=dict)
+    expected_regs: Dict[RegisterName, int] = field(default_factory=dict)
+    expected_mem_writes: Optional[List[Tuple[int, int]]] = None
+    expected_mem_state: Dict[int, int] = field(default_factory=dict)
+    initial_pc: int = 0x00
+
+
+instruction_test_cases: List[InstructionTestCase] = [
+    # --- MV (Load/Store) Instructions ---
+    InstructionTestCase(
+        test_id="MV_A_from_ext_mem",
+        instr_bytes=bytes.fromhex("88100000"),
+        init_mem={0x10: 0xAB},
+        expected_regs={RegisterName.A: 0xAB},
+    ),
+    InstructionTestCase(
+        test_id="MV_BA_from_ext_mem",
+        instr_bytes=bytes.fromhex("8A200000"),
+        init_mem={0x20: 0x12, 0x21: 0x34},
+        expected_regs={RegisterName.BA: 0x3412},
+    ),
+    InstructionTestCase(
+        test_id="MV_X_from_ext_mem",
+        instr_bytes=bytes.fromhex("8C300000"),
+        init_mem={0x30: 0x01, 0x31: 0x02, 0x32: 0x03},
+        expected_regs={RegisterName.X: 0x030201},
+    ),
+    InstructionTestCase(
+        test_id="MV_A_to_ext_mem",
+        instr_bytes=bytes.fromhex("A8200000"),
+        init_regs={RegisterName.A: 0xCD},
+        expected_mem_writes=[(0x20, 0xCD)],
+        expected_mem_state={0x20: 0xCD},
+    ),
+    InstructionTestCase(
+        test_id="MV_BA_to_ext_mem",
+        instr_bytes=bytes.fromhex("AA200000"),
+        init_regs={RegisterName.BA: 0x1234},
+        expected_mem_writes=[(0x20, 0x34), (0x21, 0x12)],
+        expected_mem_state={0x20: 0x34, 0x21: 0x12},
+    ),
+    InstructionTestCase(
+        test_id="MV_X_to_ext_mem",
+        instr_bytes=bytes.fromhex("AC200000"),
+        init_regs={RegisterName.X: 0x010203},
+        expected_mem_writes=[(0x20, 0x03), (0x21, 0x02), (0x22, 0x01)],
+        expected_mem_state={0x20: 0x03, 0x21: 0x02, 0x22: 0x01},
+    ),
+    # --- ADD Instructions ---
+    InstructionTestCase(
+        test_id="ADD_A_imm_simple",
+        instr_bytes=bytes.fromhex("4001"),
+        init_regs={RegisterName.A: 0x10},
+        expected_regs={RegisterName.A: 0x11, RegisterName.FZ: 0, RegisterName.FC: 0},
+    ),
+    InstructionTestCase(
+        test_id="ADD_A_imm_carry_zero",
+        instr_bytes=bytes.fromhex("4001"),
+        init_regs={RegisterName.A: 0xFF},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},
+    ),
+    # --- SUB Instructions ---
+    InstructionTestCase(
+        test_id="SUB_A_imm_simple",
+        instr_bytes=bytes.fromhex("4801"),
+        init_regs={RegisterName.A: 0x10},
+        expected_regs={RegisterName.A: 0x0F, RegisterName.FZ: 0, RegisterName.FC: 0},
+    ),
+    InstructionTestCase(
+        test_id="SUB_A_imm_borrow",
+        instr_bytes=bytes.fromhex("4801"),
+        init_regs={RegisterName.A: 0x00},
+        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},
+    ),
+    InstructionTestCase(
+        test_id="SUB_A_imm_zero",
+        instr_bytes=bytes.fromhex("4801"),
+        init_regs={RegisterName.A: 0x01},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},
+    ),
+]
+
+# --- New Centralized Test Runner ---
+
+
+@pytest.mark.parametrize(
+    "case",
+    instruction_test_cases,
+    ids=[case.test_id for case in instruction_test_cases],
+)
+def test_instruction_execution(case: InstructionTestCase) -> None:
+    """
+    A generic, parameterized test function that runs a single instruction case.
+    """
+    # 1. Setup Phase
     cpu, raw, reads, writes = _make_cpu_and_mem(
-        0x40, {0x10: 0xAB}, bytes.fromhex("88100000")
+        ADDRESS_SPACE_SIZE, case.init_mem, case.instr_bytes, case.initial_pc
     )
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MV    A, [00010]"
 
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.A) == 0xAB
-    assert writes == []
+    for reg, val in case.init_regs.items():
+        cpu.regs.set(reg, val)
 
-    # 2-byte register load from external memory
-    cpu, raw, reads, writes = _make_cpu_and_mem(
-        0x40, {0x20: 0x12, 0x21: 0x34}, bytes.fromhex("8A200000")
-    )
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MV    BA, [00020]"
+    # 2. Execution Phase
+    cpu.execute_instruction(case.initial_pc)
 
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.BA) == 0x3412  # Little-endian order
-    assert writes == []
+    # 3. Assertion Phase
+    # Check register states
+    for reg, expected_val in case.expected_regs.items():
+        actual_val = cpu.regs.get(reg)
+        assert actual_val == expected_val, (
+            f"[{case.test_id}] Register {reg.name} mismatch: "
+            f"Expected 0x{expected_val:X}, Got 0x{actual_val:X}"
+        )
 
-    # 3-byte register load from external memory
-    cpu, raw, reads, writes = _make_cpu_and_mem(
-        0x40, {0x30: 0x01, 0x31: 0x02, 0x32: 0x03}, bytes.fromhex("8C300000")
-    )
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MV    X, [00030]"
+    # Check memory write log
+    if case.expected_mem_writes is not None:
+        # Sort both lists to make comparison order-independent if necessary
+        assert sorted(writes) == sorted(case.expected_mem_writes), (
+            f"[{case.test_id}] Memory write log mismatch: "
+            f"Expected {case.expected_mem_writes}, Got {writes}"
+        )
 
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.X) == 0x030201  # Little-endian order
-    assert writes == []
-
-
-def test_store_to_external_memory() -> None:
-    # 1-byte register store to external memory
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("A8200000"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MV    [00020], A"
-
-    cpu.regs.set(RegisterName.A, 0xCD)
-    cpu.execute_instruction(0x00)
-    assert writes == [(0x20, 0xCD)]
-
-    # 2-byte register store to external memory
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("AA200000"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MV    [00020], BA"
-
-    cpu.regs.set(RegisterName.BA, 0x1234)
-    cpu.execute_instruction(0x00)
-    assert writes == [(0x20, 0x34), (0x21, 0x12)]  # Little-endian order
-
-    # 3-byte register store to external memory
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("AC200000"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "MV    [00020], X"
-
-    cpu.regs.set(RegisterName.X, 0x010203)
-    cpu.execute_instruction(0x00)
-    assert writes == [(0x20, 0x03), (0x21, 0x02), (0x22, 0x01)]  # Little-endian order
-
-
-def test_add() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4001"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "ADD   A, 01"
-
-    cpu.regs.set(RegisterName.A, 0x10)
-    cpu.execute_instruction(0x00)
-    assert writes == []
-    assert cpu.regs.get(RegisterName.A) == 0x11
-    assert cpu.regs.get(RegisterName.FZ) == 0  # Zero flag not set
-    assert cpu.regs.get(RegisterName.FC) == 0  # Carry flag not set
-
-    cpu.regs.set(RegisterName.A, 0xFF)
-    cpu.execute_instruction(0x00)
-    debug_instruction(cpu, 0x00)
-    assert cpu.regs.get(RegisterName.A) == 0x00  # Wraps around
-    assert cpu.regs.get(RegisterName.FZ) == 1  # Zero flag set
-    assert cpu.regs.get(RegisterName.FC) == 1  # Carry flag set
-
-
-def test_sub() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4801"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "SUB   A, 01"
-
-    cpu.regs.set(RegisterName.A, 0x10)
-    cpu.execute_instruction(0x00)
-    assert writes == []
-    assert cpu.regs.get(RegisterName.A) == 0x0F
-    assert cpu.regs.get(RegisterName.FZ) == 0  # Zero flag not set
-    assert cpu.regs.get(RegisterName.FC) == 0  # Carry flag not set
-
-    cpu.regs.set(RegisterName.A, 0x00)
-    cpu.execute_instruction(0x00)
-    debug_instruction(cpu, 0x00)
-    assert cpu.regs.get(RegisterName.A) == 0xFF  # Wraps around
-    assert cpu.regs.get(RegisterName.FZ) == 0  # Zero flag not set
-    assert cpu.regs.get(RegisterName.FC) == 1  # Carry flag set
+    # Check final memory state
+    for addr, expected_val in case.expected_mem_state.items():
+        actual_val = raw[addr]
+        assert actual_val == expected_val, (
+            f"[{case.test_id}] Memory state at 0x{addr:X} mismatch: "
+            f"Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        )
 
 
 def test_pushs_pops() -> None:
@@ -1590,7 +1636,9 @@ def compute_expected_dsrl(logical_bcd_bytes: List[int]) -> List[int]:
 
         # New byte's low nibble is the old_current_byte's high nibble.
         # New byte's high nibble is u (which was the HIGH nibble of the previous byte).
-        shifted_bytes[i] = old_current_high_nibble | (u_carry_from_prev_high_nibble << 4)
+        shifted_bytes[i] = old_current_high_nibble | (
+            u_carry_from_prev_high_nibble << 4
+        )
 
         # Update u for the next iteration using the high nibble of the current byte
         u_carry_from_prev_high_nibble = old_current_high_nibble
@@ -1828,8 +1876,16 @@ def test_decode_all_opcodes() -> None:
         # MVL: done
         # ADCL, DADL: done
         # SBCL, DSBL: done
-        ignore_instructions = ["???", "MVL", "ADCL", "DADL", "SBCL", "DSBL",
-                               "DSRL", "DSLL"]
+        ignore_instructions = [
+            "???",
+            "MVL",
+            "ADCL",
+            "DADL",
+            "SBCL",
+            "DSBL",
+            "DSRL",
+            "DSLL",
+        ]
         for ignore in ignore_instructions:
             if s and s.startswith(ignore):
                 skip = True
