@@ -124,7 +124,7 @@ class MockGoto:
 class MockLowLevelILFunction(LowLevelILFunction):
     def __init__(self) -> None:
         # self.handle = MockHandle()
-        self._arch = MockArch()  # type: ignore
+        self._arch = MockArch()
         self.ils: List[MockLLIL] = []
 
     def __del__(self) -> None:
@@ -136,7 +136,7 @@ class MockLowLevelILFunction(LowLevelILFunction):
         self.append(result)
         return result
 
-    def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] = None) -> Any:  # type: ignore
+    def goto(self, label: LowLevelILLabel, loc: Optional[ILSourceLocation] = None) -> Any:
         return MockGoto(label)
 
     def if_expr(self, cond, t, f) -> Any:  # type: ignore
@@ -158,6 +158,10 @@ class MockLowLevelILFunction(LowLevelILFunction):
         name = llil.name
         # remove the "LLIL_" prefix
         name = name[5:]
-        name = name + SZ_LOOKUP.get(size, "")
+        if isinstance(size, int):
+            suffix = SZ_LOOKUP.get(size, "")
+        else:
+            suffix = ""
+        name = name + suffix
         name = name + f"{{{flags}}}" if flags is not None else name
         return MockLLIL(name, ops)
