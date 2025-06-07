@@ -101,14 +101,14 @@ class Assembler:
                         operands=provided_ops,
                         cond=template["opts"].cond,
                         ops_reversed=template["opts"].ops_reversed,
-                )
-                instr.opcode = template["opcode"]
+                    )
+                    instr.opcode = template["opcode"]
 
-                encoder = Encoder()
-                instr.encode(encoder, 0)  # address doesn't matter for size
-                instr.set_length(len(encoder.buf))
+                    encoder = Encoder()
+                    instr.encode(encoder, 0)  # address doesn't matter for size
+                    instr.set_length(len(encoder.buf))
 
-                return instr
+                    return instr
 
         raise AssemblerError(
             f"Could not find a matching opcode for {mnemonic} with operands {provided_ops}"
