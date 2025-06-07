@@ -50,6 +50,32 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """
     ),
     AssemblerTestCase(
+        test_id="user_stack_register_ops",
+        asm_code="""
+            PUSHU A
+            PUSHU IL
+            PUSHU BA
+            PUSHU I
+            PUSHU X
+            PUSHU Y
+            PUSHU F
+            PUSHU IMR
+            POPU A
+            POPU IL
+            POPU BA
+            POPU I
+            POPU X
+            POPU Y
+            POPU F
+            POPU IMR
+        """,
+        expected_ti="""
+            @0000
+            28 29 2A 2B 2C 2D 2E 2F 38 39 3A 3B 3C 3D 3E 3F
+            q
+        """
+    ),
+    AssemblerTestCase(
         test_id="data_directive_defb_with_code",
         asm_code="""
             SECTION code

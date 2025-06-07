@@ -39,6 +39,8 @@ instruction: "NOP"i -> nop
            | "POPU"i _F -> popu_f
            | "PUSHU"i _IMR -> pushu_imr
            | "POPU"i _IMR -> popu_imr
+           | "PUSHU"i reg -> pushu_reg
+           | "POPU"i reg -> popu_reg
            | "CALL"i expression -> call
            | "CALLF"i expression -> callf
            | "INC"i reg -> inc_reg

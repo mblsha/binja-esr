@@ -239,6 +239,14 @@ class AsmTransformer(Transformer):
             "instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[RegIMR()])}
         }
 
+    def pushu_reg(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        return {"instruction": {"instr_class": PUSHU, "instr_opts": Opts(ops=[reg])}}
+
+    def popu_reg(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        return {"instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[reg])}}
+
     def call(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
