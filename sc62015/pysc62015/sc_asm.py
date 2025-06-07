@@ -8,7 +8,7 @@ from plumbum import cli  # type: ignore[import-untyped]
 # Assuming the provided library files are in a package named 'sc62015'
 from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from .coding import Encoder
-from .instr import Instruction, OPCODES, Opts
+from .instr import Instruction, OPCODES, Opts, IMemOperand
 
 # A simple cache for the reverse lookup table
 REVERSE_OPCODES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
@@ -208,6 +208,10 @@ class Assembler:
         if "instruction" in statement:
             # Retrieve the already-built instruction from the cache
             instr = self.instructions_cache[line_num]
+
+            for op in instr.operands():
+                if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
+                    op.n_val = self._evaluate_operand(op.n_val)
             encoder = Encoder()
             instr.encode(encoder, self.current_address)
             return encoder.buf
