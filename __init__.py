@@ -1,6 +1,16 @@
+import sys
 import importlib.util
 
-if importlib.util.find_spec("binaryninja") is not None:
+def module_exists(module_name):
+    if module_name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ValueError, ImportError):
+        return False
+
+
+if module_exists("binaryninja"):
     # we want to only run this on a real Binary Ninja installation
     from .sc62015.arch import SC62015, SC62015CallingConvention
     from .sc62015.view import SC62015RomView, SC62015FullView
