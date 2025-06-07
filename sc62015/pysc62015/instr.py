@@ -755,6 +755,8 @@ class Imm8(ImmOperand):
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.value is not None, "Value not set"
+        if isinstance(self.value, str):
+            raise ValueError("Cannot encode unresolved label")
         encoder.unsigned_byte(self.value)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -774,6 +776,8 @@ class Imm16(ImmOperand):
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.value is not None, "Value not set"
+        if isinstance(self.value, str):
+            raise ValueError("Cannot encode unresolved label")
         encoder.unsigned_word_le(self.value)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -802,6 +806,8 @@ class Imm20(ImmOperand):
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.value is not None, "Value not set"
         assert self.extra_hi is not None, "Extra high byte not set"
+        if isinstance(self.value, str):
+            raise ValueError("Cannot encode unresolved label")
         encoder.unsigned_byte(self.value & 0xFF)
         encoder.unsigned_byte((self.value >> 8) & 0xFF)
         encoder.unsigned_byte(self.extra_hi)
@@ -819,6 +825,8 @@ class ImmOffset(Imm8):
 
     def offset_value(self) -> int:
         assert self.value is not None, "Value not set"
+        if isinstance(self.value, str):
+            raise ValueError("Cannot encode unresolved label")
         return -self.value if self.sign == '-' else self.value
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -891,7 +899,9 @@ class IMemHelper(Operand):
             if self.value.n_val is not None:
                 n_val = self.value.n_val
 
-        n_lifted = il.const(1, int(n_val))
+        if isinstance(n_val, str):
+            raise ValueError("Cannot encode unresolved label")
+        n_lifted = il.const(1, n_val)
 
         match pre:
             case None | AddressingMode.N:
@@ -921,6 +931,8 @@ class IMemHelper(Operand):
 
         if isinstance(self.value, ImmOperand) and (pre is None or pre == AddressingMode.N):
             assert self.value.value is not None, "Value not set"
+            if isinstance(self.value.value, str):
+                raise ValueError("Cannot encode unresolved label")
             raw_addr = INTERNAL_MEMORY_START + self.value.value
             return il.const_pointer(3, raw_addr)
 
@@ -953,6 +965,8 @@ class EMemHelper(Operand):
     def emem_addr(self, il: LowLevelILFunction) -> ExpressionIndex:
         if isinstance(self.value, ImmOperand):
             assert self.value.value is not None, "Value not set"
+            if isinstance(self.value.value, str):
+                raise ValueError("Cannot encode unresolved label")
             raw_addr = self.value.value
             return il.const_pointer(3, raw_addr)
 
@@ -1467,7 +1481,7 @@ class EMemIMem(HasOperands, Imm8):
         super().decode(decoder, addr)
         self.imem.decode(decoder, addr)
 
-        self.mode = get_emem_imem_mode(self.value, addr)
+        self.mode = get_emem_imem_mode(cast(Optional[int], self.value), addr)
         if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
             self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
@@ -1537,7 +1551,7 @@ class EMemIMemOffset(HasOperands, Operand):
         self.imem2 = IMem8()
         self.imem2.decode(decoder, addr)
 
-        self.mode = get_emem_imem_mode(self.mode_imm.value, addr)
+        self.mode = get_emem_imem_mode(cast(Optional[int], self.mode_imm.value), addr)
         if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
             self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
             self.offset.decode(decoder, addr)
@@ -1696,10 +1710,12 @@ class CALL(Instruction):
         dest = self._dest()
         result = dest.value
         assert result is not None, "Value not set"
+        if isinstance(result, str):
+            raise ValueError("Cannot encode unresolved label")
         if dest.width() != 3:
             assert dest.width() == 2
             result = addr & 0xFF0000 | result
-        return result
+        return cast(int, result)
 
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
