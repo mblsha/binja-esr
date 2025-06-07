@@ -504,6 +504,180 @@ class TestIMemHelperLifting:
         assert addr_llil == expected_llil
 
 
+class TestIMem8CurrentAddr:
+    def _get_current_addr_llil(
+        self, operand: IMem8, pre_mode: Optional[AddressingMode]
+    ) -> MockLLIL:
+        il = MockLowLevelILFunction()
+        addr_expr = operand.lift_current_addr(il, pre=pre_mode, side_effects=False)
+        assert isinstance(addr_expr, MockLLIL)
+        return addr_expr
+
+    def test_direct_n_mode(self) -> None:
+        op = IMem8()
+        op.value = 0x10
+        addr_llil = self._get_current_addr_llil(op, AddressingMode.N)
+        expected_llil = mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x10])
+        assert addr_llil == expected_llil
+
+    def test_direct_no_pre(self) -> None:
+        op = IMem8()
+        op.value = 0x25
+        addr_llil = self._get_current_addr_llil(op, None)
+        expected_llil = mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x25])
+        assert addr_llil == expected_llil
+
+    def test_bp_plus_n_mode(self) -> None:
+        op = IMem8()
+        op.value = 0x05
+        addr_llil = self._get_current_addr_llil(op, AddressingMode.BP_N)
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                )
+                            ],
+                        ),
+                        mllil("CONST.b", [0x05]),
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_px_plus_n_mode(self) -> None:
+        op = IMem8()
+        op.value = 0x0A
+        addr_llil = self._get_current_addr_llil(op, AddressingMode.PX_N)
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                )
+                            ],
+                        ),
+                        mllil("CONST.b", [0x0A]),
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_py_plus_n_mode(self) -> None:
+        op = IMem8()
+        op.value = 0x03
+        addr_llil = self._get_current_addr_llil(op, AddressingMode.PY_N)
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                )
+                            ],
+                        ),
+                        mllil("CONST.b", [0x03]),
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_bp_plus_px_mode(self) -> None:
+        op = IMem8()
+        op.value = 0x00
+        addr_llil = self._get_current_addr_llil(op, AddressingMode.BP_PX)
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                )
+                            ],
+                        ),
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                )
+                            ],
+                        ),
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
+    def test_bp_plus_py_mode(self) -> None:
+        op = IMem8()
+        op.value = 0x00
+        addr_llil = self._get_current_addr_llil(op, AddressingMode.BP_PY)
+        expected_llil = mllil(
+            "ADD.l",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                )
+                            ],
+                        ),
+                        mllil(
+                            "LOAD.b",
+                            [
+                                mllil(
+                                    "CONST_PTR.l",
+                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                )
+                            ],
+                        ),
+                    ],
+                ),
+                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+            ],
+        )
+        assert addr_llil == expected_llil
+
 
 def test_lift_mv() -> None:
     instr = decode(bytearray([0x08, 0xCD]), 0x1234)
