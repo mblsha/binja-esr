@@ -1144,7 +1144,7 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         pre: Optional[AddressingMode] = None,
         side_effects: bool = True,
     ) -> ExpressionIndex:
-        addr = self.value.lift_current_addr(il, pre=pre, side_effects=side_effects) if isinstance(self.value, Pointer) else self.value.lift(il, pre=pre, side_effects=side_effects)
+        addr = self.value.lift(il, pre=pre, side_effects=side_effects)
         if self.offset:
             addr = self.offset.lift_offset(il, addr)
         return addr
