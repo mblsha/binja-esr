@@ -1023,13 +1023,11 @@ class RegF(Reg):
         return 1
 
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
-        # FIXME: likely wrong
         zbit = il.shift_left(1, il.flag(ZFlag), il.const(1, 1))
         return il.or_expr(1, il.flag(CFlag), zbit)
 
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
                     Optional[AddressingMode] = None) -> None:
-        # FIXME: likely wrong
         tmp = TempReg(TempRegF, width=self.width())
         tmp.lift_assign(il, value)
         il.append(il.set_flag(CFlag, il.and_expr(1, tmp.lift(il), il.const(1, 1))))
