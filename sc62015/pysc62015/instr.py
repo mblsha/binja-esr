@@ -731,7 +731,7 @@ class IMemOperand(Operand, HasWidth):
 
 
 class ImmOperand(Operand, HasWidth):
-    value: Optional[int]
+    value: Optional[Union[str, int]]
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
@@ -743,7 +743,7 @@ class ImmOperand(Operand, HasWidth):
 
 # n: encoded as `n`
 class Imm8(ImmOperand):
-    def __init__(self, value: Optional[int]=None) -> None:
+    def __init__(self, value: Optional[Union[str, int]] = None) -> None:
         super().__init__()
         self.value = value
 
