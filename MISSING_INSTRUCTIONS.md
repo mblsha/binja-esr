@@ -12,10 +12,11 @@ Only a few `MV` forms are parsed today (`MV A,B`, `MV B,A`, and `MV (imem),(imem
 - **Register to Register Moves** – generic forms like `MV r2, r'2` or `MV r3, r'3`.
 
 ## 2. Arithmetic Instructions
-No arithmetic operations are present in the grammar. The missing set includes:
+Basic addition (`ADD`) and subtraction (`SUB`) instructions are now supported in
+the assembler. The remaining missing set includes:
 
-- **Addition**: `ADD`, `ADC`.
-- **Subtraction**: `SUB`, `SBC`.
+- **Addition with carry**: `ADC`.
+- **Subtraction with borrow**: `SBC`.
 - **Multi-byte Arithmetic**: `ADCL`, `SBCL`.
 - **BCD Arithmetic**: `DADL`, `DSBL`.
 - **Packed BCD Modify**: `PMDF`.
