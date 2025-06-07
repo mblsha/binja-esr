@@ -74,6 +74,10 @@ instruction: "NOP"i -> nop
            | adcl_imem_a
            | sbcl_imem_imem
            | sbcl_imem_a
+           | dadl_imem_imem
+           | dadl_imem_a
+           | dsbl_imem_imem
+           | dsbl_imem_a
 
 and_imem_a.2: "AND"i imem_operand "," _A
 and_a_imem.2: "AND"i _A "," imem_operand
@@ -106,6 +110,10 @@ adcl_imem_imem.2: "ADCL"i imem_operand "," imem_operand
 adcl_imem_a.2:    "ADCL"i imem_operand "," _A
 sbcl_imem_imem.2: "SBCL"i imem_operand "," imem_operand
 sbcl_imem_a.2:    "SBCL"i imem_operand "," _A
+dadl_imem_imem.2: "DADL"i imem_operand "," imem_operand
+dadl_imem_a.2:    "DADL"i imem_operand "," _A
+dsbl_imem_imem.2: "DSBL"i imem_operand "," imem_operand
+dsbl_imem_a.2:    "DSBL"i imem_operand "," _A
 
 
 // --- Data Directives ---
