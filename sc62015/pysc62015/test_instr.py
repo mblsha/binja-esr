@@ -18,6 +18,9 @@ from .instr import (
     Imm8,
     ImmOffset,
     EMemValueOffsetHelper,
+    EMemRegOffsetHelper,
+    EMemRegMode,
+    Reg3,
     UnknownInstruction,
     PRE,
     TCL,
@@ -269,6 +272,55 @@ def test_emem_value_offset_helper_lifting() -> None:
             )
         ],
     )
+
+
+def test_emem_value_offset_helper_widths() -> None:
+    imem = IMem8()
+    imem.value = 0x10
+
+    offset = ImmOffset("+")
+    offset.value = 1
+
+    for width, suffix in [(2, "w"), (3, "l")]:
+        h = EMemValueOffsetHelper(imem, offset, width=width)
+        il = MockLowLevelILFunction()
+        assert h.lift(il) == mllil(
+            f"LOAD.{suffix}",
+            [
+                mllil(
+                    "ADD.b",
+                    [
+                        mllil(
+                            "LOAD.b",
+                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x10])],
+                        ),
+                        mllil("CONST.b", [1]),
+                    ],
+                )
+            ],
+        )
+
+
+def test_emem_reg_offset_helper_widths() -> None:
+    reg = Reg3()
+    reg.reg = "X"
+
+    for width, suffix in [(2, "w"), (3, "l")]:
+        h = EMemRegOffsetHelper(width, reg, EMemRegMode.SIMPLE, offset=None)
+        op = next(h.operands())
+        il = MockLowLevelILFunction()
+        assert op.lift(il) == mllil(
+            f"LOAD.{suffix}",
+            [mllil("REG.l", [mreg("X")])],
+        )
+        il2 = MockLowLevelILFunction()
+        op.lift_assign(il2, il2.const(width, 0x11))
+        assert il2.ils == [
+            mllil(
+                f"STORE.{suffix}",
+                [mllil("REG.l", [mreg("X")]), mllil(f"CONST.{suffix}", [0x11])],
+            )
+        ]
 
 
 class TestIMemHelperLifting:

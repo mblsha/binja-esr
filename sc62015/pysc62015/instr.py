@@ -1133,10 +1133,14 @@ class EMemAddr(Imm20, Pointer):
 
 
 class EMemValueOffsetHelper(OperandHelper, Pointer):
-    def __init__(self, value: Operand, offset: Optional[ImmOffset]):
+    def __init__(self, value: Operand, offset: Optional[ImmOffset], width: int = 1) -> None:
         super().__init__()
         self.value = value
         self.offset = offset
+        self._width = width
+
+    def width(self) -> int:
+        return self._width
 
     def lift_current_addr(
         self,
@@ -1166,8 +1170,8 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         pre: Optional[AddressingMode] = None,
         side_effects: bool = True,
     ) -> ExpressionIndex:
-        # FIXME: need to figure out the size to use, currently hardcoded to 1
-        return il.load(1, self.lift_current_addr(il, pre=pre, side_effects=side_effects))
+        # width is determined by the context in which this helper is used
+        return il.load(self.width(), self.lift_current_addr(il, pre=pre, side_effects=side_effects))
 
     def lift_assign(
         self,
@@ -1175,9 +1179,8 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         value: ExpressionIndex,
         pre: Optional[AddressingMode] = None,
     ) -> None:
-        # FIXME: what's the width? Hardcoded to 1.
         il.append(
-            il.store(1, self.lift_current_addr(il, pre=pre, side_effects=True), value)
+            il.store(self.width(), self.lift_current_addr(il, pre=pre, side_effects=True), value)
         )
 
 # page 74 of the book
@@ -1259,7 +1262,7 @@ class EMemRegOffsetHelper(HasOperands, OperandHelper):
         else:
             reg = self.reg
 
-        op = EMemValueOffsetHelper(reg, self.offset)
+        op = EMemValueOffsetHelper(reg, self.offset, width=self.width)
         yield op
 
 class RegIMemOffsetOrder(enum.Enum):
@@ -1407,7 +1410,7 @@ class EMemIMem(HasOperands, Imm8):
             self.offset.encode(encoder, addr)
 
     def operands(self) -> Generator[Operand, None, None]:
-        op = EMemValueOffsetHelper(self.imem, self.offset)
+        op = EMemValueOffsetHelper(self.imem, self.offset, width=1)
         yield op
 
 class EMemIMemOffsetOrder(enum.Enum):
@@ -1446,10 +1449,10 @@ class EMemIMemOffset(HasOperands, Operand):
     def operands(self) -> Generator[Operand, None, None]:
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
             yield self.imem1
-            op = EMemValueOffsetHelper(self.imem2, self.offset)
+            op = EMemValueOffsetHelper(self.imem2, self.offset, width=1)
             yield op
         else:
-            op = EMemValueOffsetHelper(self.imem1, self.offset)
+            op = EMemValueOffsetHelper(self.imem1, self.offset, width=1)
             yield op
             yield self.imem2
 
