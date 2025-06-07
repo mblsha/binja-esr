@@ -21,9 +21,9 @@ All logical, test, and compare instructions are now implemented by the assembler
 
 ## 5. Increment, Decrement, and Exchange Instructions
 `EX A,B`, register-to-register forms, and memory-to-memory forms are implemented.
-Missing variants include:
-
-- **Exchange**: register-to-memory combinations for `EX`, `EXW`, `EXP`, `EXL`.
+Earlier versions of this document incorrectly listed "register-to-memory"
+exchange instructions as missing. The SC62015 architecture does not provide
+such opcodes, so there is nothing to implement in the assembler.
 
 ## 6. Shift and Rotate Instructions
 The grammar supports the accumulator forms (`ROR A`, `ROL A`, `SHR A`, `SHL A`) but omits:
