@@ -437,6 +437,44 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- DADL Instruction Tests ---
+    AssemblerTestCase(
+        test_id="dadl_imem_imem",
+        asm_code="DADL (0x10), (0x20)",
+        expected_ti="""
+            @0000
+            C4 10 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="dadl_imem_a",
+        asm_code="DADL (0x30), A",
+        expected_ti="""
+            @0000
+            C5 30
+            q
+        """,
+    ),
+    # --- DSBL Instruction Tests ---
+    AssemblerTestCase(
+        test_id="dsbl_imem_imem",
+        asm_code="DSBL (0x40), (0x50)",
+        expected_ti="""
+            @0000
+            D4 40 50
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="dsbl_imem_a",
+        asm_code="DSBL (0x60), A",
+        expected_ti="""
+            @0000
+            D5 60
+            q
+        """,
+    ),
 ]
 
 
