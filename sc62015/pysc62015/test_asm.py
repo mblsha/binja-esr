@@ -659,6 +659,88 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- CMP Instruction Tests ---
+    AssemblerTestCase(
+        test_id="cmp_a_imm",
+        asm_code="CMP A, 0x55",
+        expected_ti="""
+            @0000
+            60 55
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmp_imem_imm",
+        asm_code="CMP (0x10), 0x02",
+        expected_ti="""
+            @0000
+            61 10 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmp_emem_imm",
+        asm_code="CMP [0x12345], 0x02",
+        expected_ti="""
+            @0000
+            62 45 23 01 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmp_imem_a",
+        asm_code="CMP (0x30), A",
+        expected_ti="""
+            @0000
+            63 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmp_imem_imem",
+        asm_code="CMP (0x40), (0x50)",
+        expected_ti="""
+            @0000
+            B7 40 50
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmpw_imem_imem",
+        asm_code="CMPW (0x10), (0x20)",
+        expected_ti="""
+            @0000
+            C6 10 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmpw_imem_reg",
+        asm_code="CMPW (0x30), BA",
+        expected_ti="""
+            @0000
+            D6 02 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmpp_imem_imem",
+        asm_code="CMPP (0x10), (0x20)",
+        expected_ti="""
+            @0000
+            C7 10 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="cmpp_imem_reg",
+        asm_code="CMPP (0x40), X",
+        expected_ti="""
+            @0000
+            D7 04 40
+            q
+        """,
+    ),
 ]
 
 

@@ -38,6 +38,9 @@ from .instr import (
     DADL,
     DSBL,
     PMDF,
+    CMP,
+    CMPW,
+    CMPP,
     CALL,
     JP_Abs,
     JP_Rel,
@@ -45,6 +48,7 @@ from .instr import (
     Imm20,
     ImmOffset,
     IMem20,
+    IMem16,
     INC,
     DEC,
     Reg3,
@@ -314,7 +318,7 @@ class AsmTransformer(Transformer):
     def jp_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
         imm = IMem20()
-        imm.value = op.n_val
+        imm.value = cast(int, op.n_val)
         return {
             "instruction": {"instr_class": JP_Abs, "instr_opts": Opts(ops=[imm])}}
 
@@ -709,6 +713,85 @@ class AsmTransformer(Transformer):
         op1, op2 = items
         return {
             "instruction": {"instr_class": XOR, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def cmp_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": CMP, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def cmp_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": CMP, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def cmp_emem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": CMP, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def cmp_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": CMP, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def cmp_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": CMP, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def cmpw_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        m1 = IMem16()
+        m1.value = op1.n_val
+        m2 = IMem16()
+        m2.value = op2.n_val
+        return {
+            "instruction": {"instr_class": CMPW, "instr_opts": Opts(ops=[m1, m2])}
+        }
+
+    def cmpp_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        m1 = IMem20()
+        m1.value = op1.n_val
+        m2 = IMem20()
+        m2.value = op2.n_val
+        return {
+            "instruction": {"instr_class": CMPP, "instr_opts": Opts(ops=[m1, m2])}
+        }
+
+    def cmpw_imem_reg(self, items: List[Any]) -> InstructionNode:
+        op1, reg = items
+        m = IMem16()
+        m.value = op1.n_val
+        r = Reg3()
+        r.reg = cast(Reg, reg).reg
+        r.reg_raw = Reg3.reg_idx(cast(str, r.reg))
+        r.high4 = 0
+        return {
+            "instruction": {"instr_class": CMPW, "instr_opts": Opts(ops=[m, r])}
+        }
+
+    def cmpp_imem_reg(self, items: List[Any]) -> InstructionNode:
+        op1, reg = items
+        m = IMem20()
+        m.value = op1.n_val
+        r = Reg3()
+        r.reg = cast(Reg, reg).reg
+        r.reg_raw = Reg3.reg_idx(cast(str, r.reg))
+        r.high4 = 0
+        return {
+            "instruction": {"instr_class": CMPP, "instr_opts": Opts(ops=[m, r])}
         }
 
     def def_arg(self, items: List[Any]) -> str:

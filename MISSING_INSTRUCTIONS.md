@@ -24,7 +24,7 @@ Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:
 Logical, test, and compare instructions are still partially unimplemented:
 
 - **Test**: `TEST` in all forms.
-- **Compare**: `CMP`, `CMPW`, `CMPP`.
+- **Compare**: all forms now implemented.
 
 ## 5. Increment, Decrement, and Exchange Instructions
 Only `EX A,B` is implemented. Missing variants include:
