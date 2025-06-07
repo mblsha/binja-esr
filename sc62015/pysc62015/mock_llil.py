@@ -151,7 +151,7 @@ class MockLowLevelILFunction(LowLevelILFunction):
 
     def expr(self, *args, **kwargs) -> ExprType:  # type: ignore
         llil, *ops = args
-        del kwargs["source_location"]
+        kwargs.pop("source_location", None)
         size = kwargs.get("size", None)
         flags = kwargs.get("flags", None)
 

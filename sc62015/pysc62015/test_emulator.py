@@ -1,3 +1,5 @@
+from . import binja_api  # noqa: F401
+
 from .emulator import (
     Registers,
     RegisterName,
