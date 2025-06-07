@@ -15,8 +15,6 @@ Only a few `MV` forms are parsed today (`MV A,B`, `MV B,A`, and `MV (imem),(imem
 Basic addition (`ADD`) and subtraction (`SUB`) instructions are now supported in
 the assembler. The remaining missing set includes:
 
-- **Addition with carry**: `ADC`.
-- **Subtraction with borrow**: `SBC`.
 - **Multi-byte Arithmetic**: `ADCL`, `SBCL`.
 - **BCD Arithmetic**: `DADL`, `DSBL`.
 - **Packed BCD Modify**: `PMDF`.
