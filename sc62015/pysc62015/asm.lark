@@ -114,6 +114,15 @@ instruction: "NOP"i -> nop
            | xor_imem_imm
            | xor_emem_imm
            | xor_imem_imem
+           | cmp_a_imm
+           | cmp_imem_imm
+           | cmp_emem_imm
+           | cmp_imem_a
+           | cmp_imem_imem
+           | cmpw_imem_imem
+           | cmpp_imem_imem
+           | cmpw_imem_reg
+           | cmpp_imem_reg
 
 jp_reg.2: "JP"i reg
 jp_imem.2: "JP"i imem_operand
@@ -184,6 +193,16 @@ xor_a_imm.1: "XOR"i _A "," expression
 xor_imem_imm.1: "XOR"i imem_operand "," expression
 xor_emem_imm.1: "XOR"i emem_addr "," expression
 xor_imem_imem.1: "XOR"i imem_operand "," imem_operand
+
+cmp_a_imm.1: "CMP"i _A "," expression
+cmp_imem_imm.1: "CMP"i imem_operand "," expression
+cmp_emem_imm.1: "CMP"i emem_addr "," expression
+cmp_imem_a.2: "CMP"i imem_operand "," _A
+cmp_imem_imem.1: "CMP"i imem_operand "," imem_operand
+cmpw_imem_imem.1: "CMPW"i imem_operand "," imem_operand
+cmpp_imem_imem.1: "CMPP"i imem_operand "," imem_operand
+cmpw_imem_reg.2: "CMPW"i imem_operand "," reg
+cmpp_imem_reg.2: "CMPP"i imem_operand "," reg
 
 
 // --- Data Directives ---
