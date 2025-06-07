@@ -1,4 +1,6 @@
 from typing import Any, List, Optional, Union, cast, TypedDict, Type
+from . import binja_api  # noqa: F401
+from binaryninja.architecture import RegisterName
 from lark import Lark, Transformer, Token
 from .instr import (
     Instruction,
@@ -947,7 +949,7 @@ class AsmTransformer(Transformer):
         m.value = op1.n_val
         r = Reg3()
         r.reg = cast(Reg, reg).reg
-        r.reg_raw = Reg3.reg_idx(cast(str, r.reg))
+        r.reg_raw = Reg3.reg_idx(cast(RegisterName, r.reg))
         r.high4 = 0
         return {
             "instruction": {"instr_class": CMPW, "instr_opts": Opts(ops=[m, r])}
@@ -959,7 +961,7 @@ class AsmTransformer(Transformer):
         m.value = op1.n_val
         r = Reg3()
         r.reg = cast(Reg, reg).reg
-        r.reg_raw = Reg3.reg_idx(cast(str, r.reg))
+        r.reg_raw = Reg3.reg_idx(cast(RegisterName, r.reg))
         r.high4 = 0
         return {
             "instruction": {"instr_class": CMPP, "instr_opts": Opts(ops=[m, r])}
