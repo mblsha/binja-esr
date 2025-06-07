@@ -26,11 +26,14 @@ from .instr import (
     POPS,
     PUSHU,
     POPU,
+    AND,
     Reg,
     RegB,
     RegF,
     RegIMR,
     IMemOperand,
+    Imm8,
+    EMemAddr,
     AddressingMode,
 )
 
@@ -76,8 +79,8 @@ class ProgramNode(TypedDict):
 
 class AsmTransformer(Transformer):
     def start(self, items: List[LineNode]) -> ProgramNode:
-        # Filter out empty lines that might result from parsing only newlines
-        return {"lines": [line for line in items if line]}
+        # Filter out empty lines and stray NEWLINE tokens
+        return {"lines": [line for line in items if isinstance(line, dict) and line]}
 
     def line(self, items: List[Any]) -> LineNode:
         # Filter out any stray NEWLINE tokens that might be children of the line rule
@@ -278,12 +281,61 @@ class AsmTransformer(Transformer):
         # This rule just passes through the IMemOperand object created by the more specific rules.
         return cast(IMemOperand, items[0])
 
+    def emem_addr(self, items: List[Any]) -> EMemAddr:
+        addr = EMemAddr(width=1)
+        addr.value = items[0]
+        return addr
+
+    def emem_operand(self, items: List[Any]) -> EMemAddr:
+        return cast(EMemAddr, items[0])
+
     # --- Instruction Rules ---
 
     def mv_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def and_a_imm(self, items: List[Any]) -> InstructionNode:
+        imm = Imm8()
+        imm.value = items[0]
+        return {
+            "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[Reg("A"), imm])}
+        }
+
+    def and_imem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def and_emem_imm(self, items: List[Any]) -> InstructionNode:
+        op1, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[op1, imm])}
+        }
+
+    def and_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def and_a_imem(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[Reg("A"), op1])}
+        }
+
+    def and_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": AND, "instr_opts": Opts(ops=[op1, op2])}
         }
 
     def def_arg(self, items: List[Any]) -> str:
@@ -297,4 +349,10 @@ class AsmTransformer(Transformer):
 
     def CNAME(self, token: Token) -> str:
         return str(token)
+
+    # --- Instruction Aggregation ---
+    def instruction(self, items: List[Any]) -> InstructionNode:
+        """Pass through the single parsed instruction node."""
+        assert len(items) == 1
+        return cast(InstructionNode, items[0])
 

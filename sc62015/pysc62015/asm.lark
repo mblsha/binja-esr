@@ -40,6 +40,19 @@ instruction: "NOP"i -> nop
            | "PUSHU"i _IMR -> pushu_imr
            | "POPU"i _IMR -> popu_imr
            | "MV"i imem_operand "," imem_operand -> mv_imem_imem
+           | and_imem_a
+           | and_a_imem
+           | and_a_imm
+           | and_imem_imm
+           | and_emem_imm
+           | and_imem_imem
+
+and_imem_a.2: "AND"i imem_operand "," _A
+and_a_imem.2: "AND"i _A "," imem_operand
+and_a_imm.1: "AND"i _A "," expression
+and_imem_imm.1: "AND"i imem_operand "," expression
+and_emem_imm.1: "AND"i emem_addr "," expression
+and_imem_imem.1: "AND"i imem_operand "," imem_operand
 
 
 // --- Data Directives ---
@@ -72,6 +85,9 @@ imem_py_n:  "(" _PY "+" expression ")"
 imem_bp_px: "(" _BP "+" _PX ")"
 imem_bp_py: "(" _BP "+" _PY ")"
 
+emem_addr: "[" expression "]"
+emem_operand: emem_addr
+
 
 // --- Terminals with higher priority ---
 _A: "A"i
@@ -86,10 +102,11 @@ _PY: "PY"i
 // --- Common Terminals ---
 NUMBER: /0x[0-9a-fA-F]+/i | /[0-9]+/
 
-%import common.CNAME
 %import common.ESCAPED_STRING
 %import common.NEWLINE
 %import common.WS
+
+CNAME: /[a-zA-Z_][a-zA-Z0-9_]*/
 
 %ignore WS
 // Ignore comments starting with ;

@@ -29,9 +29,9 @@ Besides `RET`, `RETI`, and `RETF`, jump and call instructions are absent:
 - **Calls**: `CALL`, `CALLF`.
 
 ## 4. Logical and Compare Instructions
-None of the logical, test, or compare operations are handled:
+Logical, test, and compare instructions are largely unimplemented:
 
-- **Logical Ops**: `AND`, `OR`, `XOR` with all addressing modes.
+- **Logical Ops**: `OR`, `XOR` with all addressing modes.
 - **Test**: `TEST` in all forms.
 - **Compare**: `CMP`, `CMPW`, `CMPP`.
 

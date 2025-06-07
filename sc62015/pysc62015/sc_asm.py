@@ -119,6 +119,8 @@ class Assembler:
                                 setattr(op, "value", int(getattr(op, "value"), 0))
                             except ValueError:
                                 setattr(op, "value", 0)
+                        if hasattr(op, "extra_hi") and getattr(op, "value", None) is not None:
+                            setattr(op, "extra_hi", (int(getattr(op, "value")) >> 16) & 0xFF)
 
                     encoder = Encoder()
                     try:
@@ -236,6 +238,11 @@ class Assembler:
             for op in instr.operands():
                 if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
                     op.n_val = self._evaluate_operand(op.n_val)
+                if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
+                    val = self._evaluate_operand(getattr(op, "value"))
+                    setattr(op, "value", val)
+                    if hasattr(op, "extra_hi"):
+                        setattr(op, "extra_hi", (val >> 16) & 0xFF)
             encoder = Encoder()
             instr.encode(encoder, self.current_address)
             return encoder.buf

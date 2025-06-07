@@ -733,6 +733,9 @@ class IMemOperand(Operand, HasWidth):
 class ImmOperand(Operand, HasWidth):
     value: Optional[int]
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}()"
+
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
         return il.const(self.width(), self.value)
@@ -1166,6 +1169,8 @@ class EMemAddr(Imm20, Pointer):
     def __init__(self, width: int) -> None:
         super().__init__()
         self._width = width
+        # Ensure extra_hi exists so assembler can populate it
+        self.extra_hi = 0
 
     def width(self) -> int:
         return self._width
