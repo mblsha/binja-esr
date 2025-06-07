@@ -26,10 +26,7 @@ exchange instructions as missing. The SC62015 architecture does not provide
 such opcodes, so there is nothing to implement in the assembler.
 
 ## 6. Shift and Rotate Instructions
-The grammar supports the accumulator forms (`ROR A`, `ROL A`, `SHR A`, `SHL A`) but omits:
-
-- **Memory Forms**: `ROR (n)`, `ROL (n)`, `SHR (n)`, `SHL (n)`.
-- **Decimal Shifts**: *(implemented)*
+All rotate, shift, and decimal shift forms are now supported by the assembler.
 
 ## 7. Stack Instructions
 All user stack operations are now supported in the assembler.
