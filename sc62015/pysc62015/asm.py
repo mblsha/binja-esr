@@ -26,6 +26,11 @@ from .instr import (
     POPS,
     PUSHU,
     POPU,
+    JP_Abs,
+    JP_Rel,
+    Imm16,
+    Imm20,
+    ImmOffset,
     Reg,
     RegB,
     RegF,
@@ -229,6 +234,27 @@ class AsmTransformer(Transformer):
         return {
             "instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[RegIMR()])}
         }
+
+    def jp_abs(self, items: List[Any]) -> InstructionNode:
+        op = Imm16()
+        op.value = items[0]
+        return {"instruction": {"instr_class": JP_Abs, "instr_opts": Opts(ops=[op])}}
+
+    def jpf_abs(self, items: List[Any]) -> InstructionNode:
+        op = Imm20()
+        op.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(name="JPF", ops=[op]),
+            }
+        }
+
+    def jr(self, items: List[Any]) -> InstructionNode:
+        sign, expr = items
+        op = ImmOffset("+" if sign == "+" else "-")
+        op.value = expr
+        return {"instruction": {"instr_class": JP_Rel, "instr_opts": Opts(ops=[op])}}
 
     def reg(self, items: List[Token]) -> Reg:
         reg_name = str(items[0]).upper()

@@ -40,6 +40,9 @@ instruction: "NOP"i -> nop
            | "PUSHU"i _IMR -> pushu_imr
            | "POPU"i _IMR -> popu_imr
            | "MV"i imem_operand "," imem_operand -> mv_imem_imem
+           | "JP"i expression -> jp_abs
+           | "JPF"i expression -> jpf_abs
+           | "JR"i SIGN expression -> jr
 
 
 // --- Data Directives ---
@@ -81,6 +84,9 @@ _IMR: "IMR"i
 _BP: "BP"i
 _PX: "PX"i
 _PY: "PY"i
+PLUS: "+"
+MINUS: "-"
+SIGN: PLUS | MINUS
 
 
 // --- Common Terminals ---

@@ -50,6 +50,36 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """
     ),
     AssemblerTestCase(
+        test_id="jp_absolute_label",
+        asm_code="""
+        start:
+            JP start
+        """,
+        expected_ti="""
+            @0000
+            02 00 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jr_positive_offset",
+        asm_code="JR +2",
+        expected_ti="""
+            @0000
+            12 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jr_negative_offset",
+        asm_code="JR -2",
+        expected_ti="""
+            @0000
+            13 02
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="data_directive_defb_with_code",
         asm_code="""
             SECTION code

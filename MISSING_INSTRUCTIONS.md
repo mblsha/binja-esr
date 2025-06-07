@@ -23,7 +23,7 @@ No arithmetic operations are present in the grammar. The missing set includes:
 ## 3. Program Flow Instructions
 Besides `RET`, `RETI`, and `RETF`, jump and call instructions are absent:
 
-- **Unconditional Jumps**: `JP`, `JR` and their far or register forms.
+ - **Unconditional Jumps**: far or register forms.
 - **Conditional Jumps**: `JPZ`, `JPNZ`, `JPC`, `JPNC`.
 - **Conditional Relative Jumps**: `JRZ`, `JRNZ`, `JRC`, `JRNC`.
 - **Calls**: `CALL`, `CALLF`.

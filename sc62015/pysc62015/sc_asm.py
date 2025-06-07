@@ -9,7 +9,7 @@ from plumbum import cli  # type: ignore[import-untyped]
 # Assuming the provided library files are in a package named 'sc62015'
 from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from .coding import Encoder
-from .instr import Instruction, OPCODES, Opts, IMemOperand, IMem8
+from .instr import Instruction, OPCODES, Opts, IMemOperand, IMem8, ImmOffset
 
 # A simple cache for the reverse lookup table
 REVERSE_OPCODES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
@@ -80,20 +80,23 @@ class Assembler:
         if mnemonic not in self._reverse_opcodes:
             raise AssemblerError(f"Unknown mnemonic: {mnemonic}")
 
-        # For the unambiguous grammar, we can match on class and operand representation
+        # For the unambiguous grammar, match by operand type rather than value
         for template in self._reverse_opcodes[mnemonic]:
             if template["class"] is not instr_class:
                 continue
 
             template_ops = template["opts"].ops or []
 
-            # Compare operands. Using repr is a simple way for the basic operand types.
             if len(provided_ops) == len(template_ops):
                 converted_match = True
                 for p_op, t_op in zip(provided_ops, template_ops):
+                    # IMem8 in the template matches any IMemOperand
                     if isinstance(t_op, IMem8) and isinstance(p_op, IMemOperand):
                         continue
-                    if repr(p_op) != repr(t_op):
+                    if type(p_op) is not type(t_op):
+                        converted_match = False
+                        break
+                    if isinstance(t_op, ImmOffset) and getattr(p_op, "sign", None) != t_op.sign:
                         converted_match = False
                         break
                 if converted_match:
@@ -236,6 +239,8 @@ class Assembler:
             for op in instr.operands():
                 if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
                     op.n_val = self._evaluate_operand(op.n_val)
+                if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
+                    setattr(op, "value", self._evaluate_operand(getattr(op, "value")))
             encoder = Encoder()
             instr.encode(encoder, self.current_address)
             return encoder.buf
