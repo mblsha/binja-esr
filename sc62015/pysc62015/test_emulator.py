@@ -4,7 +4,8 @@ from .emulator import (
     Emulator,
     Memory,
 )
-from .instr import MAX_ADDR, INTERNAL_MEMORY_START, IMEM_NAMES
+from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
+from .instr import IMEM_NAMES
 from .mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
@@ -397,7 +398,7 @@ def test_mvl_emem_reg_post_inc_to_imem() -> None:
         emem_data_start_addr + i: val for i, val in enumerate(source_data_bytes)
     }
     cpu, raw, reads, writes = _make_cpu_and_mem(
-        MAX_ADDR, init_ext_mem_data, bytes.fromhex("E32450")
+        ADDRESS_SPACE_SIZE, init_ext_mem_data, bytes.fromhex("E32450")
     )
     assert asm_str(cpu.decode_instruction(0x00).render()) == "MVL   (50), [X++]"
 
@@ -430,7 +431,7 @@ def test_mvld_imem_to_imem() -> None:
     }
 
     cpu, _, _, writes = _make_cpu_and_mem(
-        MAX_ADDR, initial_imem_setup, bytes.fromhex("CF50A0")
+        ADDRESS_SPACE_SIZE, initial_imem_setup, bytes.fromhex("CF50A0")
     )
     assert asm_str(cpu.decode_instruction(0x00).render()) == "MVLD  (50), (A0)"
 
@@ -617,7 +618,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
 )
 def test_pre_addressing_modes(tc: PreTestCase) -> None:
     cpu, raw_memory_array, logged_reads, logged_writes = _make_cpu_and_mem(
-        MAX_ADDR,
+        ADDRESS_SPACE_SIZE,
         tc.init_memory_state,
         tc.instr_bytes,
     )
@@ -834,7 +835,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
 )
 def test_adcl_instruction(tc: AdclDadlTestCase) -> None:
     cpu, raw_memory_array, _, logged_writes = _make_cpu_and_mem(
-        MAX_ADDR, tc.init_memory_state, tc.instr_bytes
+        ADDRESS_SPACE_SIZE, tc.init_memory_state, tc.instr_bytes
     )
 
     for reg, val in tc.init_register_state.items():
@@ -1011,7 +1012,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
 )
 def test_dadl_instruction(tc: AdclDadlTestCase) -> None:
     cpu, raw_memory_array, _, logged_writes = _make_cpu_and_mem(
-        MAX_ADDR, tc.init_memory_state, tc.instr_bytes
+        ADDRESS_SPACE_SIZE, tc.init_memory_state, tc.instr_bytes
     )
 
     for reg, val in tc.init_register_state.items():
@@ -1240,7 +1241,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
 )
 def test_sbcl_instruction(tc: SbclDsblTestCase) -> None:
     cpu, raw_memory_array, _, logged_writes = _make_cpu_and_mem(
-        MAX_ADDR, tc.init_memory_state, tc.instr_bytes
+        ADDRESS_SPACE_SIZE, tc.init_memory_state, tc.instr_bytes
     )
 
     for reg, val in tc.init_register_state.items():
@@ -1443,7 +1444,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
 )
 def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
     cpu, raw_memory_array, _, logged_writes = _make_cpu_and_mem(
-        MAX_ADDR, tc.init_memory_state, tc.instr_bytes
+        ADDRESS_SPACE_SIZE, tc.init_memory_state, tc.instr_bytes
     )
 
     for reg, val in tc.init_register_state.items():
@@ -1741,7 +1742,7 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
     init_register_state = {RegisterName.I: tc.loop_count_I}
 
     cpu, raw_memory_array, _, _ = _make_cpu_and_mem(
-        MAX_ADDR, init_memory_state, instr_bytes
+        ADDRESS_SPACE_SIZE, init_memory_state, instr_bytes
     )
 
     for reg, val in init_register_state.items():
@@ -1806,7 +1807,7 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
 
 
 def test_decode_all_opcodes() -> None:
-    raw_memory = bytearray([0x00] * MAX_ADDR)
+    raw_memory = bytearray([0x00] * ADDRESS_SPACE_SIZE)
 
     # enumerate all opcodes, want index for each opcode
     for i, (b, s) in enumerate(opcode_generator()):

@@ -1,5 +1,7 @@
-try:
-    import binaryninja
+import importlib.util
+
+if importlib.util.find_spec("binaryninja") is not None:
+    import binaryninja  # noqa: F401
     from .sc62015.arch import SC62015, SC62015CallingConvention
     from .sc62015.view import SC62015RomView, SC62015FullView
 
@@ -11,8 +13,6 @@ try:
 
     SC62015RomView.register()
     SC62015FullView.register()
-except ModuleNotFoundError:
-    pass
 
 
 # from .Z80Arch import Z80

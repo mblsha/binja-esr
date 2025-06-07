@@ -3,6 +3,7 @@ from .tokens import Token, TInstr, TText, TSep, TInt, TReg, TBegMem, TEndMem, Me
 from .coding import Decoder, Encoder, BufferTooShort
 from .mock_analysis import BranchType
 from .mock_llil import MockLLIL
+from .constants import INTERNAL_MEMORY_START
 
 import copy
 from dataclasses import dataclass
@@ -158,8 +159,6 @@ CZFlag = FlagName('CZ')
 REG_NAMES = [reg[0] for reg in REGISTERS]
 REG_SIZES = {reg[0]: min(3, reg[1]) for reg in REGISTERS}
 
-# 1MB address space + 256 bytes of internal memory
-MAX_ADDR = 0xFFFFF + 0xFF
 
 INTERRUPT_VECTOR_ADDR = 0xFFFFA
 ENTRY_POINT_ADDR = 0xFFFFD
@@ -177,10 +176,9 @@ CE1_ADDR_END   = 0x9FFFF
 CE0_ADDR_START = 0xA0000
 CE0_ADDR_END   = 0xBFFFF
 
-# Map internal memory to start at this address, as it's discontinuous with the
-# external memory
-INTERNAL_MEMORY_START = 0xFFFFF + 1
-INTERNAL_MEMORY_LENGTH = 255
+# Map internal RAM to start immediately after the 1MB external space. The
+# internal region occupies addresses
+#   [INTERNAL_MEMORY_START, ADDRESS_SPACE_SIZE - 1].
 
 IMEM_NAMES = {
     "BP":  0xEC, # RAM Base Pointer
@@ -2068,7 +2066,8 @@ class DSLL(Instruction):
         # Ensure the operand is IMem8 as corrected in OPCODES
         assert isinstance(imem_op, IMem8), f"DSLL operand should be IMem8, got {type(imem_op)}"
 
-        # current_addr_reg holds the internal memory address (e.g., 0x100000 + n_offset)
+        # current_addr_reg holds the internal memory address (e.g.,
+        # INTERNAL_MEMORY_START + n_offset)
         # For DSLL, (n) is the MSB address.
         current_addr_reg = TempReg(TempMultiByte1, width=3) # Addresses are 3 bytes (20/24 bit)
         current_addr_reg.lift_assign(il, imem_op.lift_current_addr(il, side_effects=False))

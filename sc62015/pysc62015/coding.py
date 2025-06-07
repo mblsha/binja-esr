@@ -2,6 +2,8 @@
 import struct
 from typing import Callable
 
+from .constants import ADDRESS_SPACE_SIZE
+
 
 class BufferTooShort(Exception):
     pass
@@ -41,9 +43,11 @@ class Decoder:
         return self._unpack("H")
 
 
+
 # FetchDecoder is similar to Decoder but uses a read_mem function to fetch memory
+
+
 class FetchDecoder(Decoder):
-    MAX_ADDR = 0xFFFFF + 0xFF
 
     def __init__(self, read_mem: Callable[[int], int]) -> None:
         self.read_mem = read_mem
@@ -53,13 +57,13 @@ class FetchDecoder(Decoder):
         return self.pos
 
     def peek(self, offset: int) -> int:
-        if self.pos + offset > self.MAX_ADDR:
+        if self.pos + offset >= ADDRESS_SPACE_SIZE:
             raise BufferTooShort
         return self.read_mem(self.pos + offset)
 
     def _unpack(self, fmt: str) -> int:
         size = struct.calcsize(fmt)
-        if self.pos + size > self.MAX_ADDR:
+        if self.pos + size > ADDRESS_SPACE_SIZE:
             raise BufferTooShort
 
         fmt = "<" + fmt if fmt[0] != ">" else fmt

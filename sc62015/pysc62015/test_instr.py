@@ -16,7 +16,6 @@ from .instr import (
     Imm8,
     ImmOffset,
     EMemValueOffsetHelper,
-    INTERNAL_MEMORY_START,
     UnknownInstruction,
     PRE,
     TCL,
@@ -25,6 +24,7 @@ from .instr import (
     IR,
 )
 from .instr import decode as decode_instr
+from .constants import INTERNAL_MEMORY_START
 from .tokens import (
     Token,
     TInstr,
