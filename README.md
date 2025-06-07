@@ -15,3 +15,15 @@ Overall structure of instruction logic based on
 
 Apache License 2.0.
 
+## Development
+
+Install the package in editable mode with development dependencies and run the
+checks:
+
+```bash
+python -m pip install -e .[dev]
+ruff check
+mypy sc62015/pysc62015
+pytest -q
+```
+

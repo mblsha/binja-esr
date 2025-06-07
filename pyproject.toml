@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binja-esr"
+version = "0.1.0"
+description = "Binary Ninja SC62015 architecture plugin"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "lark",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["sc62015/pysc62015/test*"]
