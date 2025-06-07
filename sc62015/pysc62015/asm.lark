@@ -52,6 +52,14 @@ instruction: "NOP"i -> nop
            | and_imem_imm
            | and_emem_imm
            | and_imem_imem
+           | add_a_imm
+           | add_imem_imm
+           | add_a_imem
+           | add_imem_a
+           | sub_a_imm
+           | sub_imem_imm
+           | sub_a_imem
+           | sub_imem_a
 
 and_imem_a.2: "AND"i imem_operand "," _A
 and_a_imem.2: "AND"i _A "," imem_operand
@@ -59,6 +67,16 @@ and_a_imm.1: "AND"i _A "," expression
 and_imem_imm.1: "AND"i imem_operand "," expression
 and_emem_imm.1: "AND"i emem_addr "," expression
 and_imem_imem.1: "AND"i imem_operand "," imem_operand
+
+add_a_imm.1: "ADD"i _A "," expression
+add_imem_imm.1: "ADD"i imem_operand "," expression
+add_a_imem.2: "ADD"i _A "," imem_operand
+add_imem_a.2: "ADD"i imem_operand "," _A
+
+sub_a_imm.1: "SUB"i _A "," expression
+sub_imem_imm.1: "SUB"i imem_operand "," expression
+sub_a_imem.2: "SUB"i _A "," imem_operand
+sub_imem_a.2: "SUB"i imem_operand "," _A
 
 
 // --- Data Directives ---
