@@ -920,7 +920,6 @@ class IMem8(Imm8, Pointer):
     def width(self) -> int:
         return 1
 
-    # FIXME: need to use IMemHelper
     def lift_current_addr(
         self,
         il: LowLevelILFunction,
@@ -1678,9 +1677,6 @@ class MVL(MoveInstruction):
         return il.add
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        # FIXME: need to finish this
-        # return super().lift(il, addr)
-
         dst, src = self.operands()
         assert isinstance(dst, Pointer), f"Expected Pointer, got {type(dst)}"
         assert isinstance(src, Pointer), f"Expected Pointer, got {type(src)}"
@@ -2288,7 +2284,6 @@ class RC(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.set_flag(CFlag, il.const(1, 0)))
 
-# FIXME: what does it do???
 # Timer Clear: sub-CG or main-CG timers are reset when STCL / MTCL of LCC are
 # set.
 # Divider ← D
