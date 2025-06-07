@@ -31,6 +31,8 @@ from .instr import (
     ADC,
     SUB,
     SBC,
+    ADCL,
+    SBCL,
     CALL,
     Imm16,
     Imm20,
@@ -506,6 +508,30 @@ class AsmTransformer(Transformer):
         op1 = items[0]
         return {
             "instruction": {"instr_class": SBC, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def adcl_imem_imem(self, items: List[Any]) -> InstructionNode:
+        dst, src = items
+        return {
+            "instruction": {"instr_class": ADCL, "instr_opts": Opts(ops=[dst, src])}
+        }
+
+    def adcl_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": ADCL, "instr_opts": Opts(ops=[op1, Reg("A")])}
+        }
+
+    def sbcl_imem_imem(self, items: List[Any]) -> InstructionNode:
+        dst, src = items
+        return {
+            "instruction": {"instr_class": SBCL, "instr_opts": Opts(ops=[dst, src])}
+        }
+
+    def sbcl_imem_a(self, items: List[Any]) -> InstructionNode:
+        op1 = items[0]
+        return {
+            "instruction": {"instr_class": SBCL, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
     def def_arg(self, items: List[Any]) -> str:
