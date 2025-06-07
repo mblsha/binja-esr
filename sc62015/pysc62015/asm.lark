@@ -84,6 +84,8 @@ instruction: "NOP"i -> nop
            | dadl_imem_a
            | dsbl_imem_imem
            | dsbl_imem_a
+           | pmdf_imem_imm
+           | pmdf_imem_a
 
 jp_reg.2: "JP"i reg
 jp_imem.2: "JP"i imem_operand
@@ -125,6 +127,9 @@ dadl_imem_imem.2: "DADL"i imem_operand "," imem_operand
 dadl_imem_a.2:    "DADL"i imem_operand "," _A
 dsbl_imem_imem.2: "DSBL"i imem_operand "," imem_operand
 dsbl_imem_a.2:    "DSBL"i imem_operand "," _A
+
+pmdf_imem_imm.1: "PMDF"i imem_operand "," expression
+pmdf_imem_a.2:   "PMDF"i imem_operand "," _A
 
 
 // --- Data Directives ---
