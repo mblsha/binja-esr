@@ -549,6 +549,72 @@ def test_pushs_pops() -> None:
     assert cpu.regs.get(RegisterName.FC) == 0
 
 
+def test_pushu_popu() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2E"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHU F"
+
+    cpu.regs.set(RegisterName.F, 0x0)
+    cpu.regs.set(RegisterName.U, 0x20)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1F
+    assert writes == [(0x1F, 0x0)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.FZ, 1)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1E
+    assert writes == [(0x1E, 0x2)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.FZ, 0)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1D
+    assert writes == [(0x1D, 0x1)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.FZ, 1)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1C
+    assert writes == [(0x1C, 0x3)]
+    writes.clear()
+
+    cpu.regs.set(RegisterName.F, 0)
+    raw[0] = 0x3E  # POPU instruction
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "POPU  F"
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1D
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert cpu.regs.get(RegisterName.FC) == 1
+
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1E
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert cpu.regs.get(RegisterName.FC) == 1
+
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x1F
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert cpu.regs.get(RegisterName.FC) == 0
+
+
+def test_pushu_popu_r2() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2A"))
+    assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHU BA"
+
+    cpu.regs.set(RegisterName.BA, 0x1234)
+    cpu.regs.set(RegisterName.U, 0x30)
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x2E
+    assert writes == [(0x2E, 0x34), (0x2F, 0x12)]
+    writes.clear()
+
+    raw[0] = 0x3A  # POPU BA
+    cpu.execute_instruction(0x00)
+    assert cpu.regs.get(RegisterName.U) == 0x30
+    assert cpu.regs.get(RegisterName.BA) == 0x1234
+
 def test_call_ret() -> None:
     cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("042000"))
     raw[0x20] = 0x06

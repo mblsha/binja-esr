@@ -1740,8 +1740,27 @@ class StackPopInstruction(StackInstruction):
         r.lift_assign(il, il.pop(r.width()))
 
 # FIXME: should use U pointer, not S
-class PUSHU(StackPushInstruction): pass
-class POPU(StackPopInstruction): pass
+class PUSHU(StackInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        r = self.reg()
+        assert isinstance(r, HasWidth)
+        size = r.width()
+        new_u = il.sub(3, il.reg(3, RegisterName("U")), il.const(3, size))
+        il.append(il.set_reg(3, RegisterName("U"), new_u))
+        il.append(il.store(size, new_u, r.lift(il)))
+        if isinstance(r, RegIMR):
+            r.lift_assign(il, il.and_expr(1, r.lift(il), il.const(1, 0x7F)))
+
+class POPU(StackInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        r = self.reg()
+        assert isinstance(r, HasWidth)
+        size = r.width()
+        addr_u = il.reg(3, RegisterName("U"))
+        r.lift_assign(il, il.load(size, addr_u))
+        il.append(
+            il.set_reg(3, RegisterName("U"), il.add(3, addr_u, il.const(3, size)))
+        )
 
 class PUSHS(StackPushInstruction): pass
 class POPS(StackPopInstruction): pass
