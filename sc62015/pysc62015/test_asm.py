@@ -475,6 +475,25 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    # --- DSLL/DSRL Instruction Tests ---
+    AssemblerTestCase(
+        test_id="dsll_imem_direct",
+        asm_code="DSLL (0x10)",
+        expected_ti="""
+            @0000
+            EC 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="dsrl_imem_direct",
+        asm_code="DSRL (0x20)",
+        expected_ti="""
+            @0000
+            FC 20
+            q
+        """,
+    ),
     # --- JP/JR Instruction Tests ---
     AssemblerTestCase(
         test_id="jp_abs",

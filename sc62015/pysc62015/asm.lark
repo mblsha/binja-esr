@@ -100,6 +100,8 @@ instruction: "NOP"i -> nop
            | dadl_imem_a
            | dsbl_imem_imem
            | dsbl_imem_a
+           | dsll_imem
+           | dsrl_imem
            | pmdf_imem_imm
            | pmdf_imem_a
            | or_imem_a
@@ -176,6 +178,9 @@ dadl_imem_imem.2: "DADL"i imem_operand "," imem_operand
 dadl_imem_a.2:    "DADL"i imem_operand "," _A
 dsbl_imem_imem.2: "DSBL"i imem_operand "," imem_operand
 dsbl_imem_a.2:    "DSBL"i imem_operand "," _A
+
+dsll_imem.1: "DSLL"i imem_operand
+dsrl_imem.1: "DSRL"i imem_operand
 
 pmdf_imem_imm.1: "PMDF"i imem_operand "," expression
 pmdf_imem_a.2:   "PMDF"i imem_operand "," _A
