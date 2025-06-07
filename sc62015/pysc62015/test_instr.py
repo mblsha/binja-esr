@@ -48,6 +48,7 @@ from .mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
 from binaryninja.lowlevelil import (
     LLIL_TEMP,
 )
+from binaryninja.architecture import RegisterName
 
 import os
 from pprint import pprint
@@ -303,7 +304,7 @@ def test_emem_value_offset_helper_widths() -> None:
 
 def test_emem_reg_offset_helper_widths() -> None:
     reg = Reg3()
-    reg.reg = "X"
+    reg.reg = RegisterName("X")
 
     for width, suffix in [(2, "w"), (3, "l")]:
         h = EMemRegOffsetHelper(width, reg, EMemRegMode.SIMPLE, offset=None)
