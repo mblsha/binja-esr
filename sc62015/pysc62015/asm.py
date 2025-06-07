@@ -302,6 +302,46 @@ class AsmTransformer(Transformer):
             }
         }
 
+    def jpz_abs(self, items: List[Any]) -> InstructionNode:
+        imm = Imm16()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(cond="Z", ops=[imm]),
+            }
+        }
+
+    def jpnz_abs(self, items: List[Any]) -> InstructionNode:
+        imm = Imm16()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(cond="NZ", ops=[imm]),
+            }
+        }
+
+    def jpc_abs(self, items: List[Any]) -> InstructionNode:
+        imm = Imm16()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(cond="C", ops=[imm]),
+            }
+        }
+
+    def jpnc_abs(self, items: List[Any]) -> InstructionNode:
+        imm = Imm16()
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Abs,
+                "instr_opts": Opts(cond="NC", ops=[imm]),
+            }
+        }
+
     def jp_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
         r = Reg3()
@@ -314,7 +354,7 @@ class AsmTransformer(Transformer):
     def jp_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
         imm = IMem20()
-        imm.value = op.n_val
+        imm.value = cast(Any, op.n_val)
         return {
             "instruction": {"instr_class": JP_Abs, "instr_opts": Opts(ops=[imm])}}
 
@@ -329,6 +369,86 @@ class AsmTransformer(Transformer):
         imm.value = items[0]
         return {
             "instruction": {"instr_class": JP_Rel, "instr_opts": Opts(ops=[imm])}}
+
+    def jrz_plus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("+")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="Z", ops=[imm]),
+            }
+        }
+
+    def jrz_minus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("-")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="Z", ops=[imm]),
+            }
+        }
+
+    def jrnz_plus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("+")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="NZ", ops=[imm]),
+            }
+        }
+
+    def jrnz_minus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("-")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="NZ", ops=[imm]),
+            }
+        }
+
+    def jrc_plus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("+")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="C", ops=[imm]),
+            }
+        }
+
+    def jrc_minus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("-")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="C", ops=[imm]),
+            }
+        }
+
+    def jrnc_plus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("+")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="NC", ops=[imm]),
+            }
+        }
+
+    def jrnc_minus(self, items: List[Any]) -> InstructionNode:
+        imm = ImmOffset("-")
+        imm.value = items[0]
+        return {
+            "instruction": {
+                "instr_class": JP_Rel,
+                "instr_opts": Opts(cond="NC", ops=[imm]),
+            }
+        }
 
     def inc_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])

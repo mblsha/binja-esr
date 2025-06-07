@@ -14,11 +14,7 @@ Only a few `MV` forms are parsed today (`MV A,B`, `MV B,A`, and `MV (imem),(imem
 ## 2. Arithmetic Instructions: supposedly all implemented
 
 ## 3. Program Flow Instructions
-Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:
-
-- **Unconditional Jumps**: far or register forms of `JP` and `JR`.
-- **Conditional Jumps**: `JPZ`, `JPNZ`, `JPC`, `JPNC`.
-- **Conditional Relative Jumps**: `JRZ`, `JRNZ`, `JRC`, `JRNC`.
+All jump, call, and return instructions are now supported by the assembler.
 
 ## 4. Logical and Compare Instructions
 Logical, test, and compare instructions are still partially unimplemented:
