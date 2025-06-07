@@ -111,6 +111,9 @@ class AsmTransformer(Transformer):
     def section_decl(self, items: List[Any]) -> SectionNode:
         return {"section": str(items[-1])}
 
+    def data_directive(self, items: List[Any]) -> DataDirectiveNode:
+        return items[0]  # type: ignore
+
     def defb_directive(self, items: List[Any]) -> DataDirectiveNode:
         return {"type": "defb", "args": items}
 

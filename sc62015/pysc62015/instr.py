@@ -966,6 +966,9 @@ class Reg(Operand, HasWidth):
         super().__init__()
         self.reg = reg
 
+    def __repr__(self) -> str:
+        return f"Reg(reg={self.reg!r})"
+
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TReg(self.reg)]
 
@@ -2661,3 +2664,4 @@ OPCODES = {
     0xFE: IR,
     0xFF: RESET,
 }
+

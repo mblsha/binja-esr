@@ -1,31 +1,14 @@
 #!/usr/bin/env python3
-import re
 import sys
-from typing import Dict, List, Any
+from typing import Dict, List, Any, cast
 
 import bincopy  # type: ignore[import-untyped]
 from plumbum import cli  # type: ignore[import-untyped]
 
 # Assuming the provided library files are in a package named 'sc62015'
-from .asm import AsmTransformer, asm_parser
+from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from .coding import Encoder
-from .instr import REG_NAMES
-from .instr import (
-    Instruction,
-    OPCODES,
-    Operand,
-    Opts,
-    Reg,
-    Reg3,
-    EMemAddr,
-    Imm8,
-    Imm16,
-    Imm20,
-    IMem8,
-    IMem16,
-    IMem20,
-    encode,
-)
+from .instr import Instruction, OPCODES, Opts
 
 # A simple cache for the reverse lookup table
 REVERSE_OPCODES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
@@ -54,6 +37,8 @@ class Assembler:
         self.symbols: Dict[str, int] = {}
         self.section_pointers: Dict[str, int] = {}
         self.current_address: int = 0
+        # Cache built instructions from pass 1 to use in pass 2
+        self.instructions_cache: Dict[int, Instruction] = {}
 
         if not REVERSE_OPCODES_CACHE:
             REVERSE_OPCODES_CACHE.update(self._build_reverse_opcodes())
@@ -83,84 +68,48 @@ class Assembler:
         except ValueError:
             raise AssemblerError(f"Undefined symbol or invalid number: {value}")
 
-    def _parse_and_build_instruction(self, instr_text: str) -> Instruction:
-        """Parses a raw instruction string and attempts to build an Instruction object."""
-        parts = re.split(r"[, ]+", instr_text, 1)
-        mnemonic = parts[0].upper()
-        operands_str = parts[1] if len(parts) > 1 else ""
-        operands = (
-            [op.strip() for op in operands_str.split(",")] if operands_str else []
-        )
+    def _build_instruction(self, parsed_instr: ParsedInstruction) -> Instruction:
+        """Builds an Instruction object from a parsed instruction node from the AST."""
+        instr_class = parsed_instr["instr_class"]
+        instr_opts = parsed_instr["instr_opts"]
+
+        mnemonic = (instr_opts.name or instr_class.__name__.split("_")[0]).upper()
+        provided_ops = instr_opts.ops or []
 
         if mnemonic not in self._reverse_opcodes:
             raise AssemblerError(f"Unknown mnemonic: {mnemonic}")
 
+        # For the unambiguous grammar, we can match on class and operand representation
         for template in self._reverse_opcodes[mnemonic]:
-            opts = template["opts"]
-            op_templates: List[Operand] = opts.ops or []
-
-            if len(op_templates) != len(operands):
+            if template["class"] is not instr_class:
                 continue
 
-            try:
-                built_operands: List[Operand] = []
-                for op_str, op_template in zip(operands, op_templates):
-                    val = self._evaluate_operand(op_str)
-                    instance: Operand
+            template_ops = template["opts"].ops or []
 
-                    if isinstance(op_template, EMemAddr):
-                        instance = EMemAddr(width=op_template.width())
-                        instance.value = val
-                        instance.extra_hi = (val >> 16) & 0xF
-                        built_operands.append(instance)
-                    elif isinstance(op_template, Imm20):
-                        instance = Imm20()
-                        instance.value = val
-                        instance.extra_hi = (val >> 16) & 0xF
-                        built_operands.append(instance)
-                    elif isinstance(op_template, (Imm8, IMem8, Imm16, IMem16, IMem20)):
-                        instance = op_template.__class__()
-                        instance.value = val
-                        built_operands.append(instance)
-                    elif isinstance(op_template, Reg3):
-
-                        instance = Reg3()
-                        try:
-                            op_str_upper = op_str.upper()
-                            # Find the RegisterName object from the list of available registers
-                            reg_enum = next(
-                                r for r in REG_NAMES if str(r) == op_str_upper
-                            )
-                            idx = REG_NAMES.index(reg_enum)
-                            instance.reg = reg_enum
-                            instance.reg_raw = idx
-                            instance.high4 = 0
-                        except StopIteration:
-                            raise AssemblerError(
-                                f"Invalid register name for instruction: {op_str}"
-                            ) from None
-                        built_operands.append(instance)
-                    elif isinstance(op_template, Reg):
-                        instance = Reg(op_str.upper())
-                        built_operands.append(instance)
-                    else:
-                        raise NotImplementedError(
-                            f"Operand template not implemented: {type(op_template)}"
-                        )
-
-                instr: Instruction = template["class"](
+            # Compare operands. Using repr is a simple way for the basic operand types.
+            if len(provided_ops) == len(template_ops) and all(
+                repr(p_op) == repr(t_op)
+                for p_op, t_op in zip(provided_ops, template_ops)
+            ):
+                instr = instr_class(
                     name=mnemonic,
-                    operands=built_operands,
-                    cond=opts.cond,
-                    ops_reversed=opts.ops_reversed,
+                    operands=provided_ops,
+                    cond=template["opts"].cond,
+                    ops_reversed=template["opts"].ops_reversed,
                 )
                 instr.opcode = template["opcode"]
-                return instr
-            except (ValueError, NotImplementedError, AssemblerError):
-                continue
-        raise AssemblerError(f"No valid operand combination found for: {instr_text}")
 
-    def _get_statement_size(self, statement: Dict[str, Any]) -> int:
+                encoder = Encoder()
+                instr.encode(encoder, 0)  # address doesn't matter for size
+                instr.set_length(len(encoder.buf))
+
+                return instr
+
+        raise AssemblerError(
+            f"Could not find a matching opcode for {mnemonic} with operands {provided_ops}"
+        )
+
+    def _get_statement_size(self, statement: Dict[str, Any], line_num: int) -> int:
         """Calculates the size of a statement in bytes in the first pass."""
         stmt_type = statement.get("type")
         args = statement.get("args")
@@ -178,12 +127,11 @@ class Assembler:
         elif stmt_type == "defm":
             return len(args or "")
         elif "instruction" in statement:
-            try:
-                instr = self._parse_and_build_instruction(statement["instruction"])
-                return len(encode(instr, 0))
-            except AssemblerError:
-                # Can't resolve symbols yet, assume max size.
-                return 5
+            instr = self._build_instruction(
+                cast(ParsedInstruction, statement["instruction"])
+            )
+            self.instructions_cache[line_num] = instr  # Cache for second pass
+            return instr.length()
         return 0
 
     def _first_pass(self, program_ast: Dict[str, Any]) -> None:
@@ -191,8 +139,9 @@ class Assembler:
         self.symbols = {}
         self.section_pointers = self.SECTION_BASE_ADDRESSES.copy()
         current_section = self.DEFAULT_SECTION
+        self.instructions_cache.clear()
 
-        for line in program_ast["lines"]:
+        for i, line in enumerate(program_ast["lines"]):
             if "statement" in line and line["statement"].get("section"):
                 current_section = line["statement"]["section"].lower()
                 if current_section not in self.section_pointers:
@@ -212,47 +161,35 @@ class Assembler:
                 self.symbols[line["label"]] = addr
 
             if "statement" in line:
-                size = self._get_statement_size(line["statement"])
+                size = self._get_statement_size(line["statement"], i)
                 self.section_pointers[current_section] += size
 
         # Layout .bss after .data if both exist
-        if "data" in self.section_pointers and "bss" in self.SECTION_BASE_ADDRESSES:
-            data_end_addr = self.section_pointers["data"]
-            self.section_pointers["bss"] = data_end_addr
+        if "data" in self.section_pointers and "bss" in self.section_pointers:
+            self.section_pointers["bss"] = self.section_pointers["data"]
 
     def _second_pass(self, program_ast: Dict[str, Any]) -> bincopy.BinFile:
         """Pass 2: Generate machine code using the symbol table."""
         binfile = bincopy.BinFile()
-
-        # Reset pointers to their base addresses for code generation
-        self.section_pointers = self.SECTION_BASE_ADDRESSES.copy()
-        if "data" in self.section_pointers and "bss" in self.SECTION_BASE_ADDRESSES:
-            # Recalculate data section size to place bss correctly
-            data_size = sum(
-                self._get_statement_size(line["statement"])
-                for line in program_ast["lines"]
-                if line.get("statement", {}).get("section", self.DEFAULT_SECTION)
-                == "data"
-            )
-            self.section_pointers["bss"] = (
-                self.SECTION_BASE_ADDRESSES["data"] + data_size
-            )
+        current_section_pointers = self.SECTION_BASE_ADDRESSES.copy()
+        if "data" in self.section_pointers and "bss" in current_section_pointers:
+            current_section_pointers["bss"] = self.section_pointers["data"]
 
         current_section = self.DEFAULT_SECTION
 
         for i, line in enumerate(program_ast["lines"]):
             if "statement" in line and line["statement"].get("section"):
                 current_section = line["statement"]["section"].lower()
-                if current_section not in self.section_pointers:
+                if current_section not in current_section_pointers:
                     raise AssemblerError(
                         f"Undefined section '{current_section}' encountered in second pass."
                     )
 
-            self.current_address = self.section_pointers[current_section]
+            self.current_address = current_section_pointers[current_section]
 
             if "statement" in line:
                 try:
-                    encoded_bytes = self._encode_statement(line["statement"])
+                    encoded_bytes = self._encode_statement(line["statement"], i)
                     if encoded_bytes:
                         if current_section == "bss":
                             # .bss section only reserves space, no data in file
@@ -260,20 +197,22 @@ class Assembler:
                         else:
                             binfile.add_binary(encoded_bytes, self.current_address)
 
-                    self.section_pointers[current_section] += len(encoded_bytes)
+                    current_section_pointers[current_section] += len(encoded_bytes)
                 except Exception as e:
-                    raise AssemblerError(
-                        f"on line {i+1}: {e}\n> {program_ast['source_text'].splitlines()[i]}"
-                    )
+                    source_line = program_ast["source_text"].splitlines()[i]
+                    raise AssemblerError(f"on line {i+1}: {e}\n> {source_line}") from e
         return binfile
 
-    def _encode_statement(self, statement: Dict[str, Any]) -> bytearray:
+    def _encode_statement(self, statement: Dict[str, Any], line_num: int) -> bytearray:
         """Encodes a single statement into a bytearray."""
-        stmt_type = statement.get("type")
         if "instruction" in statement:
-            instr = self._parse_and_build_instruction(statement["instruction"])
-            return encode(instr, self.current_address)
+            # Retrieve the already-built instruction from the cache
+            instr = self.instructions_cache[line_num]
+            encoder = Encoder()
+            instr.encode(encoder, self.current_address)
+            return encoder.buf
 
+        stmt_type = statement.get("type")
         if not stmt_type:
             return bytearray()
 
@@ -308,8 +247,12 @@ class Assembler:
         if not source_text.endswith("\n"):
             source_text += "\n"
 
-        tree = asm_parser.parse(source_text)
-        program_ast = AsmTransformer().transform(tree)
+        try:
+            tree = asm_parser.parse(source_text)
+            program_ast = AsmTransformer().transform(tree)
+        except Exception as e:
+            raise AssemblerError(f"Parsing failed: {e}") from e
+
         program_ast["source_text"] = source_text
 
         self._first_pass(program_ast)
