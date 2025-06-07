@@ -8,9 +8,7 @@ version = "0.1.0"
 description = "Binary Ninja SC62015 architecture plugin"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
-    "lark",
-]
+dependencies = ["lark"]
 
 [project.optional-dependencies]
 dev = [
