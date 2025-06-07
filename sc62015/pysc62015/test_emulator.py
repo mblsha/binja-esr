@@ -347,6 +347,93 @@ instruction_test_cases: List[InstructionTestCase] = [
     #         INTERNAL_MEMORY_START + 0x51: 0xBE,
     #     },
     # ),
+    # --- SHL/SHR Instructions ---
+    # SHL A (0xF6)
+    InstructionTestCase(
+        test_id="SHL_A_simple",
+        instr_bytes=bytes.fromhex("F6"),
+        init_regs={RegisterName.A: 0x55, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0xAA, RegisterName.FC: 0, RegisterName.FZ: 0},
+        expected_asm_str="SHL   A",
+    ),
+    InstructionTestCase(
+        test_id="SHL_A_carry_in",
+        instr_bytes=bytes.fromhex("F6"),
+        init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0x55, RegisterName.FC: 1, RegisterName.FZ: 0},
+        expected_asm_str="SHL   A",
+    ),
+    InstructionTestCase(
+        test_id="SHL_A_carry_out_and_zero",
+        instr_bytes=bytes.fromhex("F6"),
+        init_regs={RegisterName.A: 0x80, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_asm_str="SHL   A",
+    ),
+    # SHR A (0xF4)
+    InstructionTestCase(
+        test_id="SHR_A_simple",
+        instr_bytes=bytes.fromhex("F4"),
+        init_regs={RegisterName.A: 0x55, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x2A, RegisterName.FC: 1, RegisterName.FZ: 0},
+        expected_asm_str="SHR   A",
+    ),
+    InstructionTestCase(
+        test_id="SHR_A_carry_in",
+        instr_bytes=bytes.fromhex("F4"),
+        init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0xD5, RegisterName.FC: 0, RegisterName.FZ: 0},
+        expected_asm_str="SHR   A",
+    ),
+    InstructionTestCase(
+        test_id="SHR_A_carry_out_and_zero",
+        instr_bytes=bytes.fromhex("F4"),
+        init_regs={RegisterName.A: 0x01, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_asm_str="SHR   A",
+    ),
+    # SHL (n) (0xF7)
+    InstructionTestCase(
+        test_id="SHL_mem_simple",
+        instr_bytes=bytes.fromhex("F710"),
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x55},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0xAA)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0xAA},
+        expected_regs={RegisterName.FC: 0, RegisterName.FZ: 0},
+        expected_asm_str="SHL   (10)",
+    ),
+    InstructionTestCase(
+        test_id="SHL_mem_carry_out_and_zero",
+        instr_bytes=bytes.fromhex("F710"),
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x80},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_asm_str="SHL   (10)",
+    ),
+    # SHR (n) (0xF5)
+    InstructionTestCase(
+        test_id="SHR_mem_simple",
+        instr_bytes=bytes.fromhex("F510"),
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x55},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x2A)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x2A},
+        expected_regs={RegisterName.FC: 1, RegisterName.FZ: 0},
+        expected_asm_str="SHR   (10)",
+    ),
+    InstructionTestCase(
+        test_id="SHR_mem_carry_out_and_zero",
+        instr_bytes=bytes.fromhex("F510"),
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x01},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_asm_str="SHR   (10)",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
@@ -498,66 +585,6 @@ def test_callf_retf() -> None:
     assert cpu.regs.get(RegisterName.PC) == 0x04
     assert cpu.regs.get(RegisterName.S) == 0x30
     assert writes == []
-
-
-def test_shl_shr_a() -> None:
-    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("F6"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "SHL   A"
-
-    # Case 1: A = 0x55 (01010101), FC = 0
-    cpu.regs.set(RegisterName.A, 0x55)
-    cpu.regs.set(RegisterName.FC, 0)
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.A) == 0xAA  # 01010101 << 1 | 0 = 10101010
-    assert cpu.regs.get(RegisterName.FC) == 0  # MSB of 0x55 was 0
-    assert cpu.regs.get(RegisterName.FZ) == 0
-
-    # Case 2: A = 0xAA (10101010), FC = 1
-    cpu.regs.set(RegisterName.A, 0xAA)
-    cpu.regs.set(RegisterName.FC, 1)
-    cpu.execute_instruction(0x00)
-    assert (
-        cpu.regs.get(RegisterName.A) == 0x55
-    )  # 10101010 << 1 | 1 = 010101010 | 1 = 01010101
-    assert cpu.regs.get(RegisterName.FC) == 1  # MSB of 0xAA was 1
-    assert cpu.regs.get(RegisterName.FZ) == 0
-
-    # Case 3: A = 0x80 (10000000), FC = 0, result 0
-    cpu.regs.set(RegisterName.A, 0x80)
-    cpu.regs.set(RegisterName.FC, 0)
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.A) == 0x00  # (10000000 << 1) | 0 = 00000000
-    assert cpu.regs.get(RegisterName.FC) == 1  # MSB of 0x80 was 1
-    assert cpu.regs.get(RegisterName.FZ) == 1
-
-    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("F4"))
-    assert asm_str(cpu.decode_instruction(0x00).render()) == "SHR   A"
-
-    # Case 1: A = 0x55 (01010101), FC = 0
-    cpu.regs.set(RegisterName.A, 0x55)
-    cpu.regs.set(RegisterName.FC, 0)
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.A) == 0x2A  # 01010101 >> 1 | (0 << 7) = 00101010
-    assert cpu.regs.get(RegisterName.FC) == 1  # LSB of 0x55 was 1
-    assert cpu.regs.get(RegisterName.FZ) == 0
-
-    # Case 2: A = 0xAA (10101010), FC = 1
-    cpu.regs.set(RegisterName.A, 0xAA)
-    cpu.regs.set(RegisterName.FC, 1)
-    cpu.execute_instruction(0x00)
-    assert (
-        cpu.regs.get(RegisterName.A) == 0xD5
-    )  # 10101010 >> 1 | (1 << 7) = 01010101 | 10000000 = 11010101
-    assert cpu.regs.get(RegisterName.FC) == 0  # LSB of 0xAA was 0
-    assert cpu.regs.get(RegisterName.FZ) == 0
-
-    # Case 3: A = 0x01 (00000001), FC = 0, result 0
-    cpu.regs.set(RegisterName.A, 0x01)
-    cpu.regs.set(RegisterName.FC, 0)
-    cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.A) == 0x00  # (00000001 >> 1) | (0 << 7) = 00000000
-    assert cpu.regs.get(RegisterName.FC) == 1  # LSB of 0x01 was 1
-    assert cpu.regs.get(RegisterName.FZ) == 1
 
 
 def test_rol_ror_a() -> None:
