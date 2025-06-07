@@ -21,9 +21,8 @@ Besides `RET`, `RETI`, and `RETF`, jump instructions are absent:
 - **Conditional Relative Jumps**: `JRZ`, `JRNZ`, `JRC`, `JRNC`.
 
 ## 4. Logical and Compare Instructions
-Logical, test, and compare instructions are largely unimplemented:
+Logical, test, and compare instructions are still partially unimplemented:
 
-- **Logical Ops**: `OR`, `XOR` with all addressing modes.
 - **Test**: `TEST` in all forms.
 - **Compare**: `CMP`, `CMPW`, `CMPP`.
 
