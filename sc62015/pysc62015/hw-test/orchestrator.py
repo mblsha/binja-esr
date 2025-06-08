@@ -5,10 +5,10 @@ import time
 from typing import Any, Dict, Optional
 
 import serial
-from plumbum import cli
+from plumbum import cli  # type: ignore[import-untyped]
 
 from sc62015.pysc62015.sc_asm import Assembler
-from sc62015.pysc62015.emulator import Emulator
+from sc62015.pysc62015.emulator import Emulator, Memory
 
 # from sc62015.pysc62015.emulator import Registers, RegisterName
 
@@ -21,7 +21,7 @@ class HardwareInterface:
         port: str,
         baudrate: int = 9600,
         timeout: int = 3,
-        serial_cls=serial.Serial,
+        serial_cls: Any = serial.Serial,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -29,32 +29,37 @@ class HardwareInterface:
         self.serial_cls = serial_cls
         self.conn: Optional[serial.Serial] = None
 
-    def __enter__(self):
+    def __enter__(self) -> "HardwareInterface":
         print(f"Connecting to hardware on {self.port}...")
         self.conn = self.serial_cls(self.port, self.baudrate, timeout=self.timeout)
         time.sleep(2)  # Wait for BASIC program and serial port to be ready
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self.conn and self.conn.is_open:
             self.conn.close()
         print("Hardware connection closed.")
 
-    def _send_command(self, cmd: str, *args: Any):
-        if not self.conn:
+    def _send_command(self, cmd: str, *args: Any) -> None:
+        if self.conn is None:
             raise ConnectionError("Serial port not open.")
+        assert self.conn is not None
         self.conn.write(f"{cmd}\n".encode("ascii"))
         for arg in args:
             self.conn.write(f"{arg}\n".encode("ascii"))
 
-    def _wait_for_ok(self):
-        if not self.conn:
+    def _wait_for_ok(self) -> None:
+        if self.conn is None:
             raise ConnectionError("Serial port not open.")
+        assert self.conn is not None
         response = self.conn.readline().decode("ascii").strip()
         if response != "OK":
             raise IOError(f"Protocol error: Expected 'OK', but got '{response}'")
 
     def ping(self) -> bool:
+        if self.conn is None:
+            raise ConnectionError("Serial port not open.")
+        assert self.conn is not None
         self._send_command("P")
         response = self.conn.readline().decode("ascii").strip()
         if response != "PONG":
@@ -62,16 +67,17 @@ class HardwareInterface:
         self._wait_for_ok()
         return True
 
-    def load_code(self, address: int, code: bytearray):
+    def load_code(self, address: int, code: bytearray) -> None:
         print(f"Loading {len(code)} bytes to 0x{address:X}...")
         self._send_command("L", f"&H{address:X}", str(len(code)))
+        assert self.conn is not None
         for byte in code:
             self.conn.write(f"{byte:02X}\n".encode("ascii"))
             time.sleep(0.01)  # Small delay to avoid overwhelming BASIC's input buffer
         self._wait_for_ok()
         print("Load successful.")
 
-    def execute_code(self, address: int):
+    def execute_code(self, address: int) -> None:
         print(f"Executing code at 0x{address:X}...")
         self._send_command("X", f"&H{address:X}")
         self._wait_for_ok()
@@ -80,6 +86,8 @@ class HardwareInterface:
     def read_memory(self, address: int, length: int) -> bytearray:
         print(f"Reading {length} bytes from 0x{address:X}...")
         self._send_command("R", f"&H{address:X}", str(length))
+        if self.conn is None:
+            raise ConnectionError("Serial port not open.")
         data = bytearray()
         for _ in range(length):
             byte_hex = self.conn.readline().decode("ascii").strip()
@@ -98,7 +106,7 @@ class TestRunner:
 
     def __init__(
         self, hw_interface: HardwareInterface, assembler: Assembler, emulator: Emulator
-    ):
+    ) -> None:
         self.hw = hw_interface
         self.assembler = assembler
         self.emulator = emulator
@@ -232,7 +240,7 @@ class OrchestratorApp(cli.Application):
         help="A JSON string representing the initial register state.",
     )
 
-    def main(self, port: str):
+    def main(self, port: str) -> int:
         """
         Args:
             port: The serial port for the hardware harness (e.g., COM3, /dev/ttyUSB0).
@@ -247,7 +255,8 @@ class OrchestratorApp(cli.Application):
 
         # --- Setup ---
         assembler = Assembler()
-        emulator = Emulator(mem=None)  # Your real emulator initialization
+        dummy_mem = Memory(lambda _addr: 0, lambda _addr, _val: None)
+        emulator = Emulator(dummy_mem)
 
         try:
             with HardwareInterface(port) as hw:
