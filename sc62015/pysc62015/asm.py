@@ -122,6 +122,19 @@ class ProgramNode(TypedDict):
 
 
 class AsmTransformer(Transformer):
+    def _make_instr(
+        self,
+        instr_class: Type[Instruction],
+        *ops: Any,
+        name: Optional[str] = None,
+        cond: Optional[str] = None,
+    ) -> InstructionNode:
+        return {
+            "instruction": {
+                "instr_class": instr_class,
+                "instr_opts": Opts(name=name, cond=cond, ops=list(ops) if ops else None),
+            }
+        }
     def start(self, items: List[LineNode]) -> ProgramNode:
         # Filter out empty lines and stray NEWLINE tokens
         return {"lines": [line for line in items if isinstance(line, dict) and line]}
@@ -182,207 +195,146 @@ class AsmTransformer(Transformer):
         return {"type": "defm", "args": items[0]}
 
     def nop(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": NOP, "instr_opts": Opts()}}
+        return self._make_instr(NOP)
 
     def reti(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": RETI, "instr_opts": Opts()}}
+        return self._make_instr(RETI)
 
     def ret(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": RET, "instr_opts": Opts()}}
+        return self._make_instr(RET)
 
     def retf(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": RETF, "instr_opts": Opts()}}
+        return self._make_instr(RETF)
 
     def sc(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": SC, "instr_opts": Opts()}}
+        return self._make_instr(SC)
 
     def rc(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": RC, "instr_opts": Opts()}}
+        return self._make_instr(RC)
 
     def tcl(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": TCL, "instr_opts": Opts()}}
+        return self._make_instr(TCL)
 
     def halt(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": HALT, "instr_opts": Opts()}}
+        return self._make_instr(HALT)
 
     def off(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": OFF, "instr_opts": Opts()}}
+        return self._make_instr(OFF)
 
     def wait(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": WAIT, "instr_opts": Opts()}}
+        return self._make_instr(WAIT)
 
     def ir(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": IR, "instr_opts": Opts()}}
+        return self._make_instr(IR)
 
     def reset(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": RESET, "instr_opts": Opts()}}
+        return self._make_instr(RESET)
 
     def swap_a(self, _: List[Any]) -> InstructionNode:
-        return {
-            "instruction": {"instr_class": SWAP, "instr_opts": Opts(ops=[Reg("A")])}
-        }
+        return self._make_instr(SWAP, Reg("A"))
 
     def ror_a(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": ROR, "instr_opts": Opts(ops=[Reg("A")])}}
+        return self._make_instr(ROR, Reg("A"))
 
     def rol_a(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": ROL, "instr_opts": Opts(ops=[Reg("A")])}}
+        return self._make_instr(ROL, Reg("A"))
 
     def shr_a(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": SHR, "instr_opts": Opts(ops=[Reg("A")])}}
+        return self._make_instr(SHR, Reg("A"))
 
     def shl_a(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": SHL, "instr_opts": Opts(ops=[Reg("A")])}}
+        return self._make_instr(SHL, Reg("A"))
 
     def ror_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        return {"instruction": {"instr_class": ROR, "instr_opts": Opts(ops=[op])}}
+        return self._make_instr(ROR, op)
 
     def rol_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        return {"instruction": {"instr_class": ROL, "instr_opts": Opts(ops=[op])}}
+        return self._make_instr(ROL, op)
 
     def shr_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        return {"instruction": {"instr_class": SHR, "instr_opts": Opts(ops=[op])}}
+        return self._make_instr(SHR, op)
 
     def shl_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        return {"instruction": {"instr_class": SHL, "instr_opts": Opts(ops=[op])}}
+        return self._make_instr(SHL, op)
 
     def mv_a_b(self, _: List[Any]) -> InstructionNode:
-        return {
-            "instruction": {
-                "instr_class": MV,
-                "instr_opts": Opts(ops=[Reg("A"), RegB()]),
-            }
-        }
+        return self._make_instr(MV, Reg("A"), RegB())
 
     def mv_b_a(self, _: List[Any]) -> InstructionNode:
-        return {
-            "instruction": {
-                "instr_class": MV,
-                "instr_opts": Opts(ops=[RegB(), Reg("A")]),
-            }
-        }
+        return self._make_instr(MV, RegB(), Reg("A"))
 
     def ex_a_b(self, _: List[Any]) -> InstructionNode:
-        return {
-            "instruction": {
-                "instr_class": EX,
-                "instr_opts": Opts(ops=[Reg("A"), RegB()]),
-            }
-        }
+        return self._make_instr(EX, Reg("A"), RegB())
 
     def pushs_f(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": PUSHS, "instr_opts": Opts(ops=[RegF()])}}
+        return self._make_instr(PUSHS, RegF())
 
     def pops_f(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": POPS, "instr_opts": Opts(ops=[RegF()])}}
+        return self._make_instr(POPS, RegF())
 
     def pushu_f(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": PUSHU, "instr_opts": Opts(ops=[RegF()])}}
+        return self._make_instr(PUSHU, RegF())
 
     def popu_f(self, _: List[Any]) -> InstructionNode:
-        return {"instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[RegF()])}}
+        return self._make_instr(POPU, RegF())
 
     def pushu_imr(self, _: List[Any]) -> InstructionNode:
-        return {
-            "instruction": {"instr_class": PUSHU, "instr_opts": Opts(ops=[RegIMR()])}
-        }
+        return self._make_instr(PUSHU, RegIMR())
 
     def popu_imr(self, _: List[Any]) -> InstructionNode:
-        return {
-            "instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[RegIMR()])}
-        }
+        return self._make_instr(POPU, RegIMR())
 
     def pushu_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
-        return {"instruction": {"instr_class": PUSHU, "instr_opts": Opts(ops=[reg])}}
+        return self._make_instr(PUSHU, reg)
 
     def popu_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
-        return {"instruction": {"instr_class": POPU, "instr_opts": Opts(ops=[reg])}}
+        return self._make_instr(POPU, reg)
 
     def call(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": CALL,
-                "instr_opts": Opts(ops=[imm]),
-            }
-        }
+        return self._make_instr(CALL, imm)
 
     def callf(self, items: List[Any]) -> InstructionNode:
         imm = Imm20()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": CALL,
-                "instr_opts": Opts(name="CALLF", ops=[imm]),
-            }
-        }
+        return self._make_instr(CALL, imm, name="CALLF")
 
     def jp_abs(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Abs,
-                "instr_opts": Opts(ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Abs, imm)
 
     def jpf_abs(self, items: List[Any]) -> InstructionNode:
         imm = Imm20()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Abs,
-                "instr_opts": Opts(name="JPF", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Abs, imm, name="JPF")
 
     def jpz_abs(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Abs,
-                "instr_opts": Opts(cond="Z", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Abs, imm, cond="Z")
 
     def jpnz_abs(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Abs,
-                "instr_opts": Opts(cond="NZ", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Abs, imm, cond="NZ")
 
     def jpc_abs(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Abs,
-                "instr_opts": Opts(cond="C", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Abs, imm, cond="C")
 
     def jpnc_abs(self, items: List[Any]) -> InstructionNode:
         imm = Imm16()
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Abs,
-                "instr_opts": Opts(cond="NC", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Abs, imm, cond="NC")
 
     def jp_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
@@ -408,94 +360,52 @@ class AsmTransformer(Transformer):
     def jr_plus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("+")
         imm.value = items[0]
-        return {
-            "instruction": {"instr_class": JP_Rel, "instr_opts": Opts(ops=[imm])}}
+        return self._make_instr(JP_Rel, imm)
 
     def jr_minus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("-")
         imm.value = items[0]
-        return {
-            "instruction": {"instr_class": JP_Rel, "instr_opts": Opts(ops=[imm])}}
+        return self._make_instr(JP_Rel, imm)
 
     def jrz_plus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("+")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="Z", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="Z")
 
     def jrz_minus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("-")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="Z", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="Z")
 
     def jrnz_plus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("+")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="NZ", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="NZ")
 
     def jrnz_minus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("-")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="NZ", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="NZ")
 
     def jrc_plus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("+")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="C", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="C")
 
     def jrc_minus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("-")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="C", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="C")
 
     def jrnc_plus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("+")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="NC", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="NC")
 
     def jrnc_minus(self, items: List[Any]) -> InstructionNode:
         imm = ImmOffset("-")
         imm.value = items[0]
-        return {
-            "instruction": {
-                "instr_class": JP_Rel,
-                "instr_opts": Opts(cond="NC", ops=[imm]),
-            }
-        }
+        return self._make_instr(JP_Rel, imm, cond="NC")
 
     def inc_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
@@ -503,11 +413,11 @@ class AsmTransformer(Transformer):
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
         r.high4 = 0
-        return {"instruction": {"instr_class": INC, "instr_opts": Opts(ops=[r])}}
+        return self._make_instr(INC, r)
 
     def inc_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        return {"instruction": {"instr_class": INC, "instr_opts": Opts(ops=[op])}}
+        return self._make_instr(INC, op)
 
     def dec_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
@@ -515,11 +425,11 @@ class AsmTransformer(Transformer):
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
         r.high4 = 0
-        return {"instruction": {"instr_class": DEC, "instr_opts": Opts(ops=[r])}}
+        return self._make_instr(DEC, r)
 
     def dec_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        return {"instruction": {"instr_class": DEC, "instr_opts": Opts(ops=[op])}}
+        return self._make_instr(DEC, op)
 
     def reg(self, items: List[Token]) -> Reg:
         reg_name = str(items[0]).upper()
