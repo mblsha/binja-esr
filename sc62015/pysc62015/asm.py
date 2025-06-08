@@ -1083,6 +1083,7 @@ class AsmTransformer(Transformer):
         # For simple, post-increment and pre-decrement modes the opcode expects
         # an ``EMemReg`` operand directly.  Only the ``+n``/``-n`` forms are
         # encoded using ``RegIMemOffset``.
+        operand: Union[RegIMemOffset, EMemReg]
         if regop.mode in (
             EMemRegMode.POSITIVE_OFFSET,
             EMemRegMode.NEGATIVE_OFFSET,
@@ -1116,6 +1117,7 @@ class AsmTransformer(Transformer):
     def mvl_ememreg_imem(self, items: List[Any]) -> InstructionNode:
         regop = cast(EMemReg, items[0])
         imem = cast(IMemOperand, items[1])
+        operand: Union[RegIMemOffset, EMemReg]
         if regop.mode in (
             EMemRegMode.POSITIVE_OFFSET,
             EMemRegMode.NEGATIVE_OFFSET,
