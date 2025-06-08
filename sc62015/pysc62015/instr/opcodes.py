@@ -1,5 +1,16 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from ..tokens import Token, TInstr, TText, TSep, TInt, TReg, TBegMem, TEndMem, MemType
+from ..tokens import (
+    Token,
+    TInstr,
+    TText,
+    TSep,
+    TInt,
+    TReg,
+    TBegMem,
+    TEndMem,
+    TAddr,
+    MemType,
+)
 from ..coding import Decoder, Encoder, BufferTooShort
 
 from ..mock_llil import MockLLIL
@@ -1232,7 +1243,12 @@ class EMemAddr(Imm20, Pointer):
         return EMemHelper
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
-        return [TBegMem(MemType.EXTERNAL), TInt(f"{self.value:05X}"), TEndMem(MemType.EXTERNAL)]
+        assert self.value is not None, "Value not set"
+        return [
+            TBegMem(MemType.EXTERNAL),
+            TAddr(self.value),
+            TEndMem(MemType.EXTERNAL),
+        ]
 
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
         assert self.value is not None, "Value not set"

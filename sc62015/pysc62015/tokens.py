@@ -122,7 +122,6 @@ class TEndMem(Token):
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
         return (InstructionTextTokenType.EndMemoryOperandToken, self.__str__())
 
-# FIXME: unused
 class TAddr(Token):
     def __init__(self, value: int) -> None:
         self.value = value
@@ -131,10 +130,10 @@ class TAddr(Token):
         return f"TAddr({self.value})"
 
     def __str__(self) -> str:
-        return str(self.value)
+        return f"{self.value:05X}"
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.PossibleAddressToken, str(self.value))
+        return (InstructionTextTokenType.PossibleAddressToken, f"{self.value:05X}")
 
 class TReg(Token):
     def __init__(self, reg: str) -> None:
