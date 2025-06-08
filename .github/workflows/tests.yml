@@ -8,8 +8,12 @@ on:
   pull_request:
 
 jobs:
-  test:
+  check:
+    name: ${{ matrix.check }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        check: [ruff, mypy, pytest]
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
@@ -17,9 +21,12 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: python -m pip install -e .[dev]
-      - name: Run Ruff
-        run: ruff check
-      - name: Run Mypy
-        run: python scripts/run_mypy.py
-      - name: Run Pytest
-        run: pytest -q
+      - name: Run ${{ matrix.check }}
+        run: |
+          if [ "${{ matrix.check }}" = "ruff" ]; then
+            ruff check
+          elif [ "${{ matrix.check }}" = "mypy" ]; then
+            python scripts/run_mypy.py
+          else
+            pytest -q
+          fi
