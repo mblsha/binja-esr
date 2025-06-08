@@ -18,6 +18,7 @@ from .instr import (
     ImmOperand,
     Imm20,
     ImmOffset,
+    EMemReg,
     RegIMemOffset,
     EMemIMemOffset,
     Reg3,
@@ -120,6 +121,19 @@ class Assembler:
                         continue
                     if isinstance(t_op, RegIMemOffset) and isinstance(p_op, RegIMemOffset):
                         if t_op.order != p_op.order:
+                            converted_match = False
+                            break
+                        continue
+                    if isinstance(t_op, EMemReg) and isinstance(p_op, EMemReg):
+                        if t_op.width != p_op.width:
+                            converted_match = False
+                            break
+                        # Template does not specify the addressing mode, so any
+                        # provided mode should be accepted when ``t_op.mode`` is
+                        # ``None``.
+                        t_mode = getattr(t_op, "mode", None)
+                        p_mode = getattr(p_op, "mode", None)
+                        if t_mode is not None and t_mode != p_mode:
                             converted_match = False
                             break
                         continue
