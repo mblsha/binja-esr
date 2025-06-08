@@ -66,13 +66,13 @@ instruction: "NOP"i -> nop
            | "MVP"i imem_operand "," emem_operand -> mvp_imem_emem
            | "MVP"i emem_imem_operand "," imem_operand -> mvp_ememimem_imem
            | "MVP"i emem_operand "," imem_operand -> mvp_emem_imem
-           | "MVL"i imem_operand "," imem_operand -> mvl_imem_imem
-           | "MVL"i imem_operand "," emem_operand -> mvl_imem_emem
-           | "MVL"i emem_operand "," imem_operand -> mvl_emem_imem
            | "MVL"i imem_operand "," emem_reg_operand -> mvl_imem_ememreg
            | "MVL"i emem_reg_operand "," imem_operand -> mvl_ememreg_imem
            | "MVL"i imem_operand "," emem_imem_operand -> mvl_imem_ememimem
            | "MVL"i emem_imem_operand "," imem_operand -> mvl_ememimem_imem
+           | "MVL"i imem_operand "," imem_operand -> mvl_imem_imem
+           | "MVL"i imem_operand "," emem_operand -> mvl_imem_emem
+           | "MVL"i emem_operand "," imem_operand -> mvl_emem_imem
            | "MVLD"i imem_operand "," imem_operand -> mvld_imem_imem
            | "EX"i _A "," _B -> ex_a_b
            | "PUSHS"i _F -> pushs_f
