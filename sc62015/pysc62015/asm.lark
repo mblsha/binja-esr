@@ -36,6 +36,18 @@ instruction: "NOP"i -> nop
            | "SHL"i imem_operand -> shl_imem
            | "MV"i _A "," _B -> mv_a_b
            | "MV"i _B "," _A -> mv_b_a
+           | "MV"i reg "," reg -> mv_reg_reg
+           | "MV"i reg "," expression -> mv_reg_imm
+           | "MV"i reg "," imem_operand -> mv_reg_imem
+           | "MV"i reg "," emem_operand -> mv_reg_emem
+           | "MV"i imem_operand "," reg -> mv_imem_reg
+           | "MV"i emem_operand "," reg -> mv_emem_reg
+           | "MV"i imem_operand "," expression -> mv_imem_imm
+           | "MV"i emem_operand "," expression -> mv_emem_imm
+           | "MVW"i imem_operand "," imem_operand -> mvw_imem_imem
+           | "MVP"i imem_operand "," imem_operand -> mvp_imem_imem
+           | "MVL"i imem_operand "," imem_operand -> mvl_imem_imem
+           | "MVLD"i imem_operand "," imem_operand -> mvld_imem_imem
            | "EX"i _A "," _B -> ex_a_b
            | "PUSHS"i _F -> pushs_f
            | "POPS"i _F -> pops_f
