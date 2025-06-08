@@ -4,7 +4,11 @@ import serial
 import time
 import json
 from plumbum import cli
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..sc_asm import Assembler
+    from ..emulator import Emulator
 
 import sys
 sys.exit(0)
