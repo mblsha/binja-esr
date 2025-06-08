@@ -123,7 +123,8 @@ class Assembler:
                         if t_op.order != p_op.order:
                             converted_match = False
                             break
-                        if t_op.allowed_modes is not None and p_op.mode not in t_op.allowed_modes:
+                        allowed_modes = t_op.allowed_modes
+                        if allowed_modes is not None and p_op.mode not in allowed_modes:
                             converted_match = False
                             break
                         continue
@@ -139,10 +140,8 @@ class Assembler:
                         if t_mode is not None and t_mode != p_mode:
                             converted_match = False
                             break
-                        if (
-                            getattr(t_op, "allowed_modes", None) is not None
-                            and p_mode not in t_op.allowed_modes
-                        ):
+                        allowed_modes = getattr(t_op, "allowed_modes", None)
+                        if allowed_modes is not None and p_mode not in allowed_modes:
                             converted_match = False
                             break
                         continue
