@@ -37,9 +37,13 @@ def _transform(instr: str) -> str:
             # ``token`` may look like a register name but occasionally represents
             # a numeric constant inside addressing modes, e.g. ``[(BA)]`` or
             # ``[(CD)+BA]``. When preceded by "(", "+" or "-" treat it as a
-            # constant rather than a register.
+            # constant rather than a register. ``match.start()`` points to the
+            # beginning of the whole match, which may include the ``+`` or ``-``
+            # sign. ``token_start`` tracks the actual token location so we can
+            # inspect the character immediately before it.
             start = match.start()
-            prev = rest[start - 1] if start > 0 else ""
+            token_start = start + len(sign)
+            prev = rest[token_start - 1] if token_start > 0 else ""
             if token in REGS and prev not in {"(", "+", "-"}:
                 return match.group(0)
             if token == "FCDAB":
@@ -96,6 +100,6 @@ def test_opcode_table_roundtrip() -> None:
 
     if mismatches:
         print("\n".join(mismatches))
-        pytest.xfail(
+        pytest.fail(
             f"Opcode table divergence detected. {len(mismatches)} mismatches found."
         )
