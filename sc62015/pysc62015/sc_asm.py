@@ -19,6 +19,7 @@ from .instr import (
     Imm20,
     ImmOffset,
     Reg3,
+    RegPair,
     REVERSE_PRE_TABLE,
     SINGLE_OPERAND_PRE_LOOKUP,
     AddressingMode,
@@ -122,6 +123,15 @@ class Assembler:
                     ):
                         if type(p_op) is type(t_op):
                             continue
+                    if isinstance(t_op, RegPair) and isinstance(p_op, RegPair):
+                        if (
+                            t_op.size is not None
+                            and p_op.size is not None
+                            and t_op.size != p_op.size
+                        ):
+                            converted_match = False
+                            break
+                        continue
                     if isinstance(t_op, Reg3) and isinstance(p_op, Reg3):
                         continue
                     if repr(p_op) != repr(t_op):

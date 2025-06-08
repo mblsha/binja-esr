@@ -99,18 +99,22 @@ instruction: "NOP"i -> nop
            | "AND"i imem_operand "," expression -> and_imem_imm
            | "AND"i emem_addr "," expression -> and_emem_imm
            | "AND"i imem_operand "," imem_operand -> and_imem_imem
+           | "ADD"i _A "," reg -> add_reg_reg
            | "ADD"i _A "," expression -> add_a_imm
            | "ADD"i imem_operand "," expression -> add_imem_imm
            | "ADD"i _A "," imem_operand -> add_a_imem
            | "ADD"i imem_operand "," _A -> add_imem_a
+           | "ADD"i reg "," reg -> add_reg_reg
            | "ADC"i _A "," expression -> adc_a_imm
            | "ADC"i imem_operand "," expression -> adc_imem_imm
            | "ADC"i _A "," imem_operand -> adc_a_imem
            | "ADC"i imem_operand "," _A -> adc_imem_a
+           | "SUB"i _A "," reg -> sub_reg_reg
            | "SUB"i _A "," expression -> sub_a_imm
            | "SUB"i imem_operand "," expression -> sub_imem_imm
            | "SUB"i _A "," imem_operand -> sub_a_imem
            | "SUB"i imem_operand "," _A -> sub_imem_a
+           | "SUB"i reg "," reg -> sub_reg_reg
            | "SBC"i _A "," expression -> sbc_a_imm
            | "SBC"i imem_operand "," expression -> sbc_imem_imm
            | "SBC"i _A "," imem_operand -> sbc_a_imem

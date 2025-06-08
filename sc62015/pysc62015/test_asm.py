@@ -405,6 +405,33 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    AssemblerTestCase(
+        test_id="add_reg_r1",
+        asm_code="ADD A, IL",
+        expected_ti="""
+            @0000
+            46 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="add_reg_r2",
+        asm_code="ADD BA, I",
+        expected_ti="""
+            @0000
+            44 23
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="add_reg_r3",
+        asm_code="ADD X, Y",
+        expected_ti="""
+            @0000
+            45 45
+            q
+        """,
+    ),
     # --- SUB Instruction Tests ---
     AssemblerTestCase(
         test_id="sub_a_imm",
@@ -439,6 +466,33 @@ assembler_test_cases: List[AssemblerTestCase] = [
         expected_ti="""
             @0000
             4B 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sub_reg_r1",
+        asm_code="SUB A, IL",
+        expected_ti="""
+            @0000
+            4E 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sub_reg_r2",
+        asm_code="SUB BA, I",
+        expected_ti="""
+            @0000
+            4C 23
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="sub_reg_r3",
+        asm_code="SUB X, Y",
+        expected_ti="""
+            @0000
+            4D 45
             q
         """,
     ),
