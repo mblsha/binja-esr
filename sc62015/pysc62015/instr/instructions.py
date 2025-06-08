@@ -623,73 +623,18 @@ class SHR(ShiftRotateInstruction):
                                      il.flag(CFlag), CZFlag)
 
 # digit shift
-class DSLL(Instruction):
-    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+class DecimalShiftInstruction(Instruction):
+    def _lift_decimal_shift(self, il: LowLevelILFunction, is_left_shift: bool) -> None:
         imem_op, = self.operands()
-        # Ensure the operand is IMem8 as corrected in OPCODES
-        assert isinstance(imem_op, IMem8), f"DSLL operand should be IMem8, got {type(imem_op)}"
+        assert isinstance(imem_op, IMem8), f"{self.__class__.__name__} operand should be IMem8, got {type(imem_op)}"
 
-        # current_addr_reg holds the internal memory address (e.g.,
-        # INTERNAL_MEMORY_START + n_offset)
-        # For DSLL, (n) is the MSB address.
-        current_addr_reg = TempReg(TempMultiByte1, width=3)  # Addresses are 3 bytes (20/24 bit)
-        mode = get_addressing_mode(self._pre, 1) if self._pre else None
-        current_addr_reg.lift_assign(
-            il, imem_op.lift_current_addr(il, pre=mode, side_effects=False)
-        )
-
-        # digit_carry_reg stores the high nibble of T (current byte) to be OR'd
-        # into the low nibble of S (shifted byte) in the next (less significant) iteration.
-        digit_carry_reg = TempReg(TempBcdDigitCarry, width=1)
-        # The first S is (T_low << 4) | 0. So initial carry is 0.
-        digit_carry_reg.lift_assign(il, il.const(1, 0))
-
-        overall_zero_acc_reg = TempReg(TempOverallZeroAcc, width=1)
-        overall_zero_acc_reg.lift_assign(il, il.const(1, 0))
-
-        mem_accessor = IMemHelper(width=1, value=current_addr_reg) # For load/store via current_addr_reg
-
-        with lift_loop(il): # loop_reg is 'I', decrements from initial value
-            current_byte_T = mem_accessor.lift(il)
-
-            # S = (T_low_nibble << 4) | digit_carry_from_PREVIOUS_T_high_nibble
-            T_low_nibble = il.and_expr(1, current_byte_T, il.const(1, 0x0F))
-            T_high_nibble = il.logical_shift_right(1, current_byte_T, il.const(1, 4))
-            # T_high_nibble = il.and_expr(1, T_high_nibble, il.const(1, 0x0F)) # Mask if needed
-
-            shifted_byte_S = il.or_expr(1,
-                                        il.shift_left(1, T_low_nibble, il.const(1, 4)),
-                                        digit_carry_reg.lift(il))
-
-            mem_accessor.lift_assign(il, shifted_byte_S)
-
-            # Update digit_carry_reg with T_high_nibble for the next iteration
-            digit_carry_reg.lift_assign(il, T_high_nibble)
-
-            overall_zero_acc_reg.lift_assign(il, il.or_expr(1, overall_zero_acc_reg.lift(il), shifted_byte_S))
-
-            # Decrement address pointer for DSLL (MSB to LSB)
-            current_addr_reg.lift_assign(il, il.sub(3, current_addr_reg.lift(il), il.const(3, 1)))
-
-        il.append(il.set_flag(ZFlag, il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0))))
-        # FC is not affected.
-
-class DSRL(Instruction):
-    def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        imem_op, = self.operands()
-        assert isinstance(imem_op, IMem8), f"DSRL operand should be IMem8, got {type(imem_op)}"
-
-        # For DSRL, (n) is the LSB address.
         current_addr_reg = TempReg(TempMultiByte1, width=3)
         mode = get_addressing_mode(self._pre, 1) if self._pre else None
         current_addr_reg.lift_assign(
             il, imem_op.lift_current_addr(il, pre=mode, side_effects=False)
         )
 
-        # digit_carry_reg stores the low nibble of T (current byte) to be OR'd
-        # into the high nibble of S (shifted byte) in the next (more significant) iteration.
         digit_carry_reg = TempReg(TempBcdDigitCarry, width=1)
-        # The first S is T >> 4. So initial carry is 0.
         digit_carry_reg.lift_assign(il, il.const(1, 0))
 
         overall_zero_acc_reg = TempReg(TempOverallZeroAcc, width=1)
@@ -700,27 +645,47 @@ class DSRL(Instruction):
         with lift_loop(il):
             current_byte_T = mem_accessor.lift(il)
 
-            # S = T_high_nibble | (digit_carry_from_PREVIOUS_T_low_nibble << 4)
             T_low_nibble = il.and_expr(1, current_byte_T, il.const(1, 0x0F))
             T_high_nibble = il.logical_shift_right(1, current_byte_T, il.const(1, 4))
-            # T_high_nibble = il.and_expr(1, T_high_nibble, il.const(1, 0x0F))
 
-            shifted_byte_S = il.or_expr(1,
-                                        T_high_nibble,
-                                        il.shift_left(1, digit_carry_reg.lift(il), il.const(1, 4)))
+            shift_part = il.shift_left(1, T_low_nibble, il.const(1, 4))
+            carry_part = digit_carry_reg.lift(il)
+            next_carry = T_high_nibble
+            addr_update = il.sub(3, current_addr_reg.lift(il), il.const(3, 1))
 
+            if not is_left_shift:
+                shift_part, T_high_nibble = T_high_nibble, shift_part
+                carry_part = il.shift_left(1, carry_part, il.const(1, 4))
+                next_carry = T_low_nibble
+                addr_update = il.add(3, current_addr_reg.lift(il), il.const(3, 1))
+
+            shifted_byte_S = il.or_expr(1, shift_part, carry_part)
             mem_accessor.lift_assign(il, shifted_byte_S)
+            digit_carry_reg.lift_assign(il, next_carry)
 
-            # Update digit_carry_reg with T_low_nibble for the next iteration
-            digit_carry_reg.lift_assign(il, T_low_nibble)
+            overall_zero_acc_reg.lift_assign(
+                il,
+                il.or_expr(1, overall_zero_acc_reg.lift(il), shifted_byte_S),
+            )
 
-            overall_zero_acc_reg.lift_assign(il, il.or_expr(1, overall_zero_acc_reg.lift(il), shifted_byte_S))
+            current_addr_reg.lift_assign(il, addr_update)
 
-            # Increment address pointer for DSRL (LSB to MSB)
-            current_addr_reg.lift_assign(il, il.add(3, current_addr_reg.lift(il), il.const(3, 1)))
-
-        il.append(il.set_flag(ZFlag, il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0))))
+        il.append(
+            il.set_flag(
+                ZFlag,
+                il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0)),
+            )
+        )
         # FC is not affected.
+
+
+class DSLL(DecimalShiftInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        self._lift_decimal_shift(il, is_left_shift=True)
+
+class DSRL(DecimalShiftInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        self._lift_decimal_shift(il, is_left_shift=False)
 
 
 class IncDecInstruction(Instruction): pass
