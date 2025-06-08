@@ -34,7 +34,13 @@ def _transform(instr: str) -> str:
     def repl(match: re.Match[str]) -> str:
         sign, token = match.groups()
         if token.isalpha():
-            if token in REGS:
+            # ``token`` may look like a register name but occasionally represents
+            # a numeric constant inside addressing modes, e.g. ``[(BA)]`` or
+            # ``[(CD)+BA]``. When preceded by "(", "+" or "-" treat it as a
+            # constant rather than a register.
+            start = match.start()
+            prev = rest[start - 1] if start > 0 else ""
+            if token in REGS and prev not in {"(", "+", "-"}:
                 return match.group(0)
             if token == "FCDAB":
                 return f"{sign}0xEFCDAB"
@@ -90,5 +96,6 @@ def test_opcode_table_roundtrip() -> None:
 
     if mismatches:
         print("\n".join(mismatches))
-        # assert False, "Opcode table divergence detected. See above for details."
-        pytest.xfail(f"Opcode table divergence detected. {len(mismatches)} mismatches found.")
+        pytest.xfail(
+            f"Opcode table divergence detected. {len(mismatches)} mismatches found."
+        )
