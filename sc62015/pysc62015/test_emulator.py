@@ -2080,7 +2080,9 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
 
 
 def test_decode_all_opcodes() -> None:
-    raw_memory = bytearray([0x00] * ADDRESS_SPACE_SIZE)
+    # Reuse the shared buffer to avoid repeatedly allocating 64 KiB.
+    raw_memory = _SHARED_MEMORY
+    raw_memory[:] = b"\x00" * ADDRESS_SPACE_SIZE
 
     def read_mem(addr: int) -> int:
         return raw_memory[addr]
