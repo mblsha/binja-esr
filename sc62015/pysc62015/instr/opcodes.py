@@ -570,7 +570,22 @@ def _create_decoder(decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]
     return fusion(fusion(iter_decode(decoder, addr, opcodes)))
 
 
-def decode(decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]) -> Optional['Instruction']:
+def decode(
+    decoder: Decoder | bytes | bytearray,
+    addr: int,
+    opcodes: Dict[int, OpcodesType],
+) -> Optional['Instruction']:
+    """Decode one instruction from ``decoder``.
+
+    ``decoder`` may be either an existing :class:`Decoder` instance or raw
+    bytes.  The Binary Ninja Architecture API supplies raw bytes to the
+    ``get_instruction_*`` hooks, so supporting that here avoids an
+    ``AttributeError`` when running under the real application.
+    """
+
+    if not isinstance(decoder, Decoder):
+        decoder = Decoder(bytearray(decoder))
+
     try:
         instr, _ = next(_create_decoder(decoder, addr, opcodes))
 
