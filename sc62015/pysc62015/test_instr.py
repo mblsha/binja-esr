@@ -51,6 +51,7 @@ from binaryninja.lowlevelil import (
 from binaryninja.architecture import RegisterName
 
 import os
+from functools import lru_cache
 from pprint import pprint
 
 from typing import Generator, Tuple, List, Optional
@@ -944,7 +945,6 @@ def test_test_with_pre() -> None:
 
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
-from functools import lru_cache
 
 
 @lru_cache(maxsize=1)
