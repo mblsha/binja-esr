@@ -1,4 +1,12 @@
 from . import binja_api  # noqa: F401
+import pytest
+
+if binja_api._has_binja():
+    pytest.skip(
+        "Skipping architecture tests requiring Binary Ninja license",
+        allow_module_level=True,
+    )
+
 from sc62015.arch import SC62015
 from .mock_llil import MockLowLevelILFunction
 

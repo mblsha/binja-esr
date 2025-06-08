@@ -1,11 +1,10 @@
 #!/usr/bin/env fish
 
-set -x MYPYPATH ~/Applications/Binary\ Ninja.app/Contents/Resources/python/
-cd sc62015
+set -x MYPYPATH (pwd)/stubs:~/Applications/Binary\ Ninja.app/Contents/Resources/python/
 
 function build_and_run
-  ruff check
-  mypy pysc62015
+  ruff check .
+  mypy sc62015/pysc62015
   pytest -vv
 end
 
