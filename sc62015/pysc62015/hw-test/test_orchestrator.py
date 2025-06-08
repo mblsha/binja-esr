@@ -6,7 +6,8 @@ import pytest
 
 # Utility to load the orchestrator module from its script path
 
-ORCH_PATH = Path(__file__).parent / "hw-test" / "orchestrator.py"
+# Path to the orchestrator script relative to this test file
+ORCH_PATH = Path(__file__).parent / "orchestrator.py"
 
 
 def import_orchestrator() -> types.ModuleType:

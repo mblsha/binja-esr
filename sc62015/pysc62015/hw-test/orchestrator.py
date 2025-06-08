@@ -4,7 +4,10 @@ import json
 import time
 from typing import Any, Dict, Optional
 
-import serial
+try:
+    import serial  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover - serial may not be installed in tests
+    serial = None  # type: ignore[assignment]
 from plumbum import cli  # type: ignore[import-untyped]
 
 from sc62015.pysc62015.sc_asm import Assembler
@@ -21,12 +24,17 @@ class HardwareInterface:
         port: str,
         baudrate: int = 9600,
         timeout: int = 3,
-        serial_cls: Any = serial.Serial,
+        serial_cls: Any | None = None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.serial_cls = serial_cls
+        if serial_cls is not None:
+            self.serial_cls = serial_cls
+        elif serial is not None:
+            self.serial_cls = serial.Serial
+        else:
+            raise ImportError("pyserial is required for hardware communication")
         self.conn: Optional[serial.Serial] = None
 
     def __enter__(self) -> "HardwareInterface":
