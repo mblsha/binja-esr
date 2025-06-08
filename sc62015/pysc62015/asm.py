@@ -924,6 +924,30 @@ class AsmTransformer(Transformer):
             "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVW", ops=[src, dst])}
         }
 
+    def mvw_imem_ememreg(self, items: List[Any]) -> InstructionNode:
+        imem = cast(IMemOperand, items[0])
+        regop = cast(EMemReg, items[1])
+        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
+        im = IMem8()
+        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem = im
+        op.reg = regop.reg
+        op.mode = regop.mode
+        op.offset = regop.offset
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(name="MVW", ops=[op])}}
+
+    def mvw_ememreg_imem(self, items: List[Any]) -> InstructionNode:
+        regop = cast(EMemReg, items[0])
+        imem = cast(IMemOperand, items[1])
+        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
+        im = IMem8()
+        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem = im
+        op.reg = regop.reg
+        op.mode = regop.mode
+        op.offset = regop.offset
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(name="MVW", ops=[op])}}
+
     def mvw_imem_ememimem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
         src = cast(EMemIMem, items[1])
@@ -979,6 +1003,30 @@ class AsmTransformer(Transformer):
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[src, dst])}
         }
+
+    def mvp_imem_ememreg(self, items: List[Any]) -> InstructionNode:
+        imem = cast(IMemOperand, items[0])
+        regop = cast(EMemReg, items[1])
+        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
+        im = IMem8()
+        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem = im
+        op.reg = regop.reg
+        op.mode = regop.mode
+        op.offset = regop.offset
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[op])}}
+
+    def mvp_ememreg_imem(self, items: List[Any]) -> InstructionNode:
+        regop = cast(EMemReg, items[0])
+        imem = cast(IMemOperand, items[1])
+        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
+        im = IMem8()
+        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem = im
+        op.reg = regop.reg
+        op.mode = regop.mode
+        op.offset = regop.offset
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[op])}}
 
     def mvp_imem_ememimem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])

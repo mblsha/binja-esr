@@ -331,6 +331,42 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
     ),
     AssemblerTestCase(
+        test_id="mvw_imem_ememreg_simple",
+        asm_code="MVW (0x20), [X]",
+        expected_ti="""
+            @0000
+            E1 04 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mvw_ememreg_imem_simple",
+        asm_code="MVW [X], (0x20)",
+        expected_ti="""
+            @0000
+            E9 04 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mvp_imem_ememreg_simple",
+        asm_code="MVP (0x20), [X]",
+        expected_ti="""
+            @0000
+            E2 04 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mvp_ememreg_imem_simple",
+        asm_code="MVP [X], (0x20)",
+        expected_ti="""
+            @0000
+            EA 04 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="mv_imem_ememimem_simple",
         asm_code="MV (0x30), [(0x40)]",
         expected_ti="""
