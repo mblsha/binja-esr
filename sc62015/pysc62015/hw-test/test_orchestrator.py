@@ -104,3 +104,96 @@ def test_run_test_case_success(monkeypatch: pytest.MonkeyPatch, orch: types.Modu
         f"{len(final_bytes)}\n",
     ]
     assert ms.written == expected_writes
+
+
+# New tests for individual hardware commands
+
+
+def test_ping_failure(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"WRONG\n", b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw:
+        assert hw.ping() is False
+    assert ms.written == ["P\n"]
+
+
+def test_ping_not_open(orch: types.ModuleType) -> None:
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: MockSerial([]))
+    with pytest.raises(ConnectionError):
+        hw.ping()
+
+
+def test_load_code_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw:
+        hw.load_code(0x1234, bytearray([0xAA, 0xBB]))
+    assert ms.written == [
+        "L\n",
+        "&H1234\n",
+        "2\n",
+        "AA\n",
+        "BB\n",
+    ]
+
+
+def test_load_code_zero_length(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw:
+        hw.load_code(0x8000, bytearray())
+    assert ms.written == ["L\n", "&H8000\n", "0\n"]
+
+
+def test_load_code_error(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"FAIL\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw, pytest.raises(IOError):
+        hw.load_code(0x8000, bytearray([0x00]))
+
+
+def test_execute_code_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw:
+        hw.execute_code(0x9000)
+    assert ms.written == ["X\n", "&H9000\n"]
+
+
+def test_execute_code_error(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"ERR\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw, pytest.raises(IOError):
+        hw.execute_code(0x9000)
+
+
+def test_read_memory_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"AA\n", b"BB\n", b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw:
+        data = hw.read_memory(0x9000, 2)
+    assert data == bytearray([0xAA, 0xBB])
+    assert ms.written == ["R\n", "&H9000\n", "2\n"]
+
+
+def test_read_memory_invalid_hex(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"GG\n", b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw, pytest.raises(ValueError):
+        hw.read_memory(0x9000, 1)
