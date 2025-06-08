@@ -730,6 +730,13 @@ class AsmTransformer(Transformer):
     def mv_reg_emem(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
         mem = cast(EMemAddr, items[1])
+        # The grammar for ``emem_operand`` also matches ``emem_reg_operand`` which
+        # results in this handler receiving ``EMemReg`` instances as ``mem``.
+        # For ``MV`` instructions the width of the external memory operand is
+        # defined by the destination register width, so adjust it here to avoid
+        # mismatches during opcode lookup.
+        if isinstance(mem, EMemReg):
+            mem.width = reg.width()
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
         }
@@ -744,6 +751,8 @@ class AsmTransformer(Transformer):
     def mv_emem_reg(self, items: List[Any]) -> InstructionNode:
         mem = cast(EMemAddr, items[0])
         reg = cast(Reg, items[1])
+        if isinstance(mem, EMemReg):
+            mem.width = reg.width()
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
         }
