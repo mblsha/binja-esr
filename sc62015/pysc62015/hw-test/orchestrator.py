@@ -1,29 +1,37 @@
 #!/usr/bin/env python
 
-import serial
-import time
 import json
+import time
+from typing import Any, Dict, Optional
+
+import serial
 from plumbum import cli
-from typing import Dict, Any, Optional
 
-import sys
-sys.exit(0)
+from sc62015.pysc62015.sc_asm import Assembler
+from sc62015.pysc62015.emulator import Emulator
 
-# from pysc62015 import Assembler, Emulator, Registers, RegisterName
+# from sc62015.pysc62015.emulator import Registers, RegisterName
 
 
 class HardwareInterface:
     """Handles all serial communication with the BASIC harness."""
 
-    def __init__(self, port: str, baudrate: int = 9600, timeout: int = 3):
+    def __init__(
+        self,
+        port: str,
+        baudrate: int = 9600,
+        timeout: int = 3,
+        serial_cls=serial.Serial,
+    ) -> None:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
+        self.serial_cls = serial_cls
         self.conn: Optional[serial.Serial] = None
 
     def __enter__(self):
         print(f"Connecting to hardware on {self.port}...")
-        self.conn = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+        self.conn = self.serial_cls(self.port, self.baudrate, timeout=self.timeout)
         time.sleep(2)  # Wait for BASIC program and serial port to be ready
         return self
 
