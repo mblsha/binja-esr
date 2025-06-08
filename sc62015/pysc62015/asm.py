@@ -23,6 +23,8 @@ from .instr import (
     SHR,
     SHL,
     MV,
+    MVL,
+    MVLD,
     EX,
     EXL,
     PUSHS,
@@ -563,6 +565,104 @@ class AsmTransformer(Transformer):
         op1, op2 = items
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def mv_reg_reg(self, items: List[Any]) -> InstructionNode:
+        reg1 = cast(Reg, items[0])
+        reg2 = cast(Reg, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg1, reg2])}
+        }
+
+    def mv_reg_imm(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        val = items[1]
+        width = reg.width()
+        if width == 1:
+            imm = Imm8()
+        elif width == 2:
+            imm = Imm16()
+        else:
+            imm = Imm20()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, imm])}
+        }
+
+    def mv_reg_imem(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        mem = cast(IMemOperand, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
+        }
+
+    def mv_reg_emem(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        mem = cast(EMemAddr, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
+        }
+
+    def mv_imem_reg(self, items: List[Any]) -> InstructionNode:
+        mem = cast(IMemOperand, items[0])
+        reg = cast(Reg, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
+        }
+
+    def mv_emem_reg(self, items: List[Any]) -> InstructionNode:
+        mem = cast(EMemAddr, items[0])
+        reg = cast(Reg, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
+        }
+
+    def mv_imem_imm(self, items: List[Any]) -> InstructionNode:
+        mem, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, imm])}
+        }
+
+    def mv_emem_imm(self, items: List[Any]) -> InstructionNode:
+        mem, val = items
+        imm = Imm8()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, imm])}
+        }
+
+    def mvw_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        m1 = IMem16()
+        m1.value = op1.n_val
+        m2 = IMem16()
+        m2.value = op2.n_val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVW", ops=[m1, m2])}
+        }
+
+    def mvp_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        m1 = IMem20()
+        m1.value = op1.n_val
+        m2 = IMem20()
+        m2.value = op2.n_val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[m1, m2])}
+        }
+
+    def mvl_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": MVL, "instr_opts": Opts(ops=[op1, op2])}
+        }
+
+    def mvld_imem_imem(self, items: List[Any]) -> InstructionNode:
+        op1, op2 = items
+        return {
+            "instruction": {"instr_class": MVLD, "instr_opts": Opts(ops=[op1, op2])}
         }
 
     def ex_imem_imem(self, items: List[Any]) -> InstructionNode:
