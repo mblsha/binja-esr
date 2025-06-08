@@ -382,37 +382,84 @@ def eval_set_flag(
     return None, None
 
 
-def eval_and(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
-    assert op1_val is not None and op2_val is not None
-    result = int(op1_val) & int(op2_val)
-    return result, {"Z": 1 if result == 0 else 0, "C": 0}
+def _create_logical_eval(op_func: Callable[[int, int], int]) -> EvalLLILType:
+    """Factory for simple logical operations."""
+
+    def _eval(
+        llil: MockLLIL,
+        size: Optional[int],
+        regs: Registers,
+        memory: Memory,
+        state: State,
+    ) -> Tuple[int, Optional[ResultFlags]]:
+        assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+        op1_val, _ = eval(llil.ops[0], regs, memory, state)
+        op2_val, _ = eval(llil.ops[1], regs, memory, state)
+        assert op1_val is not None and op2_val is not None
+        result = op_func(int(op1_val), int(op2_val))
+        return result, {"Z": 1 if result == 0 else 0, "C": 0}
+
+    return _eval
 
 
-def eval_or(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
-    assert op1_val is not None and op2_val is not None
-    result = int(op1_val) | int(op2_val)
-    return result, {"Z": 1 if result == 0 else 0, "C": 0}
+def _create_arithmetic_eval(
+    op_func: Callable[[int, int], int],
+    carry_func: Callable[[int, int, int, int], int],
+) -> EvalLLILType:
+    """Factory for arithmetic operations like ADD and SUB."""
+
+    def _eval(
+        llil: MockLLIL,
+        size: Optional[int],
+        regs: Registers,
+        memory: Memory,
+        state: State,
+    ) -> Tuple[int, Optional[ResultFlags]]:
+        assert size is not None
+        assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+        op1_val, _ = eval(llil.ops[0], regs, memory, state)
+        op2_val, _ = eval(llil.ops[1], regs, memory, state)
+        assert op1_val is not None and op2_val is not None
+
+        result_full = op_func(int(op1_val), int(op2_val))
+
+        width_bits = size * 8
+        mask = (1 << width_bits) - 1
+        result_masked = result_full & mask
+
+        flag_z = 1 if result_masked == 0 else 0
+        flag_c = carry_func(int(op1_val), int(op2_val), result_full, mask)
+
+        return result_masked, {"C": flag_c, "Z": flag_z}
+
+    return _eval
 
 
-def eval_xor(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
-    assert op1_val is not None and op2_val is not None
-    result = int(op1_val) ^ int(op2_val)
-    return result, {"Z": 1 if result == 0 else 0, "C": 0}
+def _create_shift_eval(op_func: Callable[..., Tuple[int, ResultFlags]]) -> EvalLLILType:
+    """Factory for shift and rotate operations."""
+
+    def _eval(
+        llil: MockLLIL,
+        size: Optional[int],
+        regs: Registers,
+        memory: Memory,
+        state: State,
+    ) -> Tuple[int, Optional[ResultFlags]]:
+        assert size is not None
+        values = []
+        for operand in llil.ops:
+            assert isinstance(operand, MockLLIL)
+            val, _ = eval(operand, regs, memory, state)
+            assert val is not None
+            values.append(int(val))
+
+        result, flags = op_func(size, *values)
+        return result, flags
+
+    return _eval
+
+
+
 
 
 def eval_pop(
@@ -545,46 +592,6 @@ def eval_call(
     return None, None
 
 
-def eval_add(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
-    assert op1_val is not None and op2_val is not None
-
-    result_full = int(op1_val) + int(op2_val)
-
-    width_bits = size * 8
-    mask = (1 << width_bits) - 1
-    result_masked = result_full & mask
-
-    flag_z = 1 if result_masked == 0 else 0
-    flag_c = 1 if result_full > mask else 0
-
-    return result_masked, {"C": flag_c, "Z": flag_z}
-
-
-def eval_sub(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
-    assert op1_val is not None and op2_val is not None
-
-    result_full = int(op1_val) - int(op2_val)
-
-    width_bits = size * 8
-    mask = (1 << width_bits) - 1
-    result_masked = result_full & mask
-
-    flag_z = 1 if result_masked == 0 else 0
-    flag_c = 1 if result_full < 0 else 0
-
-    return result_masked, {"C": flag_c, "Z": flag_z}
 
 
 def eval_cmp_e(
@@ -632,27 +639,15 @@ def eval_cmp_slt(
     return int(signed_op1 < signed_op2), None
 
 
-def eval_lsl(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    val_expr, count_expr = llil.ops
-    val, _ = eval(val_expr, regs, memory, state)
-    count, _ = eval(count_expr, regs, memory, state)
-    assert val is not None and count is not None
-    val = int(val)
-    count = int(count)
-
+def _lsl_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
     width = size * 8
     mask = (1 << width) - 1
-
     if count == 0:
         arith_result = val & mask
         return arith_result, {"C": 0, "Z": 1 if arith_result == 0 else 0}
 
     carry_out = 0
-    if count <= width and width > 0:  # Ensure width > 0 for shift
+    if count <= width and width > 0:
         carry_out = (val >> (width - count)) & 1
 
     arith_result = (val << count) & mask
@@ -661,20 +656,8 @@ def eval_lsl(
     return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
-def eval_lsr(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    val_expr, count_expr = llil.ops
-    val, _ = eval(val_expr, regs, memory, state)
-    count, _ = eval(count_expr, regs, memory, state)
-    assert val is not None and count is not None
-    val = int(val)
-    count = int(count)
-
+def _lsr_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
     width = size * 8
-
     if count == 0:
         arith_result = val & ((1 << width) - 1 if width > 0 else 0)
         return arith_result, {"C": 0, "Z": 1 if arith_result == 0 else 0}
@@ -690,21 +673,9 @@ def eval_lsr(
     return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
-def eval_ror(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    val_expr, count_expr = llil.ops
-    val, _ = eval(val_expr, regs, memory, state)
-    count, _ = eval(count_expr, regs, memory, state)
-    assert val is not None and count is not None
-    val = int(val)
-    count = int(count)
-
+def _ror_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
     width = size * 8
     mask = (1 << width) - 1 if width > 0 else 0
-
     if width == 0:
         return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
@@ -723,21 +694,9 @@ def eval_ror(
     return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
-def eval_rol(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    val_expr, count_expr = llil.ops
-    val, _ = eval(val_expr, regs, memory, state)
-    count, _ = eval(count_expr, regs, memory, state)
-    assert val is not None and count is not None
-    val = int(val)
-    count = int(count)
-
+def _rol_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
     width = size * 8
     mask = (1 << width) - 1 if width > 0 else 0
-
     if width == 0:
         return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
@@ -759,24 +718,9 @@ def eval_rol(
     return arith_result, {"C": carry_out, "Z": zero_flag}
 
 
-def eval_rrc(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert (
-        isinstance(llil.ops[0], MockLLIL)
-        and isinstance(llil.ops[1], MockLLIL)
-        and isinstance(llil.ops[2], MockLLIL)
-    )
-    val_expr, count_expr, carry_in_expr = llil.ops
-    val, _ = eval(val_expr, regs, memory, state)
-    count_val, _ = eval(count_expr, regs, memory, state)
-    carry_in, _ = eval(carry_in_expr, regs, memory, state)
-    assert val is not None and count_val is not None and carry_in is not None
-    val = int(val)
-    count = int(count_val)
-    carry_in = int(carry_in)
-
+def _rrc_impl(
+    size: int, val: int, count: int, carry_in: int
+) -> Tuple[int, ResultFlags]:
     width = size * 8
     mask = (1 << width) - 1 if width > 0 else 0
     assert count == 1, "RRC count should be 1 for standard definition"
@@ -792,24 +736,9 @@ def eval_rrc(
     return arith_result, {"C": new_carry_out, "Z": zero_flag}
 
 
-def eval_rlc(
-    llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None
-    assert (
-        isinstance(llil.ops[0], MockLLIL)
-        and isinstance(llil.ops[1], MockLLIL)
-        and isinstance(llil.ops[2], MockLLIL)
-    )
-    val_expr, count_expr, carry_in_expr = llil.ops
-    val, _ = eval(val_expr, regs, memory, state)
-    count_val, _ = eval(count_expr, regs, memory, state)
-    carry_in, _ = eval(carry_in_expr, regs, memory, state)
-    assert val is not None and count_val is not None and carry_in is not None
-    val = int(val)
-    count = int(count_val)
-    carry_in = int(carry_in)
-
+def _rlc_impl(
+    size: int, val: int, count: int, carry_in: int
+) -> Tuple[int, ResultFlags]:
     width = size * 8
     mask = (1 << width) - 1 if width > 0 else 0
     assert count == 1, "RLC count should be 1 for standard definition"
@@ -823,6 +752,8 @@ def eval_rlc(
 
     zero_flag = 1 if arith_result == 0 else 0
     return arith_result, {"C": new_carry_out, "Z": zero_flag}
+
+
 
 
 def eval_intrinsic_tcl(
@@ -852,9 +783,9 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "SET_REG": eval_set_reg,
     "FLAG": eval_flag,
     "SET_FLAG": eval_set_flag,
-    "AND": eval_and,
-    "OR": eval_or,
-    "XOR": eval_xor,
+    "AND": _create_logical_eval(lambda a, b: a & b),
+    "OR": _create_logical_eval(lambda a, b: a | b),
+    "XOR": _create_logical_eval(lambda a, b: a ^ b),
     "POP": eval_pop,
     "PUSH": eval_push,
     "NOP": eval_nop,
@@ -864,17 +795,27 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "RET": eval_ret,
     "JUMP": eval_jump,
     "CALL": eval_call,
-    "ADD": eval_add,
-    "SUB": eval_sub,
+    "ADD": _create_arithmetic_eval(
+        lambda a, b: a + b,
+        lambda _a, _b, result, mask: 1 if result > mask else 0,
+    ),
+    "SUB": _create_arithmetic_eval(
+        lambda a, b: a - b,
+        lambda _a, _b, result, _mask: 1 if result < 0 else 0,
+    ),
     "CMP_E": eval_cmp_e,
     "CMP_UGT": eval_cmp_ugt,
     "CMP_SLT": eval_cmp_slt,
-    "LSL": eval_lsl,
-    "LSR": eval_lsr,
-    "ROR": eval_ror,
-    "RRC": eval_rrc,
-    "ROL": eval_rol,
-    "RLC": eval_rlc,
+    "LSL": _create_shift_eval(lambda size, val, count: _lsl_impl(size, val, count)),
+    "LSR": _create_shift_eval(lambda size, val, count: _lsr_impl(size, val, count)),
+    "ROR": _create_shift_eval(lambda size, val, count: _ror_impl(size, val, count)),
+    "RRC": _create_shift_eval(
+        lambda size, val, count, carry: _rrc_impl(size, val, count, carry)
+    ),
+    "ROL": _create_shift_eval(lambda size, val, count: _rol_impl(size, val, count)),
+    "RLC": _create_shift_eval(
+        lambda size, val, count, carry: _rlc_impl(size, val, count, carry)
+    ),
     "INTRINSIC_TCL": eval_intrinsic_tcl,
     "INTRINSIC_HALT": eval_intrinsic_halt,
     "INTRINSIC_OFF": eval_intrinsic_off,
