@@ -589,7 +589,7 @@ class AsmTransformer(Transformer):
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = 0
+        r.high4 = EMemRegMode.SIMPLE.value
         op = EMemReg(width=reg.width())
         op.reg = r
         op.mode = EMemRegMode.SIMPLE
@@ -600,7 +600,7 @@ class AsmTransformer(Transformer):
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = 0
+        r.high4 = EMemRegMode.POST_INC.value
         op = EMemReg(width=reg.width())
         op.reg = r
         op.mode = EMemRegMode.POST_INC
@@ -611,7 +611,7 @@ class AsmTransformer(Transformer):
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = 0
+        r.high4 = EMemRegMode.PRE_DEC.value
         op = EMemReg(width=reg.width())
         op.reg = r
         op.mode = EMemRegMode.PRE_DEC
@@ -623,7 +623,7 @@ class AsmTransformer(Transformer):
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = 0
+        r.high4 = EMemRegMode.POSITIVE_OFFSET.value
         offset = ImmOffset("+")
         offset.value = value
         op = EMemReg(width=reg.width())
@@ -638,7 +638,7 @@ class AsmTransformer(Transformer):
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = 0
+        r.high4 = EMemRegMode.NEGATIVE_OFFSET.value
         offset = ImmOffset("-")
         offset.value = value
         op = EMemReg(width=reg.width())
