@@ -5,7 +5,8 @@ set -x MYPYPATH (pwd)/stubs:~/Applications/Binary\ Ninja.app/Contents/Resources/
 function build_and_run
   ruff check .
   mypy sc62015/pysc62015
-  pytest -vv
+  # pytest -vv
+  pytest -q
 end
 
 build_and_run
