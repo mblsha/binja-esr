@@ -187,6 +187,87 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code='MV (BP+PX), (BP+PY)'
     ),
     AssemblerTestCase(
+        test_id="mv_reg_imm_8bit",
+        asm_code="MV A, 0x42",
+        expected_ti="""
+            @0000
+            08 42
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_imm_16bit",
+        asm_code="MV BA, 0x1234",
+        expected_ti="""
+            @0000
+            0A 34 12
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_imm_20bit",
+        asm_code="MV X, 0x12345",
+        expected_ti="""
+            @0000
+            0C 45 23 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_imem",
+        asm_code="MV A, (0x10)",
+        expected_ti="""
+            @0000
+            80 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_reg",
+        asm_code="MV (0x10), A",
+        expected_ti="""
+            @0000
+            A0 10
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_imm",
+        asm_code="MV (0x20), 0x55",
+        expected_ti="""
+            @0000
+            CC 20 55
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_emem",
+        asm_code="MV A, [0x12345]",
+        expected_ti="""
+            @0000
+            88 45 23 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_emem_reg",
+        asm_code="MV [0x12345], A",
+        expected_ti="""
+            @0000
+            A8 45 23 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mvw_imem_imem",
+        asm_code="MVW (0x30), (0x40)",
+        expected_ti="""
+            @0000
+            C9 30 40
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="and_all_forms",
         asm_code="""
             AND A, 0x55
@@ -1252,11 +1333,8 @@ def test_assembler_e2e(case: AssemblerTestCase) -> None:
 
 
 def test_assembler_fails_on_ambiguous_instruction() -> None:
-    """
-    Tests that the assembler fails to parse an instruction not in the grammar.
-    """
+    """Ensure previously ambiguous instructions now assemble."""
     assembler = Assembler()
-    # MV with an immediate value is not in the simple asm.lark grammar
     source_code = "MV A, 0x42"
-    with pytest.raises((AssemblerError, lark_exceptions.LarkError)):
-        assembler.assemble(source_code)
+    bin_file = assembler.assemble(source_code)
+    assert bin_file.as_ti_txt().strip() == "@0000\n08 42\nq"
