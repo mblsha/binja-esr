@@ -15,7 +15,11 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: python -m pip install -e .[dev]
-      - run: ruff check
-      - run: python scripts/run_mypy.py
-      - run: pytest -q
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
+      - name: Run Ruff
+        run: ruff check
+      - name: Run Mypy
+        run: python scripts/run_mypy.py
+      - name: Run Pytest
+        run: pytest -q
