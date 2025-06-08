@@ -417,4 +417,9 @@ if not _has_binja():
         print(msg, file=sys.stderr)
 
     bn.log_error = log_error  # type: ignore [attr-defined]
+
+    log_mod = types.ModuleType("binaryninja.log")
+    log_mod.log_error = log_error  # type: ignore [attr-defined]
+    bn.log = log_mod  # type: ignore [attr-defined]
+    sys.modules["binaryninja.log"] = log_mod
     sys.modules["binaryninja"] = bn
