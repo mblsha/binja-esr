@@ -57,6 +57,7 @@ from .instr import (
     ImmOffset,
     IMem20,
     IMem16,
+    IMem8,
     INC,
     DEC,
     Reg3,
@@ -631,20 +632,23 @@ class AsmTransformer(Transformer):
         return cast(EMemReg, items[0])
 
     def emem_imem_simple(self, items: List[Any]) -> EMemIMem:
-        im = cast(IMemOperand, items[0])
+        im = items[0]
+        im8 = IMem8()
+        im8.value = cast(Any, im).n_val
         op = EMemIMem()
-        op.imem = im
+        op.imem = im8
         op.value = EMemIMemMode.SIMPLE.value
         op.mode = EMemIMemMode.SIMPLE
         return op
 
     def emem_imem_plus(self, items: List[Any]) -> EMemIMem:
         im, val = items
-        im = cast(IMemOperand, im)
+        im8 = IMem8()
+        im8.value = cast(Any, im).n_val
         offset = ImmOffset("+")
         offset.value = val
         op = EMemIMem()
-        op.imem = im
+        op.imem = im8
         op.value = EMemIMemMode.POSITIVE_OFFSET.value
         op.mode = EMemIMemMode.POSITIVE_OFFSET
         op.offset = offset
@@ -652,11 +656,12 @@ class AsmTransformer(Transformer):
 
     def emem_imem_minus(self, items: List[Any]) -> EMemIMem:
         im, val = items
-        im = cast(IMemOperand, im)
+        im8 = IMem8()
+        im8.value = cast(Any, im).n_val
         offset = ImmOffset("-")
         offset.value = val
         op = EMemIMem()
-        op.imem = im
+        op.imem = im8
         op.value = EMemIMemMode.NEGATIVE_OFFSET.value
         op.mode = EMemIMemMode.NEGATIVE_OFFSET
         op.offset = offset
