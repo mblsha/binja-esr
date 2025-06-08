@@ -56,6 +56,8 @@ instruction: "NOP"i -> nop
            | "MV"i emem_operand "," imem_operand -> mv_emem_imem
            | "MVW"i imem_operand "," expression -> mvw_imem_imm
            | "MVW"i imem_operand "," imem_operand -> mvw_imem_imem
+           | "MVW"i imem_operand "," emem_reg_operand -> mvw_imem_ememreg
+           | "MVW"i emem_reg_operand "," imem_operand -> mvw_ememreg_imem
            | "MVW"i imem_operand "," emem_imem_operand -> mvw_imem_ememimem
            | "MVW"i emem_imem_operand "," imem_operand -> mvw_ememimem_imem
            | "MVW"i imem_operand "," emem_operand -> mvw_imem_emem
@@ -63,6 +65,8 @@ instruction: "NOP"i -> nop
            | "MVP"i imem_operand "," expression -> mvp_imem_imm
            | "MVP"i imem_operand "," imem_operand -> mvp_imem_imem
            | "MVP"i imem_operand "," emem_imem_operand -> mvp_imem_ememimem
+           | "MVP"i imem_operand "," emem_reg_operand -> mvp_imem_ememreg
+           | "MVP"i emem_reg_operand "," imem_operand -> mvp_ememreg_imem
            | "MVP"i imem_operand "," emem_operand -> mvp_imem_emem
            | "MVP"i emem_imem_operand "," imem_operand -> mvp_ememimem_imem
            | "MVP"i emem_operand "," imem_operand -> mvp_emem_imem
