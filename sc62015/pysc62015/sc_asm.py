@@ -18,6 +18,8 @@ from .instr import (
     ImmOperand,
     Imm20,
     ImmOffset,
+    RegIMemOffset,
+    EMemIMemOffset,
     Reg3,
     REVERSE_PRE_TABLE,
     SINGLE_OPERAND_PRE_LOOKUP,
@@ -112,6 +114,16 @@ class Assembler:
                         continue
                     if isinstance(t_op, ImmOffset) and isinstance(p_op, ImmOffset):
                         if t_op.sign != p_op.sign:
+                            converted_match = False
+                            break
+                        continue
+                    if isinstance(t_op, RegIMemOffset) and isinstance(p_op, RegIMemOffset):
+                        if t_op.order != p_op.order:
+                            converted_match = False
+                            break
+                        continue
+                    if isinstance(t_op, EMemIMemOffset) and isinstance(p_op, EMemIMemOffset):
+                        if t_op.order != p_op.order:
                             converted_match = False
                             break
                         continue

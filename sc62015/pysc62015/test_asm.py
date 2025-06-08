@@ -286,6 +286,69 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
     ),
     AssemblerTestCase(
+        test_id="mv_imem_emem_abs",
+        asm_code="MV (0x10), [0x12345]",
+        expected_ti="""
+            @0000
+            D0 10 45 23 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_emem_abs_imem",
+        asm_code="MV [0x12345], (0x20)",
+        expected_ti="""
+            @0000
+            D8 45 23 01 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mvw_imem_emem_abs",
+        asm_code="MVW (0x30), [0x12345]",
+        expected_ti="""
+            @0000
+            D1 30 45 23 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_ememreg_simple",
+        asm_code="MV (0x20), [X]",
+        expected_ti="""
+            @0000
+            E0 04 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_ememreg_imem_simple",
+        asm_code="MV [X], (0x20)",
+        expected_ti="""
+            @0000
+            E8 04 20
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_imem_ememimem_simple",
+        asm_code="MV (0x30), [(0x40)]",
+        expected_ti="""
+            @0000
+            F0 00 30 40
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_ememimem_imem_simple",
+        asm_code="MV [(0x40)], (0x30)",
+        expected_ti="""
+            @0000
+            F8 00 40 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="and_all_forms",
         asm_code="""
             AND A, 0x55
