@@ -123,6 +123,9 @@ class Assembler:
                         if t_op.order != p_op.order:
                             converted_match = False
                             break
+                        if t_op.allowed_modes is not None and p_op.mode not in t_op.allowed_modes:
+                            converted_match = False
+                            break
                         continue
                     if isinstance(t_op, EMemReg) and isinstance(p_op, EMemReg):
                         if t_op.width != p_op.width:
@@ -134,6 +137,12 @@ class Assembler:
                         t_mode = getattr(t_op, "mode", None)
                         p_mode = getattr(p_op, "mode", None)
                         if t_mode is not None and t_mode != p_mode:
+                            converted_match = False
+                            break
+                        if (
+                            getattr(t_op, "allowed_modes", None) is not None
+                            and p_mode not in t_op.allowed_modes
+                        ):
                             converted_match = False
                             break
                         continue
