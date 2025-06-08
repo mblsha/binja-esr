@@ -976,6 +976,42 @@ class AsmTransformer(Transformer):
             "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[src, dst])}
         }
 
+    def mvp_imem_ememimem(self, items: List[Any]) -> InstructionNode:
+        imem = cast(IMemOperand, items[0])
+        src = cast(EMemIMem, items[1])
+        op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM, width=3)
+        op.mode_imm.value = src.value
+        im1 = IMem8()
+        im1.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem1 = im1
+        im2 = IMem8()
+        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        im2.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        op.imem2 = im2
+        op.mode = src.mode
+        op.offset = src.offset
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[op])}
+        }
+
+    def mvp_ememimem_imem(self, items: List[Any]) -> InstructionNode:
+        src = cast(EMemIMem, items[0])
+        imem = cast(IMemOperand, items[1])
+        op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM, width=3)
+        op.mode_imm.value = src.value
+        im1 = IMem8()
+        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        im1.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        op.imem1 = im1
+        im2 = IMem8()
+        im2.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem2 = im2
+        op.mode = src.mode
+        op.offset = src.offset
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[op])}
+        }
+
     def mvl_imem_emem(self, items: List[Any]) -> InstructionNode:
         imem, emem_src = items
         return {"instruction": {"instr_class": MVL, "instr_opts": Opts(ops=[imem, emem_src])}}
