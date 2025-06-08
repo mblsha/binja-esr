@@ -40,6 +40,10 @@ instruction: "NOP"i -> nop
            | "MV"i reg "," expression -> mv_reg_imm
            | "MV"i reg "," imem_operand -> mv_reg_imem
            | "MV"i reg "," emem_operand -> mv_reg_emem
+           | "MV"i reg "," emem_reg_operand -> mv_reg_ememreg
+           | "MV"i emem_reg_operand "," reg -> mv_ememreg_reg
+           | "MV"i reg "," emem_imem_operand -> mv_reg_ememimem
+           | "MV"i emem_imem_operand "," reg -> mv_ememimem_reg
            | "MV"i imem_operand "," reg -> mv_imem_reg
            | "MV"i emem_operand "," reg -> mv_emem_reg
            | "MV"i imem_operand "," expression -> mv_imem_imm
@@ -180,7 +184,30 @@ imem_bp_px: "(" _BP "+" _PX ")"
 imem_bp_py: "(" _BP "+" _PY ")"
 
 emem_addr: "[" expression "]"
+
+emem_reg_operand: emem_reg_simple
+                | emem_reg_post_inc
+                | emem_reg_pre_dec
+                | emem_reg_plus
+                | emem_reg_minus
+
+emem_reg_simple: "[" reg "]"
+emem_reg_post_inc: "[" reg "++" "]"
+emem_reg_pre_dec: "[" "--" reg "]"
+emem_reg_plus: "[" reg "+" expression "]"
+emem_reg_minus: "[" reg "-" expression "]"
+
+emem_imem_operand: emem_imem_simple
+                  | emem_imem_plus
+                  | emem_imem_minus
+
+emem_imem_simple: "[" imem_operand "]"
+emem_imem_plus: "[" imem_operand "+" expression "]"
+emem_imem_minus: "[" imem_operand "-" expression "]"
+
 emem_operand: emem_addr
+            | emem_reg_operand
+            | emem_imem_operand
 
 
 // --- Terminals with higher priority ---
