@@ -19,6 +19,7 @@ from .instr import (
     Imm20,
     ImmOffset,
     RegIMemOffset,
+    EMemReg,
     EMemIMemOffset,
     Reg3,
     RegPair,
@@ -122,9 +123,23 @@ class Assembler:
                         if t_op.order != p_op.order:
                             converted_match = False
                             break
+                        if (
+                            getattr(t_op, "allowed_modes", None) is not None
+                            and p_op.mode not in t_op.allowed_modes
+                        ):
+                            converted_match = False
+                            break
                         continue
                     if isinstance(t_op, EMemIMemOffset) and isinstance(p_op, EMemIMemOffset):
                         if t_op.order != p_op.order:
+                            converted_match = False
+                            break
+                        continue
+                    if isinstance(t_op, EMemReg) and isinstance(p_op, EMemReg):
+                        if (
+                            getattr(t_op, "allowed_modes", None) is not None
+                            and p_op.mode not in t_op.allowed_modes
+                        ):
                             converted_match = False
                             break
                         continue
