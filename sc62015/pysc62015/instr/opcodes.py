@@ -859,6 +859,29 @@ class ImmOffset(Imm8):
         return il.add(self.width(), value, offset)
 
 
+# Utility mixin for operands that support optional +/- byte offsets based on
+# their addressing mode.  Several operand types share the same logic for
+# parsing/encoding these offsets, so centralize it here.
+class OffsetOperandMixin:
+    offset: Optional[ImmOffset] = None
+
+    def _decode_offset(self, decoder: Decoder, addr: int) -> None:
+        mode = getattr(self, "mode", None)
+        if mode is None:
+            return
+        mode_enum = type(mode)
+        positive = getattr(mode_enum, "POSITIVE_OFFSET", None)
+        negative = getattr(mode_enum, "NEGATIVE_OFFSET", None)
+        if mode in (positive, negative):
+            sign_lit: Literal['+', '-'] = '+' if mode == positive else '-'
+            self.offset = ImmOffset(sign_lit)
+            self.offset.decode(decoder, addr)
+
+    def _encode_offset(self, encoder: Encoder, addr: int) -> None:
+        if self.offset:
+            self.offset.encode(encoder, addr)
+
+
 # Internal Memory Addressing Modes:
 # 1. Direct
 # 2. BP-indexed
@@ -1383,7 +1406,7 @@ class RegIMemOffsetOrder(enum.Enum):
 # [r3++], (n): encoded as E8 (2 r3) n
 # [--r3], (n): encoded as E8 (3 r3) n
 # [r3±m], (n): encoded as E8 (8 r3 | C r3) n m
-class RegIMemOffset(HasOperands, Operand):
+class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
     reg: Optional[Reg3]
     imem: Optional[IMem8]
     mode: Optional[EMemRegMode]
@@ -1425,10 +1448,7 @@ class RegIMemOffset(HasOperands, Operand):
         self.mode = get_emem_reg_mode(self.reg.high4, addr)
         if self.allowed_modes is not None:
             assert self.mode in self.allowed_modes
-
-        if self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
+        self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         super().encode(encoder, addr)
@@ -1436,10 +1456,9 @@ class RegIMemOffset(HasOperands, Operand):
         self.reg.encode(encoder, addr)
         assert self.imem is not None, "IMem not set"
         self.imem.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
+        self._encode_offset(encoder, addr)
 
-class EMemReg(HasOperands, Operand):
+class EMemReg(OffsetOperandMixin, HasOperands, Operand):
     mode: Optional[EMemRegMode]
     offset: Optional[ImmOffset] = None
 
@@ -1462,16 +1481,12 @@ class EMemReg(HasOperands, Operand):
         self.mode = get_emem_reg_mode(self.reg.high4, addr)
         if self.allowed_modes is not None:
             assert self.mode in self.allowed_modes, f"Invalid mode: {self.mode}, allowed: {self.allowed_modes}"
-
-        if self.mode in (EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemRegMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
+        self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         # super().encode(encoder, addr)
         self.reg.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
+        self._encode_offset(encoder, addr)
 
     def operands(self) -> Generator[Operand, None, None]:
         assert self.mode is not None, "Mode not set"
@@ -1494,7 +1509,7 @@ def get_emem_imem_mode(val: Optional[int], addr: int) -> EMemIMemMode:
     except Exception:
         raise InvalidInstruction(f"Invalid EMemIMemMode {val:02X} at {addr:04X}")
 
-class EMemIMem(HasOperands, Imm8):
+class EMemIMem(OffsetOperandMixin, HasOperands, Imm8):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
 
@@ -1514,16 +1529,13 @@ class EMemIMem(HasOperands, Imm8):
         self.imem.decode(decoder, addr)
 
         self.mode = get_emem_imem_mode(self.value, addr)
-        if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
+        self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         super().encode(encoder, addr)
         self.imem.encode(encoder, addr)
 
-        if self.offset:
-            self.offset.encode(encoder, addr)
+        self._encode_offset(encoder, addr)
 
     def operands(self) -> Generator[Operand, None, None]:
         op = EMemValueOffsetHelper(self.imem, self.offset, width=1)
@@ -1552,7 +1564,7 @@ class EMemIMemOffsetOrder(enum.Enum):
 # [(m)], (n):   encoded as FB 00 m n
 # [(l)+m], (n): encoded as FB 80 l n m
 # [(l)-m], (n): encoded as FB C0 l n m
-class EMemIMemOffset(HasOperands, Operand):
+class EMemIMemOffset(OffsetOperandMixin, HasOperands, Operand):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
 
@@ -1591,17 +1603,14 @@ class EMemIMemOffset(HasOperands, Operand):
         self.imem2.decode(decoder, addr)
 
         self.mode = get_emem_imem_mode(self.mode_imm.value, addr)
-        if self.mode in (EMemIMemMode.POSITIVE_OFFSET, EMemIMemMode.NEGATIVE_OFFSET):
-            self.offset = ImmOffset('+' if self.mode == EMemIMemMode.POSITIVE_OFFSET else '-')
-            self.offset.decode(decoder, addr)
+        self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         super().encode(encoder, addr)
         self.mode_imm.encode(encoder, addr)
         self.imem1.encode(encoder, addr)
         self.imem2.encode(encoder, addr)
-        if self.offset:
-            self.offset.encode(encoder, addr)
+        self._encode_offset(encoder, addr)
 
 
 # ADD/SUB can use various-sized register pairs
