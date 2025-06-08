@@ -1379,6 +1379,12 @@ class RegIMemOffset(HasOperands, Operand):
         self.order = order
         self.allowed_modes = allowed_modes
 
+    def __repr__(self) -> str:
+        return (
+            f"RegIMemOffset(order={self.order}, mode={getattr(self, 'mode', None)},"
+            f" offset={getattr(self, 'offset', None)})"
+        )
+
     def operands(self) -> Generator[Operand, None, None]:
         assert self.reg is not None, "Register not set"
         assert self.imem is not None, "IMem not set"
@@ -1540,6 +1546,12 @@ class EMemIMemOffset(HasOperands, Operand):
         self.mode_imm = Imm8()
         self.imem1 = IMem8()
         self.imem2 = IMem8()
+
+    def __repr__(self) -> str:
+        return (
+            f"EMemIMemOffset(order={self.order}, mode={getattr(self, 'mode', None)},"
+            f" offset={getattr(self, 'offset', None)})"
+        )
 
     def operands(self) -> Generator[Operand, None, None]:
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
