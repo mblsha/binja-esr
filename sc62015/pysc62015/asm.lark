@@ -48,7 +48,9 @@ instruction: "NOP"i -> nop
            | "MV"i emem_operand "," reg -> mv_emem_reg
            | "MV"i imem_operand "," expression -> mv_imem_imm
            | "MV"i emem_operand "," expression -> mv_emem_imm
+           | "MVW"i imem_operand "," expression -> mvw_imem_imm
            | "MVW"i imem_operand "," imem_operand -> mvw_imem_imem
+           | "MVP"i imem_operand "," expression -> mvp_imem_imm
            | "MVP"i imem_operand "," imem_operand -> mvp_imem_imem
            | "MVL"i imem_operand "," imem_operand -> mvl_imem_imem
            | "MVLD"i imem_operand "," imem_operand -> mvld_imem_imem

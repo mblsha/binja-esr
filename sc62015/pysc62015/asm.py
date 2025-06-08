@@ -780,6 +780,16 @@ class AsmTransformer(Transformer):
             "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVW", ops=[m1, m2])}
         }
 
+    def mvw_imem_imm(self, items: List[Any]) -> InstructionNode:
+        mem, val = items
+        dst = IMem16()
+        dst.value = mem.n_val
+        imm = Imm16()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVW", ops=[dst, imm])}
+        }
+
     def mvp_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
         m1 = IMem20()
@@ -788,6 +798,16 @@ class AsmTransformer(Transformer):
         m2.value = op2.n_val
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[m1, m2])}
+        }
+
+    def mvp_imem_imm(self, items: List[Any]) -> InstructionNode:
+        mem, val = items
+        dst = IMem20()
+        dst.value = mem.n_val
+        imm = Imm20()
+        imm.value = val
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(name="MVP", ops=[dst, imm])}
         }
 
     def mvl_imem_imem(self, items: List[Any]) -> InstructionNode:
