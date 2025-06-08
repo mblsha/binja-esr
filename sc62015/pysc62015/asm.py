@@ -516,6 +516,21 @@ class AsmTransformer(Transformer):
             return RegB()
         return Reg(reg_name)
 
+    def _make_reg_pair(self, reg1: Reg, reg2: Reg) -> RegPair:
+        rp = RegPair()
+        rp.reg1 = reg1
+        rp.reg2 = reg2
+        rp.reg_raw = (RegPair.reg_idx(reg1.reg) << 4) | RegPair.reg_idx(reg2.reg)
+
+        if reg1.width() >= 3:
+            rp.size = 3
+        else:
+            if reg1.width() == reg2.width():
+                rp.size = reg1.width()
+            else:
+                rp.size = reg1.width()
+        return rp
+
     def atom(self, items: List[Any]) -> str:
         # This will return a number as a string, or a symbol name.
         # The assembler will resolve it later.
@@ -905,6 +920,16 @@ class AsmTransformer(Transformer):
             "instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
 
+    def add_reg_reg(self, items: List[Any]) -> InstructionNode:
+        if len(items) == 1:
+            reg1 = Reg("A")
+            reg2 = cast(Reg, items[0])
+        else:
+            reg1 = cast(Reg, items[0])
+            reg2 = cast(Reg, items[1])
+        rp = self._make_reg_pair(reg1, reg2)
+        return {"instruction": {"instr_class": ADD, "instr_opts": Opts(ops=[rp])}}
+
     def adc_a_imm(self, items: List[Any]) -> InstructionNode:
         imm = Imm8()
         imm.value = items[0]
@@ -958,6 +983,16 @@ class AsmTransformer(Transformer):
         return {
             "instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[op1, Reg("A")])}
         }
+
+    def sub_reg_reg(self, items: List[Any]) -> InstructionNode:
+        if len(items) == 1:
+            reg1 = Reg("A")
+            reg2 = cast(Reg, items[0])
+        else:
+            reg1 = cast(Reg, items[0])
+            reg2 = cast(Reg, items[1])
+        rp = self._make_reg_pair(reg1, reg2)
+        return {"instruction": {"instr_class": SUB, "instr_opts": Opts(ops=[rp])}}
 
     def sbc_a_imm(self, items: List[Any]) -> InstructionNode:
         imm = Imm8()
