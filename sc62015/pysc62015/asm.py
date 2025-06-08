@@ -163,6 +163,9 @@ class AsmTransformer(Transformer):
     def data_directive(self, items: List[Any]) -> DataDirectiveNode:
         return items[0]  # type: ignore
 
+    def org_directive(self, items: List[Any]) -> DataDirectiveNode:
+        return {"type": "org", "args": str(items[0])}
+
     def defb_directive(self, items: List[Any]) -> DataDirectiveNode:
         return {"type": "defb", "args": items}
 
@@ -383,9 +386,14 @@ class AsmTransformer(Transformer):
 
     def jp_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
+        try:
+            idx = Reg3.reg_idx(cast(RegisterName, reg.reg))
+        except (ValueError, TypeError):
+            # Not a known register, treat as absolute jump to symbol
+            return self.jp_abs([str(reg.reg)])
         r = Reg3()
-        r.reg = reg.reg
-        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.reg = cast(RegisterName, reg.reg)
+        r.reg_raw = idx
         r.high4 = 0
         return {
             "instruction": {"instr_class": JP_Abs, "instr_opts": Opts(ops=[r])}}

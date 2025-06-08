@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import copy
-from typing import Dict, List, Any, Optional, cast
+from typing import Dict, List, Any, Optional, cast, Tuple
 
 import bincopy  # type: ignore[import-untyped]
 from plumbum import cli  # type: ignore[import-untyped]
@@ -78,13 +78,58 @@ class Assembler:
     def _evaluate_operand(self, value: str) -> int:
         """Evaluates a string that can be a number or a symbol."""
         value = value.strip()
-        if value in self.symbols:
-            return self.symbols[value]
+        key = value.upper()
+        if key in self.symbols:
+            return self.symbols[key]
         try:
             # Allow hex (0x...), binary (0b...), octal (0o...), and decimal
             return int(value, 0)
         except ValueError:
             raise AssemblerError(f"Undefined symbol or invalid number: {value}")
+
+    def _apply_location(
+        self,
+        stmt: Dict[str, Any],
+        pointers: Dict[str, int],
+        current_section: str,
+        first_pass: bool,
+    ) -> Tuple[str, bool]:
+        """Update section/address based on SECTION or ORG directives.
+
+        Returns the possibly updated section name and a flag indicating the
+        statement was fully handled (and should not be processed further).
+        """
+
+        consumed = False
+
+        if stmt.get("section"):
+            new_section = stmt["section"].lower()
+            if first_pass:
+                if new_section not in pointers:
+                    last_addr = max(pointers.values()) if pointers else 0
+                    pointers[new_section] = last_addr
+            else:
+                if new_section not in pointers:
+                    raise AssemblerError(
+                        f"Undefined section '{new_section}' encountered in second pass."
+                    )
+            current_section = new_section
+            consumed = True
+
+        if stmt.get("type") == "org":
+            if first_pass:
+                try:
+                    new_addr = int(str(stmt["args"]), 0)
+                except ValueError:
+                    new_addr = 0
+            else:
+                new_addr = self._evaluate_operand(str(stmt["args"]))
+                self.current_address = new_addr
+
+            pointers[current_section] = new_addr
+            consumed = True
+
+        return current_section, consumed
 
     def _build_instruction(self, parsed_instr: ParsedInstruction) -> Instruction:
         """Builds an Instruction object from a parsed instruction node from the AST."""
@@ -276,26 +321,26 @@ class Assembler:
         self.instructions_cache.clear()
 
         for i, line in enumerate(program_ast["lines"]):
-            if "statement" in line and line["statement"].get("section"):
-                current_section = line["statement"]["section"].lower()
-                if current_section not in self.section_pointers:
-                    # If a new section is found, place it after the previous one
-                    last_addr = (
-                        max(self.section_pointers.values())
-                        if self.section_pointers
-                        else 0
-                    )
-                    self.section_pointers[current_section] = last_addr
+            consumed = False
+            if "statement" in line:
+                current_section, consumed = self._apply_location(
+                    line["statement"],
+                    self.section_pointers,
+                    current_section,
+                    True,
+                )
 
             addr = self.section_pointers[current_section]
 
             if "label" in line:
-                if line["label"] in self.symbols:
+                label_name = line["label"].upper()
+                if label_name in self.symbols:
                     raise AssemblerError(f"Duplicate label definition: {line['label']}")
-                self.symbols[line["label"]] = addr
+                self.symbols[label_name] = addr
 
-            if "statement" in line:
-                size = self._get_statement_size(line["statement"], i)
+            if "statement" in line and not consumed:
+                stmt = line["statement"]
+                size = self._get_statement_size(stmt, i)
                 self.section_pointers[current_section] += size
 
         # Layout .bss after .data if both exist
@@ -312,18 +357,21 @@ class Assembler:
         current_section = self.DEFAULT_SECTION
 
         for i, line in enumerate(program_ast["lines"]):
-            if "statement" in line and line["statement"].get("section"):
-                current_section = line["statement"]["section"].lower()
-                if current_section not in current_section_pointers:
-                    raise AssemblerError(
-                        f"Undefined section '{current_section}' encountered in second pass."
-                    )
+            consumed = False
+            if "statement" in line:
+                current_section, consumed = self._apply_location(
+                    line["statement"],
+                    current_section_pointers,
+                    current_section,
+                    False,
+                )
 
             self.current_address = current_section_pointers[current_section]
 
-            if "statement" in line:
+            if "statement" in line and not consumed:
+                stmt = line["statement"]
                 try:
-                    encoded_bytes = self._encode_statement(line["statement"], i)
+                    encoded_bytes = self._encode_statement(stmt, i)
                     if encoded_bytes:
                         if current_section == "bss":
                             # .bss section only reserves space, no data in file
@@ -371,6 +419,8 @@ class Assembler:
             return bytearray()
 
         args = statement["args"]
+        if stmt_type == "org":
+            return bytearray()
         if stmt_type == "defs":
             size = self._evaluate_operand(str(args))
             return bytearray(size)

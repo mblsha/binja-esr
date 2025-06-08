@@ -2,7 +2,7 @@
 
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Dict, Any, Optional
 
 try:
     import serial  # type: ignore[import-untyped]
@@ -12,8 +12,6 @@ from plumbum import cli  # type: ignore[import-untyped]
 
 from sc62015.pysc62015.sc_asm import Assembler
 from sc62015.pysc62015.emulator import Emulator, Memory
-
-# from sc62015.pysc62015.emulator import Registers, RegisterName
 
 
 class HardwareInterface:

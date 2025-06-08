@@ -3,6 +3,7 @@ start: (line | NEWLINE)*
 line: (label? statement?)
 
 ?statement: section_decl
+          | org_directive
           | data_directive
           | instruction
 
@@ -10,6 +11,8 @@ label: CNAME ":"
 
 section_decl: "SECTION"i CNAME
 data_directive: defb_directive | defw_directive | defl_directive | defs_directive | defm_directive
+
+org_directive: _ORG expression
 
 // --- Unambiguous Instructions ---
 
@@ -248,6 +251,7 @@ _IMR.2: "IMR"i
 _BP.2: "BP"i
 _PX.2: "PX"i
 _PY.2: "PY"i
+_ORG.2: ".ORG"i
 
 
 // --- Common Terminals ---
