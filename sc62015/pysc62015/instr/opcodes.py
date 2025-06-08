@@ -7,7 +7,7 @@ from ..constants import INTERNAL_MEMORY_START
 
 import copy
 from dataclasses import dataclass
-from typing import Optional, List, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any, cast
+from typing import Optional, List, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any
 import enum
 from contextlib import contextmanager
 
@@ -713,7 +713,7 @@ class HasOperands:
 
 
 class IMemOperand(Operand, HasWidth):
-    def __init__(self, mode: AddressingMode, n: Optional[Union[str, int]] = None):
+    def __init__(self, mode: AddressingMode, n: Optional[int] = None):
         self.mode = mode
         self.n_val = n
         self.helper = IMemHelper(width=1, value=self)
@@ -732,9 +732,8 @@ class IMemOperand(Operand, HasWidth):
     def encode(self, encoder: Encoder, addr: int) -> None:
         # The 'n' value is encoded only if the mode requires it.
         if self.mode in [AddressingMode.N, AddressingMode.BP_N, AddressingMode.PX_N, AddressingMode.PY_N]:
-            assert self.n_val is not None
-            value = int(self.n_val, 0) if isinstance(self.n_val, str) else self.n_val
-            encoder.unsigned_byte(value)
+            assert isinstance(self.n_val, int)
+            encoder.unsigned_byte(self.n_val)
 
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
         return self.helper.lift(il, self.mode, side_effects)
@@ -896,7 +895,7 @@ class IMemHelper(Operand):
         return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
 
     def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
-        n_val: Union[str, int] = 0
+        n_val: int = 0
         if isinstance(self.value, ImmOperand):
             if self.value.value is not None:
                 n_val = self.value.value
@@ -904,7 +903,7 @@ class IMemHelper(Operand):
             if self.value.n_val is not None:
                 n_val = self.value.n_val
 
-        n_lifted = il.const(1, int(n_val))
+        n_lifted = il.const(1, n_val)
 
         match pre:
             case None | AddressingMode.N:

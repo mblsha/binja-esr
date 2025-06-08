@@ -189,11 +189,6 @@ class Assembler:
                     if pre_byte is not None:
                         instr_for_size._pre = pre_byte
                     for op in instr_for_size.operands():
-                        if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
-                            try:
-                                op.n_val = int(op.n_val, 0)
-                            except ValueError:
-                                op.n_val = 0
                         if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
                             try:
                                 setattr(op, "value", int(getattr(op, "value"), 0))
@@ -318,8 +313,6 @@ class Assembler:
             instr = self.instructions_cache[line_num]
 
             for op in instr.operands():
-                if isinstance(op, IMemOperand) and isinstance(op.n_val, str):
-                    op.n_val = self._evaluate_operand(op.n_val)
                 if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
                     val = self._evaluate_operand(getattr(op, "value"))
                     setattr(op, "value", val)
