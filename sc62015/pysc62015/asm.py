@@ -548,7 +548,8 @@ class AsmTransformer(Transformer):
     # --- Internal Memory Operand Rules ---
 
     def imem_n(self, items: List[Any]) -> IMemOperand:
-        return IMemOperand(AddressingMode.N, n=items[0])
+        value = int(str(items[0]), 0)
+        return IMemOperand(AddressingMode.N, n=value)
 
     def imem_bp_n(self, items: List[Any]) -> IMemOperand:
         value = items[0]
@@ -558,13 +559,16 @@ class AsmTransformer(Transformer):
                 return IMemOperand(AddressingMode.BP_PX)
             if upper == "PY":
                 return IMemOperand(AddressingMode.BP_PY)
-        return IMemOperand(AddressingMode.BP_N, n=value)
+            value = int(value, 0)
+        return IMemOperand(AddressingMode.BP_N, n=int(value))
 
     def imem_px_n(self, items: List[Any]) -> IMemOperand:
-        return IMemOperand(AddressingMode.PX_N, n=items[0])
+        value = int(str(items[0]), 0)
+        return IMemOperand(AddressingMode.PX_N, n=value)
 
     def imem_py_n(self, items: List[Any]) -> IMemOperand:
-        return IMemOperand(AddressingMode.PY_N, n=items[0])
+        value = int(str(items[0]), 0)
+        return IMemOperand(AddressingMode.PY_N, n=value)
 
     def imem_bp_px(self, items: List[Any]) -> IMemOperand:
         return IMemOperand(AddressingMode.BP_PX)
@@ -809,7 +813,7 @@ class AsmTransformer(Transformer):
         regop = cast(EMemReg, items[1])
         op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
         im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im.value = imem.n_val
         op.imem = im
         op.reg = regop.reg
         op.mode = regop.mode
@@ -821,7 +825,7 @@ class AsmTransformer(Transformer):
         imem = cast(IMemOperand, items[1])
         op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
         im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im.value = imem.n_val
         op.imem = im
         op.reg = regop.reg
         op.mode = regop.mode
@@ -834,11 +838,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        im1.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im2.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -851,10 +855,10 @@ class AsmTransformer(Transformer):
         op.mode_imm.value = src.value
         im1 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im1.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
-        im2.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im2.value = imem.n_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -926,11 +930,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM, width=2)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        im1.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im2.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -945,10 +949,10 @@ class AsmTransformer(Transformer):
         op.mode_imm.value = src.value
         im1 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im1.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
-        im2.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im2.value = imem.n_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -982,11 +986,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        im1.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im2.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -999,10 +1003,10 @@ class AsmTransformer(Transformer):
         op.mode_imm.value = src.value
         im1 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im1.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
-        im2.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im2.value = imem.n_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -1021,7 +1025,7 @@ class AsmTransformer(Transformer):
         regop = cast(EMemReg, items[1])
         op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
         im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im.value = imem.n_val
         op.imem = im
         op.reg = regop.reg
         op.mode = regop.mode
@@ -1033,7 +1037,7 @@ class AsmTransformer(Transformer):
         imem = cast(IMemOperand, items[1])
         op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
         im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im.value = imem.n_val
         op.imem = im
         op.reg = regop.reg
         op.mode = regop.mode
@@ -1046,11 +1050,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        im1.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im2.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
@@ -1063,10 +1067,10 @@ class AsmTransformer(Transformer):
         op.mode_imm.value = src.value
         im1 = IMem8()
         src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
-        im1.value = int(src_val, 0) if isinstance(src_val, str) else src_val
+        im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
-        im2.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im2.value = imem.n_val
         op.imem2 = im2
         op.mode = src.mode
         op.offset = src.offset
