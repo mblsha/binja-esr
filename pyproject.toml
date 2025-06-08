@@ -15,6 +15,7 @@ dev = [
     "pytest",
     "mypy",
     "ruff",
+    "serial",  # for testing with real hardware
 ]
 
 [tool.setuptools.packages.find]
