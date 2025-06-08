@@ -15,6 +15,11 @@ from .tokens import asm_str
 from dataclasses import dataclass, field
 import pytest
 
+# Preallocate a single memory buffer for unit tests to reuse. This avoids
+# repeatedly allocating large bytearrays in many test cases and speeds up the
+# overall test suite.
+_SHARED_MEMORY = bytearray(ADDRESS_SPACE_SIZE)
+
 
 def test_registers() -> None:
     regs = Registers()
@@ -64,7 +69,9 @@ def _make_cpu_and_mem(
     Create a bytearray-backed mock memory, preload it with `init_data` and
     `instr_bytes`, then return (cpu, raw_memory, read_log, write_log).
     """
-    raw = bytearray(size)
+    assert size <= ADDRESS_SPACE_SIZE
+    raw = _SHARED_MEMORY
+    raw[:size] = b"\x00" * size
     for addr, val in init_data.items():
         raw[addr] = val & 0xFF
 
