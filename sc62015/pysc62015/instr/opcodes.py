@@ -608,10 +608,6 @@ class Instruction:
         self.ops_reversed = ops_reversed
         self._operands = operands
         self._cond = cond
-        self.doinit()
-
-    def doinit(self) -> None:
-        pass
 
     def length(self) -> int:
         assert self._length is not None, "Length not set"
@@ -677,9 +673,6 @@ class Instruction:
             mode = dst_mode if index == 0 else src_mode
             tokens += operand.render(mode)
         return tokens
-
-    def display(self, addr: int) -> None:
-        print(f"{addr:04X}:\t" + "".join(str(token) for token in self.render()))
 
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         info.length += self.length()
