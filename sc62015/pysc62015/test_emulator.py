@@ -5,6 +5,7 @@ from .emulator import (
     RegisterName,
     Emulator,
     Memory,
+    State,
 )
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 from .instr import IMEM_NAMES
@@ -2081,31 +2082,31 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
 def test_decode_all_opcodes() -> None:
     raw_memory = bytearray([0x00] * ADDRESS_SPACE_SIZE)
 
+    def read_mem(addr: int) -> int:
+        return raw_memory[addr]
+
+    def write_mem(addr: int, value: int) -> None:
+        raw_memory[addr] = value
+
+    memory = Memory(read_mem, write_mem)
+    cpu = Emulator(memory)
+    address = 0x00
+
     # enumerate all opcodes, want index for each opcode
     for i, (b, s) in enumerate(opcode_generator()):
         if b is None:
             continue
 
-        for j, byte in enumerate(b):
-            raw_memory[j] = byte
+        raw_memory[: len(b)] = b
 
-        def read_mem(addr: int) -> int:
-            # if addr < 0 or addr >= len(raw_memory):
-            #     raise IndexError(f"Address out of bounds: {addr:04x}")
-            return raw_memory[addr]
+        cpu.regs = Registers()
+        cpu.state = State()
+        cpu.regs.set(RegisterName.S, 0x1000)  # Set stack pointer to a valid location
+        cpu.regs.set(RegisterName.U, 0x2000)  # Set stack pointer to a valid location
+        cpu.regs.set(RegisterName.X, 0x10)
 
-        def write_mem(addr: int, value: int) -> None:
-            # if addr < 0 or addr >= len(raw_memory):
-            #     raise IndexError(f"Address out of bounds: {addr:04x}")
-            raw_memory[addr] = value
-
-        skip = False
-        # FIXME: need to ensure they're covered by specific tests that set up
-        # the memory and registers properly.
-        # MVL: done
-        # ADCL, DADL: done
-        # SBCL, DSBL: done
-        ignore_instructions = [
+        # Certain instructions require special setup; skip them here.
+        ignore_instructions = (
             "???",
             "MVL",
             "ADCL",
@@ -2114,22 +2115,9 @@ def test_decode_all_opcodes() -> None:
             "DSBL",
             "DSRL",
             "DSLL",
-        ]
-        for ignore in ignore_instructions:
-            if s and s.startswith(ignore):
-                skip = True
-                break
-        if skip:
+        )
+        if s and s.startswith(ignore_instructions):
             continue
-
-        memory = Memory(read_mem, write_mem)
-        cpu = Emulator(memory)
-
-        address = 0x00
-        cpu.regs.set(RegisterName.S, 0x1000)  # Set stack pointer to a valid location
-        cpu.regs.set(RegisterName.U, 0x2000)  # Set stack pointer to a valid location
-
-        cpu.regs.set(RegisterName.X, 0x10)
 
         try:
             cpu.execute_instruction(address)

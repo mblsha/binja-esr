@@ -944,25 +944,34 @@ def test_test_with_pre() -> None:
 
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
-def opcode_generator() -> (
-    Generator[Tuple[Optional[bytearray], Optional[str]], None, None]
-):
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _opcode_list() -> Tuple[Tuple[Optional[bytearray], Optional[str]], ...]:
+    """Load the opcode table from ``opcodes.txt`` only once."""
     dirname = os.path.dirname(__file__)
+    result: List[Tuple[Optional[bytearray], Optional[str]]] = []
     with open(os.path.join(dirname, "opcodes.txt")) as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
-                yield None, None
+                result.append((None, None))
                 continue
             parts = line.split(":")
             if len(parts) != 2:
                 raise ValueError(f"Invalid line: {line}")
             byte_str, expected_str = parts
             byte_array = bytearray.fromhex(byte_str)
-            expected_str = expected_str.strip()
-            # replace repeated spaces with a single space
-            expected_str = " ".join(expected_str.split())
-            yield byte_array, expected_str
+            expected_str = " ".join(expected_str.strip().split())
+            result.append((byte_array, expected_str))
+    return tuple(result)
+
+
+def opcode_generator() -> Generator[Tuple[Optional[bytearray], Optional[str]], None, None]:
+    """Yield opcode bytes and expected assembly from the cached opcode table."""
+    for item in _opcode_list():
+        yield item
 
 
 def test_opcode_generator() -> None:
