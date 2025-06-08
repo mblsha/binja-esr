@@ -733,7 +733,8 @@ class IMemOperand(Operand, HasWidth):
         # The 'n' value is encoded only if the mode requires it.
         if self.mode in [AddressingMode.N, AddressingMode.BP_N, AddressingMode.PX_N, AddressingMode.PY_N]:
             assert self.n_val is not None
-            encoder.unsigned_byte(cast(int, self.n_val))  # Assumes n_val is already an int
+            value = int(self.n_val, 0) if isinstance(self.n_val, str) else self.n_val
+            encoder.unsigned_byte(value)
 
     def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
         return self.helper.lift(il, self.mode, side_effects)
