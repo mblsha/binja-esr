@@ -231,9 +231,9 @@ emem_imem_simple: "[" imem_operand "]"
 emem_imem_plus: "[" imem_operand "+" expression "]"
 emem_imem_minus: "[" imem_operand "-" expression "]"
 
-emem_operand: emem_addr
-            | emem_reg_operand
+emem_operand: emem_reg_operand
             | emem_imem_operand
+            | emem_addr
 
 
 // --- Terminals with higher priority ---
