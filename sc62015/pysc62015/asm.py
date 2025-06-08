@@ -700,9 +700,16 @@ class AsmTransformer(Transformer):
     def mv_reg_reg(self, items: List[Any]) -> InstructionNode:
         reg1 = cast(Reg, items[0])
         reg2 = cast(Reg, items[1])
+
+        # Register to register moves that don't have a dedicated opcode are
+        # encoded using the ``RegPair`` operand with a fixed size of two bytes.
+        rp = RegPair(size=2)
+        rp.reg1 = reg1
+        rp.reg2 = reg2
+        rp.reg_raw = (RegPair.reg_idx(reg1.reg) << 4) | RegPair.reg_idx(reg2.reg)
+
         return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg1, reg2])}
-        }
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[rp])}}
 
     def mv_reg_imm(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
