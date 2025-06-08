@@ -1479,7 +1479,8 @@ class EMemIMem(HasOperands, Imm8):
 
     def __init__(self) -> None:
         super().__init__()
-        self.imem = IMem8()
+        # Allow both decoded IMem8 values and parsed IMemOperand objects
+        self.imem: Union[IMem8, IMemOperand] = IMem8()
 
     def __repr__(self) -> str:
         return (
