@@ -66,6 +66,7 @@ from .instr import (
     RegIMR,
     RegPair,
     IMemOperand,
+    ImmOperand,
     Imm8,
     EMemAddr,
     AddressingMode,
@@ -578,6 +579,7 @@ class AsmTransformer(Transformer):
         reg = cast(Reg, items[0])
         val = items[1]
         width = reg.width()
+        imm: ImmOperand
         if width == 1:
             imm = Imm8()
         elif width == 2:
