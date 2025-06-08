@@ -1080,26 +1080,68 @@ class AsmTransformer(Transformer):
     def mvl_imem_ememreg(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
         regop = cast(EMemReg, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
-        im = IMem8()
-        im.value = imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return {"instruction": {"instr_class": MVL, "instr_opts": Opts(ops=[op])}}
+        # For simple, post-increment and pre-decrement modes the opcode expects
+        # an ``EMemReg`` operand directly.  Only the ``+n``/``-n`` forms are
+        # encoded using ``RegIMemOffset``.
+        if regop.mode in (
+            EMemRegMode.POSITIVE_OFFSET,
+            EMemRegMode.NEGATIVE_OFFSET,
+        ):
+            op = RegIMemOffset(
+                order=RegIMemOffsetOrder.DEST_IMEM,
+                allowed_modes=[
+                    EMemRegMode.POSITIVE_OFFSET,
+                    EMemRegMode.NEGATIVE_OFFSET,
+                ],
+            )
+            im = IMem8()
+            im.value = imem.n_val
+            op.imem = im
+            op.reg = regop.reg
+            op.mode = regop.mode
+            op.offset = regop.offset
+            operand = op
+        else:
+            regop.width = 1
+            operand = regop
+        return {
+            "instruction": {
+                "instr_class": MVL,
+                "instr_opts": Opts(ops=[imem, operand])
+                if operand is regop
+                else Opts(ops=[operand])
+            }
+        }
 
     def mvl_ememreg_imem(self, items: List[Any]) -> InstructionNode:
         regop = cast(EMemReg, items[0])
         imem = cast(IMemOperand, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
-        im = IMem8()
-        im.value = imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return {"instruction": {"instr_class": MVL, "instr_opts": Opts(ops=[op])}}
+        if regop.mode in (
+            EMemRegMode.POSITIVE_OFFSET,
+            EMemRegMode.NEGATIVE_OFFSET,
+        ):
+            op = RegIMemOffset(
+                order=RegIMemOffsetOrder.DEST_REG_OFFSET,
+                allowed_modes=[
+                    EMemRegMode.POSITIVE_OFFSET,
+                    EMemRegMode.NEGATIVE_OFFSET,
+                ],
+            )
+            im = IMem8()
+            im.value = imem.n_val
+            op.imem = im
+            op.reg = regop.reg
+            op.mode = regop.mode
+            op.offset = regop.offset
+            operand = op
+            opts = Opts(ops=[operand])
+        else:
+            # When using simple, post-increment or pre-decrement modes the
+            # operands are encoded in the logical order.
+            regop.width = 1
+            operand = regop
+            opts = Opts(ops=[operand, imem])
+        return {"instruction": {"instr_class": MVL, "instr_opts": opts}}
 
     def mvl_imem_ememimem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
