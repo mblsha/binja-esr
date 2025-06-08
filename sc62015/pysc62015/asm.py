@@ -536,6 +536,7 @@ class AsmTransformer(Transformer):
                 rp.size = reg1.width()
         return rp
 
+
     def atom(self, items: List[Any]) -> str:
         # This will return a number as a string, or a symbol name.
         # The assembler will resolve it later.
@@ -700,8 +701,10 @@ class AsmTransformer(Transformer):
     def mv_reg_reg(self, items: List[Any]) -> InstructionNode:
         reg1 = cast(Reg, items[0])
         reg2 = cast(Reg, items[1])
+        rp = self._make_reg_pair(reg1, reg2)
+        rp.size = 2
         return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg1, reg2])}
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[rp])}
         }
 
     def mv_reg_imm(self, items: List[Any]) -> InstructionNode:
