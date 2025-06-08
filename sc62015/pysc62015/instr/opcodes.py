@@ -1541,25 +1541,26 @@ class EMemIMemOffset(HasOperands, Operand):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
 
-    def __init__(self, order: EMemIMemOffsetOrder) -> None:
+    def __init__(self, order: EMemIMemOffsetOrder, width: int = 1) -> None:
         self.order = order
+        self.width = width
         self.mode_imm = Imm8()
         self.imem1 = IMem8()
         self.imem2 = IMem8()
 
     def __repr__(self) -> str:
         return (
-            f"EMemIMemOffset(order={self.order}, mode={getattr(self, 'mode', None)},"
-            f" offset={getattr(self, 'offset', None)})"
+            f"EMemIMemOffset(order={self.order}, width={self.width}, "
+            f"mode={getattr(self, 'mode', None)}, offset={getattr(self, 'offset', None)})"
         )
 
     def operands(self) -> Generator[Operand, None, None]:
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
             yield self.imem1
-            op = EMemValueOffsetHelper(self.imem2, self.offset, width=1)
+            op = EMemValueOffsetHelper(self.imem2, self.offset, width=self.width)
             yield op
         else:
-            op = EMemValueOffsetHelper(self.imem1, self.offset, width=1)
+            op = EMemValueOffsetHelper(self.imem1, self.offset, width=self.width)
             yield op
             yield self.imem2
 
