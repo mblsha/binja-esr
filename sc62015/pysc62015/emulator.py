@@ -528,20 +528,10 @@ def eval_ret(
         addr_val, int
     ), f"Address for RET must be an integer, got {type(addr_val)}"
 
-    effective_addr = addr_val
-    # Check if the source of the address (llil.ops[0]) is a MockLLIL object and has a width method
-    if isinstance(llil.ops[0], MockLLIL) and llil.ops[0].width() == 2:
-        # This logic is for architectures where a 16-bit return address is popped and
-        # combined with a page/segment register or parts of the current PC.
-        # For SC62015, RET pops 2 bytes, RETF pops 3.
-        # If addr_val is 16-bit from POP.w, it needs to be expanded to 20-bit.
-        # The exact mechanism (e.g. which page) depends on arch specifics.
-        # A common behavior is to use the page of PC at time of CALL.
-        # Here, we use page of PC at time of RET. This might not be universally correct.
-        # The value from `regs.get(RegisterName.PC)` is PC of (RET instruction + length of RET).
-        effective_addr = (regs.get(RegisterName.PC) & 0xFF0000) | addr_val
-
-    regs.set(RegisterName.PC, effective_addr)
+    # The lifting phase already expands a 16-bit return address to a 20-bit
+    # value using the current PC page, so both RET and RETF simply jump to the
+    # evaluated address here.
+    regs.set(RegisterName.PC, addr_val)
     return None, None
 
 

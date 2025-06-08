@@ -666,6 +666,27 @@ def test_call_ret() -> None:
     assert writes == []
 
 
+def test_call_ret_high_page() -> None:
+    cpu, raw, reads, writes = _make_cpu_and_mem(
+        0x40000, {}, bytes.fromhex("042000"), instr_addr=0x30000
+    )
+    raw[0x30020] = 0x06
+    assert asm_str(cpu.decode_instruction(0x30000).render()) == "CALL  0020"
+    assert asm_str(cpu.decode_instruction(0x30020).render()) == "RET"
+
+    cpu.regs.set(RegisterName.S, 0x30)
+    cpu.execute_instruction(0x30000)
+    assert cpu.regs.get(RegisterName.PC) == 0x30020
+    assert cpu.regs.get(RegisterName.S) == 0x2E
+    assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
+    writes.clear()
+
+    cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
+    assert cpu.regs.get(RegisterName.PC) == 0x30003
+    assert cpu.regs.get(RegisterName.S) == 0x30
+    assert writes == []
+
+
 def test_callf_retf() -> None:
     cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("05200000"))
     raw[0x20] = 0x07
