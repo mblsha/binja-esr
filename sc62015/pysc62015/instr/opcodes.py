@@ -1428,6 +1428,12 @@ class EMemReg(HasOperands, Operand):
         self.reg = Reg3()
         self.allowed_modes = allowed_modes
 
+    def __repr__(self) -> str:
+        return (
+            f"EMemReg(width={self.width}, mode={getattr(self, 'mode', None)}, "
+            f"offset={getattr(self, 'offset', None)})"
+        )
+
     def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)
         self.reg.decode(decoder, addr)
@@ -1474,6 +1480,12 @@ class EMemIMem(HasOperands, Imm8):
     def __init__(self) -> None:
         super().__init__()
         self.imem = IMem8()
+
+    def __repr__(self) -> str:
+        return (
+            f"EMemIMem(mode={getattr(self, 'mode', None)}, "
+            f"offset={getattr(self, 'offset', None)})"
+        )
 
     def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)

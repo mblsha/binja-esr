@@ -69,6 +69,10 @@ from .instr import (
     ImmOperand,
     Imm8,
     EMemAddr,
+    EMemReg,
+    EMemRegMode,
+    EMemIMem,
+    EMemIMemMode,
     AddressingMode,
 )
 
@@ -560,6 +564,107 @@ class AsmTransformer(Transformer):
     def emem_operand(self, items: List[Any]) -> EMemAddr:
         return cast(EMemAddr, items[0])
 
+    def emem_reg_simple(self, items: List[Any]) -> EMemReg:
+        reg = cast(Reg, items[0])
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        op = EMemReg(width=reg.width())
+        op.reg = r
+        op.mode = EMemRegMode.SIMPLE
+        return op
+
+    def emem_reg_post_inc(self, items: List[Any]) -> EMemReg:
+        reg = cast(Reg, items[0])
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        op = EMemReg(width=reg.width())
+        op.reg = r
+        op.mode = EMemRegMode.POST_INC
+        return op
+
+    def emem_reg_pre_dec(self, items: List[Any]) -> EMemReg:
+        reg = cast(Reg, items[0])
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        op = EMemReg(width=reg.width())
+        op.reg = r
+        op.mode = EMemRegMode.PRE_DEC
+        return op
+
+    def emem_reg_plus(self, items: List[Any]) -> EMemReg:
+        reg = cast(Reg, items[0])
+        value = items[1]
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        offset = ImmOffset("+")
+        offset.value = value
+        op = EMemReg(width=reg.width())
+        op.reg = r
+        op.mode = EMemRegMode.POSITIVE_OFFSET
+        op.offset = offset
+        return op
+
+    def emem_reg_minus(self, items: List[Any]) -> EMemReg:
+        reg = cast(Reg, items[0])
+        value = items[1]
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(reg.reg)
+        r.high4 = 0
+        offset = ImmOffset("-")
+        offset.value = value
+        op = EMemReg(width=reg.width())
+        op.reg = r
+        op.mode = EMemRegMode.NEGATIVE_OFFSET
+        op.offset = offset
+        return op
+
+    def emem_reg_operand(self, items: List[Any]) -> EMemReg:
+        return cast(EMemReg, items[0])
+
+    def emem_imem_simple(self, items: List[Any]) -> EMemIMem:
+        im = cast(IMemOperand, items[0])
+        op = EMemIMem()
+        op.imem = im
+        op.value = EMemIMemMode.SIMPLE.value
+        op.mode = EMemIMemMode.SIMPLE
+        return op
+
+    def emem_imem_plus(self, items: List[Any]) -> EMemIMem:
+        im, val = items
+        im = cast(IMemOperand, im)
+        offset = ImmOffset("+")
+        offset.value = val
+        op = EMemIMem()
+        op.imem = im
+        op.value = EMemIMemMode.POSITIVE_OFFSET.value
+        op.mode = EMemIMemMode.POSITIVE_OFFSET
+        op.offset = offset
+        return op
+
+    def emem_imem_minus(self, items: List[Any]) -> EMemIMem:
+        im, val = items
+        im = cast(IMemOperand, im)
+        offset = ImmOffset("-")
+        offset.value = val
+        op = EMemIMem()
+        op.imem = im
+        op.value = EMemIMemMode.NEGATIVE_OFFSET.value
+        op.mode = EMemIMemMode.NEGATIVE_OFFSET
+        op.offset = offset
+        return op
+
+    def emem_imem_operand(self, items: List[Any]) -> EMemIMem:
+        return cast(EMemIMem, items[0])
+
     # --- Instruction Rules ---
 
     def mv_imem_imem(self, items: List[Any]) -> InstructionNode:
@@ -614,6 +719,36 @@ class AsmTransformer(Transformer):
 
     def mv_emem_reg(self, items: List[Any]) -> InstructionNode:
         mem = cast(EMemAddr, items[0])
+        reg = cast(Reg, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
+        }
+
+    def mv_reg_ememreg(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        mem = cast(EMemReg, items[1])
+        mem.width = reg.width()
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
+        }
+
+    def mv_ememreg_reg(self, items: List[Any]) -> InstructionNode:
+        mem = cast(EMemReg, items[0])
+        reg = cast(Reg, items[1])
+        mem.width = reg.width()
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
+        }
+
+    def mv_reg_ememimem(self, items: List[Any]) -> InstructionNode:
+        reg = cast(Reg, items[0])
+        mem = cast(EMemIMem, items[1])
+        return {
+            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
+        }
+
+    def mv_ememimem_reg(self, items: List[Any]) -> InstructionNode:
+        mem = cast(EMemIMem, items[0])
         reg = cast(Reg, items[1])
         return {
             "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
