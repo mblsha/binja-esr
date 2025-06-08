@@ -1474,6 +1474,55 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    AssemblerTestCase(
+        test_id="org_changes_address",
+        asm_code="""
+            NOP
+            .ORG 0x10
+            HALT
+        """,
+        expected_ti="""
+            @0000
+            00
+            @0010
+            DE
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="org_with_label_reference",
+        asm_code="""
+            .ORG 0x20
+        label:
+            NOP
+            JP label
+        """,
+        expected_ti="""
+            @0020
+            00 02 20 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="org_multiple_addresses",
+        asm_code="""
+            .ORG 0x10
+            NOP
+            .ORG 0x20
+            HALT
+            .ORG 0x05
+            NOP
+        """,
+        expected_ti="""
+            @0005
+            00
+            @0010
+            00
+            @0020
+            DE
+            q
+        """,
+    ),
 ]
 
 
