@@ -115,8 +115,13 @@ class RetInstruction(Instruction):
         info.add_branch(BranchType.FunctionReturn)
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        # FIXME: should add bitmask for 2-byte pop?
-        il.append(il.ret(il.pop(self.addr_size())))
+        pop_val = il.pop(self.addr_size())
+        if self.addr_size() == 2:
+            high = il.and_expr(
+                3, il.reg(3, RegisterName("PC")), il.const(3, 0xFF0000)
+            )
+            pop_val = il.or_expr(3, pop_val, high)
+        il.append(il.ret(pop_val))
 
 class RET(RetInstruction): pass
 class RETF(RetInstruction):
