@@ -10,11 +10,13 @@ line: (label? statement?)
 label: CNAME ":"
 
 section_decl: "SECTION"i CNAME
-data_directive: defb_directive | defw_directive | defl_directive | defs_directive | defm_directive
+data_directive: "defb"i def_arg ("," def_arg)* -> defb_directive
+               | "defw"i def_arg ("," def_arg)* -> defw_directive
+               | "defl"i def_arg ("," def_arg)* -> defl_directive
+               | "defs"i NUMBER -> defs_directive
+               | "defm"i string_literal -> defm_directive
 
 org_directive: _ORG expression
-
-// --- Unambiguous Instructions ---
 
 instruction: "NOP"i -> nop
            | "RETI"i -> reti
@@ -184,19 +186,10 @@ instruction: "NOP"i -> nop
            | "TEST"i emem_addr "," expression -> test_emem_imm
            | "TEST"i imem_operand "," _A -> test_imem_a
 
-
-
 // --- Data Directives ---
-defb_directive: "defb"i def_arg ("," def_arg)*
-defw_directive: "defw"i def_arg ("," def_arg)*
-defl_directive: "defl"i def_arg ("," def_arg)*
-defs_directive: "defs"i NUMBER
-defm_directive: "defm"i string_literal
-
 ?def_arg: expression | string_literal
 ?expression: atom
 string_literal: ESCAPED_STRING
-
 
 // --- Operands ---
 reg: CNAME
@@ -242,7 +235,6 @@ emem_operand: emem_reg_operand
             | emem_imem_operand
             | emem_addr
 
-
 // --- Terminals with higher priority ---
 _A.2: "A"i
 _B.2: "B"i
@@ -252,7 +244,6 @@ _BP.2: "BP"i
 _PX.2: "PX"i
 _PY.2: "PY"i
 _ORG.2: ".ORG"i
-
 
 // --- Common Terminals ---
 NUMBER: /0x[0-9a-fA-F]+/i | /[0-9]+/
