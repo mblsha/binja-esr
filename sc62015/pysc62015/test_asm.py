@@ -349,6 +349,24 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
     ),
     AssemblerTestCase(
+        test_id="mvw_imem_ememimem_simple",
+        asm_code="MVW (0x30), [(0x40)]",
+        expected_ti="""
+            @0000
+            F1 00 30 40
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mvw_ememimem_imem_simple",
+        asm_code="MVW [(0x40)], (0x30)",
+        expected_ti="""
+            @0000
+            F9 00 40 30
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="and_all_forms",
         asm_code="""
             AND A, 0x55
