@@ -69,7 +69,8 @@ def test_opcode_table_roundtrip() -> None:
         try:
             output = assembler.assemble(source).as_binary()
         except Exception as e:
-            mismatches.append(f"Line {idx+1}: {asm_text} -> Exception: {e}")
+            text = str(e).replace("\n", " ")
+            mismatches.append(f"Line {idx+1}: {asm_text} -> Exception: {text}")
             continue
 
         if _strip_pre(output) != _strip_pre(expected_bytes):
