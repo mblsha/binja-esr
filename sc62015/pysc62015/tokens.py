@@ -7,29 +7,6 @@ import enum
 from typing import List, Tuple
 
 
-def token(kind: str, text: str) -> InstructionTextToken:
-    if InstructionTextToken is None:
-        return text
-    else:
-        if kind == "instr":
-            tokenType = InstructionTextTokenType.InstructionToken
-        elif kind == "opsep":
-            tokenType = InstructionTextTokenType.OperandSeparatorToken
-        elif kind == "reg":
-            tokenType = InstructionTextTokenType.RegisterToken
-        elif kind == "int":
-            tokenType = InstructionTextTokenType.IntegerToken
-        elif kind == "addr":
-            tokenType = InstructionTextTokenType.PossibleAddressToken
-        elif kind == "begmem":
-            tokenType = InstructionTextTokenType.BeginMemoryOperandToken
-        elif kind == "endmem":
-            tokenType = InstructionTextTokenType.EndMemoryOperandToken
-        elif kind == "text":
-            tokenType = InstructionTextTokenType.TextToken
-        else:
-            raise ValueError("Invalid token kind {}".format(kind))
-        return InstructionTextToken(tokenType, text)
 
 
 class Token:
@@ -145,7 +122,6 @@ class TEndMem(Token):
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
         return (InstructionTextTokenType.EndMemoryOperandToken, self.__str__())
 
-
 # FIXME: unused
 class TAddr(Token):
     def __init__(self, value: int) -> None:
@@ -159,7 +135,6 @@ class TAddr(Token):
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
         return (InstructionTextTokenType.PossibleAddressToken, str(self.value))
-
 
 class TReg(Token):
     def __init__(self, reg: str) -> None:
