@@ -15,7 +15,7 @@ if os.path.isdir(bn_path) and bn_path not in sys.path:
 try:
     import binaryninja  # noqa: F401
     has_binja = True
-except Exception:
+except ImportError:
     has_binja = False
 
 if not has_binja:
