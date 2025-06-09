@@ -11,7 +11,7 @@ from .instr import IMEM_NAMES
 from binja_helpers.mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
-from .tokens import asm_str
+from binja_helpers.tokens import asm_str
 from dataclasses import dataclass, field
 import pytest
 
