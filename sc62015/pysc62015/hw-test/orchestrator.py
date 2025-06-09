@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 
 try:
     import serial  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - serial may not be installed in tests
+except ImportError:  # pragma: no cover - serial may not be installed in tests
     serial = None  # type: ignore[assignment]
 from plumbum import cli  # type: ignore[import-untyped]
 

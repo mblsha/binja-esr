@@ -28,7 +28,7 @@ def _has_binja() -> bool:
         import binaryninja  # noqa: F401
 
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
