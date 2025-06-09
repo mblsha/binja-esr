@@ -15,6 +15,7 @@ from ..coding import Decoder, Encoder, BufferTooShort
 
 from ..mock_llil import MockLLIL
 from ..constants import INTERNAL_MEMORY_START
+from .traits import HasWidth
 
 import copy
 from dataclasses import dataclass
@@ -713,13 +714,6 @@ class Instruction:
     def lift_operation2(self, il: LowLevelILFunction, arg1: ExpressionIndex, arg2: ExpressionIndex) -> ExpressionIndex:
         raise NotImplementedError(f"lift_operation2() not implemented for {self.__class__.__name__} instruction")
         return il.unimplemented()
-
-
-class HasWidth:
-    def width(self) -> int:
-        raise NotImplementedError("width not implemented for HasWidth")
-
-
 # HasOperands is used to indicate that the operand expects other operands to be
 # used instead.
 class HasOperands:
@@ -1257,8 +1251,10 @@ class EMemAddr(Imm20, Pointer):
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
                     Optional[AddressingMode] = None) -> None:
         assert self.value is not None, "Value not set"
-        # FIXME: should use width of value
-        il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
+        assert isinstance(value, HasWidth), f"Expected HasWidth, got {type(value)}"
+        il.append(
+            il.store(value.width(), il.const_pointer(3, self.value), value)
+        )
 
 
 class EMemValueOffsetHelper(OperandHelper, Pointer):
@@ -1436,8 +1432,8 @@ class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         assert self.reg is not None, "Register not set"
         assert self.imem is not None, "IMem not set"
         assert self.mode is not None, "Mode not set"
-        # FIXME: is width=1 here?
-        op = EMemRegOffsetHelper(1, self.reg, self.mode, self.offset)
+        assert isinstance(self.imem, HasWidth), f"Expected HasWidth, got {type(self.imem)}"
+        op = EMemRegOffsetHelper(self.imem.width(), self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
             yield op
             yield self.imem

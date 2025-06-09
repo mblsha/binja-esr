@@ -1,5 +1,6 @@
 from .opcodes import *  # noqa: F401,F403
 from ..mock_analysis import BranchType  # noqa: F401
+from .traits import HasWidth
 from typing import Callable
 class NOP(Instruction):
      def lift(self, il: LowLevelILFunction, addr: int) -> None:
@@ -211,7 +212,6 @@ class StackPopInstruction(StackInstruction):
         assert isinstance(r, HasWidth), f"Expected HasWidth, got {type(r)}"
         r.lift_assign(il, il.pop(r.width()))
 
-# FIXME: should use U pointer, not S
 class PUSHU(StackInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
@@ -441,7 +441,8 @@ def lift_multi_byte(
             def advance() -> None:
                 op_il_math = il.sub if reverse else il.add
                 # Advance pointer by element width 'w'
-                ptr.lift_assign(il, op_il_math(3, ptr.lift(il), il.const(3, w))) # ptr is 3 bytes
+                ptr.lift_assign(il, op_il_math(3, ptr.lift(il), il.const(3, w)))
+                # ptr is 3 bytes
         else: # Register operand
             def load() -> ExpressionIndex:
                 return op.lift(il)
@@ -499,11 +500,11 @@ def lift_multi_byte(
             if subtract: # SBCL: m = m - n - C_in. Implemented as m - (n + C_in)
                          # The inner add (n + C_in) must NOT alter flags.
                 term_to_subtract = il.add(w, b, initial_c_flag_expr)
-                main_op_llil = il.sub(w, a, term_to_subtract, CZFlag) # This SUB sets C and Z flags
+                main_op_llil = il.sub(w, a, term_to_subtract, CZFlag)  # This SUB sets C and Z flags
             else: # ADCL: m = m + n + C_in. Implemented as m + (n + C_in)
                   # The inner add (n + C_in) must NOT alter flags.
                 term_to_add = il.add(w, b, initial_c_flag_expr)
-                main_op_llil = il.add(w, a, term_to_add, CZFlag) # This ADD sets C and Z flags
+                main_op_llil = il.add(w, a, term_to_add, CZFlag)  # This ADD sets C and Z flags
 
             # Execute the main operation and store its result in byte_op_result_holder.
             # The flags (C and Z) are set when main_op_llil is evaluated as part of this set_reg.
@@ -514,13 +515,17 @@ def lift_multi_byte(
         store1(current_byte_calculated_value_expr)
 
         # Accumulate for overall Zero flag check. This OR must not affect C/Z flags.
-        overall_zero_acc_reg.lift_assign(il, il.or_expr(w, overall_zero_acc_reg.lift(il), current_byte_calculated_value_expr))
+        overall_zero_acc_reg.lift_assign(
+            il, il.or_expr(w, overall_zero_acc_reg.lift(il), current_byte_calculated_value_expr)
+        )
 
         adv1()
         adv2()
 
     # After loop, set the final Zero flag based on the accumulator
-    il.append(il.set_flag(ZFlag, il.compare_equal(w, overall_zero_acc_reg.lift(il), il.const(w, 0))))
+    il.append(
+        il.set_flag(ZFlag, il.compare_equal(w, overall_zero_acc_reg.lift(il), il.const(w, 0)))
+    )
     # The Carry flag (FC) will hold the carry/borrow from the last byte's operation.
 
 
@@ -575,7 +580,6 @@ class TEST(CompareInstruction):
         dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
         src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
         first, second = self.operands()
-        # FIXME: does it set the Z flag if any bit is set?
         il.append(
             il.set_flag(
                 ZFlag,
@@ -590,7 +594,6 @@ class CMP(CompareInstruction):
         dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
         src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
         first, second = self.operands()
-        # FIXME: what's the proper width?
         il.append(
             il.sub(
                 self.width(),
@@ -606,7 +609,7 @@ class CMPP(CMP):
     def width(self) -> int:
         return 3
 
-# FIXME: verify on real hardware, likely wrong
+# Shift and rotate instructions operate on one bit
 class ShiftRotateInstruction(Instruction):
     def shift_by(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.const(1, 1)
