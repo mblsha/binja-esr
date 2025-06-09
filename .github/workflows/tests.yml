@@ -21,5 +21,7 @@ jobs:
         run: ruff check
       - name: Run Mypy
         run: python scripts/run_mypy.py
-      - name: Run Pytest
-        run: pytest -q
+      - name: Run Pytest with coverage
+        run: pytest --cov=sc62015/pysc62015 --cov-report=xml --cov-report=term
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
