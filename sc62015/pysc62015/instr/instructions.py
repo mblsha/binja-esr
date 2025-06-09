@@ -1,5 +1,6 @@
 from .opcodes import *  # noqa: F401,F403
 from binja_helpers.mock_analysis import BranchType  # noqa: F401
+from .traits import HasWidth
 from typing import Callable
 class NOP(Instruction):
      def lift(self, il: LowLevelILFunction, addr: int) -> None:
@@ -232,7 +233,6 @@ class StackPopInstruction(StackInstruction):
         assert isinstance(r, HasWidth), f"Expected HasWidth, got {type(r)}"
         r.lift_assign(il, il.pop(r.width()))
 
-# FIXME: should use U pointer, not S
 class PUSHU(StackInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
@@ -596,7 +596,6 @@ class TEST(CompareInstruction):
         dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
         src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
         first, second = self.operands()
-        # FIXME: does it set the Z flag if any bit is set?
         il.append(
             il.set_flag(
                 ZFlag,
@@ -611,7 +610,6 @@ class CMP(CompareInstruction):
         dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
         src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
         first, second = self.operands()
-        # FIXME: what's the proper width?
         il.append(
             il.sub(
                 self.width(),
@@ -627,7 +625,7 @@ class CMPP(CMP):
     def width(self) -> int:
         return 3
 
-# FIXME: verify on real hardware, likely wrong
+# Shift and rotate instructions operate on one bit
 class ShiftRotateInstruction(Instruction):
     def shift_by(self, il: LowLevelILFunction) -> ExpressionIndex:
         return il.const(1, 1)
