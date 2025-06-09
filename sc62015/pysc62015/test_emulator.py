@@ -6,7 +6,7 @@ from .emulator import (
     Emulator,
     Memory,
 )
-from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
+from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START, PC_MASK
 from .instr import IMEM_NAMES
 from .mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
@@ -60,6 +60,18 @@ def test_registers() -> None:
     regs.set(RegisterName.FZ, 1)
     assert regs.get(RegisterName.FZ) == 1
     assert regs.get(RegisterName.F) == 3  # FC + FZ bits set
+
+
+def test_pc_mask() -> None:
+    regs = Registers()
+
+    # Setting a value with bits above 20 should wrap around
+    regs.set(RegisterName.PC, PC_MASK + 1 + 0x12345)
+    assert regs.get(RegisterName.PC) == 0x12345
+
+    # Verify masking occurs on retrieval as well
+    regs.set(RegisterName.PC, 0x1234567)
+    assert regs.get(RegisterName.PC) == 0x34567
 
 
 def _make_cpu_and_mem(
