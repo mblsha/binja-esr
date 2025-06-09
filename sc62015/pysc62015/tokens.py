@@ -1,5 +1,5 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/tokens.py
-from . import binja_api # noqa: F401
+from binja_helpers import binja_api  # noqa: F401
 from binaryninja import InstructionTextToken
 from binaryninja.enums import InstructionTextTokenType
 
