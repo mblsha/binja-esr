@@ -1,7 +1,7 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
 from binja_helpers.coding import FetchDecoder
-from .constants import PC_MASK
+from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr import (
     decode,
@@ -196,7 +196,7 @@ class Emulator:
         def fecher(offset: int) -> int:
             return self.memory.read_byte(address + offset)
 
-        decoder = FetchDecoder(fecher)
+        decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
         return decode(decoder, address, OPCODES)  # type: ignore
 
     def execute_instruction(self, address: int) -> None:

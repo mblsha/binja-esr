@@ -3,8 +3,8 @@ from binja_helpers.coding import (
     FetchDecoder as _FetchDecoder,
     Encoder as _Encoder,
     BufferTooShort as _BufferTooShort,
-    ADDRESS_SPACE_SIZE as ADDRESS_SPACE_SIZE,
 )
+from .constants import ADDRESS_SPACE_SIZE  # noqa: F401 - re-export
 
 # Re-export the generic helpers to maintain compatibility with existing imports
 Decoder = _Decoder
