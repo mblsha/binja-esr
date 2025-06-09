@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Protocol, Tuple, TypedDict
+from typing import Callable, Dict, Optional, Protocol, Tuple, TypedDict, cast
 
 from .mock_llil import MockIntrinsic, MockLLIL
 
@@ -67,6 +67,19 @@ class ResultFlags(TypedDict, total=False):
     Z: Optional[int]
 
 
+@dataclass
+class FlagInfo:
+    register: str
+    bit: int
+
+
+# Default bit positions for generic flags in the combined flag register "F".
+FLAG_LAYOUT: Dict[str, FlagInfo] = {
+    "C": FlagInfo("F", 0),
+    "Z": FlagInfo("F", 1),
+}
+
+
 FlagGetter = Callable[[str], int]
 FlagSetter = Callable[[str, int], None]
 
@@ -92,13 +105,26 @@ def evaluate_llil(
 
     if get_flag is None:
         def get_flag_default(name: str) -> int:
-            return regs.get_by_name(f"F{name}")
+            info = FLAG_LAYOUT.get(name)
+            if info is None:
+                return regs.get_by_name(f"F{name}")
+            reg_val = regs.get_by_name(info.register)
+            return (reg_val >> info.bit) & 1
 
         get_flag = get_flag_default
 
     if set_flag is None:
         def set_flag_default(name: str, value: int) -> None:
-            regs.set_by_name(f"F{name}", value)
+            info = FLAG_LAYOUT.get(name)
+            if info is None:
+                regs.set_by_name(f"F{name}", value)
+                return
+            reg_val = regs.get_by_name(info.register)
+            if value:
+                reg_val |= 1 << info.bit
+            else:
+                reg_val &= ~(1 << info.bit)
+            regs.set_by_name(info.register, reg_val)
 
         set_flag = set_flag_default
 
@@ -115,36 +141,26 @@ def evaluate_llil(
     result_value, op_defined_flags = f(llil, size, regs, memory, state, get_flag, set_flag)
 
     if llil_flags_spec is not None and llil_flags_spec != "0":
-        if "Z" in llil_flags_spec:
-            fz_val_to_set: Optional[int] = None
+        flag_from_result: Dict[str, Callable[[int, int], int]] = {
+            "Z": lambda val, sz: int((val & ((1 << (sz * 8)) - 1)) == 0),
+            "C": lambda val, sz: int(val > ((1 << (sz * 8)) - 1)),
+        }
+
+        for flag_name in llil_flags_spec:
+            value_to_set: Optional[int] = None
             if op_defined_flags:
-                fz_val_to_set = op_defined_flags.get("Z")
+                value_to_set = cast(Optional[int], op_defined_flags.get(flag_name))
 
-            if fz_val_to_set is not None:
-                set_flag("Z", fz_val_to_set)
-            elif isinstance(result_value, int):
+            if value_to_set is None and isinstance(result_value, int):
                 assert size is not None, (
-                    f"FZ flag setting from result_value requires size for {current_op_name_for_eval}"  # noqa: E501
+                    f"F{flag_name} flag setting from result_value requires size for {current_op_name_for_eval}"
                 )
-                zero_mask = (1 << (size * 8)) - 1
-                set_flag("Z", int((result_value & zero_mask) == 0))
+                update_func = flag_from_result.get(flag_name)
+                if update_func is not None:
+                    value_to_set = update_func(int(result_value), size)
 
-        if "C" in llil_flags_spec:
-            fc_val_to_set: Optional[int] = None
-            if op_defined_flags:
-                fc_val_to_set = op_defined_flags.get("C")
-
-            if fc_val_to_set is not None:
-                set_flag("C", fc_val_to_set)
-            elif isinstance(result_value, int):
-                assert size is not None, (
-                    f"FC flag setting from result_value requires size for {current_op_name_for_eval}"  # noqa: E501
-                )
-                unsigned_max_for_size = (1 << (size * 8)) - 1
-                carry_flag_val = 0
-                if result_value > unsigned_max_for_size:
-                    carry_flag_val = 1
-                set_flag("C", carry_flag_val)
+            if value_to_set is not None:
+                set_flag(flag_name, value_to_set)
 
     return result_value, op_defined_flags
 
