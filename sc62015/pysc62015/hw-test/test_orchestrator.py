@@ -61,6 +61,7 @@ def test_run_test_case_success(monkeypatch: pytest.MonkeyPatch, orch: types.Modu
         final_bytes.extend(final_state[reg].to_bytes(size, "little"))
 
     responses = [
+        b"OK\n",  # status message
         b"OK\n",  # load_code
         b"OK\n",  # execute_code
         *[f"{b:02X}\n".encode("ascii") for b in final_bytes],
@@ -92,6 +93,8 @@ def test_run_test_case_success(monkeypatch: pytest.MonkeyPatch, orch: types.Modu
     assert assembler.source is not None
     assert "ADD A, #$10" in assembler.source
     expected_writes = [
+        "S\n",
+        "TEST: ADD A, #$10\n",
         "L\n",
         "&H8000\n",
         "2\n",
@@ -197,3 +200,13 @@ def test_read_memory_invalid_hex(monkeypatch: pytest.MonkeyPatch, orch: types.Mo
     monkeypatch.setattr(orch.time, "sleep", lambda s: None)
     with hw, pytest.raises(ValueError):
         hw.read_memory(0x9000, 1)
+
+
+def test_print_status(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+    responses = [b"OK\n"]
+    ms = MockSerial(responses)
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
+    monkeypatch.setattr(orch.time, "sleep", lambda s: None)
+    with hw:
+        hw.print_status("HELLO")
+    assert ms.written == ["S\n", "HELLO\n"]

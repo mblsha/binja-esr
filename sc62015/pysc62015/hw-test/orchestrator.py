@@ -102,6 +102,12 @@ class HardwareInterface:
         print("Read successful.")
         return data
 
+    def print_status(self, message: str) -> None:
+        """Display a status message on the hardware screen."""
+        print(f"Status: {message}")
+        self._send_command("S", message)
+        self._wait_for_ok()
+
 
 class TestRunner:
     """Orchestrates the test generation, execution, and comparison."""
@@ -197,6 +203,8 @@ class TestRunner:
         """Runs a complete test case on both platforms and compares results."""
         print(f"\n===== Running Test Case: {instruction} =====")
         print(f"Initial State: {initial_state}")
+
+        self.hw.print_status(f"TEST: {instruction}")
 
         wrapper_asm = self._generate_test_wrapper(instruction, initial_state)
         machine_code = self.assembler.assemble(wrapper_asm)

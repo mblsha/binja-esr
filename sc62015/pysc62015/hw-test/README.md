@@ -69,3 +69,15 @@ The protocol uses ASCII commands and data over a standard serial connection.
     4.  `OK\n`
 *   **Device On-Screen Display:** `CMD: READ`, `ADDR: <addr> LEN: <len>`, followed by a mini hex dump of the data.
 
+### **Command: `S` (Status Message)**
+
+*   **Purpose:** Displays a debugging status message on the device screen.
+*   **PC Sends:**
+    1.  `S\n`
+    2.  `<message_text>\n`
+*   **Device Responds:**
+    ```
+    OK\n
+    ```
+*   **Device On-Screen Display:** `STATUS:` on a clear screen followed by the message text.
+
