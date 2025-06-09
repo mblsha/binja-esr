@@ -83,6 +83,8 @@ def _make_cpu_and_mem(
 
     def read_mem(addr: int) -> int:
         reads.append(addr)
+        if addr >= INTERNAL_MEMORY_START:
+            addr = INTERNAL_MEMORY_START + ((addr - INTERNAL_MEMORY_START) & 0xFF)
         if addr < 0 or addr >= len(raw):
             raise IndexError(f"Read address {addr:04x} out of bounds")
         return raw[addr]
@@ -90,6 +92,8 @@ def _make_cpu_and_mem(
     def write_mem(addr: int, value: int) -> None:
         writes.append((addr, value))
         # print(f"Writing {value:02x} to address {addr:04x}") # Uncomment for debugging
+        if addr >= INTERNAL_MEMORY_START:
+            addr = INTERNAL_MEMORY_START + ((addr - INTERNAL_MEMORY_START) & 0xFF)
         if addr < 0 or addr >= len(raw):
             raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
@@ -315,22 +319,21 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="SWAP  A",
     ),
     # --- MVL/MVLD Edge Cases ---
-    # FIXME: failing
-    # InstructionTestCase(
-    #     test_id="MVL_(m)_(n)_I_is_zero",
-    #     instr_bytes=bytes.fromhex("CB50A0"),  # MVL (50), (A0)
-    #     init_regs={RegisterName.I: 0},
-    #     init_mem={
-    #         INTERNAL_MEMORY_START + 0xA0: 0xDE,  # Source
-    #         INTERNAL_MEMORY_START + 0x50: 0xAD,  # Destination
-    #     },
-    #     # How many times will I loop for here? Possible edge case.
-    #     expected_regs={RegisterName.I: 0},
-    #     expected_mem_state={
-    #         INTERNAL_MEMORY_START + 0xA0: 0xDE,
-    #         INTERNAL_MEMORY_START + 0x50: 0xAD,  # Should remain unchanged
-    #     },
-    # ),
+    InstructionTestCase(
+        test_id="MVL_(m)_(n)_I_is_zero",
+        instr_bytes=bytes.fromhex("CB50A0"),  # MVL (50), (A0)
+        init_regs={RegisterName.I: 0},
+        init_mem={
+            INTERNAL_MEMORY_START + 0xA0: 0xDE,  # Source
+            INTERNAL_MEMORY_START + 0x50: 0xAD,  # Destination
+        },
+        expected_regs={RegisterName.I: 0},
+        expected_mem_state={
+            INTERNAL_MEMORY_START + 0xA0: 0xDE,
+            INTERNAL_MEMORY_START + 0x50: 0xAD,  # Should remain unchanged
+        },
+        expected_asm_str="MVL   (50), (A0)",
+    ),
     InstructionTestCase(
         test_id="MVL_imem_overlap_fwd_clobber",
         instr_bytes=bytes.fromhex("CB5150"),  # MVL (51), (50)
@@ -371,50 +374,46 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="MVLD  (51), (50)",
     ),
-    # FIXME: failing
-    # InstructionTestCase(
-    #     test_id="MVL_imem_to_imem_wrap_around",
-    #     instr_bytes=bytes.fromhex("CBFEF0"),  # MVL (FE), (F0)
-    #     init_regs={RegisterName.I: 4},
-    #     init_mem={
-    #         INTERNAL_MEMORY_START + 0xF0: 0x11,
-    #         INTERNAL_MEMORY_START + 0xF1: 0x22,
-    #         INTERNAL_MEMORY_START + 0xF2: 0x33,
-    #         INTERNAL_MEMORY_START + 0xF3: 0x44,
-    #     },
-    #     # 1. mem[FE] = mem[F0]; 2. mem[FF] = mem[F1]; 3. mem[00] = mem[F2]; 4. mem[01] = mem[F3]
-    #     expected_regs={RegisterName.I: 0},
-    #     expected_mem_state={
-    #         INTERNAL_MEMORY_START + 0xFE: 0x11,
-    #         INTERNAL_MEMORY_START + 0xFF: 0x22,
-    #         INTERNAL_MEMORY_START + 0x00: 0x33,
-    #         INTERNAL_MEMORY_START + 0x01: 0x44,
-    #     },
-    # ),
-    # FIXME: failing
-    # InstructionTestCase(
-    #     test_id="MVL_(imem)_[--X]",
-    #     instr_bytes=bytes.fromhex("E33452"),  # MVL (52), [--X]
-    #     init_regs={
-    #         RegisterName.I: 2,
-    #         RegisterName.X: 0x2002,  # Start X pointing after the source data
-    #     },
-    #     init_mem={
-    #         0x2000: 0xBE,
-    #         0x2001: 0xEF,
-    #     },
-    #     # 1. I=2. --X=0x2001. Copy [0x2001] to (0x52). d--=0x51, s--=0x2000.
-    #     # 2. I=1. --X=0x2000. Copy [0x2000] to (0x51). d--=0x50, s--=0x1FFF.
-    #     # Final X is 0x2000.
-    #     expected_regs={
-    #         RegisterName.I: 0,
-    #         RegisterName.X: 0x2000,
-    #     },
-    #     expected_mem_state={
-    #         INTERNAL_MEMORY_START + 0x52: 0xEF,
-    #         INTERNAL_MEMORY_START + 0x51: 0xBE,
-    #     },
-    # ),
+    InstructionTestCase(
+        test_id="MVL_imem_to_imem_wrap_around",
+        instr_bytes=bytes.fromhex("CBFEF0"),  # MVL (FE), (F0)
+        init_regs={RegisterName.I: 4},
+        init_mem={
+            INTERNAL_MEMORY_START + 0xF0: 0x11,
+            INTERNAL_MEMORY_START + 0xF1: 0x22,
+            INTERNAL_MEMORY_START + 0xF2: 0x33,
+            INTERNAL_MEMORY_START + 0xF3: 0x44,
+        },
+        expected_regs={RegisterName.I: 0},
+        expected_mem_state={
+            INTERNAL_MEMORY_START + 0xFE: 0x11,
+            INTERNAL_MEMORY_START + 0xFF: 0x22,
+            INTERNAL_MEMORY_START + 0x00: 0x33,
+            INTERNAL_MEMORY_START + 0x01: 0x44,
+        },
+        expected_asm_str="MVL   (FE), (F0)",
+    ),
+    InstructionTestCase(
+        test_id="MVL_(imem)_[--X]",
+        instr_bytes=bytes.fromhex("E33452"),  # MVL (52), [--X]
+        init_regs={
+            RegisterName.I: 2,
+            RegisterName.X: 0x2002,  # Start X pointing after the source data
+        },
+        init_mem={
+            0x2000: 0xBE,
+            0x2001: 0xEF,
+        },
+        expected_regs={
+            RegisterName.I: 0,
+            RegisterName.X: 0x2000,
+        },
+        expected_mem_state={
+            INTERNAL_MEMORY_START + 0x52: 0xEF,
+            INTERNAL_MEMORY_START + 0x51: 0xBE,
+        },
+        expected_asm_str="MVL   (52), [--X]",
+    ),
     # --- SHL/SHR Instructions ---
     # SHL A (0xF6)
     InstructionTestCase(

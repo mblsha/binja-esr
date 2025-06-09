@@ -172,13 +172,34 @@ class MVL(MoveInstruction):
 
             # +1 index
             func = self.modify_addr_il(il)
-            dst_reg.lift_assign(il, func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1)))
-            src_reg.lift_assign(il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1)))
+            dst_func = func
+            if (
+                isinstance(dst, IMem8)
+                and isinstance(src, EMemValueOffsetHelper)
+                and isinstance(src.value, RegIncrementDecrementHelper)
+                and src.value.mode == EMemRegMode.PRE_DEC
+            ):
+                dst_func = il.sub
 
-            # in case we have POST_INC or PRE_DEC, we need to update the
-            # register by lifting it and not assigning it
+            dst_reg.lift_assign(
+                il, dst_func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1))
+            )
+
+            if (
+                isinstance(src, EMemValueOffsetHelper)
+                and isinstance(src.value, RegIncrementDecrementHelper)
+                and src.value.mode == EMemRegMode.PRE_DEC
+            ):
+                updated_src = src.lift_current_addr(il, pre=src_mode)
+                src_reg.lift_assign(il, updated_src)
+            else:
+                src_reg.lift_assign(
+                    il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1))
+                )
+                src.lift_current_addr(il, pre=src_mode)
+
+            # apply any addressing side effects for destination
             dst.lift_current_addr(il, pre=dst_mode)
-            src.lift_current_addr(il, pre=src_mode)
 
 class MVLD(MVL):
     def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:

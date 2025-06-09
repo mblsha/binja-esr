@@ -1669,12 +1669,21 @@ def lift_loop(il: LowLevelILFunction) -> Generator[None, None, None]:
     if_false = LowLevelILLabel()
 
     loop_reg = Reg("I")
+    width = loop_reg.width()
+
+    # If I is zero, skip the loop entirely
+    il.append(
+        il.if_expr(
+            il.compare_equal(width, loop_reg.lift(il), il.const(width, 0)),
+            if_true,
+            if_false,
+        )
+    )
     il.mark_label(if_false)
 
     # loop iteration
     yield
 
-    width = loop_reg.width()
     loop_reg.lift_assign(il, il.sub(width, loop_reg.lift(il), il.const(1, 1)))
     cond = il.compare_equal(width, loop_reg.lift(il), il.const(width, 0))
     il.append(il.if_expr(cond, if_true, if_false))
