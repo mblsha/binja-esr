@@ -1,22 +1,26 @@
+"""Utility helpers for working with Binary Ninja instruction tokens."""
+
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/tokens.py
-from binja_helpers import binja_api  # noqa: F401
+
+
+from . import binja_api  # noqa: F401 -- make sure Binary Ninja stubs are loaded
 from binaryninja import InstructionTextToken
 from binaryninja.enums import InstructionTextTokenType
 
 import enum
-from typing import List, Tuple
-
-
+from typing import Iterable, Any, List, Tuple
 
 
 class Token:
+    """Base class for all renderable tokens."""
+
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return False
         return self.__dict__ == getattr(other, "__dict__", {})
 
-    def binja(self) -> tuple[InstructionTextTokenType, str]:
-        raise NotImplementedError("binja() not implemented for {}".format(type(self)))
+    def binja(self) -> Tuple[InstructionTextTokenType, str]:
+        raise NotImplementedError(f"binja() not implemented for {type(self)}")
 
     def to_binja(self) -> InstructionTextToken:
         kind, data = self.binja()
@@ -24,11 +28,14 @@ class Token:
 
 
 def asm(parts: List[Token]) -> List[InstructionTextToken]:
-    # map all tokens using to_binja()
+    """Convert tokens to Binary Ninja ``InstructionTextToken`` objects."""
+
     return [part.to_binja() for part in parts]
 
 
-def asm_str(parts: List[Token]) -> str:
+def asm_str(parts: Iterable[Any]) -> str:
+    """Return a human readable assembly string for a sequence of tokens."""
+
     return "".join(str(part) for part in parts)
 
 
@@ -124,6 +131,7 @@ class TEndMem(Token):
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
         return (InstructionTextTokenType.EndMemoryOperandToken, self.__str__())
 
+
 class TAddr(Token):
     def __init__(self, value: int) -> None:
         self.value = value
@@ -149,3 +157,4 @@ class TReg(Token):
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
         return (InstructionTextTokenType.RegisterToken, self.reg)
+
