@@ -23,6 +23,7 @@ checks:
 ```bash
 python -m pip install -e .[dev]
 ruff check
+export MYPYPATH=$(pwd)/stubs  # ensure Binary Ninja stubs are found
 mypy sc62015/pysc62015
 pytest --cov=sc62015/pysc62015 --cov-report=term-missing --cov-report=xml
 ```
