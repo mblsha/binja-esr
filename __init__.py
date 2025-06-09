@@ -1,5 +1,13 @@
 import sys
 import importlib.util
+from pathlib import Path
+
+# Ensure the plugin directory is available on ``sys.path`` so that
+# absolute imports like ``binja_helpers`` work when the plugin is loaded
+# directly by Binary Ninja.
+_plugin_dir = str(Path(__file__).resolve().parent)
+if _plugin_dir not in sys.path:
+    sys.path.insert(0, _plugin_dir)
 
 def module_exists(module_name):
     if module_name in sys.modules:
