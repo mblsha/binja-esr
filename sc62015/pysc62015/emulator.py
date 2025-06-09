@@ -1,6 +1,6 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
-from .coding import FetchDecoder
+from binja_helpers.coding import FetchDecoder
 from .constants import PC_MASK
 
 from .instr import (
