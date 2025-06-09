@@ -46,6 +46,13 @@ class MockHandle:
 
 @dataclass
 class MockLLIL:
+    """Simplified stand-in for Binary Ninja's LLIL expression.
+
+    WARNING: On a real Binary Ninja instance these expressions are
+    represented by ``ExpressionIndex`` integers.  This class exists only
+    for testing and should not be confused with the real API.
+    """
+
     op: str
     ops: List[Any]
 
