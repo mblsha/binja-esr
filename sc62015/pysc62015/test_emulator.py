@@ -198,6 +198,42 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_state={0x60: 0x03, 0x61: 0x02, 0x62: 0x01},
         expected_asm_str="MV    [Y], X",
     ),
+    InstructionTestCase(
+        test_id="MV_preserves_flags",
+        instr_bytes=bytes.fromhex("88100000"),
+        init_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
+        init_mem={0x10: 0x55},
+        expected_regs={
+            RegisterName.A: 0x55,
+            RegisterName.FC: 1,
+            RegisterName.FZ: 1,
+        },
+        expected_asm_str="MV    A, [00010]",
+    ),
+    InstructionTestCase(
+        test_id="JP_preserves_flags",
+        instr_bytes=bytes.fromhex("023412"),
+        init_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_regs={
+            RegisterName.PC: 0x1234,
+            RegisterName.FC: 1,
+            RegisterName.FZ: 1,
+        },
+        expected_asm_str="JP    1234",
+    ),
+    InstructionTestCase(
+        test_id="PUSHU_preserves_flags",
+        instr_bytes=bytes.fromhex("2E"),
+        init_regs={RegisterName.U: 0x20, RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_mem_writes=[(0x1F, 0x03)],
+        expected_mem_state={0x1F: 0x03},
+        expected_regs={
+            RegisterName.U: 0x1F,
+            RegisterName.FC: 1,
+            RegisterName.FZ: 1,
+        },
+        expected_asm_str="PUSHU F",
+    ),
     # --- ADD Instructions ---
     InstructionTestCase(
         test_id="ADD_A_imm_simple",
@@ -744,6 +780,7 @@ def test_rol_ror_a() -> None:
     assert cpu.regs.get(RegisterName.A) == 0x55
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == 0
+
 
 
 class PreTestCase(NamedTuple):
