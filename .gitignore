@@ -1,6 +1,6 @@
 __pycache__
 Session.vim
-binja_esr.egg-info/
+*.egg-info/
 .coverage
 coverage.xml
 htmlcov/
