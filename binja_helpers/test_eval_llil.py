@@ -114,6 +114,124 @@ eval_llil_test_cases = [
         expected_result=0x00,
         expected_flags_in_f=0b11,
     ),
+    # Logical operations
+    *(
+        LlilEvalTestCase(
+            test_id=f"and_{sz}_sets_flags",
+            llil_expr=mllil(
+                f"AND.{sz}{{CZ}}",
+                [mllil(f"CONST.{sz}", [0]), mllil(f"CONST.{sz}", [0])],
+            ),
+            expected_result=0,
+            expected_flags_in_f=0b10,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"or_{sz}_sets_carry_only",
+            llil_expr=mllil(
+                f"OR.{sz}{'{C}'}",
+                [mllil(f"CONST.{sz}", [1]), mllil(f"CONST.{sz}", [2])],
+            ),
+            expected_result=3,
+            expected_flags_in_f=0,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"xor_{sz}_sets_zero_only",
+            llil_expr=mllil(
+                f"XOR.{sz}{'{Z}'}",
+                [mllil(f"CONST.{sz}", [0xAA]), mllil(f"CONST.{sz}", [0xAA])],
+            ),
+            expected_result=0,
+            expected_flags_in_f=0b10,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"sub_{sz}_borrow_sets_carry",
+            llil_expr=mllil(
+                f"SUB.{sz}{{CZ}}",
+                [mllil(f"CONST.{sz}", [0]), mllil(f"CONST.{sz}", [1])],
+            ),
+            expected_result=(1 << ({"b":8,"w":16,"l":24}[sz])) - 1,
+            expected_flags_in_f=0b01,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    # Shift and rotate operations
+    *(
+        LlilEvalTestCase(
+            test_id=f"lsr_{sz}_carry_and_zero",
+            llil_expr=mllil(
+                f"LSR.{sz}{{CZ}}",
+                [mllil(f"CONST.{sz}", [1]), mllil(f"CONST.{sz}", [1])],
+            ),
+            expected_result=0,
+            expected_flags_in_f=0b11,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"ror_{sz}_updates_flags",
+            llil_expr=mllil(
+                f"ROR.{sz}{{CZ}}",
+                [mllil(f"CONST.{sz}", [1]), mllil(f"CONST.{sz}", [1])],
+            ),
+            expected_result=(1 << ({"b":8,"w":16,"l":24}[sz])) >> 1,
+            expected_flags_in_f=0b01,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"rol_{sz}_updates_flags",
+            llil_expr=mllil(
+                f"ROL.{sz}{{CZ}}",
+                [mllil(f"CONST.{sz}", [1 << ({"b":8,"w":16,"l":24}[sz] - 1)]), mllil(f"CONST.{sz}", [1])],
+            ),
+            expected_result=1,
+            expected_flags_in_f=0b01,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"rrc_{sz}_carry_out",
+            llil_expr=mllil(
+                f"RRC.{sz}{{CZ}}",
+                [
+                    mllil(f"CONST.{sz}", [2]),
+                    mllil(f"CONST.{sz}", [1]),
+                    mllil(f"CONST.{sz}", [1]),
+                ],
+            ),
+            expected_result=(1 << ({"b":8,"w":16,"l":24}[sz] - 1)) | 1,
+            expected_flags_in_f=0,
+        )
+        for sz in ["b", "w", "l"]
+    ),
+    *(
+        LlilEvalTestCase(
+            test_id=f"rlc_{sz}_carry_out",
+            llil_expr=mllil(
+                f"RLC.{sz}{{CZ}}",
+                [
+                    mllil(f"CONST.{sz}", [1]),
+                    mllil(f"CONST.{sz}", [1]),
+                    mllil(f"CONST.{sz}", [1]),
+                ],
+            ),
+            expected_result=3,
+            expected_flags_in_f=0,
+        )
+        for sz in ["b", "w", "l"]
+    ),
 ]
 
 
@@ -155,3 +273,161 @@ def test_llil_evaluation(case: LlilEvalTestCase) -> None:
 
     for addr, value in case.expected_mem_writes.items():
         assert buf[addr] == value
+
+
+def test_nop_does_nothing() -> None:
+    llil = mllil("NOP")
+    regs = SimpleRegs()
+    regs.set_by_name("F", 0x3)
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    result, _ = evaluate_llil(llil, regs, memory, state)
+    assert result is None
+    assert regs.get_by_name("F") == 0x3
+
+
+def test_unimpl_raises() -> None:
+    with pytest.raises(NotImplementedError):
+        llil = mllil("UNIMPL")
+        regs = SimpleRegs()
+        buf, read_mem, write_mem = make_mem()
+        memory = Memory(read_mem, write_mem)
+        state = State()
+        evaluate_llil(llil, regs, memory, state)
+
+
+def test_jump_sets_pc() -> None:
+    llil = mllil("JUMP", [mllil("CONST_PTR", [0x123])])
+    regs = SimpleRegs()
+    regs.set_by_name("PC", 0)
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    evaluate_llil(llil, regs, memory, state)
+    assert regs.get_by_name("PC") == 0x123
+
+
+def test_call_pushes_return_address_and_updates_pc() -> None:
+    llil = mllil("CALL", [mllil("CONST_PTR.w", [0x200])])
+    regs = SimpleRegs()
+    regs.set_by_name("PC", 0x1111)
+    regs.set_by_name("S", 0x10)
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    evaluate_llil(llil, regs, memory, state)
+    assert regs.get_by_name("PC") == 0x200
+    assert regs.get_by_name("S") == 0x0E
+    assert buf[0x0E] == 0x11 and buf[0x0F] == 0x11
+
+
+def test_ret_sets_pc_from_operand() -> None:
+    llil = mllil("RET", [mllil("CONST_PTR", [0x333])])
+    regs = SimpleRegs()
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    evaluate_llil(llil, regs, memory, state)
+    assert regs.get_by_name("PC") == 0x333
+
+
+@pytest.mark.parametrize(
+    "a,b,expected",
+    [
+        (1, 1, 1),
+        (1, 2, 0),
+    ],
+)
+def test_cmp_e(a: int, b: int, expected: int) -> None:
+    llil = mllil(
+        "CMP_E.b",
+        [mllil("CONST.b", [a]), mllil("CONST.b", [b])],
+    )
+    regs = SimpleRegs()
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    result, _ = evaluate_llil(llil, regs, memory, state)
+    assert result == expected
+
+
+def test_cmp_ugt() -> None:
+    llil = mllil(
+        "CMP_UGT.w",
+        [mllil("CONST.w", [3]), mllil("CONST.w", [2])],
+    )
+    regs = SimpleRegs()
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    result, _ = evaluate_llil(llil, regs, memory, state)
+    assert result == 1
+
+
+def test_cmp_slt_signed() -> None:
+    llil = mllil(
+        "CMP_SLT.b",
+        [mllil("CONST.b", [0xFF]), mllil("CONST.b", [0x01])],
+    )
+    regs = SimpleRegs()
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    result, _ = evaluate_llil(llil, regs, memory, state)
+    assert result == 1
+
+
+def test_intrinsic_handlers() -> None:
+    regs = SimpleRegs()
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+
+    evaluate_llil(mllil("INTRINSIC_TCL"), regs, memory, state)
+    assert not state.halted
+
+    evaluate_llil(mllil("INTRINSIC_HALT"), regs, memory, state)
+    assert state.halted
+
+    state.halted = False
+    evaluate_llil(mllil("INTRINSIC_OFF"), regs, memory, state)
+    assert state.halted
+
+
+def test_operation_without_flag_spec_leaves_flags() -> None:
+    llil = mllil(
+        "AND.w",
+        [mllil("CONST.w", [1]), mllil("CONST.w", [1])],
+    )
+    regs = SimpleRegs()
+    regs.set_by_name("F", 0x3)
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    evaluate_llil(llil, regs, memory, state)
+    assert regs.get_by_name("F") == 0x3
+
+
+def test_custom_flag_handlers() -> None:
+    regs = SimpleRegs()
+    buf, read_mem, write_mem = make_mem()
+    memory = Memory(read_mem, write_mem)
+    state = State()
+    flag_store: Dict[str, int] = {}
+
+    def get_flag(name: str) -> int:
+        return flag_store.get(name, 0)
+
+    def set_flag(name: str, value: int) -> None:
+        flag_store[name] = value
+
+    expr = mllil(
+        "ADD.b{CZ}",
+        [mllil("CONST.b", [1]), mllil("CONST.b", [0xFF])],
+    )
+    evaluate_llil(expr, regs, memory, state, get_flag=get_flag, set_flag=set_flag)
+
+    assert flag_store.get("C") == 1
+    assert flag_store.get("Z") == 1
+    assert regs.get_by_name("F") == 0
