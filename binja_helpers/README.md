@@ -11,7 +11,9 @@ stub of the ``binaryninja`` Python API when Binary Ninja is not installed.
    Import ``binja_helpers.binja_api`` before any ``binaryninja`` imports.  The
    module attempts to locate a local Binary Ninja installation and installs a
    lightweight stub when none is found.  This makes unit tests runnable on
-   systems without a Binary Ninja license.
+   systems without a Binary Ninja license.  The examples append ``# noqa: F401``
+   to this import to silence ``ruff``\'s "imported but unused" warning because
+   the module is imported only for its side effects.
 
 2. **Construct mock LLIL**
 
