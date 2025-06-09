@@ -42,7 +42,7 @@ from binja_helpers.tokens import (
     TReg,
 )
 from binja_helpers.tokens import asm_str
-from .coding import Decoder, Encoder
+from binja_helpers.coding import Decoder, Encoder
 from binja_helpers.mock_analysis import MockAnalysisInfo
 from binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
 from binaryninja.lowlevelil import (

@@ -11,7 +11,7 @@ from binja_helpers.tokens import (
     TAddr,
     MemType,
 )
-from ..coding import Decoder, Encoder, BufferTooShort
+from binja_helpers.coding import Decoder, Encoder, BufferTooShort
 
 from binja_helpers.mock_llil import MockLLIL
 from ..constants import INTERNAL_MEMORY_START
