@@ -1,7 +1,9 @@
 from typing import Dict, Set, Callable, Optional, Any, cast, Tuple, TypedDict
 import enum
-from .coding import FetchDecoder
 from dataclasses import dataclass
+
+from .coding import FetchDecoder
+from .constants import PC_MASK
 
 from .instr import (
     decode,
@@ -94,7 +96,10 @@ class Registers:
 
     def get(self, reg: RegisterName) -> int:
         if reg in self.BASE:
-            return self._values[reg]
+            val = self._values[reg]
+            if reg is RegisterName.PC:
+                return val & PC_MASK
+            return val
 
         match reg:
             case RegisterName.A:
@@ -116,7 +121,10 @@ class Registers:
 
     def set(self, reg: RegisterName, value: int) -> None:
         if reg in self.BASE:
-            self._values[reg] = value & (1 << (REGISTER_SIZE[reg] * 8)) - 1
+            mask = (1 << (REGISTER_SIZE[reg] * 8)) - 1
+            if reg is RegisterName.PC:
+                mask = PC_MASK
+            self._values[reg] = value & mask
             return
 
         match reg:
