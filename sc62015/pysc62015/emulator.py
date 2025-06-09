@@ -192,7 +192,7 @@ EvalLLILType = Callable[
 ]
 
 
-def eval(
+def evaluate_llil(
     llil: MockLLIL, regs: Registers, memory: Memory, state: State
 ) -> Tuple[Optional[int], Optional[ResultFlags]]:
     op_name_bare = llil.bare_op()
@@ -301,7 +301,7 @@ class Emulator:
                 assert isinstance(
                     node.cond, MockLLIL
                 ), "Condition for IF expression must be MockLLIL"
-                cond_val, _ = self.eval(node.cond)
+                cond_val, _ = self.evaluate(node.cond)
                 assert (
                     cond_val is not None
                 ), "Condition for IF expression evaluated to None"
@@ -318,11 +318,11 @@ class Emulator:
                 continue
 
             assert isinstance(node, MockLLIL), f"Expected MockLLIL, got {type(node)}"
-            self.eval(node)
+            self.evaluate(node)
             pc_llil += 1
 
-    def eval(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
-        return eval(llil, self.regs, self.memory, self.state)
+    def evaluate(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
+        return evaluate_llil(llil, self.regs, self.memory, self.state)
 
 
 def eval_const(
@@ -356,7 +356,7 @@ def eval_set_reg(
     assert isinstance(
         llil.ops[1], MockLLIL
     ), "Source operand for SET_REG must be MockLLIL"
-    value_to_set, _ = eval(llil.ops[1], regs, memory, state)
+    value_to_set, _ = evaluate_llil(llil.ops[1], regs, memory, state)
     assert value_to_set is not None, "Value for SET_REG cannot be None"
     regs.set(reg_name_enum, value_to_set)
     return None, None
@@ -376,7 +376,7 @@ def eval_set_flag(
     assert isinstance(
         llil.ops[1], MockLLIL
     ), "Source operand for SET_FLAG must be MockLLIL"
-    value_to_set, _ = eval(llil.ops[1], regs, memory, state)
+    value_to_set, _ = evaluate_llil(llil.ops[1], regs, memory, state)
     assert value_to_set is not None, "Value for SET_FLAG cannot be None"
     regs.set(flag_name_enum, value_to_set != 0)
     return None, None
@@ -393,8 +393,8 @@ def _create_logical_eval(op_func: Callable[[int, int], int]) -> EvalLLILType:
         state: State,
     ) -> Tuple[int, Optional[ResultFlags]]:
         assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-        op1_val, _ = eval(llil.ops[0], regs, memory, state)
-        op2_val, _ = eval(llil.ops[1], regs, memory, state)
+        op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state)
+        op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state)
         assert op1_val is not None and op2_val is not None
         result = op_func(int(op1_val), int(op2_val))
         return result, {"Z": 1 if result == 0 else 0, "C": 0}
@@ -417,8 +417,8 @@ def _create_arithmetic_eval(
     ) -> Tuple[int, Optional[ResultFlags]]:
         assert size is not None
         assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-        op1_val, _ = eval(llil.ops[0], regs, memory, state)
-        op2_val, _ = eval(llil.ops[1], regs, memory, state)
+        op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state)
+        op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state)
         assert op1_val is not None and op2_val is not None
 
         result_full = op_func(int(op1_val), int(op2_val))
@@ -449,7 +449,7 @@ def _create_shift_eval(op_func: Callable[..., Tuple[int, ResultFlags]]) -> EvalL
         values = []
         for operand in llil.ops:
             assert isinstance(operand, MockLLIL)
-            val, _ = eval(operand, regs, memory, state)
+            val, _ = evaluate_llil(operand, regs, memory, state)
             assert val is not None
             values.append(int(val))
 
@@ -477,7 +477,7 @@ def eval_push(
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert size
     assert isinstance(llil.ops[0], MockLLIL)
-    value_to_push, _ = eval(llil.ops[0], regs, memory, state)
+    value_to_push, _ = evaluate_llil(llil.ops[0], regs, memory, state)
     assert value_to_push is not None
     addr = regs.get(RegisterName.S) - size
     memory.write_bytes(size, addr, value_to_push)
@@ -502,8 +502,8 @@ def eval_store(
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert size
     assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    dest_addr, _ = eval(llil.ops[0], regs, memory, state)
-    value_to_store, _ = eval(llil.ops[1], regs, memory, state)
+    dest_addr, _ = evaluate_llil(llil.ops[0], regs, memory, state)
+    value_to_store, _ = evaluate_llil(llil.ops[1], regs, memory, state)
     assert dest_addr is not None and value_to_store is not None
     memory.write_bytes(size, dest_addr, value_to_store)
     return None, None
@@ -514,7 +514,7 @@ def eval_load(
 ) -> Tuple[int, Optional[ResultFlags]]:
     assert size
     assert isinstance(llil.ops[0], MockLLIL)
-    addr, _ = eval(llil.ops[0], regs, memory, state)
+    addr, _ = evaluate_llil(llil.ops[0], regs, memory, state)
     assert addr is not None
     return memory.read_bytes(addr, size), None
 
@@ -523,7 +523,7 @@ def eval_ret(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL)
-    addr_val, _ = eval(llil.ops[0], regs, memory, state)
+    addr_val, _ = evaluate_llil(llil.ops[0], regs, memory, state)
     assert isinstance(
         addr_val, int
     ), f"Address for RET must be an integer, got {type(addr_val)}"
@@ -539,7 +539,7 @@ def eval_jump(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL)
-    addr, _ = eval(llil.ops[0], regs, memory, state)
+    addr, _ = evaluate_llil(llil.ops[0], regs, memory, state)
     assert isinstance(
         addr, int
     ), f"Address for JUMP must be an integer, got {type(addr)}"
@@ -551,7 +551,7 @@ def eval_call(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[None, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL)
-    addr, _ = eval(llil.ops[0], regs, memory, state)
+    addr, _ = evaluate_llil(llil.ops[0], regs, memory, state)
     assert isinstance(
         addr, int
     ), f"Address for CALL must be an integer, got {type(addr)}"
@@ -588,8 +588,8 @@ def eval_cmp_e(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[int, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state)
+    op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state)
     assert op1_val is not None and op2_val is not None
     return int(int(op1_val) == int(op2_val)), None
 
@@ -598,8 +598,8 @@ def eval_cmp_ugt(
     llil: MockLLIL, size: Optional[int], regs: Registers, memory: Memory, state: State
 ) -> Tuple[int, Optional[ResultFlags]]:
     assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state)
+    op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state)
     assert op1_val is not None and op2_val is not None
     return int(int(op1_val) > int(op2_val)), None
 
@@ -619,8 +619,8 @@ def eval_cmp_slt(
 ) -> Tuple[int, Optional[ResultFlags]]:
     assert size is not None, "Size must be provided for signed comparison"
     assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = eval(llil.ops[0], regs, memory, state)
-    op2_val, _ = eval(llil.ops[1], regs, memory, state)
+    op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state)
+    op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state)
     assert op1_val is not None and op2_val is not None
 
     signed_op1 = to_signed(int(op1_val), size)
