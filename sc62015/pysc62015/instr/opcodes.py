@@ -602,7 +602,6 @@ def decode(
 
         return instr
     except StopIteration:
-        print("StopIteration: No instruction found")
         return None
     # except NotImplementedError as e:
     #     binaryninja.log_warn(e)
