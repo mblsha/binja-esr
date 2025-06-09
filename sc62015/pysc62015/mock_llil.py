@@ -78,7 +78,9 @@ def mreg(name: str) -> MockReg:
     return MockReg(name)
 
 
-def mllil(op: str, ops: List[object] = []) -> MockLLIL:
+def mllil(op: str, ops: Optional[List[object]] = None) -> MockLLIL:
+    if ops is None:
+        ops = []
     return MockLLIL(op, ops)
 
 
