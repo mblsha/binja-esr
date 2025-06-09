@@ -1,5 +1,5 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from ..tokens import (
+from binja_helpers.tokens import (
     Token,
     TInstr,
     TText,
