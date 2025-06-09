@@ -81,6 +81,12 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     **{getattr(RegisterName, f"TEMP{i}"): 3 for i in range(NUM_TEMP_REGISTERS)},
 }
 
+# Mapping from generic flag names to architecture specific registers
+FLAG_TO_REGISTER: Dict[str, RegisterName] = {
+    "C": RegisterName.FC,
+    "Z": RegisterName.FZ,
+}
+
 
 class Registers:
     BASE: Set[RegisterName] = {
@@ -166,6 +172,18 @@ class Registers:
     def set_by_name(self, name: str, value: int) -> None:
         self.set(RegisterName[name], value)
 
+    def get_flag(self, name: str) -> int:
+        reg = FLAG_TO_REGISTER.get(name)
+        if reg is None:
+            raise ValueError(f"Unknown flag {name}")
+        return self.get(reg)
+
+    def set_flag(self, name: str, value: int) -> None:
+        reg = FLAG_TO_REGISTER.get(name)
+        if reg is None:
+            raise ValueError(f"Unknown flag {name}")
+        self.set(reg, value)
+
 
 
 class Emulator:
@@ -239,5 +257,12 @@ class Emulator:
             pc_llil += 1
 
     def evaluate(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
-        return evaluate_llil(llil, self.regs, self.memory, self.state)
+        return evaluate_llil(
+            llil,
+            self.regs,
+            self.memory,
+            self.state,
+            self.regs.get_flag,
+            self.regs.set_flag,
+        )
 
