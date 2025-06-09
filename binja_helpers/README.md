@@ -4,6 +4,8 @@ Utility modules for developing and testing Binary Ninja plugins without requirin
 Binary Ninja itself.  Importing ``binja_helpers.binja_api`` provides a minimal
 stub of the ``binaryninja`` Python API when Binary Ninja is not installed.
 
+These helpers operate on instruction objects that have already been decoded from binary input. The decoding logic was inspired by whitequark's [avnera](https://github.com/whitequark/binja-avnera) project.
+
 ## Usage
 
 1. **Import the stub helper**
