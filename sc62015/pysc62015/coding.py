@@ -32,9 +32,7 @@ class Decoder:
         self.pos += size
         if len(items) == 1:
             return items[0]  # type: ignore
-        else:
-            raise ValueError("Unpacking more than one item is not supported")
-            return items
+        raise ValueError("Unpacking more than one item is not supported")
 
     def unsigned_byte(self) -> int:
         return self._unpack("B")
@@ -73,9 +71,7 @@ class FetchDecoder(Decoder):
         self.pos += size
         if len(items) == 1:
             return items[0]  # type: ignore
-        else:
-            raise ValueError("Unpacking more than one item is not supported")
-            return items
+        raise ValueError("Unpacking more than one item is not supported")
 
 
 class Encoder:
