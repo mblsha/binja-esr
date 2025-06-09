@@ -8,7 +8,7 @@ from .instr import (
     OPCODES,
     Instruction,
 )
-from .mock_llil import (
+from binja_helpers.mock_llil import (
     MockLowLevelILFunction,
     MockLLIL,
     MockLabel,

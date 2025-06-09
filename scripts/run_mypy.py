@@ -19,7 +19,7 @@ except ImportError:
     has_binja = False
 
 if not has_binja:
-    from sc62015.pysc62015 import binja_api  # noqa: F401
+    from binja_helpers import binja_api  # noqa: F401
     stub_dir = os.path.join(os.path.dirname(__file__), "..", "stubs")
     os.environ["MYPYPATH"] = os.path.abspath(stub_dir)
     print(f"Using stubs from {os.environ['MYPYPATH']}")

@@ -1,4 +1,4 @@
-from . import binja_api  # noqa: F401
+from binja_helpers import binja_api  # noqa: F401
 
 from .instr import (
     encode,
@@ -43,8 +43,8 @@ from .tokens import (
     TReg,
 )
 from .coding import Decoder, Encoder
-from .mock_analysis import MockAnalysisInfo
-from .mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
+from binja_helpers.mock_analysis import MockAnalysisInfo
+from binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
 from binaryninja.lowlevelil import (
     LLIL_TEMP,
 )

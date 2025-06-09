@@ -1,5 +1,5 @@
 from .opcodes import *  # noqa: F401,F403
-from ..mock_analysis import BranchType  # noqa: F401
+from binja_helpers.mock_analysis import BranchType  # noqa: F401
 from typing import Callable
 class NOP(Instruction):
      def lift(self, il: LowLevelILFunction, addr: int) -> None:

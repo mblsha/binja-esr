@@ -13,7 +13,7 @@ from ..tokens import (
 )
 from ..coding import Decoder, Encoder, BufferTooShort
 
-from ..mock_llil import MockLLIL
+from binja_helpers.mock_llil import MockLLIL
 from ..constants import INTERNAL_MEMORY_START
 
 import copy
@@ -23,7 +23,7 @@ import enum
 from contextlib import contextmanager
 
 
-from .. import binja_api # noqa: F401
+from binja_helpers import binja_api  # noqa: F401
 from binaryninja import (
     InstructionInfo,
 )

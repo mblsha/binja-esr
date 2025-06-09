@@ -1,4 +1,4 @@
-from . import binja_api  # noqa: F401
+from binja_helpers import binja_api  # noqa: F401
 
 from .emulator import (
     Registers,
@@ -8,7 +8,7 @@ from .emulator import (
 )
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 from .instr import IMEM_NAMES
-from .mock_llil import MockLowLevelILFunction
+from binja_helpers.mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
 from .tokens import asm_str
