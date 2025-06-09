@@ -1,4 +1,5 @@
 from binja_helpers.coding import Decoder, Encoder, FetchDecoder, BufferTooShort
+import struct
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
 import pytest
 
@@ -70,3 +71,43 @@ def test_encoder() -> None:
     encoder.unsigned_word_le(0xBBAA)
     encoder.unsigned_word_le(0xDDCC)
     assert encoder.buf == bytearray([0xAA, 0xBB, 0xCC, 0xDD])
+
+
+def test_decoder_errors() -> None:
+    decoder = Decoder(bytearray([0x11]))
+    assert decoder.unsigned_byte() == 0x11
+    with pytest.raises(BufferTooShort):
+        decoder.unsigned_byte()
+
+    decoder = Decoder(bytearray([0x22]))
+    with pytest.raises(BufferTooShort):
+        decoder.unsigned_word_le()
+
+
+def test_fetchdecoder_unpack_boundary() -> None:
+    memory = bytearray(range(256)) + bytearray([0] * (ADDRESS_SPACE_SIZE - 256))
+
+    def read_mem(addr: int) -> int:
+        if 0 <= addr < len(memory):
+            return memory[addr]
+        raise IndexError("Address out of bounds")
+
+    decoder = FetchDecoder(read_mem, ADDRESS_SPACE_SIZE)
+    decoder.pos = ADDRESS_SPACE_SIZE - 1
+    with pytest.raises(BufferTooShort):
+        decoder._unpack("H")
+
+
+def test_fetchdecoder_read_error_propagation() -> None:
+    def read_mem(addr: int) -> int:
+        raise RuntimeError("read failed")
+
+    decoder = FetchDecoder(read_mem, ADDRESS_SPACE_SIZE)
+    with pytest.raises(RuntimeError):
+        decoder.unsigned_byte()
+
+
+def test_encoder_value_too_large() -> None:
+    encoder = Encoder()
+    with pytest.raises(struct.error):
+        encoder.unsigned_byte(256)
