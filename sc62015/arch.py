@@ -68,7 +68,7 @@ class SC62015(Architecture):
                 return info
         except Exception as exc:
             log_error(f"SC62015.get_instruction_info() failed at {addr:#x}: {exc}")
-            pass
+            raise
 
     def get_instruction_text(self, data, addr):
         try:
@@ -84,6 +84,7 @@ class SC62015(Architecture):
                 return asm(decoded.render()), decoded.length()
         except Exception as exc:
             log_error(f"SC62015.get_instruction_text() failed at {addr:#x}: {exc}")
+            raise
 
     def get_instruction_low_level_il(self, data, addr, il):
         # try:
