@@ -20,6 +20,28 @@ class DummyRegisters:
         self.set_by_name(f"F{name}", value & 1)
 
 
+class FlagMethodRegisters:
+    """Registers that require using set_flag/get_flag for flag access."""
+
+    def __init__(self) -> None:
+        self.regs: dict[str, int] = {}
+        self.flags: dict[str, int] = {}
+
+    def get_by_name(self, name: str) -> int:
+        return self.regs.get(name, 0)
+
+    def set_by_name(self, name: str, value: int) -> None:
+        if name.startswith("F"):
+            raise AssertionError("set_by_name called for flag")
+        self.regs[name] = value & 0xFFFFFFFF
+
+    def get_flag(self, name: str) -> int:
+        return self.flags.get(name, 0)
+
+    def set_flag(self, name: str, value: int) -> None:
+        self.flags[name] = value & 1
+
+
 def make_memory() -> tuple[Memory, dict[int, int]]:
     mem: dict[int, int] = {}
 
@@ -71,6 +93,23 @@ def test_add_sets_flags() -> None:
     assert result == 0x00
     assert regs.get_by_name("FC") == 1
     assert regs.get_by_name("FZ") == 1
+
+
+def test_add_uses_flag_methods() -> None:
+    regs = FlagMethodRegisters()
+    memory, _ = make_memory()
+    state = State()
+
+    result, _ = evaluate_llil(
+        mllil("ADD.b{CZ}", [mllil("CONST.b", [0xFF]), mllil("CONST.b", [1])]),
+        regs,
+        memory,
+        state,
+    )
+    assert result == 0x00
+    # Flags should be written via set_flag, not set_by_name("FC")
+    assert regs.flags.get("C") == 1
+    assert regs.flags.get("Z") == 1
 
 
 def test_sub_sets_carry() -> None:

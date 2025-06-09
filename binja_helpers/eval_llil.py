@@ -91,14 +91,22 @@ def evaluate_llil(
     current_op_name_for_eval = op_name_bare
 
     if get_flag is None:
-        def get_flag_default(name: str) -> int:
-            return regs.get_by_name(f"F{name}")
+        if hasattr(regs, "get_flag"):
+            def get_flag_default(name: str) -> int:
+                return regs.get_flag(name)
+        else:
+            def get_flag_default(name: str) -> int:
+                return regs.get_by_name(f"F{name}")
 
         get_flag = get_flag_default
 
     if set_flag is None:
-        def set_flag_default(name: str, value: int) -> None:
-            regs.set_by_name(f"F{name}", value)
+        if hasattr(regs, "set_flag"):
+            def set_flag_default(name: str, value: int) -> None:
+                regs.set_flag(name, value)
+        else:
+            def set_flag_default(name: str, value: int) -> None:
+                regs.set_by_name(f"F{name}", value)
 
         set_flag = set_flag_default
 
