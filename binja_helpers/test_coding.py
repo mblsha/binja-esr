@@ -1,4 +1,5 @@
-from binja_helpers.coding import Decoder, Encoder, FetchDecoder, BufferTooShort, ADDRESS_SPACE_SIZE
+from binja_helpers.coding import Decoder, Encoder, FetchDecoder, BufferTooShort
+from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
 import pytest
 
 
@@ -21,7 +22,7 @@ def test_fetchdecoder() -> None:
             return memory[addr]
         raise IndexError("Address out of bounds")
 
-    decoder = FetchDecoder(read_mem)
+    decoder = FetchDecoder(read_mem, ADDRESS_SPACE_SIZE)
 
     assert decoder.peek(0) == 0x01
     assert decoder.peek(1) == 0x02
@@ -41,7 +42,7 @@ def test_fetchdecoder_bounds() -> None:
             return memory[addr]
         raise IndexError("Address out of bounds")
 
-    decoder = FetchDecoder(read_mem)
+    decoder = FetchDecoder(read_mem, ADDRESS_SPACE_SIZE)
 
     decoder.pos = ADDRESS_SPACE_SIZE - 1
     assert decoder.peek(0) == memory[-1]
