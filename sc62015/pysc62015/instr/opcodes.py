@@ -650,14 +650,17 @@ class Instruction:
     # logical operands order
     def operands(self) -> Generator[Operand, None, None]:
         if self._operands is None:
-            yield from ()
-        else:
-            # three levels of indirection SURELY is enough to handle cases
-            # where operands expand to other operands
-            for op1 in self._operands:
-                for op2 in op1.operands():
-                    for op3 in op2.operands():
-                        yield op3
+            return
+
+        def _expand(op: Operand) -> Generator[Operand, None, None]:
+            for sub in op.operands():
+                if sub is op:
+                    yield sub
+                else:
+                    yield from _expand(sub)
+
+        for operand in self._operands:
+            yield from _expand(operand)
 
     # physical opcode encoding order
     def operands_coding(self) -> Iterator[Operand]:
