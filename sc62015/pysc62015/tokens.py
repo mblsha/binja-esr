@@ -11,7 +11,9 @@ from typing import List, Tuple
 
 class Token:
     def __eq__(self, other: object) -> bool:
-        return repr(self) == repr(other)
+        if type(self) is not type(other):
+            return False
+        return self.__dict__ == getattr(other, "__dict__", {})
 
     def binja(self) -> tuple[InstructionTextTokenType, str]:
         raise NotImplementedError("binja() not implemented for {}".format(type(self)))
