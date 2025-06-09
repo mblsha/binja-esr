@@ -1253,9 +1253,9 @@ class EMemAddr(Imm20, Pointer):
     def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
                     Optional[AddressingMode] = None) -> None:
         assert self.value is not None, "Value not set"
-        assert isinstance(value, HasWidth), f"Expected HasWidth, got {type(value)}"
+        assert isinstance(value, (MockLLIL, int)), f"Expected MockLLIL or int, got {type(value)}"
         il.append(
-            il.store(value.width(), il.const_pointer(3, self.value), value)
+            il.store(self.width(), il.const_pointer(3, self.value), value)
         )
 
 
