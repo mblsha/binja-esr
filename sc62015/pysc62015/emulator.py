@@ -48,7 +48,11 @@ class RegisterName(enum.Enum):
     FC = "FC"  # Carry
     FZ = "FZ"  # Zero
     F = "F"
-    # Temp Register
+    # Temp registers
+    #
+    # These are generated dynamically so new temporary registers can
+    # be added by simply adjusting ``NUM_TEMP_REGISTERS``. This keeps
+    # the enum definition DRY and avoids repeating similar lines.
     for _i in range(NUM_TEMP_REGISTERS):
         locals()[f"TEMP{_i}"] = f"TEMP{_i}"
     del _i
