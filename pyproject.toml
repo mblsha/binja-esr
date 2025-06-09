@@ -13,6 +13,7 @@ dependencies = ["lark", "bincopy", "plumbum"]
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-cov",
     "mypy",
     "ruff",
     "serial",  # for testing with real hardware
@@ -21,3 +22,6 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["sc62015/pysc62015/test*"]
+
+[tool.coverage.run]
+source = ["sc62015/pysc62015"]

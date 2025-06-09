@@ -6,7 +6,7 @@ function build_and_run
   ruff check .
   mypy sc62015/pysc62015
   # pytest -vv
-  pytest -q
+  pytest --cov=sc62015/pysc62015 --cov-report=term-missing
 end
 
 build_and_run
