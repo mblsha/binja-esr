@@ -1,4 +1,4 @@
-from binja_helpers.coding import Decoder, Encoder, FetchDecoder, BufferTooShort
+from binja_helpers.binja_helpers.coding import Decoder, Encoder, FetchDecoder, BufferTooShort
 import struct
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
 import pytest

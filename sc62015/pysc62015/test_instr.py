@@ -30,7 +30,7 @@ from .instr import (
 )
 from .instr import decode as decode_instr
 from .constants import INTERNAL_MEMORY_START
-from binja_helpers.tokens import (
+from binja_helpers.binja_helpers.tokens import (
     Token,
     TInstr,
     TSep,
@@ -41,10 +41,10 @@ from binja_helpers.tokens import (
     MemType,
     TReg,
 )
-from binja_helpers.tokens import asm_str
-from binja_helpers.coding import Decoder, Encoder
-from binja_helpers.mock_analysis import MockAnalysisInfo
-from binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
+from binja_helpers.binja_helpers.tokens import asm_str
+from binja_helpers.binja_helpers.coding import Decoder, Encoder
+from binja_helpers.binja_helpers.mock_analysis import MockAnalysisInfo
+from binja_helpers.binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
 from binaryninja.lowlevelil import (
     LLIL_TEMP,
 )

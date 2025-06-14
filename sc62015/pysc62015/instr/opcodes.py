@@ -1,5 +1,5 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from binja_helpers.tokens import (
+from binja_helpers.binja_helpers.tokens import (
     Token,
     TInstr,
     TText,
@@ -11,9 +11,9 @@ from binja_helpers.tokens import (
     TAddr,
     MemType,
 )
-from binja_helpers.coding import Decoder, Encoder, BufferTooShort
+from binja_helpers.binja_helpers.coding import Decoder, Encoder, BufferTooShort
 
-from binja_helpers.mock_llil import MockLLIL
+from binja_helpers.binja_helpers.mock_llil import MockLLIL
 from ..constants import INTERNAL_MEMORY_START
 from .traits import HasWidth
 
@@ -1686,5 +1686,3 @@ def lift_loop(il: LowLevelILFunction) -> Generator[None, None, None]:
     cond = il.compare_equal(width, loop_reg.lift(il), il.const(width, 0))
     il.append(il.if_expr(cond, if_true, if_false))
     il.mark_label(if_true)
-
-

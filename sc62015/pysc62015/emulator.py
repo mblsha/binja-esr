@@ -1,6 +1,6 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
-from binja_helpers.coding import FetchDecoder
+from binja_helpers.binja_helpers.coding import FetchDecoder
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr import (
@@ -8,14 +8,14 @@ from .instr import (
     OPCODES,
     Instruction,
 )
-from binja_helpers.mock_llil import (
+from binja_helpers.binja_helpers.mock_llil import (
     MockLowLevelILFunction,
     MockLLIL,
     MockLabel,
     MockIfExpr,
     MockGoto,
 )
-from binja_helpers.eval_llil import (
+from binja_helpers.binja_helpers.eval_llil import (
     Memory,
     State,
     ResultFlags,
@@ -265,4 +265,3 @@ class Emulator:
             self.regs.get_flag,
             self.regs.set_flag,
         )
-
