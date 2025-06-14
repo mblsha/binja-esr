@@ -8,7 +8,9 @@ if binja_api._has_binja():
     )
 
 from sc62015.arch import SC62015
-from binja_helpers.binja_helpers.mock_llil import MockLowLevelILFunction
+from binja_helpers.import_helper import import_from_binja_helper
+
+MockLowLevelILFunction = import_from_binja_helper('mock_llil', 'MockLowLevelILFunction')
 
 
 def test_get_instruction_low_level_il_with_bytes() -> None:

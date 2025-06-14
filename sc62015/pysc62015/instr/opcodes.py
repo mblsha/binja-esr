@@ -1,19 +1,16 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from binja_helpers.binja_helpers.tokens import (
-    Token,
-    TInstr,
-    TText,
-    TSep,
-    TInt,
-    TReg,
-    TBegMem,
-    TEndMem,
-    TAddr,
-    MemType,
-)
-from binja_helpers.binja_helpers.coding import Decoder, Encoder, BufferTooShort
+from binja_helpers.import_helper import import_from_binja_helper
 
-from binja_helpers.binja_helpers.mock_llil import MockLLIL
+# Import tokens module components
+(Token, TInstr, TText, TSep, TInt, TReg, TBegMem, TEndMem, TAddr, MemType) = import_from_binja_helper(
+    'tokens', 'Token', 'TInstr', 'TText', 'TSep', 'TInt', 'TReg', 'TBegMem', 'TEndMem', 'TAddr', 'MemType'
+)
+
+# Import coding module components
+(Decoder, Encoder, BufferTooShort) = import_from_binja_helper('coding', 'Decoder', 'Encoder', 'BufferTooShort')
+
+# Import mock_llil module components
+MockLLIL = import_from_binja_helper('mock_llil', 'MockLLIL')
 from ..constants import INTERNAL_MEMORY_START
 from .traits import HasWidth
 

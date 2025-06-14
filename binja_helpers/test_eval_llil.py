@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-from binja_helpers.binja_helpers import binja_api  # noqa: F401
-from binja_helpers.binja_helpers.eval_llil import evaluate_llil, Memory, State
-from binja_helpers.binja_helpers.mock_llil import MockLLIL, MockFlag, mllil, mreg
+from binja_helpers.import_helper import import_from_binja_helper
+
+binja_api = import_from_binja_helper('binja_api')  # noqa: F401
+(evaluate_llil, Memory, State) = import_from_binja_helper('eval_llil', 'evaluate_llil', 'Memory', 'State')
+(MockLLIL, MockFlag, mllil, mreg) = import_from_binja_helper('mock_llil', 'MockLLIL', 'MockFlag', 'mllil', 'mreg')
 import pytest
 
 class SimpleRegs:

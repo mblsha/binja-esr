@@ -1,6 +1,8 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
-from binja_helpers.binja_helpers.coding import FetchDecoder
+from binja_helpers.import_helper import import_from_binja_helper
+
+FetchDecoder = import_from_binja_helper('coding', 'FetchDecoder')
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr import (
@@ -8,18 +10,14 @@ from .instr import (
     OPCODES,
     Instruction,
 )
-from binja_helpers.binja_helpers.mock_llil import (
-    MockLowLevelILFunction,
-    MockLLIL,
-    MockLabel,
-    MockIfExpr,
-    MockGoto,
+# Import mock_llil module components
+(MockLowLevelILFunction, MockLLIL, MockLabel, MockIfExpr, MockGoto) = import_from_binja_helper(
+    'mock_llil', 'MockLowLevelILFunction', 'MockLLIL', 'MockLabel', 'MockIfExpr', 'MockGoto'
 )
-from binja_helpers.binja_helpers.eval_llil import (
-    Memory,
-    State,
-    ResultFlags,
-    evaluate_llil,
+
+# Import eval_llil module components
+(Memory, State, ResultFlags, evaluate_llil) = import_from_binja_helper(
+    'eval_llil', 'Memory', 'State', 'ResultFlags', 'evaluate_llil'
 )
 from binaryninja import (
     InstructionInfo,

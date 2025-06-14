@@ -8,10 +8,12 @@ from .emulator import (
 )
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START, PC_MASK
 from .instr import IMEM_NAMES
-from binja_helpers.binja_helpers.mock_llil import MockLowLevelILFunction
+from binja_helpers.import_helper import import_from_binja_helper
+
+MockLowLevelILFunction = import_from_binja_helper('mock_llil', 'MockLowLevelILFunction')
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
-from binja_helpers.binja_helpers.tokens import asm_str
+asm_str = import_from_binja_helper('tokens', 'asm_str')
 from dataclasses import dataclass, field
 import pytest
 

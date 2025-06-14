@@ -1,5 +1,7 @@
 from .opcodes import *  # noqa: F401,F403
-from binja_helpers.binja_helpers.mock_analysis import BranchType  # noqa: F401
+from binja_helpers.import_helper import import_from_binja_helper
+
+BranchType = import_from_binja_helper('mock_analysis', 'BranchType')  # noqa: F401
 from .traits import HasWidth
 from typing import Callable
 class NOP(Instruction):

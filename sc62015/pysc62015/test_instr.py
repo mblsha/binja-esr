@@ -30,21 +30,24 @@ from .instr import (
 )
 from .instr import decode as decode_instr
 from .constants import INTERNAL_MEMORY_START
-from binja_helpers.binja_helpers.tokens import (
-    Token,
-    TInstr,
-    TSep,
-    TText,
-    TInt,
-    TBegMem,
-    TEndMem,
-    MemType,
-    TReg,
+from binja_helpers.import_helper import import_from_binja_helper
+
+# Import tokens module components
+(Token, TInstr, TSep, TText, TInt, TBegMem, TEndMem, MemType, TReg) = import_from_binja_helper(
+    'tokens', 'Token', 'TInstr', 'TSep', 'TText', 'TInt', 'TBegMem', 'TEndMem', 'MemType', 'TReg'
 )
-from binja_helpers.binja_helpers.tokens import asm_str
-from binja_helpers.binja_helpers.coding import Decoder, Encoder
-from binja_helpers.binja_helpers.mock_analysis import MockAnalysisInfo
-from binja_helpers.binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
+asm_str = import_from_binja_helper('tokens', 'asm_str')
+
+# Import coding module components
+(Decoder, Encoder) = import_from_binja_helper('coding', 'Decoder', 'Encoder')
+
+# Import mock_analysis module components
+MockAnalysisInfo = import_from_binja_helper('mock_analysis', 'MockAnalysisInfo')
+
+# Import mock_llil module components
+(MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg) = import_from_binja_helper(
+    'mock_llil', 'MockLowLevelILFunction', 'MockLLIL', 'MockFlag', 'mllil', 'mreg'
+)
 from binaryninja.lowlevelil import (
     LLIL_TEMP,
 )
