@@ -17,13 +17,20 @@ import types
 from dataclasses import dataclass
 from typing import Any
 
-_binja_install = os.path.expanduser(
-    "~/Applications/Binary Ninja.app/Contents/Resources/python/"
-)
-if os.path.isdir(_binja_install) and _binja_install not in sys.path:
-    sys.path.append(_binja_install)
+# Force use of mock when FORCE_BINJA_MOCK environment variable is set
+_force_mock = os.environ.get("FORCE_BINJA_MOCK", "").lower() in ("1", "true", "yes")
+
+if not _force_mock:
+    _binja_install = os.path.expanduser(
+        "~/Applications/Binary Ninja.app/Contents/Resources/python/"
+    )
+    if os.path.isdir(_binja_install) and _binja_install not in sys.path:
+        sys.path.append(_binja_install)
+
 
 def _has_binja() -> bool:
+    if _force_mock:
+        return False
     try:
         import binaryninja  # noqa: F401
 
@@ -73,8 +80,13 @@ if not _has_binja():
         BigEndian = 1
 
     class FlagRole(enum.Enum):
-        ZeroFlagRole = 0
-        CarryFlagRole = 1
+        NegativeSignFlagRole = 0
+        ZeroFlagRole = 1
+        OverflowFlagRole = 2
+        CarryFlagRole = 3
+
+    class ImplicitRegisterExtend(enum.Enum):
+        SignExtendToFullWidth = 0
 
     enums_mod.BranchType = BranchType  # type: ignore [attr-defined]
     enums_mod.InstructionTextTokenType = InstructionTextTokenType  # type: ignore [attr-defined]
@@ -83,6 +95,7 @@ if not _has_binja():
     enums_mod.SymbolType = SymbolType  # type: ignore [attr-defined]
     enums_mod.Endianness = Endianness  # type: ignore [attr-defined]
     enums_mod.FlagRole = FlagRole  # type: ignore [attr-defined]
+    enums_mod.ImplicitRegisterExtend = ImplicitRegisterExtend  # type: ignore [attr-defined]
 
     bn.enums = enums_mod  # type: ignore [attr-defined]
     sys.modules["binaryninja.enums"] = enums_mod
@@ -422,4 +435,18 @@ if not _has_binja():
     log_mod.log_error = log_error  # type: ignore [attr-defined]
     bn.log = log_mod  # type: ignore [attr-defined]
     sys.modules["binaryninja.log"] = log_mod
+
+    # Add UIContext mock for interaction module
+    interaction_mod = types.ModuleType("binaryninja.interaction")
+
+    class UIContext:
+        @staticmethod
+        def activeContext():
+            return None
+
+    interaction_mod.UIContext = UIContext  # type: ignore [attr-defined]
+    bn.interaction = interaction_mod  # type: ignore [attr-defined]
+    bn.UIContext = UIContext  # type: ignore [attr-defined]  # Also add to main module
+    sys.modules["binaryninja.interaction"] = interaction_mod
+
     sys.modules["binaryninja"] = bn
