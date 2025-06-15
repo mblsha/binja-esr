@@ -144,6 +144,7 @@ if not _has_binja():
             self.file = types.SimpleNamespace(filename=filename)
             # Memory buffer for testing - configurable size
             self._memory = bytearray(memory_size)
+            self.state: Any = None
 
         def read(self, addr: int, length: int) -> bytes:
             """Read bytes from mock memory."""
@@ -172,7 +173,7 @@ if not _has_binja():
         name: str = ""  # Added type hint
 
         @classmethod
-        def __getitem__(cls, _name: str) -> "Architecture":
+        def __class_getitem__(cls, _name: str) -> "Architecture":
             return cls()
 
     class RegisterName(str):
