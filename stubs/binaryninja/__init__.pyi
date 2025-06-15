@@ -1,4 +1,4 @@
-from typing import Any, Callable, NewType
+from typing import Any, Callable, NewType, ClassVar, Optional, Dict, List
 
 # Type aliases for register and intrinsic names - these need to be distinct types
 RegisterName = NewType('RegisterName', str)
@@ -10,7 +10,7 @@ ILIntrinsic = Any
 IntrinsicIndex = Any
 
 class RegisterInfo:
-    def __init__(self, name: str, size: int, offset: int = 0, extend: Any = None) -> None: ...
+    def __init__(self, name: RegisterName, size: int, offset: int = 0, extend: Any = None) -> None: ...
     name: str
     size: int
     offset: int
@@ -21,20 +21,20 @@ class IntrinsicInfo:
     outputs: list[Any]
 
 class Architecture:
-    name: str | None = None
+    name: ClassVar[Optional[str]] = None
     endianness: Any = None
     address_size: int = 8
     default_int_size: int = 4
     instr_alignment: int = 1
     max_instr_length: int = 16
     opcode_display_length: int = 8
-    regs: dict[str, RegisterInfo] = {}
-    stack_pointer: str | None = None
+    regs: ClassVar[Dict[RegisterName, RegisterInfo]] = {}
+    stack_pointer: ClassVar[Optional[str]] = None
     link_reg: str | None = None
     global_regs: list[str] = []
     system_regs: list[str] = []
     flags: list[str] = []
-    flag_write_types: list[str] = []
+    flag_write_types: ClassVar[List[FlagWriteTypeName]] = []
     flag_roles: dict[str, Any] = {}
     flags_written_by_flag_write_type: dict[str, list[str]] = {}
     intrinsics: dict[str, IntrinsicInfo] = {}
