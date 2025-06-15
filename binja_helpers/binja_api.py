@@ -328,6 +328,16 @@ if not _has_binja():
         ) -> object:
             return self._op("SUB", size, a, b, flags=flags)
 
+        def mult(
+            self, size: int, a: object, b: object, flags: object | None = None
+        ) -> object:
+            return self._op("MUL", size, a, b, flags=flags)
+
+        def div_signed(
+            self, size: int, a: object, b: object, flags: object | None = None
+        ) -> object:
+            return self._op("DIVS", size, a, b, flags=flags)
+
         def and_expr(
             self, size: int, a: object, b: object, flags: object | None = None
         ) -> object:
