@@ -162,10 +162,19 @@ if not _has_binja():
             obj.name = name
             return obj
 
+    class FlagWriteTypeName(str):
+        name: str  # Declare the attribute
+
+        def __new__(cls, name: str) -> "FlagWriteTypeName":
+            obj = str.__new__(cls, name)
+            obj.name = name
+            return obj
+
     arch_mod.Architecture = Architecture  # type: ignore [attr-defined]
     arch_mod.RegisterName = RegisterName  # type: ignore [attr-defined]
     arch_mod.IntrinsicName = IntrinsicName  # type: ignore [attr-defined]
     arch_mod.FlagName = FlagName  # type: ignore [attr-defined]
+    arch_mod.FlagWriteTypeName = FlagWriteTypeName  # type: ignore [attr-defined]
     bn.architecture = arch_mod  # type: ignore [attr-defined]
     sys.modules["binaryninja.architecture"] = arch_mod
 
@@ -174,6 +183,7 @@ if not _has_binja():
     bn.RegisterName = RegisterName  # type: ignore[attr-defined]
     bn.IntrinsicName = IntrinsicName  # type: ignore[attr-defined]
     bn.FlagName = FlagName  # type: ignore[attr-defined]
+    bn.FlagWriteTypeName = FlagWriteTypeName  # type: ignore[attr-defined]
 
     llil_mod = types.ModuleType("binaryninja.lowlevelil")
 
