@@ -169,6 +169,12 @@ if not _has_binja():
     bn.architecture = arch_mod  # type: ignore [attr-defined]
     sys.modules["binaryninja.architecture"] = arch_mod
 
+    # Expose common architecture types at the module root so imports like
+    # ``from binaryninja import RegisterName`` succeed when using this mock.
+    bn.RegisterName = RegisterName  # type: ignore[attr-defined]
+    bn.IntrinsicName = IntrinsicName  # type: ignore[attr-defined]
+    bn.FlagName = FlagName  # type: ignore[attr-defined]
+
     llil_mod = types.ModuleType("binaryninja.lowlevelil")
 
     class ExpressionIndex(int):
