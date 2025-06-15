@@ -8,7 +8,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  ruff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -19,9 +19,43 @@ jobs:
         run: python -m pip install -e .[dev]
       - name: Run Ruff
         run: ruff check
+
+  mypy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
       - name: Run Mypy
         run: python scripts/run_mypy.py
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -e .[dev]
       - name: Run Pytest with coverage
         run: pytest --cov=sc62015/pysc62015 --cov-report=xml --cov-report=term
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [ruff, mypy, unit-tests]
+    if: always()
+    steps:
+      - name: Check overall status
+        run: |
+          if [ "${{ needs.ruff.result }}" == "success" ] && [ "${{ needs.mypy.result }}" == "success" ] && [ "${{ needs.unit-tests.result }}" == "success" ]; then
+            echo "✅ All checks passed successfully!"
+          else
+            echo "❌ Some checks failed"
+            exit 1
+          fi
