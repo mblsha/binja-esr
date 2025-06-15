@@ -121,12 +121,49 @@ if not _has_binja():
 
     binaryview_mod = types.ModuleType("binaryninja.binaryview")
 
+    # Mock configuration registry for architecture-specific settings
+    _mock_config = {
+        "default_filename": "test.bin",
+        "default_memory_size": 0x100000,  # 1MB
+    }
+
+    def configure_mock_binaryview(filename: str = None, memory_size: int = None) -> None:
+        """Configure mock BinaryView defaults for testing."""
+        if filename is not None:
+            _mock_config["default_filename"] = filename
+        if memory_size is not None:
+            _mock_config["default_memory_size"] = memory_size
+
     class BinaryView:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
+            # Extract configuration from kwargs with fallbacks to global config
+            filename = kwargs.get("filename", _mock_config["default_filename"])
+            memory_size = kwargs.get("memory_size", _mock_config["default_memory_size"])
 
+            # Mock file object - configurable filename
+            self.file = types.SimpleNamespace(filename=filename)
+            # Memory buffer for testing - configurable size
+            self._memory = bytearray(memory_size)
+
+        def read(self, addr: int, length: int) -> bytes:
+            """Read bytes from mock memory."""
+            if addr + length > len(self._memory):
+                return b'\x00' * length
+            return bytes(self._memory[addr:addr+length])
+
+        def write_memory(self, addr: int, data: bytes) -> None:
+            """Write data to mock memory for testing."""
+            if addr + len(data) <= len(self._memory):
+                self._memory[addr:addr+len(data)] = data
+
+    # Add configuration function to the module
+    binaryview_mod.configure_mock_binaryview = configure_mock_binaryview  # type: ignore [attr-defined]
     binaryview_mod.BinaryView = BinaryView  # type: ignore [attr-defined]
     bn.binaryview = binaryview_mod  # type: ignore [attr-defined]
+
+    # Also expose configuration at top level for easy access
+    bn.configure_mock_binaryview = configure_mock_binaryview  # type: ignore [attr-defined]
+
     sys.modules["binaryninja.binaryview"] = binaryview_mod
 
     arch_mod = types.ModuleType("binaryninja.architecture")
@@ -389,7 +426,7 @@ if not _has_binja():
         def ret(self, dest: object | None = None) -> object:
             ops = [] if dest is None else [dest]
             return self._op("RET", None, *ops)
-            
+
         def intrinsic(self, outputs: list[Any], name: str, inputs: list[Any]) -> object:
             return self._op("INTRINSIC", None, outputs, name, inputs)
 
