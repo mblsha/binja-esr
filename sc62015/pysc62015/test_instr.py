@@ -48,7 +48,7 @@ from binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, 
 from binaryninja.lowlevelil import (
     LLIL_TEMP,
 )
-from binaryninja.architecture import RegisterName
+from binaryninja import RegisterName
 
 import os
 from pprint import pprint

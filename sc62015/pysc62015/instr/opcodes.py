@@ -28,7 +28,7 @@ from binja_helpers import binja_api  # noqa: F401
 from binaryninja import (
     InstructionInfo,
 )
-from binaryninja.architecture import (
+from binaryninja import (
     RegisterName,
     IntrinsicName,
     FlagName,

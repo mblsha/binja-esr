@@ -1,6 +1,6 @@
 from typing import Any, List, Optional, Union, cast, TypedDict, Type, Literal
 from binja_helpers import binja_api  # noqa: F401
-from binaryninja.architecture import RegisterName
+from binaryninja import RegisterName
 from lark import Lark, Transformer, Token
 from .instr import (
     Instruction,
