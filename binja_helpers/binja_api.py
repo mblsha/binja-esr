@@ -15,7 +15,7 @@ import os
 import sys
 import types
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 # Force use of mock when FORCE_BINJA_MOCK environment variable is set
 _force_mock = os.environ.get("FORCE_BINJA_MOCK", "").lower() in ("1", "true", "yes")
@@ -127,7 +127,7 @@ if not _has_binja():
         "default_memory_size": 0x100000,  # 1MB
     }
 
-    def configure_mock_binaryview(filename: str = None, memory_size: int = None) -> None:
+    def configure_mock_binaryview(filename: Optional[str] = None, memory_size: Optional[int] = None) -> None:
         """Configure mock BinaryView defaults for testing."""
         if filename is not None:
             _mock_config["default_filename"] = filename
@@ -499,7 +499,7 @@ if not _has_binja():
 
     class UIContext:
         @staticmethod
-        def activeContext():
+        def activeContext() -> None:
             return None
 
     interaction_mod.UIContext = UIContext  # type: ignore [attr-defined]

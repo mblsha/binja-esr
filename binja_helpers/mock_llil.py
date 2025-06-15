@@ -131,10 +131,10 @@ class MockGoto:
     label: Any
 
 
-class MockLowLevelILFunction(LowLevelILFunction):
+class MockLowLevelILFunction(LowLevelILFunction):  # type: ignore[misc]
     def __init__(self) -> None:
         # self.handle = MockHandle()
-        self._arch = MockArch()  # type: ignore
+        self._arch = MockArch()
         self.ils: List[MockLLIL] = []
 
     def __del__(self) -> None:
