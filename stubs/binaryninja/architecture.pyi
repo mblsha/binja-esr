@@ -1,10 +1,11 @@
 from typing import Any, Dict, List
+from . import RegisterInfo, RegisterName, FlagWriteTypeName
 
 class Architecture:
-    name: str
-    regs: Dict[str, Any]
-    stack_pointer: str
-    flag_write_types: List[str]
+    name: str | None
+    regs: Dict[RegisterName, RegisterInfo]
+    stack_pointer: str | None
+    flag_write_types: List[FlagWriteTypeName]
     standalone_platform: Any
 
     def __getitem__(self, name: str) -> "Architecture":
@@ -13,14 +14,6 @@ class Architecture:
     @classmethod
     def __class_getitem__(cls, name: str) -> "Architecture":
         ...
-
-
-class RegisterName(str):
-    ...
-
-
-class IntrinsicName(str):
-    ...
 
 
 class FlagName(str):
