@@ -450,6 +450,9 @@ if not _has_binja():
             ops = [] if dest is None else [dest]
             return self._op("RET", None, *ops)
 
+        def no_ret(self) -> object:
+            return self._op("NORET", None)
+
         def intrinsic(self, outputs: list[Any], name: str, inputs: list[Any]) -> object:
             return self._op("INTRINSIC", None, outputs, name, inputs)
 
