@@ -1,13 +1,17 @@
-from typing import Any, Callable, Union
+from typing import Any, Callable, NewType
 
-# Type aliases for register and intrinsic names
-RegisterName = str
-IntrinsicName = str 
-FlagWriteTypeName = str
+# Type aliases for register and intrinsic names - these need to be distinct types
+RegisterName = NewType('RegisterName', str)
+IntrinsicName = NewType('IntrinsicName', str) 
+FlagWriteTypeName = NewType('FlagWriteTypeName', str)
+ILRegister = Any
+RegisterIndex = Any
+ILIntrinsic = Any
+IntrinsicIndex = Any
 
 class RegisterInfo:
-    def __init__(self, name: Union[RegisterName, str], size: int, offset: int = 0, extend: Any = None) -> None: ...
-    name: RegisterName
+    def __init__(self, name: str, size: int, offset: int = 0, extend: Any = None) -> None: ...
+    name: str
     size: int
     offset: int
 
@@ -17,11 +21,24 @@ class IntrinsicInfo:
     outputs: list[Any]
 
 class Architecture:
-    name: str
-    regs: dict[Union[RegisterName, str], RegisterInfo]
-    stack_pointer: str
-    flag_write_types: list[Union[FlagWriteTypeName, str]]
-    standalone_platform: Any
+    name: str | None = None
+    endianness: Any = None
+    address_size: int = 8
+    default_int_size: int = 4
+    instr_alignment: int = 1
+    max_instr_length: int = 16
+    opcode_display_length: int = 8
+    regs: dict[str, RegisterInfo] = {}
+    stack_pointer: str | None = None
+    link_reg: str | None = None
+    global_regs: list[str] = []
+    system_regs: list[str] = []
+    flags: list[str] = []
+    flag_write_types: list[str] = []
+    flag_roles: dict[str, Any] = {}
+    flags_written_by_flag_write_type: dict[str, list[str]] = {}
+    intrinsics: dict[str, IntrinsicInfo] = {}
+    standalone_platform: Any = None
     
     # Workaround for mypy not understanding __getitem__ on metaclass
     @classmethod
