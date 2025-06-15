@@ -7,3 +7,4 @@ SectionSemantics: Any
 SymbolType: Any
 Endianness: Any
 FlagRole: Any
+ImplicitRegisterExtend: Any
