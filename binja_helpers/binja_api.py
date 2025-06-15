@@ -396,8 +396,20 @@ if not _has_binja():
         def compare_equal(self, size: int, a: object, b: object) -> object:
             return self._op("CMP_E", size, a, b)
 
+        def compare_not_equal(self, size: int, a: object, b: object) -> object:
+            return self._op("CMP_NE", size, a, b)
+
         def compare_signed_less_than(self, size: int, a: object, b: object) -> object:
             return self._op("CMP_SLT", size, a, b)
+
+        def compare_signed_greater_than(self, size: int, a: object, b: object) -> object:
+            return self._op("CMP_SGT", size, a, b)
+
+        def compare_signed_less_equal(self, size: int, a: object, b: object) -> object:
+            return self._op("CMP_SLE", size, a, b)
+
+        def compare_signed_greater_equal(self, size: int, a: object, b: object) -> object:
+            return self._op("CMP_SGE", size, a, b)
 
         def compare_unsigned_greater_than(
             self, size: int, a: object, b: object
