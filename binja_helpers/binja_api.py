@@ -373,6 +373,9 @@ if not _has_binja():
         def ret(self, dest: object | None = None) -> object:
             ops = [] if dest is None else [dest]
             return self._op("RET", None, *ops)
+            
+        def intrinsic(self, outputs: list[Any], name: str, inputs: list[Any]) -> object:
+            return self._op("INTRINSIC", None, outputs, name, inputs)
 
     class LowLevelILLabel:
         pass
@@ -405,9 +408,11 @@ if not _has_binja():
 
     @dataclass
     class RegisterInfo:
-        name: str
-        size: int
-        offset: int = 0
+        def __init__(self, name: str, size: int, offset: int = 0, extend: Any = None) -> None:
+            self.name = name
+            self.size = size
+            self.offset = offset
+            self.extend = extend
 
     bn.RegisterInfo = RegisterInfo  # type: ignore [attr-defined]
 

@@ -1,15 +1,34 @@
 from typing import Any, Callable
 
-class ArchitectureMeta(type):
-    def __getitem__(cls, name: str) -> "Architecture":
-        ...
+# Type aliases for register and intrinsic names
+RegisterName = str
+IntrinsicName = str 
+FlagWriteTypeName = str
 
-class Architecture(metaclass=ArchitectureMeta):
-    name: str
-    regs: dict[str, Any]
-    stack_pointer: str
-    flag_write_types: list[str]
+class RegisterInfo:
+    def __init__(self, name: RegisterName, size: int, offset: int = 0, extend: Any = None) -> None: ...
+    name: RegisterName
+    size: int
+    offset: int
+
+class IntrinsicInfo:
+    def __init__(self, inputs: list[Any], outputs: list[Any]) -> None: ...
+    inputs: list[Any]
+    outputs: list[Any]
+
+class Architecture:
+    name: str | None
+    regs: dict[RegisterName, RegisterInfo]
+    stack_pointer: str | None
+    flag_write_types: list[FlagWriteTypeName]
     standalone_platform: Any
+    
+    # Workaround for mypy not understanding __getitem__ on metaclass
+    @classmethod
+    def __class_getitem__(cls, name: str) -> "Architecture": ...
+
+# Unfortunately mypy has issues with dynamic indexing, so we need this workaround
+def __getattr__(name: str) -> Any: ...
 
 class BinaryView:
     file: Any
@@ -26,8 +45,6 @@ class BinaryView:
     def __init__(self, parent_view: "BinaryView | None" = None, file_metadata: Any = None) -> None: ...
 
 InstructionInfo: Any
-RegisterInfo: Any
-IntrinsicInfo: Any
 CallingConvention: Any
 InstructionTextToken: Any
 UIContext: Any
