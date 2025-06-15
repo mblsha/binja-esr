@@ -1,4 +1,4 @@
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 # Type aliases for register and intrinsic names
 RegisterName = str
@@ -6,7 +6,7 @@ IntrinsicName = str
 FlagWriteTypeName = str
 
 class RegisterInfo:
-    def __init__(self, name: RegisterName, size: int, offset: int = 0, extend: Any = None) -> None: ...
+    def __init__(self, name: Union[RegisterName, str], size: int, offset: int = 0, extend: Any = None) -> None: ...
     name: RegisterName
     size: int
     offset: int
@@ -17,10 +17,10 @@ class IntrinsicInfo:
     outputs: list[Any]
 
 class Architecture:
-    name: str | None
-    regs: dict[RegisterName, RegisterInfo]
-    stack_pointer: str | None
-    flag_write_types: list[FlagWriteTypeName]
+    name: str
+    regs: dict[Union[RegisterName, str], RegisterInfo]
+    stack_pointer: str
+    flag_write_types: list[Union[FlagWriteTypeName, str]]
     standalone_platform: Any
     
     # Workaround for mypy not understanding __getitem__ on metaclass
