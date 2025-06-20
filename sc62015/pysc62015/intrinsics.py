@@ -1,45 +1,12 @@
 """SC62015-specific intrinsic evaluators."""
 
-from typing import Optional, Tuple, Callable, Dict, Protocol, TypedDict
+from typing import Optional, Tuple
 
-
-class RegistersLike(Protocol):
-    """Minimal register access interface used by the evaluator."""
-
-    def get_by_name(self, name: str) -> int:  # pragma: no cover - protocol
-        ...
-
-    def set_by_name(self, name: str, value: int) -> None:  # pragma: no cover - protocol
-        ...
-
-
-class Memory:
-    """Simple memory helper used by the LLIL evaluator."""
-
-    def read_byte(self, address: int) -> int:
-        ...
-
-    def write_byte(self, address: int, value: int) -> None:
-        ...
-
-
-class State:
-    """Execution state."""
-    halted: bool
-
-
-class ResultFlags(TypedDict, total=False):
-    C: Optional[int]
-    Z: Optional[int]
-
-
-FlagGetter = Callable[[str], int]
-FlagSetter = Callable[[str, int], None]
-
-
-class MockLLIL:
-    """Mock LLIL for type hints."""
-    pass
+# Import types from the main evaluation system to ensure compatibility
+from binja_helpers.eval_llil import (
+    RegistersLike, Memory, State, ResultFlags, FlagGetter, FlagSetter
+)
+from binja_helpers.mock_llil import MockLLIL
 
 
 def eval_intrinsic_tcl(
