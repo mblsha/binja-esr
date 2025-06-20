@@ -175,3 +175,7 @@ class MockLowLevelILFunction(LowLevelILFunction):  # type: ignore[misc]
         name = name + suffix
         name = name + f"{{{flags}}}" if flags is not None else name
         return MockLLIL(name, ops)
+
+    def get_label_for_address(self, arch: Any, addr: int) -> LowLevelILLabel:
+        """Mock implementation for getting a label for an address."""
+        return LowLevelILLabel()
