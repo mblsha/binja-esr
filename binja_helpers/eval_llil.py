@@ -165,32 +165,21 @@ def evaluate_llil(
     return result_value, op_defined_flags
 
 
-def eval_const(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[int, Optional[ResultFlags]]:
-    result = llil.ops[0]
-    assert isinstance(result, int)
-    return result, None
+def _create_const_eval() -> EvalLLILType:
+    def _eval(
+        llil: MockLLIL,
+        size: Optional[int],
+        regs: RegistersLike,
+        memory: Memory,
+        state: State,
+        get_flag: FlagGetter,
+        set_flag: FlagSetter,
+    ) -> Tuple[int, Optional[ResultFlags]]:
+        result = llil.ops[0]
+        assert isinstance(result, int)
+        return result, None
 
-
-def eval_const_ptr(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[int, Optional[ResultFlags]]:
-    result = llil.ops[0]
-    assert isinstance(result, int)
-    return result, None
+    return _eval
 
 
 def eval_reg(
@@ -485,38 +474,6 @@ def eval_call(
     return None, None
 
 
-def eval_cmp_e(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state, get_flag, set_flag)
-    op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state, get_flag, set_flag)
-    assert op1_val is not None and op2_val is not None
-    return int(int(op1_val) == int(op2_val)), None
-
-
-def eval_cmp_ugt(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state, get_flag, set_flag)
-    op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state, get_flag, set_flag)
-    assert op1_val is not None and op2_val is not None
-    return int(int(op1_val) > int(op2_val)), None
-
-
 def to_signed(value: int, size_bytes: int) -> int:
     width_bits = size_bytes * 8
     mask = (1 << width_bits) - 1
@@ -527,25 +484,34 @@ def to_signed(value: int, size_bytes: int) -> int:
     return value
 
 
-def eval_cmp_slt(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[int, Optional[ResultFlags]]:
-    assert size is not None, "Size must be provided for signed comparison"
-    assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
-    op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state, get_flag, set_flag)
-    op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state, get_flag, set_flag)
-    assert op1_val is not None and op2_val is not None
+def _create_comparison_eval(op_func: Callable[[int, int], bool], signed: bool = False) -> EvalLLILType:
+    def _eval(
+        llil: MockLLIL,
+        size: Optional[int],
+        regs: RegistersLike,
+        memory: Memory,
+        state: State,
+        get_flag: FlagGetter,
+        set_flag: FlagSetter,
+    ) -> Tuple[int, Optional[ResultFlags]]:
+        if signed:
+            assert size is not None, "Size must be provided for signed comparison"
+        assert isinstance(llil.ops[0], MockLLIL) and isinstance(llil.ops[1], MockLLIL)
+        op1_val, _ = evaluate_llil(llil.ops[0], regs, memory, state, get_flag, set_flag)
+        op2_val, _ = evaluate_llil(llil.ops[1], regs, memory, state, get_flag, set_flag)
+        assert op1_val is not None and op2_val is not None
+        
+        if signed:
+            assert size is not None  # Already checked above
+            op1_val = to_signed(int(op1_val), size)
+            op2_val = to_signed(int(op2_val), size)
+        else:
+            op1_val = int(op1_val)
+            op2_val = int(op2_val)
+        
+        return int(op_func(op1_val, op2_val)), None
 
-    signed_op1 = to_signed(int(op1_val), size)
-    signed_op2 = to_signed(int(op2_val), size)
-
-    return int(signed_op1 < signed_op2), None
+    return _eval
 
 
 def _lsl_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
@@ -663,47 +629,26 @@ def _rlc_impl(
     return arith_result, {"C": new_carry_out, "Z": zero_flag}
 
 
-def eval_intrinsic_tcl(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    return None, None
+def _create_intrinsic_eval(action: Optional[Callable[[State], None]] = None) -> EvalLLILType:
+    def _eval(
+        llil: MockLLIL,
+        size: Optional[int],
+        regs: RegistersLike,
+        memory: Memory,
+        state: State,
+        get_flag: FlagGetter,
+        set_flag: FlagSetter,
+    ) -> Tuple[None, Optional[ResultFlags]]:
+        if action is not None:
+            action(state)
+        return None, None
 
-
-def eval_intrinsic_halt(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    state.halted = True
-    return None, None
-
-
-def eval_intrinsic_off(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    state.halted = True
-    return None, None
+    return _eval
 
 
 EVAL_LLIL: Dict[str, EvalLLILType] = {
-    "CONST": eval_const,
-    "CONST_PTR": eval_const_ptr,
+    "CONST": _create_const_eval(),
+    "CONST_PTR": _create_const_eval(),
     "REG": eval_reg,
     "SET_REG": eval_set_reg,
     "FLAG": eval_flag,
@@ -728,9 +673,28 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
         lambda a, b: a - b,
         lambda _a, _b, result, _mask: 1 if result < 0 else 0,
     ),
-    "CMP_E": eval_cmp_e,
-    "CMP_UGT": eval_cmp_ugt,
-    "CMP_SLT": eval_cmp_slt,
+    "MUL": _create_arithmetic_eval(
+        lambda a, b: a * b,
+        lambda _a, _b, result, mask: 1 if result > mask else 0,
+    ),
+    "DIVU": _create_arithmetic_eval(
+        lambda a, b: a // b if b != 0 else 0,
+        lambda _a, _b, result, _mask: 0,  # Division typically doesn't set carry
+    ),
+    "MODU": _create_arithmetic_eval(
+        lambda a, b: a % b if b != 0 else 0,
+        lambda _a, _b, result, _mask: 0,  # Modulo typically doesn't set carry
+    ),
+    "CMP_E": _create_comparison_eval(lambda a, b: a == b),
+    "CMP_NE": _create_comparison_eval(lambda a, b: a != b),
+    "CMP_UGT": _create_comparison_eval(lambda a, b: a > b),
+    "CMP_UGE": _create_comparison_eval(lambda a, b: a >= b),
+    "CMP_ULT": _create_comparison_eval(lambda a, b: a < b),
+    "CMP_ULE": _create_comparison_eval(lambda a, b: a <= b),
+    "CMP_SGT": _create_comparison_eval(lambda a, b: a > b, signed=True),
+    "CMP_SGE": _create_comparison_eval(lambda a, b: a >= b, signed=True),
+    "CMP_SLT": _create_comparison_eval(lambda a, b: a < b, signed=True),
+    "CMP_SLE": _create_comparison_eval(lambda a, b: a <= b, signed=True),
     "LSL": _create_shift_eval(lambda size, val, count: _lsl_impl(size, val, count)),
     "LSR": _create_shift_eval(lambda size, val, count: _lsr_impl(size, val, count)),
     "ROR": _create_shift_eval(lambda size, val, count: _ror_impl(size, val, count)),
@@ -741,7 +705,7 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "RLC": _create_shift_eval(
         lambda size, val, count, carry: _rlc_impl(size, val, count, carry)
     ),
-    "INTRINSIC_TCL": eval_intrinsic_tcl,
-    "INTRINSIC_HALT": eval_intrinsic_halt,
-    "INTRINSIC_OFF": eval_intrinsic_off,
+    "INTRINSIC_TCL": _create_intrinsic_eval(),
+    "INTRINSIC_HALT": _create_intrinsic_eval(lambda state: setattr(state, 'halted', True)),
+    "INTRINSIC_OFF": _create_intrinsic_eval(lambda state: setattr(state, 'halted', True)),
 }
