@@ -479,9 +479,19 @@ if not _has_binja():
     @dataclass
     class InstructionInfo:
         length: int = 0
+        
+        def __init__(self) -> None:
+            self.length = 0
+            self.branches: list[object] = []
 
-        def add_branch(self, *args: object, **kwargs: object) -> None:
-            pass
+        def add_branch(self, branch_type: object, target: object | None = None, arch: object | None = None) -> None:
+            # Create a mock branch object
+            class MockBranch:
+                def __init__(self, branch_type: object, target: object | None):
+                    self.type = branch_type
+                    self.target = target
+            
+            self.branches.append(MockBranch(branch_type, target))
 
     bn.InstructionInfo = InstructionInfo  # type: ignore [attr-defined]
 
