@@ -90,6 +90,32 @@ EvalLLILType = Callable[
 ]
 
 
+# Global registry for architecture-specific intrinsic evaluators
+_INTRINSIC_REGISTRY: Dict[str, EvalLLILType] = {}
+
+
+def register_intrinsic(name: str, evaluator: EvalLLILType) -> None:
+    """Register an architecture-specific intrinsic evaluator.
+    
+    Args:
+        name: The intrinsic name (e.g., "TCL", "HALT", "OFF")
+        evaluator: The evaluation function that implements the intrinsic behavior
+    """
+    _INTRINSIC_REGISTRY[name] = evaluator
+
+
+def get_intrinsic_evaluator(name: str) -> Optional[EvalLLILType]:
+    """Get the evaluator for a specific intrinsic.
+    
+    Args:
+        name: The intrinsic name
+        
+    Returns:
+        The evaluator function if registered, None otherwise
+    """
+    return _INTRINSIC_REGISTRY.get(name)
+
+
 def evaluate_llil(
     llil: MockLLIL,
     regs: RegistersLike,
@@ -130,13 +156,19 @@ def evaluate_llil(
 
     if isinstance(llil, MockIntrinsic):
         intrinsic = llil
-        current_op_name_for_eval = f"INTRINSIC_{intrinsic.name}"
-
-    f = EVAL_LLIL.get(current_op_name_for_eval)
-    if f is None:
-        raise NotImplementedError(
-            f"Eval for {current_op_name_for_eval} not implemented"
-        )
+        # Look up intrinsic in the registry first
+        f = get_intrinsic_evaluator(intrinsic.name)
+        if f is None:
+            raise NotImplementedError(
+                f"Intrinsic '{intrinsic.name}' not registered. "
+                f"Architecture-specific intrinsics must be registered using register_intrinsic()."
+            )
+    else:
+        f = EVAL_LLIL.get(current_op_name_for_eval)
+        if f is None:
+            raise NotImplementedError(
+                f"Eval for {current_op_name_for_eval} not implemented"
+            )
 
     result_value, op_defined_flags = f(llil, size, regs, memory, state, get_flag, set_flag)
 
@@ -663,42 +695,7 @@ def _rlc_impl(
     return arith_result, {"C": new_carry_out, "Z": zero_flag}
 
 
-def eval_intrinsic_tcl(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    return None, None
 
-
-def eval_intrinsic_halt(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    state.halted = True
-    return None, None
-
-
-def eval_intrinsic_off(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    state.halted = True
-    return None, None
 
 
 EVAL_LLIL: Dict[str, EvalLLILType] = {
@@ -741,7 +738,4 @@ EVAL_LLIL: Dict[str, EvalLLILType] = {
     "RLC": _create_shift_eval(
         lambda size, val, count, carry: _rlc_impl(size, val, count, carry)
     ),
-    "INTRINSIC_TCL": eval_intrinsic_tcl,
-    "INTRINSIC_HALT": eval_intrinsic_halt,
-    "INTRINSIC_OFF": eval_intrinsic_off,
 }
