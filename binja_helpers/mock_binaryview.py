@@ -1,6 +1,7 @@
 """Generic Mock BinaryView implementation for testing."""
 
 from typing import Dict
+from binaryninja.binaryview import BinaryView
 
 
 class MockFile:
@@ -10,7 +11,7 @@ class MockFile:
         self.filename = filename
 
 
-class MockBinaryView:
+class MockBinaryView(BinaryView):  # type: ignore[misc]
     """Generic mock BinaryView for testing."""
 
     def __init__(self, filename: str = "test.bin"):
