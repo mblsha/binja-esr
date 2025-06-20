@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 from binja_helpers import binja_api  # noqa: F401
 from binja_helpers.eval_llil import evaluate_llil, Memory, State
@@ -7,18 +7,24 @@ from binja_helpers.mock_llil import MockLLIL, MockFlag, mllil, mreg
 import pytest
 
 class SimpleRegs:
-    def __init__(self):
-        self.values = {}
+    def __init__(self) -> None:
+        self.values: dict[str, int] = {}
 
     def get_by_name(self, name: str) -> int:
-        return self.values.get(name, 0)
+        return self.values.get(name, 0) or 0
 
     def set_by_name(self, name: str, value: int) -> None:
         self.values[name] = value & 0xFFFFFFFF
 
+    def get_flag(self, name: str) -> int:
+        return self.values.get(name, 0) or 0
+
+    def set_flag(self, name: str, value: int) -> None:
+        self.values[name] = value & 1
 
 
-def make_mem(size=0x100):
+
+def make_mem(size: int = 0x100) -> Tuple[bytearray, Callable[[int], int], Callable[[int, int], None]]:
     buf = bytearray(size)
     return (
         buf,
@@ -378,21 +384,7 @@ def test_cmp_slt_signed() -> None:
     assert result == 1
 
 
-def test_intrinsic_handlers() -> None:
-    regs = SimpleRegs()
-    buf, read_mem, write_mem = make_mem()
-    memory = Memory(read_mem, write_mem)
-    state = State()
 
-    evaluate_llil(mllil("INTRINSIC_TCL"), regs, memory, state)
-    assert not state.halted
-
-    evaluate_llil(mllil("INTRINSIC_HALT"), regs, memory, state)
-    assert state.halted
-
-    state.halted = False
-    evaluate_llil(mllil("INTRINSIC_OFF"), regs, memory, state)
-    assert state.halted
 
 
 def test_operation_without_flag_spec_leaves_flags() -> None:

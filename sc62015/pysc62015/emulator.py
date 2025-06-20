@@ -24,6 +24,7 @@ from binja_helpers.eval_llil import (
 from binaryninja import (
     InstructionInfo,
 )
+from .intrinsics import register_sc62015_intrinsics
 
 
 NUM_TEMP_REGISTERS = 14
@@ -188,6 +189,9 @@ class Registers:
 
 class Emulator:
     def __init__(self, memory: Memory) -> None:
+        # Register SC62015-specific intrinsics with the evaluation system
+        register_sc62015_intrinsics()
+        
         self.regs = Registers()
         self.memory = memory
         self.state = State()
@@ -265,4 +269,3 @@ class Emulator:
             self.regs.get_flag,
             self.regs.set_flag,
         )
-
