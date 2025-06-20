@@ -3,7 +3,7 @@ from . import RegisterInfo, RegisterName, FlagWriteTypeName
 
 class Architecture:
     name: str
-    regs: Dict[Union[RegisterName, str], RegisterInfo]
+    regs: Dict[RegisterName, RegisterInfo]
     stack_pointer: str
     flag_write_types: List[Union[FlagWriteTypeName, str]]
     standalone_platform: Any
