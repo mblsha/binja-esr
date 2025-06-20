@@ -131,11 +131,18 @@ class MockGoto:
     label: Any
 
 
+class MockSourceFunction:
+    """Mock source function with arch attribute."""
+    def __init__(self) -> None:
+        self.arch = MockArch()
+
+
 class MockLowLevelILFunction(LowLevelILFunction):  # type: ignore[misc]
     def __init__(self) -> None:
         # self.handle = MockHandle()
         self._arch = MockArch()
         self.ils: List[MockLLIL] = []
+        self.source_function = MockSourceFunction()
 
     def __del__(self) -> None:
         pass
