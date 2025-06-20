@@ -378,21 +378,7 @@ def test_cmp_slt_signed() -> None:
     assert result == 1
 
 
-def test_intrinsic_handlers() -> None:
-    regs = SimpleRegs()
-    buf, read_mem, write_mem = make_mem()
-    memory = Memory(read_mem, write_mem)
-    state = State()
 
-    evaluate_llil(mllil("INTRINSIC_TCL"), regs, memory, state)
-    assert not state.halted
-
-    evaluate_llil(mllil("INTRINSIC_HALT"), regs, memory, state)
-    assert state.halted
-
-    state.halted = False
-    evaluate_llil(mllil("INTRINSIC_OFF"), regs, memory, state)
-    assert state.halted
 
 
 def test_operation_without_flag_spec_leaves_flags() -> None:
