@@ -167,6 +167,20 @@ if not _has_binja():
 
     sys.modules["binaryninja.binaryview"] = binaryview_mod
 
+    function_mod = types.ModuleType("binaryninja.function")
+
+    class Function:
+        """Mock Binary Ninja Function class."""
+        
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            # Create a mock architecture
+            from .mock_llil import MockArch
+            self.arch = MockArch()
+
+    function_mod.Function = Function  # type: ignore [attr-defined]
+    bn.function = function_mod  # type: ignore [attr-defined]
+    sys.modules["binaryninja.function"] = function_mod
+
     arch_mod = types.ModuleType("binaryninja.architecture")
 
     class Architecture:
