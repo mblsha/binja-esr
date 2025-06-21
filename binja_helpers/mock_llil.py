@@ -53,6 +53,8 @@ class MockFlag:
 
 # we cannot use real Architecture (it requires a Binary Ninja license)
 class MockArch:
+    address_size = 4  # SCUMM6 uses 4-byte addresses
+    
     def get_reg_index(self, name: object) -> Any:
         assert name != "IMR"
 
