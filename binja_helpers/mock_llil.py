@@ -143,6 +143,11 @@ class MockLowLevelILFunction(LowLevelILFunction):  # type: ignore[misc]
         self._arch = MockArch()
         self.ils: List[MockLLIL] = []
         self.source_function = MockSourceFunction()
+    
+    @property
+    def arch(self) -> MockArch:
+        """The architecture for this LLIL function."""
+        return self._arch
 
     def __del__(self) -> None:
         pass
