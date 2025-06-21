@@ -11,8 +11,34 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
 
-SZ_LOOKUP = {1: ".b", 2: ".w", 3: ".l", 4: ".error"}
-SUFFIX_SZ = {"b": 1, "w": 2, "l": 3}
+# Default size lookup table - can be overridden per architecture
+DEFAULT_SZ_LOOKUP = {1: ".b", 2: ".w", 3: ".l", 4: ".error"}
+DEFAULT_SUFFIX_SZ = {"b": 1, "w": 2, "l": 3}
+
+# Current active size lookup - can be modified by set_size_lookup()
+SZ_LOOKUP = DEFAULT_SZ_LOOKUP.copy()
+SUFFIX_SZ = DEFAULT_SUFFIX_SZ.copy()
+
+
+def set_size_lookup(size_lookup: dict[int, str], suffix_sz: dict[str, int] = None) -> None:
+    """
+    Set custom size lookup tables for architecture-specific width suffixes.
+    
+    Args:
+        size_lookup: Map from byte size to suffix string (e.g., {4: ".4"})
+        suffix_sz: Optional reverse mapping from suffix to size (e.g., {"4": 4})
+    """
+    global SZ_LOOKUP, SUFFIX_SZ
+    SZ_LOOKUP = size_lookup.copy()
+    if suffix_sz is not None:
+        SUFFIX_SZ = suffix_sz.copy()
+
+
+def reset_size_lookup() -> None:
+    """Reset size lookup tables to defaults."""
+    global SZ_LOOKUP, SUFFIX_SZ
+    SZ_LOOKUP = DEFAULT_SZ_LOOKUP.copy()
+    SUFFIX_SZ = DEFAULT_SUFFIX_SZ.copy()
 
 
 @dataclass
@@ -61,7 +87,8 @@ class MockLLIL:
         opsplit = op.split(".")
         op = opsplit[0]
         if len(opsplit) > 1:
-            size = SUFFIX_SZ[opsplit[1]]
+            suffix = opsplit[1]
+            size = SUFFIX_SZ.get(suffix, None)
         else:
             size = None
         return size
