@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Union
 from . import RegisterInfo, RegisterName, FlagWriteTypeName
 
-class Architecture:
+class Architecture(object):
     address_size: int
     name: str
     regs: Dict[RegisterName, RegisterInfo]

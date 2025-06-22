@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-class BinaryView:
+class BinaryView(object):
     file: Any
     end: int
     
