@@ -261,15 +261,15 @@ class Assembler:
                                 setattr(op, "value", int(getattr(op, "value"), 0))
                             except ValueError:
                                 setattr(op, "value", 0)
+                        offset = getattr(op, "offset", None)
                         if (
-                            hasattr(op, "offset")
-                            and isinstance(op.offset, ImmOffset)
-                            and isinstance(op.offset.value, str)
+                            isinstance(offset, ImmOffset)
+                            and isinstance(offset.value, str)
                         ):
                             try:
-                                op.offset.value = int(op.offset.value, 0)
+                                offset.value = int(offset.value, 0)
                             except ValueError:
-                                op.offset.value = 0
+                                offset.value = 0
                         if hasattr(op, "extra_hi") and getattr(op, "value", None) is not None:
                             setattr(op, "extra_hi", (int(getattr(op, "value")) >> 16) & 0xFF)
                         if isinstance(op, Imm20) and isinstance(op.value, int):
@@ -404,12 +404,12 @@ class Assembler:
                         setattr(op, "value", val)
                     if isinstance(op, Imm20) and isinstance(val, int):
                         op.extra_hi = (val >> 16) & 0xFF
+                offset = getattr(op, "offset", None)
                 if (
-                    hasattr(op, "offset")
-                    and isinstance(op.offset, ImmOffset)
-                    and isinstance(op.offset.value, str)
+                    isinstance(offset, ImmOffset)
+                    and isinstance(offset.value, str)
                 ):
-                    op.offset.value = self._evaluate_operand(op.offset.value)
+                    offset.value = self._evaluate_operand(offset.value)
             encoder = Encoder()
             instr.encode(encoder, self.current_address)
             return encoder.buf
