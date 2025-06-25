@@ -61,7 +61,16 @@ class BinaryView:
     def create_user_function(self, addr: int) -> Any | None: ...
     def __init__(self, parent_view: "BinaryView | None" = None, file_metadata: Any = None) -> None: ...
 
-InstructionInfo: Any
+class InstructionInfo:
+    """Minimal stub for Binary Ninja InstructionInfo."""
+
+    length: int
+
+    def __init__(self) -> None: ...
+
+    def add_branch(
+        self, branch_type: Any, target: Any | None = None, arch: Any | None = None
+    ) -> None: ...
 CallingConvention: Any
 InstructionTextToken: Any
 UIContext: Any
