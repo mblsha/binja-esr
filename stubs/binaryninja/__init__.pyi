@@ -40,11 +40,11 @@ class Architecture:
     intrinsics: dict[str, IntrinsicInfo] = {}
     standalone_platform: Any = None
     
-    # Workaround for mypy not understanding __getitem__ on metaclass
+    # Workaround for type checker not understanding __getitem__ on metaclass
     @classmethod
     def __class_getitem__(cls, name: str) -> "Architecture": ...
 
-# Unfortunately mypy has issues with dynamic indexing, so we need this workaround
+# Unfortunately type checkers have issues with dynamic indexing, so we need this workaround
 def __getattr__(name: str) -> Any: ...
 
 class BinaryView:

@@ -214,8 +214,8 @@ class Emulator:
         info = InstructionInfo()
         instr.analyze(info, address)
 
-        # MyPy Fix for line 244: Cast info.length to int.
-        # Although type-hinted as int, MyPy might not be able to prove it in all contexts.
+        # Type checker fix: Cast info.length to int.
+        # Although type-hinted as int, type checker might not be able to prove it in all contexts.
         current_instr_length = cast(int, info.length)
         assert (
             current_instr_length is not None
@@ -236,7 +236,7 @@ class Emulator:
                 continue
 
             if isinstance(node, MockIfExpr):
-                # MyPy Fix for line 253: Ensure node.cond is MockLLIL for eval
+                # Type checker fix: Ensure node.cond is MockLLIL for eval
                 assert isinstance(
                     node.cond, MockLLIL
                 ), "Condition for IF expression must be MockLLIL"

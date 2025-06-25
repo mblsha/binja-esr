@@ -1,6 +1,6 @@
 import os
 import sys
-from mypy import api
+import subprocess
 
 # Ensure repository root is in sys.path so sc62015 can be imported when the
 # script is run from the 'scripts' directory.
@@ -21,13 +21,13 @@ except ImportError:
 if not has_binja:
     from binja_helpers import binja_api  # noqa: F401
     stub_dir = os.path.join(os.path.dirname(__file__), "..", "stubs")
-    os.environ["MYPYPATH"] = os.path.abspath(stub_dir)
-    print(f"Using stubs from {os.environ['MYPYPATH']}")
+    print(f"Using stubs from {os.path.abspath(stub_dir)}")
 else:
-    os.environ["MYPYPATH"] = bn_path
     print(f"Using Binary Ninja from {bn_path}")
 
-stdout, stderr, exit_status = api.run(["sc62015/pysc62015"])
-print(stdout, end="")
-print(stderr, end="", file=sys.stderr)
-sys.exit(exit_status)
+# Run pyright on the target directory
+result = subprocess.run(["pyright", "sc62015/pysc62015"], capture_output=True, text=True)
+print(result.stdout, end="")
+print(result.stderr, end="", file=sys.stderr)
+sys.exit(result.returncode)
+
