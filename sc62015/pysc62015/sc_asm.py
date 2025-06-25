@@ -9,9 +9,9 @@ from plumbum import cli  # type: ignore[import-untyped]
 # Assuming the provided library files are in a package named 'sc62015'
 from .asm import AsmTransformer, asm_parser, ParsedInstruction
 from binja_helpers.coding import Encoder
+from .instr.opcode_table import OPCODES
 from .instr import (
     Instruction,
-    OPCODES,
     Opts,
     IMemOperand,
     IMem8,

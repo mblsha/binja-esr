@@ -3,9 +3,9 @@ import enum
 from binja_helpers.coding import FetchDecoder
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
+from .instr.opcode_table import OPCODES
 from .instr import (
     decode,
-    OPCODES,
     Instruction,
 )
 from binja_helpers.mock_llil import (
@@ -21,7 +21,7 @@ from binja_helpers.eval_llil import (
     ResultFlags,
     evaluate_llil,
 )
-from binaryninja import (
+from binaryninja import (  # type: ignore
     InstructionInfo,
 )
 from .intrinsics import register_sc62015_intrinsics

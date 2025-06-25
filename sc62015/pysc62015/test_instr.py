@@ -1,8 +1,8 @@
 
-from binja_helpers import binja_api  # noqa: F401
+from binja_helpers import binja_api  # noqa: F401  # pyright: ignore
+from .instr.opcode_table import OPCODES
 from .instr import (
     encode,
-    OPCODES,
     Operand,
     Instruction,
     JP_Abs,
@@ -45,10 +45,10 @@ from binja_helpers.tokens import asm_str
 from binja_helpers.coding import Decoder, Encoder
 from binja_helpers.mock_analysis import MockAnalysisInfo
 from binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
-from binaryninja.lowlevelil import (
+from binaryninja.lowlevelil import (  # type: ignore
     LLIL_TEMP,
 )
-from binaryninja import RegisterName
+from binaryninja import RegisterName  # type: ignore
 
 import os
 from pprint import pprint
