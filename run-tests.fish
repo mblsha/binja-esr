@@ -1,10 +1,8 @@
 #!/usr/bin/env fish
 
-set -x MYPYPATH (pwd)/stubs:~/Applications/Binary\ Ninja.app/Contents/Resources/python/
-
 function build_and_run
   ruff check .
-  mypy sc62015/pysc62015
+  pyright sc62015/pysc62015
   # pytest -vv
   pytest --cov=sc62015/pysc62015 --cov-report=term-missing
 end
@@ -16,4 +14,3 @@ while fswatch -1 .
   build_and_run
   sleep 1
 end
-

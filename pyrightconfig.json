@@ -1,0 +1,41 @@
+{
+  "include": [
+    "sc62015/pysc62015"
+  ],
+  "exclude": [
+    "sc62015/pysc62015/hw-test"
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "stubPath": "./stubs",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning",
+  "reportGeneralTypeIssues": "warning",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalSubscript": "none",
+  "reportOptionalOperand": "none",
+  "reportOptionalCall": "none",
+  "reportOptionalIterable": "none",
+  "reportOptionalContextManager": "none",
+  "reportUntypedFunctionDecorator": "none",
+  "reportUntypedClassDecorator": "none",
+  "reportUntypedBaseClass": "none",
+  "reportUntypedNamedTuple": "none",
+  "reportPrivateUsage": "none",
+  "reportConstantRedefinition": "none",
+  "reportIncompatibleMethodOverride": "none",
+  "reportIncompatibleVariableOverride": "none",
+  "reportOverlappingOverload": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownLambdaType": "none",
+  "reportUnknownParameterType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportInvalidTypeForm": "none",
+  "reportAssignmentType": "none",
+  "reportCallIssue": "none"
+}
