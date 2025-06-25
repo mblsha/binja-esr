@@ -1040,6 +1040,7 @@ def test_compare_opcodes() -> None:
                     check_no_unimplemented(op)
 
         def start_check_lifting(ils: List[MockLLIL]) -> None:
+            assert b is not None  # Already checked above
             assert len(ils) > 0, f"Failed to lift {b.hex()} at line {i+1}: {s}"
             for instr in ils:
                 check_no_unimplemented(instr)

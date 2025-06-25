@@ -13,7 +13,6 @@
   "reportUnusedImport": "warning",
   "reportUnusedVariable": "warning",
   "reportGeneralTypeIssues": "warning",
-  "reportOptionalMemberAccess": "none",
   "reportOptionalSubscript": "none",
   "reportOptionalOperand": "none",
   "reportOptionalCall": "none",
