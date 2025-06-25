@@ -36,6 +36,5 @@
   "reportAttributeAccessIssue": "none",
   "reportArgumentType": "none",
   "reportInvalidTypeForm": "none",
-  "reportAssignmentType": "none",
   "reportCallIssue": "none"
 }
