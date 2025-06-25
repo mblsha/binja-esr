@@ -23,9 +23,8 @@ checks:
 ```bash
 python -m pip install -e .[dev]
 ruff check
-mypy sc62015/pysc62015
+pyright sc62015/pysc62015
 pytest --cov=sc62015/pysc62015 --cov-report=term-missing --cov-report=xml
 ```
 
 The CI workflow uploads coverage results to Codecov on each commit.
-

@@ -14,7 +14,7 @@ dependencies = ["lark", "bincopy", "plumbum"]
 dev = [
     "pytest",
     "pytest-cov",
-    "mypy",
+    "pyright",
     "ruff",
     "serial",  # for testing with real hardware
 ]
