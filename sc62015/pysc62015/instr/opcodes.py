@@ -24,19 +24,19 @@ import enum
 from contextlib import contextmanager
 
 
-from binja_helpers import binja_api  # noqa: F401
-from binaryninja import (
+from binja_helpers import binja_api  # noqa: F401  # pyright: ignore
+from binaryninja import (  # type: ignore
     InstructionInfo,
 )
-from binaryninja import (
+from binaryninja import (  # type: ignore
     RegisterName,
     IntrinsicName,
     FlagName,
 )
-from binaryninja.lowlevelil import (
+from binaryninja.lowlevelil import (  # type: ignore
     LowLevelILFunction,
 )
-from binaryninja.lowlevelil import (
+from binaryninja.lowlevelil import (  # type: ignore
     LowLevelILLabel,
     LLIL_TEMP,
     ExpressionIndex,
