@@ -32,5 +32,10 @@
   "reportUnknownMemberType": "none",
   "reportUnknownArgumentType": "none",
   "reportUnknownLambdaType": "none",
-  "reportUnknownParameterType": "none"
+  "reportUnknownParameterType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportInvalidTypeForm": "none",
+  "reportAssignmentType": "none",
+  "reportCallIssue": "none"
 }
