@@ -471,7 +471,7 @@ class SC62015_AssemblerCLI(cli.Application):
     PROGNAME = "sc_asm"
     VERSION = "1.0.0"
 
-    output_file = cli.SwitchAttr(
+    output_file: str | None = cli.SwitchAttr(
         ["-o", "--output"], str, help="Output file path for ihex (default: stdout)"
     )
 
