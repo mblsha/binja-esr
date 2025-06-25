@@ -1,4 +1,5 @@
 import re
+from typing import Union
 import pytest
 
 from .sc_asm import Assembler
@@ -54,11 +55,11 @@ def _transform(instr: str) -> str:
     return f"{mnemonic} {rest}".strip()
 
 
-def _strip_pre(data: bytes) -> bytes:
+def _strip_pre(data: Union[bytearray, bytes]) -> bytes:
     index = 0
     while index < len(data) and data[index] in PRE_PREFIXES:
         index += 1
-    return data[index:]
+    return bytes(data[index:])
 
 
 def test_opcode_table_roundtrip() -> None:
@@ -86,7 +87,7 @@ def test_opcode_table_roundtrip() -> None:
         if _strip_pre(output) != _strip_pre(expected_bytes):
             try:
                 expected_instr = decode(expected_bytes, 0)
-                output_instr = decode(output, 0)
+                output_instr = decode(bytearray(output), 0)
             except Exception:
                 mismatches.append(
                     f"Line {idx+1}: {asm_text} -> {output.hex()} expected {expected_bytes.hex()}"
