@@ -1,5 +1,5 @@
-from binja_helpers import binja_api  # noqa: F401
 
+from binja_helpers import binja_api  # noqa: F401
 from .instr import (
     encode,
     OPCODES,

@@ -131,7 +131,7 @@ class RETF(RetInstruction):
         return 3
 class RETI(RetInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        imr, *rest = RegIMR().operands()
+        imr, *_rest = RegIMR().operands()
         imr.lift_assign(il, il.pop(1))
         RegF().lift_assign(il, il.pop(1))
         il.append(il.ret(il.pop(3)))
@@ -267,7 +267,7 @@ class POPS(StackPopInstruction): pass
 
 class ArithmeticInstruction(Instruction):
     def width(self) -> int:
-        first, second = self.operands()
+        first, _second = self.operands()
         assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         return first.width()
 class ADD(ArithmeticInstruction):
@@ -476,7 +476,7 @@ def lift_multi_byte(
     w = op1.width()
 
     load1, store1, adv1 = make_handlers(op1, True, dst_mode)
-    load2, store2, adv2 = make_handlers(op2, False, src_mode)
+    load2, _store2, adv2 = make_handlers(op2, False, src_mode)
 
     if clear_carry:
         il.append(il.set_flag(CFlag, il.const(1, 0)))
@@ -818,7 +818,7 @@ class IR(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.push(3, RegPC().lift(il)))
         il.append(il.push(1, RegF().lift(il)))
-        imr, *rest = RegIMR().operands()
+        imr, *_rest = RegIMR().operands()
         il.append(il.push(1, imr.lift(il)))
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
 

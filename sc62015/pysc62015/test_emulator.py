@@ -1,5 +1,5 @@
-from binja_helpers import binja_api  # noqa: F401
 
+from binja_helpers import binja_api  # noqa: F401
 from .emulator import (
     Registers,
     RegisterName,
@@ -528,7 +528,7 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
     A generic, parameterized test function that runs a single instruction case.
     """
     # 1. Setup Phase
-    cpu, raw, reads, writes = _make_cpu_and_mem(
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
         ADDRESS_SPACE_SIZE, case.init_mem, case.instr_bytes, case.initial_pc
     )
 
@@ -574,7 +574,7 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
 
 
 def test_pushs_pops() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4F"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4F"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHS F"
 
     cpu.regs.set(RegisterName.F, 0x0)
@@ -629,7 +629,7 @@ def test_pushs_pops() -> None:
 
 
 def test_pushu_popu() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2E"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2E"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHU F"
 
     cpu.regs.set(RegisterName.F, 0x0)
@@ -679,7 +679,7 @@ def test_pushu_popu() -> None:
 
 
 def test_pushu_popu_r2() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2A"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2A"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHU BA"
 
     cpu.regs.set(RegisterName.BA, 0x1234)
@@ -695,7 +695,7 @@ def test_pushu_popu_r2() -> None:
     assert cpu.regs.get(RegisterName.BA) == 0x1234
 
 def test_call_ret() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("042000"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("042000"))
     raw[0x20] = 0x06
     assert asm_str(cpu.decode_instruction(0x00).render()) == "CALL  0020"
     assert asm_str(cpu.decode_instruction(0x20).render()) == "RET"
@@ -714,7 +714,7 @@ def test_call_ret() -> None:
 
 
 def test_call_ret_high_page() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
         0x40000, {}, bytes.fromhex("042000"), instr_addr=0x30000
     )
     raw[0x30020] = 0x06
@@ -735,7 +735,7 @@ def test_call_ret_high_page() -> None:
 
 
 def test_callf_retf() -> None:
-    cpu, raw, reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("05200000"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("05200000"))
     raw[0x20] = 0x07
     assert asm_str(cpu.decode_instruction(0x00).render()) == "CALLF 00020"
     assert asm_str(cpu.decode_instruction(0x20).render()) == "RETF"
@@ -754,7 +754,7 @@ def test_callf_retf() -> None:
 
 
 def test_rol_ror_a() -> None:
-    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("E6"))
+    cpu, _, _, _writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("E6"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "ROL   A"
 
     # Case 1: A = 0x55 (01010101)
@@ -773,7 +773,7 @@ def test_rol_ror_a() -> None:
     assert cpu.regs.get(RegisterName.FC) == 1
     assert cpu.regs.get(RegisterName.FZ) == 0
 
-    cpu, _, _, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("E4"))
+    cpu, _, _, _writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("E4"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "ROR   A"
 
     # Case 1: A = 0x55 (01010101)
@@ -962,7 +962,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
     ],  # Use test_id for readable test names
 )
 def test_pre_addressing_modes(tc: PreTestCase) -> None:
-    cpu, raw_memory_array, logged_reads, logged_writes = _make_cpu_and_mem(
+    cpu, raw_memory_array, _logged_reads, logged_writes = _make_cpu_and_mem(
         ADDRESS_SPACE_SIZE,
         tc.init_memory_state,
         tc.instr_bytes,

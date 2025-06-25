@@ -475,7 +475,7 @@ class SC62015_AssemblerCLI(cli.Application):
         ["-o", "--output"], str, help="Output file path for ihex (default: stdout)"
     )
 
-    def main(self, input_file: cli.ExistingFile) -> None:
+    def main(self, input_file: cli.ExistingFile) -> None:  # type: ignore[type-arg]
         """Main entry point for the CLI application."""
         print(f"Assembling '{input_file}'...")
         try:
