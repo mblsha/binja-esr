@@ -33,8 +33,6 @@
   "reportUnknownArgumentType": "none",
   "reportUnknownLambdaType": "none",
   "reportUnknownParameterType": "none",
-  "reportAttributeAccessIssue": "none",
   "reportArgumentType": "none",
-  "reportAssignmentType": "none",
   "reportCallIssue": "none"
 }
