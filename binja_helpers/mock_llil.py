@@ -220,8 +220,3 @@ class MockLowLevelILFunction(LowLevelILFunction):  # type: ignore[misc]
     def get_label_for_address(self, arch: Any, addr: int) -> LowLevelILLabel:
         """Mock implementation for getting a label for an address."""
         return LowLevelILLabel()
-    
-    def abs(self, size: int, a: Any) -> MockLLIL:
-        """Absolute value operation."""
-        suffix = SZ_LOOKUP.get(size, "")
-        return MockLLIL(f"ABS{suffix}", [a])
