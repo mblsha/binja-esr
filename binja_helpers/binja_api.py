@@ -115,7 +115,26 @@ if not _has_binja():
         addr: int
         name: str
 
+    class Type:
+        """Mock Type class for Binary Ninja types."""
+        def __init__(self, type_str: str = "unknown"):
+            self._type_str = type_str
+        
+        @staticmethod
+        def array(element_type: 'Type', count: int) -> 'Type':
+            """Create an array type."""
+            return Type(f"array[{count}]")
+        
+        @staticmethod
+        def int(width: int, sign: bool = True, altname: str = "") -> 'Type':
+            """Create an integer type."""
+            return Type(f"int{width}")
+        
+        def __repr__(self) -> str:
+            return f"Type({self._type_str})"
+
     types_mod.Symbol = Symbol  # type: ignore [attr-defined]
+    types_mod.Type = Type  # type: ignore [attr-defined]
     bn.types = types_mod  # type: ignore [attr-defined]
     sys.modules["binaryninja.types"] = types_mod
 
