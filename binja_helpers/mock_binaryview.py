@@ -1,6 +1,6 @@
 """Generic Mock BinaryView implementation for testing."""
 
-from typing import Dict
+from typing import Dict, Any
 from binaryninja.binaryview import BinaryView
 
 
@@ -46,3 +46,8 @@ class MockBinaryView(BinaryView):  # type: ignore[misc]
     def set_memory_region(self, start_addr: int, data: bytes) -> None:
         """Set a region of memory for testing."""
         self.write_memory(start_addr, data)
+
+    def define_user_type(self, name: str, type_obj: Any) -> None:
+        """Mock implementation of define_user_type."""
+        # For testing purposes, we just accept the call without error
+        pass
