@@ -168,9 +168,15 @@ class SC62015FullView(SC62015BaseView):
         SegmentDef('CE0', CE0_ADDR_START, CE0_ADDR_END - CE0_ADDR_START, CE0_ADDR_START,
                    SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
                    SectionSemantics.ReadWriteDataSectionSemantics),
+
+        # CE2 registers
+        # TODO: Need to figure out the proper memory map - CE0/CE1/CE2 indexing doesn't make sense
+        SegmentDef('CE2', 0xC0000, 0x20000, 0xC0000,
+                   SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable | SegmentFlag.SegmentExecutable,
+                   SectionSemantics.ReadWriteDataSectionSemantics),
     ]
 
     @classmethod
     def is_valid_for_data(cls, data) -> bool:
         buf = data.read(0, 4*3)
-        return buf == b"\x01\x01\x01\x01\x01\x01\x01\x01\x06\x60\x00\x34"
+        return buf == b"\x01\x01\x01\x01\x01\x01\x01\x01\x06\x60\x00\x34" or buf == b"\x00\x00\x0C\x18\xF8\x0D\x40\x00\x24\x07\x00\x00"
