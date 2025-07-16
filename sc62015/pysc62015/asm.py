@@ -528,68 +528,62 @@ class AsmTransformer(Transformer):
     def emem_operand(self, items: List[Any]) -> EMemAddr:
         return cast(EMemAddr, items[0])
 
-    def emem_reg_simple(self, items: List[Any]) -> EMemReg:
-        reg = cast(Reg, items[0])
+    def _build_emem_reg(
+        self,
+        reg: Reg,
+        mode: EMemRegMode,
+        offset: Optional[int] = None,
+        sign: str = "+",
+    ) -> EMemReg:
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = EMemRegMode.SIMPLE.value
+        r.high4 = mode.value
         op = EMemReg(width=reg.width())
         op.reg = r
-        op.mode = EMemRegMode.SIMPLE
+        op.mode = mode
+        if offset is not None:
+            off = ImmOffset(sign)
+            off.value = offset
+            op.offset = off
         return op
+
+    def _cmp_imem_reg(
+        self,
+        op1: IMemOperand,
+        reg: Reg,
+        mem_cls: Type[IMemOperand],
+        instr: Type[Instruction],
+    ) -> InstructionNode:
+        mem = cast(Any, mem_cls())
+        mem.value = op1.n_val
+        r = Reg3()
+        r.reg = reg.reg
+        r.reg_raw = Reg3.reg_idx(cast(RegisterName, r.reg))
+        r.high4 = 0
+        return self._instr_node(instr, mem, r)
+
+    def emem_reg_simple(self, items: List[Any]) -> EMemReg:
+        reg = cast(Reg, items[0])
+        return self._build_emem_reg(reg, EMemRegMode.SIMPLE)
 
     def emem_reg_post_inc(self, items: List[Any]) -> EMemReg:
         reg = cast(Reg, items[0])
-        r = Reg3()
-        r.reg = reg.reg
-        r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = EMemRegMode.POST_INC.value
-        op = EMemReg(width=reg.width())
-        op.reg = r
-        op.mode = EMemRegMode.POST_INC
-        return op
+        return self._build_emem_reg(reg, EMemRegMode.POST_INC)
 
     def emem_reg_pre_dec(self, items: List[Any]) -> EMemReg:
         reg = cast(Reg, items[0])
-        r = Reg3()
-        r.reg = reg.reg
-        r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = EMemRegMode.PRE_DEC.value
-        op = EMemReg(width=reg.width())
-        op.reg = r
-        op.mode = EMemRegMode.PRE_DEC
-        return op
+        return self._build_emem_reg(reg, EMemRegMode.PRE_DEC)
 
     def emem_reg_plus(self, items: List[Any]) -> EMemReg:
         reg = cast(Reg, items[0])
         value = items[1]
-        r = Reg3()
-        r.reg = reg.reg
-        r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = EMemRegMode.POSITIVE_OFFSET.value
-        offset = ImmOffset("+")
-        offset.value = value
-        op = EMemReg(width=reg.width())
-        op.reg = r
-        op.mode = EMemRegMode.POSITIVE_OFFSET
-        op.offset = offset
-        return op
+        return self._build_emem_reg(reg, EMemRegMode.POSITIVE_OFFSET, value, "+")
 
     def emem_reg_minus(self, items: List[Any]) -> EMemReg:
         reg = cast(Reg, items[0])
         value = items[1]
-        r = Reg3()
-        r.reg = reg.reg
-        r.reg_raw = Reg3.reg_idx(reg.reg)
-        r.high4 = EMemRegMode.NEGATIVE_OFFSET.value
-        offset = ImmOffset("-")
-        offset.value = value
-        op = EMemReg(width=reg.width())
-        op.reg = r
-        op.mode = EMemRegMode.NEGATIVE_OFFSET
-        op.offset = offset
-        return op
+        return self._build_emem_reg(reg, EMemRegMode.NEGATIVE_OFFSET, value, "-")
 
     def emem_reg_operand(self, items: List[Any]) -> EMemReg:
         return cast(EMemReg, items[0])
@@ -1380,23 +1374,11 @@ class AsmTransformer(Transformer):
 
     def cmpw_imem_reg(self, items: List[Any]) -> InstructionNode:
         op1, reg = items
-        m = IMem16()
-        m.value = op1.n_val
-        r = Reg3()
-        r.reg = cast(Reg, reg).reg
-        r.reg_raw = Reg3.reg_idx(cast(RegisterName, r.reg))
-        r.high4 = 0
-        return self._instr_node(CMPW, m, r)
+        return self._cmp_imem_reg(op1, cast(Reg, reg), IMem16, CMPW)
 
     def cmpp_imem_reg(self, items: List[Any]) -> InstructionNode:
         op1, reg = items
-        m = IMem20()
-        m.value = op1.n_val
-        r = Reg3()
-        r.reg = cast(Reg, reg).reg
-        r.reg_raw = Reg3.reg_idx(cast(RegisterName, r.reg))
-        r.high4 = 0
-        return self._instr_node(CMPP, m, r)
+        return self._cmp_imem_reg(op1, cast(Reg, reg), IMem20, CMPP)
 
     def test_a_imm(self, items: List[Any]) -> InstructionNode:
         imm = self._imm8(items[0])
