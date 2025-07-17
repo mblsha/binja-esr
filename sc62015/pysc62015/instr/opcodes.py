@@ -1077,7 +1077,29 @@ class IMem20(IMem8):
         return 3
 
 # Register operand encoded as part of the instruction opcode
-class Reg(Operand, HasWidth):
+class RegLiftMixin(HasWidth):
+    """Mixin providing common register lifting helpers."""
+
+    reg: Any
+
+    def lift(
+        self,
+        il: LowLevelILFunction,
+        pre: Optional[AddressingMode] = None,
+        side_effects: bool = True,
+    ) -> ExpressionIndex:
+        return il.reg(self.width(), self.reg)
+
+    def lift_assign(
+        self,
+        il: LowLevelILFunction,
+        value: ExpressionIndex,
+        pre: Optional[AddressingMode] = None,
+    ) -> None:
+        il.append(il.set_reg(self.width(), self.reg, value))
+
+
+class Reg(RegLiftMixin, Operand, HasWidth):
     def __init__(self, reg: Any) -> None:
         super().__init__()
         self.reg = reg
@@ -1091,14 +1113,7 @@ class Reg(Operand, HasWidth):
     def width(self) -> int:
         return REG_SIZES[self.reg]
 
-    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
-        return il.reg(self.width(), self.reg)
-
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
-                    Optional[AddressingMode] = None) -> None:
-        il.append(il.set_reg(self.width(), self.reg, value))
-
-class TempReg(Operand):
+class TempReg(RegLiftMixin, Operand):
     def __init__(self, reg: Any, width: int=3) -> None:
         super().__init__()
         self.reg = reg
@@ -1110,12 +1125,7 @@ class TempReg(Operand):
     def width(self) -> int:
         return self._width
 
-    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
-        return il.reg(self.width(), self.reg)
-
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
-                    Optional[AddressingMode] = None) -> None:
-        il.append(il.set_reg(self.width(), self.reg, value))
+    # lift() and lift_assign() provided by RegLiftMixin
 
 # only makes sense for PUSHU / POPU
 class RegIMR(HasOperands, Reg):
@@ -1162,7 +1172,7 @@ class RegF(Reg):
         il.append(il.set_flag(CFlag, il.and_expr(1, tmp.lift(il), il.const(1, 1))))
         il.append(il.set_flag(ZFlag, il.and_expr(1, tmp.lift(il), il.const(1, 2))))
 
-class Reg3(Operand, HasWidth):
+class Reg3(RegLiftMixin, Operand, HasWidth):
     reg: Optional[RegisterName]
     reg_raw: Optional[int]
     high4: Optional[int]
@@ -1205,14 +1215,7 @@ class Reg3(Operand, HasWidth):
         assert self.reg is not None, "Register not set"
         return [TReg(self.reg)]
 
-    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
-        assert self.reg is not None, "Register not set"
-        return il.reg(self.width(), self.reg)
-
-    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre:
-                    Optional[AddressingMode] = None) -> None:
-        assert self.reg is not None, "Register not set"
-        il.append(il.set_reg(self.width(), self.reg, value))
+    # lift() and lift_assign() provided by RegLiftMixin
 
 # External Memory: Absolute Addressing using 20-bit address
 # [lmn]: encoded as `[n m l]`
