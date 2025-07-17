@@ -16,6 +16,5 @@
   "reportUnknownArgumentType": "none",
   "reportUnknownLambdaType": "none",
   "reportUnknownParameterType": "none",
-  "reportArgumentType": "none",
   "reportCallIssue": "none"
 }
