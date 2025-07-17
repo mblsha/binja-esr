@@ -286,6 +286,27 @@ class SBC(ArithmeticInstruction):
                                                     il.flag(CFlag)), CZFlag)
 
 
+def _conditional_assign(
+    il: LowLevelILFunction,
+    temp: TempReg,
+    cond: ExpressionIndex,
+    true_val: ExpressionIndex,
+    false_val: ExpressionIndex,
+) -> None:
+    """Assign ``true_val`` or ``false_val`` to ``temp`` based on ``cond``."""
+    label_true = LowLevelILLabel()
+    label_false = LowLevelILLabel()
+    label_end = LowLevelILLabel()
+
+    il.append(il.if_expr(cond, label_true, label_false))
+    il.mark_label(label_true)
+    temp.lift_assign(il, true_val)
+    il.append(il.goto(label_end))
+    il.mark_label(label_false)
+    temp.lift_assign(il, false_val)
+    il.mark_label(label_end)
+
+
 def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: ExpressionIndex) -> Operand:
     assert w == 1, "BCD add currently only supports 1-byte operands"
 
@@ -303,16 +324,13 @@ def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
     adj_low_needed = il.compare_unsigned_greater_than(1, sum_low_with_carry_val, il.const(1, 9))
     sum_low_adjusted_val = il.add(1, sum_low_with_carry_val, il.const(1, 0x06))
 
-    label_adj_low_true = LowLevelILLabel()
-    label_adj_low_false = LowLevelILLabel()
-    label_after_adj_low = LowLevelILLabel()
-    il.append(il.if_expr(adj_low_needed, label_adj_low_true, label_adj_low_false))
-    il.mark_label(label_adj_low_true)
-    temp_sum_low_final_reg.lift_assign(il, sum_low_adjusted_val)
-    il.append(il.goto(label_after_adj_low))
-    il.mark_label(label_adj_low_false)
-    temp_sum_low_final_reg.lift_assign(il, sum_low_with_carry_val)
-    il.mark_label(label_after_adj_low)
+    _conditional_assign(
+        il,
+        temp_sum_low_final_reg,
+        adj_low_needed,
+        sum_low_adjusted_val,
+        sum_low_with_carry_val,
+    )
 
     current_sum_low_final = temp_sum_low_final_reg.lift(il)
     result_low_nibble_val = il.and_expr(1, current_sum_low_final, il.const(1, 0x0F))
@@ -329,16 +347,13 @@ def bcd_add_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
     adj_high_needed = il.compare_unsigned_greater_than(1, sum_high_with_carry_val, il.const(1, 9))
     sum_high_adjusted_val = il.add(1, sum_high_with_carry_val, il.const(1, 0x06))
 
-    label_adj_high_true = LowLevelILLabel()
-    label_adj_high_false = LowLevelILLabel()
-    label_after_adj_high = LowLevelILLabel()
-    il.append(il.if_expr(adj_high_needed, label_adj_high_true, label_adj_high_false))
-    il.mark_label(label_adj_high_true)
-    temp_sum_high_final_reg.lift_assign(il, sum_high_adjusted_val)
-    il.append(il.goto(label_after_adj_high))
-    il.mark_label(label_adj_high_false)
-    temp_sum_high_final_reg.lift_assign(il, sum_high_with_carry_val)
-    il.mark_label(label_after_adj_high)
+    _conditional_assign(
+        il,
+        temp_sum_high_final_reg,
+        adj_high_needed,
+        sum_high_adjusted_val,
+        sum_high_with_carry_val,
+    )
 
     current_sum_high_final = temp_sum_high_final_reg.lift(il)
     result_high_nibble_val = il.and_expr(1, current_sum_high_final, il.const(1, 0x0F))
@@ -372,16 +387,13 @@ def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
     final_low_nibble_reg = TempReg(TempBcdLowNibbleProcessing, width=1)
     adj_val_low = il.sub(1, temp_sub_low_val, il.const(1, 0x06)) # Subtract 6 if borrow
 
-    label_adj_low_true_s = LowLevelILLabel()
-    label_adj_low_false_s = LowLevelILLabel()
-    label_after_adj_low_s = LowLevelILLabel()
-    il.append(il.if_expr(borrow_from_low_val, label_adj_low_true_s, label_adj_low_false_s))
-    il.mark_label(label_adj_low_true_s)
-    final_low_nibble_reg.lift_assign(il, adj_val_low)
-    il.append(il.goto(label_after_adj_low_s))
-    il.mark_label(label_adj_low_false_s)
-    final_low_nibble_reg.lift_assign(il, temp_sub_low_val)
-    il.mark_label(label_after_adj_low_s)
+    _conditional_assign(
+        il,
+        final_low_nibble_reg,
+        borrow_from_low_val,
+        adj_val_low,
+        temp_sub_low_val,
+    )
 
     result_low_nibble_val = il.and_expr(1, final_low_nibble_reg.lift(il), il.const(1, 0x0F))
 
@@ -396,16 +408,13 @@ def bcd_sub_emul(il: LowLevelILFunction, w: int, a: ExpressionIndex, b: Expressi
     final_high_nibble_reg = TempReg(TempBcdHighNibbleProcessing, width=1)
     adj_val_high = il.sub(1, temp_sub_high_val, il.const(1, 0x06))
 
-    label_adj_high_true_s = LowLevelILLabel()
-    label_adj_high_false_s = LowLevelILLabel()
-    label_after_adj_high_s = LowLevelILLabel()
-    il.append(il.if_expr(new_bcd_borrow_out_byte_val, label_adj_high_true_s, label_adj_high_false_s))
-    il.mark_label(label_adj_high_true_s)
-    final_high_nibble_reg.lift_assign(il, adj_val_high)
-    il.append(il.goto(label_after_adj_high_s))
-    il.mark_label(label_adj_high_false_s)
-    final_high_nibble_reg.lift_assign(il, temp_sub_high_val)
-    il.mark_label(label_after_adj_high_s)
+    _conditional_assign(
+        il,
+        final_high_nibble_reg,
+        new_bcd_borrow_out_byte_val,
+        adj_val_high,
+        temp_sub_high_val,
+    )
 
     result_high_nibble_val = il.and_expr(1, final_high_nibble_reg.lift(il), il.const(1, 0x0F))
     result_byte_val = il.or_expr(1, il.shift_left(1, result_high_nibble_val, il.const(1, 4)), result_low_nibble_val)
