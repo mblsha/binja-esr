@@ -546,119 +546,97 @@ def _create_comparison_eval(op_func: Callable[[int, int], bool], signed: bool = 
     return _eval
 
 
-def _lsl_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
+def _shift_impl(size: int, val: int, count: int, *, left: bool) -> Tuple[int, ResultFlags]:
+    """Common implementation for logical shifts."""
     width = size * 8
-    mask = (1 << width) - 1
+    mask = (1 << width) - 1 if width > 0 else 0
+
     if count == 0:
-        arith_result = val & mask
-        return arith_result, {"C": 0, "Z": 1 if arith_result == 0 else 0}
+        result = val & mask
+        return result, {"C": 0, "Z": 1 if result == 0 else 0}
 
     carry_out = 0
-    if count <= width and width > 0:
-        carry_out = (val >> (width - count)) & 1
+    if left:
+        if count <= width and width > 0:
+            carry_out = (val >> (width - count)) & 1
+        result = (val << count) & mask
+    else:
+        if count > 0 and count <= width and width > 0:
+            carry_out = (val >> (count - 1)) & 1
+        result = (val >> count) & mask
 
-    arith_result = (val << count) & mask
-    zero_flag = 1 if arith_result == 0 else 0
+    return result, {"C": carry_out, "Z": 1 if result == 0 else 0}
 
-    return arith_result, {"C": carry_out, "Z": zero_flag}
+
+def _lsl_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
+    return _shift_impl(size, val, count, left=True)
 
 
 def _lsr_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
-    width = size * 8
-    if count == 0:
-        arith_result = val & ((1 << width) - 1 if width > 0 else 0)
-        return arith_result, {"C": 0, "Z": 1 if arith_result == 0 else 0}
+    return _shift_impl(size, val, count, left=False)
 
-    carry_out = 0
-    if count > 0 and count <= width and width > 0:
+
+def _rotate_impl(size: int, val: int, count: int, *, left: bool) -> Tuple[int, ResultFlags]:
+    """Rotate ``val`` left or right by ``count`` bits."""
+    width = size * 8
+    mask = (1 << width) - 1 if width > 0 else 0
+    if width == 0:
+        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
+
+    count %= width
+    if count == 0:
+        result = val & mask
+        carry_out = (val >> (width - 1)) & 1 if left and width > 0 else val & 1
+        return result, {"C": carry_out, "Z": 1 if result == 0 else 0}
+
+    if left:
+        shifted_part = val << count
+        rotated_part = val >> (width - count)
+        carry_out = (val >> (width - count)) & 1
+    else:
+        shifted_part = val >> count
+        rotated_part = val << (width - count)
         carry_out = (val >> (count - 1)) & 1
 
-    arith_result = val >> count
-    zero_flag_val = arith_result & ((1 << width) - 1 if width > 0 else 0)
-    zero_flag = 1 if zero_flag_val == 0 else 0
-
-    return arith_result, {"C": carry_out, "Z": zero_flag}
+    result = (shifted_part | rotated_part) & mask
+    return result, {"C": carry_out, "Z": 1 if result == 0 else 0}
 
 
 def _ror_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
-    width = size * 8
-    mask = (1 << width) - 1 if width > 0 else 0
-    if width == 0:
-        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
-
-    count %= width
-    if count == 0:
-        arith_result = val & mask
-        return arith_result, {"C": val & 1, "Z": 1 if arith_result == 0 else 0}
-
-    shifted_part = val >> count
-    rotated_part = val << (width - count)
-    arith_result = (shifted_part | rotated_part) & mask
-
-    carry_out = (val >> (count - 1)) & 1
-    zero_flag = 1 if arith_result == 0 else 0
-
-    return arith_result, {"C": carry_out, "Z": zero_flag}
+    return _rotate_impl(size, val, count, left=False)
 
 
 def _rol_impl(size: int, val: int, count: int) -> Tuple[int, ResultFlags]:
-    width = size * 8
-    mask = (1 << width) - 1 if width > 0 else 0
-    if width == 0:
-        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
-
-    count %= width
-    if count == 0:
-        arith_result = val & mask
-        return arith_result, {
-            "C": (val >> (width - 1)) & 1 if width > 0 else 0,
-            "Z": 1 if arith_result == 0 else 0,
-        }
-
-    shifted_part = val << count
-    rotated_part = val >> (width - count)
-    arith_result = (shifted_part | rotated_part) & mask
-
-    carry_out = (val >> (width - count)) & 1
-    zero_flag = 1 if arith_result == 0 else 0
-
-    return arith_result, {"C": carry_out, "Z": zero_flag}
+    return _rotate_impl(size, val, count, left=True)
 
 
-def _rrc_impl(
-    size: int, val: int, count: int, carry_in: int
+def _rotate_through_carry_impl(
+    size: int, val: int, count: int, carry_in: int, *, left: bool
 ) -> Tuple[int, ResultFlags]:
+    """Rotate ``val`` through carry left or right by ``count`` bits."""
     width = size * 8
     mask = (1 << width) - 1 if width > 0 else 0
-    assert count == 1, "RRC count should be 1 for standard definition"
+    assert count == 1, "RRC/RLC count should be 1 for standard definition"
 
     if width == 0:
         return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
-    new_carry_out = val & 1
-    arith_result = (val >> count) | (carry_in << (width - count))
-    arith_result &= mask
+    if left:
+        new_carry_out = (val >> (width - 1)) & 1 if width > 0 else 0
+        result = ((val << count) | carry_in) & mask
+    else:
+        new_carry_out = val & 1
+        result = ((val >> count) | (carry_in << (width - count))) & mask
 
-    zero_flag = 1 if arith_result == 0 else 0
-    return arith_result, {"C": new_carry_out, "Z": zero_flag}
+    return result, {"C": new_carry_out, "Z": 1 if result == 0 else 0}
 
 
-def _rlc_impl(
-    size: int, val: int, count: int, carry_in: int
-) -> Tuple[int, ResultFlags]:
-    width = size * 8
-    mask = (1 << width) - 1 if width > 0 else 0
-    assert count == 1, "RLC count should be 1 for standard definition"
+def _rrc_impl(size: int, val: int, count: int, carry_in: int) -> Tuple[int, ResultFlags]:
+    return _rotate_through_carry_impl(size, val, count, carry_in, left=False)
 
-    if width == 0:
-        return val & mask, {"C": 0, "Z": 1 if (val & mask) == 0 else 0}
 
-    new_carry_out = (val >> (width - 1)) & 1 if width > 0 else 0
-    arith_result = (val << count) | carry_in
-    arith_result &= mask
-
-    zero_flag = 1 if arith_result == 0 else 0
-    return arith_result, {"C": new_carry_out, "Z": zero_flag}
+def _rlc_impl(size: int, val: int, count: int, carry_in: int) -> Tuple[int, ResultFlags]:
+    return _rotate_through_carry_impl(size, val, count, carry_in, left=True)
 
 
 def _create_intrinsic_eval(action: Optional[Callable[[State], None]] = None) -> EvalLLILType:
