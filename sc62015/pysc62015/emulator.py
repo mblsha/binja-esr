@@ -101,6 +101,15 @@ class Registers:
         RegisterName.F,
     } | {getattr(RegisterName, f"TEMP{i}") for i in range(NUM_TEMP_REGISTERS)}
 
+    _SUBREG_INFO: Dict[RegisterName, Tuple[RegisterName, int, int]] = {
+        RegisterName.A: (RegisterName.BA, 0, 0xFF),
+        RegisterName.B: (RegisterName.BA, 8, 0xFF),
+        RegisterName.IL: (RegisterName.I, 0, 0xFF),
+        RegisterName.IH: (RegisterName.I, 8, 0xFF),
+        RegisterName.FC: (RegisterName.F, 0, 0x01),
+        RegisterName.FZ: (RegisterName.F, 1, 0x01),
+    }
+
     def __init__(self) -> None:
         self._values: Dict[RegisterName, int] = {reg: 0 for reg in self.BASE}
 
@@ -111,23 +120,12 @@ class Registers:
                 return val & PC_MASK
             return val
 
-        match reg:
-            case RegisterName.A:
-                return self._values[RegisterName.BA] & 0xFF
-            case RegisterName.B:
-                return (self._values[RegisterName.BA] >> 8) & 0xFF
-            case RegisterName.IL:
-                return self._values[RegisterName.I] & 0xFF
-            case RegisterName.IH:
-                return (self._values[RegisterName.I] >> 8) & 0xFF
-            case RegisterName.FC:
-                return self._values[RegisterName.F] & 0x01
-            case RegisterName.FZ:
-                return (self._values[RegisterName.F] >> 1) & 0x01
-            case _:
-                raise ValueError(
-                    f"Attempted to get unknown or non-base register: {reg}"
-                )
+        info = self._SUBREG_INFO.get(reg)
+        if info is not None:
+            base, shift, mask = info
+            return (self._values[base] >> shift) & mask
+
+        raise ValueError(f"Attempted to get unknown or non-base register: {reg}")
 
     def set(self, reg: RegisterName, value: int) -> None:
         if reg in self.BASE:
@@ -137,35 +135,17 @@ class Registers:
             self._values[reg] = value & mask
             return
 
-        match reg:
-            case RegisterName.A:
-                self._values[RegisterName.BA] = (
-                    self._values[RegisterName.BA] & 0xFF00
-                ) | (value & 0xFF)
-            case RegisterName.B:
-                self._values[RegisterName.BA] = (
-                    self._values[RegisterName.BA] & 0x00FF
-                ) | ((value & 0xFF) << 8)
-            case RegisterName.IL:
-                self._values[RegisterName.I] = (
-                    self._values[RegisterName.I] & 0xFF00
-                ) | (value & 0xFF)
-            case RegisterName.IH:
-                self._values[RegisterName.I] = (
-                    self._values[RegisterName.I] & 0x00FF
-                ) | ((value & 0xFF) << 8)
-            case RegisterName.FC:
-                self._values[RegisterName.F] = (self._values[RegisterName.F] & 0xFE) | (
-                    value & 0x01
-                )
-            case RegisterName.FZ:
-                self._values[RegisterName.F] = (self._values[RegisterName.F] & 0xFD) | (
-                    (value & 0x01) << 1
-                )
-            case _:
-                raise ValueError(
-                    f"Attempted to set unknown or non-base register: {reg}"
-                )
+        info = self._SUBREG_INFO.get(reg)
+        if info is not None:
+            base, shift, mask = info
+            full_mask = (1 << (REGISTER_SIZE[base] * 8)) - 1
+            cur = self._values[base] & full_mask
+            cur &= ~(mask << shift)
+            cur |= (value & mask) << shift
+            self._values[base] = cur
+            return
+
+        raise ValueError(f"Attempted to set unknown or non-base register: {reg}")
 
     def get_by_name(self, name: str) -> int:
         return self.get(RegisterName[name])
