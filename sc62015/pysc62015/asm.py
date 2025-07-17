@@ -491,6 +491,25 @@ class AsmTransformer(Transformer):
         """Helper for ``instr reg, #imm`` style instructions."""
         return self._op_imm(instr_cls, Reg(reg_name), val)
 
+    def _reg_imem_offset(
+        self,
+        instr_cls: type[Instruction],
+        imem: IMemOperand,
+        regop: EMemReg,
+        order: RegIMemOffsetOrder,
+        *,
+        name: str | None = None,
+    ) -> InstructionNode:
+        """Build instructions using ``RegIMemOffset`` operands."""
+        op = RegIMemOffset(order=order)
+        im = IMem8()
+        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        op.imem = im
+        op.reg = regop.reg
+        op.mode = regop.mode
+        op.offset = regop.offset
+        return self._instr_node(instr_cls, op, name=name)
+
     @staticmethod
     def _imm_offset(sign: Literal['+', '-'], value: Any) -> ImmOffset:
         imm = ImmOffset(sign)
@@ -767,26 +786,16 @@ class AsmTransformer(Transformer):
     def mv_imem_ememreg(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
         regop = cast(EMemReg, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
-        im = IMem8()
-        im.value = imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return self._instr_node(MV, op)
+        return self._reg_imem_offset(
+            MV, imem, regop, RegIMemOffsetOrder.DEST_IMEM
+        )
 
     def mv_ememreg_imem(self, items: List[Any]) -> InstructionNode:
         regop = cast(EMemReg, items[0])
         imem = cast(IMemOperand, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
-        im = IMem8()
-        im.value = imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return self._instr_node(MV, op)
+        return self._reg_imem_offset(
+            MV, imem, regop, RegIMemOffsetOrder.DEST_REG_OFFSET
+        )
 
     def mv_imem_ememimem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
@@ -871,26 +880,16 @@ class AsmTransformer(Transformer):
     def mvw_imem_ememreg(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
         regop = cast(EMemReg, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
-        im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return self._instr_node(MV, op, name="MVW")
+        return self._reg_imem_offset(
+            MV, imem, regop, RegIMemOffsetOrder.DEST_IMEM, name="MVW"
+        )
 
     def mvw_ememreg_imem(self, items: List[Any]) -> InstructionNode:
         regop = cast(EMemReg, items[0])
         imem = cast(IMemOperand, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
-        im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return self._instr_node(MV, op, name="MVW")
+        return self._reg_imem_offset(
+            MV, imem, regop, RegIMemOffsetOrder.DEST_REG_OFFSET, name="MVW"
+        )
 
     def mvw_imem_ememimem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
@@ -943,26 +942,16 @@ class AsmTransformer(Transformer):
     def mvp_imem_ememreg(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
         regop = cast(EMemReg, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)
-        im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return self._instr_node(MV, op, name="MVP")
+        return self._reg_imem_offset(
+            MV, imem, regop, RegIMemOffsetOrder.DEST_IMEM, name="MVP"
+        )
 
     def mvp_ememreg_imem(self, items: List[Any]) -> InstructionNode:
         regop = cast(EMemReg, items[0])
         imem = cast(IMemOperand, items[1])
-        op = RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)
-        im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
-        op.imem = im
-        op.reg = regop.reg
-        op.mode = regop.mode
-        op.offset = regop.offset
-        return self._instr_node(MV, op, name="MVP")
+        return self._reg_imem_offset(
+            MV, imem, regop, RegIMemOffsetOrder.DEST_REG_OFFSET, name="MVP"
+        )
 
     def mvp_imem_ememimem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
