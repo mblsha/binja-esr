@@ -470,6 +470,27 @@ class AsmTransformer(Transformer):
         imm.value = value
         return imm
 
+    def _op_imm(
+        self,
+        instr_cls: type[Instruction],
+        op: Operand,
+        val: Any,
+        *,
+        name: str | None = None,
+    ) -> InstructionNode:
+        """Helper to build ``instr_cls op, #imm`` instructions."""
+        imm = self._imm8(val)
+        return self._instr_node(instr_cls, op, imm, name=name)
+
+    def _reg_imm(
+        self,
+        instr_cls: type[Instruction],
+        reg_name: str,
+        val: Any,
+    ) -> InstructionNode:
+        """Helper for ``instr reg, #imm`` style instructions."""
+        return self._op_imm(instr_cls, Reg(reg_name), val)
+
     @staticmethod
     def _imm_offset(sign: Literal['+', '-'], value: Any) -> ImmOffset:
         imm = ImmOffset(sign)
@@ -725,19 +746,11 @@ class AsmTransformer(Transformer):
 
     def mv_imem_imm(self, items: List[Any]) -> InstructionNode:
         mem, val = items
-        imm = Imm8()
-        imm.value = val
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, imm])}
-        }
+        return self._op_imm(MV, mem, val)
 
     def mv_emem_imm(self, items: List[Any]) -> InstructionNode:
         mem, val = items
-        imm = Imm8()
-        imm.value = val
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, imm])}
-        }
+        return self._op_imm(MV, mem, val)
 
     def mv_imem_emem(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
@@ -1120,18 +1133,15 @@ class AsmTransformer(Transformer):
         return self._instr_node(EXL, op1, op2)
 
     def and_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(AND, Reg("A"), imm)
+        return self._reg_imm(AND, "A", items[0])
 
     def and_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(AND, op1, imm)
+        return self._op_imm(AND, op1, val)
 
     def and_emem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(AND, op1, imm)
+        return self._op_imm(AND, op1, val)
 
     def and_imem_a(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1146,13 +1156,11 @@ class AsmTransformer(Transformer):
         return self._instr_node(AND, op1, op2)
 
     def add_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(ADD, Reg("A"), imm)
+        return self._reg_imm(ADD, "A", items[0])
 
     def add_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(ADD, op1, imm)
+        return self._op_imm(ADD, op1, val)
 
     def add_a_imem(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1173,13 +1181,11 @@ class AsmTransformer(Transformer):
         return self._instr_node(ADD, rp)
 
     def adc_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(ADC, Reg("A"), imm)
+        return self._reg_imm(ADC, "A", items[0])
 
     def adc_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(ADC, op1, imm)
+        return self._op_imm(ADC, op1, val)
 
     def adc_a_imem(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1190,13 +1196,11 @@ class AsmTransformer(Transformer):
         return self._instr_node(ADC, op1, Reg("A"))
 
     def sub_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(SUB, Reg("A"), imm)
+        return self._reg_imm(SUB, "A", items[0])
 
     def sub_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(SUB, op1, imm)
+        return self._op_imm(SUB, op1, val)
 
     def sub_a_imem(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1217,13 +1221,11 @@ class AsmTransformer(Transformer):
         return self._instr_node(SUB, rp)
 
     def sbc_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(SBC, Reg("A"), imm)
+        return self._reg_imm(SBC, "A", items[0])
 
     def sbc_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(SBC, op1, imm)
+        return self._op_imm(SBC, op1, val)
 
     def sbc_a_imem(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1275,26 +1277,22 @@ class AsmTransformer(Transformer):
 
     def pmdf_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(PMDF, op1, imm)
+        return self._op_imm(PMDF, op1, val)
 
     def pmdf_imem_a(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
         return self._instr_node(PMDF, op1, Reg("A"))
 
     def or_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(OR, Reg("A"), imm)
+        return self._reg_imm(OR, "A", items[0])
 
     def or_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(OR, op1, imm)
+        return self._op_imm(OR, op1, val)
 
     def or_emem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(OR, op1, imm)
+        return self._op_imm(OR, op1, val)
 
     def or_imem_a(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1309,18 +1307,15 @@ class AsmTransformer(Transformer):
         return self._instr_node(OR, op1, op2)
 
     def xor_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(XOR, Reg("A"), imm)
+        return self._reg_imm(XOR, "A", items[0])
 
     def xor_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(XOR, op1, imm)
+        return self._op_imm(XOR, op1, val)
 
     def xor_emem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(XOR, op1, imm)
+        return self._op_imm(XOR, op1, val)
 
     def xor_imem_a(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1335,18 +1330,15 @@ class AsmTransformer(Transformer):
         return self._instr_node(XOR, op1, op2)
 
     def cmp_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(CMP, Reg("A"), imm)
+        return self._reg_imm(CMP, "A", items[0])
 
     def cmp_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(CMP, op1, imm)
+        return self._op_imm(CMP, op1, val)
 
     def cmp_emem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(CMP, op1, imm)
+        return self._op_imm(CMP, op1, val)
 
     def cmp_imem_a(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
@@ -1381,18 +1373,15 @@ class AsmTransformer(Transformer):
         return self._cmp_imem_reg(op1, cast(Reg, reg), IMem20, CMPP)
 
     def test_a_imm(self, items: List[Any]) -> InstructionNode:
-        imm = self._imm8(items[0])
-        return self._instr_node(TEST, Reg("A"), imm)
+        return self._reg_imm(TEST, "A", items[0])
 
     def test_imem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(TEST, op1, imm)
+        return self._op_imm(TEST, op1, val)
 
     def test_emem_imm(self, items: List[Any]) -> InstructionNode:
         op1, val = items
-        imm = self._imm8(val)
-        return self._instr_node(TEST, op1, imm)
+        return self._op_imm(TEST, op1, val)
 
     def test_imem_a(self, items: List[Any]) -> InstructionNode:
         op1 = items[0]
