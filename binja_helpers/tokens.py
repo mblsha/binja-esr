@@ -8,7 +8,8 @@ from binaryninja import InstructionTextToken
 from binaryninja.enums import InstructionTextTokenType
 
 import enum
-from typing import Iterable, Any, List, Tuple
+from typing import Iterable, Any, List, Tuple, ClassVar
+from dataclasses import dataclass
 
 
 class Token:
@@ -39,60 +40,41 @@ def asm_str(parts: Iterable[Any]) -> str:
     return "".join(str(part) for part in parts)
 
 
-class TInstr(Token):
-    def __init__(self, instr: str) -> None:
-        self.instr = instr
+@dataclass
+class _BaseToken(Token):
+    """Simple token carrying a string value."""
+
+    value: str
+    token_type: ClassVar[InstructionTextTokenType]
 
     def __repr__(self) -> str:
-        return f"TInstr({self.instr})"
+        return f"{self.__class__.__name__}({self.value})"
 
     def __str__(self) -> str:
-        return self.instr
+        return self.value
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.InstructionToken, self.instr)
+        return (self.token_type, self.__str__())
 
 
-class TSep(Token):
-    def __init__(self, sep: str) -> None:
-        self.sep = sep
-
-    def __repr__(self) -> str:
-        return f"TSep({self.sep})"
-
-    def __str__(self) -> str:
-        return self.sep
-
-    def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.OperandSeparatorToken, self.sep)
+@dataclass
+class TInstr(_BaseToken):
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.InstructionToken
 
 
-class TText(Token):
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-    def __repr__(self) -> str:
-        return f"TText({self.text})"
-
-    def __str__(self) -> str:
-        return self.text
-
-    def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.TextToken, self.text)
+@dataclass
+class TSep(_BaseToken):
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.OperandSeparatorToken
 
 
-class TInt(Token):
-    def __init__(self, value: str) -> None:
-        self.value = value
+@dataclass
+class TText(_BaseToken):
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.TextToken
 
-    def __repr__(self) -> str:
-        return f"TInt({self.value})"
 
-    def __str__(self) -> str:
-        return str(self.value)
-
-    def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.IntegerToken, str(self.value))
+@dataclass
+class TInt(_BaseToken):
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.IntegerToken
 
 
 class MemType(enum.Enum):
@@ -100,41 +82,43 @@ class MemType(enum.Enum):
     EXTERNAL = 1
 
 
+@dataclass
 class TBegMem(Token):
-    def __init__(self, mem_type: MemType) -> None:
-        self.mem_type = mem_type
+    mem_type: MemType
+
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.BeginMemoryOperandToken
 
     def __repr__(self) -> str:
         return f"TBegMem({self.mem_type})"
 
     def __str__(self) -> str:
-        if self.mem_type == MemType.EXTERNAL:
-            return "["
-        return "("
+        return "[" if self.mem_type == MemType.EXTERNAL else "("
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.BeginMemoryOperandToken, self.__str__())
+        return (self.token_type, self.__str__())
 
 
+@dataclass
 class TEndMem(Token):
-    def __init__(self, mem_type: MemType) -> None:
-        self.mem_type = mem_type
+    mem_type: MemType
+
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.EndMemoryOperandToken
 
     def __repr__(self) -> str:
         return f"TEndMem({self.mem_type})"
 
     def __str__(self) -> str:
-        if self.mem_type == MemType.EXTERNAL:
-            return "]"
-        return ")"
+        return "]" if self.mem_type == MemType.EXTERNAL else ")"
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.EndMemoryOperandToken, self.__str__())
+        return (self.token_type, self.__str__())
 
 
+@dataclass
 class TAddr(Token):
-    def __init__(self, value: int) -> None:
-        self.value = value
+    value: int
+
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.PossibleAddressToken
 
     def __repr__(self) -> str:
         return f"TAddr({self.value})"
@@ -143,18 +127,9 @@ class TAddr(Token):
         return f"{self.value:05X}"
 
     def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.PossibleAddressToken, f"{self.value:05X}")
+        return (self.token_type, self.__str__())
 
-class TReg(Token):
-    def __init__(self, reg: str) -> None:
-        self.reg = reg
-
-    def __repr__(self) -> str:
-        return f"TReg({self.reg})"
-
-    def __str__(self) -> str:
-        return self.reg
-
-    def binja(self) -> Tuple[InstructionTextTokenType, str]:
-        return (InstructionTextTokenType.RegisterToken, self.reg)
+@dataclass
+class TReg(_BaseToken):
+    token_type: ClassVar[InstructionTextTokenType] = InstructionTextTokenType.RegisterToken
 
