@@ -20,8 +20,7 @@ except ImportError:
 
 if not has_binja:
     from binja_test_mocks import binja_api  # noqa: F401
-    stub_dir = os.path.join(os.path.dirname(__file__), "..", "stubs")
-    print(f"Using stubs from {os.path.abspath(stub_dir)}")
+    print("Using stubs from binja-test-mocks package")
 else:
     print(f"Using Binary Ninja from {bn_path}")
 
