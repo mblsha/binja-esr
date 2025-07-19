@@ -10,6 +10,7 @@
   "stubPath": "./stubs",
   "reportMissingImports": "none",
   "reportMissingTypeStubs": false,
+  "reportMissingModuleSource": "none",
   "reportUnusedImport": "warning",
   "reportUnusedVariable": "warning",
   "reportGeneralTypeIssues": "warning",
