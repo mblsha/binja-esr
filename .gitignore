@@ -4,3 +4,4 @@ Session.vim
 .coverage
 coverage.xml
 htmlcov/
+mcp
