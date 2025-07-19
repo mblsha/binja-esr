@@ -26,6 +26,9 @@ pytest path/to/test_file.py::test_function_name
 
 # Continuous testing with file watching (requires Fish shell and fswatch)
 ./run-tests.fish
+
+# Run Python code within Binary Ninja process
+./mcp/binja-cli.py python "print(bv.functions)"
 ```
 
 ## Architecture Overview
