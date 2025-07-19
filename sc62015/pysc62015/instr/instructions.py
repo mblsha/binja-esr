@@ -1,5 +1,5 @@
 from .opcodes import *  # noqa: F401,F403
-from binja_helpers.mock_analysis import BranchType  # noqa: F401
+from binaryninja.enums import BranchType  # noqa: F401
 from .traits import HasWidth
 from typing import Callable
 from binaryninja import InstructionInfo  # type: ignore

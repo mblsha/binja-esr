@@ -3,7 +3,7 @@ import importlib.util
 from pathlib import Path
 
 # Ensure the plugin directory is available on ``sys.path`` so that
-# absolute imports like ``binja_helpers`` work when the plugin is loaded
+# absolute imports like ``binja_test_mocks`` work when the plugin is loaded
 # directly by Binary Ninja.
 _plugin_dir = str(Path(__file__).resolve().parent)
 if _plugin_dir not in sys.path:

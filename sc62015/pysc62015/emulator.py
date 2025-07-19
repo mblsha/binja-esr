@@ -1,6 +1,6 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
-from binja_helpers.coding import FetchDecoder
+from binja_test_mocks.coding import FetchDecoder
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr.opcode_table import OPCODES
@@ -8,14 +8,14 @@ from .instr import (
     decode,
     Instruction,
 )
-from binja_helpers.mock_llil import (
+from binja_test_mocks.mock_llil import (
     MockLowLevelILFunction,
     MockLLIL,
     MockLabel,
     MockIfExpr,
     MockGoto,
 )
-from binja_helpers.eval_llil import (
+from binja_test_mocks.eval_llil import (
     Memory,
     State,
     ResultFlags,

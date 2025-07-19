@@ -1,5 +1,5 @@
 
-from binja_helpers import binja_api  # noqa: F401  # pyright: ignore
+from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from .instr.opcode_table import OPCODES
 from .instr import (
     encode,
@@ -30,7 +30,7 @@ from .instr import (
 )
 from .instr import decode as decode_instr
 from .constants import INTERNAL_MEMORY_START
-from binja_helpers.tokens import (
+from binja_test_mocks.tokens import (
     Token,
     TInstr,
     TSep,
@@ -41,10 +41,10 @@ from binja_helpers.tokens import (
     MemType,
     TReg,
 )
-from binja_helpers.tokens import asm_str
-from binja_helpers.coding import Decoder, Encoder
-from binja_helpers.mock_analysis import MockAnalysisInfo
-from binja_helpers.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
+from binja_test_mocks.tokens import asm_str
+from binja_test_mocks.coding import Decoder, Encoder
+from binja_test_mocks.mock_analysis import MockAnalysisInfo
+from binja_test_mocks.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
 from binaryninja.lowlevelil import (  # type: ignore
     LLIL_TEMP,
 )

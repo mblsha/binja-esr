@@ -3,10 +3,10 @@
 from typing import Optional, Tuple
 
 # Import types from the main evaluation system to ensure compatibility
-from binja_helpers.eval_llil import (
+from binja_test_mocks.eval_llil import (
     RegistersLike, Memory, State, ResultFlags, FlagGetter, FlagSetter
 )
-from binja_helpers.mock_llil import MockLLIL
+from binja_test_mocks.mock_llil import MockLLIL
 
 
 def eval_intrinsic_tcl(
@@ -63,7 +63,7 @@ def eval_intrinsic_off(
 def register_sc62015_intrinsics() -> None:
     """Register all SC62015-specific intrinsic evaluators with the generic evaluation system."""
     # Import here to avoid circular imports
-    from binja_helpers.eval_llil import register_intrinsic
+    from binja_test_mocks.eval_llil import register_intrinsic
     
     register_intrinsic("TCL", eval_intrinsic_tcl)
     register_intrinsic("HALT", eval_intrinsic_halt)

@@ -19,7 +19,7 @@ except ImportError:
     has_binja = False
 
 if not has_binja:
-    from binja_helpers import binja_api  # noqa: F401
+    from binja_test_mocks import binja_api  # noqa: F401
     stub_dir = os.path.join(os.path.dirname(__file__), "..", "stubs")
     print(f"Using stubs from {os.path.abspath(stub_dir)}")
 else:

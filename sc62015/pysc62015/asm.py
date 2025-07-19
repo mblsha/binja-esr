@@ -1,5 +1,5 @@
 from typing import Any, List, Optional, Union, cast, TypedDict, Type, Literal
-from binja_helpers import binja_api  # noqa: F401  # pyright: ignore
+from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from binaryninja import RegisterName  # type: ignore
 from lark import Lark, Transformer, Token
 from .instr import (

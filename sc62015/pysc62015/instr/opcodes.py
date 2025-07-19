@@ -1,5 +1,5 @@
 # based on https://github.com/whitequark/binja-avnera/blob/main/mc/instr.py
-from binja_helpers.tokens import (
+from binja_test_mocks.tokens import (
     Token,
     TInstr,
     TText,
@@ -11,9 +11,9 @@ from binja_helpers.tokens import (
     TAddr,
     MemType,
 )
-from binja_helpers.coding import Decoder, Encoder, BufferTooShort
+from binja_test_mocks.coding import Decoder, Encoder, BufferTooShortErrorError as BufferTooShort
 
-from binja_helpers.mock_llil import MockLLIL
+from binja_test_mocks.mock_llil import MockLLIL
 from ..constants import INTERNAL_MEMORY_START
 from .traits import HasWidth
 
@@ -24,7 +24,7 @@ import enum
 from contextlib import contextmanager
 
 
-from binja_helpers import binja_api  # noqa: F401  # pyright: ignore
+from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from binaryninja import (  # type: ignore
     InstructionInfo,
 )
