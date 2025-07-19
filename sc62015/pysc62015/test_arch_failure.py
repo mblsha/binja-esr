@@ -1,4 +1,4 @@
-from binja_helpers import binja_api  # noqa: F401
+from binja_test_mocks import binja_api  # noqa: F401
 import pytest
 
 if binja_api._has_binja():
@@ -8,7 +8,7 @@ if binja_api._has_binja():
     )
 
 from sc62015.arch import SC62015
-from binja_helpers.mock_llil import MockLowLevelILFunction
+from binja_test_mocks.mock_llil import MockLowLevelILFunction
 
 
 def test_get_instruction_low_level_il_with_bytes() -> None:

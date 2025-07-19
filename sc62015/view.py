@@ -92,7 +92,43 @@ class SC62015BaseView(BinaryView):
         )
         self.add_function(self._entry_point)
 
+        # Define types
+        self._define_types()
+
         return True
+
+    def _define_types(self):
+        """Define SC62015-specific types in Binary Ninja"""
+        
+        # Define IOCSAttribute enum
+        iocs_attr_c = '''enum IOCSAttribute {
+    DEVICE_READ_ENABLE = 1,
+    DEVICE_WRITE_ENABLE = 2, 
+    DEVICE_NO_SIMULTANEOUS_RW = 4,
+    DEVICE_ASCII_DEFAULT = 16,
+    DEVICE_CHARACTER = 32,
+    DEVICE_SPECIAL_FILE = 64,
+    DEVICE_FILE_CONTROL = 128
+};'''
+        
+        # Define IOCSEntry struct  
+        iocs_entry_c = '''struct IOCSEntry {
+    uint8_t next_header_addr[3];      // +0: Address to next IOCS header (3 bytes)
+    uint8_t device_number;            // +3: Device number (1 byte)
+    enum IOCSAttribute device_attr;   // +4: Device attribute (1 byte)
+    uint8_t entry_address[3];         // +5: Entry address of each IOCS (3 bytes)
+    // +8: Drive name follows (variable length, null-terminated, max 5 bytes)
+};'''
+        
+        # Parse and define the types
+        try:
+            types_result = self.platform.parse_types_from_source(iocs_attr_c + '\n' + iocs_entry_c)
+            if types_result.types:
+                for name, type_obj in types_result.types.items():
+                    self.define_user_type(name, type_obj)
+        except Exception as e:
+            # Log error but don't fail initialization
+            print(f"Warning: Failed to define types: {e}")
 
     def perform_get_address_size(self) -> int:
         return 3

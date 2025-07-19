@@ -9,7 +9,7 @@ from binaryninja.enums import Endianness, FlagRole
 from binaryninja.log import log_error
 
 from .pysc62015.instr import decode, encode, OPCODES
-from binja_helpers.tokens import asm
+from binja_test_mocks.tokens import asm
 
 
 class SC62015(Architecture):
