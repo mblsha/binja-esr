@@ -14,5 +14,8 @@
     ],
     "version": "1.0",
     "author": "mblsha",
-    "minimumbinaryninjaversion": 776
+    "minimumbinaryninjaversion": 776,
+    "dependencies": {
+        "pip": ["lark", "bincopy", "plumbum", "binja-test-mocks"]
+    }
 }
