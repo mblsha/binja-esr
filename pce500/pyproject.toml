@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pce500-emulator"
+version = "0.1.0"
+description = "Sharp PC-E500 emulator based on SC62015 CPU"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "Pillow",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pyright",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.coverage.run]
+source = ["pce500"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
