@@ -2,11 +2,11 @@
 
 from typing import Optional
 from .memory import MemoryMapper, ROMRegion, RAMRegion, PeripheralRegion
-from .display import HD61202UController, HD61700Controller
+from .display import HD61202Controller
 
 
 class PCE500Machine:
-    """PC-E500 machine configuration."""
+    """PC-E500 machine configuration (hardcoded for PC-E500 only)."""
     
     # Memory map constants (from PC-E500 specification)
     INTERNAL_ROM_START = 0xC0000
@@ -27,14 +27,12 @@ class PCE500Machine:
     CARD_32KB_START = 0x44000
     CARD_64KB_START = 0x40000
     
-    # LCD controllers in 0x2xxxx space
-    LCD_MAIN_START = 0x20000       # Main LCD controller (HD61202U)
-    LCD_SUB_START = 0x28000        # Sub LCD controller (HD61700)
+    # LCD controller in 0x2xxxx space
+    LCD_MAIN_START = 0x20000       # Main LCD controller (HD61202)
     
     def __init__(self):
         self.memory = MemoryMapper()
-        self.main_lcd = HD61202UController(self.LCD_MAIN_START)
-        self.sub_lcd = HD61700Controller(self.LCD_SUB_START)
+        self.main_lcd = HD61202Controller(self.LCD_MAIN_START)
         
         # Setup default memory map
         self._setup_memory_map()
@@ -51,17 +49,13 @@ class PCE500Machine:
             RAMRegion(0xBFC00, 0x400, "Work Area (Reserved)")
         )
         
-        # LCD controllers in 0x2xxxx space
-        # The controllers use complex address decoding:
+        # LCD controller in 0x2xxxx space
+        # The controller uses complex address decoding:
         # - They respond to addresses in 0x2xxxx range
         # - Address bits control chip selection and operation type
-        # Main LCD: HD61202U dual-chip controller
+        # HD61202 dual-chip controller for 240x32 display
         self.memory.add_region(
-            PeripheralRegion(0x20000, 0x8000, self.main_lcd, "Main LCD (HD61202U)")
-        )
-        # Sub LCD: HD61700 controller
-        self.memory.add_region(
-            PeripheralRegion(0x28000, 0x8000, self.sub_lcd, "Sub LCD (HD61700)")
+            PeripheralRegion(0x20000, 0x10000, self.main_lcd, "LCD (HD61202)")
         )
     
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
@@ -105,17 +99,14 @@ class PCE500Machine:
     
     def reset(self) -> None:
         """Reset machine state."""
-        # Reset display controllers
-        # For HD61202U, we need to reset the interpreters
+        # Reset display controller
+        # For HD61202, we need to reset the interpreters
         for chip in self.main_lcd.chips.values():
-            chip.vram = bytearray(chip.VRAM_SIZE)
+            chip.vram = bytearray(chip.vram_size)
             chip.display_on = False
             chip.page = 0
             chip.y_addr = 0
             chip.start_line = 0
-        
-        self.sub_lcd.clear_display()
-        self.sub_lcd.display_on = False
         
         # Clear RAM regions
         for region in self.memory.regions:
