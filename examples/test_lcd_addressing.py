@@ -8,14 +8,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import only the display module to avoid emulator dependencies
-from pce500.display.hd61202u_toolkit import HD61202U, HD61202UController, ChipSelect, AddressDecode
+from pce500.display.hd61202_toolkit import HD61202, HD61202Controller, ChipSelect, AddressDecode
 
 
 def test_address_decoding():
     """Test the elegant address decoding system."""
-    controller = HD61202UController()
+    controller = HD61202Controller()
     
-    print("=== HD61202U Address Decoding Test ===\n")
+    print("=== HD61202 Address Decoding Test ===\n")
     
     # Test cases with different address patterns
     test_addresses = [
@@ -62,7 +62,7 @@ def test_address_decoding():
 
 def demonstrate_lcd_commands():
     """Demonstrate sending commands to the LCD."""
-    controller = HD61202UController()
+    controller = HD61202Controller()
     
     print("\n=== LCD Command Examples ===\n")
     
@@ -82,7 +82,7 @@ def demonstrate_lcd_commands():
     print(f"   Write 0x{cmd:02X} to address 0x{addr:05X}")
     
     # Debug: check what command is parsed
-    parsed_cmd = HD61202U.Parser.parse(False, False, cmd)
+    parsed_cmd = HD61202.Parser.parse(False, False, cmd)
     print(f"   Parsed command: {parsed_cmd}")
     
     controller.write(addr, cmd)

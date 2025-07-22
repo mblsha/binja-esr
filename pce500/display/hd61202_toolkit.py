@@ -1,4 +1,4 @@
-"""HD61202U LCD controller toolkit for PC-E500 emulator."""
+"""HD61202 LCD controller toolkit for PC-E500 emulator."""
 
 from dataclasses import dataclass
 from typing import Union, TypeAlias, Dict
@@ -7,9 +7,9 @@ from PIL import Image, ImageDraw
 import numpy as np
 
 
-class HD61202U:
+class HD61202:
     """
-    A toolkit for parsing and interpreting commands for the Hitachi HD61202U
+    A toolkit for parsing and interpreting commands for the Hitachi HD61202
     LCD Column Driver, used in the PC-E500 main display.
 
     This class serves as a namespace for three main components:
@@ -70,9 +70,9 @@ class HD61202U:
 
     # --- 2. The Parser ---
     class Parser:
-        """A static class to parse raw bus signals into HD61202U.Command objects."""
+        """A static class to parse raw bus signals into HD61202.Command objects."""
         @staticmethod
-        def parse(di: bool, rw: bool, data: int) -> "HD61202U.Command":
+        def parse(di: bool, rw: bool, data: int) -> "HD61202.Command":
             """
             Parses a single bus event using elegant pattern matching.
 
@@ -85,35 +85,38 @@ class HD61202U:
                 case (False, False):  # Instruction Write
                     match data:
                         case d if (d & 0b11111110) == 0b00111110:
-                            return HD61202U.DisplayOnOff(on=bool(d & 1))
+                            return HD61202.DisplayOnOff(on=bool(d & 1))
                         case d if (d & 0b11000000) == 0b11000000:
-                            return HD61202U.SetStartLine(line=(d & 0x3F))
+                            return HD61202.SetStartLine(line=(d & 0x3F))
                         case d if (d & 0b11110000) == 0b10110000:
-                            return HD61202U.SetPage(page=(d & 0x0F))
+                            return HD61202.SetPage(page=(d & 0x0F))
                         case d if (d & 0b11000000) == 0b01000000:
-                            return HD61202U.SetYAddress(y_addr=(d & 0x3F))
+                            return HD61202.SetYAddress(y_addr=(d & 0x3F))
                 case (True, False):  # Data Write
-                    return HD61202U.WriteData(value=data)
+                    return HD61202.WriteData(value=data)
                 case (False, True):  # Status Read
-                    return HD61202U.StatusReadRequest()
+                    return HD61202.StatusReadRequest()
                 case (True, True):  # Data Read
-                    return HD61202U.DataReadRequest()
+                    return HD61202.DataReadRequest()
 
-            return HD61202U.UnknownCommand(di=di, rw=rw, value=data)
+            return HD61202.UnknownCommand(di=di, rw=rw, value=data)
 
 
     # --- 3. The Interpreter ---
     class Interpreter:
-        """Simulates the internal state and VRAM of an HD61202U controller."""
-        PAGE_WIDTH = 64
-        VRAM_SIZE = 512  # 8 pages * 64 columns
+        """Simulates the internal state and VRAM of an HD61202 controller."""
 
         def __init__(self, width: int = 64, height: int = 64):
             self.width = width
             self.height = height
+            
+            # Calculate page dimensions based on display size
+            self.page_width = width  # Columns per page
+            self.num_pages = (height + 7) // 8  # Number of 8-pixel high pages
+            self.vram_size = self.num_pages * self.page_width
 
             # --- Internal State Simulation ---
-            self.vram = bytearray(self.VRAM_SIZE)
+            self.vram = bytearray(self.vram_size)
             self.page: int = 0
             self.y_addr: int = 0
             self.start_line: int = 0
@@ -124,26 +127,26 @@ class HD61202U:
             self.on_off: bool = False
             self.reset: bool = False
 
-        def eval(self, cmd: "HD61202U.Command") -> None:
+        def eval(self, cmd: "HD61202.Command") -> None:
             """Evaluates a command and updates the interpreter's internal state."""
             match cmd:
-                case HD61202U.DisplayOnOff(on=on):
+                case HD61202.DisplayOnOff(on=on):
                     self.display_on = on
                     self.on_off = on
-                case HD61202U.SetStartLine(line=line):
+                case HD61202.SetStartLine(line=line):
                     self.start_line = line
-                case HD61202U.SetPage(page=page):
+                case HD61202.SetPage(page=page):
                     self.page = page
-                case HD61202U.SetYAddress(y_addr=y_addr):
+                case HD61202.SetYAddress(y_addr=y_addr):
                     self.y_addr = y_addr
-                case HD61202U.WriteData(value=value):
-                    address = self.page * self.PAGE_WIDTH + self.y_addr
-                    if address < self.VRAM_SIZE:
+                case HD61202.WriteData(value=value):
+                    address = self.page * self.page_width + self.y_addr
+                    if address < self.vram_size:
                         self.vram[address] = value
-                    self.y_addr = (self.y_addr + 1) % self.PAGE_WIDTH
-                case HD61202U.StatusReadRequest() | HD61202U.DataReadRequest():
+                    self.y_addr = (self.y_addr + 1) % self.page_width
+                case HD61202.StatusReadRequest() | HD61202.DataReadRequest():
                     pass # Reads are handled separately
-                case HD61202U.UnknownCommand():
+                case HD61202.UnknownCommand():
                     pass # Ignore unknown commands
 
         def read_status(self) -> int:
@@ -159,10 +162,10 @@ class HD61202U:
 
         def read_data(self) -> int:
             """Reads data from the current address and advances."""
-            address = self.page * self.PAGE_WIDTH + self.y_addr
-            if address < self.VRAM_SIZE:
+            address = self.page * self.page_width + self.y_addr
+            if address < self.vram_size:
                 data = self.vram[address]
-                self.y_addr = (self.y_addr + 1) % self.PAGE_WIDTH
+                self.y_addr = (self.y_addr + 1) % self.page_width
                 return data
             return 0xFF
 
@@ -179,12 +182,13 @@ class HD61202U:
                 page, bit_in_page = divmod(ram_line, 8)
 
                 for screen_x in range(self.width):
-                    vram_addr = page * self.PAGE_WIDTH + screen_x
-                    byte = self.vram[vram_addr]
+                    vram_addr = page * self.page_width + screen_x
+                    if vram_addr < self.vram_size:
+                        byte = self.vram[vram_addr]
 
-                    if (byte >> bit_in_page) & 1:
-                        x0, y0 = screen_x * zoom, screen_y * zoom
-                        draw.rectangle((x0, y0, x0 + zoom - 1, y0 + zoom - 1), fill=on_color)
+                        if (byte >> bit_in_page) & 1:
+                            x0, y0 = screen_x * zoom, screen_y * zoom
+                            draw.rectangle((x0, y0, x0 + zoom - 1, y0 + zoom - 1), fill=on_color)
             return img
 
         def get_display_buffer(self) -> np.ndarray:
@@ -198,11 +202,12 @@ class HD61202U:
                 page, bit_in_page = divmod(ram_line, 8)
                 
                 for screen_x in range(self.width):
-                    vram_addr = page * self.PAGE_WIDTH + screen_x
-                    byte = self.vram[vram_addr]
-                    
-                    if (byte >> bit_in_page) & 1:
-                        buffer[screen_y, screen_x] = 1
+                    vram_addr = page * self.page_width + screen_x
+                    if vram_addr < self.vram_size:
+                        byte = self.vram[vram_addr]
+                        
+                        if (byte >> bit_in_page) & 1:
+                            buffer[screen_y, screen_x] = 1
                         
             return buffer
 
@@ -243,8 +248,8 @@ class AddressDecode:
         return self.chip_select == ChipSelect.LEFT
 
 
-class HD61202UController:
-    """PC-E500 main display controller using two HD61202U chips."""
+class HD61202Controller:
+    """PC-E500 main display controller using two HD61202 chips."""
     
     # Address bit positions
     BIT_RW = 0   # A0: Read/Write
@@ -257,10 +262,11 @@ class HD61202UController:
         """Initialize controller."""
         self.start_addr = start_addr
         
-        # Two HD61202U chips for 128x64 display
-        self.chips: Dict[str, HD61202U.Interpreter] = {
-            'left': HD61202U.Interpreter(width=64, height=64),
-            'right': HD61202U.Interpreter(width=64, height=64)
+        # Two HD61202 chips for 240x32 display
+        # Each chip handles 120x32 pixels (left/right split)
+        self.chips: Dict[str, HD61202.Interpreter] = {
+            'left': HD61202.Interpreter(width=120, height=32),
+            'right': HD61202.Interpreter(width=120, height=32)
         }
         
     def decode_address(self, address: int) -> AddressDecode:
@@ -284,7 +290,7 @@ class HD61202UController:
         decode = self.decode_address(address)
         return decode.is_valid
     
-    def _get_selected_chips(self, decode: AddressDecode) -> list[HD61202U.Interpreter]:
+    def _get_selected_chips(self, decode: AddressDecode) -> list[HD61202.Interpreter]:
         """Get list of selected chip interpreters based on address decode."""
         if not decode.chips_enabled:
             return []
@@ -342,7 +348,7 @@ class HD61202UController:
             return
             
         # Parse command and broadcast to selected chips
-        cmd = HD61202U.Parser.parse(decode.di, False, value)
+        cmd = HD61202.Parser.parse(decode.di, False, value)
         for chip in self._get_selected_chips(decode):
             chip.eval(cmd)
                 
@@ -351,10 +357,10 @@ class HD61202UController:
         left_buffer = self.chips['left'].get_display_buffer()
         right_buffer = self.chips['right'].get_display_buffer()
         
-        # Combine into 128x64 display
-        combined = np.zeros((64, 128), dtype=np.uint8)
-        combined[:, :64] = left_buffer
-        combined[:, 64:] = right_buffer
+        # Combine into 240x32 display
+        combined = np.zeros((32, 240), dtype=np.uint8)
+        combined[:, :120] = left_buffer
+        combined[:, 120:] = right_buffer
         
         return combined
         
@@ -365,8 +371,8 @@ class HD61202UController:
         
     @property
     def width(self) -> int:
-        return 128
+        return 240
         
     @property
     def height(self) -> int:
-        return 64
+        return 32
