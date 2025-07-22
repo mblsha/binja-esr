@@ -24,6 +24,13 @@ def main():
     else:
         print(f"ROM file '{rom_path}' not found. Running with empty ROM space.")
     
+    # Example: Load a memory card if available
+    card_path = "card_64k.bin"
+    if Path(card_path).exists():
+        print(f"Loading 64KB memory card from {card_path}")
+        with open(card_path, 'rb') as f:
+            emu.machine.load_memory_card(f.read(), 65536)
+    
     # Print memory map
     print("\n" + emu.machine.get_memory_info())
     

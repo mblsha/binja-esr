@@ -2,28 +2,38 @@
 
 from typing import Optional
 from .memory import MemoryMapper, ROMRegion, RAMRegion, PeripheralRegion
-from .display import T6A04Controller, HD61700Controller
+from .display import HD61202UController, HD61700Controller
 
 
 class PCE500Machine:
     """PC-E500 machine configuration."""
     
-    # Memory map constants
-    INTERNAL_RAM_START = 0x000000
-    INTERNAL_RAM_SIZE = 0x2000    # 8KB internal RAM
+    # Memory map constants (from PC-E500 specification)
+    INTERNAL_ROM_START = 0xC0000
+    INTERNAL_ROM_SIZE = 0x40000    # 256KB internal ROM
     
-    EXTERNAL_RAM_START = 0x008000
-    EXTERNAL_RAM_SIZE = 0x8000     # 32KB external RAM (base model)
+    USER_AREA_START = 0xB8000
+    USER_AREA_SIZE = 0x4C00        # Size up to BEC00H
     
-    ROM_START = 0x040000
-    ROM_SIZE = 0x40000             # 256KB ROM
+    MACHINE_CODE_START = 0xBEC00  
+    MACHINE_CODE_SIZE = 0x1234     # 0x1234 bytes
     
-    LCD_MAIN_START = 0x007000     # Main LCD controller
-    LCD_SUB_START = 0x007800      # Sub LCD controller
+    INTERNAL_RAM_START = 0xB8000
+    INTERNAL_RAM_SIZE = 0x8000     # 32KB internal RAM
+    
+    # Memory cards
+    CARD_8KB_START = 0x40000
+    CARD_16KB_START = 0x48000
+    CARD_32KB_START = 0x44000
+    CARD_64KB_START = 0x40000
+    
+    # LCD controllers in 0x2xxxx space
+    LCD_MAIN_START = 0x20000       # Main LCD controller (HD61202U)
+    LCD_SUB_START = 0x28000        # Sub LCD controller (HD61700)
     
     def __init__(self):
         self.memory = MemoryMapper()
-        self.main_lcd = T6A04Controller(self.LCD_MAIN_START)
+        self.main_lcd = HD61202UController(self.LCD_MAIN_START)
         self.sub_lcd = HD61700Controller(self.LCD_SUB_START)
         
         # Setup default memory map
@@ -31,36 +41,60 @@ class PCE500Machine:
     
     def _setup_memory_map(self) -> None:
         """Setup the default PC-E500 memory map."""
-        # Internal RAM (8KB)
+        # Internal RAM (32KB) - includes user area
         self.memory.add_region(
             RAMRegion(self.INTERNAL_RAM_START, self.INTERNAL_RAM_SIZE, "Internal RAM")
         )
         
-        # External RAM (32KB base, can be expanded)
+        # Work area (reserved)
         self.memory.add_region(
-            RAMRegion(self.EXTERNAL_RAM_START, self.EXTERNAL_RAM_SIZE, "External RAM")
+            RAMRegion(0xBFC00, 0x400, "Work Area (Reserved)")
         )
         
-        # LCD controllers as peripherals
+        # LCD controllers in 0x2xxxx space
+        # The controllers use complex address decoding:
+        # - They respond to addresses in 0x2xxxx range
+        # - Address bits control chip selection and operation type
+        # Main LCD: HD61202U dual-chip controller
         self.memory.add_region(
-            PeripheralRegion(self.LCD_MAIN_START, 0x800, self.main_lcd, "Main LCD")
+            PeripheralRegion(0x20000, 0x8000, self.main_lcd, "Main LCD (HD61202U)")
         )
+        # Sub LCD: HD61700 controller
         self.memory.add_region(
-            PeripheralRegion(self.LCD_SUB_START, 0x100, self.sub_lcd, "Sub LCD")
+            PeripheralRegion(0x28000, 0x8000, self.sub_lcd, "Sub LCD (HD61700)")
         )
     
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
         """Load ROM data at specified address."""
         if start_address is None:
-            start_address = self.ROM_START
+            start_address = self.INTERNAL_ROM_START
         
         # Validate ROM size
-        if len(rom_data) > self.ROM_SIZE:
-            raise ValueError(f"ROM size {len(rom_data)} exceeds maximum {self.ROM_SIZE}")
+        if len(rom_data) > self.INTERNAL_ROM_SIZE:
+            raise ValueError(f"ROM size {len(rom_data)} exceeds maximum {self.INTERNAL_ROM_SIZE}")
         
         # Add ROM region
         self.memory.add_region(
-            ROMRegion(start_address, rom_data, "System ROM")
+            ROMRegion(start_address, rom_data, "Internal ROM")
+        )
+    
+    def load_memory_card(self, card_data: bytes, card_size: int) -> None:
+        """Load a memory card (8KB, 16KB, 32KB, or 64KB)."""
+        card_starts = {
+            8192: self.CARD_8KB_START,    # 8KB
+            16384: self.CARD_16KB_START,   # 16KB
+            32768: self.CARD_32KB_START,   # 32KB
+            65536: self.CARD_64KB_START    # 64KB
+        }
+        
+        if card_size not in card_starts:
+            raise ValueError(f"Invalid card size {card_size}. Must be 8KB, 16KB, 32KB, or 64KB")
+            
+        if len(card_data) > card_size:
+            raise ValueError(f"Card data size {len(card_data)} exceeds card size {card_size}")
+            
+        self.memory.add_region(
+            ROMRegion(card_starts[card_size], card_data, f"{card_size//1024}KB Card")
         )
     
     def expand_ram(self, size: int, start_address: int) -> None:
@@ -72,8 +106,14 @@ class PCE500Machine:
     def reset(self) -> None:
         """Reset machine state."""
         # Reset display controllers
-        self.main_lcd.clear_display()
-        self.main_lcd.display_on = False
+        # For HD61202U, we need to reset the interpreters
+        for chip in self.main_lcd.chips.values():
+            chip.vram = bytearray(chip.VRAM_SIZE)
+            chip.display_on = False
+            chip.page = 0
+            chip.y_addr = 0
+            chip.start_line = 0
+        
         self.sub_lcd.clear_display()
         self.sub_lcd.display_on = False
         

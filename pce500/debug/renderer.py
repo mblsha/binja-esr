@@ -3,7 +3,7 @@
 from typing import Optional, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from ..display import LCDController
+from ..display import LCDController, HD61202UController
 
 
 class DisplayRenderer:
@@ -16,9 +16,27 @@ class DisplayRenderer:
         self.bg_color = bg_color
         self.fg_color = fg_color
         
-    def render_display(self, controller: LCDController) -> Image.Image:
+    def render_display(self, controller) -> Image.Image:
         """Render LCD controller display to PIL Image."""
-        # Get display buffer
+        # Handle HD61202UController specially
+        if isinstance(controller, HD61202UController):
+            # Use the HD61202U's own render method and scale it
+            left_img = controller.chips['left'].render(zoom=self.scale, 
+                                                       on_color=self.fg_color, 
+                                                       off_color=self.bg_color)
+            right_img = controller.chips['right'].render(zoom=self.scale, 
+                                                        on_color=self.fg_color, 
+                                                        off_color=self.bg_color)
+            
+            # Combine the two halves
+            width = controller.width * self.scale
+            height = controller.height * self.scale
+            img = Image.new('RGB', (width, height), self.bg_color)
+            img.paste(left_img, (0, 0))
+            img.paste(right_img, (64 * self.scale, 0))
+            return img
+        
+        # For other controllers, use the buffer method
         buffer = controller.get_display_buffer()
         
         # Create image with LCD-like colors
@@ -40,8 +58,8 @@ class DisplayRenderer:
         
         return img
     
-    def render_dual_display(self, main_lcd: LCDController, 
-                           sub_lcd: LCDController,
+    def render_dual_display(self, main_lcd, 
+                           sub_lcd,
                            gap: int = 20) -> Image.Image:
         """Render both LCD displays in a single image."""
         # Render individual displays
@@ -65,13 +83,13 @@ class DisplayRenderer:
         
         return combined
     
-    def save_display(self, controller: LCDController, filename: str) -> None:
+    def save_display(self, controller, filename: str) -> None:
         """Save display to image file."""
         img = self.render_display(controller)
         img.save(filename)
     
-    def create_debug_image(self, main_lcd: LCDController,
-                          sub_lcd: LCDController,
+    def create_debug_image(self, main_lcd,
+                          sub_lcd,
                           cpu_state: dict,
                           filename: str) -> None:
         """Create a debug image with displays and CPU state."""

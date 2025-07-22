@@ -4,11 +4,10 @@ import time
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-# Import the SC62015 CPU from the parent package
+# Import the SC62015 emulator from the parent package
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from sc62015.pysc62015.cpu import CPU
-from sc62015.pysc62015.memory import Memory
+from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, Memory
 
 from .machine import PCE500Machine
 
@@ -38,7 +37,7 @@ class PCE500Emulator:
     def __init__(self):
         self.machine = PCE500Machine()
         self.memory = PCE500Memory(self.machine)
-        self.cpu = CPU(self.memory)
+        self.cpu = SC62015Emulator(self.memory)
         
         # Emulation state
         self.running = False

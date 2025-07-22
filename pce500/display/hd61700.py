@@ -10,7 +10,7 @@ class HD61700Controller(LCDController):
     REG_CONTROL = 0x00
     REG_DATA = 0x01
     
-    def __init__(self, start_addr: int = 0x7800):
+    def __init__(self, start_addr: int = 0x28000):
         # HD61700: Typically smaller display, e.g., 24x2 characters (192x16 pixels)
         super().__init__(width=192, height=16, start_addr=start_addr, size=0x100)
         
@@ -20,6 +20,14 @@ class HD61700Controller(LCDController):
         # Control state
         self.address_counter = 0
         self.auto_increment = True
+    
+    def contains_address(self, address: int) -> bool:
+        """Check if address is handled by this controller."""
+        # Must be in 0x2xxxx range
+        if (address & 0xF0000) != 0x20000:
+            return False
+        # Use parent class check for specific range
+        return super().contains_address(address)
         
     def _handle_read(self, offset: int) -> int:
         """Handle read from HD61700."""
