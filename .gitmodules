@@ -1,0 +1,3 @@
+[submodule "pce500/third_party/retrobus-perfetto"]
+	path = pce500/third_party/retrobus-perfetto
+	url = https://github.com/mblsha/retrobus-perfetto.git
