@@ -1,7 +1,6 @@
 """Base LCD controller class for PC-E500 emulator."""
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional
 import numpy as np
 
 

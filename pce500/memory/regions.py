@@ -1,7 +1,6 @@
 """Memory region definitions for PC-E500."""
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 
 class MemoryRegion(ABC):

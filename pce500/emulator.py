@@ -7,7 +7,7 @@ from pathlib import Path
 # Import the SC62015 emulator from the parent package
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, Memory
+from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, Memory, RegisterName
 
 from .machine import PCE500Machine
 
@@ -66,12 +66,14 @@ class PCE500Emulator:
             self._trace_state()
         
         # Check breakpoints
-        if self.cpu.regs.pc in self.breakpoints:
+        pc = self.cpu.regs.get(RegisterName.PC)
+        if pc in self.breakpoints:
             self.running = False
             return 0
         
         # Execute instruction
-        cycles = self.cpu.step()
+        self.cpu.execute_instruction(pc)
+        cycles = 1  # TODO: Implement cycle counting
         self.cycle_count += cycles
         
         return cycles

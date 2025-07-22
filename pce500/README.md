@@ -64,3 +64,12 @@ The 240×32 pixel display is managed by two HD61202 chips. The specific arrangem
 ## CPU Information
 
 The PC-E500 uses the SC62015 (ESR-L) processor. For detailed CPU information, see the [pysc62015 documentation](../sc62015/pysc62015/).
+
+### System Vectors
+
+The SC62015 processor uses specific memory locations for system initialization:
+
+- **Interrupt Vector**: Located at 0xFFFFA (3 bytes, little-endian)
+- **Entry Point**: Located at 0xFFFFD (3 bytes, little-endian)
+
+On reset, the CPU reads the entry point address from 0xFFFFD and begins execution there. The interrupt vector at 0xFFFFA is called when interrupts occur.
