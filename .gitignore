@@ -5,3 +5,5 @@ Session.vim
 coverage.xml
 htmlcov/
 mcp
+data/pc-e500.bin
+data/*.txt

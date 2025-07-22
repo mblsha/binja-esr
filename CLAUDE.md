@@ -65,3 +65,58 @@ This is a Binary Ninja plugin for the SC62015 (ESR-L) processor, used in Sharp P
 - Registers: A, B, BA (16-bit A+B), I (index), X/Y (24-bit pointers), U/S (stack pointers), PC
 - Flags: Zero (Z) and Carry (C)
 - Memory regions: internal (0x000-0x1FF), external, and chip select areas
+
+## SC62015 Emulator Usage
+
+The SC62015 emulator (`sc62015/pysc62015/emulator.py`) is a sophisticated LLIL-based implementation that executes instructions by:
+1. Decoding them into instruction objects
+2. Lifting them to Binary Ninja's Low-Level IL
+3. Evaluating the LLIL to perform the actual execution
+
+### Important: Register Access Pattern
+
+The emulator uses getter/setter methods for register access, NOT property syntax:
+
+```python
+# CORRECT - Use get/set methods
+pc = emu.regs.get(RegisterName.PC)
+emu.regs.set(RegisterName.PC, 0x1000)
+reg_a = emu.regs.get(RegisterName.A)
+
+# INCORRECT - These will fail
+pc = emu.regs.pc  # AttributeError!
+emu.regs.pc = 0x1000  # AttributeError!
+```
+
+### PC Advancement
+
+The emulator correctly advances PC after each instruction execution. The `execute_instruction()` method:
+1. Sets PC to the instruction address
+2. Decodes and lifts the instruction
+3. Updates PC to `address + instruction_length`
+4. Evaluates the LLIL (which may modify PC for jumps/branches)
+
+### Testing the Emulator
+
+When writing tests, always use the correct register access pattern:
+
+```python
+from sc62015.pysc62015.emulator import Emulator, Memory, RegisterName
+
+# Set PC
+emu.regs.set(RegisterName.PC, 0x1000)
+
+# Execute instruction at current PC
+emu.execute_instruction(emu.regs.get(RegisterName.PC))
+
+# Check PC advanced
+new_pc = emu.regs.get(RegisterName.PC)
+```
+
+## PC-E500 Emulator
+
+The PC-E500 emulator (`pce500/`) wraps the SC62015 emulator with Sharp PC-E500 specific hardware:
+- Memory mapper for ROM/RAM regions
+- HD61202 LCD controller emulation
+- Entry point at 0xFFFFD (3 bytes, little-endian)
+- Interrupt vector at 0xFFFFA (3 bytes, little-endian)

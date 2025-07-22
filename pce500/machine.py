@@ -39,14 +39,10 @@ class PCE500Machine:
     
     def _setup_memory_map(self) -> None:
         """Setup the default PC-E500 memory map."""
-        # Internal RAM (32KB) - includes user area
+        # Internal RAM (32KB at 0xB8000-0xBFFFF)
+        # This includes both user area and work area
         self.memory.add_region(
             RAMRegion(self.INTERNAL_RAM_START, self.INTERNAL_RAM_SIZE, "Internal RAM")
-        )
-        
-        # Work area (reserved)
-        self.memory.add_region(
-            RAMRegion(0xBFC00, 0x400, "Work Area (Reserved)")
         )
         
         # LCD controller in 0x2xxxx space
