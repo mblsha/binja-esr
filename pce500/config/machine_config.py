@@ -50,11 +50,13 @@ class MachineConfig:
     def get_default_memory_map() -> List[MemoryMapConfig]:
         """Get default PC-E500 memory map."""
         return [
-            MemoryMapConfig("Internal RAM", "ram", 0x000000, 0x2000),
-            MemoryMapConfig("Main LCD", "peripheral", 0x007000, 0x800),
-            MemoryMapConfig("Sub LCD", "peripheral", 0x007800, 0x100),
-            MemoryMapConfig("External RAM", "ram", 0x008000, 0x8000),
-            MemoryMapConfig("System ROM", "rom", 0x040000, 0x40000),
+            MemoryMapConfig("Internal ROM", "rom", 0xC0000, 0x40000),
+            MemoryMapConfig("Work Area", "ram", 0xBFC00, 0x400),
+            MemoryMapConfig("Machine Code Area", "ram", 0xBEC00, 0x1234),
+            MemoryMapConfig("Internal RAM", "ram", 0xB8000, 0x8000),
+            MemoryMapConfig("LCD Controllers", "peripheral", 0x20000, 0x10000),
+            MemoryMapConfig("Extension Area", "ram", 0x50000, 0x38000),
+            MemoryMapConfig("64KB Card", "rom", 0x40000, 0x10000),
         ]
     
     def save(self, path: str) -> None:
@@ -91,11 +93,13 @@ class MachineConfig:
             "PC-E500S": cls(
                 name="Sharp PC-E500S",
                 memory_map=[
-                    MemoryMapConfig("Internal RAM", "ram", 0x000000, 0x2000),
-                    MemoryMapConfig("Main LCD", "peripheral", 0x007000, 0x800),
-                    MemoryMapConfig("Sub LCD", "peripheral", 0x007800, 0x100),
-                    MemoryMapConfig("External RAM", "ram", 0x008000, 0x10000),  # 64KB
-                    MemoryMapConfig("System ROM", "rom", 0x040000, 0x40000),
+                    MemoryMapConfig("Internal ROM", "rom", 0xC0000, 0x40000),
+                    MemoryMapConfig("Work Area", "ram", 0xBFC00, 0x400),
+                    MemoryMapConfig("Machine Code Area", "ram", 0xBEC00, 0x1234),
+                    MemoryMapConfig("Internal RAM", "ram", 0xB8000, 0x8000),
+                    MemoryMapConfig("LCD Controllers", "peripheral", 0x20000, 0x10000),
+                    MemoryMapConfig("Extension Area", "ram", 0x50000, 0x38000),
+                    MemoryMapConfig("64KB Card", "rom", 0x40000, 0x10000),
                 ]
             ),
         }

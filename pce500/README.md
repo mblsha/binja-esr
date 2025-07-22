@@ -41,11 +41,21 @@ See `examples/run_pce500.py` for a complete example.
 ## Memory Map
 
 Default PC-E500 memory configuration:
-- 0x000000-0x001FFF: Internal RAM (8KB)
-- 0x007000-0x0077FF: Main LCD controller
-- 0x007800-0x0078FF: Sub LCD controller  
-- 0x008000-0x00FFFF: External RAM (32KB, expandable)
-- 0x040000-0x07FFFF: System ROM (256KB)
+- 0x00000-0x3FFFF: (Unassigned)
+- 0x40000-0x4FFFF: Memory card area
+  - 64KB card: 0x40000-0x4FFFF
+  - 32KB card: 0x44000-0x4BFFF
+  - 16KB card: 0x48000-0x4BFFF
+  - 8KB card: 0x48000-0x49FFF
+- 0x50000-0xB7FFF: Extension area (for future expansion)
+- 0xB8000-0xBFFFF: Internal RAM (32KB)
+  - 0xB8000-0xBEBFF: User area
+  - 0xBEC00-0xBFE33: Machine code area (0x1234 bytes)
+  - 0xBFC00-0xBFFFF: Work area (reserved)
+- 0xC0000-0xFFFFF: Internal ROM (256KB)
+- 0x2xxxx: LCD controllers (memory-mapped I/O, address-decoded)
+  - Main LCD: HD61202U dual-chip (128x64)
+  - Sub LCD: HD61700
 
 ## Configuration
 
