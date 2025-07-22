@@ -1,69 +1,66 @@
-# PC-E500 Emulator
-
-A Sharp PC-E500 emulator built on the SC62015 CPU implementation.
-
-## Features
-
-- Full memory mapping with support for 256KB ROM files
-- Dual LCD controller emulation (main 160x64 and sub display)
-- Debug image rendering of display state
-- Configurable memory maps for different PC-E500 variants
-- Memory inspection and debugging tools
-
-## Installation
-
-```bash
-cd pce500
-pip install -e .
-```
-
-## Usage
-
-```python
-from pce500 import PCE500Emulator
-from pce500.debug import DisplayRenderer
-
-# Create and configure emulator
-emu = PCE500Emulator()
-emu.load_rom("path/to/rom.bin")
-emu.reset()
-
-# Run emulation
-emu.run(max_cycles=1000)
-
-# Render display to image
-renderer = DisplayRenderer()
-renderer.save_display(emu.machine.main_lcd, "display.png")
-```
-
-See `examples/run_pce500.py` for a complete example.
+# PC-E500 Architecture Documentation
 
 ## Memory Map
 
-Default PC-E500 memory configuration:
-- 0x00000-0x3FFFF: (Unassigned)
-- 0x40000-0x4FFFF: Memory card area
-  - 64KB card: 0x40000-0x4FFFF
-  - 32KB card: 0x44000-0x4BFFF
-  - 16KB card: 0x48000-0x4BFFF
-  - 8KB card: 0x48000-0x49FFF
-- 0x50000-0xB7FFF: Extension area (for future expansion)
-- 0xB8000-0xBFFFF: Internal RAM (32KB)
-  - 0xB8000-0xBEBFF: User area
-  - 0xBEC00-0xBFE33: Machine code area (0x1234 bytes)
-  - 0xBFC00-0xBFFFF: Work area (reserved)
-- 0xC0000-0xFFFFF: Internal ROM (256KB)
-- 0x2xxxx: LCD controllers (memory-mapped I/O, address-decoded)
-  - Main LCD: HD61202U dual-chip (128x64)
-  - Sub LCD: HD61700
+The PC-E500 uses a 20-bit address space (1MB total) with the following memory regions:
 
-## Configuration
+### Memory Region Details
 
-Create custom machine configurations:
+- **Internal ROM** (0xC0000 - 0xFFFFF): 256KB, contains system firmware
+- **Internal RAM** (0xB8000 - 0xBFFFF): 32KB, user and system memory
+- **Memory Card Slot** (0x40000 - 0x4FFFF): Starting at 0x40000, supports up to 64KB
+- **LCD Controllers** (0x2xxxx): Memory-mapped I/O for display control
 
-```python
-from pce500.config import MachineConfig
+## LCD Display System
 
-config = MachineConfig.for_model("PC-E500S")  # 64KB RAM variant
-config.save("my_config.json")
-```
+The PC-E500 features a single 240×32 pixel monochrome LCD display controlled by two HD61202 column driver chips working together at addresses 0x2xxxx.
+
+### LCD Controller Configuration
+
+The display uses two Hitachi HD61202 chips accessed through memory-mapped I/O. The exact division of display area between the two chips needs to be determined.
+
+### Memory-Mapped I/O
+
+Commands to the LCD controllers are interpreted based on the memory address accessed by the CPU in the 0x2xxxx range.
+
+#### Hardware Control Signal Mapping
+
+| Controller Pin | CPU Connection | Function |
+|---------------|----------------|----------|
+| | **Left HD61202** | **Right HD61202** | |
+| DB0-7 | DIO0-7 | DIO0-7 | Data bus, three-state I/O common terminal |
+| E (Enable) | CE5 | CE5 | At write (R/W = low): Data latched at falling edge of E<br>At read (R/W = high): Data appears while E is high |
+| R/W (Read/Write) | A0 | A0 | R/W = High: Data read mode<br>R/W = Low: Data write mode |
+| D/I (Data/Instruction) | A1 | A1 | D/I = High: DB0-7 is display data<br>D/I = Low: DB0-7 is display control data |
+| CS1 | A3 | A2 | Active Low |
+| CS2 | A12 | A12 | Active Low |
+| CS3 | A13 | A13 | Active High |
+
+#### Address Decoding
+
+The CPU address bits control LCD operations:
+- **A0**: R/W control (0 = write, 1 = read)
+- **A1**: D/I control (0 = instruction, 1 = data)
+- **A3:A2**: Chip selection
+  - `00`: Broadcast to both chips
+  - `01`: Right chip only
+  - `10`: Left chip only
+  - `11`: No chips selected
+- **A12**: CS2 (active low)
+- **A13**: CS3 (active high) - must be 1 for valid LCD access
+
+#### Access Examples
+
+Write command to left chip:
+- Address: 0x2xxxx with A13=1, A3:A2=10, A1=0, A0=0
+
+Write data to both chips:
+- Address: 0x2xxxx with A13=1, A3:A2=00, A1=1, A0=0
+
+### Display Organization
+
+The 240×32 pixel display is managed by two HD61202 chips. The specific arrangement of how these chips divide the display area (e.g., left/right split, top/bottom split, or interleaved) requires further investigation.
+
+## CPU Information
+
+The PC-E500 uses the SC62015 (ESR-L) processor. For detailed CPU information, see the [pysc62015 documentation](../sc62015/pysc62015/).
