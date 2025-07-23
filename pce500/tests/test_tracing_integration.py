@@ -211,10 +211,10 @@ class TestTracingIntegration:
 class TestTracingEmulatorEdgeCases:
     """Test edge cases and error conditions."""
     
-    def test_tracing_without_tg4perfetto(self):
-        """Test graceful behavior when tg4perfetto is not available."""
+    def test_tracing_without_perfetto_library(self):
+        """Test graceful behavior when perfetto library is not available."""
         # This is hard to test without actually uninstalling the package
-        # But the code handles it gracefully by checking HAS_TG4PERFETTO
+        # But the code handles it gracefully by checking for library availability
         pass
     
     def test_invalid_memory_access_tracing(self):
