@@ -111,18 +111,18 @@ class PCE500Emulator:
     def get_cpu_state(self) -> Dict[str, Any]:
         """Get current CPU state."""
         return {
-            'pc': self.cpu.regs.pc,
-            'a': self.cpu.regs.a,
-            'b': self.cpu.regs.b,
-            'ba': self.cpu.regs.ba,
-            'i': self.cpu.regs.i,
-            'x': self.cpu.regs.x,
-            'y': self.cpu.regs.y,
-            'u': self.cpu.regs.u,
-            's': self.cpu.regs.s,
+            'pc': self.cpu.regs.get(RegisterName.PC),
+            'a': self.cpu.regs.get(RegisterName.A),
+            'b': self.cpu.regs.get(RegisterName.B),
+            'ba': self.cpu.regs.get(RegisterName.BA),
+            'i': self.cpu.regs.get(RegisterName.I),
+            'x': self.cpu.regs.get(RegisterName.X),
+            'y': self.cpu.regs.get(RegisterName.Y),
+            'u': self.cpu.regs.get(RegisterName.U),
+            's': self.cpu.regs.get(RegisterName.S),
             'flags': {
-                'z': self.cpu.regs.f_z,
-                'c': self.cpu.regs.f_c
+                'z': self.cpu.regs.get(RegisterName.F_Z),
+                'c': self.cpu.regs.get(RegisterName.F_C)
             },
             'cycles': self.cycle_count
         }
