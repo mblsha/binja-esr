@@ -1,3 +1,9 @@
+# Exclude third-party directories
+extend-exclude = [
+    "pce500/third_party/",
+    "**/third_party/**",
+]
+
 [lint]
 ignore = ['F405', 'E701']
 

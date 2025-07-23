@@ -1,7 +1,7 @@
 """Memory mapper for PC-E500 emulator."""
 
-from typing import List, Optional
-from .regions import MemoryRegion
+from typing import List, Optional, Dict, Any
+from .regions import MemoryRegion, PeripheralRegion
 
 
 class MemoryMapper:
@@ -9,6 +9,7 @@ class MemoryMapper:
     
     def __init__(self):
         self.regions: List[MemoryRegion] = []
+        self._context: Optional[Dict[str, Any]] = None
     
     def add_region(self, region: MemoryRegion) -> None:
         """Add a memory region to the mapper."""
@@ -31,12 +32,25 @@ class MemoryMapper:
                 return region
         return None
     
+    def set_context(self, context: Optional[Dict[str, Any]]) -> None:
+        """Set the context for memory operations (e.g., CPU state).
+        
+        Args:
+            context: Dictionary containing contextual information like cpu_pc
+        """
+        self._context = context
+    
     def read_byte(self, address: int) -> int:
         """Read a byte from the given address."""
         address &= 0xFFFFFF  # 24-bit address space
         region = self.find_region(address)
         if region:
-            return region.read_byte(region.offset(address))
+            # Pass context to peripherals
+            if isinstance(region, PeripheralRegion) and self._context:
+                cpu_pc = self._context.get('cpu_pc')
+                return region.read_byte(region.offset(address), cpu_pc=cpu_pc)
+            else:
+                return region.read_byte(region.offset(address))
         return 0xFF  # Return 0xFF for unmapped addresses
     
     def write_byte(self, address: int, value: int) -> None:
@@ -44,7 +58,12 @@ class MemoryMapper:
         address &= 0xFFFFFF  # 24-bit address space
         region = self.find_region(address)
         if region:
-            region.write_byte(region.offset(address), value)
+            # Pass context to peripherals
+            if isinstance(region, PeripheralRegion) and self._context:
+                cpu_pc = self._context.get('cpu_pc')
+                region.write_byte(region.offset(address), value, cpu_pc=cpu_pc)
+            else:
+                region.write_byte(region.offset(address), value)
         # Writes to unmapped addresses are ignored
     
     def read_word(self, address: int) -> int:

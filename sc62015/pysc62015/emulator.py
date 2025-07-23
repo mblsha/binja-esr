@@ -112,6 +112,8 @@ class Registers:
 
     def __init__(self) -> None:
         self._values: Dict[RegisterName, int] = {reg: 0 for reg in self.BASE}
+        # Call stack tracking for Perfetto tracing
+        self.call_sub_level: int = 0
 
     def get(self, reg: RegisterName) -> int:
         if reg in self.BASE:
@@ -175,6 +177,10 @@ class Emulator:
         self.regs = Registers()
         self.memory = memory
         self.state = State()
+        
+        # Track last PC for tracing
+        self._last_pc: int = 0
+        self._current_pc: int = 0
 
     def decode_instruction(self, address: int) -> Instruction:
         def fecher(offset: int) -> int:
@@ -184,9 +190,31 @@ class Emulator:
         return decode(decoder, address, OPCODES)  # type: ignore
 
     def execute_instruction(self, address: int) -> None:
+        # Track PC history for tracing
+        self._last_pc = self._current_pc
+        self._current_pc = address
+        
         self.regs.set(RegisterName.PC, address)
         instr = self.decode_instruction(address)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
+        
+        # Track call stack depth based on opcode
+        opcode = self.memory.read_byte(address)
+        prev_level = self.regs.call_sub_level
+        
+        # Monitor specific opcodes for call stack tracking
+        if opcode == 0x04:  # CALL mn
+            self.regs.call_sub_level += 1
+        elif opcode == 0x05:  # CALLF lmn
+            self.regs.call_sub_level += 1
+        elif opcode == 0xFE:  # IR - Interrupt entry
+            self.regs.call_sub_level += 1
+        elif opcode == 0x06:  # RET
+            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
+        elif opcode == 0x07:  # RETF
+            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
+        elif opcode == 0x01:  # RETI - Return from interrupt
+            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
 
         il = MockLowLevelILFunction()
         instr.lift(il, address)

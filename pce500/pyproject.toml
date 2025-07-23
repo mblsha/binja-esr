@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "Pillow",
+    "retrobus-perfetto @ file:third_party/retrobus-perfetto/py",
 ]
 
 [project.optional-dependencies]
