@@ -200,7 +200,6 @@ class Emulator:
         
         # Track call stack depth based on opcode
         opcode = self.memory.read_byte(address)
-        prev_level = self.regs.call_sub_level
         
         # Monitor specific opcodes for call stack tracking
         if opcode == 0x04:  # CALL mn

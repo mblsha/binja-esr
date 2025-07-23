@@ -6,16 +6,19 @@ import tempfile
 
 from sc62015.pysc62015.emulator import Memory, RegisterName
 from pce500.tracing_emulator import TracingEmulator
-from pce500.trace_manager import g_tracer
 
 
 class TestMemory(Memory):
     """Simple memory implementation for testing."""
     
-    def __init__(self, size: int = 0x100000):
+    def __init__(self, size: int = 0x1000000):  # 16MB to cover 24-bit address space
         self._memory = bytearray(size)
     
     def read(self, address: int, size: int) -> bytes:
+        # Make sure we're reading within bounds
+        if address + size > len(self._memory):
+            # For out of bounds reads, return zeros
+            return bytes(size)
         return bytes(self._memory[address:address + size])
     
     def write(self, address: int, data: bytes) -> None:
@@ -27,6 +30,27 @@ class TestMemory(Memory):
     
     def write_byte(self, address: int, value: int) -> None:
         self._memory[address] = value & 0xFF
+    
+    def read_bytes(self, size: int, address: int) -> int:
+        """Read bytes from memory and return as integer (little-endian).
+        
+        Note: The signature has size before address, matching Binary Ninja's API.
+        """
+        data = self.read(address, size)
+        result = 0
+        for i, byte in enumerate(data):
+            result |= byte << (i * 8)
+        return result
+    
+    def write_bytes(self, size: int, address: int, value: int) -> None:
+        """Write integer value to memory as bytes (little-endian).
+        
+        Note: The signature has size before address, matching Binary Ninja's API.
+        """
+        data = []
+        for i in range(size):
+            data.append((value >> (i * 8)) & 0xFF)
+        self.write(address, bytes(data))
 
 
 @pytest.fixture
@@ -53,6 +77,12 @@ def emulator(memory):
 class TestCallStackTracking:
     """Test call stack tracking functionality."""
     
+    def setup_stack(self, emulator):
+        """Initialize stack pointer to a reasonable value."""
+        # Initialize S register (system stack pointer) to point to valid memory
+        # Stack grows downward, so set it to a high address
+        emulator.regs.set(RegisterName.S, 0xFFFF)
+    
     def test_simple_call_return(self, memory, emulator):
         """Test basic CALL/RET sequence."""
         # CALL 0x2000 (opcode 0x04, little-endian address)
@@ -62,7 +92,8 @@ class TestCallStackTracking:
         # NOP after RET
         memory.write(0x2001, bytes([0x00]))
         
-        # Initial state
+        # Setup stack and initial state
+        self.setup_stack(emulator)
         assert emulator.regs.call_sub_level == 0
         
         # Execute CALL
@@ -76,6 +107,9 @@ class TestCallStackTracking:
     
     def test_nested_calls(self, memory, emulator):
         """Test nested CALL instructions."""
+        # Setup stack
+        self.setup_stack(emulator)
+        
         # func1: CALL func2
         memory.write(0x1000, bytes([0x04, 0x00, 0x20]))  # CALL 0x2000
         
@@ -113,6 +147,9 @@ class TestCallStackTracking:
         # Interrupt handler at 0x3000
         memory.write(0x3000, bytes([0x01]))  # RETI
         
+        # Set PC to a known value before executing IR
+        emulator.regs.set(RegisterName.PC, 0x1000)
+        
         # Execute interrupt
         emulator.execute_instruction(0x1000)  # IR
         assert emulator.regs.call_sub_level == 1
@@ -125,6 +162,9 @@ class TestCallStackTracking:
     
     def test_callf_retf(self, memory, emulator):
         """Test far call/return (CALLF/RETF)."""
+        # Setup stack
+        self.setup_stack(emulator)
+        
         # CALLF 0x012345 (opcode 0x05, little-endian 20-bit address)
         memory.write(0x1000, bytes([0x05, 0x45, 0x23, 0x01]))
         

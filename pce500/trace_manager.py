@@ -7,10 +7,12 @@ for CPU execution, peripherals, and memory operations with Perfetto format outpu
 import collections
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple, Union
+from typing import Any, Deque, Dict, Optional, Union
+
+from retrobus_perfetto import PerfettoTraceBuilder
 
 # Import configuration
 try:
@@ -24,9 +26,6 @@ except ImportError:
 
 # Configuration flag to enable/disable tracing at compile time
 ENABLE_PERFETTO_TRACING = TracingConfig.is_enabled()
-
-# Import retrobus-perfetto (required dependency)
-from retrobus_perfetto import PerfettoTraceBuilder
 
 
 class TraceEventType(Enum):
@@ -166,7 +165,22 @@ class TraceManager:
     
     def is_tracing(self) -> bool:
         """Check if tracing is currently active."""
-        return self._tracing_enabled and self._trace_builder is not None
+        return self._tracing_enabled
+    
+    def get_call_depth(self, thread_id: int) -> int:
+        """Get the current call stack depth for a thread."""
+        if not self._tracing_enabled:
+            return 0
+        thread = str(thread_id)
+        if thread in self._call_stacks:
+            return len(self._call_stacks[thread])
+        return 0
+    
+    def get_timestamp(self) -> int:
+        """Get current timestamp in nanoseconds."""
+        if not self._tracing_enabled:
+            return 0
+        return self._get_timestamp()
     
     def _get_timestamp(self) -> int:
         """Get current timestamp in nanoseconds."""
@@ -281,7 +295,7 @@ class TraceManager:
             return
             
         with self._rlock:
-            event = self._trace_builder.add_flow(
+            self._trace_builder.add_flow(
                 self._track_uuids[thread],
                 name,
                 self._get_timestamp(),
@@ -295,7 +309,7 @@ class TraceManager:
             return
             
         with self._rlock:
-            event = self._trace_builder.add_flow(
+            self._trace_builder.add_flow(
                 self._track_uuids[thread],
                 name,
                 self._get_timestamp(),

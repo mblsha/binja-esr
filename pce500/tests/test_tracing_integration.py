@@ -4,11 +4,15 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from sc62015.pysc62015.emulator import Memory, RegisterName
+from sc62015.pysc62015.emulator import RegisterName
 from pce500.tracing_emulator import TracingEmulator
 from pce500.memory.mapper import MemoryMapper
 from pce500.memory.regions import RAMRegion, PeripheralRegion
-from pce500.trace_manager import g_tracer
+from pce500.tracing_config import TracingConfig
+from unittest.mock import patch
+
+# Enable tracing for tests
+TracingConfig.enable()
 
 
 class MockPeripheral:
@@ -54,12 +58,14 @@ class TestTracingIntegration:
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
             trace_path = f.name
         
-        emu = TracingEmulator(mapper, trace_path)
-        yield emu, peripheral, trace_path
-        
-        # Cleanup
-        emu.stop_tracing()
-        Path(trace_path).unlink(missing_ok=True)
+        # Patch ENABLE_PERFETTO_TRACING to ensure tracing is enabled
+        with patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', True):
+            emu = TracingEmulator(mapper, trace_path)
+            yield emu, peripheral, trace_path
+            
+            # Cleanup
+            emu.stop_tracing()
+            Path(trace_path).unlink(missing_ok=True)
     
     def test_conditional_jump_tracing(self, tracing_emulator):
         """Test that conditional jumps are traced when taken."""

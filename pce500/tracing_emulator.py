@@ -5,7 +5,6 @@ from pathlib import Path
 import struct
 
 from sc62015.pysc62015.emulator import Emulator, Memory, RegisterName
-from sc62015.pysc62015.instr import Instruction
 from .trace_manager import g_tracer
 from .tracing_config import TracingConfig
 
@@ -47,9 +46,18 @@ class TracingMemoryWrapper(Memory):
             for i, byte in enumerate(data):
                 self._wrapped.write_byte(address + i, byte)
                 
-    def read_bytes(self, size: int, address: int) -> bytes:
-        """For eval_llil compatibility."""
-        return self.read(address, size)
+    def read_bytes(self, size: int, address: int) -> int:
+        """For eval_llil compatibility - returns integer value."""
+        # First try to delegate to wrapped memory's read_bytes if it has one
+        if hasattr(self._wrapped, 'read_bytes'):
+            return self._wrapped.read_bytes(size, address)
+        
+        # Otherwise, read bytes and convert to integer (little-endian)
+        data = self.read(address, size)
+        result = 0
+        for i, byte in enumerate(data):
+            result |= byte << (i * 8)
+        return result
         
     def write_bytes(self, size: int, address: int, data) -> None:
         """For eval_llil compatibility."""
@@ -134,23 +142,18 @@ class TracingEmulator(Emulator):
         data = bytes([self.memory.read_byte(address + i) for i in range(4)])
         
         # Track call stack depth and emit trace events
-        prev_level = self.regs.call_sub_level
-        
         # Monitor specific opcodes for call stack tracking and tracing
         if opcode == 0x04:  # CALL mn
-            self.regs.call_sub_level += 1
             if g_tracer.is_tracing():
                 new_pc = struct.unpack('<H', data[1:3])[0]
                 g_tracer.begin_function("CPU", new_pc, address)
                 
         elif opcode == 0x05:  # CALLF lmn
-            self.regs.call_sub_level += 1
             if g_tracer.is_tracing():
                 new_pc = data[1] | (data[2] << 8) | (data[3] << 16)
                 g_tracer.begin_function("CPU", new_pc, address)
                 
         elif opcode == 0xFE:  # IR - Interrupt entry
-            self.regs.call_sub_level += 1
             if g_tracer.is_tracing():
                 # Interrupt vector is at 0xFFFFA
                 int_vector = bytes([self.memory.read_byte(0xFFFFA + i) for i in range(3)])
@@ -168,12 +171,10 @@ class TracingEmulator(Emulator):
         elif opcode == 0x06:  # RET
             if g_tracer.is_tracing():
                 g_tracer.end_function("CPU", address)
-            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
             
         elif opcode == 0x07:  # RETF
             if g_tracer.is_tracing():
                 g_tracer.end_function("CPU", address)
-            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
             
         elif opcode == 0x01:  # RETI - Return from interrupt
             if g_tracer.is_tracing():
@@ -184,8 +185,6 @@ class TracingEmulator(Emulator):
                     interrupt_id = self._interrupt_stack.pop()
                     g_tracer.trace_interrupt("RETI_Exit", pc=address)
                     g_tracer.end_flow("Interrupt", interrupt_id)
-                    
-            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
             
         # Trace jump instructions
         elif opcode == 0x02:  # JP mn

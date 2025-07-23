@@ -212,7 +212,7 @@ def main():
         
         # Report results
         elapsed = time.time() - start_time
-        print(f"\nExecution summary:")
+        print("\nExecution summary:")
         print(f"  Total instructions: {instruction_count:,}")
         print(f"  Total time: {elapsed:.2f} seconds")
         print(f"  Average speed: {instruction_count/elapsed:,.0f} instructions/sec")
@@ -222,14 +222,14 @@ def main():
         
         # Debug: Check if tracing was active
         from pce500.trace_manager import g_tracer
-        print(f"\nTracing status:")
+        print("\nTracing status:")
         print(f"  Was tracing active: {g_tracer._tracing_enabled}")
         print(f"  Trace file handle: {g_tracer._trace_file}")
         
         # Verify trace file
         if trace_path.exists():
             size = trace_path.stat().st_size
-            print(f"\nTrace file generated successfully!")
+            print("\nTrace file generated successfully!")
             print(f"  Path: {trace_path}")
             print(f"  Size: {size:,} bytes ({size/1024/1024:.2f} MB)")
             
@@ -244,9 +244,9 @@ def main():
         else:
             print(f"\n✗ Trace file was not created at {trace_path}")
         
-        print(f"\nTo view the trace:")
-        print(f"  1. Open https://ui.perfetto.dev")
-        print(f"  2. Click 'Open trace file'")
+        print("\nTo view the trace:")
+        print("  1. Open https://ui.perfetto.dev")
+        print("  2. Click 'Open trace file'")
         print(f"  3. Select: {trace_path.absolute()}")
 
 
