@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import pytest
 from typing import List
 
-from pce500.simple_emulator import SimplifiedPCE500Emulator
+from pce500 import PCE500Emulator
 from sc62015.pysc62015.instr import decode, OPCODES
 from sc62015.pysc62015.emulator import RegisterName
 
@@ -19,7 +19,7 @@ def test_pce500_execution_trace():
         pytest.skip(f"ROM file {rom_path} not found")
     
     # Create emulator and load full memory image
-    emu = SimplifiedPCE500Emulator()
+    emu = PCE500Emulator()
     with open(rom_path, "rb") as f:
         rom_data = f.read()
     
