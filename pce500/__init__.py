@@ -1,6 +1,6 @@
 """Sharp PC-E500 emulator package."""
 
-from .emulator import PCE500Emulator
-from .machine import PCE500Machine
+# Import from the main implementation
+from .emulator import PCE500Emulator, PCE500Machine
 
 __all__ = ["PCE500Emulator", "PCE500Machine"]

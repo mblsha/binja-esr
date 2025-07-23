@@ -1,6 +1,6 @@
 """Simplified memory implementation for PC-E500 emulator."""
 
-from typing import Optional, Dict, Tuple
+from typing import Optional
 from dataclasses import dataclass
 
 from .trace_manager import g_tracer
@@ -16,10 +16,11 @@ class MemoryRegion:
     name: str = ""
     
 
-class SimplifiedMemory:
-    """Simplified memory manager for PC-E500.
+class PCE500Memory:
+    """Memory manager for PC-E500.
     
-    Replaces the complex 4-layer abstraction with direct memory access.
+    Direct memory access implementation that replaces the original
+    complex 4-layer abstraction.
     """
     
     def __init__(self):
@@ -86,7 +87,7 @@ class SimplifiedMemory:
             
             # Perfetto tracing for RAM reads
             if self.perfetto_enabled and cpu_pc is not None:
-                g_tracer.trace_instant("Memory", f"RAM_Read", {
+                g_tracer.trace_instant("Memory", "RAM_Read", {
                     "addr": f"0x{address:06X}",
                     "value": f"0x{value:02X}",
                     "pc": f"0x{cpu_pc:06X}"
@@ -133,7 +134,7 @@ class SimplifiedMemory:
                 trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
                 if cpu_pc is not None:
                     trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory", f"RAM_Write", trace_data)
+                g_tracer.trace_instant("Memory", "RAM_Write", trace_data)
             
         # LCD controller (0x20000-0x2FFFF)
         elif 0x20000 <= address <= 0x2FFFF and self.lcd_controller:
@@ -142,7 +143,7 @@ class SimplifiedMemory:
         # ROM regions - silently ignore writes
         elif 0xC0000 <= address <= 0xFFFFF:
             if self.perfetto_enabled:
-                g_tracer.trace_instant("Memory", f"ROM_Write_Ignored", 
+                g_tracer.trace_instant("Memory", "ROM_Write_Ignored", 
                                      {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"})
             
         # Memory card - ROM, ignore writes
@@ -222,7 +223,7 @@ class SimplifiedMemory:
         
         if self.internal_rom:
             lines.append(f"  ROM: 0xC0000-0xFFFFF ({len(self.internal_rom)//1024}KB)")
-        lines.append(f"  RAM: 0xB8000-0xBFFFF (32KB)")
+        lines.append("  RAM: 0xB8000-0xBFFFF (32KB)")
         
         if self.memory_card:
             lines.append(f"  Card: 0x{self.card_start:05X} ({len(self.memory_card)//1024}KB)")
@@ -240,3 +241,8 @@ class SimplifiedMemory:
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing."""
         self.perfetto_enabled = enabled
+
+
+# Backward compatibility aliases
+SimplifiedMemory = PCE500Memory
+MemoryMapper = PCE500Memory  # For code expecting the old MemoryMapper class

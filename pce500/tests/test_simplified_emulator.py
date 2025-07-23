@@ -1,13 +1,12 @@
 """Tests for the simplified PC-E500 emulator."""
 
-import pytest
 import sys
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pce500.simple_emulator import SimplifiedPCE500Emulator
+from pce500.emulator import SimplifiedPCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
@@ -70,7 +69,7 @@ class TestSimplifiedEmulator:
         emu.memory.write_byte(0x20008, 0x3F)  # Display on
         
         # Verify display state
-        assert emu.lcd.display_on[0] == True
+        assert emu.lcd.display_on[0] is True
         
     def test_reset_functionality(self):
         """Test emulator reset."""

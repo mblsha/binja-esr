@@ -205,3 +205,8 @@ class HD61202Controller:
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing."""
         self.perfetto_enabled = enabled
+
+
+# Backward compatibility aliases
+SimpleHD61202 = HD61202Controller
+HD61202 = HD61202Controller  # For code expecting the toolkit HD61202 class

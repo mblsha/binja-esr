@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test elegant LCD address decoding for PC-E500 emulator."""
+"""Test LCD controller for PC-E500 emulator."""
 
 import sys
 from pathlib import Path
@@ -8,103 +8,169 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import only the display module to avoid emulator dependencies
-from pce500.display.hd61202_toolkit import HD61202, HD61202Controller
+from pce500.display import HD61202Controller
 
 
-def test_address_decoding():
-    """Test the elegant address decoding system."""
+def test_basic_operations():
+    """Test basic LCD controller operations."""
     controller = HD61202Controller()
     
-    print("=== HD61202 Address Decoding Test ===\n")
+    print("=== HD61202 Controller Test ===\n")
     
-    # Test cases with different address patterns
-    test_addresses = [
-        # Address,    Description
-        (0x20000, "Base address - write instruction to both chips"),
-        (0x20001, "Read instruction from both chips"),
-        (0x20002, "Write data to both chips"),
-        (0x20003, "Read data from both chips"),
-        (0x20004, "Write instruction to chip 2 only"),
-        (0x20008, "Write instruction to chip 1 only"),
-        (0x2000C, "Write instruction to no chips"),
-        (0x22000, "CS3=1, write instruction to both chips"),
-        (0x23000, "CS2=1 (inactive), disables chip 2"),
-        (0x10000, "Wrong range (0x1xxxx)"),
-        (0x30000, "Wrong range (0x3xxxx)"),
+    # Test initial state
+    print("1. Initial state:")
+    print(f"   Display on: {controller.display_on}")
+    print(f"   Page: {controller.page}")
+    print(f"   Column: {controller.column}")
+    print(f"   Display size: {controller.width}x{controller.height}")
+    
+    # Test display on/off commands
+    print("\n2. Testing display control:")
+    
+    # Turn on left display (chip 0)
+    addr = 0x20000  # Base address, instruction mode
+    cmd = 0x3F  # Display ON
+    print(f"   Sending display ON command (0x{cmd:02X}) to address 0x{addr:05X}")
+    controller.write(addr, cmd)
+    print(f"   Left display on: {controller.display_on[0]}")
+    print(f"   Right display on: {controller.display_on[1]}")
+    
+    # Turn on right display (chip 1)  
+    addr = 0x20004  # Chip 1 select
+    controller.write(addr, cmd)
+    print(f"   After turning on right chip: {controller.display_on}")
+    
+    # Test page selection
+    print("\n3. Testing page selection:")
+    addr = 0x20000  # Both chips
+    cmd = 0xB2  # Set page 2
+    print(f"   Setting page 2 (command 0x{cmd:02X})")
+    controller.write(addr, cmd)
+    print(f"   Page registers: {controller.page}")
+    
+    # Test column selection
+    print("\n4. Testing column selection:")
+    cmd = 0x15  # Set column to 21 (0x15)
+    print(f"   Setting column to 21 (command 0x{cmd:02X})")
+    controller.write(addr, cmd)
+    print(f"   Column registers: {controller.column}")
+    
+    # Test data write
+    print("\n5. Testing data write:")
+    addr = 0x20002  # Data write to both chips
+    data = 0xFF  # All pixels on
+    print(f"   Writing data 0x{data:02X} to current position")
+    controller.write(addr, data)
+    
+    # Check VRAM
+    left_offset = controller.page[0] * 120 + controller.column[0]
+    right_offset = controller.page[1] * 120 + controller.column[1]
+    print(f"   Left VRAM[{left_offset}]: 0x{controller.left_vram[left_offset]:02X}")
+    print(f"   Right VRAM[{right_offset}]: 0x{controller.right_vram[right_offset]:02X}")
+    print(f"   Column after write: {controller.column}")
+    
+    # Test status read
+    print("\n6. Testing status read:")
+    addr = 0x20001  # Status read
+    status = controller.read(addr)
+    print(f"   Status byte: 0x{status:02X}")
+    print(f"   Busy: {bool(status & 0x80)}")
+    print(f"   Display ON: {bool(status & 0x20)}")
+    print(f"   Reset: {bool(status & 0x10)}")
+    
+    # Test reset
+    print("\n7. Testing reset:")
+    controller.reset()
+    print("   After reset:")
+    print(f"   - Display on: {controller.display_on}")
+    print(f"   - Page: {controller.page}")
+    print(f"   - Column: {controller.column}")
+
+
+def test_address_patterns():
+    """Test different address patterns."""
+    controller = HD61202Controller()
+    
+    print("\n=== Address Pattern Test ===\n")
+    
+    test_cases = [
+        # (address, description)
+        (0x20000, "Base: instruction to both chips"),
+        (0x20001, "Base+1: status read from both chips"),
+        (0x20002, "Base+2: data write to both chips"),
+        (0x20003, "Base+3: data read from both chips"),
+        (0x20004, "Base+4: instruction to right chip only"),
+        (0x20006, "Base+6: data write to right chip only"),
+        (0x20008, "Base+8: instruction to left chip only"),
+        (0x2000A, "Base+A: data write to left chip only"),
+        (0x2000C, "Base+C: no chip selected"),
+        (0x22000, "Different base: still works"),
+        (0x30000, "Out of range: ignored"),
     ]
     
-    for addr, desc in test_addresses:
-        print(f"Address: 0x{addr:05X} - {desc}")
+    # Turn on displays first
+    controller.write(0x20000, 0x3F)
+    
+    for addr, desc in test_cases:
+        print(f"Address 0x{addr:05X}: {desc}")
         
-        if controller.contains_address(addr):
-            decode = controller.decode_address(addr)
-            print("  ✓ Valid LCD access")
-            print(f"  - R/W: {'Read' if decode.rw else 'Write'}")
-            print(f"  - D/I: {'Data' if decode.di else 'Instruction'}")
-            print(f"  - Chip Select: {decode.chip_select.name}")
-            print(f"  - CS2: {'High (inactive)' if decode.cs2 else 'Low (active)'}")
-            print(f"  - CS3: {'High (active)' if decode.cs3 else 'Low (inactive)'}")
+        # Try writing a command
+        if addr <= 0x2FFFF:
+            old_page = controller.page.copy()
+            controller.write(addr, 0xB1)  # Set page 1
             
-            chips = controller._get_selected_chips(decode)
-            if chips:
-                chip_names = []
-                if controller.chips['left'] in chips:
-                    chip_names.append("Left")
-                if controller.chips['right'] in chips:
-                    chip_names.append("Right")
-                print(f"  - Active chips: {', '.join(chip_names)}")
+            # Check which chips were affected
+            if controller.page != old_page:
+                changed = []
+                if controller.page[0] != old_page[0]:
+                    changed.append("left")
+                if controller.page[1] != old_page[1]:
+                    changed.append("right")
+                print(f"  -> Changed: {', '.join(changed)}")
             else:
-                print("  - Active chips: None")
+                print("  -> No change")
         else:
-            print("  ✗ Invalid LCD access")
+            print("  -> Out of range")
         print()
 
 
-def demonstrate_lcd_commands():
-    """Demonstrate sending commands to the LCD."""
+def test_drawing_pattern():
+    """Test drawing a simple pattern."""
     controller = HD61202Controller()
     
-    print("\n=== LCD Command Examples ===\n")
+    print("\n=== Drawing Pattern Test ===\n")
     
-    # Turn on display for both chips
-    addr = 0x22000  # CS3=1, A1=0 (instruction), A3:A2=00 (both chips)
-    cmd = 0x3F  # Display ON command
-    print("1. Turn on both displays:")
-    print(f"   Write 0x{cmd:02X} to address 0x{addr:05X}")
-    controller.write(addr, cmd)
-    print(f"   Left display on: {controller.chips['left'].display_on}")
-    print(f"   Right display on: {controller.chips['right'].display_on}")
+    # Turn on both displays
+    controller.write(0x20000, 0x3F)
     
-    # Set page on left chip only
-    addr = 0x22008  # CS3=1, A1=0 (instruction), A3:A2=10 (left chip)
-    cmd = 0xB3  # Set page 3
-    print("\n2. Set page 3 on left chip:")
-    print(f"   Write 0x{cmd:02X} to address 0x{addr:05X}")
+    # Draw a checkerboard pattern on page 0
+    controller.write(0x20000, 0xB0)  # Set page 0
     
-    # Debug: check what command is parsed
-    parsed_cmd = HD61202.Parser.parse(False, False, cmd)
-    print(f"   Parsed command: {parsed_cmd}")
+    print("Drawing checkerboard pattern on page 0...")
+    addr = 0x20002  # Data write
+    for col in range(120):
+        # Set column
+        controller.write(0x20000, col)
+        
+        # Write pattern (alternating 0xAA and 0x55)
+        pattern = 0xAA if col % 2 == 0 else 0x55
+        controller.write(addr, pattern)
     
-    controller.write(addr, cmd)
-    print(f"   Left chip page: {controller.chips['left'].page}")
-    print(f"   Right chip page: {controller.chips['right'].page}")
+    # Check a few bytes
+    print("Sample of VRAM contents:")
+    for i in range(0, 10):
+        print(f"  Column {i}: Left=0x{controller.left_vram[i]:02X}, "
+              f"Right=0x{controller.right_vram[i]:02X}")
     
-    # Write data to right chip only
-    addr = 0x22006  # CS3=1, A1=1 (data), A3:A2=01 (right chip)
-    data = 0xAA  # Data pattern
-    print("\n3. Write data to right chip:")
-    print(f"   Write 0x{data:02X} to address 0x{addr:05X}")
-    controller.write(addr, data)
-    print(f"   Right chip VRAM[0]: 0x{controller.chips['right'].vram[0]:02X}")
-    
-    # Read status from both chips
-    addr = 0x22001  # CS3=1, A1=0 (instruction), A3:A2=00 (both), A0=1 (read)
-    print("\n4. Read status from both chips:")
-    print(f"   Read from address 0x{addr:05X}")
-    status = controller.read(addr)
-    print(f"   Combined status: 0x{status:02X}")
+    # Calculate fill percentage
+    filled_left = sum(1 for b in controller.left_vram[:120] if b != 0)
+    filled_right = sum(1 for b in controller.right_vram[:120] if b != 0)
+    print("\nFill stats for page 0:")
+    print(f"  Left chip: {filled_left}/120 columns filled")
+    print(f"  Right chip: {filled_right}/120 columns filled")
 
 
 if __name__ == "__main__":
-    test_address_decoding()
-    demonstrate_lcd_commands()
+    test_basic_operations()
+    test_address_patterns()
+    test_drawing_pattern()

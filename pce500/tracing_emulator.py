@@ -62,6 +62,10 @@ class TracingMemoryWrapper(Memory):
     def write_bytes(self, size: int, address: int, data) -> None:
         """For eval_llil compatibility."""
         if isinstance(data, int):
+            # Handle both signed and unsigned integers
+            # Mask to the appropriate size to avoid overflow
+            max_val = (1 << (size * 8))
+            data = data & (max_val - 1)
             data = data.to_bytes(size, byteorder='little', signed=False)
         self.write(address, data)
         
