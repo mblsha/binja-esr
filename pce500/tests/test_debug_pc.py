@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pce500.simple_emulator import SimplifiedPCE500Emulator
+from pce500 import PCE500Emulator
 from sc62015.pysc62015.instr import decode, OPCODES
 from sc62015.pysc62015.emulator import RegisterName
 
@@ -14,7 +14,7 @@ def test_debug_pc():
     rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
     
     # Create emulator and load ROM
-    emu = SimplifiedPCE500Emulator()
+    emu = PCE500Emulator()
     with open(rom_path, "rb") as f:
         rom_data = f.read()
     
