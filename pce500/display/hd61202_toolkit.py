@@ -1,7 +1,7 @@
 """HD61202 LCD controller toolkit for PC-E500 emulator."""
 
 from dataclasses import dataclass
-from typing import Union, TypeAlias, Dict
+from typing import Union, TypeAlias, Dict, Optional
 from enum import IntEnum
 from PIL import Image, ImageDraw
 import numpy as np
@@ -313,8 +313,16 @@ class HD61202Controller:
             case ChipSelect.NONE:
                 return []
         
-    def read(self, address: int) -> int:
-        """Read from LCD controller."""
+    def read(self, address: int, cpu_pc: Optional[int] = None) -> int:
+        """Read from LCD controller.
+        
+        Args:
+            address: Memory address being read
+            cpu_pc: Optional CPU program counter for tracing context
+            
+        Returns:
+            8-bit value read from LCD
+        """
         if not self.contains_address(address):
             return 0xFF
             
@@ -330,14 +338,48 @@ class HD61202Controller:
             
         if not decode.di:  # Status read (instruction mode)
             # OR together status from all selected chips
-            return sum(chip.read_status() for chip in selected_chips)
+            result = sum(chip.read_status() for chip in selected_chips)
+            
+            # Add tracing
+            try:
+                from ..trace_manager import g_tracer
+                if g_tracer.is_tracing() and cpu_pc is not None:
+                    g_tracer.trace_instant(
+                        "Display",
+                        f"LCD_StatusRead@0x{cpu_pc:06X}",
+                        {"status": f"0x{result:02X}"}
+                    )
+            except ImportError:
+                pass
+                
+            return result
         else:  # Data read
             # For data reads, OR together data from all selected chips
             # (though typically only one chip is selected for data reads)
-            return sum(chip.read_data() for chip in selected_chips)
+            result = sum(chip.read_data() for chip in selected_chips)
+            
+            # Add tracing
+            try:
+                from ..trace_manager import g_tracer
+                if g_tracer.is_tracing() and cpu_pc is not None:
+                    g_tracer.trace_instant(
+                        "Display",
+                        f"LCD_DataRead@0x{cpu_pc:06X}",
+                        {"data": f"0x{result:02X}"}
+                    )
+            except ImportError:
+                pass
+                
+            return result
         
-    def write(self, address: int, value: int) -> None:
-        """Write to LCD controller."""
+    def write(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
+        """Write to LCD controller.
+        
+        Args:
+            address: Memory address being written
+            value: 8-bit value to write
+            cpu_pc: Optional CPU program counter for tracing context
+        """
         if not self.contains_address(address):
             return
             
@@ -349,6 +391,36 @@ class HD61202Controller:
             
         # Parse command and broadcast to selected chips
         cmd = HD61202.Parser.parse(decode.di, False, value)
+        
+        # Add tracing support if trace manager is available
+        try:
+            from ..trace_manager import g_tracer
+            if g_tracer.is_tracing() and cpu_pc is not None:
+                # Get command name for tracing
+                cmd_name = cmd.__class__.__name__
+                
+                # Add specific details for different command types
+                details = {"cmd": cmd_name, "value": f"0x{value:02X}"}
+                
+                if isinstance(cmd, HD61202.SetPage):
+                    details["page"] = cmd.page
+                elif isinstance(cmd, HD61202.SetYAddress):
+                    details["y_addr"] = cmd.y_addr
+                elif isinstance(cmd, HD61202.SetStartLine):
+                    details["line"] = cmd.line
+                elif isinstance(cmd, HD61202.WriteData):
+                    details["data"] = f"0x{cmd.value:02X}"
+                
+                # Emit trace event
+                g_tracer.trace_instant(
+                    "Display",
+                    f"LCD_{cmd_name}@0x{cpu_pc:06X}",
+                    details
+                )
+        except ImportError:
+            # Tracing not available, continue normally
+            pass
+        
         for chip in self._get_selected_chips(decode):
             chip.eval(cmd)
                 

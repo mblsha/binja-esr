@@ -1,1 +1,1 @@
-"""PC-E500 emulator tests."""
+"""Tests for PC-E500 emulator with Perfetto tracing."""

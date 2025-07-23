@@ -1,2 +1,3 @@
 numpy>=1.24.0
 Pillow>=10.0.0
+retrobus-perfetto @ file:./third_party/retrobus-perfetto/py

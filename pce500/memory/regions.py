@@ -72,8 +72,35 @@ class PeripheralRegion(MemoryRegion):
         super().__init__(start, size, name)
         self.peripheral = peripheral
     
-    def read_byte(self, offset: int) -> int:
+    def read_byte(self, offset: int, cpu_pc: int = None) -> int:
+        """Read a byte from peripheral with optional CPU context.
+        
+        Args:
+            offset: Offset within the region
+            cpu_pc: Optional CPU program counter for tracing
+            
+        Returns:
+            Byte value from peripheral
+        """
+        # Check if peripheral supports cpu_pc parameter
+        if cpu_pc is not None and hasattr(self.peripheral.read, '__code__'):
+            # Check if 'cpu_pc' is in the function's parameters
+            if 'cpu_pc' in self.peripheral.read.__code__.co_varnames:
+                return self.peripheral.read(self.start + offset, cpu_pc=cpu_pc)
         return self.peripheral.read(self.start + offset)
     
-    def write_byte(self, offset: int, value: int) -> None:
+    def write_byte(self, offset: int, value: int, cpu_pc: int = None) -> None:
+        """Write a byte to peripheral with optional CPU context.
+        
+        Args:
+            offset: Offset within the region
+            value: Byte value to write
+            cpu_pc: Optional CPU program counter for tracing
+        """
+        # Check if peripheral supports cpu_pc parameter
+        if cpu_pc is not None and hasattr(self.peripheral.write, '__code__'):
+            # Check if 'cpu_pc' is in the function's parameters
+            if 'cpu_pc' in self.peripheral.write.__code__.co_varnames:
+                self.peripheral.write(self.start + offset, value, cpu_pc=cpu_pc)
+                return
         self.peripheral.write(self.start + offset, value)
