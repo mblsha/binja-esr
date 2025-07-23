@@ -3,12 +3,15 @@
 import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 import threading
 import time
 
 from pce500.trace_manager import TraceManager, g_tracer, ENABLE_PERFETTO_TRACING
 from pce500.tracing_config import TracingConfig
+
+# Enable tracing for tests
+TracingConfig.enable()
 
 
 class TestTraceManager:
@@ -49,25 +52,26 @@ class TestTraceManager:
     
     def test_timestamp_monotonic(self):
         """Test that timestamps are monotonically increasing."""
-        if not g_tracer.is_tracing():
-            with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
-                g_tracer.start_tracing(f.name)
-                cleanup = True
-        else:
-            cleanup = False
-            
-        try:
-            ts1 = g_tracer.get_timestamp()
-            time.sleep(0.001)  # Sleep 1ms
-            ts2 = g_tracer.get_timestamp()
-            
-            assert ts2 > ts1
-            # Should be at least 1000 microseconds apart
-            assert ts2 - ts1 >= 1000
-        finally:
-            if cleanup:
-                g_tracer.stop_tracing()
-                Path(f.name).unlink(missing_ok=True)
+        with patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', True):
+            if not g_tracer.is_tracing():
+                with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
+                    g_tracer.start_tracing(f.name)
+                    cleanup = True
+            else:
+                cleanup = False
+                
+            try:
+                ts1 = g_tracer.get_timestamp()
+                time.sleep(0.001)  # Sleep 1ms
+                ts2 = g_tracer.get_timestamp()
+                
+                assert ts2 > ts1
+                # Should be at least 1000 microseconds apart
+                assert ts2 - ts1 >= 1000
+            finally:
+                if cleanup:
+                    g_tracer.stop_tracing()
+                    Path(f.name).unlink(missing_ok=True)
     
     def test_thread_safety(self):
         """Test thread-safe access to TraceManager."""
@@ -100,18 +104,30 @@ class TestTraceEvents:
     
     @pytest.fixture
     def mock_tg4perfetto(self):
-        """Mock tg4perfetto module."""
-        with patch('pce500.trace_manager.tg4perfetto') as mock:
-            # Mock the track class
-            mock_track = Mock()
-            mock_track.id = "test_track"
-            mock.track.return_value = mock_track
-            
-            # Mock the file context manager
-            mock_file = MagicMock()
-            mock.open.return_value = mock_file
-            
-            yield mock
+        """Mock retrobus_perfetto module."""
+        # Create a mock instance of PerfettoTraceBuilder
+        mock_instance = MagicMock()
+        
+        # Mock required methods
+        mock_instance.add_process_track.return_value = "process_track_uuid"
+        mock_instance.add_thread = MagicMock(return_value="thread_track_uuid")
+        mock_instance.add_counter_track.return_value = "counter_track_uuid"
+        
+        # Mock event methods that return event objects
+        mock_event = MagicMock()
+        mock_event.add_annotations = MagicMock()
+        
+        mock_instance.begin_slice = MagicMock(return_value=mock_event)
+        mock_instance.end_slice = MagicMock()
+        mock_instance.add_instant_event = MagicMock(return_value=mock_event)
+        mock_instance.update_counter = MagicMock()
+        mock_instance.add_flow = MagicMock()
+        mock_instance.finalize = MagicMock(return_value=b"trace_data")
+        
+        # Patch both the class and the ENABLE flag
+        with patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', True):
+            with patch('pce500.trace_manager.PerfettoTraceBuilder', return_value=mock_instance):
+                yield mock_instance
     
     def test_begin_end_function(self, mock_tg4perfetto):
         """Test function begin/end tracing."""
@@ -122,32 +138,29 @@ class TestTraceEvents:
             g_tracer.begin_function("CPU", pc=0x1000, caller_pc=0x500, name="test_func")
             g_tracer.end_function("CPU", pc=0x1000)
             
+            # Verify begin_slice and end_slice were called
+            mock_tg4perfetto.begin_slice.assert_called()
+            mock_tg4perfetto.end_slice.assert_called()
+            
             g_tracer.stop_tracing()
     
     def test_trace_instant(self, mock_tg4perfetto):
         """Test instant event tracing."""
-        mock_instant = Mock()
-        mock_tg4perfetto.instant.return_value = mock_instant
-        
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
             # Trace instant event
             g_tracer.trace_instant("CPU", "TestEvent", {"value": 42})
             
-            # Verify instant was called
-            mock_tg4perfetto.instant.assert_called()
-            call_args = mock_tg4perfetto.instant.call_args
-            assert call_args[0][0] == "TestEvent"  # name
-            assert "track" in call_args[1]  # track parameter
+            # Verify add_instant_event was called
+            mock_tg4perfetto.add_instant_event.assert_called()
+            call_args = mock_tg4perfetto.add_instant_event.call_args
+            assert call_args[0][1] == "TestEvent"  # name is second argument
             
             g_tracer.stop_tracing()
     
     def test_trace_jump(self, mock_tg4perfetto):
         """Test jump tracing."""
-        mock_instant = Mock()
-        mock_tg4perfetto.instant.return_value = mock_instant
-        
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
@@ -155,7 +168,7 @@ class TestTraceEvents:
             g_tracer.trace_jump("CPU", from_pc=0x1000, to_pc=0x2000)
             
             # Should create instant event
-            mock_tg4perfetto.instant.assert_called()
+            mock_tg4perfetto.add_instant_event.assert_called()
             
             g_tracer.stop_tracing()
     
@@ -167,18 +180,13 @@ class TestTraceEvents:
             # Trace counter
             g_tracer.trace_counter("CPU", "instructions", 1000)
             
-            # Verify count was called
-            mock_tg4perfetto.count.assert_called_with(
-                "instructions", 1000, mock.ANY, track=mock.ANY
-            )
+            # Verify update_counter was called
+            mock_tg4perfetto.update_counter.assert_called()
             
             g_tracer.stop_tracing()
     
     def test_flow_events(self, mock_tg4perfetto):
         """Test flow begin/end events."""
-        mock_instant = Mock()
-        mock_tg4perfetto.instant.return_value = mock_instant
-        
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
@@ -186,8 +194,8 @@ class TestTraceEvents:
             g_tracer.begin_flow("Interrupt", flow_id=123)
             g_tracer.end_flow("Interrupt", flow_id=123)
             
-            # Should create instant events with flow metadata
-            assert mock_tg4perfetto.instant.call_count >= 2
+            # Should create flow events
+            assert mock_tg4perfetto.add_flow.call_count >= 2
             
             g_tracer.stop_tracing()
 
