@@ -375,6 +375,73 @@ class PCE500Emulator:
         
         # Default case - should not happen for branch instructions
         return 0
+    
+    def _get_condition_code(self, instr) -> Optional[str]:
+        """Get condition code from conditional instruction."""
+        return getattr(instr, '_cond', None)
+    
+    def _is_conditional_jump(self, instr) -> bool:
+        """Check if instruction is a conditional jump."""
+        return (isinstance(instr, JumpInstruction) and 
+                hasattr(instr, '_cond') and 
+                bool(instr._cond))
+    
+    def _trace_call(self, pc: int, dest_addr: int):
+        """Trace call instruction."""
+        g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:05X}")
+        self.call_depth += 1
+        g_tracer.trace_instant("CPU", "call", {
+            "from": f"0x{pc:06X}",
+            "to": f"0x{dest_addr:05X}",
+            "depth": self.call_depth
+        })
+    
+    def _trace_return(self, pc: int, instr_class_name: str):
+        """Trace return instruction."""
+        g_tracer.end_function("CPU", pc)
+        self.call_depth = max(0, self.call_depth - 1)
+        
+        # Special handling for RETI
+        if instr_class_name == "RETI" and self._interrupt_stack:
+            flow_id = self._interrupt_stack.pop()
+            g_tracer.end_flow("CPU", flow_id, f"RETI@0x{pc:06X}")
+        
+        g_tracer.trace_instant("CPU", "return", {
+            "at": f"0x{pc:06X}",
+            "type": instr_class_name.lower(),
+            "depth": self.call_depth
+        })
+    
+    def _trace_interrupt(self, pc: int, vector_addr: int):
+        """Trace software interrupt."""
+        interrupt_id = self._next_interrupt_id
+        self._next_interrupt_id += 1
+        self._interrupt_stack.append(interrupt_id)
+
+        g_tracer.begin_flow("CPU", interrupt_id, f"IR@0x{pc:06X}")
+        g_tracer.begin_function("CPU", vector_addr, pc, f"int_0x{vector_addr:05X}")
+        self.call_depth += 1
+
+        g_tracer.trace_instant("CPU", "interrupt", {
+            "from": f"0x{pc:06X}",
+            "vector": f"0x{vector_addr:05X}",
+            "interrupt_id": interrupt_id
+        })
+    
+    def _trace_jump(self, pc: int, dest_addr: int, condition: Optional[str] = None):
+        """Trace jump instruction."""
+        trace_data = {
+            "from": f"0x{pc:06X}",
+            "to": f"0x{dest_addr:06X}"
+        }
+        
+        if condition:
+            trace_data["condition"] = condition
+            trace_data["type"] = "conditional"
+        else:
+            trace_data["type"] = "unconditional"
+            
+        g_tracer.trace_instant("CPU", "jump", trace_data)
 
     def _analyze_control_flow(self, pc: int, eval_info) -> None:
         """Analyze control flow instructions for Perfetto tracing.
@@ -384,77 +451,27 @@ class PCE500Emulator:
             eval_info: InstructionEvalInfo containing instruction and metadata
         """
         instr = eval_info.instruction
-        instr_name = instr.name()
         
         # Handle CALL instructions
         if isinstance(instr, CALL):
             dest_addr = self._get_branch_target(instr, pc)
-            g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:05X}")
-            self.call_depth += 1
-            g_tracer.trace_instant("CPU", instr_name, {
-                "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:05X}",
-                "depth": self.call_depth
-            })
+            self._trace_call(pc, dest_addr)
         
         # Handle return instructions (RET, RETF, RETI)
         elif isinstance(instr, RetInstruction):
-            g_tracer.end_function("CPU", pc)
-            self.call_depth = max(0, self.call_depth - 1)
-            
-            # Special handling for RETI
-            if instr_name == "RETI" and self._interrupt_stack:
-                flow_id = self._interrupt_stack.pop()
-                g_tracer.end_flow("CPU", flow_id, f"RETI@0x{pc:06X}")
-            
-            g_tracer.trace_instant("CPU", instr_name, {
-                "at": f"0x{pc:06X}",
-                "depth": self.call_depth
-            })
+            self._trace_return(pc, type(instr).__name__)
         
         # Handle IR (software interrupt)
         elif isinstance(instr, IR):
             # Read interrupt vector from 0xFFFFA
             vector_addr = self.memory.read_long(0xFFFFA)
-            # Generate unique interrupt ID
-            interrupt_id = self._next_interrupt_id
-            self._next_interrupt_id += 1
-            self._interrupt_stack.append(interrupt_id)
-
-            g_tracer.begin_flow("CPU", interrupt_id, f"IR@0x{pc:06X}")
-            g_tracer.begin_function("CPU", vector_addr, pc, f"int_0x{vector_addr:05X}")
-            self.call_depth += 1
-
-            g_tracer.trace_instant("CPU", "IR", {
-                "from": f"0x{pc:06X}",
-                "vector": f"0x{vector_addr:05X}",
-                "interrupt_id": interrupt_id
-            })
+            self._trace_interrupt(pc, vector_addr)
         
-        # Handle jump instructions (JP, JPF, JR, and conditional jumps)
+        # Handle jump instructions
         elif isinstance(instr, JumpInstruction):
             dest_addr = self._get_branch_target(instr, pc)
-            
-            # Check if it's a conditional jump
-            is_conditional = instr_name in ["JRZ", "JRNZ", "JRC", "JRNC"]
-            
-            trace_data = {
-                "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:06X}"
-            }
-            
-            # Add offset for relative jumps
-            if instr_name.startswith("JR") and dest_addr != 0:
-                # Calculate offset from the destination
-                offset = dest_addr - (pc + instr.length())
-                if offset > 127:
-                    offset -= 256  # Handle negative offsets
-                trace_data["offset"] = offset
-            
-            if is_conditional:
-                trace_data["conditional"] = True
-            
-            g_tracer.trace_instant("CPU", instr_name, trace_data)
+            condition = self._get_condition_code(instr)
+            self._trace_jump(pc, dest_addr, condition)
 
 
     def _check_conditional_jump_taken(self, pc_before: int, pc_after: int, eval_info) -> None:
@@ -466,18 +483,19 @@ class PCE500Emulator:
             eval_info: InstructionEvalInfo containing instruction and metadata
         """
         instr = eval_info.instruction
-        instr_name = instr.name()
         
-        # Check if it's a conditional jump
-        if isinstance(instr, JumpInstruction) and instr_name in ["JRZ", "JRNZ", "JRC", "JRNC"]:
+        # Check if it's a conditional jump using semantic method
+        if self._is_conditional_jump(instr):
             instr_len = eval_info.instruction_info.length
             expected_pc = (pc_before + instr_len) & 0xFFFFFF
 
             # If PC changed from expected, jump was taken
             jump_taken = pc_after != expected_pc
+            condition = self._get_condition_code(instr)
 
-            g_tracer.trace_instant("CPU", f"{instr_name}_Result", {
+            g_tracer.trace_instant("CPU", "jump_result", {
                 "from": f"0x{pc_before:06X}",
                 "to": f"0x{pc_after:06X}",
+                "condition": condition,
                 "taken": jump_taken
             })
