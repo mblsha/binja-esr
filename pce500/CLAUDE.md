@@ -101,3 +101,59 @@ with emu:
 print(f"Instructions: {emu.instructions}")
 print(f"Memory reads: {emu.memory_reads}")
 ```
+
+### Perfetto Tracing System
+
+The emulator includes sophisticated Perfetto tracing that can be visualized at https://ui.perfetto.dev/
+
+#### Trace Threads
+
+The tracing system uses multiple threads to organize different types of events:
+
+1. **Execution Thread**: All instruction executions
+   - Shows every instruction with PC, opcode, and flag states
+   - Includes C and Z flags before/after each instruction (C_before, Z_before, C_after, Z_after)
+   - Helps debug flag-dependent conditional jumps
+
+2. **CPU Thread**: Control flow and system events
+   - Function calls/returns with call stack tracking
+   - Jump instructions (only taken jumps for conditionals)
+   - Interrupts and system events
+   - No longer shows individual instruction execution
+
+3. **Memory Thread**: Memory operations
+   - Read/write operations with addresses and values
+   - Memory-mapped I/O access
+
+4. **I/O Thread**: I/O operations
+5. **Display Thread**: LCD controller operations
+6. **Interrupt Thread**: Interrupt handling
+
+#### Jump Tracing
+
+Jump instructions are traced with special handling:
+- **Unconditional jumps** (JP, JPF): Always traced
+- **Conditional jumps** (JRZ, JRNZ, JRC, JRNC): Only traced when taken
+- Jump traces show actual PC destinations (where execution went)
+- FROM address is the jump instruction location
+- TO address is the actual PC after the jump executed
+
+#### Implementation Details
+
+Key files for tracing:
+- `trace_manager.py`: Core Perfetto integration using retrobus-perfetto
+- `emulator.py`: Instruction and control flow tracing
+- `memory.py`: Memory access tracing
+
+To enable tracing:
+```python
+emu = PCE500Emulator(perfetto_trace=True)
+# Trace file saved as pc-e500.trace
+```
+
+#### Debugging Tips
+
+1. Use separate threads to filter events in Perfetto UI
+2. Look at flag states in Execution thread to understand conditional behavior
+3. CPU thread shows program flow without execution noise
+4. Correlate memory accesses with instruction execution using timestamps
