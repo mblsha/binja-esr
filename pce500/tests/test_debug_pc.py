@@ -40,7 +40,7 @@ def test_debug_pc():
     print(f"  PC: {emu.cpu.regs.get(RegisterName.PC):06X}")
     
     # Call execute_instruction directly
-    emu.cpu.execute_instruction(test_pc)
+    _ = emu.cpu.execute_instruction(test_pc)
     
     print("\nAfter execute_instruction:")
     print(f"  PC: {emu.cpu.regs.get(RegisterName.PC):06X}")

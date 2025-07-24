@@ -1,5 +1,6 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
+from dataclasses import dataclass
 from binja_test_mocks.coding import FetchDecoder
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
@@ -28,6 +29,12 @@ from .intrinsics import register_sc62015_intrinsics
 
 
 NUM_TEMP_REGISTERS = 14
+
+
+@dataclass
+class InstructionEvalInfo:
+    instruction_info: InstructionInfo
+    instruction: Instruction
 
 
 class RegisterName(enum.Enum):
@@ -189,7 +196,7 @@ class Emulator:
         decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
         return decode(decoder, address, OPCODES)  # type: ignore
 
-    def execute_instruction(self, address: int) -> None:
+    def execute_instruction(self, address: int) -> InstructionEvalInfo:
         # Track PC history for tracing
         self._last_pc = self._current_pc
         self._current_pc = address
@@ -266,6 +273,8 @@ class Emulator:
             assert isinstance(node, MockLLIL), f"Expected MockLLIL, got {type(node)}"
             self.evaluate(node)
             pc_llil += 1
+        
+        return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
     def evaluate(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
         return evaluate_llil(
