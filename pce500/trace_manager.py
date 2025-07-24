@@ -87,11 +87,14 @@ class TraceManager:
         
     def start_tracing(self, output_path: Union[str, Path]) -> bool:
         """Start tracing to a file."""
+        print(f"DEBUG: start_tracing called with output_path={output_path}")
+        print(f"DEBUG: ENABLE_PERFETTO_TRACING={ENABLE_PERFETTO_TRACING}")
         if not ENABLE_PERFETTO_TRACING:
             return False
             
         with self._rlock:
             if self._tracing_enabled:
+                print("DEBUG: Tracing already enabled")
                 return False
                 
             try:
@@ -125,14 +128,18 @@ class TraceManager:
                 self._tracing_enabled = True
                 self._start_time = time.perf_counter()
                 
+                print(f"DEBUG: Tracing started successfully, file will be saved to: {self._trace_file}")
                 return True
                 
             except Exception as e:
+                print(f"DEBUG: Exception in start_tracing: {e}")
                 raise RuntimeError(f"Failed to start tracing: {e}") from e
     
     def stop_tracing(self) -> bool:
         """Stop tracing and save the file."""
+        print(f"DEBUG: stop_tracing called, _tracing_enabled={self._tracing_enabled}, _trace_builder={self._trace_builder is not None}")
         if not self._tracing_enabled or not self._trace_builder:
+            print("DEBUG: Tracing not enabled or no trace builder")
             return False
             
         with self._rlock:
@@ -149,7 +156,11 @@ class TraceManager:
                 
                 # Save the trace
                 if self._trace_file:
+                    print(f"DEBUG: Saving trace to {self._trace_file}")
                     self._trace_builder.save(str(self._trace_file))
+                    print(f"DEBUG: Trace saved successfully")
+                else:
+                    print("DEBUG: No trace file path set!")
                 
                 # Reset state
                 self._tracing_enabled = False
