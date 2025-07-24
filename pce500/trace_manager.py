@@ -95,6 +95,7 @@ class TraceManager:
                 
                 # Create thread tracks
                 self._track_uuids["CPU"] = self._trace_builder.add_thread("CPU")
+                self._track_uuids["Execution"] = self._trace_builder.add_thread("Execution")
                 self._track_uuids["Memory"] = self._trace_builder.add_thread("Memory")
                 self._track_uuids["I/O"] = self._trace_builder.add_thread("I/O")
                 self._track_uuids["Display"] = self._trace_builder.add_thread("Display")
