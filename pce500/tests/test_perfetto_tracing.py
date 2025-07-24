@@ -8,10 +8,6 @@ import threading
 import time
 
 from pce500.trace_manager import TraceManager, g_tracer, ENABLE_PERFETTO_TRACING
-from pce500.tracing_config import TracingConfig
-
-# Enable tracing for tests
-TracingConfig.enable()
 
 
 class TestTraceManager:
@@ -231,54 +227,6 @@ class TestCallStackTracking:
         """Test that old frames are cleaned up."""
         # This would require mocking time or waiting, so we'll skip for now
         pass
-
-
-class TestTracingConfig:
-    """Test the tracing configuration system."""
-    
-    def test_enable_disable(self):
-        """Test enabling and disabling tracing via config."""
-        # Reset to defaults
-        TracingConfig.reset()
-        
-        # Initially disabled
-        assert not TracingConfig.is_enabled()
-        
-        # Enable
-        TracingConfig.enable()
-        assert TracingConfig.is_enabled()
-        
-        # Disable
-        TracingConfig.disable()
-        assert not TracingConfig.is_enabled()
-    
-    def test_output_path_config(self):
-        """Test output path configuration."""
-        TracingConfig.reset()
-        
-        # Default path
-        default_path = TracingConfig.get_output_path()
-        assert default_path == Path("trace.perfetto-trace")
-        
-        # Set custom path
-        custom_path = Path("/tmp/custom.trace")
-        TracingConfig.set_output_path(custom_path)
-        assert TracingConfig.get_output_path() == custom_path
-    
-    def test_environment_variables(self, monkeypatch):
-        """Test environment variable configuration."""
-        TracingConfig.reset()
-        
-        # Test enable via env var
-        monkeypatch.setenv("PCE500_ENABLE_TRACING", "1")
-        assert TracingConfig.is_enabled()
-        
-        monkeypatch.setenv("PCE500_ENABLE_TRACING", "false")
-        assert not TracingConfig.is_enabled()
-        
-        # Test output path via env var
-        monkeypatch.setenv("PCE500_TRACE_OUTPUT", "/tmp/env.trace")
-        assert TracingConfig.get_output_path() == Path("/tmp/env.trace")
 
 
 class TestNoOpBehavior:

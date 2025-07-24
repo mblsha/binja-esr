@@ -14,18 +14,8 @@ from typing import Any, Deque, Dict, Optional, Union
 
 from retrobus_perfetto import PerfettoTraceBuilder
 
-# Import configuration
-try:
-    from .tracing_config import TracingConfig
-except ImportError:
-    # Fallback if config module not available
-    class TracingConfig:
-        @staticmethod
-        def is_enabled():
-            return True
-
-# Configuration flag to enable/disable tracing at compile time
-ENABLE_PERFETTO_TRACING = TracingConfig.is_enabled()
+# Configuration flag to enable/disable tracing
+ENABLE_PERFETTO_TRACING = True
 
 
 class TraceEventType(Enum):
