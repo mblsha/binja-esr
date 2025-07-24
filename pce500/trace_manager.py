@@ -190,10 +190,14 @@ class TraceManager:
             return 0
         return int((time.perf_counter() - self._start_time) * 1_000_000_000)
     
-    def begin_function(self, thread: str, pc: int, caller_pc: int, name: Optional[str] = None) -> None:
-        """Begin a function duration event."""
+    def begin_function(self, thread: str, pc: int, caller_pc: int, name: Optional[str] = None) -> Optional[Any]:
+        """Begin a function duration event.
+        
+        Returns:
+            The event object if tracing is enabled, None otherwise.
+        """
         if not self.is_tracing() or thread not in self._track_uuids:
-            return
+            return None
             
         with self._rlock:
             # Clean up old frames
@@ -225,6 +229,8 @@ class TraceManager:
                 "pc": f"0x{pc:06X}",
                 "caller": f"0x{caller_pc:06X}"
             })
+            
+            return event
     
     def end_function(self, thread: str, pc: int) -> None:
         """End a function duration event."""
@@ -258,10 +264,14 @@ class TraceManager:
                     self._get_timestamp()
                 )
     
-    def trace_instant(self, thread: str, name: str, args: Optional[Dict[str, Any]] = None) -> None:
-        """Add an instant event."""
+    def trace_instant(self, thread: str, name: str, args: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+        """Add an instant event.
+        
+        Returns:
+            The event object if tracing is enabled, None otherwise.
+        """
         if not self.is_tracing() or thread not in self._track_uuids:
-            return
+            return None
             
         with self._rlock:
             event = self._trace_builder.add_instant_event(
@@ -272,6 +282,8 @@ class TraceManager:
             
             if args:
                 event.add_annotations(args)
+                
+            return event
     
     def trace_counter(self, thread: str, name: str, value: float) -> None:
         """Add a counter event.
