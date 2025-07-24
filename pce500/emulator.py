@@ -183,14 +183,16 @@ class PCE500Emulator:
         if self.trace is not None:
             self.trace.append(('exec', pc, self.cycle_count))
 
-        # Pre-execution tracing - trace BEFORE the instruction executes
+        # Pre-execution - capture state for tracing
+        opcode = None
+        fc_before = None
+        fz_before = None
+        
         if self.perfetto_enabled:
-            # Read just the opcode for basic trace
+            # Read the opcode and flag state before execution
             opcode = self.memory.read_byte(pc)
-            g_tracer.trace_instant("Execution", f"Exec@0x{pc:06X}", {
-                "pc": f"0x{pc:06X}",
-                "opcode": f"0x{opcode:02X}"
-            })
+            fc_before = self.cpu.regs.get(RegisterName.FC)
+            fz_before = self.cpu.regs.get(RegisterName.FZ)
 
         # Store PC before execution for conditional jump analysis
         pc_before = pc
@@ -205,8 +207,19 @@ class PCE500Emulator:
 
             # Post-execution analysis - detailed tracing after execution
             if self.perfetto_enabled:
-                # Debug output
-                # print(f"DEBUG: PC=0x{pc:06X}, opcode=0x{eval_info.instruction.opcode:02X}, perfetto_enabled={self.perfetto_enabled}, call_depth={self.call_depth}")
+                # Capture flag state after execution
+                fc_after = self.cpu.regs.get(RegisterName.FC)
+                fz_after = self.cpu.regs.get(RegisterName.FZ)
+                
+                # Trace execution with both before and after flag states
+                g_tracer.trace_instant("Execution", f"Exec@0x{pc:06X}", {
+                    "pc": f"0x{pc:06X}",
+                    "opcode": f"0x{opcode:02X}",
+                    "C_before": fc_before,
+                    "Z_before": fz_before,
+                    "C_after": fc_after,
+                    "Z_after": fz_after
+                })
 
                 # Analyze control flow instructions
                 self._analyze_control_flow(pc_before, eval_info)

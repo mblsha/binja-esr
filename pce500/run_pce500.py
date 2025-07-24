@@ -31,7 +31,7 @@ def main():
         # Reset and run
         emu.reset()
 
-        num_steps = 10000
+        num_steps = 1000
         print(f"Running {num_steps} instructions with tracing...")
         for _ in range(num_steps):
             emu.step()
