@@ -31,9 +31,9 @@ def main():
         # Reset and run
         emu.reset()
 
-        # Run for 1000 instructions
-        print("Running 1000 instructions with tracing...")
-        for _ in range(1000):
+        num_steps = 10000
+        print(f"Running {num_steps} instructions with tracing...")
+        for _ in range(num_steps):
             emu.step()
 
         print(f"Executed {emu.instruction_count} instructions")
