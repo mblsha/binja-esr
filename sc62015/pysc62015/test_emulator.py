@@ -546,7 +546,7 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
         )
 
     # 3. Execution Phase
-    cpu.execute_instruction(case.initial_pc)
+    _ = cpu.execute_instruction(case.initial_pc)
     # 4. Assertion Phase
     # Check register states
     for reg, expected_val in case.expected_regs.items():
@@ -579,27 +579,27 @@ def test_pushs_pops() -> None:
 
     cpu.regs.set(RegisterName.F, 0x0)
     cpu.regs.set(RegisterName.S, 0x20)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1F
     assert writes == [(0x1F, 0x0)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1E
     assert writes == [(0x1E, 0x2)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 0)
     cpu.regs.set(RegisterName.FC, 1)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1D
     assert writes == [(0x1D, 0x1)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
     cpu.regs.set(RegisterName.FC, 1)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1C
     assert writes == [(0x1C, 0x3)]
     writes.clear()
@@ -607,22 +607,22 @@ def test_pushs_pops() -> None:
     cpu.regs.set(RegisterName.F, 0)
     raw[0] = 0x5F  # Change to POPS instruction
     assert asm_str(cpu.decode_instruction(0x00).render()) == "POPS  F"
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1D
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 1
 
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1E
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 1
 
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x1F
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 0
 
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.S) == 0x20
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 0
@@ -634,27 +634,27 @@ def test_pushu_popu() -> None:
 
     cpu.regs.set(RegisterName.F, 0x0)
     cpu.regs.set(RegisterName.U, 0x20)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1F
     assert writes == [(0x1F, 0x0)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1E
     assert writes == [(0x1E, 0x2)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 0)
     cpu.regs.set(RegisterName.FC, 1)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1D
     assert writes == [(0x1D, 0x1)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
     cpu.regs.set(RegisterName.FC, 1)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1C
     assert writes == [(0x1C, 0x3)]
     writes.clear()
@@ -662,17 +662,17 @@ def test_pushu_popu() -> None:
     cpu.regs.set(RegisterName.F, 0)
     raw[0] = 0x3E  # POPU instruction
     assert asm_str(cpu.decode_instruction(0x00).render()) == "POPU  F"
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1D
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 1
 
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1E
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 1
 
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x1F
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 0
@@ -684,13 +684,13 @@ def test_pushu_popu_r2() -> None:
 
     cpu.regs.set(RegisterName.BA, 0x1234)
     cpu.regs.set(RegisterName.U, 0x30)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x2E
     assert writes == [(0x2E, 0x34), (0x2F, 0x12)]
     writes.clear()
 
     raw[0] = 0x3A  # POPU BA
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x30
     assert cpu.regs.get(RegisterName.BA) == 0x1234
 
@@ -701,13 +701,13 @@ def test_call_ret() -> None:
     assert asm_str(cpu.decode_instruction(0x20).render()) == "RET"
 
     cpu.regs.set(RegisterName.S, 0x30)  # Set stack pointer to a valid location
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.PC) == 0x20
     assert cpu.regs.get(RegisterName.S) == 0x2E
     assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
     writes.clear()
 
-    cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
+    _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
     assert cpu.regs.get(RegisterName.PC) == 0x03
     assert cpu.regs.get(RegisterName.S) == 0x30
     assert writes == []
@@ -722,13 +722,13 @@ def test_call_ret_high_page() -> None:
     assert asm_str(cpu.decode_instruction(0x30020).render()) == "RET"
 
     cpu.regs.set(RegisterName.S, 0x30)
-    cpu.execute_instruction(0x30000)
+    _ = cpu.execute_instruction(0x30000)
     assert cpu.regs.get(RegisterName.PC) == 0x30020
     assert cpu.regs.get(RegisterName.S) == 0x2E
     assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
     writes.clear()
 
-    cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
+    _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
     assert cpu.regs.get(RegisterName.PC) == 0x30003
     assert cpu.regs.get(RegisterName.S) == 0x30
     assert writes == []
@@ -741,13 +741,13 @@ def test_callf_retf() -> None:
     assert asm_str(cpu.decode_instruction(0x20).render()) == "RETF"
 
     cpu.regs.set(RegisterName.S, 0x30)  # Set stack pointer to a valid location
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.PC) == 0x20
     assert cpu.regs.get(RegisterName.S) == 0x2D
     assert writes == [(0x2D, 0x04), (0x2E, 0x00), (0x2F, 0x00)]
     writes.clear()
 
-    cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
+    _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
     assert cpu.regs.get(RegisterName.PC) == 0x04
     assert cpu.regs.get(RegisterName.S) == 0x30
     assert writes == []
@@ -759,7 +759,7 @@ def test_rol_ror_a() -> None:
 
     # Case 1: A = 0x55 (01010101)
     cpu.regs.set(RegisterName.A, 0x55)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     # MSB is 0. (01010101 << 1) | 0 = 10101010
     assert cpu.regs.get(RegisterName.A) == 0xAA
     assert cpu.regs.get(RegisterName.FC) == 0
@@ -767,7 +767,7 @@ def test_rol_ror_a() -> None:
 
     # Case 2: A = 0xAA (10101010)
     cpu.regs.set(RegisterName.A, 0xAA)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     # MSB is 1. (10101010 << 1) | 1 = 010101010 | 1 = 01010101
     assert cpu.regs.get(RegisterName.A) == 0x55
     assert cpu.regs.get(RegisterName.FC) == 1
@@ -778,7 +778,7 @@ def test_rol_ror_a() -> None:
 
     # Case 1: A = 0x55 (01010101)
     cpu.regs.set(RegisterName.A, 0x55)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     # LSB is 1. (01010101 >> 1) | (1 << 7) = 00101010 | 10000000 = 10101010
     assert cpu.regs.get(RegisterName.A) == 0xAA
     assert cpu.regs.get(RegisterName.FC) == 1
@@ -786,7 +786,7 @@ def test_rol_ror_a() -> None:
 
     # Case 2: A = 0xAA (10101010)
     cpu.regs.set(RegisterName.A, 0xAA)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
     # LSB is 0. (10101010 >> 1) | (0 << 7) = 01010101
     assert cpu.regs.get(RegisterName.A) == 0x55
     assert cpu.regs.get(RegisterName.FC) == 0
@@ -990,7 +990,7 @@ def test_pre_addressing_modes(tc: PreTestCase) -> None:
     )
 
     # debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
 
     if tc.expected_A_val_after is not None:
         # This is a "MV A, (mem_src)" type test
@@ -1192,7 +1192,7 @@ def test_adcl_instruction(tc: AdclDadlTestCase) -> None:
     ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
 
     # debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
 
     for i, expected_val in enumerate(tc.expected_m_values_after):
         actual_val = raw_memory_array[tc.expected_m_addr_start + i]
@@ -1369,7 +1369,7 @@ def test_dadl_instruction(tc: AdclDadlTestCase) -> None:
     ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
 
     # debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
 
     for i, expected_val in enumerate(tc.expected_m_values_after):
         actual_val = raw_memory_array[tc.expected_m_addr_start + i]
@@ -1598,7 +1598,7 @@ def test_sbcl_instruction(tc: SbclDsblTestCase) -> None:
     ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
 
     # debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
 
     for i, expected_val in enumerate(tc.expected_m_values_after):
         actual_val = raw_memory_array[tc.expected_m_addr_start + i]
@@ -1801,7 +1801,7 @@ def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
     ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
 
     # debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
 
     # DSBL processes memory in reverse, (m) operand in instruction is the LSB/end address.
     # tc.expected_m_addr_start is the MSB address for verification.
@@ -2111,7 +2111,7 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
 
     # --- Execute ---
     # debug_instruction(cpu, 0x00)
-    cpu.execute_instruction(0x00)
+    _ = cpu.execute_instruction(0x00)
 
     # --- Verify Registers ---
     assert (
@@ -2201,7 +2201,7 @@ def test_decode_all_opcodes() -> None:
         cpu.regs.set(RegisterName.X, 0x10)
 
         try:
-            cpu.execute_instruction(address)
+            _ = cpu.execute_instruction(address)
         except Exception as e:
             debug_instruction(cpu, address)
             raise ValueError(f"Failed to evaluate {s} at line {i+1}") from e

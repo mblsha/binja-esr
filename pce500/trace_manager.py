@@ -148,7 +148,7 @@ class TraceManager:
                 if self._trace_file:
                     print(f"DEBUG: Saving trace to {self._trace_file}")
                     self._trace_builder.save(str(self._trace_file))
-                    print(f"DEBUG: Trace saved successfully")
+                    print("DEBUG: Trace saved successfully")
                 else:
                     print("DEBUG: No trace file path set!")
                 

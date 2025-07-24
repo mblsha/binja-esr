@@ -181,37 +181,40 @@ class PCE500Emulator:
         if self.trace is not None:
             self.trace.append(('exec', pc, self.cycle_count))
 
-        # Read instruction for analysis
-        instr_bytes = bytes(self.memory.read_byte(pc + i) for i in range(4))
-        opcode = instr_bytes[0] if instr_bytes else 0
-
-        # Debug output
-        # print(f"DEBUG: PC=0x{pc:06X}, opcode=0x{opcode:02X}, perfetto_enabled={self.perfetto_enabled}, call_depth={self.call_depth}")
-
-        # Perfetto tracing with instruction analysis
-        if self.perfetto_enabled:
-            # Trace execution instant
-            g_tracer.trace_instant("CPU", f"Exec@0x{pc:06X}", {
-                "pc": f"0x{pc:06X}",
-                "opcode": f"0x{opcode:02X}"
-            })
-
-            # Analyze control flow instructions
-            self._analyze_control_flow(pc, opcode, instr_bytes)
-
         # Store PC before execution for conditional jump analysis
         pc_before = pc
 
         # Execute instruction
         try:
-            self.cpu.execute_instruction(pc)
+            eval_info = self.cpu.execute_instruction(pc)
             self.cycle_count += 1
 
             # Update counters
             self.instruction_count += 1
 
-            # Check if a conditional jump was taken
+            # Get instruction info for analysis
+            opcode = eval_info.instruction.opcode
+            instr_len = eval_info.instruction_info.length
+
+            # Read instruction bytes for detailed analysis (if needed)
+            instr_bytes = bytes(self.memory.read_byte(pc + i) for i in range(min(4, instr_len)))
+
+            # Debug output
+            # print(f"DEBUG: PC=0x{pc:06X}, opcode=0x{opcode:02X}, perfetto_enabled={self.perfetto_enabled}, call_depth={self.call_depth}")
+
+            # Perfetto tracing with instruction analysis
             if self.perfetto_enabled:
+                # Trace execution instant
+                g_tracer.trace_instant("CPU", f"Exec@0x{pc:06X}", {
+                    "pc": f"0x{pc:06X}",
+                    "opcode": f"0x{opcode:02X}",
+                    "length": instr_len
+                })
+
+                # Analyze control flow instructions
+                self._analyze_control_flow(pc, opcode, instr_bytes, instr_len)
+
+                # Check if a conditional jump was taken
                 pc_after = self.cpu.regs.get(RegisterName.PC)
                 self._check_conditional_jump_taken(pc_before, pc_after, opcode)
 
@@ -340,16 +343,16 @@ class PCE500Emulator:
         self.stop_tracing()
         return False
 
-    def _analyze_control_flow(self, pc: int, opcode: int, instr_bytes: bytes) -> None:
+    def _analyze_control_flow(self, pc: int, opcode: int, instr_bytes: bytes, instr_len: int) -> None:
         """Analyze control flow instructions for Perfetto tracing.
 
         Args:
             pc: Current program counter
             opcode: Instruction opcode
             instr_bytes: Raw instruction bytes (at least 4 bytes)
+            instr_len: Instruction length in bytes
         """
         # Get next PC after this instruction
-        instr_len = self._get_instruction_length(opcode)
         new_pc = (pc + instr_len) & 0xFFFFFF
 
         # CALL - 16-bit absolute call
@@ -478,23 +481,6 @@ class PCE500Emulator:
                 "conditional": True
             })
 
-    def _get_instruction_length(self, opcode: int) -> int:
-        """Get instruction length based on opcode.
-
-        This is a simplified version - full implementation would need
-        complete opcode table.
-        """
-        # Control flow instructions
-        if opcode in [0x04, 0x0E]:  # CALL, JP
-            return 3
-        elif opcode in [0x05, 0x0F]:  # CALLF, JPF
-            return 4
-        elif opcode in [0x08, 0x09, 0x0A, 0x0B, 0x0D]:  # JRZ, JRNZ, JRC, JRNC, JR
-            return 2
-        elif opcode in [0x00, 0x01, 0x06, 0x07, 0xFE]:  # NOP, RETI, RET, RETF, IR
-            return 1
-        else:
-            return 1  # Default for simple instructions
 
     def _check_conditional_jump_taken(self, pc_before: int, pc_after: int, opcode: int) -> None:
         """Check if a conditional jump was taken and trace it.
