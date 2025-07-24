@@ -183,6 +183,15 @@ class PCE500Emulator:
         if self.trace is not None:
             self.trace.append(('exec', pc, self.cycle_count))
 
+        # Pre-execution tracing - trace BEFORE the instruction executes
+        if self.perfetto_enabled:
+            # Read just the opcode for basic trace
+            opcode = self.memory.read_byte(pc)
+            g_tracer.trace_instant("CPU", f"Exec@0x{pc:06X}", {
+                "pc": f"0x{pc:06X}",
+                "opcode": f"0x{opcode:02X}"
+            })
+
         # Store PC before execution for conditional jump analysis
         pc_before = pc
 
@@ -194,24 +203,13 @@ class PCE500Emulator:
             # Update counters
             self.instruction_count += 1
 
-            # Get instruction info for analysis
-            opcode = eval_info.instruction.opcode
-            instr_len = eval_info.instruction_info.length
-
-            # Debug output
-            # print(f"DEBUG: PC=0x{pc:06X}, opcode=0x{opcode:02X}, perfetto_enabled={self.perfetto_enabled}, call_depth={self.call_depth}")
-
-            # Perfetto tracing with instruction analysis
+            # Post-execution analysis - detailed tracing after execution
             if self.perfetto_enabled:
-                # Trace execution instant
-                g_tracer.trace_instant("CPU", f"Exec@0x{pc:06X}", {
-                    "pc": f"0x{pc:06X}",
-                    "opcode": f"0x{opcode:02X}",
-                    "length": instr_len
-                })
+                # Debug output
+                # print(f"DEBUG: PC=0x{pc:06X}, opcode=0x{eval_info.instruction.opcode:02X}, perfetto_enabled={self.perfetto_enabled}, call_depth={self.call_depth}")
 
                 # Analyze control flow instructions
-                self._analyze_control_flow(pc, eval_info)
+                self._analyze_control_flow(pc_before, eval_info)
 
                 # Check if a conditional jump was taken
                 pc_after = self.cpu.regs.get(RegisterName.PC)
