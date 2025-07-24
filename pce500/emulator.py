@@ -352,7 +352,7 @@ class PCE500Emulator:
         Returns:
             Target address for the branch
         """
-        from sc62015.pysc62015.instr.operands import ImmOperand, ImmOffset
+        from sc62015.pysc62015.instr.opcodes import ImmOperand, ImmOffset
         
         # Get the first operand (branch instructions typically have the target as first operand)
         if hasattr(instr, '_operands') and len(instr._operands) > 0:
