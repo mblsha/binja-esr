@@ -1,7 +1,6 @@
 """Simplified PC-E500 emulator combining machine and emulator functionality."""
 
 import time
-import struct
 from typing import Optional, Dict, Any, Set
 from pathlib import Path
 
@@ -9,6 +8,9 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
+from sc62015.pysc62015.instr.instructions import (
+    CALL, RetInstruction, JumpInstruction, IR
+)
 
 from .memory import PCE500Memory
 from .display.hd61202 import HD61202Controller
@@ -98,7 +100,7 @@ class PCE500Emulator:
 
         # Simple tracing
         self.trace_enabled = trace_enabled
-        self.trace: list = [] if trace_enabled else None
+        self.trace: Optional[list] = [] if trace_enabled else None
 
         # Perfetto tracing
         self.perfetto_enabled = perfetto_trace
@@ -196,9 +198,6 @@ class PCE500Emulator:
             opcode = eval_info.instruction.opcode
             instr_len = eval_info.instruction_info.length
 
-            # Read instruction bytes for detailed analysis (if needed)
-            instr_bytes = bytes(self.memory.read_byte(pc + i) for i in range(min(4, instr_len)))
-
             # Debug output
             # print(f"DEBUG: PC=0x{pc:06X}, opcode=0x{opcode:02X}, perfetto_enabled={self.perfetto_enabled}, call_depth={self.call_depth}")
 
@@ -212,11 +211,11 @@ class PCE500Emulator:
                 })
 
                 # Analyze control flow instructions
-                self._analyze_control_flow(pc, opcode, instr_bytes, instr_len)
+                self._analyze_control_flow(pc, eval_info)
 
                 # Check if a conditional jump was taken
                 pc_after = self.cpu.regs.get(RegisterName.PC)
-                self._check_conditional_jump_taken(pc_before, pc_after, opcode)
+                self._check_conditional_jump_taken(pc_before, pc_after, eval_info)
 
             # Update Perfetto counters
             if self.perfetto_enabled:
@@ -342,63 +341,79 @@ class PCE500Emulator:
         """Context manager exit - ensure tracing is stopped."""
         self.stop_tracing()
         return False
+    
+    def _get_branch_target(self, instr, pc: int) -> int:
+        """Extract branch target address from instruction.
+        
+        Args:
+            instr: The instruction object
+            pc: Current program counter
+            
+        Returns:
+            Target address for the branch
+        """
+        from sc62015.pysc62015.instr.operands import ImmOperand, ImmOffset
+        
+        # Get the first operand (branch instructions typically have the target as first operand)
+        if hasattr(instr, '_operands') and len(instr._operands) > 0:
+            first_op = instr._operands[0]
+            
+            # For absolute jumps/calls with immediate addresses
+            if isinstance(first_op, ImmOperand) and first_op.value is not None:
+                if instr.name() in ["CALLF", "JPF"]:
+                    # 20-bit addresses
+                    return first_op.value & 0xFFFFF
+                else:  # CALL, JP
+                    # 16-bit addresses
+                    return first_op.value & 0xFFFF
+            
+            # For relative jumps with offset
+            elif isinstance(first_op, ImmOffset):
+                offset = first_op.offset_value()
+                # Calculate from PC after instruction
+                return (pc + instr.length() + offset) & 0xFFFFFF
+        
+        # Default case - should not happen for branch instructions
+        return 0
 
-    def _analyze_control_flow(self, pc: int, opcode: int, instr_bytes: bytes, instr_len: int) -> None:
+    def _analyze_control_flow(self, pc: int, eval_info) -> None:
         """Analyze control flow instructions for Perfetto tracing.
 
         Args:
             pc: Current program counter
-            opcode: Instruction opcode
-            instr_bytes: Raw instruction bytes (at least 4 bytes)
-            instr_len: Instruction length in bytes
+            eval_info: InstructionEvalInfo containing instruction and metadata
         """
-        # Get next PC after this instruction
-        new_pc = (pc + instr_len) & 0xFFFFFF
-
-        # CALL - 16-bit absolute call
-        if opcode == 0x04:
-            dest_addr = struct.unpack('<H', instr_bytes[1:3])[0]
-            g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:04X}")
-            self.call_depth += 1
-            g_tracer.trace_instant("CPU", "CALL", {
-                "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:04X}",
-                "depth": self.call_depth
-            })
-
-        # CALLF - 20-bit far call
-        elif opcode == 0x05:
-            # 20-bit address in little-endian (3 bytes)
-            dest_addr = (instr_bytes[1] | (instr_bytes[2] << 8) |
-                        ((instr_bytes[3] & 0x0F) << 16))
+        instr = eval_info.instruction
+        instr_name = instr.name()
+        
+        # Handle CALL instructions
+        if isinstance(instr, CALL):
+            dest_addr = self._get_branch_target(instr, pc)
             g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:05X}")
             self.call_depth += 1
-            g_tracer.trace_instant("CPU", "CALLF", {
+            g_tracer.trace_instant("CPU", instr_name, {
                 "from": f"0x{pc:06X}",
                 "to": f"0x{dest_addr:05X}",
                 "depth": self.call_depth
             })
-
-        # RET - Return from subroutine
-        elif opcode == 0x06:
+        
+        # Handle return instructions (RET, RETF, RETI)
+        elif isinstance(instr, RetInstruction):
             g_tracer.end_function("CPU", pc)
             self.call_depth = max(0, self.call_depth - 1)
-            g_tracer.trace_instant("CPU", "RET", {
+            
+            # Special handling for RETI
+            if instr_name == "RETI" and self._interrupt_stack:
+                flow_id = self._interrupt_stack.pop()
+                g_tracer.end_flow("CPU", flow_id, f"RETI@0x{pc:06X}")
+            
+            g_tracer.trace_instant("CPU", instr_name, {
                 "at": f"0x{pc:06X}",
                 "depth": self.call_depth
             })
-
-        # RETF - Far return
-        elif opcode == 0x07:
-            g_tracer.end_function("CPU", pc)
-            self.call_depth = max(0, self.call_depth - 1)
-            g_tracer.trace_instant("CPU", "RETF", {
-                "at": f"0x{pc:06X}",
-                "depth": self.call_depth
-            })
-
-        # IR - Software interrupt
-        elif opcode == 0xFE:
+        
+        # Handle IR (software interrupt)
+        elif isinstance(instr, IR):
             # Read interrupt vector from 0xFFFFA
             vector_addr = self.memory.read_long(0xFFFFA)
             # Generate unique interrupt ID
@@ -415,92 +430,53 @@ class PCE500Emulator:
                 "vector": f"0x{vector_addr:05X}",
                 "interrupt_id": interrupt_id
             })
-
-        # RETI - Return from interrupt
-        elif opcode == 0x01:
-            g_tracer.end_function("CPU", pc)
-            self.call_depth = max(0, self.call_depth - 1)
-
-            if self._interrupt_stack:
-                flow_id = self._interrupt_stack.pop()
-                g_tracer.end_flow("CPU", flow_id, f"RETI@0x{pc:06X}")
-
-            g_tracer.trace_instant("CPU", "RETI", {
-                "at": f"0x{pc:06X}",
-                "depth": self.call_depth
-            })
-
-        # JP - 16-bit absolute jump
-        elif opcode == 0x0E:
-            dest_addr = struct.unpack('<H', instr_bytes[1:3])[0]
-            g_tracer.trace_instant("CPU", "JP", {
+        
+        # Handle jump instructions (JP, JPF, JR, and conditional jumps)
+        elif isinstance(instr, JumpInstruction):
+            dest_addr = self._get_branch_target(instr, pc)
+            
+            # Check if it's a conditional jump
+            is_conditional = instr_name in ["JRZ", "JRNZ", "JRC", "JRNC"]
+            
+            trace_data = {
                 "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:04X}"
-            })
-
-        # JPF - 20-bit far jump
-        elif opcode == 0x0F:
-            dest_addr = (instr_bytes[1] | (instr_bytes[2] << 8) |
-                        ((instr_bytes[3] & 0x0F) << 16))
-            g_tracer.trace_instant("CPU", "JPF", {
-                "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:05X}"
-            })
-
-        # JR - 8-bit relative jump
-        elif opcode == 0x0D:
-            # Sign-extend 8-bit offset
-            offset = instr_bytes[1]
-            if offset & 0x80:
-                offset |= 0xFFFFFF00
-            dest_addr = (new_pc + offset) & 0xFFFFFF
-            g_tracer.trace_instant("CPU", "JR", {
-                "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:06X}",
-                "offset": offset
-            })
-
-        # Conditional jumps (JRZ, JRNZ, JRC, JRNC)
-        elif opcode in [0x08, 0x09, 0x0A, 0x0B]:
-            # These are 2-byte instructions with 8-bit relative offset
-            offset = instr_bytes[1]
-            if offset & 0x80:
-                offset |= 0xFFFFFF00
-            dest_addr = (pc + 2 + offset) & 0xFFFFFF
-
-            # Determine jump type
-            jump_types = {0x08: "JRZ", 0x09: "JRNZ", 0x0A: "JRC", 0x0B: "JRNC"}
-            jump_type = jump_types.get(opcode, "JR??")
-
-            # We can't know if the jump is taken until after execution
-            # For now, just trace that it's a conditional jump
-            g_tracer.trace_instant("CPU", jump_type, {
-                "from": f"0x{pc:06X}",
-                "to": f"0x{dest_addr:06X}",
-                "offset": offset,
-                "conditional": True
-            })
+                "to": f"0x{dest_addr:06X}"
+            }
+            
+            # Add offset for relative jumps
+            if instr_name.startswith("JR") and dest_addr != 0:
+                # Calculate offset from the destination
+                offset = dest_addr - (pc + instr.length())
+                if offset > 127:
+                    offset -= 256  # Handle negative offsets
+                trace_data["offset"] = offset
+            
+            if is_conditional:
+                trace_data["conditional"] = True
+            
+            g_tracer.trace_instant("CPU", instr_name, trace_data)
 
 
-    def _check_conditional_jump_taken(self, pc_before: int, pc_after: int, opcode: int) -> None:
+    def _check_conditional_jump_taken(self, pc_before: int, pc_after: int, eval_info) -> None:
         """Check if a conditional jump was taken and trace it.
 
         Args:
             pc_before: PC before instruction execution
             pc_after: PC after instruction execution
-            opcode: The instruction opcode
+            eval_info: InstructionEvalInfo containing instruction and metadata
         """
-        # Conditional jumps: JRZ, JRNZ, JRC, JRNC
-        if opcode in [0x08, 0x09, 0x0A, 0x0B]:
-            instr_len = 2  # Conditional jumps are 2 bytes
+        instr = eval_info.instruction
+        instr_name = instr.name()
+        
+        # Check if it's a conditional jump
+        if isinstance(instr, JumpInstruction) and instr_name in ["JRZ", "JRNZ", "JRC", "JRNC"]:
+            instr_len = eval_info.instruction_info.length
             expected_pc = (pc_before + instr_len) & 0xFFFFFF
 
             # If PC changed from expected, jump was taken
             jump_taken = pc_after != expected_pc
-            jump_types = {0x08: "JRZ", 0x09: "JRNZ", 0x0A: "JRC", 0x0B: "JRNC"}
-            jump_type = jump_types.get(opcode, "JR??")
 
-            g_tracer.trace_instant("CPU", f"{jump_type}_Result", {
+            g_tracer.trace_instant("CPU", f"{instr_name}_Result", {
                 "from": f"0x{pc_before:06X}",
                 "to": f"0x{pc_after:06X}",
                 "taken": jump_taken
