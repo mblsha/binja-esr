@@ -118,9 +118,6 @@ class PCE500Emulator:
         # PC tracking for memory context and jump analysis
         self._current_pc = 0
         self._last_pc = 0
-        
-        # Track pending jumps for conditional jump filtering
-        self._pending_jump: Optional[Dict[str, Any]] = None
 
         # Performance counters
         self.instruction_count = 0
@@ -343,49 +340,11 @@ class PCE500Emulator:
         self.stop_tracing()
         return False
     
-    def _get_branch_target(self, instr, pc: int) -> int:
-        """Extract branch target address from instruction.
-        
-        Args:
-            instr: The instruction object
-            pc: Current program counter
-            
-        Returns:
-            Target address for the branch
-        """
-        from sc62015.pysc62015.instr.opcodes import ImmOperand, ImmOffset
-        
-        # Get the first operand (branch instructions typically have the target as first operand)
-        if hasattr(instr, '_operands') and len(instr._operands) > 0:
-            first_op = instr._operands[0]
-            
-            # For absolute jumps/calls with immediate addresses
-            if isinstance(first_op, ImmOperand) and first_op.value is not None:
-                if instr.name() in ["CALLF", "JPF"]:
-                    # 20-bit addresses
-                    return first_op.value & 0xFFFFF
-                else:  # CALL, JP
-                    # 16-bit addresses
-                    return first_op.value & 0xFFFF
-            
-            # For relative jumps with offset
-            elif isinstance(first_op, ImmOffset):
-                offset = first_op.offset_value()
-                # Calculate from PC after instruction
-                return (pc + instr.length() + offset) & 0xFFFFFF
-        
-        # Default case - should not happen for branch instructions
-        return 0
     
     def _get_condition_code(self, instr) -> Optional[str]:
         """Get condition code from conditional instruction."""
         return getattr(instr, '_cond', None)
     
-    def _is_conditional_jump(self, instr) -> bool:
-        """Check if instruction is a conditional jump."""
-        return (isinstance(instr, JumpInstruction) and 
-                hasattr(instr, '_cond') and 
-                bool(instr._cond))
     
     def _trace_call(self, pc: int, dest_addr: int):
         """Trace call instruction."""
@@ -459,7 +418,7 @@ class PCE500Emulator:
         
         # Handle CALL instructions
         if isinstance(instr, CALL):
-            dest_addr = self._get_branch_target(instr, pc)
+            dest_addr = instr.dest_addr(pc)
             self._trace_call(pc, dest_addr)
         
         # Handle return instructions (RET, RETF, RETI)
@@ -472,40 +431,36 @@ class PCE500Emulator:
             vector_addr = self.memory.read_long(0xFFFFA)
             self._trace_interrupt(pc, vector_addr)
         
-        # Handle jump instructions
+        # Handle jump instructions - don't trace here, wait until after execution
         elif isinstance(instr, JumpInstruction):
-            dest_addr = self._get_branch_target(instr, pc)
-            condition = self._get_condition_code(instr)
-            
-            if condition:
-                # Store jump info for later evaluation (after instruction executes)
-                self._pending_jump = {
-                    'pc': pc,
-                    'dest': dest_addr,
-                    'condition': condition
-                }
-            else:
-                # Unconditional jumps are always taken, trace immediately
-                self._trace_jump(pc, dest_addr, condition)
+            # We'll check if the jump was taken in _check_conditional_jump_taken
+            pass
 
 
     def _check_conditional_jump_taken(self, pc_before: int, pc_after: int, eval_info) -> None:
-        """Check if a conditional jump was taken and trace it.
+        """Check if a jump was taken and trace it.
 
         Args:
             pc_before: PC before instruction execution
             pc_after: PC after instruction execution
             eval_info: InstructionEvalInfo containing instruction and metadata
         """
-        # Check if we have a pending conditional jump
-        if hasattr(self, '_pending_jump') and self._pending_jump:
-            jump_info = self._pending_jump
-            self._pending_jump = None  # Clear pending jump
+        instr = eval_info.instruction
+        
+        # Only process jump instructions
+        if not isinstance(instr, JumpInstruction):
+            return
             
-            # Check if jump was taken by comparing PC to expected destination
-            jump_taken = (pc_after == jump_info['dest'])
-            
-            # Trace the jump only if it was taken
-            if jump_taken:
-                self._trace_jump(jump_info['pc'], jump_info['dest'], 
-                               jump_info['condition'], jump_taken)
+        # Calculate expected PC if no jump was taken
+        expected_pc = (pc_before + eval_info.instruction_info.length) & 0xFFFFFF
+        
+        # If PC changed from expected, jump was taken
+        jump_taken = (pc_after != expected_pc)
+        
+        # Get condition code (None for unconditional jumps)
+        condition = self._get_condition_code(instr)
+        
+        # For unconditional jumps, always trace
+        # For conditional jumps, only trace if taken
+        if not condition or jump_taken:
+            self._trace_jump(pc_before, pc_after, condition, jump_taken)
