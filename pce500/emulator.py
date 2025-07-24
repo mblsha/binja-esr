@@ -118,6 +118,9 @@ class PCE500Emulator:
         # PC tracking for memory context and jump analysis
         self._current_pc = 0
         self._last_pc = 0
+        
+        # Track pending jumps for conditional jump filtering
+        self._pending_jump: Optional[Dict[str, Any]] = None
 
         # Performance counters
         self.instruction_count = 0
@@ -187,7 +190,7 @@ class PCE500Emulator:
         if self.perfetto_enabled:
             # Read just the opcode for basic trace
             opcode = self.memory.read_byte(pc)
-            g_tracer.trace_instant("CPU", f"Exec@0x{pc:06X}", {
+            g_tracer.trace_instant("Execution", f"Exec@0x{pc:06X}", {
                 "pc": f"0x{pc:06X}",
                 "opcode": f"0x{opcode:02X}"
             })
@@ -426,8 +429,12 @@ class PCE500Emulator:
             "interrupt_id": interrupt_id
         })
     
-    def _trace_jump(self, pc: int, dest_addr: int, condition: Optional[str] = None):
-        """Trace jump instruction."""
+    def _trace_jump(self, pc: int, dest_addr: int, condition: Optional[str] = None, taken: bool = True):
+        """Trace jump instruction - only if taken."""
+        # For conditional jumps, only trace if taken
+        if condition and not taken:
+            return
+            
         trace_data = {
             "from": f"0x{pc:06X}",
             "to": f"0x{dest_addr:06X}"
@@ -435,7 +442,7 @@ class PCE500Emulator:
         
         if condition:
             trace_data["condition"] = condition
-            trace_data["type"] = "conditional"
+            trace_data["type"] = "conditional_taken"
         else:
             trace_data["type"] = "unconditional"
             
@@ -469,7 +476,17 @@ class PCE500Emulator:
         elif isinstance(instr, JumpInstruction):
             dest_addr = self._get_branch_target(instr, pc)
             condition = self._get_condition_code(instr)
-            self._trace_jump(pc, dest_addr, condition)
+            
+            if condition:
+                # Store jump info for later evaluation (after instruction executes)
+                self._pending_jump = {
+                    'pc': pc,
+                    'dest': dest_addr,
+                    'condition': condition
+                }
+            else:
+                # Unconditional jumps are always taken, trace immediately
+                self._trace_jump(pc, dest_addr, condition)
 
 
     def _check_conditional_jump_taken(self, pc_before: int, pc_after: int, eval_info) -> None:
@@ -480,20 +497,15 @@ class PCE500Emulator:
             pc_after: PC after instruction execution
             eval_info: InstructionEvalInfo containing instruction and metadata
         """
-        instr = eval_info.instruction
-        
-        # Check if it's a conditional jump using semantic method
-        if self._is_conditional_jump(instr):
-            instr_len = eval_info.instruction_info.length
-            expected_pc = (pc_before + instr_len) & 0xFFFFFF
-
-            # If PC changed from expected, jump was taken
-            jump_taken = pc_after != expected_pc
-            condition = self._get_condition_code(instr)
-
-            g_tracer.trace_instant("CPU", "jump_result", {
-                "from": f"0x{pc_before:06X}",
-                "to": f"0x{pc_after:06X}",
-                "condition": condition,
-                "taken": jump_taken
-            })
+        # Check if we have a pending conditional jump
+        if hasattr(self, '_pending_jump') and self._pending_jump:
+            jump_info = self._pending_jump
+            self._pending_jump = None  # Clear pending jump
+            
+            # Check if jump was taken by comparing PC to expected destination
+            jump_taken = (pc_after == jump_info['dest'])
+            
+            # Trace the jump only if it was taken
+            if jump_taken:
+                self._trace_jump(jump_info['pc'], jump_info['dest'], 
+                               jump_info['condition'], jump_taken)
