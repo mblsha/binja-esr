@@ -7,3 +7,4 @@ htmlcov/
 mcp
 data/pc-e500.bin
 data/*.txt
+pc-e500.trace
