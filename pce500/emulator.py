@@ -360,17 +360,39 @@ class PCE500Emulator:
     
     
     def _trace_call(self, pc: int, dest_addr: int):
-        """Trace call instruction."""
-        g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:05X}")
+        """Trace call instruction with register state."""
+        # Begin function duration event
+        func_event = g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:05X}")
         self.call_depth += 1
-        g_tracer.trace_instant("CPU", "call", {
+        
+        # Create call instant event with basic info
+        call_event = g_tracer.trace_instant("CPU", "call", {
             "from": f"0x{pc:06X}",
             "to": f"0x{dest_addr:05X}",
             "depth": self.call_depth
         })
+        
+        # Add register annotations to the call event
+        if call_event:
+            state = self.get_cpu_state()
+            
+            # Add all register values as annotations
+            call_event.add_annotations({
+                "reg_A": f"0x{state['a']:02X}",
+                "reg_B": f"0x{state['b']:02X}",
+                "reg_BA": f"0x{state['ba']:04X}",
+                "reg_I": f"0x{state['i']:04X}",
+                "reg_X": f"0x{state['x']:06X}",
+                "reg_Y": f"0x{state['y']:06X}",
+                "reg_U": f"0x{state['u']:06X}",
+                "reg_S": f"0x{state['s']:06X}",
+                "reg_PC": f"0x{state['pc']:06X}",
+                "flag_C": state['flags']['c'],
+                "flag_Z": state['flags']['z']
+            })
     
     def _trace_return(self, pc: int, instr_class_name: str):
-        """Trace return instruction."""
+        """Trace return instruction with register state."""
         g_tracer.end_function("CPU", pc)
         self.call_depth = max(0, self.call_depth - 1)
         
@@ -379,27 +401,67 @@ class PCE500Emulator:
             flow_id = self._interrupt_stack.pop()
             g_tracer.end_flow("CPU", flow_id, f"RETI@0x{pc:06X}")
         
-        g_tracer.trace_instant("CPU", "return", {
+        # Create return instant event with basic info
+        return_event = g_tracer.trace_instant("CPU", "return", {
             "at": f"0x{pc:06X}",
             "type": instr_class_name.lower(),
             "depth": self.call_depth
         })
+        
+        # Add register annotations to the return event
+        if return_event:
+            state = self.get_cpu_state()
+            
+            # Add all register values as annotations
+            return_event.add_annotations({
+                "reg_A": f"0x{state['a']:02X}",
+                "reg_B": f"0x{state['b']:02X}",
+                "reg_BA": f"0x{state['ba']:04X}",
+                "reg_I": f"0x{state['i']:04X}",
+                "reg_X": f"0x{state['x']:06X}",
+                "reg_Y": f"0x{state['y']:06X}",
+                "reg_U": f"0x{state['u']:06X}",
+                "reg_S": f"0x{state['s']:06X}",
+                "reg_PC": f"0x{state['pc']:06X}",
+                "flag_C": state['flags']['c'],
+                "flag_Z": state['flags']['z']
+            })
     
     def _trace_interrupt(self, pc: int, vector_addr: int):
-        """Trace software interrupt."""
+        """Trace software interrupt with register state."""
         interrupt_id = self._next_interrupt_id
         self._next_interrupt_id += 1
         self._interrupt_stack.append(interrupt_id)
 
         g_tracer.begin_flow("CPU", interrupt_id, f"IR@0x{pc:06X}")
-        g_tracer.begin_function("CPU", vector_addr, pc, f"int_0x{vector_addr:05X}")
+        func_event = g_tracer.begin_function("CPU", vector_addr, pc, f"int_0x{vector_addr:05X}")
         self.call_depth += 1
 
-        g_tracer.trace_instant("CPU", "interrupt", {
+        # Create interrupt instant event with basic info
+        int_event = g_tracer.trace_instant("CPU", "interrupt", {
             "from": f"0x{pc:06X}",
             "vector": f"0x{vector_addr:05X}",
             "interrupt_id": interrupt_id
         })
+        
+        # Add register annotations to the interrupt event
+        if int_event:
+            state = self.get_cpu_state()
+            
+            # Add all register values as annotations
+            int_event.add_annotations({
+                "reg_A": f"0x{state['a']:02X}",
+                "reg_B": f"0x{state['b']:02X}",
+                "reg_BA": f"0x{state['ba']:04X}",
+                "reg_I": f"0x{state['i']:04X}",
+                "reg_X": f"0x{state['x']:06X}",
+                "reg_Y": f"0x{state['y']:06X}",
+                "reg_U": f"0x{state['u']:06X}",
+                "reg_S": f"0x{state['s']:06X}",
+                "reg_PC": f"0x{state['pc']:06X}",
+                "flag_C": state['flags']['c'],
+                "flag_Z": state['flags']['z']
+            })
     
     def _trace_jump(self, pc: int, dest_addr: int, condition: Optional[str] = None, taken: bool = True):
         """Trace jump instruction - only if taken."""
