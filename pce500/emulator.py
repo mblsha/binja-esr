@@ -365,19 +365,12 @@ class PCE500Emulator:
         func_event = g_tracer.begin_function("CPU", dest_addr, pc, f"func_0x{dest_addr:05X}")
         self.call_depth += 1
         
-        # Create call instant event with basic info
-        call_event = g_tracer.trace_instant("CPU", "call", {
-            "from": f"0x{pc:06X}",
-            "to": f"0x{dest_addr:05X}",
-            "depth": self.call_depth
-        })
-        
-        # Add register annotations to the call event
-        if call_event:
+        # Add register annotations to the function slice event
+        if func_event:
             state = self.get_cpu_state()
             
             # Add all register values as annotations
-            call_event.add_annotations({
+            func_event.add_annotations({
                 "reg_A": f"0x{state['a']:02X}",
                 "reg_B": f"0x{state['b']:02X}",
                 "reg_BA": f"0x{state['ba']:04X}",
@@ -390,6 +383,13 @@ class PCE500Emulator:
                 "flag_C": state['flags']['c'],
                 "flag_Z": state['flags']['z']
             })
+        
+        # Create call instant event with basic info only
+        g_tracer.trace_instant("CPU", "call", {
+            "from": f"0x{pc:06X}",
+            "to": f"0x{dest_addr:05X}",
+            "depth": self.call_depth
+        })
     
     def _trace_return(self, pc: int, instr_class_name: str):
         """Trace return instruction with register state."""
@@ -437,19 +437,12 @@ class PCE500Emulator:
         func_event = g_tracer.begin_function("CPU", vector_addr, pc, f"int_0x{vector_addr:05X}")
         self.call_depth += 1
 
-        # Create interrupt instant event with basic info
-        int_event = g_tracer.trace_instant("CPU", "interrupt", {
-            "from": f"0x{pc:06X}",
-            "vector": f"0x{vector_addr:05X}",
-            "interrupt_id": interrupt_id
-        })
-        
-        # Add register annotations to the interrupt event
-        if int_event:
+        # Add register annotations to the interrupt function slice event
+        if func_event:
             state = self.get_cpu_state()
             
             # Add all register values as annotations
-            int_event.add_annotations({
+            func_event.add_annotations({
                 "reg_A": f"0x{state['a']:02X}",
                 "reg_B": f"0x{state['b']:02X}",
                 "reg_BA": f"0x{state['ba']:04X}",
@@ -462,6 +455,13 @@ class PCE500Emulator:
                 "flag_C": state['flags']['c'],
                 "flag_Z": state['flags']['z']
             })
+
+        # Create interrupt instant event with basic info only
+        g_tracer.trace_instant("CPU", "interrupt", {
+            "from": f"0x{pc:06X}",
+            "vector": f"0x{vector_addr:05X}",
+            "interrupt_id": interrupt_id
+        })
     
     def _trace_jump(self, pc: int, dest_addr: int, condition: Optional[str] = None, taken: bool = True):
         """Trace jump instruction - only if taken."""
