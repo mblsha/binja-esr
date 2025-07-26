@@ -86,7 +86,7 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 | **Flag (C/Z)** | Undefined. | Undefined. | Retained. |
 | **Internal memory** | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | ACM (FEH) bit 7, UCR (F7H), USR (F8H) bits 0 to 2/5, IMR (FCH), and SCR (FDH), are all reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. |
 
-### Internal Memory Map (IMEM\_NAMES, defined in opcodes.py)
+### Internal Memory Map (IMEMRegisters, defined in opcodes.py)
 
 | Name | Address (Hex) | Description |
 | :--- | :--- | :--- |
