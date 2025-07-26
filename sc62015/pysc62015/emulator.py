@@ -177,7 +177,7 @@ class Registers:
 
 
 class Emulator:
-    def __init__(self, memory: Memory) -> None:
+    def __init__(self, memory: Memory, reset_on_init: bool = True) -> None:
         # Register SC62015-specific intrinsics with the evaluation system
         register_sc62015_intrinsics()
         
@@ -188,6 +188,10 @@ class Emulator:
         # Track last PC for tracing
         self._last_pc: int = 0
         self._current_pc: int = 0
+        
+        # Perform power-on reset if requested
+        if reset_on_init:
+            self.power_on_reset()
 
     def decode_instruction(self, address: int) -> Instruction:
         def fecher(offset: int) -> int:
@@ -285,3 +289,49 @@ class Emulator:
             self.regs.get_flag,
             self.regs.set_flag,
         )
+    
+    def power_on_reset(self) -> None:
+        """Perform power-on reset per SC62015 spec.
+        
+        This method performs the same operations as the RESET instruction:
+        - ACM (FEH) bit 7 is reset to 0
+        - UCR (F7H) is reset to 0
+        - USR (F8H) bits 0 to 2/5 are reset to 0, bits 3 and 4 are set to 1
+        - IMR (FCH) is reset to 0
+        - SCR (FDH) is reset to 0
+        - SSR (FFH) bit 2 is reset to 0
+        - PC reads the reset vector at 0xFFFFA (3 bytes, little-endian)
+        - Other registers retain their values (initialized to 0)
+        - Flags (C/Z) are retained (initialized to 0)
+        """
+        # Reset ACM bit 7
+        acm = self.memory.read_byte(0xFE)
+        acm &= ~0x80  # Clear bit 7
+        self.memory.write_byte(0xFE, acm)
+        
+        # Reset UCR, IMR, SCR to 0
+        self.memory.write_byte(0xF7, 0x00)  # UCR
+        self.memory.write_byte(0xFC, 0x00)  # IMR
+        self.memory.write_byte(0xFD, 0x00)  # SCR
+        
+        # Modify USR register
+        usr = self.memory.read_byte(0xF8)
+        usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
+        usr |= 0x18   # Set bits 3 and 4 to 1
+        self.memory.write_byte(0xF8, usr)
+        
+        # Reset SSR bit 2
+        ssr = self.memory.read_byte(0xFF)
+        ssr &= ~0x04  # Clear bit 2
+        self.memory.write_byte(0xFF, ssr)
+        
+        # Read reset vector at 0xFFFFA (3 bytes, little-endian)
+        reset_vector = self.memory.read_byte(0xFFFFA)
+        reset_vector |= self.memory.read_byte(0xFFFFB) << 8
+        reset_vector |= self.memory.read_byte(0xFFFFC) << 16
+        
+        # Set PC to reset vector (masked to 20 bits)
+        self.regs.set(RegisterName.PC, reset_vector & PC_MASK)
+        
+        # Clear halted state
+        self.state.halted = False
