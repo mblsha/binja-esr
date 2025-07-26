@@ -96,7 +96,7 @@ class PCE500Emulator:
         self.memory.set_lcd_controller(self.lcd)
 
         # Create CPU emulator with our memory
-        self.cpu = SC62015Emulator(self.memory, reset_on_init=False)
+        self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
 
         # Emulation state
         self.breakpoints: Set[int] = set()
