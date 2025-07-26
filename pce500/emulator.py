@@ -162,11 +162,12 @@ class PCE500Emulator:
         # Reset CPU state
         self.cpu.power_on_reset()
         
-        # Set PC to entry point (not reset vector)
+        # After power-on reset, set PC to entry point (not reset vector)
         # The reset vector at 0xFFFFA is only used for RESET instruction
         # Normal startup uses entry point at 0xFFFFD
-        entry_point = self.memory.read_long(0xFFFFD)
-        self.cpu.regs.set(RegisterName.PC, entry_point)
+        if hasattr(self.memory, 'internal_rom') and self.memory.internal_rom:
+            entry_point = self.memory.read_long(0xFFFFD)
+            self.cpu.regs.set(RegisterName.PC, entry_point)
 
         # Reset emulation state
         self.cycle_count = 0
