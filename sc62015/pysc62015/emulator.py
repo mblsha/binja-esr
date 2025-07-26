@@ -5,6 +5,7 @@ from binja_test_mocks.coding import FetchDecoder
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr.opcode_table import OPCODES
+from .instr.opcodes import IMEM_NAMES
 from .instr import (
     decode,
     Instruction,
@@ -294,36 +295,36 @@ class Emulator:
         """Perform power-on reset per SC62015 spec.
         
         This method performs the same operations as the RESET instruction:
-        - ACM (FEH) bit 7 is reset to 0
+        - LCC (FEH) bit 7 is reset to 0 (documented as ACM bit 7)
         - UCR (F7H) is reset to 0
         - USR (F8H) bits 0 to 2/5 are reset to 0, bits 3 and 4 are set to 1
-        - IMR (FCH) is reset to 0
+        - ISR (FCH) is reset to 0 (clears interrupt status)
         - SCR (FDH) is reset to 0
         - SSR (FFH) bit 2 is reset to 0
         - PC reads the reset vector at 0xFFFFA (3 bytes, little-endian)
         - Other registers retain their values (initialized to 0)
         - Flags (C/Z) are retained (initialized to 0)
         """
-        # Reset ACM bit 7
-        acm = self.memory.read_byte(0xFE)
-        acm &= ~0x80  # Clear bit 7
-        self.memory.write_byte(0xFE, acm)
+        # Reset LCC bit 7 (documented as ACM bit 7 in RESET spec)
+        lcc = self.memory.read_byte(IMEM_NAMES["LCC"])
+        lcc &= ~0x80  # Clear bit 7
+        self.memory.write_byte(IMEM_NAMES["LCC"], lcc)
         
-        # Reset UCR, IMR, SCR to 0
-        self.memory.write_byte(0xF7, 0x00)  # UCR
-        self.memory.write_byte(0xFC, 0x00)  # IMR
-        self.memory.write_byte(0xFD, 0x00)  # SCR
+        # Reset UCR, ISR, SCR to 0
+        self.memory.write_byte(IMEM_NAMES["UCR"], 0x00)
+        self.memory.write_byte(IMEM_NAMES["ISR"], 0x00)  # Clear interrupt status
+        self.memory.write_byte(IMEM_NAMES["SCR"], 0x00)
         
         # Modify USR register
-        usr = self.memory.read_byte(0xF8)
+        usr = self.memory.read_byte(IMEM_NAMES["USR"])
         usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
         usr |= 0x18   # Set bits 3 and 4 to 1
-        self.memory.write_byte(0xF8, usr)
+        self.memory.write_byte(IMEM_NAMES["USR"], usr)
         
         # Reset SSR bit 2
-        ssr = self.memory.read_byte(0xFF)
+        ssr = self.memory.read_byte(IMEM_NAMES["SSR"])
         ssr &= ~0x04  # Clear bit 2
-        self.memory.write_byte(0xFF, ssr)
+        self.memory.write_byte(IMEM_NAMES["SSR"], ssr)
         
         # Read reset vector at 0xFFFFA (3 bytes, little-endian)
         reset_vector = self.memory.read_byte(0xFFFFA)

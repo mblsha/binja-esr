@@ -95,9 +95,9 @@ def test_reset_instruction():
     # Set up initial values
     memory.write_byte(0xF7, 0xFF)  # UCR
     memory.write_byte(0xF8, 0xFF)  # USR with all bits set
-    memory.write_byte(0xFC, 0xFF)  # IMR
+    memory.write_byte(0xFC, 0xFF)  # ISR
     memory.write_byte(0xFD, 0xFF)  # SCR
-    memory.write_byte(0xFE, 0xFF)  # ACM with bit 7 set
+    memory.write_byte(0xFE, 0xFF)  # LCC with bit 7 set
     memory.write_byte(0xFF, 0xFF)  # SSR with bit 2 set
     
     # Set reset vector at 0xFFFFA to point to 0x12345
@@ -126,14 +126,14 @@ def test_reset_instruction():
     
     # Check register modifications
     assert memory.read_byte(0xF7) == 0x00  # UCR reset
-    assert memory.read_byte(0xFC) == 0x00  # IMR reset
+    assert memory.read_byte(0xFC) == 0x00  # ISR reset (clears interrupt status)
     assert memory.read_byte(0xFD) == 0x00  # SCR reset
     
     usr = memory.read_byte(0xF8)
     assert (usr & 0x3F) == 0x18  # Bits 0-5: only bits 3,4 should be set
     
-    acm = memory.read_byte(0xFE)
-    assert (acm & 0x80) == 0x00  # Bit 7 should be clear
+    lcc = memory.read_byte(0xFE)
+    assert (lcc & 0x80) == 0x00  # Bit 7 should be clear
     
     ssr = memory.read_byte(0xFF)
     assert (ssr & 0x04) == 0x00  # Bit 2 should be clear
@@ -155,9 +155,9 @@ def test_power_on_reset():
     # Set up initial values
     memory.write_byte(0xF7, 0xFF)  # UCR
     memory.write_byte(0xF8, 0xFF)  # USR with all bits set
-    memory.write_byte(0xFC, 0xFF)  # IMR
+    memory.write_byte(0xFC, 0xFF)  # ISR
     memory.write_byte(0xFD, 0xFF)  # SCR
-    memory.write_byte(0xFE, 0xFF)  # ACM with bit 7 set
+    memory.write_byte(0xFE, 0xFF)  # LCC with bit 7 set
     memory.write_byte(0xFF, 0xFF)  # SSR with bit 2 set
     
     # Set reset vector at 0xFFFFA to point to 0x54321
@@ -170,14 +170,14 @@ def test_power_on_reset():
     
     # Check register modifications
     assert memory.read_byte(0xF7) == 0x00  # UCR reset
-    assert memory.read_byte(0xFC) == 0x00  # IMR reset
+    assert memory.read_byte(0xFC) == 0x00  # ISR reset (clears interrupt status)
     assert memory.read_byte(0xFD) == 0x00  # SCR reset
     
     usr = memory.read_byte(0xF8)
     assert (usr & 0x3F) == 0x18  # Bits 0-5: only bits 3,4 should be set
     
-    acm = memory.read_byte(0xFE)
-    assert (acm & 0x80) == 0x00  # Bit 7 should be clear
+    lcc = memory.read_byte(0xFE)
+    assert (lcc & 0x80) == 0x00  # Bit 7 should be clear
     
     ssr = memory.read_byte(0xFF)
     assert (ssr & 0x04) == 0x00  # Bit 2 should be clear

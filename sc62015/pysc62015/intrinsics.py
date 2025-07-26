@@ -8,6 +8,9 @@ from binja_test_mocks.eval_llil import (
 )
 from binja_test_mocks.mock_llil import MockLLIL
 
+# Import register addresses from opcodes
+from .instr.opcodes import IMEM_NAMES
+
 
 def eval_intrinsic_tcl(
     llil: MockLLIL,
@@ -41,16 +44,16 @@ def eval_intrinsic_halt(
     - SSR (FFH) bit 2 is set to 1
     - USR (F8H) bits 3 and 4 are set to 1
     """
-    # Modify USR register (F8H)
-    usr = memory.read_byte(0xF8)
+    # Modify USR register
+    usr = memory.read_byte(IMEM_NAMES["USR"])
     usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
     usr |= 0x18   # Set bits 3 and 4 to 1
-    memory.write_byte(0xF8, usr)
+    memory.write_byte(IMEM_NAMES["USR"], usr)
     
-    # Modify SSR register (FFH)
-    ssr = memory.read_byte(0xFF)
+    # Modify SSR register
+    ssr = memory.read_byte(IMEM_NAMES["SSR"])
     ssr |= 0x04   # Set bit 2 to 1
-    memory.write_byte(0xFF, ssr)
+    memory.write_byte(IMEM_NAMES["SSR"], ssr)
     
     state.halted = True
     return None, None
@@ -73,16 +76,16 @@ def eval_intrinsic_off(
     - USR (F8H) bits 3 and 4 are set to 1
     Same as HALT but represents a different power state (main/sub clock stop).
     """
-    # Modify USR register (F8H)
-    usr = memory.read_byte(0xF8)
+    # Modify USR register
+    usr = memory.read_byte(IMEM_NAMES["USR"])
     usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
     usr |= 0x18   # Set bits 3 and 4 to 1
-    memory.write_byte(0xF8, usr)
+    memory.write_byte(IMEM_NAMES["USR"], usr)
     
-    # Modify SSR register (FFH)
-    ssr = memory.read_byte(0xFF)
+    # Modify SSR register
+    ssr = memory.read_byte(IMEM_NAMES["SSR"])
     ssr |= 0x04   # Set bit 2 to 1
-    memory.write_byte(0xFF, ssr)
+    memory.write_byte(IMEM_NAMES["SSR"], ssr)
     
     state.halted = True
     return None, None
@@ -100,10 +103,10 @@ def eval_intrinsic_reset(
     """Evaluate the RESET intrinsic.
     
     This instruction resets the processor per SC62015 spec:
-    - ACM (FEH) bit 7 is reset to 0
+    - LCC (FEH) bit 7 is reset to 0 (documented as ACM bit 7)
     - UCR (F7H) is reset to 0
     - USR (F8H) bits 0 to 2/5 are reset to 0
-    - IMR (FCH) is reset to 0
+    - ISR (FCH) is reset to 0 (clears interrupt status)
     - SCR (FDH) is reset to 0 
     - SSR (FFH) bit 2 is reset to 0
     - USR (F8H) bits 3 and 4 are set to 1
@@ -111,26 +114,26 @@ def eval_intrinsic_reset(
     - Other registers retain their values
     - Flags (C/Z) are retained
     """
-    # Reset ACM bit 7
-    acm = memory.read_byte(0xFE)
-    acm &= ~0x80  # Clear bit 7
-    memory.write_byte(0xFE, acm)
+    # Reset LCC bit 7 (documented as ACM bit 7 in RESET spec)
+    lcc = memory.read_byte(IMEM_NAMES["LCC"])
+    lcc &= ~0x80  # Clear bit 7
+    memory.write_byte(IMEM_NAMES["LCC"], lcc)
     
-    # Reset UCR, IMR, SCR to 0
-    memory.write_byte(0xF7, 0x00)  # UCR
-    memory.write_byte(0xFC, 0x00)  # IMR
-    memory.write_byte(0xFD, 0x00)  # SCR
+    # Reset UCR, ISR, SCR to 0
+    memory.write_byte(IMEM_NAMES["UCR"], 0x00)
+    memory.write_byte(IMEM_NAMES["ISR"], 0x00)  # Clear interrupt status
+    memory.write_byte(IMEM_NAMES["SCR"], 0x00)
     
     # Modify USR register
-    usr = memory.read_byte(0xF8)
+    usr = memory.read_byte(IMEM_NAMES["USR"])
     usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
     usr |= 0x18   # Set bits 3 and 4 to 1
-    memory.write_byte(0xF8, usr)
+    memory.write_byte(IMEM_NAMES["USR"], usr)
     
     # Reset SSR bit 2
-    ssr = memory.read_byte(0xFF)
+    ssr = memory.read_byte(IMEM_NAMES["SSR"])
     ssr &= ~0x04  # Clear bit 2
-    memory.write_byte(0xFF, ssr)
+    memory.write_byte(IMEM_NAMES["SSR"], ssr)
     
     # Read reset vector at 0xFFFFA (3 bytes, little-endian)
     reset_vector = memory.read_byte(0xFFFFA)
