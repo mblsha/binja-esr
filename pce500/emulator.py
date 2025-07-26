@@ -97,6 +97,13 @@ class PCE500Emulator:
 
         # Create CPU emulator with our memory
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
+        
+        # After power-on reset, set PC to entry point (not reset vector)
+        # The reset vector at 0xFFFFA is only used for RESET instruction
+        # Normal startup uses entry point at 0xFFFFD
+        if hasattr(self.memory, 'internal_rom') and self.memory.internal_rom:
+            entry_point = self.memory.read_long(0xFFFFD)
+            self.cpu.regs.set(RegisterName.PC, entry_point)
 
         # Emulation state
         self.breakpoints: Set[int] = set()
@@ -152,10 +159,14 @@ class PCE500Emulator:
         # Reset LCD
         self.lcd.reset()
 
-        # Reset CPU state by setting PC to reset vector
-        # Get reset vector from ROM
-        reset_vector = self.memory.read_long(0xFFFFD)
-        self.cpu.regs.set(RegisterName.PC, reset_vector)
+        # Reset CPU state
+        self.cpu.power_on_reset()
+        
+        # Set PC to entry point (not reset vector)
+        # The reset vector at 0xFFFFA is only used for RESET instruction
+        # Normal startup uses entry point at 0xFFFFD
+        entry_point = self.memory.read_long(0xFFFFD)
+        self.cpu.regs.set(RegisterName.PC, entry_point)
 
         # Reset emulation state
         self.cycle_count = 0
