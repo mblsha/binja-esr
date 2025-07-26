@@ -12,7 +12,7 @@ from .pysc62015.constants import (
     INTERNAL_MEMORY_LENGTH,
 )
 from .pysc62015.instr import (
-    IMEM_NAMES,
+    IMEMRegisters,
     INTERRUPT_VECTOR_ADDR,
     ENTRY_POINT_ADDR,
     SH26_ADDR_START,
@@ -74,9 +74,9 @@ class SC62015BaseView(BinaryView):
             )
 
         # Define named internal-memory variables
-        for name, offset in IMEM_NAMES.items():
-            addr = INTERNAL_MEMORY_START + offset
-            self.define_data_var(addr, 'uint8_t', name)
+        for reg in IMEMRegisters:
+            addr = INTERNAL_MEMORY_START + reg.value
+            self.define_data_var(addr, 'uint8_t', reg.name)
 
         # Read vectors and define entry points
         self._interrupt_vector = self.read_int(INTERRUPT_VECTOR_ADDR, 3)

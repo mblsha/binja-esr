@@ -7,7 +7,7 @@ from .emulator import (
     Memory,
 )
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START, PC_MASK
-from .instr import IMEM_NAMES
+from .instr.opcodes import IMEMRegisters
 from binja_test_mocks.mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
@@ -848,7 +848,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
             test_id="PRE_0x22_Op1_BP_N_MV_(BP+n)_A",
             instr_bytes=bytes([0x22, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
-                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
             },
             init_register_state={RegisterName.A: OPERAND_A_VAL},
             expected_asm_str=f"MV    (BP+{N_OPERAND_VAL:02X}), A",
@@ -864,7 +864,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
             test_id="PRE_0x36_Op1_PX_N_MV_(PX+n)_A",
             instr_bytes=bytes([0x36, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
-                INTERNAL_MEMORY_START + IMEM_NAMES["PX"]: PX_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.PX: PX_REG_VAL,
             },
             init_register_state={RegisterName.A: OPERAND_A_VAL},
             expected_asm_str=f"MV    (PX+{N_OPERAND_VAL:02X}), A",
@@ -882,8 +882,8 @@ def get_pre_test_cases() -> List[PreTestCase]:
                 [0x26, MV_MEM_DEST_A_SRC_OPCODE, N_OPERAND_VAL]
             ),  # N_OPERAND_VAL is present but ignored by (BP+PX) mode for destination calculation
             init_memory_state={
-                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
-                INTERNAL_MEMORY_START + IMEM_NAMES["PX"]: PX_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.PX: PX_REG_VAL,
             },
             init_register_state={RegisterName.A: OPERAND_A_VAL},
             expected_asm_str="MV    (BP+PX), A",
@@ -912,7 +912,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
             test_id="PRE_0x30_Op2_BP_N_MV_A_(BP+n)",  # 0x30 for 2nd op (BP+n) if 1st op is (n)
             instr_bytes=bytes([0x30, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
-                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
                 INTERNAL_MEMORY_START
                 + ((BP_REG_VAL + N_OPERAND_VAL) & 0xFF): OPERAND_MEM_VAL,
             },
@@ -925,7 +925,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
             test_id="PRE_0x33_Op2_PY_N_MV_A_(PY+n)",  # 0x33 for 2nd op (PY+n) if 1st op is (n)
             instr_bytes=bytes([0x33, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
-                INTERNAL_MEMORY_START + IMEM_NAMES["PY"]: PY_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.PY: PY_REG_VAL,
                 INTERNAL_MEMORY_START
                 + ((PY_REG_VAL + N_OPERAND_VAL) & 0xFF): OPERAND_MEM_VAL,
             },
@@ -940,8 +940,8 @@ def get_pre_test_cases() -> List[PreTestCase]:
                 [0x31, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]
             ),  # N_OPERAND_VAL ignored for (BP+PY) source
             init_memory_state={
-                INTERNAL_MEMORY_START + IMEM_NAMES["BP"]: BP_REG_VAL,
-                INTERNAL_MEMORY_START + IMEM_NAMES["PY"]: PY_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
+                INTERNAL_MEMORY_START + IMEMRegisters.PY: PY_REG_VAL,
                 INTERNAL_MEMORY_START
                 + ((BP_REG_VAL + PY_REG_VAL) & 0xFF): OPERAND_MEM_VAL,
             },

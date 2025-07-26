@@ -21,6 +21,7 @@ import copy
 from dataclasses import dataclass
 from typing import Optional, List, Generator, Iterator, Dict, Tuple, Union, Type, Literal, Any
 import enum
+from enum import IntEnum
 from contextlib import contextmanager
 
 
@@ -227,18 +228,24 @@ CE0_ADDR_END   = 0xBFFFF
 # internal region occupies addresses
 #   [INTERNAL_MEMORY_START, ADDRESS_SPACE_SIZE - 1].
 
-IMEM_NAMES = {
-    "BP":  0xEC, # RAM Base Pointer
-    "PX":  0xED, # RAM PX Pointer
-    "PY":  0xEE, # RAM PY Pointer
-
+class IMEMRegisters(IntEnum):
+    """Internal Memory-mapped registers for SC62015.
+    
+    Using IntEnum provides type safety and autocomplete while still
+    allowing the values to be used directly as integers.
+    """
+    # RAM Pointers
+    BP = 0xEC   # RAM Base Pointer
+    PX = 0xED   # RAM PX Pointer
+    PY = 0xEE   # RAM PY Pointer
+    
     # A system with two RAM card slots may have two discontinuous
     # physical address windows (CE1 and CE0).  This register lets
     # you virtually join them into one contiguous block when enabled.
     #
     # When AME (bit 7) = 1:
     #   - The end of the CE1 window is linked to the start of the
-    #     CE0 window in the software’s virtual address space.
+    #     CE0 window in the software's virtual address space.
     #
     # Bitfields:
     #   AME     (bit 7)    = 1 to enable address‐modify
@@ -252,32 +259,34 @@ IMEM_NAMES = {
     #     111111 = 128 KB
     #
     # Notes:
-    #   • Virtual CE1 region follows directly after CE1’s physical
+    #   • Virtual CE1 region follows directly after CE1's physical
     #     end.
-    #   • Virtual CE0 region begins at CE0’s physical base.
-    "AMC": 0xEF, # ADR Modify Control
-
+    #   • Virtual CE0 region begins at CE0's physical base.
+    AMC = 0xEF  # ADR Modify Control
+    
+    # Key I/O ports
     # Controls KO0-KO15 output pins
-    "KOL": 0xF0, # Key Output Buffer H
-    "KOH": 0xF1, # Key Output Buffer L
-
+    KOL = 0xF0  # Key Output Buffer H
+    KOH = 0xF1  # Key Output Buffer L
+    
     # Controls KI0-KI7 input pins
-    "KIL": 0xF2, # Key Input Buffer
-
+    KIL = 0xF2  # Key Input Buffer
+    
+    # E Port I/O
     # Controls E0-E15 pins
-    "EOL": 0xF3, # E Port Output Buffer H
-    "EOH": 0xF4, # E Port Output Buffer L
+    EOL = 0xF3  # E Port Output Buffer H
+    EOH = 0xF4  # E Port Output Buffer L
     # Controls E0-E15 pins
-    "EIL": 0xF5, # E Port Input Buffer H
-    "EIH": 0xF6, # E Port Input Buffer L
-
+    EIL = 0xF5  # E Port Input Buffer H
+    EIH = 0xF6  # E Port Input Buffer L
+    
     #     7     6     5     4     3     2     1     0
     #   +-----+-----+-----+-----+-----+-----+-----+-----+
     #   | BOE | BR2 | BR1 | BR0 | PA1 | PA0 |  DL |  ST |
     #   +-----+-----+-----+-----+-----+-----+-----+-----+
     #
     #  BOE  (bit 7)  – Break Output Enable.
-    #                  When ‘1’, TXD is driven low (“0”) continuously.
+    #                  When '1', TXD is driven low ("0") continuously.
     #
     #  Baud Rate Factor (bits 6–4 = BR2,BR1,BR0):
     #    000 → 0    (resets UART)
@@ -301,54 +310,54 @@ IMEM_NAMES = {
     #  Stop Bits (bit 0 = ST):
     #    0 → 1 stop bit
     #    1 → 2 stop bits
-    "UCR": 0xF7, # UART Control Register
-
+    UCR = 0xF7  # UART Control Register
+    
     #     7     6     5     4     3     2     1     0
     #   +-----+-----+-----+-----+-----+-----+-----+-----+
     #   |     |     | RXR | TXE | TXR |  FE |  OE |  PE |
     #   +-----+-----+-----+-----+-----+-----+-----+-----+
     #
     #  RXR (bit 5) – Receiver Ready:
-    #     ‘1’ when a character has been fully received;
-    #     clears to ‘0’ once RX buffer is read.
+    #     '1' when a character has been fully received;
+    #     clears to '0' once RX buffer is read.
     #
     #  TXE (bit 4) – Transmitter Empty:
-    #     ‘0’ while UART is shifting bits out;
-    #     ‘1’ when transmitter is idle.
+    #     '0' while UART is shifting bits out;
+    #     '1' when transmitter is idle.
     #
     #  TXR (bit 3) – Transmitter Ready:
-    #     ‘0’ immediately after software writes TXD;
-    #     becomes ‘1’ once data has moved into the shift register.
+    #     '0' immediately after software writes TXD;
+    #     becomes '1' once data has moved into the shift register.
     #
     #  FE  (bit 2) – Framing Error:
-    #     ‘0’ if stop-bit framing was incorrect; ‘1’ otherwise.
+    #     '0' if stop-bit framing was incorrect; '1' otherwise.
     #     Updated on each receive completion.
     #
     #  OE  (bit 1) – Overrun Error:
-    #     ‘1’ if new character completes while RXR=‘1’.
+    #     '1' if new character completes while RXR='1'.
     #     Updated on each receive completion.
     #
     #  PE  (bit 0) – Parity Error:
-    #     ‘1’ if received parity does not match.
+    #     '1' if received parity does not match.
     #     Updated on each receive completion.
-    "USR": 0xF8, # UART Status Register
-
+    USR = 0xF8  # UART Status Register
+    
     # Holds the 8-bit data of the last received character.
-    "RXD": 0xF9, # UART Receive Buffer
-
+    RXD = 0xF9  # UART Receive Buffer
+    
     # – Write data here for transmission.
-    # – When TXE (USR[4]) goes ‘1’, the byte moves to the transmitter.
+    # – When TXE (USR[4]) goes '1', the byte moves to the transmitter.
     # – You may queue a new byte even while prior is sending;
-    #   TXR (USR[3]) tells you when it’s been accepted.
-    "TXD": 0xFA, # UART Transmit Buffer
-
+    #   TXR (USR[3]) tells you when it's been accepted.
+    TXD = 0xFA  # UART Transmit Buffer
+    
     #    7     6     5      4      3      2     1     0
     #  +-----+-----+------+-------+------+-----+-----+-----+
     #  | IRM | EXM | RXRM | TXRM  | ONKM | KEYM| STM | MTM |
     #  +-----+-----+------+-------+------+-----+-----+-----+
     #
     # IRM  (bit 7) – Global interrupt mask:
-    #    Write ‘0’ to disable all sources.
+    #    Write '0' to disable all sources.
     #
     # EXM  (bit 6) – External Interrupt Mask.
     # RXRM (bit 5) – Receiver Ready Interrupt Mask.
@@ -358,11 +367,11 @@ IMEM_NAMES = {
     # STM  (bit 1) – SEC Timer Interrupt Mask.
     # MTM  (bit 0) – MSEC Timer Interrupt Mask.
     #
-    # Writing ‘0’ to any bit inhibits that individual interrupt source.
+    # Writing '0' to any bit inhibits that individual interrupt source.
     # On interrupt entry, the current IMR is pushed to system/user stack
     # and IRM (bit 7) is cleared.
-    "IMR": 0xFB, # Interrupt Mask Register
-
+    IMR = 0xFB  # Interrupt Mask Register
+    
     #     7    6     5     4      3      2     1     0
     #   +----+-----+-----+------+-------+-----+-----+-----+
     #   |    | EXI | RXRI| TXRI | ONKI  | KEYI| STI | MTI |
@@ -370,28 +379,28 @@ IMEM_NAMES = {
     #
     #  Bit 7  – Reserved.
     #  EXI    (bit 6) – External Interrupt:
-    #        ‘1’ when an IRQ request arrives on the external pin.
+    #        '1' when an IRQ request arrives on the external pin.
     #  RXRI   (bit 5) – Receiver Ready Interrupt:
-    #        ‘1’ when UART has completed receiving one character.
+    #        '1' when UART has completed receiving one character.
     #  TXRI   (bit 4) – Transmitter Ready Interrupt:
-    #        ‘1’ when TX buffer (FAH) is ready for new data.
+    #        '1' when TX buffer (FAH) is ready for new data.
     #  ONKI   (bit 3) – On-Key Interrupt:
-    #        ‘1’ when a high level is input to the ON pin.
+    #        '1' when a high level is input to the ON pin.
     #  KEYI   (bit 2) – Key Interrupt:
-    #        ‘1’ if any configured KI pin goes high.
+    #        '1' if any configured KI pin goes high.
     #  STI    (bit 1) – SEC Timer Interrupt:
-    #        ‘1’ when the sub-CG timer requests an interrupt.
+    #        '1' when the sub-CG timer requests an interrupt.
     #  MTI    (bit 0) – MSEC Timer Interrupt:
-    #        ‘1’ when the main CG timer requests an interrupt.
-    "ISR": 0xFC, # Interrupt Status Register
-
+    #        '1' when the main CG timer requests an interrupt.
+    ISR = 0xFC  # Interrupt Status Register
+    
     #     7    6    5    4    3    2    1     0
     #   +----+----+----+----+-----+----+----+-----+
     #   | ISE| BZ2| BZ1| BZ0| VDDC| STS| MTS| DISC|
     #   +----+----+----+----+-----+----+----+-----+
     #
     #  ISE   (bit 7) – IRQ Start Enable:
-    #               ‘1’ allows an external IRQ to resume the CPU from HALT/OFF.
+    #               '1' allows an external IRQ to resume the CPU from HALT/OFF.
     #
     #  BZ2–BZ0 (bits 6–4) – CO/CI pin Control Factors:
     #     000: CO=low,    CI=0 (input disallowed)
@@ -417,8 +426,8 @@ IMEM_NAMES = {
     #               0 = DIS pin low → display OFF;
     #               1 = DIS pin high → display ON.
     #               To synchronize: set DISC=1, wait >1 cycle, set DISC=0.
-    "SCR": 0xFD, # System Control Register
-
+    SCR = 0xFD  # System Control Register
+    
     #     7     6    5    4    3    2    1     0
     #   +----+----+----+----+----+----+-----+------+
     #   |LCC4|LCC3|LCC2|LCC1|LCC0| KSD| STCL| MTCL |
@@ -428,15 +437,15 @@ IMEM_NAMES = {
     #     00000 = min … 11111 = max
     #
     #  KSD    (bit 2) – Key Strobe Disable:
-    #               ‘1’ forces KO pins low; key outputs can be read.
+    #               '1' forces KO pins low; key outputs can be read.
     #
     #  STCL   (bit 1) – SEC Timer Clear:
-    #               If ‘1’ when TCL executes, resets sub-CG timer.
+    #               If '1' when TCL executes, resets sub-CG timer.
     #
     #  MTCL   (bit 0) – MSEC Timer Clear:
-    #               If ‘1’ when TCL executes, resets main CG timer.
-    "LCC": 0xFE, # LCD Contrast Control
-
+    #               If '1' when TCL executes, resets main CG timer.
+    LCC = 0xFE  # LCD Contrast Control
+    
     #     7    6    5    4    3    2    1     0
     #   +----+----+----+----+----+----+----+------+
     #   |    |    |    |    | ONK| RSF| CI | TEST |
@@ -445,18 +454,18 @@ IMEM_NAMES = {
     #  Bits 7–4 – Reserved.
     #
     #  ONK   (bit 3) – ON-Key input:
-    #               ‘0’ when ON pin is low, ‘1’ when high.
+    #               '0' when ON pin is low, '1' when high.
     #
     #  RSF   (bit 2) – Reset-Start Flag:
-    #               ‘0’ when RESET pin is high, ‘1’ when HALT/OFF.
+    #               '0' when RESET pin is high, '1' when HALT/OFF.
     #
     #  CI    (bit 1) – CMT Input:
-    #               ‘0’ when CI pin is low, ‘1’ when high.
+    #               '0' when CI pin is low, '1' when high.
     #
     #  TEST  (bit 0) – Test Input:
-    #               ‘0’ when TEST pin is low, ‘1’ when high.
-    "SSR": 0xFF, # System Status Control
-}
+    #               '0' when TEST pin is low, '1' when high.
+    SSR = 0xFF  # System Status Control
+
 
 class Operand:
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -930,7 +939,8 @@ class IMemHelper(Operand):
     # they're not real registers, but we treat them as such
     @staticmethod
     def _reg_value(name: str, il: LowLevelILFunction) -> ExpressionIndex:
-        addr = IMEM_NAMES[name]
+        # Use the IntEnum for dynamic lookup
+        addr = IMEMRegisters[name]
         return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
 
     def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
@@ -1137,7 +1147,7 @@ class RegIMR(HasOperands, Reg):
         return 1
 
     def operands(self) -> Generator[Operand, None, None]:
-        yield IMem8(IMEM_NAMES["IMR"])
+        yield IMem8(IMEMRegisters.IMR)
 
 # Special case: only makes sense for MV, special case since B is not in the REGISTERS
 class RegB(Reg):

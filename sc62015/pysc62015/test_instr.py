@@ -11,7 +11,7 @@ from .instr import (
     EMemIMemMode,
     IMem8,
     IMemHelper,
-    IMEM_NAMES,
+    IMEMRegisters,
     TempReg,
     AddressingMode,
     Reg,
@@ -382,7 +382,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
                                 )
                             ],
                         ),  # BP value
@@ -412,7 +412,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PX],
                                 )
                             ],
                         ),  # PX value
@@ -440,7 +440,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PY],
                                 )
                             ],
                         ),  # PY value
@@ -470,7 +470,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
                                 )
                             ],
                         ),  # BP value
@@ -479,7 +479,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PX],
                                 )
                             ],
                         ),  # PX value
@@ -506,7 +506,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
                                 )
                             ],
                         ),  # BP value
@@ -515,7 +515,7 @@ class TestIMemHelperLifting:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PY],
                                 )
                             ],
                         ),  # PY value
@@ -595,7 +595,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
                                 )
                             ],
                         ),
@@ -622,7 +622,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PX],
                                 )
                             ],
                         ),
@@ -649,7 +649,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PY],
                                 )
                             ],
                         ),
@@ -676,7 +676,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
                                 )
                             ],
                         ),
@@ -685,7 +685,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PX"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PX],
                                 )
                             ],
                         ),
@@ -711,7 +711,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
                                 )
                             ],
                         ),
@@ -720,7 +720,7 @@ class TestIMem8CurrentAddr:
                             [
                                 mllil(
                                     "CONST_PTR.l",
-                                    [INTERNAL_MEMORY_START + IMEM_NAMES["PY"]],
+                                    [INTERNAL_MEMORY_START + IMEMRegisters.PY],
                                 )
                             ],
                         ),
@@ -836,7 +836,7 @@ def test_cmp_with_pre() -> None:
                                     [
                                         mllil(
                                             "LOAD.b",
-                                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]])],
+                                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEMRegisters.BP])],
                                         ),
                                         mllil("CONST.b", [0x34]),
                                     ],
@@ -878,7 +878,7 @@ def test_test_with_pre() -> None:
                                             [
                                                 mllil(
                                                     "LOAD.b",
-                                                    [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEM_NAMES["BP"]])],
+                                                    [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEMRegisters.BP])],
                                                 ),
                                                 mllil("CONST.b", [0x12]),
                                             ],
