@@ -110,7 +110,7 @@ def _make_cpu_and_mem(
             raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
 
-    cpu = Emulator(Memory(read_mem, write_mem))
+    cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
     return cpu, raw, reads, writes
 
 

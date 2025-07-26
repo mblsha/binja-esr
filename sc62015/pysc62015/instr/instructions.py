@@ -843,9 +843,7 @@ class RESET(MiscInstruction):
         info.add_branch(BranchType.FunctionReturn)
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        mem = EMemAddr(width=3)
-        mem.value = ENTRY_POINT_ADDR
-        il.append(il.jump(mem.lift(il)))
+        il.append(il.intrinsic([], RESETIntrinsic, []))
 
 class UnknownInstruction(Instruction):
     def name(self) -> str:

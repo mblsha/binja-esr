@@ -85,13 +85,18 @@ class PCE500Emulator:
             trace_enabled: Enable simple list-based tracing
             perfetto_trace: Enable Perfetto tracing (if available)
         """
+        # Initialize performance counters first (needed by TrackedMemory)
+        self.instruction_count = 0
+        self.memory_read_count = 0
+        self.memory_write_count = 0
+        
         # Create memory and LCD controller
         self.memory = TrackedMemory(self)
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
 
         # Create CPU emulator with our memory
-        self.cpu = SC62015Emulator(self.memory)
+        self.cpu = SC62015Emulator(self.memory, reset_on_init=False)
 
         # Emulation state
         self.breakpoints: Set[int] = set()
@@ -118,11 +123,6 @@ class PCE500Emulator:
         # PC tracking for memory context and jump analysis
         self._current_pc = 0
         self._last_pc = 0
-
-        # Performance counters
-        self.instruction_count = 0
-        self.memory_read_count = 0
-        self.memory_write_count = 0
 
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
         """Load ROM data."""

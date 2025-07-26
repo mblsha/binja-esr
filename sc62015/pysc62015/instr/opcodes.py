@@ -164,6 +164,7 @@ def get_addressing_mode(pre_value: int, operand_index: int) -> AddressingMode:
 TCLIntrinsic = IntrinsicName("TCL")
 HALTIntrinsic = IntrinsicName("HALT")
 OFFIntrinsic = IntrinsicName("OFF")
+RESETIntrinsic = IntrinsicName("RESET")
 
 # Use distinct temporary registers for various operations in order to avoid
 # overlap in case of multiple operations being performed in the same instruction.
