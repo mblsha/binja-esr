@@ -5,7 +5,6 @@ from binja_test_mocks.coding import FetchDecoder
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr.opcode_table import OPCODES
-from .instr.opcodes import IMEMRegisters
 from .instr import (
     decode,
     Instruction,
@@ -294,7 +293,8 @@ class Emulator:
     def power_on_reset(self) -> None:
         """Perform power-on reset per SC62015 spec.
         
-        This method performs the same operations as the RESET instruction:
+        This method calls the RESET intrinsic evaluator directly to avoid duplicating
+        the reset logic. The RESET intrinsic performs all necessary operations:
         - LCC (FEH) bit 7 is reset to 0 (documented as ACM bit 7)
         - UCR (F7H) is reset to 0
         - USR (F8H) bits 0 to 2/5 are reset to 0, bits 3 and 4 are set to 1
@@ -305,34 +305,17 @@ class Emulator:
         - Other registers retain their values (initialized to 0)
         - Flags (C/Z) are retained (initialized to 0)
         """
-        # Reset LCC bit 7 (documented as ACM bit 7 in RESET spec)
-        lcc = self.memory.read_byte(IMEMRegisters.LCC)
-        lcc &= ~0x80  # Clear bit 7
-        self.memory.write_byte(IMEMRegisters.LCC, lcc)
+        # Directly call the RESET intrinsic evaluator
+        from .intrinsics import eval_intrinsic_reset
+        eval_intrinsic_reset(
+            None,  # llil not needed
+            None,  # size not needed
+            self.regs,
+            self.memory,
+            self.state,
+            self.regs.get_flag,
+            self.regs.set_flag,
+        )
         
-        # Reset UCR, ISR, SCR to 0
-        self.memory.write_byte(IMEMRegisters.UCR, 0x00)
-        self.memory.write_byte(IMEMRegisters.ISR, 0x00)  # Clear interrupt status
-        self.memory.write_byte(IMEMRegisters.SCR, 0x00)
-        
-        # Modify USR register
-        usr = self.memory.read_byte(IMEMRegisters.USR)
-        usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
-        usr |= 0x18   # Set bits 3 and 4 to 1
-        self.memory.write_byte(IMEMRegisters.USR, usr)
-        
-        # Reset SSR bit 2
-        ssr = self.memory.read_byte(IMEMRegisters.SSR)
-        ssr &= ~0x04  # Clear bit 2
-        self.memory.write_byte(IMEMRegisters.SSR, ssr)
-        
-        # Read reset vector at 0xFFFFA (3 bytes, little-endian)
-        reset_vector = self.memory.read_byte(0xFFFFA)
-        reset_vector |= self.memory.read_byte(0xFFFFB) << 8
-        reset_vector |= self.memory.read_byte(0xFFFFC) << 16
-        
-        # Set PC to reset vector (masked to 20 bits)
-        self.regs.set(RegisterName.PC, reset_vector & PC_MASK)
-        
-        # Clear halted state
+        # Clear halted state (RESET doesn't set this, but power-on should clear it)
         self.state.halted = False
