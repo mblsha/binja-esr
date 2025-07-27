@@ -149,6 +149,28 @@ class MV(MoveInstruction):
 class MVL(MoveInstruction):
     def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
         return il.add
+    
+    def _update_address_with_wrap(
+        self,
+        il: LowLevelILFunction,
+        reg: TempReg,
+        update_func: Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex],
+        operand: Operand
+    ) -> None:
+        """Update address register with wrapping for IMem8 operands."""
+        new_addr = update_func(reg.width(), reg.lift(il), il.const(reg.width(), 1))
+        
+        if isinstance(operand, IMem8):
+            # For IMem8, wrap address within internal memory range (0x00-0xFF)
+            # Extract offset by subtracting INTERNAL_MEMORY_START
+            offset = il.sub(3, new_addr, il.const(3, INTERNAL_MEMORY_START))
+            # Wrap the offset within 0xFF range
+            wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
+            # Add back the base to get the full address
+            wrapped_addr = il.add(3, il.const(3, INTERNAL_MEMORY_START), wrapped_offset)
+            reg.lift_assign(il, wrapped_addr)
+        else:
+            reg.lift_assign(il, new_addr)
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         dst, src = self.operands()
@@ -187,21 +209,8 @@ class MVL(MoveInstruction):
             ):
                 dst_func = il.sub
 
-            # For IMem8 destinations, wrap address within internal memory range
-            if isinstance(dst, IMem8):
-                # Calculate new address (increment by 1)
-                new_addr = dst_func(dst_reg.width(), dst_reg.lift(il), il.const(dst_reg.width(), 1))
-                # Extract just the offset part (subtract INTERNAL_MEMORY_START)
-                offset = il.sub(3, new_addr, il.const(3, INTERNAL_MEMORY_START))
-                # Wrap the offset within 0xFF range
-                wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
-                # Add back the base to get the full address
-                wrapped_addr = il.add(3, il.const(3, INTERNAL_MEMORY_START), wrapped_offset)
-                dst_reg.lift_assign(il, wrapped_addr)
-            else:
-                dst_reg.lift_assign(
-                    il, dst_func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1))
-                )
+            # Update destination address with wrapping for IMem8
+            self._update_address_with_wrap(il, dst_reg, dst_func, dst)
 
             if (
                 isinstance(src, EMemValueOffsetHelper)
@@ -211,21 +220,8 @@ class MVL(MoveInstruction):
                 updated_src = src.lift_current_addr(il, pre=src_mode)
                 src_reg.lift_assign(il, updated_src)
             else:
-                # For IMem8 sources, wrap address within internal memory range
-                if isinstance(src, IMem8):
-                    # Calculate new address (increment by 1)
-                    new_addr = func(src_reg.width(), src_reg.lift(il), il.const(src_reg.width(), 1))
-                    # Extract just the offset part (subtract INTERNAL_MEMORY_START)
-                    offset = il.sub(3, new_addr, il.const(3, INTERNAL_MEMORY_START))
-                    # Wrap the offset within 0xFF range
-                    wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
-                    # Add back the base to get the full address
-                    wrapped_addr = il.add(3, il.const(3, INTERNAL_MEMORY_START), wrapped_offset)
-                    src_reg.lift_assign(il, wrapped_addr)
-                else:
-                    src_reg.lift_assign(
-                        il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1))
-                    )
+                # Update source address with wrapping for IMem8
+                self._update_address_with_wrap(il, src_reg, func, src)
                 src.lift_current_addr(il, pre=src_mode)
 
             # apply any addressing side effects for destination
