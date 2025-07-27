@@ -521,31 +521,35 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MVL   (BP+FE), (BP+50)",
     ),
     InstructionTestCase(
-        test_id="MVL_(00)_[--X]_BP2_I3",
+        test_id="MVL_(00)_[--X]_BP2_I5",
         instr_bytes=bytes.fromhex("E33400"),  # MVL (00), [--X] with BP=2
         init_regs={
-            RegisterName.I: 3,
+            RegisterName.I: 5,
             RegisterName.X: 0x2000,
         },
         init_mem={
             # BP register at internal memory
             INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x02,  # BP = 2
             # Source data at external memory
-            0x1FFD: 0x11,
+            0x1FFB: 0x55,
+            0x1FFC: 0x44,
+            0x1FFD: 0x33,
             0x1FFE: 0x22,
-            0x1FFF: 0x33,
+            0x1FFF: 0x11,
         },
         expected_regs={
             RegisterName.I: 0,
-            RegisterName.X: 0x1FFD,  # X decremented by 3
+            RegisterName.X: 0x1FFB,  # X decremented by 5
         },
         expected_mem_state={
             # BP=2, so (BP+00) = address 0x02
             # MVL with pre-decrement source causes destination to decrement too
-            # Writes go to: 0x02, 0x01, 0x00
-            INTERNAL_MEMORY_START + 0x02: 0x33,  # From 0x1FFF
+            # Writes go to: 0x02, 0x01, 0x00, 0xFF (wrapped), 0xFE (wrapped)
+            INTERNAL_MEMORY_START + 0x02: 0x11,  # From 0x1FFF
             INTERNAL_MEMORY_START + 0x01: 0x22,  # From 0x1FFE
-            INTERNAL_MEMORY_START + 0x00: 0x11,  # From 0x1FFD
+            INTERNAL_MEMORY_START + 0x00: 0x33,  # From 0x1FFD
+            INTERNAL_MEMORY_START + 0xFF: 0x44,  # From 0x1FFC (wrapped from -1)
+            INTERNAL_MEMORY_START + 0xFE: 0x55,  # From 0x1FFB (wrapped from -2)
             # BP remains unchanged
             INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x02,
         },
