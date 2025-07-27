@@ -9,6 +9,7 @@ from binaryninja.enums import Endianness, FlagRole
 from binaryninja.log import log_error
 
 from .pysc62015.instr import decode, encode, OPCODES
+from .pysc62015.instr.opcodes import InvalidInstruction
 from binja_test_mocks.tokens import asm
 
 
@@ -67,6 +68,9 @@ class SC62015(Architecture):
                 info = InstructionInfo()
                 decoded.analyze(info, addr)
                 return info
+        except (AssertionError, InvalidInstruction) as exc:
+            # Invalid instruction encoding, return None to mark as data
+            return None
         except Exception as exc:
             log_error(f"SC62015.get_instruction_info() failed at {addr:#x}: {exc}")
             raise
@@ -77,25 +81,30 @@ class SC62015(Architecture):
                 encoded = data[: decoded.length()]
                 recoded = encode(decoded, addr)
                 if encoded != recoded:
-                    log_error("Instruction roundtrip error:")
-                    log_error("".join(str(token) for token in decoded.render()))
-                    log_error("Old: {}".format(encoded.hex()))
-                    log_error("New: {}".format(recoded.hex()))
-                    return None, None
+                    # Roundtrip failed - this can happen with consecutive PRE instructions
+                    # or other invalid encodings. Treat as data.
+                    return None
                 return asm(decoded.render()), decoded.length()
+        except (AssertionError, InvalidInstruction):
+            # Invalid instruction encoding, return None to mark as data
+            return None
         except Exception as exc:
             log_error(f"SC62015.get_instruction_text() failed at {addr:#x}: {exc}")
             raise
 
     def get_instruction_low_level_il(self, data, addr, il):
-        # try:
-        if decoded := decode(data, addr, OPCODES):
-            decoded.lift(il, addr)
-            return decoded.length()
-        # except Exception as exc:
-        #     log_error(
-        #         f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}"
-        #     )
+        try:
+            if decoded := decode(data, addr, OPCODES):
+                decoded.lift(il, addr)
+                return decoded.length()
+        except (AssertionError, InvalidInstruction):
+            # Invalid instruction encoding, return None to mark as data
+            return None
+        except Exception as exc:
+            log_error(
+                f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}"
+            )
+            raise
 
 
 class SC62015CallingConvention(CallingConvention):
