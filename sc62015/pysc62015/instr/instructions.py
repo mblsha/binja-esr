@@ -156,8 +156,8 @@ class MVL(MoveInstruction):
         assert isinstance(src, Pointer), f"Expected Pointer, got {type(src)}"
         # 0xCB and 0xCF variants use IMem8, IMem8
         dst_reg = TempReg(TempMvlDst)
-        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
-        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
 
         dst_reg.lift_assign(
             il, dst.lift_current_addr(il, pre=dst_mode, side_effects=False)
@@ -166,11 +166,15 @@ class MVL(MoveInstruction):
         src_reg.lift_assign(
             il, src.lift_current_addr(il, pre=src_mode, side_effects=False)
         )
+        
+        # Debug: print initial addresses
+        # print(f"MVL: dst_mode={dst_mode}, src_mode={src_mode}")
 
         with lift_loop(il):
             src_mem = src.memory_helper()(1, src_reg)
             dst_mem = dst.memory_helper()(1, dst_reg)
-            dst_mem.lift_assign(il, src_mem.lift(il))
+            # Use AddressingMode.N since src_reg and dst_reg already contain final addresses
+            dst_mem.lift_assign(il, src_mem.lift(il, pre=AddressingMode.N), pre=AddressingMode.N)
 
             # +1 index
             func = self.modify_addr_il(il)
@@ -183,9 +187,21 @@ class MVL(MoveInstruction):
             ):
                 dst_func = il.sub
 
-            dst_reg.lift_assign(
-                il, dst_func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1))
-            )
+            # For IMem8 destinations, wrap address within internal memory range
+            if isinstance(dst, IMem8):
+                # Calculate new address (increment by 1)
+                new_addr = dst_func(dst_reg.width(), dst_reg.lift(il), il.const(dst_reg.width(), 1))
+                # Extract just the offset part (subtract INTERNAL_MEMORY_START)
+                offset = il.sub(3, new_addr, il.const(3, INTERNAL_MEMORY_START))
+                # Wrap the offset within 0xFF range
+                wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
+                # Add back the base to get the full address
+                wrapped_addr = il.add(3, il.const(3, INTERNAL_MEMORY_START), wrapped_offset)
+                dst_reg.lift_assign(il, wrapped_addr)
+            else:
+                dst_reg.lift_assign(
+                    il, dst_func(dst_reg.width(), dst_reg.lift(il), il.const(1, 1))
+                )
 
             if (
                 isinstance(src, EMemValueOffsetHelper)
@@ -195,9 +211,21 @@ class MVL(MoveInstruction):
                 updated_src = src.lift_current_addr(il, pre=src_mode)
                 src_reg.lift_assign(il, updated_src)
             else:
-                src_reg.lift_assign(
-                    il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1))
-                )
+                # For IMem8 sources, wrap address within internal memory range
+                if isinstance(src, IMem8):
+                    # Calculate new address (increment by 1)
+                    new_addr = func(src_reg.width(), src_reg.lift(il), il.const(src_reg.width(), 1))
+                    # Extract just the offset part (subtract INTERNAL_MEMORY_START)
+                    offset = il.sub(3, new_addr, il.const(3, INTERNAL_MEMORY_START))
+                    # Wrap the offset within 0xFF range
+                    wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
+                    # Add back the base to get the full address
+                    wrapped_addr = il.add(3, il.const(3, INTERNAL_MEMORY_START), wrapped_offset)
+                    src_reg.lift_assign(il, wrapped_addr)
+                else:
+                    src_reg.lift_assign(
+                        il, func(src_reg.width(), src_reg.lift(il), il.const(1, 1))
+                    )
                 src.lift_current_addr(il, pre=src_mode)
 
             # apply any addressing side effects for destination
@@ -447,8 +475,8 @@ def lift_multi_byte(
 ) -> None:
     assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
 
-    dst_mode = get_addressing_mode(pre, 1) if pre else None
-    src_mode = get_addressing_mode(pre, 2) if pre else None
+    dst_mode = get_addressing_mode(pre, 1)
+    src_mode = get_addressing_mode(pre, 2)
 
     # Helper to create load/store/advance logic for operands
     def make_handlers(
@@ -473,10 +501,12 @@ def lift_multi_byte(
             def load() -> ExpressionIndex:
                 # Use width 'w' (e.g. 1 for byte) for memory load/store element size
                 assert isinstance(op, Pointer)
-                return op.memory_helper()(w, ptr).lift(il)
+                # Use AddressingMode.N since ptr already contains the final address
+                return op.memory_helper()(w, ptr).lift(il, pre=AddressingMode.N)
             def store(val: ExpressionIndex) -> None:
                 assert isinstance(op, Pointer)
-                op.memory_helper()(w, ptr).lift_assign(il, val)
+                # Use AddressingMode.N since ptr already contains the final address
+                op.memory_helper()(w, ptr).lift_assign(il, val, pre=AddressingMode.N)
             def advance() -> None:
                 op_il_math = il.sub if reverse else il.add
                 # Advance pointer by element width 'w'
@@ -611,8 +641,8 @@ class XOR(LogicInstruction):
 class CompareInstruction(Instruction): pass
 class TEST(CompareInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
-        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
         first, second = self.operands()
         il.append(
             il.set_flag(
@@ -625,8 +655,8 @@ class CMP(CompareInstruction):
     def width(self) -> int:
         return 1
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
-        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
         first, second = self.operands()
         il.append(
             il.sub(
@@ -671,7 +701,7 @@ class DecimalShiftInstruction(Instruction):
         assert isinstance(imem_op, IMem8), f"{self.__class__.__name__} operand should be IMem8, got {type(imem_op)}"
 
         current_addr_reg = TempReg(TempMultiByte1, width=3)
-        mode = get_addressing_mode(self._pre, 1) if self._pre else None
+        mode = get_addressing_mode(self._pre, 1)
         current_addr_reg.lift_assign(
             il, imem_op.lift_current_addr(il, pre=mode, side_effects=False)
         )
@@ -685,7 +715,8 @@ class DecimalShiftInstruction(Instruction):
         mem_accessor = IMemHelper(width=1, value=current_addr_reg)
 
         with lift_loop(il):
-            current_byte_T = mem_accessor.lift(il)
+            # Use AddressingMode.N since current_addr_reg already contains the final address
+            current_byte_T = mem_accessor.lift(il, pre=AddressingMode.N)
 
             T_low_nibble = il.and_expr(1, current_byte_T, il.const(1, 0x0F))
             T_high_nibble = il.logical_shift_right(1, current_byte_T, il.const(1, 4))
@@ -702,7 +733,8 @@ class DecimalShiftInstruction(Instruction):
                 addr_update = il.add(3, current_addr_reg.lift(il), il.const(3, 1))
 
             shifted_byte_S = il.or_expr(1, shift_part, carry_part)
-            mem_accessor.lift_assign(il, shifted_byte_S)
+            # Use AddressingMode.N since current_addr_reg already contains the final address
+            mem_accessor.lift_assign(il, shifted_byte_S, pre=AddressingMode.N)
             digit_carry_reg.lift_assign(il, next_carry)
 
             overall_zero_acc_reg.lift_assign(

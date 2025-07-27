@@ -153,10 +153,13 @@ SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
 }
 
 
-def get_addressing_mode(pre_value: int, operand_index: int) -> AddressingMode:
+def get_addressing_mode(pre_value: Optional[int], operand_index: int) -> AddressingMode:
     """
     Returns the addressing mode for the given PRE byte and operand index (1 or 2).
+    If pre_value is None, returns BP_N as the default addressing mode.
     """
+    if pre_value is None:
+        return AddressingMode.BP_N
     try:
         return PRE_TABLE[operand_index][pre_value]
     except KeyError:
@@ -683,8 +686,8 @@ class Instruction:
         return reversed(ops)
 
     def render(self) -> List[Token]:
-        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
-        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
 
         tokens: List[Token] = [TInstr(self.name())]
         if len(self._operands) > 0:
@@ -702,8 +705,8 @@ class Instruction:
         info.length += self.length()
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst_mode = get_addressing_mode(self._pre, 1) if self._pre else None
-        src_mode = get_addressing_mode(self._pre, 2) if self._pre else None
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
 
         operands = tuple(self.operands())
         if len(operands) == 0:
@@ -908,9 +911,13 @@ class IMemHelper(Operand):
         return self._width
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
+        # Convert None to BP_N for consistent behavior
+        if pre is None:
+            pre = AddressingMode.BP_N
+            
         result: List[Token] = [TBegMem(MemType.INTERNAL)]
         match pre:
-            case None | AddressingMode.N:
+            case AddressingMode.N:
                 result.extend(self.value.render())
             case AddressingMode.BP_N:
                 result.append(TText("BP"))
@@ -945,6 +952,10 @@ class IMemHelper(Operand):
         return il.load(1, il.const_pointer(3, INTERNAL_MEMORY_START + addr))
 
     def _imem_offset(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
+        # Convert None to BP_N for consistent behavior
+        if pre is None:
+            pre = AddressingMode.BP_N
+            
         n_val: int = 0
         if isinstance(self.value, ImmOperand):
             if self.value.value is not None:
@@ -956,7 +967,7 @@ class IMemHelper(Operand):
         n_lifted = il.const(1, n_val)
 
         match pre:
-            case None | AddressingMode.N:
+            case AddressingMode.N:
                 return n_lifted
             case AddressingMode.BP_N:
                 return il.add(1, self._reg_value("BP", il), n_lifted)
@@ -972,16 +983,20 @@ class IMemHelper(Operand):
                 raise NotImplementedError(f"Unknown addressing mode {pre}")
 
     def imem_addr(self, il: LowLevelILFunction, pre: Optional[AddressingMode]) -> ExpressionIndex:
+        # Convert None to BP_N for consistent behavior
+        if pre is None:
+            pre = AddressingMode.BP_N
+            
         if isinstance(self.value, TempReg):
-            if pre is None or pre == AddressingMode.N:
+            if pre == AddressingMode.N:
                 # The register is assumed to hold the complete address.
                 return self.value.lift(il)
 
         if isinstance(self.value, Reg):
-            if pre is None or pre == AddressingMode.N:
+            if pre == AddressingMode.N:
                 return il.add(3, self.value.lift(il), il.const(3, INTERNAL_MEMORY_START))
 
-        if isinstance(self.value, ImmOperand) and (pre is None or pre == AddressingMode.N):
+        if isinstance(self.value, ImmOperand) and pre == AddressingMode.N:
             assert self.value.value is not None, "Value not set"
             raw_addr = INTERNAL_MEMORY_START + self.value.value
             return il.const_pointer(3, raw_addr)

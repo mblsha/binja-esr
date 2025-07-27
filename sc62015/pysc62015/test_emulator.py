@@ -374,7 +374,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0xA0: 0xDE,
             INTERNAL_MEMORY_START + 0x50: 0xAD,  # Should remain unchanged
         },
-        expected_asm_str="MVL   (50), (A0)",
+        expected_asm_str="MVL   (BP+50), (BP+A0)",
     ),
     InstructionTestCase(
         test_id="MVL_imem_overlap_fwd_clobber",
@@ -394,7 +394,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x52: 0xAA,
             INTERNAL_MEMORY_START + 0x53: 0xAA,
         },
-        expected_asm_str="MVL   (51), (50)",
+        expected_asm_str="MVL   (BP+51), (BP+50)",
     ),
     InstructionTestCase(
         test_id="MVLD_imem_overlap_bwd_correct",
@@ -414,7 +414,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x50: 0xBB,
             INTERNAL_MEMORY_START + 0x4F: 0xCC,
         },
-        expected_asm_str="MVLD  (51), (50)",
+        expected_asm_str="MVLD  (BP+51), (BP+50)",
     ),
     InstructionTestCase(
         test_id="MVL_imem_to_imem_wrap_around",
@@ -433,7 +433,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x00: 0x33,
             INTERNAL_MEMORY_START + 0x01: 0x44,
         },
-        expected_asm_str="MVL   (FE), (F0)",
+        expected_asm_str="MVL   (BP+FE), (BP+F0)",
     ),
     InstructionTestCase(
         test_id="MVL_(imem)_[--X]",
@@ -454,7 +454,136 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x52: 0xEF,
             INTERNAL_MEMORY_START + 0x51: 0xBE,
         },
-        expected_asm_str="MVL   (52), [--X]",
+        expected_asm_str="MVL   (BP+52), [--X]",
+    ),
+    InstructionTestCase(
+        test_id="MVL_(02)_[--X]_I5_X2000",
+        instr_bytes=bytes.fromhex("E33402"),  # MVL (02), [--X]
+        init_regs={
+            RegisterName.I: 5,
+            RegisterName.X: 0x2000,  # X points to address 2000
+        },
+        init_mem={
+            # Source data at external memory (will be read from addresses 1FFB-1FFF due to pre-decrement)
+            0x1FFB: 0x55,
+            0x1FFC: 0x11,
+            0x1FFD: 0x22,
+            0x1FFE: 0x33,
+            0x1FFF: 0x44,
+        },
+        expected_regs={
+            RegisterName.I: 0,
+            RegisterName.X: 0x1FFB,  # X decremented by 5
+        },
+        expected_mem_state={
+            # MVL with pre-decrement source causes destination to decrement too
+            # Writes go to: 0x02, 0x01, 0x00, 0xFF, 0xFE (wrapped)
+            INTERNAL_MEMORY_START + 0x02: 0x44,  # First byte from 0x1FFF
+            INTERNAL_MEMORY_START + 0x01: 0x33,  # Second byte from 0x1FFE
+            INTERNAL_MEMORY_START + 0x00: 0x22,  # Third byte from 0x1FFD
+            INTERNAL_MEMORY_START + 0xFF: 0x11,  # Fourth byte from 0x1FFC (wrapped from -1)
+            INTERNAL_MEMORY_START + 0xFE: 0x55,  # Fifth byte from 0x1FFB (wrapped from -2)
+        },
+        expected_asm_str="MVL   (BP+02), [--X]",
+    ),
+    InstructionTestCase(
+        test_id="MVL_(FE)_(50)_I5_wrap",
+        instr_bytes=bytes.fromhex("CBFE50"),  # MVL (FE), (50) - no PRE, both use BP_N by default
+        init_regs={
+            RegisterName.I: 5,
+        },
+        init_mem={
+            # Source data at internal memory starting at BP+50
+            INTERNAL_MEMORY_START + 0x50: 0xAA,
+            INTERNAL_MEMORY_START + 0x51: 0xBB,
+            INTERNAL_MEMORY_START + 0x52: 0xCC,
+            INTERNAL_MEMORY_START + 0x53: 0xDD,
+            INTERNAL_MEMORY_START + 0x54: 0xEE,
+        },
+        expected_regs={
+            RegisterName.I: 0,
+        },
+        expected_mem_state={
+            # MVL copies from (BP+50) to (BP+FE) with incrementing addresses
+            # Destination addresses: 0xFE, 0xFF, 0x00 (wrapped), 0x01, 0x02
+            INTERNAL_MEMORY_START + 0xFE: 0xAA,  # From BP+50
+            INTERNAL_MEMORY_START + 0xFF: 0xBB,  # From BP+51
+            INTERNAL_MEMORY_START + 0x00: 0xCC,  # From BP+52 (wrapped from 0x100)
+            INTERNAL_MEMORY_START + 0x01: 0xDD,  # From BP+53 (wrapped from 0x101)
+            INTERNAL_MEMORY_START + 0x02: 0xEE,  # From BP+54 (wrapped from 0x102)
+            # Source data remains unchanged
+            INTERNAL_MEMORY_START + 0x50: 0xAA,
+            INTERNAL_MEMORY_START + 0x51: 0xBB,
+            INTERNAL_MEMORY_START + 0x52: 0xCC,
+            INTERNAL_MEMORY_START + 0x53: 0xDD,
+            INTERNAL_MEMORY_START + 0x54: 0xEE,
+        },
+        expected_asm_str="MVL   (BP+FE), (BP+50)",
+    ),
+    InstructionTestCase(
+        test_id="MVL_(00)_[--X]_BP2_I3",
+        instr_bytes=bytes.fromhex("E33400"),  # MVL (00), [--X] with BP=2
+        init_regs={
+            RegisterName.I: 3,
+            RegisterName.X: 0x2000,
+        },
+        init_mem={
+            # BP register at internal memory
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x02,  # BP = 2
+            # Source data at external memory
+            0x1FFD: 0x11,
+            0x1FFE: 0x22,
+            0x1FFF: 0x33,
+        },
+        expected_regs={
+            RegisterName.I: 0,
+            RegisterName.X: 0x1FFD,  # X decremented by 3
+        },
+        expected_mem_state={
+            # BP=2, so (BP+00) = address 0x02
+            # MVL with pre-decrement source causes destination to decrement too
+            # Writes go to: 0x02, 0x01, 0x00
+            INTERNAL_MEMORY_START + 0x02: 0x33,  # From 0x1FFF
+            INTERNAL_MEMORY_START + 0x01: 0x22,  # From 0x1FFE
+            INTERNAL_MEMORY_START + 0x00: 0x11,  # From 0x1FFD
+            # BP remains unchanged
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x02,
+        },
+        expected_asm_str="MVL   (BP+00), [--X]",
+    ),
+    InstructionTestCase(
+        test_id="MVL_(00)_(50)_BP_FE_I3",
+        instr_bytes=bytes.fromhex("CB0050"),  # MVL (00), (50) with BP=0xFE
+        init_regs={
+            RegisterName.I: 3,
+        },
+        init_mem={
+            # BP register at internal memory
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xFE,  # BP = 0xFE
+            # Source data at internal memory (BP+50)
+            # With BP=0xFE, (BP+50) = 0xFE + 0x50 = 0x14E, wrapped to 0x4E
+            INTERNAL_MEMORY_START + 0x4E: 0xAA,
+            INTERNAL_MEMORY_START + 0x4F: 0xBB,
+            INTERNAL_MEMORY_START + 0x50: 0xCC,
+        },
+        expected_regs={
+            RegisterName.I: 0,
+        },
+        expected_mem_state={
+            # BP=0xFE, so (BP+00) = address 0xFE
+            # MVL copies from (BP+50) to (BP+00) with incrementing addresses
+            # Source: 0x4E, 0x4F, 0x50
+            # Destination: 0xFE, 0xFF, 0x00 (wrapped)
+            INTERNAL_MEMORY_START + 0xFE: 0xAA,  # From BP+50 (0x4E)
+            INTERNAL_MEMORY_START + 0xFF: 0xBB,  # From BP+51 (0x4F)
+            INTERNAL_MEMORY_START + 0x00: 0xCC,  # From BP+52 (0x50), wrapped from 0x100
+            # Source and BP remain unchanged
+            INTERNAL_MEMORY_START + 0x4E: 0xAA,
+            INTERNAL_MEMORY_START + 0x4F: 0xBB,
+            INTERNAL_MEMORY_START + 0x50: 0xCC,
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xFE,
+        },
+        expected_asm_str="MVL   (BP+00), (BP+50)",
     ),
     # --- SHL/SHR Instructions ---
     # SHL A (0xF6)
@@ -510,7 +639,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0xAA)],
         expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0xAA},
         expected_regs={RegisterName.FC: 0, RegisterName.FZ: 0},
-        expected_asm_str="SHL   (10)",
+        expected_asm_str="SHL   (BP+10)",
     ),
     InstructionTestCase(
         test_id="SHL_mem_carry_out_and_zero",
@@ -520,7 +649,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
         expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
-        expected_asm_str="SHL   (10)",
+        expected_asm_str="SHL   (BP+10)",
     ),
     # SHR (n) (0xF5)
     InstructionTestCase(
@@ -531,7 +660,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x2A)],
         expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x2A},
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 0},
-        expected_asm_str="SHR   (10)",
+        expected_asm_str="SHR   (BP+10)",
     ),
     InstructionTestCase(
         test_id="SHR_mem_carry_out_and_zero",
@@ -541,7 +670,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
         expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
-        expected_asm_str="SHR   (10)",
+        expected_asm_str="SHR   (BP+10)",
     ),
 ]
 
@@ -1072,7 +1201,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x34,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="ADCL  (10), (20)",
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x46],  # 0x12 + 0x34 = 0x46
         expected_I_after=0,
@@ -1087,7 +1216,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x34,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 1},
-        expected_asm_str="ADCL  (10), (20)",
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x47],  # 0x12 + 0x34 + 1 = 0x47
         expected_I_after=0,
@@ -1102,7 +1231,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x20,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="ADCL  (10), (20)",
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x10],  # 0xF0 + 0x20 = 0x110 -> 0x10
         expected_I_after=0,
@@ -1117,7 +1246,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x56,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="ADCL  (10), (20)",
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x00],  # 0xAA + 0x56 = 0x100 -> 0x00
         expected_I_after=0,
@@ -1134,7 +1263,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x21: 0x02,  # (n)
         },
         init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
-        expected_asm_str="ADCL  (10), (20)",
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0: 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
         # Byte 1: 0x01 + 0x02 + 1 = 0x04  -> mem[0x11]=0x04, FC=0
@@ -1153,7 +1282,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x21: 0x00,  # (n)
         },
         init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
-        expected_asm_str="ADCL  (10), (20)",
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0: 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
         # Byte 1: 0xFF + 0x00 + 1 = 0x100 -> mem[0x11]=0x00, FC=1
@@ -1172,7 +1301,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             RegisterName.I: 1,
             RegisterName.FC: 0,
         },
-        expected_asm_str="ADCL  (10), A",
+        expected_asm_str="ADCL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x46],  # 0x12 + 0x34 = 0x46
         expected_I_after=0,
@@ -1191,7 +1320,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },
-        expected_asm_str="ADCL  (10), A",
+        expected_asm_str="ADCL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0: mem[0x10]=0xFF, A=0x01. 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
         # Byte 1: mem[0x11]=0x01, A=0x01. 0x01 + 0x01 + 1 = 0x03  -> mem[0x11]=0x03, FC=0
@@ -1276,7 +1405,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x34,
         },  # BCD 12, BCD 34
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="DADL  (10), (20)",
+        expected_asm_str="DADL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START
         + 0x10,  # Addr (10) is used as is (LSB)
         expected_m_values_after=[0x46],  # BCD 12 + BCD 34 = BCD 46
@@ -1292,7 +1421,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x05,
         },  # BCD 05, BCD 05
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="DADL  (10), (20)",
+        expected_asm_str="DADL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x10],  # BCD 05 + BCD 05 = BCD 10
         expected_I_after=0,
@@ -1307,7 +1436,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x50,
         },  # BCD 50, BCD 50
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="DADL  (10), (20)",
+        expected_asm_str="DADL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x00],  # BCD 50 + BCD 50 = BCD 100 -> 00, C=1
         expected_I_after=0,
@@ -1329,7 +1458,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x02,  # (n) = BCD 0250
         },
         init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
-        expected_asm_str="DADL  (11), (21)",
+        expected_asm_str="DADL  (BP+11), (BP+21)",
         expected_m_addr_start=INTERNAL_MEMORY_START
         + 0x10,  # Start address for verification of written (m)
         # Byte 0 (LSB, addrs 0x11, 0x21): 0x50 + 0x50 + 0 = BCD 100 -> mem[0x11]=0x00, FC=1
@@ -1349,7 +1478,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
             RegisterName.I: 1,
             RegisterName.FC: 0,
         },  # A = BCD 34
-        expected_asm_str="DADL  (10), A",
+        expected_asm_str="DADL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x46],  # BCD 12 + BCD 34 = BCD 46
         expected_I_after=0,
@@ -1368,7 +1497,7 @@ dadl_test_cases: List[AdclDadlTestCase] = [
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },  # A = BCD 01
-        expected_asm_str="DADL  (11), A",
+        expected_asm_str="DADL  (BP+11), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # Start for verification
         # Byte 0 (LSB, addr 0x11): mem[0x11]=0x99, A=0x01. BCD 99 + BCD 01 + 0 = BCD 100 -> mem[0x11]=0x00, FC=1
         # Byte 1 (MSB, addr 0x10): mem[0x10]=0x01, A=0x01. BCD 01 + BCD 01 + 1 = BCD 03  -> mem[0x10]=0x03, FC=0
@@ -1472,7 +1601,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x22,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="SBCL  (10), (20)",
+        expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # LSB address
         expected_m_values_after=[0x33],  # 0x55 - 0x22 - 0 = 0x33
         expected_I_after=0,
@@ -1487,7 +1616,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x22,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Borrow In
-        expected_asm_str="SBCL  (10), (20)",
+        expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x32],  # 0x55 - 0x22 - 1 = 0x32
         expected_I_after=0,
@@ -1502,7 +1631,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x20,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="SBCL  (10), (20)",
+        expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0xF0],  # 0x10 - 0x20 - 0 = 0xF0 (borrow)
         expected_I_after=0,
@@ -1517,7 +1646,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x20,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="SBCL  (10), (20)",
+        expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x00],  # 0x20 - 0x20 - 0 = 0x00
         expected_I_after=0,
@@ -1537,7 +1666,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },  # No initial borrow
-        expected_asm_str="SBCL  (10), (20)",
+        expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # LSB addr of (m)
         # Byte 0 (LSB, addrs 0x10, 0x20): m[0x10]=0x00, n[0x20]=0x01. 0x00 - 0x01 - 0 = 0xFF. mem[0x10]=0xFF, FC=1 (borrow)
         # Byte 1 (MSB, addrs 0x11, 0x21): m[0x11]=0x50, n[0x21]=0x20. 0x50 - 0x20 - 1(borrow_in) = 0x2F. mem[0x11]=0x2F, FC=0
@@ -1559,7 +1688,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             RegisterName.I: 2,
             RegisterName.FC: 1,
         },  # Initial Borrow In (e.g. from 0 - 0 - 1)
-        expected_asm_str="SBCL  (10), (20)",
+        expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0: 0x00 - 0x00 - 1 = 0xFF. mem[0x10]=0xFF, FC=1
         # Byte 1: 0x00 - 0x00 - 1 = 0xFF. mem[0x11]=0xFF, FC=1
@@ -1578,7 +1707,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             RegisterName.I: 1,
             RegisterName.FC: 0,
         },
-        expected_asm_str="SBCL  (10), A",
+        expected_asm_str="SBCL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x55],  # 0xAA - 0x55 - 0 = 0x55
         expected_I_after=0,
@@ -1597,7 +1726,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },
-        expected_asm_str="SBCL  (10), A",
+        expected_asm_str="SBCL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0 (LSB, m_addr 0x10): m[0x10]=0x00, A=0x01. 0x00 - 0x01 - 0 = 0xFF. mem[0x10]=0xFF, FC=1
         # Byte 1 (MSB, m_addr 0x11): m[0x11]=0x30, A=0x01. 0x30 - 0x01 - 1 = 0x2E. mem[0x11]=0x2E, FC=0
@@ -1680,7 +1809,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x22,  # BCD 22 for (n)
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},  # No borrow in
-        expected_asm_str="DSBL  (10), (20)",
+        expected_asm_str="DSBL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START
         + 0x10,  # MSB (and LSB in this case) address of (m)
         expected_m_values_after=[0x33],  # BCD 55 - BCD 22 = BCD 33
@@ -1696,7 +1825,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x22,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Borrow In
-        expected_asm_str="DSBL  (10), (20)",
+        expected_asm_str="DSBL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x32],  # BCD 55 - BCD 22 - 1 = BCD 32
         expected_I_after=0,
@@ -1711,7 +1840,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x05,  # BCD 05
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="DSBL  (10), (20)",
+        expected_asm_str="DSBL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x18],  # BCD 23 - BCD 05 = BCD 18
         expected_I_after=0,
@@ -1726,7 +1855,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x20,  # BCD 20
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="DSBL  (10), (20)",
+        expected_asm_str="DSBL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[
             0x90
@@ -1743,7 +1872,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x25,
         },
         init_register_state={RegisterName.I: 1, RegisterName.FC: 0},
-        expected_asm_str="DSBL  (10), (20)",
+        expected_asm_str="DSBL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x00],  # BCD 25 - BCD 25 = BCD 00
         expected_I_after=0,
@@ -1762,7 +1891,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x20: 0x00,  # MSB of (n) -> (n) = BCD 0001
         },
         init_register_state={RegisterName.I: 2, RegisterName.FC: 0},
-        expected_asm_str="DSBL  (11), (21)",
+        expected_asm_str="DSBL  (BP+11), (BP+21)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # MSB addr of (m)
         # Byte 0 (LSB, m_addr 0x11, n_addr 0x21): m[0x11]=0x00, n[0x21]=0x01. BCD 00 - BCD 01 - 0 = BCD 99. mem[0x11]=0x99, FC_out=1 (borrow)
         # Byte 1 (MSB, m_addr 0x10, n_addr 0x20): m[0x10]=0x20, n[0x20]=0x00. BCD 20 - BCD 00 - 1(borrow_in) = BCD 19. mem[0x10]=0x19, FC_out=0
@@ -1781,7 +1910,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             RegisterName.I: 1,
             RegisterName.FC: 0,
         },
-        expected_asm_str="DSBL  (10), A",
+        expected_asm_str="DSBL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x66],  # BCD 78 - BCD 12 = BCD 66
         expected_I_after=0,
@@ -1800,7 +1929,7 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },
-        expected_asm_str="DSBL  (11), A",
+        expected_asm_str="DSBL  (BP+11), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # MSB addr of (m)
         # Byte 0 (LSB, m_addr 0x11): m[0x11]=0x00, A=0x01. BCD 00 - BCD 01 - 0 = BCD 99. mem[0x11]=0x99, FC_out=1
         # Byte 1 (MSB, m_addr 0x10): m[0x10]=0x01, A=0x01. BCD 01 - BCD 01 - 1 = BCD 99. mem[0x10]=0x99, FC_out=1
@@ -2131,8 +2260,8 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
     ), f"Test '{tc.test_id}': Failed to decode instruction"
 
     expected_mnemonic = "DSLL " if tc.is_dsll else "DSRL "
-    # Assuming IMem8 is rendered as (XX)
-    expected_asm_str = f"{expected_mnemonic:6s}({tc.instr_operand_n_val:02X})"
+    # Assuming IMem8 is rendered as (BP+XX)
+    expected_asm_str = f"{expected_mnemonic:6s}(BP+{tc.instr_operand_n_val:02X})"
     actual_asm_str = asm_str(decoded_instr.render())
 
     assert (
