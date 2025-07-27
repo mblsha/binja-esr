@@ -58,6 +58,7 @@ class SC62015(Architecture):
         "TCL": IntrinsicInfo(inputs=[], outputs=[]),
         "HALT": IntrinsicInfo(inputs=[], outputs=[]),
         "OFF": IntrinsicInfo(inputs=[], outputs=[]),
+        "RESET": IntrinsicInfo(inputs=[], outputs=[]),
     }
 
     def get_instruction_info(self, data, addr):
