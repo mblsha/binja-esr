@@ -27,6 +27,7 @@ from .instr import (
     HALT,
     OFF,
     IR,
+    InvalidInstruction,
 )
 from .instr import decode as decode_instr
 from .constants import INTERNAL_MEMORY_START
@@ -1018,13 +1019,24 @@ def test_compare_opcodes() -> None:
 
         # test that no assertions are raised
         info = MockAnalysisInfo()
-        instr.analyze(info, 0x1234)
-        assert info.length == len(b), f"Failed at line {i+1}: {s}"
+        try:
+            instr.analyze(info, 0x1234)
+            assert info.length == len(b), f"Failed at line {i+1}: {s}"
+        except InvalidInstruction:
+            # Skip unfused PRE instructions - they're invalid on their own
+            if isinstance(instr, PRE):
+                continue
+            raise
 
         try:
             # test that no assertions are raised
             il = MockLowLevelILFunction()
             instr.lift(il, 0x1234)
+        except InvalidInstruction:
+            # Skip unfused PRE instructions - they're invalid on their own
+            if isinstance(instr, PRE):
+                continue
+            raise
         except Exception as exc:
             raise ValueError(f"Failed to lift {b.hex()} at line {i+1}: {s}") from exc
 

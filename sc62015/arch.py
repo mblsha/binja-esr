@@ -68,7 +68,7 @@ class SC62015(Architecture):
                 info = InstructionInfo()
                 decoded.analyze(info, addr)
                 return info
-        except (AssertionError, InvalidInstruction) as exc:
+        except (AssertionError, InvalidInstruction):
             # Invalid instruction encoding, return None to mark as data
             return None
         except Exception as exc:
