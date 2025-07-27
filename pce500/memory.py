@@ -87,9 +87,13 @@ class PCE500Memory:
             # Internal 256-byte RAM
             offset = address - 0x100000
             if offset < 0x100:
-                # For now, return 0xFF as PC-E500 doesn't use this memory
-                return 0xFF
-            return 0xFF
+                # Map internal memory to existing internal_ram storage (reuse existing array)
+                # Internal memory (256 bytes) maps to the end of internal_ram
+                internal_ram_offset = len(self.internal_ram) - 256 + offset
+                if internal_ram_offset >= 0:
+                    return self.internal_ram[internal_ram_offset]
+                raise ValueError(f"Internal memory mapping error: negative offset {internal_ram_offset} for address 0x{address:06X}")
+            raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
         
         # Internal ROM (0xC0000-0xFFFFF)
         if 0xC0000 <= address <= 0xFFFFF:
@@ -141,8 +145,17 @@ class PCE500Memory:
             # Internal 256-byte RAM
             offset = address - 0x100000
             if offset < 0x100:
-                # For now, ignore writes as PC-E500 doesn't use this memory
-                if self.perfetto_enabled:
+                # Map internal memory to existing internal_ram storage (reuse existing array)
+                # Internal memory (256 bytes) maps to the end of internal_ram
+                internal_ram_offset = len(self.internal_ram) - 256 + offset
+                if internal_ram_offset >= 0:
+                    self.internal_ram[internal_ram_offset] = value
+                else:
+                    raise ValueError(f"Internal memory mapping error: negative offset {internal_ram_offset} for address 0x{address:06X}")
+            else:
+                raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
+                
+            if self.perfetto_enabled:
                     # Get current BP value from internal memory if CPU is available
                     bp_value = "N/A"
                     if self.cpu:
