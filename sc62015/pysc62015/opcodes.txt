@@ -571,6 +571,7 @@ AF070707: MV    [70707],S
 B004: MV    [X],A
 B005: MV    [Y],A
 B007: MV    [S],A
+B025: MV    [Y++],A
 B107: MV    [S],IL
 B207: MV    [S],BA
 B307: MV    [S],I

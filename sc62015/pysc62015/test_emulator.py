@@ -227,6 +227,36 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MV    A, [00010]",
     ),
     InstructionTestCase(
+        test_id="MV_[Y++]_A", 
+        instr_bytes=bytes.fromhex("B025"),
+        init_regs={
+            RegisterName.A: 0x42,
+            RegisterName.Y: 0x1000,
+        },
+        expected_regs={
+            RegisterName.A: 0x42,  # A unchanged
+            RegisterName.Y: 0x1001,  # Y incremented by 1 (data width for A)
+        },
+        expected_mem_writes=[(0x1000, 0x42)],  # Write happens at Y, then increment
+        expected_mem_state={0x1000: 0x42},
+        expected_asm_str="MV    [Y++], A",
+    ),
+    InstructionTestCase(
+        test_id="MV_[Y++]_BA",
+        instr_bytes=bytes.fromhex("B225"),  # B2 is MV [EMemReg], BA
+        init_regs={
+            RegisterName.BA: 0x1234,
+            RegisterName.Y: 0x2000,
+        },
+        expected_regs={
+            RegisterName.BA: 0x1234,  # BA unchanged
+            RegisterName.Y: 0x2002,  # Y incremented by 2 (data width for BA)
+        },
+        expected_mem_writes=[(0x2000, 0x34), (0x2001, 0x12)],  # Write BA at Y, then increment
+        expected_mem_state={0x2000: 0x34, 0x2001: 0x12},
+        expected_asm_str="MV    [Y++], BA",
+    ),
+    InstructionTestCase(
         test_id="JP_preserves_flags",
         instr_bytes=bytes.fromhex("023412"),
         init_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
