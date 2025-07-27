@@ -5,6 +5,12 @@ from dataclasses import dataclass
 
 from .trace_manager import g_tracer
 
+# Import constants for accessing internal memory registers
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
+
 
 @dataclass
 class MemoryRegion:
@@ -38,6 +44,9 @@ class PCE500Memory:
         
         # Perfetto tracing
         self.perfetto_enabled = False
+        
+        # Reference to CPU emulator for accessing internal memory registers
+        self.cpu = None
         
     def load_rom(self, rom_data: bytes) -> None:
         """Load internal ROM."""
@@ -134,11 +143,29 @@ class PCE500Memory:
             if offset < 0x100:
                 # For now, ignore writes as PC-E500 doesn't use this memory
                 if self.perfetto_enabled:
+                    # Get current BP value from internal memory if CPU is available
+                    bp_value = "N/A"
+                    if self.cpu:
+                        try:
+                            bp_addr = INTERNAL_MEMORY_START + IMEMRegisters.BP
+                            bp_value = f"0x{self.cpu.memory.read_byte(bp_addr):02X}"
+                        except Exception:
+                            bp_value = "N/A"
+                    
+                    # Check if this offset corresponds to a known internal memory register
+                    imem_name = "N/A"
+                    for reg_name in IMEMRegisters.__members__:
+                        if IMEMRegisters[reg_name].value == offset:
+                            imem_name = reg_name
+                            break
+                    
                     g_tracer.trace_instant("Memory_Internal", "CPU_Internal_Write", {
                         "addr": f"0x{address:06X}",
                         "offset": f"0x{offset:02X}",
                         "value": f"0x{value:02X}",
-                        "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
+                        "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A",
+                        "bp": bp_value,
+                        "imem_name": imem_name
                     })
             return
         
@@ -279,6 +306,10 @@ class PCE500Memory:
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing."""
         self.perfetto_enabled = enabled
+        
+    def set_cpu(self, cpu) -> None:
+        """Set reference to CPU emulator for accessing internal memory registers."""
+        self.cpu = cpu
 
 
 # Backward compatibility aliases
