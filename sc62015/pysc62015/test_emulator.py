@@ -676,6 +676,14 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
         expected_asm_str="SHR   (BP+10)",
     ),
+    # --- MV Instruction for Internal Memory Register ---
+    InstructionTestCase(
+        test_id="MV_BP_register_immediate",
+        instr_bytes=bytes.fromhex("30ccecc2"),
+        init_mem={INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x00},  # Initial BP = 0x00
+        expected_mem_state={INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xC2},  # BP = 0xC2
+        expected_asm_str="MV    (EC), C2",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
