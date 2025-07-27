@@ -168,3 +168,105 @@ class TestSimplifiedEmulator:
         assert stats['elapsed_time'] >= 0
         assert stats['instructions_per_second'] == 0
         assert stats['speed_ratio'] == 0
+        
+    def test_mv_bp_register_instruction_execution(self):
+        """Test MV (EC), C2 instruction execution - opcode 30ccecc2."""
+        from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
+        
+        emu = PCE500Emulator(perfetto_trace=True)
+        
+        # Setup ROM with the MV (EC), C2 instruction (opcode: 30ccecc2)
+        rom_data = bytearray(256 * 1024)
+        opcode_bytes = bytes.fromhex('30ccecc2')
+        for i, byte in enumerate(opcode_bytes):
+            rom_data[i] = byte
+        emu.load_rom(bytes(rom_data))
+        
+        # Set PC to start of ROM
+        initial_pc = 0xC0000
+        emu.cpu.regs.set(RegisterName.PC, initial_pc)
+        
+        # Verify instruction is correctly loaded in ROM
+        for i, expected_byte in enumerate(opcode_bytes):
+            actual_byte = emu.memory.read_byte(initial_pc + i)
+            assert actual_byte == expected_byte, f"ROM byte {i}: expected 0x{expected_byte:02X}, got 0x{actual_byte:02X}"
+        
+        # Decode instruction to verify it's correct
+        instr = emu.cpu.decode_instruction(initial_pc)
+        assert instr is not None, "Failed to decode instruction"
+        
+        # Test BP value reading using both memory access methods
+        bp_addr = INTERNAL_MEMORY_START + IMEMRegisters.BP
+        
+        # Check initial BP values via both methods
+        initial_bp_via_memory = emu.memory.read_byte(bp_addr)
+        initial_bp_via_cpu = emu.cpu.memory.read_byte(bp_addr)
+        assert initial_bp_via_memory == initial_bp_via_cpu, f"Both methods should give same initial value: memory={initial_bp_via_memory:02X}, cpu={initial_bp_via_cpu:02X}"
+        
+        # Get initial state
+        initial_reads = emu.memory_read_count
+        initial_writes = emu.memory_write_count
+        
+        # Execute the instruction
+        result = emu.step()
+        
+        # Verify execution completed successfully
+        assert result is True, "Instruction execution should continue (not hit breakpoint)"
+        
+        # Verify PC advanced by instruction length (4 bytes)
+        final_pc = emu.cpu.regs.get(RegisterName.PC)
+        assert final_pc == initial_pc + 4, f"PC should advance by 4 bytes: expected 0x{initial_pc + 4:06X}, got 0x{final_pc:06X}"
+        
+        # Check final BP values via both methods
+        final_bp_via_memory = emu.memory.read_byte(bp_addr)
+        final_bp_via_cpu = emu.cpu.memory.read_byte(bp_addr)
+        assert final_bp_via_memory == final_bp_via_cpu, f"Both methods should give same final value: memory={final_bp_via_memory:02X}, cpu={final_bp_via_cpu:02X}"
+        
+        # Verify that BP value correctly changed to 0xC2 (the immediate value from the MV instruction)
+        assert final_bp_via_memory == 0xC2, f"BP should be 0xC2 after MV (EC), C2 instruction, got 0x{final_bp_via_memory:02X}"
+        assert final_bp_via_cpu == 0xC2, f"BP should be 0xC2 via cpu.memory access, got 0x{final_bp_via_cpu:02X}"
+        
+        # Verify memory operations occurred
+        assert emu.memory_read_count > initial_reads, "Should have read memory during instruction fetch"
+        assert emu.memory_write_count > initial_writes, "Should have attempted memory write for MV instruction"
+        
+        # Note: The BP register value correctly changes because PCE500Memory now properly
+        # maps SC62015 internal memory to existing storage (reusing internal_ram array)
+        # This allows the MV instruction to write to internal memory registers successfully
+        
+        # Verify instruction count incremented
+        assert emu.instruction_count == 1, "Instruction count should increment"
+        
+    def test_mv_bp_register_with_sc62015_direct(self):
+        """Test MV (EC), C2 with SC62015 emulator directly to verify BP value changes."""
+        from sc62015.pysc62015.test_emulator import _make_cpu_and_mem
+        from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
+        from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+        
+        # Create SC62015 emulator with the MV instruction
+        opcode_bytes = bytes.fromhex('30ccecc2')
+        init_mem = {INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x00}  # Initial BP = 0x00
+        
+        cpu, raw, reads, writes = _make_cpu_and_mem(
+            size=ADDRESS_SPACE_SIZE,
+            init_data=init_mem,
+            instr_bytes=opcode_bytes,
+            instr_addr=0x1000
+        )
+        
+        # Verify initial BP value
+        bp_addr = INTERNAL_MEMORY_START + IMEMRegisters.BP
+        initial_bp = raw[bp_addr]
+        assert initial_bp == 0x00, f"Initial BP should be 0x00, got 0x{initial_bp:02X}"
+        
+        # Set PC and execute instruction
+        cpu.regs.set(RegisterName.PC, 0x1000)
+        cpu.execute_instruction(0x1000)
+        
+        # Verify BP value changed to 0xC2
+        final_bp = raw[bp_addr]
+        assert final_bp == 0xC2, f"BP should be 0xC2 after instruction, got 0x{final_bp:02X}"
+        
+        # Verify PC advanced correctly
+        final_pc = cpu.regs.get(RegisterName.PC)
+        assert final_pc == 0x1004, f"PC should advance to 0x1004, got 0x{final_pc:04X}"
