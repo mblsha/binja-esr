@@ -98,6 +98,9 @@ class PCE500Emulator:
         # Create CPU emulator with our memory
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         
+        # Give memory access to CPU for accessing internal registers
+        self.memory.set_cpu(self.cpu)
+        
         # After power-on reset, set PC to entry point (not reset vector)
         # The reset vector at 0xFFFFA is only used for RESET instruction
         # Normal startup uses entry point at 0xFFFFD
