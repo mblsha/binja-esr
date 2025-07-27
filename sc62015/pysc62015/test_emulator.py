@@ -684,6 +684,187 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_state={INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xC2},  # BP = 0xC2
         expected_asm_str="MV    (EC), C2",
     ),
+    # --- AND Instructions ---
+    # 0x70: AND A, imm8
+    InstructionTestCase(
+        test_id="AND_A_imm_zero_result",
+        instr_bytes=bytes.fromhex("7000"),  # AND A, 00
+        init_regs={RegisterName.A: 0xFF, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="AND   A, 00",
+    ),
+    InstructionTestCase(
+        test_id="AND_A_imm_non_zero_result",
+        instr_bytes=bytes.fromhex("700F"),  # AND A, 0F
+        init_regs={RegisterName.A: 0x55, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x05, RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="AND   A, 0F",
+    ),
+    InstructionTestCase(
+        test_id="AND_A_imm_all_ones",
+        instr_bytes=bytes.fromhex("70FF"),  # AND A, FF
+        init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0xAA, RegisterName.FZ: 0, RegisterName.FC: 1},  # A unchanged, FC unchanged
+        expected_asm_str="AND   A, FF",
+    ),
+    InstructionTestCase(
+        test_id="AND_A_imm_zero_operand",
+        instr_bytes=bytes.fromhex("700F"),  # AND A, 0F
+        init_regs={RegisterName.A: 0xF0, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},  # Zero result
+        expected_asm_str="AND   A, 0F",
+    ),
+    # 0x71: AND (n), imm8
+    InstructionTestCase(
+        test_id="AND_mem_imm_zero_result",
+        instr_bytes=bytes.fromhex("711000"),  # AND (BP+10), 00
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0xFF},
+        init_regs={RegisterName.FC: 1},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_regs={RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="AND   (BP+10), 00",
+    ),
+    InstructionTestCase(
+        test_id="AND_mem_imm_non_zero_result",
+        instr_bytes=bytes.fromhex("71100F"),  # AND (BP+10), 0F
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x55},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x05)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x05},
+        expected_regs={RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="AND   (BP+10), 0F",
+    ),
+    # --- OR Instructions ---
+    # 0x78: OR A, imm8
+    InstructionTestCase(
+        test_id="OR_A_imm_zero_result",
+        instr_bytes=bytes.fromhex("7800"),  # OR A, 00
+        init_regs={RegisterName.A: 0x00, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="OR    A, 00",
+    ),
+    InstructionTestCase(
+        test_id="OR_A_imm_non_zero_result",
+        instr_bytes=bytes.fromhex("780F"),  # OR A, 0F
+        init_regs={RegisterName.A: 0x00, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x0F, RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="OR    A, 0F",
+    ),
+    InstructionTestCase(
+        test_id="OR_A_imm_all_ones",
+        instr_bytes=bytes.fromhex("78FF"),  # OR A, FF
+        init_regs={RegisterName.A: 0x00, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="OR    A, FF",
+    ),
+    InstructionTestCase(
+        test_id="OR_A_imm_combine_bits",
+        instr_bytes=bytes.fromhex("78F0"),  # OR A, F0
+        init_regs={RegisterName.A: 0x0F, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="OR    A, F0",
+    ),
+    # 0x79: OR (n), imm8
+    InstructionTestCase(
+        test_id="OR_mem_imm_zero_result",
+        instr_bytes=bytes.fromhex("791000"),  # OR (BP+10), 00
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x00},
+        init_regs={RegisterName.FC: 1},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_regs={RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="OR    (BP+10), 00",
+    ),
+    InstructionTestCase(
+        test_id="OR_mem_imm_non_zero_result",
+        instr_bytes=bytes.fromhex("79100F"),  # OR (BP+10), 0F
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0xF0},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0xFF)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0xFF},
+        expected_regs={RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="OR    (BP+10), 0F",
+    ),
+    # --- XOR Instructions ---
+    # 0x68: XOR A, imm8
+    InstructionTestCase(
+        test_id="XOR_A_imm_zero_result_same",
+        instr_bytes=bytes.fromhex("68FF"),  # XOR A, FF
+        init_regs={RegisterName.A: 0xFF, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="XOR   A, FF",
+    ),
+    InstructionTestCase(
+        test_id="XOR_A_imm_zero_result_pattern",
+        instr_bytes=bytes.fromhex("6855"),  # XOR A, 55
+        init_regs={RegisterName.A: 0x55, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="XOR   A, 55",
+    ),
+    InstructionTestCase(
+        test_id="XOR_A_imm_non_zero_result",
+        instr_bytes=bytes.fromhex("6855"),  # XOR A, 55
+        init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="XOR   A, 55",
+    ),
+    InstructionTestCase(
+        test_id="XOR_A_imm_with_zero",
+        instr_bytes=bytes.fromhex("6800"),  # XOR A, 00
+        init_regs={RegisterName.A: 0xAA, RegisterName.FC: 0},
+        expected_regs={RegisterName.A: 0xAA, RegisterName.FZ: 0, RegisterName.FC: 0},  # A unchanged
+        expected_asm_str="XOR   A, 00",
+    ),
+    # 0x69: XOR (n), imm8
+    InstructionTestCase(
+        test_id="XOR_mem_imm_zero_result",
+        instr_bytes=bytes.fromhex("6910FF"),  # XOR (BP+10), FF
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0xFF},
+        init_regs={RegisterName.FC: 1},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_regs={RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="XOR   (BP+10), FF",
+    ),
+    InstructionTestCase(
+        test_id="XOR_mem_imm_non_zero_result",
+        instr_bytes=bytes.fromhex("69100F"),  # XOR (BP+10), 0F
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0xF0},
+        init_regs={RegisterName.FC: 0},
+        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0xFF)],
+        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0xFF},
+        expected_regs={RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="XOR   (BP+10), 0F",
+    ),
+    # Test register-to-register variants
+    # 0x77: AND A, (n)
+    InstructionTestCase(
+        test_id="AND_A_mem_zero_result",
+        instr_bytes=bytes.fromhex("7710"),  # AND A, (BP+10)
+        init_regs={RegisterName.A: 0xF0, RegisterName.FC: 1},
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x0F},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="AND   A, (BP+10)",
+    ),
+    # 0x7F: OR A, (n)
+    InstructionTestCase(
+        test_id="OR_A_mem_non_zero_result",
+        instr_bytes=bytes.fromhex("7F10"),  # OR A, (BP+10)
+        init_regs={RegisterName.A: 0xF0, RegisterName.FC: 0},
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0x0F},
+        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_asm_str="OR    A, (BP+10)",
+    ),
+    # 0x6F: XOR A, (n)
+    InstructionTestCase(
+        test_id="XOR_A_mem_zero_result",
+        instr_bytes=bytes.fromhex("6F10"),  # XOR A, (BP+10)
+        init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
+        init_mem={INTERNAL_MEMORY_START + 0x10: 0xAA},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_asm_str="XOR   A, (BP+10)",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
