@@ -147,7 +147,7 @@ class SC62015RomView(SC62015BaseView):
     name = 'SC62015:ROM'
     long_name = 'SC62015 ROM-only View'
 
-    # Only the ROM is file-backed
+    # Only the ROM is file-backed; internal RAM is virtual
     SEGMENTS: List[SegmentDef] = [
         SegmentDef(
             name='ROM',
@@ -156,6 +156,15 @@ class SC62015RomView(SC62015BaseView):
             file_offset=0,
             flags=(SegmentFlag.SegmentReadable | SegmentFlag.SegmentExecutable),
             semantics=SectionSemantics.ReadOnlyCodeSectionSemantics,
+        ),
+        # SC62015 CPU internal RAM - not file-backed
+        SegmentDef(
+            name='Internal RAM',
+            start=INTERNAL_MEMORY_START,  # 0x100000
+            length=INTERNAL_MEMORY_LENGTH,  # 0x100 (256 bytes)
+            file_offset=None,  # Virtual segment, not in file
+            flags=(SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable),
+            semantics=SectionSemantics.ReadWriteDataSectionSemantics,
         ),
     ]
 
@@ -180,7 +189,8 @@ class SC62015FullView(SC62015BaseView):
                    SegmentFlag.SegmentReadable | SegmentFlag.SegmentExecutable,
                    SectionSemantics.ReadOnlyCodeSectionSemantics),
 
-        # Internal RAM (file contains RAM contents)
+        # SC62015 CPU Internal RAM at 0x100000-0x1000FF (256 bytes)
+        # Note: This is the CPU's built-in RAM, separate from external memory space
         SegmentDef('Internal RAM', INTERNAL_MEMORY_START, INTERNAL_MEMORY_LENGTH, INTERNAL_MEMORY_START,
                    SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
                    SectionSemantics.ReadWriteDataSectionSemantics),
