@@ -92,17 +92,7 @@ class PCE500Memory:
             
         # Internal RAM (0xB8000-0xBFFFF)
         elif 0xB8000 <= address <= 0xBFFFF:
-            value = self.internal_ram[address - 0xB8000]
-            
-            # Perfetto tracing for RAM reads
-            if self.perfetto_enabled and cpu_pc is not None:
-                g_tracer.trace_instant("Memory_External", "PCE500_RAM_Read", {
-                    "addr": f"0x{address:06X}",
-                    "value": f"0x{value:02X}",
-                    "pc": f"0x{cpu_pc:06X}"
-                })
-            
-            return value
+            return self.internal_ram[address - 0xB8000]
             
         # LCD controller (0x20000-0x2FFFF)
         elif 0x20000 <= address <= 0x2FFFF and self.lcd_controller:
@@ -117,9 +107,12 @@ class PCE500Memory:
             if region.start <= address <= region.end:
                 offset = address - region.start
                 if region.rom_data:
-                    return region.rom_data[offset] if offset < len(region.rom_data) else 0xFF
+                    value = region.rom_data[offset] if offset < len(region.rom_data) else 0xFF
                 elif region.data:
-                    return region.data[offset]
+                    value = region.data[offset]
+                else:
+                    value = 0xFF
+                return value
                     
         return 0xFF  # Default for unmapped memory
         
