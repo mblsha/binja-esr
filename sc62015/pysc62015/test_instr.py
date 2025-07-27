@@ -1083,30 +1083,36 @@ def test_test_with_pre() -> None:
             [
                 MockFlag("Z"),
                 mllil(
-                    "AND.l",
+                    "CMP_E.l",
                     [
                         mllil(
-                            "LOAD.b",
+                            "AND.l",
                             [
                                 mllil(
-                                    "ADD.l",
+                                    "LOAD.b",
                                     [
                                         mllil(
-                                            "ADD.b",
+                                            "ADD.l",
                                             [
                                                 mllil(
-                                                    "LOAD.b",
-                                                    [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEMRegisters.BP])],
+                                                    "ADD.b",
+                                                    [
+                                                        mllil(
+                                                            "LOAD.b",
+                                                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEMRegisters.BP])],
+                                                        ),
+                                                        mllil("CONST.b", [0x12]),
+                                                    ],
                                                 ),
-                                                mllil("CONST.b", [0x12]),
+                                                mllil("CONST.l", [INTERNAL_MEMORY_START]),
                                             ],
-                                        ),
-                                        mllil("CONST.l", [INTERNAL_MEMORY_START]),
+                                        )
                                     ],
-                                )
+                                ),
+                                mllil("CONST.b", [0x07]),
                             ],
                         ),
-                        mllil("CONST.b", [0x07]),
+                        mllil("CONST.l", [0]),
                     ],
                 ),
             ],

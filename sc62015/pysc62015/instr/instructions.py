@@ -640,10 +640,11 @@ class TEST(CompareInstruction):
         dst_mode = get_addressing_mode(self._pre, 1)
         src_mode = get_addressing_mode(self._pre, 2)
         first, second = self.operands()
+        and_result = il.and_expr(3, first.lift(il, dst_mode), second.lift(il, src_mode))
         il.append(
             il.set_flag(
                 ZFlag,
-                il.and_expr(3, first.lift(il, dst_mode), second.lift(il, src_mode)),
+                il.compare_equal(3, and_result, il.const(3, 0)),
             )
         )
 
