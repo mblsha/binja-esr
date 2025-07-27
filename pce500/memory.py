@@ -73,6 +73,15 @@ class PCE500Memory:
         """
         address &= 0xFFFFFF  # 24-bit address space
         
+        # Check for SC62015 internal memory (0x100000-0x1000FF)
+        if address >= 0x100000:
+            # Internal 256-byte RAM
+            offset = address - 0x100000
+            if offset < 0x100:
+                # For now, return 0xFF as PC-E500 doesn't use this memory
+                return 0xFF
+            return 0xFF
+        
         # Internal ROM (0xC0000-0xFFFFF)
         if 0xC0000 <= address <= 0xFFFFF:
             if self.internal_rom:
@@ -124,6 +133,21 @@ class PCE500Memory:
         """
         address &= 0xFFFFFF  # 24-bit address space
         value &= 0xFF
+        
+        # Check for SC62015 internal memory (0x100000-0x1000FF)
+        if address >= 0x100000:
+            # Internal 256-byte RAM
+            offset = address - 0x100000
+            if offset < 0x100:
+                # For now, ignore writes as PC-E500 doesn't use this memory
+                if self.perfetto_enabled:
+                    g_tracer.trace_instant("Memory_Internal", "CPU_Internal_Write", {
+                        "addr": f"0x{address:06X}",
+                        "offset": f"0x{offset:02X}",
+                        "value": f"0x{value:02X}",
+                        "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
+                    })
+            return
         
         # Internal RAM (0xB8000-0xBFFFF)
         if 0xB8000 <= address <= 0xBFFFF:
