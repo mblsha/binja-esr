@@ -217,6 +217,14 @@ class PRE(Instruction):
         sister._pre = self.opcode
         sister.set_length(self.length() + sister.length())
         return sister
+    
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
+        # PRE instructions that couldn't fuse are invalid
+        raise InvalidInstruction(f"Unfused PRE instruction at {addr:#x}")
+    
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        # PRE instructions that couldn't fuse are invalid
+        raise InvalidInstruction(f"Unfused PRE instruction at {addr:#x}")
 
 class StackInstruction(Instruction):
     def reg(self) -> Operand:
