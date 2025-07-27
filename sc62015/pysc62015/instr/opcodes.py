@@ -709,7 +709,8 @@ class Instruction:
         if len(operands) == 0:
             il.append(il.unimplemented())
         else:
-            op1 = operands[0].lift(il, dst_mode)
+            # For destination operand, disable side effects on first lift() to avoid double increment
+            op1 = operands[0].lift(il, dst_mode, side_effects=False)
             if len(operands) == 1:
                 il_value = self.lift_operation1(il, op1)
             elif len(operands) == 2:
