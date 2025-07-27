@@ -197,14 +197,10 @@ class PCE500Emulator:
 
         # Pre-execution - capture state for tracing
         opcode = None
-        fc_before = None
-        fz_before = None
         
         if self.perfetto_enabled:
-            # Read the opcode and flag state before execution
+            # Read the opcode before execution
             opcode = self.memory.read_byte(pc)
-            fc_before = self.cpu.regs.get(RegisterName.FC)
-            fz_before = self.cpu.regs.get(RegisterName.FZ)
 
         # Store PC before execution for conditional jump analysis
         pc_before = pc
@@ -219,19 +215,30 @@ class PCE500Emulator:
 
             # Post-execution analysis - detailed tracing after execution
             if self.perfetto_enabled:
-                # Capture flag state after execution
-                fc_after = self.cpu.regs.get(RegisterName.FC)
-                fz_after = self.cpu.regs.get(RegisterName.FZ)
+                # Get full CPU state after execution
+                state = self.get_cpu_state()
                 
-                # Trace execution with both before and after flag states
-                g_tracer.trace_instant("Execution", f"Exec@0x{pc:06X}", {
+                # Trace execution with all registers (same naming as function calls)
+                event = g_tracer.trace_instant("Execution", f"Exec@0x{pc:06X}", {
                     "pc": f"0x{pc:06X}",
-                    "opcode": f"0x{opcode:02X}",
-                    "C_before": fc_before,
-                    "Z_before": fz_before,
-                    "C_after": fc_after,
-                    "Z_after": fz_after
+                    "opcode": f"0x{opcode:02X}"
                 })
+                
+                # Add all register values as annotations (same as function calls)
+                if event:
+                    event.add_annotations({
+                        "reg_A": f"0x{state['a']:02X}",
+                        "reg_B": f"0x{state['b']:02X}",
+                        "reg_BA": f"0x{state['ba']:04X}",
+                        "reg_I": f"0x{state['i']:04X}",
+                        "reg_X": f"0x{state['x']:06X}",
+                        "reg_Y": f"0x{state['y']:06X}",
+                        "reg_U": f"0x{state['u']:06X}",
+                        "reg_S": f"0x{state['s']:06X}",
+                        "reg_PC": f"0x{state['pc']:06X}",
+                        "flag_C": state['flags']['c'],
+                        "flag_Z": state['flags']['z']
+                    })
 
                 # Analyze control flow instructions
                 self._analyze_control_flow(pc_before, eval_info)
