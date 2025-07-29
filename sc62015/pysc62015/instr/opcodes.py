@@ -644,6 +644,9 @@ class Instruction:
         self.opcode = decoder.unsigned_byte()
         for op in self.operands_coding():
             op.decode(decoder, addr)
+            # Set width for operands that support it based on instruction name
+            if hasattr(op, 'set_width_from_instruction'):
+                op.set_width_from_instruction(self)
 
     def set_length(self, length: int) -> None:
         self._length = length
@@ -1453,6 +1456,7 @@ class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
                  Optional[List[EMemRegMode]] = None) -> None:
         self.order = order
         self.allowed_modes = allowed_modes
+        self.width = 1  # Default width, will be updated based on instruction name
 
     def __repr__(self) -> str:
         return (
@@ -1465,13 +1469,35 @@ class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         assert self.imem is not None, "IMem not set"
         assert self.mode is not None, "Mode not set"
         assert isinstance(self.imem, HasWidth), f"Expected HasWidth, got {type(self.imem)}"
-        op = EMemRegOffsetHelper(self.imem.width(), self.reg, self.mode, self.offset)
+        
+        # Create the appropriate IMem operand based on width
+        if self.width == 2:
+            # For MVW, we need IMem16 instead of IMem8
+            imem_operand = IMem16()
+            imem_operand.value = self.imem.value  # Copy the value
+        elif self.width == 3:
+            # For MVP, we need IMem20
+            imem_operand = IMem20()
+            imem_operand.value = self.imem.value  # Copy the value
+        else:
+            imem_operand = self.imem
+        
+        op = EMemRegOffsetHelper(self.width, self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
             yield op
-            yield self.imem
+            yield imem_operand
         else:
-            yield self.imem
+            yield imem_operand
             yield op
+    
+    def set_width_from_instruction(self, instr: 'Instruction') -> None:
+        """Set width based on the instruction name (MVW=2, MVP=3, otherwise 1)."""
+        if instr.name() == "MVW":
+            self.width = 2
+        elif instr.name() == "MVP":
+            self.width = 3
+        else:
+            self.width = 1
 
     def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)
@@ -1479,6 +1505,7 @@ class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         self.reg.decode(decoder, addr)
         self.reg.assert_r3()
 
+        # For now, always decode as IMem8, we'll handle width in operands()
         self.imem = IMem8()
         self.imem.decode(decoder, addr)
 
@@ -1611,6 +1638,7 @@ class EMemIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         self.mode_imm = Imm8()
         self.imem1 = IMem8()
         self.imem2 = IMem8()
+        self._parent_instruction = None
 
     def __repr__(self) -> str:
         return (
@@ -1619,14 +1647,40 @@ class EMemIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         )
 
     def operands(self) -> Generator[Operand, None, None]:
+        # Create the appropriate IMem operands based on width
+        if self.width == 2:
+            # For MVW, we need IMem16
+            imem1_operand = IMem16()
+            imem2_operand = IMem16()
+            imem1_operand.value = self.imem1.value
+            imem2_operand.value = self.imem2.value
+        elif self.width == 3:
+            # For MVP, we need IMem20
+            imem1_operand = IMem20()
+            imem2_operand = IMem20()
+            imem1_operand.value = self.imem1.value
+            imem2_operand.value = self.imem2.value
+        else:
+            imem1_operand = self.imem1
+            imem2_operand = self.imem2
+            
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
-            yield self.imem1
-            op = EMemValueOffsetHelper(self.imem2, self.offset, width=self.width)
+            yield imem1_operand
+            op = EMemValueOffsetHelper(imem2_operand, self.offset, width=self.width)
             yield op
         else:
-            op = EMemValueOffsetHelper(self.imem1, self.offset, width=self.width)
+            op = EMemValueOffsetHelper(imem1_operand, self.offset, width=self.width)
             yield op
-            yield self.imem2
+            yield imem2_operand
+    
+    def set_width_from_instruction(self, instr: 'Instruction') -> None:
+        """Set width based on the instruction name (MVW=2, MVP=3, otherwise 1)."""
+        if instr.name() == "MVW":
+            self.width = 2
+        elif instr.name() == "MVP":
+            self.width = 3
+        else:
+            self.width = 1
 
     def decode(self, decoder: Decoder, addr: int) -> None:
         super().decode(decoder, addr)
