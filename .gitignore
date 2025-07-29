@@ -10,3 +10,4 @@ data/*.txt
 pc-e500.trace
 *.trace
 *.perfetto-trace
+.claude/
