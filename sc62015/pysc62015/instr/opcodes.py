@@ -645,8 +645,9 @@ class Instruction:
         for op in self.operands_coding():
             op.decode(decoder, addr)
             # Set width for operands that support it based on instruction name
-            if hasattr(op, 'set_width_from_instruction'):
-                op.set_width_from_instruction(self)
+            set_width_fn = getattr(op, 'set_width_from_instruction', None)
+            if callable(set_width_fn):
+                set_width_fn(self)
 
     def set_length(self, length: int) -> None:
         self._length = length
