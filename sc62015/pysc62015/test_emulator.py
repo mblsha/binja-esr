@@ -865,6 +865,61 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
         expected_asm_str="XOR   A, (BP+10)",
     ),
+    
+    # Test case for b204 instruction with BA=0x5AA5
+    InstructionTestCase(
+        test_id="MV_emem_BA_b204",
+        instr_bytes=bytes.fromhex("B204"),  # MV [X], BA
+        init_regs={
+            RegisterName.BA: 0x5AA5, 
+            RegisterName.X: 0xBE000,  # X points to address 0xBE000
+            RegisterName.FC: 0, 
+            RegisterName.FZ: 0
+        },
+        init_mem={0xBE000: 0x00, 0xBE001: 0x00},  # Clear external memory at 0xBE000-0xBE001
+        expected_regs={
+            RegisterName.BA: 0x5AA5, 
+            RegisterName.X: 0xBE000,  # X unchanged
+            RegisterName.FC: 0, 
+            RegisterName.FZ: 0
+        },
+        expected_mem_writes=[(0xBE000, 0xA5), (0xBE001, 0x5A)],  # Little-endian: LSB first
+        expected_mem_state={0xBE000: 0xA5, 0xBE001: 0x5A},  # BA=0x5AA5 stored as A5 5A
+        expected_asm_str="MV    [X], BA",
+    ),
+    
+    # Test case for 30e904d4 instruction - MVW [X], (BP+D4)
+    InstructionTestCase(
+        test_id="MVW_X_indirect_from_BP_30e904d4",
+        instr_bytes=bytes.fromhex("30E904D4"),  # MVW [X], (BP+D4)
+        init_regs={
+            RegisterName.X: 0x080000,  # X points to external memory address 0x080000
+            RegisterName.FC: 0, 
+            RegisterName.FZ: 0
+        },
+        init_mem={
+            # Initialize internal memory at BP+D4 with test data
+            INTERNAL_MEMORY_START + 0xD4: 0x34,  # Low byte of word
+            INTERNAL_MEMORY_START + 0xD5: 0x12,  # High byte of word
+            # Clear destination memory
+            0x080000: 0x00,
+            0x080001: 0x00,
+        },
+        expected_regs={
+            RegisterName.X: 0x080000,  # X unchanged
+            RegisterName.FC: 0,  # Flags unchanged
+            RegisterName.FZ: 0
+        },
+        expected_mem_writes=[
+            (0x080000, 0x34),  # Low byte written first
+            (0x080001, 0x12),  # High byte written second
+        ],
+        expected_mem_state={
+            0x080000: 0x34,  # Word 0x1234 stored little-endian
+            0x080001: 0x12,
+        },
+        expected_asm_str="MVW   [X], (BP+D4)",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
