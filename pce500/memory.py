@@ -173,7 +173,6 @@ class PCE500Memory:
                             break
                     
                     g_tracer.trace_instant("Memory_Internal", "CPU_Internal_Write", {
-                        "addr": f"0x{address:06X}",
                         "offset": f"0x{offset:02X}",
                         "value": f"0x{value:02X}",
                         "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A",
