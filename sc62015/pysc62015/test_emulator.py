@@ -976,6 +976,8 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.U: 0x50,  # User stack pointer
         },
         init_mem={
+            # Set BP register to non-zero value
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,  # BP = 0x10
             # Place test value on stack where U points
             0x50: 0xA5,  # Value to be popped to IMR
             # Initialize IMR to different value to verify it changes
@@ -985,8 +987,12 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.U: 0x51,  # U incremented by 1 after pop
         },
         expected_mem_state={
-            # IMR should contain the popped value
-            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0xA5,
+            # With BP=0x10, BP+0xFB = 0x10B, which wraps to 0x0B in internal memory
+            INTERNAL_MEMORY_START + 0x0B: 0xA5,
+            # BP should remain unchanged
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,
+            # IMR at 0xFB should remain unchanged since we're writing to BP+FB
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0x00,
         },
         expected_asm_str="POPU  (BP+FB)",
     ),
