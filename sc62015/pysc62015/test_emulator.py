@@ -920,6 +920,38 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="MVW   [X], (BP+D4)",
     ),
+    InstructionTestCase(
+        test_id="MV_Y_from_BP_plus_E6_PRE30_no_wrap",
+        instr_bytes=bytes.fromhex("3085E6"),
+        init_mem={
+            # BP register at internal memory
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,  # BP = 0x10, so BP+0xE6 = 0xF6 (no wrap)
+            # Place test data at internal memory 0xF6-0xF8
+            INTERNAL_MEMORY_START + 0xF6: 0x11,
+            INTERNAL_MEMORY_START + 0xF7: 0x22,
+            INTERNAL_MEMORY_START + 0xF8: 0x33,
+        },
+        expected_regs={
+            RegisterName.Y: 0x332211,  # Little-endian: low byte first
+        },
+        expected_asm_str="MV    Y, (BP+E6)",
+    ),
+    InstructionTestCase(
+        test_id="MV_Y_from_BP_plus_E6_PRE30_with_wraparound",
+        instr_bytes=bytes.fromhex("3085E6"),
+        init_mem={
+            # BP register at internal memory
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x20,  # BP = 0x20, so BP+0xE6 = 0x106, wraps to 0x06
+            # Place test data at internal memory 0x06-0x08 (after wraparound)
+            INTERNAL_MEMORY_START + 0x06: 0x11,
+            INTERNAL_MEMORY_START + 0x07: 0x22,
+            INTERNAL_MEMORY_START + 0x08: 0x33,
+        },
+        expected_regs={
+            RegisterName.Y: 0x332211,  # Little-endian: low byte first
+        },
+        expected_asm_str="MV    Y, (BP+E6)",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
