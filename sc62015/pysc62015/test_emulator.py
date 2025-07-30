@@ -952,6 +952,23 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="MV    Y, (BP+E6)",
     ),
+    InstructionTestCase(
+        test_id="MVP_to_E6_internal_mem",
+        instr_bytes=bytes.fromhex("30dce6defc0b"),
+        init_mem={
+            # Initialize destination memory to verify it gets overwritten
+            INTERNAL_MEMORY_START + 0xE6: 0xFF,
+            INTERNAL_MEMORY_START + 0xE7: 0xFF,
+            INTERNAL_MEMORY_START + 0xE8: 0xFF,
+        },
+        expected_mem_state={
+            # MVP writes 20-bit value 0x0BFCDE in little-endian order to internal memory offset 0xE6
+            INTERNAL_MEMORY_START + 0xE6: 0xDE,  # Low byte
+            INTERNAL_MEMORY_START + 0xE7: 0xFC,  # Mid byte
+            INTERNAL_MEMORY_START + 0xE8: 0x0B,  # High byte (only low 4 bits used for 20-bit)
+        },
+        expected_asm_str="MVP   (E6), BFCDE",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
