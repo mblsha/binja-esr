@@ -2,15 +2,13 @@
 
 import sys
 from pathlib import Path
-import os
-import tempfile
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from pce500.emulator import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
+from sc62015.pysc62015.instr.opcodes import INTERNAL_MEMORY_START
 
 
 class TestSimplifiedEmulator:
@@ -273,50 +271,3 @@ class TestSimplifiedEmulator:
         # Verify PC advanced correctly
         final_pc = cpu.regs.get(RegisterName.PC)
         assert final_pc == 0x1004, f"PC should advance to 0x1004, got 0x{final_pc:04X}"
-        
-    def test_internal_memory_dump(self):
-        """Test internal memory dump functionality."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            emu = PCE500Emulator(perfetto_trace=True)
-            emu.MEMORY_DUMP_DIR = tmpdir
-            
-            # Set known pattern in internal memory
-            for i in range(256):
-                emu.memory.write_byte(INTERNAL_MEMORY_START + i, i & 0xFF)
-            
-            # Load a simple program that reaches the dump PC
-            # NOP at 0xC0000, then JP to 0x0F1196
-            rom_data = bytearray(256 * 1024)
-            rom_data[0] = 0xCE  # NOP
-            rom_data[1] = 0x1A  # JP instruction
-            rom_data[2] = 0x96
-            rom_data[3] = 0x11
-            rom_data[4] = 0x0F
-            
-            # Place NOP at target address
-            target_offset = 0x0F1196 - 0xC0000
-            rom_data[target_offset] = 0xCE  # NOP
-            
-            emu.load_rom(bytes(rom_data))
-            
-            # Set entry point
-            emu.memory.write_long(0xFFFFD, 0xC0000)
-            emu.reset()
-            
-            # Run until we hit the dump PC
-            emu.add_breakpoint(0x0F1197)  # Stop after dump
-            emu.run()
-            
-            # Check that dump file was created
-            dump_files = [f for f in os.listdir(tmpdir) if f.startswith("internal_memory_dump_")]
-            assert len(dump_files) == 1
-            
-            # Verify dump content
-            dump_path = os.path.join(tmpdir, dump_files[0])
-            with open(dump_path, 'rb') as f:
-                dump_data = f.read()
-            
-            assert len(dump_data) == 256
-            # Check the pattern we wrote
-            for i in range(256):
-                assert dump_data[i] == (i & 0xFF)

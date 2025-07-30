@@ -79,7 +79,7 @@ class PCE500Emulator:
     INTERNAL_RAM_SIZE = 0x8000     # 32KB
     
     # Debug/dump configuration
-    MEMORY_DUMP_PC = 0x0F1196      # PC to trigger internal memory dump
+    MEMORY_DUMP_PC = 0x0F119C      # PC to trigger internal memory dump
     MEMORY_DUMP_DIR = "."          # Directory for dump files
 
     def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False):
