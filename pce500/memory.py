@@ -316,6 +316,12 @@ class PCE500Memory:
             
         return "\n".join(lines)
         
+    def get_internal_memory_bytes(self) -> bytes:
+        """Get internal memory (256 bytes) as raw bytes."""
+        # Internal memory is stored in the last 256 bytes of internal_ram
+        start_offset = len(self.internal_ram) - 256
+        return bytes(self.internal_ram[start_offset:start_offset + 256])
+        
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing."""
         self.perfetto_enabled = enabled

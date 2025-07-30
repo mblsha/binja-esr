@@ -77,6 +77,10 @@ class PCE500Emulator:
     INTERNAL_ROM_SIZE = 0x40000    # 256KB
     INTERNAL_RAM_START = 0xB8000
     INTERNAL_RAM_SIZE = 0x8000     # 32KB
+    
+    # Debug/dump configuration
+    MEMORY_DUMP_PC = 0x0F1196      # PC to trigger internal memory dump
+    MEMORY_DUMP_DIR = "."          # Directory for dump files
 
     def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False):
         """Initialize the PC-E500 emulator.
@@ -198,6 +202,33 @@ class PCE500Emulator:
         if self.trace is not None:
             self.trace.append(('exec', pc, self.cycle_count))
 
+        # Check for internal memory dump trigger
+        if pc == self.MEMORY_DUMP_PC and self.perfetto_enabled:
+            # Dump internal memory when reaching target PC
+            internal_mem = self.memory.get_internal_memory_bytes()
+            
+            # Save to binary file with timestamp
+            import time
+            import os
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            dump_filename = f"internal_memory_dump_{timestamp}_pc_{pc:06X}.bin"
+            dump_path = os.path.join(self.MEMORY_DUMP_DIR, dump_filename)
+            
+            with open(dump_path, 'wb') as f:
+                f.write(internal_mem)
+            
+            print(f"\nInternal memory dumped to: {dump_path}")
+            print(f"  PC: 0x{pc:06X}")
+            print(f"  Size: {len(internal_mem)} bytes")
+            
+            # Also trace it in Perfetto
+            g_tracer.trace_instant("Debug", "InternalMemoryDump", {
+                "pc": f"0x{pc:06X}",
+                "filename": dump_filename,
+                "size": str(len(internal_mem)),
+                "trigger": f"PC match 0x{self.MEMORY_DUMP_PC:06X}"
+            })
+        
         # Pre-execution - capture state for tracing
         opcode = None
         
@@ -296,6 +327,11 @@ class PCE500Emulator:
     def add_breakpoint(self, address: int) -> None:
         """Add a breakpoint at the specified address."""
         self.breakpoints.add(address & 0xFFFFFF)
+        
+    def set_memory_dump_pc(self, address: int) -> None:
+        """Set the PC address that triggers internal memory dump."""
+        self.MEMORY_DUMP_PC = address & 0xFFFFFF
+        print(f"Internal memory dump will trigger at PC=0x{self.MEMORY_DUMP_PC:06X}")
 
     def remove_breakpoint(self, address: int) -> None:
         """Remove a breakpoint."""
