@@ -986,6 +986,10 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_regs={
             RegisterName.U: 0x51,  # U incremented by 1 after pop
         },
+        expected_mem_writes=[
+            # POPU IMR writes the popped value to IMR register
+            (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0xA5),
+        ],
         expected_mem_state={
             # IMR should contain the popped value (now using direct addressing)
             INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0xA5,
