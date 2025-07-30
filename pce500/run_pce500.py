@@ -11,13 +11,22 @@ from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
-def main():
+def main(dump_pc=None, no_dump=False):
     """Example with Perfetto tracing enabled."""
     # Note: Perfetto trace is automatically saved when exiting the context manager
     # Create emulator with tracing
     with PCE500Emulator(trace_enabled=True, perfetto_trace=True) as emu:
         print("Created emulator with Perfetto tracing enabled")
         print("Trace will be saved to pc-e500.trace")
+        
+        # Handle memory dump configuration
+        if no_dump:
+            # Disable dumps by setting an impossible PC value
+            emu.set_memory_dump_pc(0xFFFFFF)
+            print("Internal memory dumps disabled")
+        elif dump_pc is not None:
+            emu.set_memory_dump_pc(dump_pc)
+            print(f"Internal memory dump will trigger at PC=0x{dump_pc:06X}")
 
         # Load ROM and run
         rom_path = Path(__file__).parent.parent / "data" / "pc-e500.bin"
@@ -60,5 +69,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="PC-E500 Emulator Example")
+    parser.add_argument("--dump-pc", type=lambda x: int(x, 0), 
+                        help="PC address to trigger internal memory dump (hex or decimal, e.g., 0x0F119C)")
+    parser.add_argument("--no-dump", action='store_true',
+                        help="Disable internal memory dumps entirely")
     args = parser.parse_args()
-    main()
+    main(dump_pc=args.dump_pc, no_dump=args.no_dump)
