@@ -969,6 +969,27 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="MVP   (E6), BFCDE",
     ),
+    InstructionTestCase(
+        test_id="POPU_IMR",
+        instr_bytes=bytes.fromhex("3f"),
+        init_regs={
+            RegisterName.U: 0x50,  # User stack pointer
+        },
+        init_mem={
+            # Place test value on stack where U points
+            0x50: 0xA5,  # Value to be popped to IMR
+            # Initialize IMR to different value to verify it changes
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0x00,
+        },
+        expected_regs={
+            RegisterName.U: 0x51,  # U incremented by 1 after pop
+        },
+        expected_mem_state={
+            # IMR should contain the popped value
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0xA5,
+        },
+        expected_asm_str="POPU  (BP+FB)",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
