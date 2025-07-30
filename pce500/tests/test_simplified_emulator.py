@@ -172,7 +172,7 @@ class TestSimplifiedEmulator:
         
     def test_mv_bp_register_instruction_execution(self):
         """Test MV (EC), C2 instruction execution - opcode 30ccecc2."""
-        from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
+        from sc62015.pysc62015.instr.opcodes import IMEMRegisters
         
         emu = PCE500Emulator(perfetto_trace=True)
         

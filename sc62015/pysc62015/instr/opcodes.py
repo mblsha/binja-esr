@@ -1159,15 +1159,22 @@ class TempReg(RegLiftMixin, Operand):
     # lift() and lift_assign() provided by RegLiftMixin
 
 # only makes sense for PUSHU / POPU
-class RegIMR(HasOperands, Reg):
+class RegIMR(Reg):
     def __init__(self) -> None:
         super().__init__("IMR")
 
     def width(self) -> int:
         return 1
-
-    def operands(self) -> Generator[Operand, None, None]:
-        yield IMem8(IMEMRegisters.IMR)
+    
+    def lift(self, il: LowLevelILFunction, pre: Optional[AddressingMode] = None, side_effects: bool = True) -> ExpressionIndex:
+        # Always use direct addressing (N) for IMR, ignoring PRE mode
+        imem = IMem8(IMEMRegisters.IMR)
+        return imem.lift(il, AddressingMode.N, side_effects)
+    
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre: Optional[AddressingMode] = None) -> None:
+        # Always use direct addressing (N) for IMR, ignoring PRE mode
+        imem = IMem8(IMEMRegisters.IMR)
+        imem.lift_assign(il, value, AddressingMode.N)
 
 # Special case: only makes sense for MV, special case since B is not in the REGISTERS
 class RegB(Reg):

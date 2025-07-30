@@ -987,14 +987,36 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.U: 0x51,  # U incremented by 1 after pop
         },
         expected_mem_state={
-            # With BP=0x10, BP+0xFB = 0x10B, which wraps to 0x0B in internal memory
-            INTERNAL_MEMORY_START + 0x0B: 0xA5,
+            # IMR should contain the popped value (now using direct addressing)
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0xA5,
             # BP should remain unchanged
             INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,
-            # IMR at 0xFB should remain unchanged since we're writing to BP+FB
-            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0x00,
         },
-        expected_asm_str="POPU  (BP+FB)",
+        expected_asm_str="POPU  IMR",
+    ),
+    InstructionTestCase(
+        test_id="PUSHU_IMR_with_BP",
+        instr_bytes=bytes.fromhex("2f"),
+        init_regs={
+            RegisterName.U: 0x50,  # User stack pointer
+        },
+        init_mem={
+            # Set BP register to non-zero value
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,  # BP = 0x10
+            # Set IMR to test value with high bit set
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0xFF,  # Test masking behavior
+        },
+        expected_regs={
+            RegisterName.U: 0x4F,  # U decremented by 1 after push
+        },
+        expected_mem_writes=[
+            # PUSHU IMR has special behavior:
+            # 1. Pushes original IMR value to stack
+            (0x4F, 0xFF),  # Original IMR value pushed to stack
+            # 2. Then masks IMR register itself with 0x7F
+            (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x7F),  # IMR masked and written back
+        ],
+        expected_asm_str="PUSHU IMR",
     ),
 ]
 
