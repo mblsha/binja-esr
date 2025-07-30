@@ -177,7 +177,8 @@ class PCE500Memory:
                         "value": f"0x{value:02X}",
                         "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A",
                         "bp": bp_value,
-                        "imem_name": imem_name
+                        "imem_name": imem_name,
+                        "size": "1"  # Always 1 for byte writes
                     })
             return
         
@@ -244,10 +245,10 @@ class PCE500Memory:
         high = self.read_byte(address + 1)
         return low | (high << 8)
         
-    def write_word(self, address: int, value: int) -> None:
+    def write_word(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Write 16-bit word (little-endian)."""
-        self.write_byte(address, value & 0xFF)
-        self.write_byte(address + 1, (value >> 8) & 0xFF)
+        self.write_byte(address, value & 0xFF, cpu_pc)
+        self.write_byte(address + 1, (value >> 8) & 0xFF, cpu_pc)
         
     def read_long(self, address: int) -> int:
         """Read 24-bit long (little-endian)."""
@@ -256,11 +257,11 @@ class PCE500Memory:
         high = self.read_byte(address + 2)
         return low | (mid << 8) | (high << 16)
         
-    def write_long(self, address: int, value: int) -> None:
+    def write_long(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Write 24-bit long (little-endian)."""
-        self.write_byte(address, value & 0xFF)
-        self.write_byte(address + 1, (value >> 8) & 0xFF)
-        self.write_byte(address + 2, (value >> 16) & 0xFF)
+        self.write_byte(address, value & 0xFF, cpu_pc)
+        self.write_byte(address + 1, (value >> 8) & 0xFF, cpu_pc)
+        self.write_byte(address + 2, (value >> 16) & 0xFF, cpu_pc)
         
     def add_ram(self, start: int, size: int, name: str = "") -> None:
         """Add additional RAM region."""
