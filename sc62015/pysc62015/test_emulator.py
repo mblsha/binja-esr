@@ -921,36 +921,20 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MVW   [X], (BP+D4)",
     ),
     InstructionTestCase(
-        test_id="MV_Y_from_BP_plus_E6_PRE30_no_wrap",
+        test_id="MV_Y_from_E6_PRE30",
         instr_bytes=bytes.fromhex("3085E6"),
         init_mem={
-            # BP register at internal memory
-            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,  # BP = 0x10, so BP+0xE6 = 0xF6 (no wrap)
-            # Place test data at internal memory 0xF6-0xF8
-            INTERNAL_MEMORY_START + 0xF6: 0x11,
-            INTERNAL_MEMORY_START + 0xF7: 0x22,
-            INTERNAL_MEMORY_START + 0xF8: 0x33,
+            # BP register at internal memory (not used with corrected PRE mode)
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,
+            # Place test data at internal memory 0xE6-0xE8 (direct addressing)
+            INTERNAL_MEMORY_START + 0xE6: 0x11,
+            INTERNAL_MEMORY_START + 0xE7: 0x22,
+            INTERNAL_MEMORY_START + 0xE8: 0x33,
         },
         expected_regs={
             RegisterName.Y: 0x332211,  # Little-endian: low byte first
         },
-        expected_asm_str="MV    Y, (BP+E6)",
-    ),
-    InstructionTestCase(
-        test_id="MV_Y_from_BP_plus_E6_PRE30_with_wraparound",
-        instr_bytes=bytes.fromhex("3085E6"),
-        init_mem={
-            # BP register at internal memory
-            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x20,  # BP = 0x20, so BP+0xE6 = 0x106, wraps to 0x06
-            # Place test data at internal memory 0x06-0x08 (after wraparound)
-            INTERNAL_MEMORY_START + 0x06: 0x11,
-            INTERNAL_MEMORY_START + 0x07: 0x22,
-            INTERNAL_MEMORY_START + 0x08: 0x33,
-        },
-        expected_regs={
-            RegisterName.Y: 0x332211,  # Little-endian: low byte first
-        },
-        expected_asm_str="MV    Y, (BP+E6)",
+        expected_asm_str="MV    Y, (E6)",
     ),
     InstructionTestCase(
         test_id="MVP_to_E6_internal_mem",
@@ -1418,44 +1402,44 @@ def get_pre_test_cases() -> List[PreTestCase]:
             expected_A_val_after=OPERAND_MEM_VAL,
         ),
         PreTestCase(
-            test_id="PRE_0x30_Op2_BP_N_MV_A_(BP+n)",  # 0x30 for 2nd op (BP+n) if 1st op is (n)
+            test_id="PRE_0x30_Single_Addressable_MV_A_(n)",  # 0x30 with single addressable operand uses PRE1
             instr_bytes=bytes([0x30, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
                 INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
-                INTERNAL_MEMORY_START
-                + ((BP_REG_VAL + N_OPERAND_VAL) & 0xFF): OPERAND_MEM_VAL,
+                # Place data at direct address since single addressable operands use PRE1
+                INTERNAL_MEMORY_START + N_OPERAND_VAL: OPERAND_MEM_VAL,
             },
             init_register_state={RegisterName.A: 0x00},
-            expected_asm_str=f"MV    A, (BP+{N_OPERAND_VAL:02X})",
+            expected_asm_str=f"MV    A, ({N_OPERAND_VAL:02X})",
             expected_pre_val_in_instr=0x30,
             expected_A_val_after=OPERAND_MEM_VAL,
         ),
         PreTestCase(
-            test_id="PRE_0x33_Op2_PY_N_MV_A_(PY+n)",  # 0x33 for 2nd op (PY+n) if 1st op is (n)
+            test_id="PRE_0x33_Single_Addressable_MV_A_(n)",  # 0x33 with single addressable operand uses PRE1
             instr_bytes=bytes([0x33, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
                 INTERNAL_MEMORY_START + IMEMRegisters.PY: PY_REG_VAL,
-                INTERNAL_MEMORY_START
-                + ((PY_REG_VAL + N_OPERAND_VAL) & 0xFF): OPERAND_MEM_VAL,
+                # Place data at direct address since single addressable operands use PRE1
+                INTERNAL_MEMORY_START + N_OPERAND_VAL: OPERAND_MEM_VAL,
             },
             init_register_state={RegisterName.A: 0x00},
-            expected_asm_str=f"MV    A, (PY+{N_OPERAND_VAL:02X})",
+            expected_asm_str=f"MV    A, ({N_OPERAND_VAL:02X})",
             expected_pre_val_in_instr=0x33,
             expected_A_val_after=OPERAND_MEM_VAL,
         ),
         PreTestCase(
-            test_id="PRE_0x31_Op2_BP_PY_MV_A_(BP+PY)",  # 0x31 for 2nd op (BP+PY) if 1st op is (n)
+            test_id="PRE_0x31_Single_Addressable_MV_A_(n)",  # 0x31 with single addressable operand uses PRE1
             instr_bytes=bytes(
                 [0x31, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]
-            ),  # N_OPERAND_VAL ignored for (BP+PY) source
+            ),
             init_memory_state={
                 INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
                 INTERNAL_MEMORY_START + IMEMRegisters.PY: PY_REG_VAL,
-                INTERNAL_MEMORY_START
-                + ((BP_REG_VAL + PY_REG_VAL) & 0xFF): OPERAND_MEM_VAL,
+                # Place data at direct address since single addressable operands use PRE1
+                INTERNAL_MEMORY_START + N_OPERAND_VAL: OPERAND_MEM_VAL,
             },
             init_register_state={RegisterName.A: 0x00},
-            expected_asm_str="MV    A, (BP+PY)",
+            expected_asm_str=f"MV    A, ({N_OPERAND_VAL:02X})",
             expected_pre_val_in_instr=0x31,
             expected_A_val_after=OPERAND_MEM_VAL,
         ),
