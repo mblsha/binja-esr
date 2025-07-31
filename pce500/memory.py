@@ -22,6 +22,7 @@ class MemoryOverlay:
     data: Optional[Union[bytes, bytearray]] = None
     read_handler: Optional[Callable[[int, Optional[int]], int]] = None  # (address, cpu_pc) -> byte
     write_handler: Optional[Callable[[int, int, Optional[int]], None]] = None  # (address, value, cpu_pc) -> None
+    perfetto_thread: str = "Memory_External"  # Default Perfetto thread for traces
     
 
 class PCE500Memory:
@@ -134,11 +135,18 @@ class PCE500Memory:
         # External memory space (0x00000-0xFFFFF)
         address &= 0xFFFFF
         
-        # Check overlays for write handlers or read-only
+        # Check overlays for write handlers, read-only, or writable data
         for overlay in self.overlays:
             if overlay.start <= address <= overlay.end:
                 if overlay.write_handler:
                     overlay.write_handler(address, value, cpu_pc)
+                    # Add tracing for write_handler overlays
+                    if self.perfetto_enabled:
+                        trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                        if cpu_pc is not None:
+                            trace_data["pc"] = f"0x{cpu_pc:06X}"
+                        trace_data["overlay"] = overlay.name
+                        g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
                     return
                 elif overlay.read_only:
                     # Silently ignore writes to read-only overlays
@@ -147,7 +155,20 @@ class PCE500Memory:
                         if cpu_pc is not None:
                             trace_data["pc"] = f"0x{cpu_pc:06X}"
                         trace_data["overlay"] = overlay.name
-                        g_tracer.trace_instant("Memory_External", "", trace_data)
+                        g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
+                    return
+                elif overlay.data and isinstance(overlay.data, bytearray):
+                    # Write to writable overlay data
+                    offset = address - overlay.start
+                    if offset < len(overlay.data):
+                        overlay.data[offset] = value
+                        # Add tracing for writable overlay writes
+                        if self.perfetto_enabled:
+                            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                            if cpu_pc is not None:
+                                trace_data["pc"] = f"0x{cpu_pc:06X}"
+                            trace_data["overlay"] = overlay.name
+                            g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
                     return
         
         # Default to external memory
@@ -220,7 +241,8 @@ class PCE500Memory:
                 name="lcd_controller",
                 read_only=False,
                 read_handler=lambda addr, pc: controller.read(addr, pc),
-                write_handler=lambda addr, val, pc: controller.write(addr, val, pc)
+                write_handler=lambda addr, val, pc: controller.write(addr, val, pc),
+                perfetto_thread="Display"
             ))
     
     def load_memory_card(self, card_data: bytes, card_size: int) -> None:
@@ -266,6 +288,17 @@ class PCE500Memory:
             name=name or f"ROM_0x{start:06X}",
             read_only=True,
             data=data
+        ))
+        
+    def add_display_memory(self) -> None:
+        """Add display memory overlay for CE0 region (0x00A000-0x00AFFF)."""
+        self.add_overlay(MemoryOverlay(
+            start=0x00A000,
+            end=0x00AFFF,
+            name="display_memory",
+            read_only=False,
+            data=bytearray(0x1000),  # 4KB
+            perfetto_thread="Display"
         ))
         
     def reset(self) -> None:
