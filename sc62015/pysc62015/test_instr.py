@@ -275,10 +275,10 @@ def test_emem_value_offset_helper_lifting() -> None:
         "LOAD.b",
         [
             mllil(
-                "ADD.b",
+                "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
                 [
                     mllil(
-                        "LOAD.b", [
+                        "LOAD.l", [  # For indirect addressing, we load 3 bytes (20-bit address)
                             mllil(
                                 "ADD.l",
                                 [
@@ -304,7 +304,7 @@ def test_emem_value_offset_helper_lifting() -> None:
                             )
                         ]
                     ),
-                    mllil("CONST.b", [0xCD]),  # offset
+                    mllil("CONST.l", [0xCD]),  # offset (now 3-byte for external addresses)
                 ],
             )
         ],
@@ -326,10 +326,10 @@ def test_emem_value_offset_helper_widths() -> None:
             f"LOAD.{suffix}",
             [
                 mllil(
-                    "ADD.b",
+                    "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
                     [
                         mllil(
-                            "LOAD.b", [
+                            "LOAD.l", [  # For indirect addressing, we load 3 bytes (20-bit address)
                                 mllil(
                                     "ADD.l",
                                     [
@@ -355,7 +355,7 @@ def test_emem_value_offset_helper_widths() -> None:
                                 )
                             ]
                         ),
-                        mllil("CONST.b", [1]),  # offset
+                        mllil("CONST.l", [1]),  # offset (now 3-byte for external addresses)
                     ],
                 )
             ],

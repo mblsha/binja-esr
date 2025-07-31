@@ -898,8 +898,11 @@ class ImmOffset(Imm8):
         raise NotImplementedError("lift() not implemented for ImmOffset")
 
     def lift_offset(self, il: LowLevelILFunction, value: ExpressionIndex) -> ExpressionIndex:
-        offset = il.const(self.width(), self.offset_value())
-        return il.add(self.width(), value, offset)
+        # Determine the width of the value we're adding to
+        # For external memory addresses, this should be 3 bytes (20-bit)
+        width = 3  # External memory addresses are 20-bit
+        offset = il.const(width, self.offset_value())
+        return il.add(width, value, offset)
 
 
 # Utility mixin for operands that support optional +/- byte offsets based on
@@ -1341,7 +1344,18 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         pre: Optional[AddressingMode] = None,
         side_effects: bool = True,
     ) -> ExpressionIndex:
-        addr = self.value.lift(il, pre=pre, side_effects=side_effects)
+        # For indirect external memory addressing through internal memory,
+        # we need to read a 20-bit address from internal memory
+        if isinstance(self.value, IMem8):
+            # For indirect addressing, the IMem8 value points to a location in internal memory
+            # that contains a 20-bit external memory address. We need to read 3 bytes from there.
+            # First get the internal memory address
+            imem_addr = self.value._helper().imem_addr(il, pre)
+            # Now load 3 bytes (20-bit address) from that location  
+            addr = il.load(3, imem_addr)
+        else:
+            addr = self.value.lift(il, pre=pre, side_effects=side_effects)
+        
         if self.offset:
             addr = self.offset.lift_offset(il, addr)
         return addr
