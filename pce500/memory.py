@@ -172,7 +172,7 @@ class PCE500Memory:
                             imem_name = reg_name
                             break
                     
-                    g_tracer.trace_instant("Memory_Internal", "CPU_Internal_Write", {
+                    g_tracer.trace_instant("Memory_Internal", "", {
                         "offset": f"0x{offset:02X}",
                         "value": f"0x{value:02X}",
                         "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A",
@@ -191,7 +191,7 @@ class PCE500Memory:
                 trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
                 if cpu_pc is not None:
                     trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory_External", "PCE500_RAM_Write", trace_data)
+                g_tracer.trace_instant("Memory_External", "", trace_data)
             
         # LCD controller (0x20000-0x2FFFF)
         elif 0x20000 <= address <= 0x2FFFF and self.lcd_controller:
@@ -202,19 +202,23 @@ class PCE500Memory:
                 trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
                 if cpu_pc is not None:
                     trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory_External", "LCD_IO_Write", trace_data)
+                g_tracer.trace_instant("Memory_External", "", trace_data)
             
         # ROM regions - silently ignore writes
         elif 0xC0000 <= address <= 0xFFFFF:
             if self.perfetto_enabled:
-                g_tracer.trace_instant("Memory_External", "PCE500_ROM_Write_Ignored", 
-                                     {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"})
+                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                if cpu_pc is not None:
+                    trace_data["pc"] = f"0x{cpu_pc:06X}"
+                g_tracer.trace_instant("Memory_External", "", trace_data)
             
         # Memory card - ROM, ignore writes
         elif self.memory_card and self.card_start <= address < self.card_start + len(self.memory_card):
             if self.perfetto_enabled:
-                g_tracer.trace_instant("Memory_External", "Card_Write_Ignored", 
-                                     {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"})
+                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                if cpu_pc is not None:
+                    trace_data["pc"] = f"0x{cpu_pc:06X}"
+                g_tracer.trace_instant("Memory_External", "", trace_data)
             
         # Check additional regions
         else:
@@ -231,12 +235,14 @@ class PCE500Memory:
                                 if cpu_pc is not None:
                                     trace_data["pc"] = f"0x{cpu_pc:06X}"
                                 trace_data["region"] = region.name or f"RAM_0x{region.start:06X}"
-                                g_tracer.trace_instant("Memory_External", "Region_RAM_Write", trace_data)
+                                g_tracer.trace_instant("Memory_External", "", trace_data)
                     else:
                         # ROM regions ignore writes
                         if self.perfetto_enabled:
-                            g_tracer.trace_instant("Memory_External", "Region_ROM_Write_Ignored", 
-                                                 {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"})
+                            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                            if cpu_pc is not None:
+                                trace_data["pc"] = f"0x{cpu_pc:06X}"
+                            g_tracer.trace_instant("Memory_External", "", trace_data)
                     break
                     
     def read_word(self, address: int) -> int:
