@@ -195,14 +195,14 @@ class PCE500Memory:
         self.overlays = [o for o in self.overlays if o.name != name]
     
     def load_rom(self, rom_data: bytes) -> None:
-        """Load ROM as an overlay at 0xE0000."""
+        """Load ROM as an overlay at 0xC0000."""
         # Remove any existing ROM overlay
         self.remove_overlay("internal_rom")
         
         # Add new ROM overlay
         self.add_overlay(MemoryOverlay(
-            start=0xE0000,
-            end=0xE0000 + len(rom_data) - 1,
+            start=0xC0000,
+            end=0xC0000 + len(rom_data) - 1,
             name="internal_rom",
             read_only=True,
             data=rom_data

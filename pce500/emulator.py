@@ -73,7 +73,7 @@ class PCE500Emulator:
     """
 
     # Memory constants
-    INTERNAL_ROM_START = 0xE0000  # Changed to new ROM location
+    INTERNAL_ROM_START = 0xC0000  # ROM location
     INTERNAL_ROM_SIZE = 0x40000    # 256KB
     INTERNAL_RAM_START = 0xB8000
     INTERNAL_RAM_SIZE = 0x8000     # 32KB
@@ -146,7 +146,7 @@ class PCE500Emulator:
             start_address = self.INTERNAL_ROM_START
 
         if start_address == self.INTERNAL_ROM_START or start_address == 0xC0000:
-            # Loading as internal ROM (now at 0xE0000)
+            # Loading as internal ROM (at 0xC0000)
             self.memory.load_rom(rom_data)
         else:
             # Loading at arbitrary address

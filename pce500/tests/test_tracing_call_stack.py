@@ -93,8 +93,8 @@ class TestCallStackTracking:
         # Create a minimal ROM with interrupt vector at 0xFFFFA pointing to 0xB8300
         rom_size = 0x40000  # 256KB
         rom_data = bytearray(b'\xFF' * rom_size)
-        # Set interrupt vector at offset 0x1FFFA (0xFFFFA - 0xE0000)
-        rom_data[0x1FFFA:0x1FFFD] = bytes([0x00, 0x83, 0x0B])  # Little-endian 0x0B8300
+        # Set interrupt vector at offset 0x3FFFA (0xFFFFA - 0xC0000)
+        rom_data[0x3FFFA:0x3FFFD] = bytes([0x00, 0x83, 0x0B])  # Little-endian 0x0B8300
         emulator.load_rom(bytes(rom_data))
     
         # IR instruction (opcode 0xFE) in RAM
@@ -221,8 +221,8 @@ class TestCallStackTracking:
         # Create a minimal ROM with interrupt vector at 0xFFFFA pointing to 0xB8600
         rom_size = 0x40000  # 256KB
         rom_data = bytearray(b'\xFF' * rom_size)
-        # Set interrupt vector at offset 0x1FFFA (0xFFFFA - 0xE0000)
-        rom_data[0x1FFFA:0x1FFFD] = bytes([0x00, 0x86, 0x0B])  # Little-endian 0x0B8600
+        # Set interrupt vector at offset 0x3FFFA (0xFFFFA - 0xC0000)
+        rom_data[0x3FFFA:0x3FFFD] = bytes([0x00, 0x86, 0x0B])  # Little-endian 0x0B8600
         emulator.load_rom(bytes(rom_data))
         
         # func1: CALL func2
