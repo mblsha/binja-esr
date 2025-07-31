@@ -207,6 +207,27 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MV    BA, [X]",
     ),
     InstructionTestCase(
+        test_id="MV_BA_to_emem_reg_X_40000",
+        instr_bytes=bytes.fromhex("B204"),
+        init_regs={
+            RegisterName.X: 0x40000,  # X points to address 0x40000
+            RegisterName.BA: 0xAA55,  # BA contains 0xAA55
+        },
+        expected_mem_writes=[
+            (0x40000, 0x55),  # Low byte of BA (little-endian)
+            (0x40001, 0xAA),  # High byte of BA
+        ],
+        expected_mem_state={
+            0x40000: 0x55,  # Low byte written first
+            0x40001: 0xAA,  # High byte written second
+        },
+        expected_regs={
+            RegisterName.X: 0x40000,  # X should remain unchanged (SIMPLE mode)
+            RegisterName.BA: 0xAA55,  # BA should remain unchanged
+        },
+        expected_asm_str="MV    [X], BA",
+    ),
+    InstructionTestCase(
         test_id="MV_X_to_emem_reg",
         instr_bytes=bytes.fromhex("B405"),
         init_regs={RegisterName.X: 0x010203, RegisterName.Y: 0x0060},
