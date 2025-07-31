@@ -18,9 +18,9 @@ def test_debug_pc():
     with open(rom_path, "rb") as f:
         rom_data = f.read()
     
-    # Load ROM
+    # Load ROM - new system expects ROM at 0xE0000
     rom_portion = rom_data[0xC0000:0x100000]
-    emu.load_rom(rom_portion, start_address=0xC0000)
+    emu.load_rom(rom_portion)
     
     # Set PC to a specific address
     test_pc = 0xF10C2

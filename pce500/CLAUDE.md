@@ -40,11 +40,13 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
    - Provides context manager support for automatic trace file saving
    - Implements breakpoint and debugging features
 
-2. **PCE500Memory** (`memory.py`): Direct memory implementation
-   - Pre-allocated regions for RAM (32KB at 0xB8000) and ROM (256KB at 0xC0000)
-   - Optional memory card support (up to 64KB at 0x40000)
-   - Memory-mapped I/O for LCD controllers at 0x2xxxx
-   - Perfetto tracing integration for memory access
+2. **PCE500Memory** (`memory.py`): Overlay-based memory system
+   - Base 1MB writable external memory (0x00000-0xFFFFF) with 0x00 default for unmapped reads
+   - Flexible overlay system for ROM, I/O, and special regions
+   - ROM at 0xE0000-0xFFFFF (256KB) as read-only overlay
+   - Memory card support (up to 64KB at 0x40000) as overlay
+   - Memory-mapped I/O for LCD controllers at 0x2xxxx as I/O overlay
+   - Perfetto tracing integration for memory access with Internal/External categorization
 
 3. **HD61202Controller** (`display/hd61202.py`): LCD controller emulation
    - Dual HD61202 chips for 240x32 pixel display
@@ -58,10 +60,11 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
 
 ### Memory Map
 
-- **Internal ROM**: 0xC0000 - 0xFFFFF (256KB)
-- **Internal RAM**: 0xB8000 - 0xBFFFF (32KB)
-- **Memory Card**: 0x40000 - 0x4FFFF (up to 64KB)
-- **LCD Controllers**: 0x2xxxx (memory-mapped I/O)
+- **Base External Memory**: 0x00000 - 0xFFFFF (1MB) - fully writable, defaults to 0x00
+- **Internal ROM Overlay**: 0xE0000 - 0xFFFFF (256KB) - read-only, mapped over base memory
+- **SC62015 Internal Memory**: 0x100000 - 0x1000FF (256B) - separate from external memory
+- **Memory Card Overlay**: 0x40000 - 0x4FFFF (up to 64KB) - read-only when inserted
+- **LCD Controllers Overlay**: 0x20000 - 0x2FFFF (64KB) - I/O handlers for HD61202 chips
 
 System vectors:
 - **Entry Point**: 0xFFFFD (3 bytes, little-endian)
@@ -69,10 +72,15 @@ System vectors:
 
 ### Key Design Patterns
 
-1. **Simplified Architecture**: Recently refactored from complex 4-layer abstraction to clean, maintainable design
+1. **Overlay Memory System**: Recently refactored from fixed regions to flexible overlay system
+   - Base 1MB writable external memory layer
+   - Read-only ROM/memory card overlays mapped on top
+   - I/O overlays with custom read/write handlers
+   - Easy addition/removal of memory regions at runtime
 2. **Performance Tracking**: Built-in counters for instructions, memory operations, and cycles
 3. **Context Manager Support**: Emulator can be used with `with` statement for automatic resource cleanup
 4. **Modular Tracing**: Optional Perfetto tracing that can be enabled/disabled at runtime
+5. **Simplified Memory Categories**: All memory operations traced as Internal or External only
 
 ### Testing Infrastructure
 

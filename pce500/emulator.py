@@ -73,7 +73,7 @@ class PCE500Emulator:
     """
 
     # Memory constants
-    INTERNAL_ROM_START = 0xC0000
+    INTERNAL_ROM_START = 0xE0000  # Changed to new ROM location
     INTERNAL_ROM_SIZE = 0x40000    # 256KB
     INTERNAL_RAM_START = 0xB8000
     INTERNAL_RAM_SIZE = 0x8000     # 32KB
@@ -108,7 +108,9 @@ class PCE500Emulator:
         # After power-on reset, set PC to entry point (not reset vector)
         # The reset vector at 0xFFFFA is only used for RESET instruction
         # Normal startup uses entry point at 0xFFFFD
-        if hasattr(self.memory, 'internal_rom') and self.memory.internal_rom:
+        # Check if ROM is loaded by looking for internal_rom overlay
+        rom_loaded = any(overlay.name == 'internal_rom' for overlay in self.memory.overlays)
+        if rom_loaded:
             entry_point = self.memory.read_long(0xFFFFD)
             self.cpu.regs.set(RegisterName.PC, entry_point)
 
@@ -143,8 +145,8 @@ class PCE500Emulator:
         if start_address is None:
             start_address = self.INTERNAL_ROM_START
 
-        if start_address == self.INTERNAL_ROM_START:
-            # Loading as internal ROM
+        if start_address == self.INTERNAL_ROM_START or start_address == 0xC0000:
+            # Loading as internal ROM (now at 0xE0000)
             self.memory.load_rom(rom_data)
         else:
             # Loading at arbitrary address
@@ -172,7 +174,9 @@ class PCE500Emulator:
         # After power-on reset, set PC to entry point (not reset vector)
         # The reset vector at 0xFFFFA is only used for RESET instruction
         # Normal startup uses entry point at 0xFFFFD
-        if hasattr(self.memory, 'internal_rom') and self.memory.internal_rom:
+        # Check if ROM is loaded by looking for internal_rom overlay
+        rom_loaded = any(overlay.name == 'internal_rom' for overlay in self.memory.overlays)
+        if rom_loaded:
             entry_point = self.memory.read_long(0xFFFFD)
             self.cpu.regs.set(RegisterName.PC, entry_point)
 

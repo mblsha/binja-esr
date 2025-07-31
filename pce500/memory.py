@@ -1,6 +1,6 @@
 """Simplified memory implementation for PC-E500 emulator."""
 
-from typing import Optional
+from typing import Optional, Callable, Union, List
 from dataclasses import dataclass
 
 from .trace_manager import g_tracer
@@ -13,13 +13,15 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
 
 
 @dataclass
-class MemoryRegion:
-    """Simple memory region descriptor."""
+class MemoryOverlay:
+    """Represents a memory overlay that can override reads/writes."""
     start: int
     end: int
-    data: Optional[bytearray] = None  # None for ROM
-    rom_data: Optional[bytes] = None  # None for RAM
-    name: str = ""
+    name: str
+    read_only: bool = True
+    data: Optional[Union[bytes, bytearray]] = None
+    read_handler: Optional[Callable[[int, Optional[int]], int]] = None  # (address, cpu_pc) -> byte
+    write_handler: Optional[Callable[[int, int, Optional[int]], None]] = None  # (address, value, cpu_pc) -> None
     
 
 class PCE500Memory:
@@ -30,17 +32,11 @@ class PCE500Memory:
     """
     
     def __init__(self):
-        # Pre-allocate common regions
-        self.internal_ram = bytearray(32 * 1024)  # 32KB at 0xB8000
-        self.internal_rom: Optional[bytes] = None  # 256KB at 0xC0000
+        # Base 1MB external memory (0x00000-0xFFFFF)
+        self.external_memory = bytearray(1024 * 1024)
         
-        # Optional components
-        self.lcd_controller = None
-        self.memory_card: Optional[bytes] = None
-        self.card_start = 0
-        
-        # Additional regions for expansion
-        self.regions: list[MemoryRegion] = []
+        # Overlays list (checked in order)
+        self.overlays: List[MemoryOverlay] = []
         
         # Perfetto tracing
         self.perfetto_enabled = False
@@ -48,30 +44,7 @@ class PCE500Memory:
         # Reference to CPU emulator for accessing internal memory registers
         self.cpu = None
         
-    def load_rom(self, rom_data: bytes) -> None:
-        """Load internal ROM."""
-        if len(rom_data) > 256 * 1024:
-            raise ValueError(f"ROM too large: {len(rom_data)} bytes")
-        self.internal_rom = rom_data
-        
-    def load_memory_card(self, card_data: bytes, card_size: int) -> None:
-        """Load memory card."""
-        card_starts = {
-            8192: 0x40000,    # 8KB
-            16384: 0x48000,   # 16KB
-            32768: 0x44000,   # 32KB
-            65536: 0x40000    # 64KB
-        }
-        
-        if card_size not in card_starts:
-            raise ValueError(f"Invalid card size: {card_size}")
-            
-        self.memory_card = card_data
-        self.card_start = card_starts[card_size]
-        
-    def set_lcd_controller(self, controller) -> None:
-        """Set LCD controller for memory-mapped I/O."""
-        self.lcd_controller = controller
+    # The new implementations are in the add_overlay section below
         
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -87,47 +60,27 @@ class PCE500Memory:
             # Internal 256-byte RAM
             offset = address - 0x100000
             if offset < 0x100:
-                # Map internal memory to existing internal_ram storage (reuse existing array)
-                # Internal memory (256 bytes) maps to the end of internal_ram
-                internal_ram_offset = len(self.internal_ram) - 256 + offset
-                if internal_ram_offset >= 0:
-                    return self.internal_ram[internal_ram_offset]
-                raise ValueError(f"Internal memory mapping error: negative offset {internal_ram_offset} for address 0x{address:06X}")
+                # Internal memory stored at end of external_memory for compatibility
+                internal_offset = len(self.external_memory) - 256 + offset
+                return self.external_memory[internal_offset]
             raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
         
-        # Internal ROM (0xC0000-0xFFFFF)
-        if 0xC0000 <= address <= 0xFFFFF:
-            if self.internal_rom:
-                offset = address - 0xC0000
-                if offset < len(self.internal_rom):
-                    return self.internal_rom[offset]
-            return 0x00
-            
-        # Internal RAM (0xB8000-0xBFFFF)
-        elif 0xB8000 <= address <= 0xBFFFF:
-            return self.internal_ram[address - 0xB8000]
-            
-        # LCD controller (0x20000-0x2FFFF)
-        elif 0x20000 <= address <= 0x2FFFF and self.lcd_controller:
-            return self.lcd_controller.read(address, cpu_pc)
-            
-        # Memory card
-        elif self.memory_card and self.card_start <= address < self.card_start + len(self.memory_card):
-            return self.memory_card[address - self.card_start]
-            
-        # Check additional regions
-        for region in self.regions:
-            if region.start <= address <= region.end:
-                offset = address - region.start
-                if region.rom_data:
-                    value = region.rom_data[offset] if offset < len(region.rom_data) else 0x00
-                elif region.data:
-                    value = region.data[offset]
-                else:
-                    value = 0x00
-                return value
-                    
-        return 0x00  # Default for unmapped memory
+        # External memory space (0x00000-0xFFFFF)
+        address &= 0xFFFFF
+        
+        # Check overlays in order
+        for overlay in self.overlays:
+            if overlay.start <= address <= overlay.end:
+                if overlay.read_handler:
+                    return overlay.read_handler(address, cpu_pc)
+                elif overlay.data:
+                    offset = address - overlay.start
+                    if offset < len(overlay.data):
+                        return overlay.data[offset]
+                return 0x00
+        
+        # Default to external memory
+        return self.external_memory[address]
         
     def write_byte(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Write a byte to memory.
@@ -145,17 +98,11 @@ class PCE500Memory:
             # Internal 256-byte RAM
             offset = address - 0x100000
             if offset < 0x100:
-                # Map internal memory to existing internal_ram storage (reuse existing array)
-                # Internal memory (256 bytes) maps to the end of internal_ram
-                internal_ram_offset = len(self.internal_ram) - 256 + offset
-                if internal_ram_offset >= 0:
-                    self.internal_ram[internal_ram_offset] = value
-                else:
-                    raise ValueError(f"Internal memory mapping error: negative offset {internal_ram_offset} for address 0x{address:06X}")
-            else:
-                raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
+                # Internal memory stored at end of external_memory for compatibility
+                internal_offset = len(self.external_memory) - 256 + offset
+                self.external_memory[internal_offset] = value
                 
-            if self.perfetto_enabled:
+                if self.perfetto_enabled:
                     # Get current BP value from internal memory if CPU is available
                     bp_value = "N/A"
                     if self.cpu:
@@ -180,70 +127,38 @@ class PCE500Memory:
                         "imem_name": imem_name,
                         "size": "1"  # Always 1 for byte writes
                     })
+            else:
+                raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
             return
         
-        # Internal RAM (0xB8000-0xBFFFF)
-        if 0xB8000 <= address <= 0xBFFFF:
-            self.internal_ram[address - 0xB8000] = value
-            
-            # Perfetto tracing for RAM writes
-            if self.perfetto_enabled:
-                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                if cpu_pc is not None:
-                    trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory_External", "", trace_data)
-            
-        # LCD controller (0x20000-0x2FFFF)
-        elif 0x20000 <= address <= 0x2FFFF and self.lcd_controller:
-            self.lcd_controller.write(address, value, cpu_pc)
-            
-            # Perfetto tracing for I/O writes
-            if self.perfetto_enabled:
-                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                if cpu_pc is not None:
-                    trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory_External", "", trace_data)
-            
-        # ROM regions - silently ignore writes
-        elif 0xC0000 <= address <= 0xFFFFF:
-            if self.perfetto_enabled:
-                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                if cpu_pc is not None:
-                    trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory_External", "", trace_data)
-            
-        # Memory card - ROM, ignore writes
-        elif self.memory_card and self.card_start <= address < self.card_start + len(self.memory_card):
-            if self.perfetto_enabled:
-                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                if cpu_pc is not None:
-                    trace_data["pc"] = f"0x{cpu_pc:06X}"
-                g_tracer.trace_instant("Memory_External", "", trace_data)
-            
-        # Check additional regions
-        else:
-            for region in self.regions:
-                if region.start <= address <= region.end:
-                    if region.data:  # RAM region
-                        offset = address - region.start
-                        if offset < len(region.data):
-                            region.data[offset] = value
-                            
-                            # Perfetto tracing for additional RAM writes
-                            if self.perfetto_enabled:
-                                trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                                if cpu_pc is not None:
-                                    trace_data["pc"] = f"0x{cpu_pc:06X}"
-                                trace_data["region"] = region.name or f"RAM_0x{region.start:06X}"
-                                g_tracer.trace_instant("Memory_External", "", trace_data)
-                    else:
-                        # ROM regions ignore writes
-                        if self.perfetto_enabled:
-                            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                            if cpu_pc is not None:
-                                trace_data["pc"] = f"0x{cpu_pc:06X}"
-                            g_tracer.trace_instant("Memory_External", "", trace_data)
-                    break
+        # External memory space (0x00000-0xFFFFF)
+        address &= 0xFFFFF
+        
+        # Check overlays for write handlers or read-only
+        for overlay in self.overlays:
+            if overlay.start <= address <= overlay.end:
+                if overlay.write_handler:
+                    overlay.write_handler(address, value, cpu_pc)
+                    return
+                elif overlay.read_only:
+                    # Silently ignore writes to read-only overlays
+                    if self.perfetto_enabled:
+                        trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                        if cpu_pc is not None:
+                            trace_data["pc"] = f"0x{cpu_pc:06X}"
+                        trace_data["overlay"] = overlay.name
+                        g_tracer.trace_instant("Memory_External", "", trace_data)
+                    return
+        
+        # Default to external memory
+        self.external_memory[address] = value
+        
+        # Perfetto tracing for all writes
+        if self.perfetto_enabled:
+            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+            if cpu_pc is not None:
+                trace_data["pc"] = f"0x{cpu_pc:06X}"
+            g_tracer.trace_instant("Memory_External", "", trace_data)
                     
     def read_word(self, address: int) -> int:
         """Read 16-bit word (little-endian)."""
@@ -269,30 +184,99 @@ class PCE500Memory:
         self.write_byte(address + 1, (value >> 8) & 0xFF, cpu_pc)
         self.write_byte(address + 2, (value >> 16) & 0xFF, cpu_pc)
         
+    def add_overlay(self, overlay: MemoryOverlay) -> None:
+        """Add a memory overlay."""
+        self.overlays.append(overlay)
+        # Optionally sort by start address for efficiency
+        self.overlays.sort(key=lambda o: o.start)
+    
+    def remove_overlay(self, name: str) -> None:
+        """Remove overlay by name."""
+        self.overlays = [o for o in self.overlays if o.name != name]
+    
+    def load_rom(self, rom_data: bytes) -> None:
+        """Load ROM as an overlay at 0xE0000."""
+        # Remove any existing ROM overlay
+        self.remove_overlay("internal_rom")
+        
+        # Add new ROM overlay
+        self.add_overlay(MemoryOverlay(
+            start=0xE0000,
+            end=0xE0000 + len(rom_data) - 1,
+            name="internal_rom",
+            read_only=True,
+            data=rom_data
+        ))
+    
+    def set_lcd_controller(self, controller) -> None:
+        """Add LCD controller as an overlay."""
+        # Remove any existing LCD overlay
+        self.remove_overlay("lcd_controller")
+        
+        if controller:
+            self.add_overlay(MemoryOverlay(
+                start=0x20000,
+                end=0x2FFFF,
+                name="lcd_controller",
+                read_only=False,
+                read_handler=lambda addr, pc: controller.read(addr, pc),
+                write_handler=lambda addr, val, pc: controller.write(addr, val, pc)
+            ))
+    
+    def load_memory_card(self, card_data: bytes, card_size: int) -> None:
+        """Load memory card as overlay."""
+        card_starts = {
+            8192: 0x40000,    # 8KB
+            16384: 0x48000,   # 16KB
+            32768: 0x44000,   # 32KB
+            65536: 0x40000    # 64KB
+        }
+        
+        if card_size not in card_starts:
+            raise ValueError(f"Invalid card size: {card_size}")
+        
+        # Remove any existing memory card overlay
+        self.remove_overlay("memory_card")
+        
+        # Add new memory card overlay
+        start = card_starts[card_size]
+        self.add_overlay(MemoryOverlay(
+            start=start,
+            end=start + len(card_data) - 1,
+            name="memory_card",
+            read_only=True,
+            data=card_data
+        ))
+    
     def add_ram(self, start: int, size: int, name: str = "") -> None:
-        """Add additional RAM region."""
-        self.regions.append(MemoryRegion(
+        """Add additional RAM overlay (writable)."""
+        self.add_overlay(MemoryOverlay(
             start=start,
             end=start + size - 1,
-            data=bytearray(size),
-            name=name
+            name=name or f"RAM_0x{start:06X}",
+            read_only=False,
+            data=bytearray(size)
         ))
         
     def add_rom(self, start: int, data: bytes, name: str = "") -> None:
-        """Add additional ROM region."""
-        self.regions.append(MemoryRegion(
+        """Add additional ROM overlay (read-only)."""
+        self.add_overlay(MemoryOverlay(
             start=start,
             end=start + len(data) - 1,
-            rom_data=data,
-            name=name
+            name=name or f"ROM_0x{start:06X}",
+            read_only=True,
+            data=data
         ))
         
     def reset(self) -> None:
         """Reset all RAM to zero."""
-        self.internal_ram[:] = bytes(len(self.internal_ram))
-        for region in self.regions:
-            if region.data:  # RAM region
-                region.data[:] = bytes(len(region.data))
+        # Reset external memory (including internal memory at the end)
+        self.external_memory[:] = bytes(len(self.external_memory))
+        
+        # Reset any writable overlays
+        for overlay in self.overlays:
+            if not overlay.read_only and overlay.data and isinstance(overlay.data, bytearray):
+                overlay.data[:] = bytes(len(overlay.data))
                 
     def read_bytes(self, address: int, size: int) -> bytes:
         """Read multiple bytes from memory (for SC62015 emulator compatibility)."""
@@ -304,29 +288,31 @@ class PCE500Memory:
     def get_memory_info(self) -> str:
         """Get memory configuration info."""
         lines = ["Memory Configuration:"]
+        lines.append("  Base RAM: 0x00000-0xFFFFF (1MB)")
+        lines.append("  Internal: 0x100000-0x1000FF (256B)")
         
-        if self.internal_rom:
-            lines.append(f"  ROM: 0xC0000-0xFFFFF ({len(self.internal_rom)//1024}KB)")
-        lines.append("  RAM: 0xB8000-0xBFFFF (32KB)")
+        if self.overlays:
+            lines.append("\nOverlays:")
+            for overlay in sorted(self.overlays, key=lambda o: o.start):
+                size = (overlay.end - overlay.start + 1)
+                if size >= 1024:
+                    size_str = f"{size//1024}KB"
+                else:
+                    size_str = f"{size}B"
+                
+                overlay_type = "R/O" if overlay.read_only else "R/W"
+                if overlay.read_handler or overlay.write_handler:
+                    overlay_type = "I/O"
+                
+                lines.append(f"  {overlay.name}: 0x{overlay.start:05X}-0x{overlay.end:05X} ({size_str}) [{overlay_type}]")
         
-        if self.memory_card:
-            lines.append(f"  Card: 0x{self.card_start:05X} ({len(self.memory_card)//1024}KB)")
-            
-        if self.lcd_controller:
-            lines.append("  LCD: 0x20000-0x2FFFF")
-            
-        for region in self.regions:
-            size = (region.end - region.start + 1) // 1024
-            rtype = "RAM" if region.data else "ROM"
-            lines.append(f"  {rtype}: 0x{region.start:05X}-0x{region.end:05X} ({size}KB) {region.name}")
-            
         return "\n".join(lines)
         
     def get_internal_memory_bytes(self) -> bytes:
         """Get internal memory (256 bytes) as raw bytes."""
-        # Internal memory is stored in the last 256 bytes of internal_ram
-        start_offset = len(self.internal_ram) - 256
-        return bytes(self.internal_ram[start_offset:start_offset + 256])
+        # Internal memory is stored in the last 256 bytes of external_memory
+        start_offset = len(self.external_memory) - 256
+        return bytes(self.external_memory[start_offset:])
         
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing."""

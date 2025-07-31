@@ -30,11 +30,11 @@ class TestSimplifiedEmulator:
         rom_data = bytes([0x00, 0x01, 0x02, 0x03] * 64)  # 256 bytes
         emu.load_rom(rom_data)
         
-        # Verify ROM is loaded at correct address
-        assert emu.memory.read_byte(0xC0000) == 0x00
-        assert emu.memory.read_byte(0xC0001) == 0x01
-        assert emu.memory.read_byte(0xC0002) == 0x02
-        assert emu.memory.read_byte(0xC0003) == 0x03
+        # Verify ROM is loaded at correct address (0xE0000)
+        assert emu.memory.read_byte(0xE0000) == 0x00
+        assert emu.memory.read_byte(0xE0001) == 0x01
+        assert emu.memory.read_byte(0xE0002) == 0x02
+        assert emu.memory.read_byte(0xE0003) == 0x03
         
     def test_memory_card_loading(self):
         """Test memory card loading."""
@@ -79,9 +79,10 @@ class TestSimplifiedEmulator:
         # Load ROM with reset vector
         rom_data = bytearray(256 * 1024)
         # Set reset vector at 0xFFFFD to point to 0x1234
-        rom_data[0x3FFFD] = 0x34  # Low byte
-        rom_data[0x3FFFE] = 0x12  # Middle byte
-        rom_data[0x3FFFF] = 0x00  # High byte
+        # ROM starts at 0xE0000, so offset is 0xFFFFD - 0xE0000 = 0x1FFFD
+        rom_data[0x1FFFD] = 0x34  # Low byte
+        rom_data[0x1FFFE] = 0x12  # Middle byte
+        rom_data[0x1FFFF] = 0x00  # High byte
         emu.load_rom(bytes(rom_data))
         
         # Write some data to RAM
@@ -132,11 +133,11 @@ class TestSimplifiedEmulator:
         
         # Load simple program
         rom_data = bytearray(256 * 1024)
-        rom_data[0] = 0x00  # NOP at 0xC0000
+        rom_data[0] = 0x00  # NOP at 0xE0000
         emu.load_rom(bytes(rom_data))
         
         # Set PC
-        emu.cpu.regs.set(RegisterName.PC, 0xC0000)
+        emu.cpu.regs.set(RegisterName.PC, 0xE0000)
         
         # Execute one instruction
         emu.step()
@@ -144,7 +145,7 @@ class TestSimplifiedEmulator:
         # Check trace
         assert len(emu.trace) == 1
         assert emu.trace[0][0] == 'exec'
-        assert emu.trace[0][1] == 0xC0000
+        assert emu.trace[0][1] == 0xE0000
         
     def test_memory_info(self):
         """Test memory info display."""
@@ -155,9 +156,9 @@ class TestSimplifiedEmulator:
         
         # Get memory info
         info = emu.get_memory_info()
-        assert "ROM: 0xC0000-0xFFFFF (256KB)" in info
-        assert "RAM: 0xB8000-0xBFFFF (32KB)" in info
-        assert "LCD: 0x20000-0x2FFFF" in info
+        assert "internal_rom: 0xE0000-0x11FFFF (256KB)" in info
+        assert "Base RAM: 0x00000-0xFFFFF (1MB)" in info
+        assert "lcd_controller: 0x20000-0x2FFFF (64KB)" in info
         
     def test_performance_stats(self):
         """Test performance statistics."""
@@ -184,7 +185,7 @@ class TestSimplifiedEmulator:
         emu.load_rom(bytes(rom_data))
         
         # Set PC to start of ROM
-        initial_pc = 0xC0000
+        initial_pc = 0xE0000
         emu.cpu.regs.set(RegisterName.PC, initial_pc)
         
         # Verify instruction is correctly loaded in ROM
