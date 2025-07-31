@@ -301,6 +301,30 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="PUSHU F",
     ),
+    # Test MV IL instruction - verify high byte is cleared
+    InstructionTestCase(
+        test_id="MV_IL_clears_high_byte",
+        instr_bytes=bytes([0x09, 0x09]),  # MV IL, 09
+        init_regs={RegisterName.I: 0xAABB},  # Initialize I to 0xAABB
+        expected_regs={
+            RegisterName.IL: 0x09,   # IL should be 0x09
+            RegisterName.IH: 0x00,   # IH should be cleared to 0x00
+            RegisterName.I: 0x0009   # Full I register should be 0x0009
+        },
+        expected_asm_str="MV    IL, 09",
+    ),
+    # Test MV I instruction - verify all bytes are set
+    InstructionTestCase(
+        test_id="MV_I_preserves_all_bytes",
+        instr_bytes=bytes([0x0B, 0x34, 0x12]),  # MV I, 1234 (0x0B is opcode for MV I)
+        init_regs={RegisterName.I: 0xAABB},  # Initialize I to 0xAABB
+        expected_regs={
+            RegisterName.I: 0x1234,   # Full I register set to 0x1234
+            RegisterName.IL: 0x34,    # IL is low byte
+            RegisterName.IH: 0x12     # IH is high byte
+        },
+        expected_asm_str="MV    I, 1234",
+    ),
     # --- ADD Instructions ---
     InstructionTestCase(
         test_id="ADD_A_imm_simple",
