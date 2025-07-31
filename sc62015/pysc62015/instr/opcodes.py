@@ -1187,6 +1187,19 @@ class TempReg(RegLiftMixin, Operand):
     # lift() and lift_assign() provided by RegLiftMixin
 
 # only makes sense for PUSHU / POPU
+class RegIL(Reg):
+    """Special IL register that clears the entire I register when assigned."""
+    def __init__(self) -> None:
+        super().__init__("IL")
+
+    def width(self) -> int:
+        return 1
+
+    def lift_assign(self, il: LowLevelILFunction, value: ExpressionIndex, pre: Optional[AddressingMode] = None) -> None:
+        # When assigning to IL, clear the entire I register first, then set the low byte
+        # This matches the hardware behavior where MV IL, XX clears IH
+        il.append(il.set_reg(2, RegisterName("I"), il.and_expr(2, value, il.const(2, 0xFF))))
+
 class RegIMR(Reg):
     def __init__(self) -> None:
         super().__init__("IMR")
