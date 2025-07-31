@@ -10,6 +10,7 @@ from binja_test_mocks.mock_llil import MockLLIL
 
 # Import register addresses from opcodes
 from .instr.opcodes import IMEMRegisters
+from .constants import INTERNAL_MEMORY_START
 
 
 def eval_intrinsic_tcl(
@@ -45,15 +46,15 @@ def eval_intrinsic_halt(
     - USR (F8H) bits 3 and 4 are set to 1
     """
     # Modify USR register
-    usr = memory.read_byte(IMEMRegisters.USR)
+    usr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR)
     usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
     usr |= 0x18   # Set bits 3 and 4 to 1
-    memory.write_byte(IMEMRegisters.USR, usr)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR, usr)
     
     # Modify SSR register
-    ssr = memory.read_byte(IMEMRegisters.SSR)
+    ssr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR)
     ssr |= 0x04   # Set bit 2 to 1
-    memory.write_byte(IMEMRegisters.SSR, ssr)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR, ssr)
     
     state.halted = True
     return None, None
@@ -77,15 +78,15 @@ def eval_intrinsic_off(
     Same as HALT but represents a different power state (main/sub clock stop).
     """
     # Modify USR register
-    usr = memory.read_byte(IMEMRegisters.USR)
+    usr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR)
     usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
     usr |= 0x18   # Set bits 3 and 4 to 1
-    memory.write_byte(IMEMRegisters.USR, usr)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR, usr)
     
     # Modify SSR register
-    ssr = memory.read_byte(IMEMRegisters.SSR)
+    ssr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR)
     ssr |= 0x04   # Set bit 2 to 1
-    memory.write_byte(IMEMRegisters.SSR, ssr)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR, ssr)
     
     state.halted = True
     return None, None
@@ -115,25 +116,25 @@ def eval_intrinsic_reset(
     - Flags (C/Z) are retained
     """
     # Reset LCC bit 7 (documented as ACM bit 7 in RESET spec)
-    lcc = memory.read_byte(IMEMRegisters.LCC)
+    lcc = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC)
     lcc &= ~0x80  # Clear bit 7
-    memory.write_byte(IMEMRegisters.LCC, lcc)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC, lcc)
     
     # Reset UCR, ISR, SCR to 0
-    memory.write_byte(IMEMRegisters.UCR, 0x00)
-    memory.write_byte(IMEMRegisters.ISR, 0x00)  # Clear interrupt status
-    memory.write_byte(IMEMRegisters.SCR, 0x00)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.UCR, 0x00)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)  # Clear interrupt status
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SCR, 0x00)
     
     # Modify USR register
-    usr = memory.read_byte(IMEMRegisters.USR)
+    usr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR)
     usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
     usr |= 0x18   # Set bits 3 and 4 to 1
-    memory.write_byte(IMEMRegisters.USR, usr)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR, usr)
     
     # Reset SSR bit 2
-    ssr = memory.read_byte(IMEMRegisters.SSR)
+    ssr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR)
     ssr &= ~0x04  # Clear bit 2
-    memory.write_byte(IMEMRegisters.SSR, ssr)
+    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR, ssr)
     
     # Read reset vector at 0xFFFFA (3 bytes, little-endian)
     reset_vector = memory.read_byte(0xFFFFA)
