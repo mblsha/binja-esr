@@ -99,8 +99,11 @@ class PCE500Emulator:
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
 
-        # Create CPU emulator with our memory
+        # Create CPU emulator with our memory (temporarily disable tracing during reset)
+        old_perfetto_state = self.memory.perfetto_enabled
+        self.memory.set_perfetto_enabled(False)
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
+        self.memory.set_perfetto_enabled(old_perfetto_state)
         
         # Give memory access to CPU for accessing internal registers
         self.memory.set_cpu(self.cpu)
@@ -168,8 +171,11 @@ class PCE500Emulator:
         # Reset LCD
         self.lcd.reset()
 
-        # Reset CPU state
+        # Reset CPU state (temporarily disable tracing during reset)
+        old_perfetto_state = self.memory.perfetto_enabled
+        self.memory.set_perfetto_enabled(False)
         self.cpu.power_on_reset()
+        self.memory.set_perfetto_enabled(old_perfetto_state)
         
         # After power-on reset, set PC to entry point (not reset vector)
         # The reset vector at 0xFFFFA is only used for RESET instruction
