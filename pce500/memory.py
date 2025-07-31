@@ -101,7 +101,7 @@ class PCE500Memory:
                 offset = address - 0xC0000
                 if offset < len(self.internal_rom):
                     return self.internal_rom[offset]
-            return 0xFF
+            return 0x00
             
         # Internal RAM (0xB8000-0xBFFFF)
         elif 0xB8000 <= address <= 0xBFFFF:
@@ -120,14 +120,14 @@ class PCE500Memory:
             if region.start <= address <= region.end:
                 offset = address - region.start
                 if region.rom_data:
-                    value = region.rom_data[offset] if offset < len(region.rom_data) else 0xFF
+                    value = region.rom_data[offset] if offset < len(region.rom_data) else 0x00
                 elif region.data:
                     value = region.data[offset]
                 else:
-                    value = 0xFF
+                    value = 0x00
                 return value
                     
-        return 0xFF  # Default for unmapped memory
+        return 0x00  # Default for unmapped memory
         
     def write_byte(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Write a byte to memory.
