@@ -149,7 +149,7 @@ class MV(MoveInstruction):
 class MVL(MoveInstruction):
     def modify_addr_il(self, il: LowLevelILFunction) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
         return il.add
-    
+
     def _update_address_with_wrap(
         self,
         il: LowLevelILFunction,
@@ -159,7 +159,7 @@ class MVL(MoveInstruction):
     ) -> None:
         """Update address register with wrapping for IMem8 operands."""
         new_addr = update_func(reg.width(), reg.lift(il), il.const(reg.width(), 1))
-        
+
         if isinstance(operand, IMem8):
             # For IMem8, wrap address within internal memory range (0x00-0xFF)
             # Extract offset by subtracting INTERNAL_MEMORY_START
@@ -188,7 +188,7 @@ class MVL(MoveInstruction):
         src_reg.lift_assign(
             il, src.lift_current_addr(il, pre=src_mode, side_effects=False)
         )
-        
+
         # Debug: print initial addresses
         # print(f"MVL: dst_mode={dst_mode}, src_mode={src_mode}")
 
@@ -241,11 +241,11 @@ class PRE(Instruction):
         sister._pre = self.opcode
         sister.set_length(self.length() + sister.length())
         return sister
-    
+
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         # PRE instructions that couldn't fuse are invalid
         raise InvalidInstruction(f"Unfused PRE instruction at {addr:#x}")
-    
+
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # PRE instructions that couldn't fuse are invalid
         raise InvalidInstruction(f"Unfused PRE instruction at {addr:#x}")

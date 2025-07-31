@@ -227,7 +227,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MV    A, [00010]",
     ),
     InstructionTestCase(
-        test_id="MV_[Y++]_A", 
+        test_id="MV_[Y++]_A",
         instr_bytes=bytes.fromhex("B025"),
         init_regs={
             RegisterName.A: 0x42,
@@ -270,11 +270,11 @@ instruction_test_cases: List[InstructionTestCase] = [
     InstructionTestCase(
         test_id="PUSHU_preserves_flags",
         instr_bytes=bytes.fromhex("2E"),
-        init_regs={RegisterName.U: 0x20, RegisterName.FC: 1, RegisterName.FZ: 1},
-        expected_mem_writes=[(0x1F, 0x03)],
-        expected_mem_state={0x1F: 0x03},
+        init_regs={RegisterName.U: 0x8000, RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_mem_writes=[(0x7FFF, 0x03)],
+        expected_mem_state={0x7FFF: 0x03},
         expected_regs={
-            RegisterName.U: 0x1F,
+            RegisterName.U: 0x7FFF,
             RegisterName.FC: 1,
             RegisterName.FZ: 1,
         },
@@ -865,36 +865,36 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
         expected_asm_str="XOR   A, (BP+10)",
     ),
-    
+
     # Test case for b204 instruction with BA=0x5AA5
     InstructionTestCase(
         test_id="MV_emem_BA_b204",
         instr_bytes=bytes.fromhex("B204"),  # MV [X], BA
         init_regs={
-            RegisterName.BA: 0x5AA5, 
+            RegisterName.BA: 0x5AA5,
             RegisterName.X: 0xBE000,  # X points to address 0xBE000
-            RegisterName.FC: 0, 
+            RegisterName.FC: 0,
             RegisterName.FZ: 0
         },
         init_mem={0xBE000: 0x00, 0xBE001: 0x00},  # Clear external memory at 0xBE000-0xBE001
         expected_regs={
-            RegisterName.BA: 0x5AA5, 
+            RegisterName.BA: 0x5AA5,
             RegisterName.X: 0xBE000,  # X unchanged
-            RegisterName.FC: 0, 
+            RegisterName.FC: 0,
             RegisterName.FZ: 0
         },
         expected_mem_writes=[(0xBE000, 0xA5), (0xBE001, 0x5A)],  # Little-endian: LSB first
         expected_mem_state={0xBE000: 0xA5, 0xBE001: 0x5A},  # BA=0x5AA5 stored as A5 5A
         expected_asm_str="MV    [X], BA",
     ),
-    
+
     # Test case for 30e904d4 instruction - MVW [X], (BP+D4)
     InstructionTestCase(
         test_id="MVW_X_indirect_from_BP_30e904d4",
         instr_bytes=bytes.fromhex("30E904D4"),  # MVW [X], (BP+D4)
         init_regs={
             RegisterName.X: 0x080000,  # X points to external memory address 0x080000
-            RegisterName.FC: 0, 
+            RegisterName.FC: 0,
             RegisterName.FZ: 0
         },
         init_mem={
@@ -962,12 +962,12 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_mem={
             # Set BP to 0x34 to ensure it's not being used
             INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x34,  # BP = 0x34
-            
+
             # Internal memory at 0xE6 contains 20-bit external address (little-endian)
             INTERNAL_MEMORY_START + 0xE6: 0x00,  # Low byte
-            INTERNAL_MEMORY_START + 0xE7: 0x10,  # Mid byte  
+            INTERNAL_MEMORY_START + 0xE7: 0x10,  # Mid byte
             INTERNAL_MEMORY_START + 0xE8: 0x02,  # High byte (20-bit address = 0x021000)
-            
+
             # External memory at 0x021000 + 0x08 = 0x021008 contains test value
             0x021008: 0x42,  # Test value to be loaded into A
         },
@@ -978,21 +978,40 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MV    A, [(E6)+08]",
     ),
     InstructionTestCase(
+        test_id="MV_Y_from_X_plus_offset",
+        instr_bytes=bytes.fromhex("958412"),
+        init_regs={
+            RegisterName.X: 0x3000,  # Base address for external memory access
+            RegisterName.Y: 0x999999,  # Initial value to verify it gets changed
+        },
+        init_mem={
+            # Place 3 bytes at external memory address X+0x12 (0x3000+0x12=0x3012)
+            0x3012: 0x11,  # Low byte
+            0x3013: 0x22,  # Mid byte
+            0x3014: 0x33,  # High byte
+        },
+        expected_regs={
+            RegisterName.Y: 0x332211,  # Y should contain the 3 bytes from external memory (little-endian)
+            RegisterName.X: 0x3000,    # X should remain unchanged (positive offset, not inc/dec)
+        },
+        expected_asm_str="MV    Y, [X+12]",
+    ),
+    InstructionTestCase(
         test_id="POPU_IMR",
         instr_bytes=bytes.fromhex("3f"),
         init_regs={
-            RegisterName.U: 0x50,  # User stack pointer
+            RegisterName.U: 0x8000,  # User stack pointer in higher external memory
         },
         init_mem={
             # Set BP register to non-zero value
             INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,  # BP = 0x10
             # Place test value on stack where U points
-            0x50: 0xA5,  # Value to be popped to IMR
+            0x8000: 0xA5,  # Value to be popped to IMR
             # Initialize IMR to different value to verify it changes
             INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0x00,
         },
         expected_regs={
-            RegisterName.U: 0x51,  # U incremented by 1 after pop
+            RegisterName.U: 0x8001,  # U incremented by 1 after pop
         },
         expected_mem_writes=[
             # POPU IMR writes the popped value to IMR register
@@ -1010,7 +1029,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         test_id="PUSHU_IMR_with_BP",
         instr_bytes=bytes.fromhex("2f"),
         init_regs={
-            RegisterName.U: 0x50,  # User stack pointer
+            RegisterName.U: 0x8000,  # User stack pointer in higher external memory
         },
         init_mem={
             # Set BP register to non-zero value
@@ -1019,14 +1038,37 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0xFF,  # Test masking behavior
         },
         expected_regs={
-            RegisterName.U: 0x4F,  # U decremented by 1 after push
+            RegisterName.U: 0x7FFF,  # U decremented by 1 after push
         },
         expected_mem_writes=[
-            # PUSHU IMR has special behavior:
+            # PUSHU IMR has special behavior per documentation:
             # 1. Pushes original IMR value to stack
-            (0x4F, 0xFF),  # Original IMR value pushed to stack
-            # 2. Then masks IMR register itself with 0x7F
-            (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x7F),  # IMR masked and written back
+            (0x7FFF, 0xFF),  # Original IMR value pushed to stack
+            # 2. Then clears bit 7 of IMR (IMR₇ ← 0) only if bit 7 was set
+            (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x7F),  # IMR with bit 7 cleared
+        ],
+        expected_asm_str="PUSHU IMR",
+    ),
+    InstructionTestCase(
+        test_id="PUSHU_IMR_bit7_clear",
+        instr_bytes=bytes.fromhex("2f"),
+        init_regs={
+            RegisterName.U: 0x8000,  # User stack pointer in higher external memory
+        },
+        init_mem={
+            # Set BP register to non-zero value
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x10,  # BP = 0x10
+            # Set IMR with bit 7 already clear
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR: 0x7F,  # Bit 7 is already 0
+        },
+        expected_regs={
+            RegisterName.U: 0x7FFF,  # U decremented by 1 after push
+        },
+        expected_mem_writes=[
+            # PUSHU IMR pushes the value to stack and always clears bit 7
+            (0x7FFF, 0x7F),  # Original IMR value pushed to stack
+            # Even though bit 7 is already 0, the instruction still writes
+            (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x7F),  # IMR written (unchanged)
         ],
         expected_asm_str="PUSHU IMR",
     ),
@@ -1091,142 +1133,144 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
 
 
 def test_pushs_pops() -> None:
-    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("4F"))
+    # Test PUSHS F and POPS F instructions
+    # Note: PUSHS IMR and POPS IMR do not exist in the SC62015 instruction set
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("4F"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHS F"
 
     cpu.regs.set(RegisterName.F, 0x0)
-    cpu.regs.set(RegisterName.S, 0x20)
+    cpu.regs.set(RegisterName.S, 0x7000)  # System stack in higher external memory
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1F
-    assert writes == [(0x1F, 0x0)]
+    assert cpu.regs.get(RegisterName.S) == 0x6FFF
+    assert writes == [(0x6FFF, 0x0)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1E
-    assert writes == [(0x1E, 0x2)]
+    assert cpu.regs.get(RegisterName.S) == 0x6FFE
+    assert writes == [(0x6FFE, 0x2)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 0)
     cpu.regs.set(RegisterName.FC, 1)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1D
-    assert writes == [(0x1D, 0x1)]
+    assert cpu.regs.get(RegisterName.S) == 0x6FFD
+    assert writes == [(0x6FFD, 0x1)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
     cpu.regs.set(RegisterName.FC, 1)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1C
-    assert writes == [(0x1C, 0x3)]
+    assert cpu.regs.get(RegisterName.S) == 0x6FFC
+    assert writes == [(0x6FFC, 0x3)]
     writes.clear()
 
     cpu.regs.set(RegisterName.F, 0)
     raw[0] = 0x5F  # Change to POPS instruction
     assert asm_str(cpu.decode_instruction(0x00).render()) == "POPS  F"
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1D
+    assert cpu.regs.get(RegisterName.S) == 0x6FFD
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 1
 
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1E
+    assert cpu.regs.get(RegisterName.S) == 0x6FFE
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 1
 
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x1F
+    assert cpu.regs.get(RegisterName.S) == 0x6FFF
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 0
 
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.S) == 0x20
+    assert cpu.regs.get(RegisterName.S) == 0x7000
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 0
 
 
 def test_pushu_popu() -> None:
-    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2E"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("2E"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHU F"
 
     cpu.regs.set(RegisterName.F, 0x0)
-    cpu.regs.set(RegisterName.U, 0x20)
+    cpu.regs.set(RegisterName.U, 0x8000)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1F
-    assert writes == [(0x1F, 0x0)]
+    assert cpu.regs.get(RegisterName.U) == 0x7FFF
+    assert writes == [(0x7FFF, 0x0)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1E
-    assert writes == [(0x1E, 0x2)]
+    assert cpu.regs.get(RegisterName.U) == 0x7FFE
+    assert writes == [(0x7FFE, 0x2)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 0)
     cpu.regs.set(RegisterName.FC, 1)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1D
-    assert writes == [(0x1D, 0x1)]
+    assert cpu.regs.get(RegisterName.U) == 0x7FFD
+    assert writes == [(0x7FFD, 0x1)]
     writes.clear()
 
     cpu.regs.set(RegisterName.FZ, 1)
     cpu.regs.set(RegisterName.FC, 1)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1C
-    assert writes == [(0x1C, 0x3)]
+    assert cpu.regs.get(RegisterName.U) == 0x7FFC
+    assert writes == [(0x7FFC, 0x3)]
     writes.clear()
 
     cpu.regs.set(RegisterName.F, 0)
     raw[0] = 0x3E  # POPU instruction
     assert asm_str(cpu.decode_instruction(0x00).render()) == "POPU  F"
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1D
+    assert cpu.regs.get(RegisterName.U) == 0x7FFD
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 1
 
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1E
+    assert cpu.regs.get(RegisterName.U) == 0x7FFE
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 1
 
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x1F
+    assert cpu.regs.get(RegisterName.U) == 0x7FFF
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.FC) == 0
 
 
 def test_pushu_popu_r2() -> None:
-    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("2A"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("2A"))
     assert asm_str(cpu.decode_instruction(0x00).render()) == "PUSHU BA"
 
     cpu.regs.set(RegisterName.BA, 0x1234)
-    cpu.regs.set(RegisterName.U, 0x30)
+    cpu.regs.set(RegisterName.U, 0x8000)
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x2E
-    assert writes == [(0x2E, 0x34), (0x2F, 0x12)]
+    assert cpu.regs.get(RegisterName.U) == 0x7FFE
+    assert writes == [(0x7FFE, 0x34), (0x7FFF, 0x12)]
     writes.clear()
 
     raw[0] = 0x3A  # POPU BA
     _ = cpu.execute_instruction(0x00)
-    assert cpu.regs.get(RegisterName.U) == 0x30
+    assert cpu.regs.get(RegisterName.U) == 0x8000
     assert cpu.regs.get(RegisterName.BA) == 0x1234
 
 def test_call_ret() -> None:
-    cpu, raw, _reads, writes = _make_cpu_and_mem(0x40, {}, bytes.fromhex("042000"))
+    cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("042000"))
     raw[0x20] = 0x06
     assert asm_str(cpu.decode_instruction(0x00).render()) == "CALL  0020"
     assert asm_str(cpu.decode_instruction(0x20).render()) == "RET"
 
-    cpu.regs.set(RegisterName.S, 0x30)  # Set stack pointer to a valid location
+    cpu.regs.set(RegisterName.S, 0x7000)  # Set system stack pointer to a valid location
     _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.PC) == 0x20
-    assert cpu.regs.get(RegisterName.S) == 0x2E
-    assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
+    assert cpu.regs.get(RegisterName.S) == 0x6FFE
+    assert writes == [(0x6FFE, 0x03), (0x6FFF, 0x00)]
     writes.clear()
 
     _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
     assert cpu.regs.get(RegisterName.PC) == 0x03
-    assert cpu.regs.get(RegisterName.S) == 0x30
+    assert cpu.regs.get(RegisterName.S) == 0x7000
     assert writes == []
 
 
