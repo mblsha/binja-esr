@@ -1624,10 +1624,11 @@ class EMemIMem(OffsetOperandMixin, HasOperands, Imm8):
     mode: Optional[EMemIMemMode]
     offset: Optional[ImmOffset] = None
 
-    def __init__(self) -> None:
+    def __init__(self, width: Optional[int] = None) -> None:
         super().__init__()
         # Allow both decoded IMem8 values and parsed IMemOperand objects
         self.imem: Union[IMem8, IMemOperand] = IMem8()
+        self._width = width if width is not None else 1
 
     def __repr__(self) -> str:
         return (
@@ -1649,8 +1650,14 @@ class EMemIMem(OffsetOperandMixin, HasOperands, Imm8):
         self._encode_offset(encoder, addr)
 
     def operands(self) -> Generator[Operand, None, None]:
-        op = EMemValueOffsetHelper(self.imem, self.offset, width=1)
+        op = EMemValueOffsetHelper(self.imem, self.offset, width=self._width)
         yield op
+    
+    def set_width_from_instruction(self, instr: 'Instruction') -> None:
+        """Set width based on the source register for MV instructions."""
+        # For MV EMemIMem, Reg - determine width from the source register
+        # The opcode table should set the width based on the register size
+        pass  # Width should be set in __init__ from opcode table
 
 class EMemIMemOffsetOrder(enum.Enum):
     DEST_INT_MEM = 0

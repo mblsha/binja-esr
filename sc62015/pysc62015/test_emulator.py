@@ -1072,6 +1072,31 @@ instruction_test_cases: List[InstructionTestCase] = [
         ],
         expected_asm_str="PUSHU IMR",
     ),
+    InstructionTestCase(
+        test_id="MV_BA_to_indirect_ext_mem_with_offset",
+        instr_bytes=bytes.fromhex("30ba80e604"),
+        init_regs={
+            RegisterName.BA: 0x1234,  # 16-bit test value
+        },
+        init_mem={
+            # Internal memory at 0xE6 contains 20-bit external address (little-endian)
+            INTERNAL_MEMORY_START + 0xE6: 0x00,  # Low byte
+            INTERNAL_MEMORY_START + 0xE7: 0x20,  # Mid byte
+            INTERNAL_MEMORY_START + 0xE8: 0x04,  # High byte (20-bit address = 0x042000)
+            # Expected: External memory at 0x042000 + 0x04 = 0x042004 should receive BA value
+        },
+        expected_mem_writes=[
+            # BUG: Currently only writes 1 byte, but should write 2 bytes for BA register
+            (0x042004, 0x34),  # Low byte of BA
+            (0x042005, 0x12),  # High byte of BA (this write is missing due to bug)
+        ],
+        expected_mem_state={
+            # BUG: Currently only the first byte is written
+            0x042004: 0x34,  # Low byte should be written
+            0x042005: 0x12,  # High byte should be written (but currently isn't)
+        },
+        expected_asm_str="MV    [(E6)+04], BA",
+    ),
 ]
 
 # --- New Centralized Test Runner ---
