@@ -1142,6 +1142,17 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="MV    [(E6)+04], BA",
     ),
+    # Test INC X instruction
+    InstructionTestCase(
+        test_id="INC_X_with_initial_0DF820",
+        instr_bytes=bytes.fromhex("6c04"),
+        init_regs={RegisterName.X: 0x0DF820},
+        expected_regs={
+            RegisterName.X: 0x0DF821,
+            RegisterName.FZ: 0  # Z flag cleared since result is non-zero
+        },
+        expected_asm_str="INC   X",
+    ),
 ]
 
 # --- New Centralized Test Runner ---

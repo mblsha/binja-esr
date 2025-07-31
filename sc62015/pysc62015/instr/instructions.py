@@ -759,13 +759,19 @@ class DSRL(DecimalShiftInstruction):
         self._lift_decimal_shift(il, is_left_shift=False)
 
 
-class IncDecInstruction(Instruction): pass
+class IncDecInstruction(Instruction):
+    def width(self) -> int:
+        first, *rest = self.operands()
+        assert len(rest) == 0, "Expected only one operand"
+        assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
+        return first.width()
+
 class INC(IncDecInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg: ExpressionIndex) -> ExpressionIndex:
-        return il.add(1, il_arg, il.const(1, 1), ZFlag)
+        return il.add(self.width(), il_arg, il.const(self.width(), 1), ZFlag)
 class DEC(IncDecInstruction):
     def lift_operation1(self, il: LowLevelILFunction, il_arg: ExpressionIndex) -> ExpressionIndex:
-        return il.sub(1, il_arg, il.const(1, 1), ZFlag)
+        return il.sub(self.width(), il_arg, il.const(self.width(), 1), ZFlag)
 
 class ExchangeInstruction(Instruction):
     def lift_single_exchange(self, il: LowLevelILFunction, addr: int) -> None:
