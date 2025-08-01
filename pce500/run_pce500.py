@@ -18,7 +18,7 @@ def main(dump_pc=None, no_dump=False):
     with PCE500Emulator(trace_enabled=True, perfetto_trace=True) as emu:
         print("Created emulator with Perfetto tracing enabled")
         print("Trace will be saved to pc-e500.trace")
-        
+
         # Handle memory dump configuration
         if no_dump:
             # Disable dumps by setting an impossible PC value
@@ -41,7 +41,7 @@ def main(dump_pc=None, no_dump=False):
         emu.reset()
         print(f"PC after reset: {emu.cpu.regs.get(RegisterName.PC):06X}")
 
-        num_steps = 500
+        num_steps = 1000
         print(f"Running {num_steps} instructions with tracing...")
         for _ in range(num_steps):
             emu.step()
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="PC-E500 Emulator Example")
-    parser.add_argument("--dump-pc", type=lambda x: int(x, 0), 
+    parser.add_argument("--dump-pc", type=lambda x: int(x, 0),
                         help="PC address to trigger internal memory dump (hex or decimal, e.g., 0x0F119C)")
     parser.add_argument("--no-dump", action='store_true',
                         help="Disable internal memory dumps entirely")
