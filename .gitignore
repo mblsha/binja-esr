@@ -11,3 +11,4 @@ pc-e500.trace
 *.trace
 *.perfetto-trace
 .claude/
+*.bin
