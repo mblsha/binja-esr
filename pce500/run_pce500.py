@@ -41,7 +41,7 @@ def main(dump_pc=None, no_dump=False):
         emu.reset()
         print(f"PC after reset: {emu.cpu.regs.get(RegisterName.PC):06X}")
 
-        num_steps = 1000
+        num_steps = 20000
         print(f"Running {num_steps} instructions with tracing...")
         for _ in range(num_steps):
             emu.step()
