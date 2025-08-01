@@ -11,11 +11,11 @@ from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
-def main(dump_pc=None, no_dump=False):
+def main(dump_pc=None, no_dump=False, save_lcd=True):
     """Example with Perfetto tracing enabled."""
     # Note: Perfetto trace is automatically saved when exiting the context manager
     # Create emulator with tracing
-    with PCE500Emulator(trace_enabled=True, perfetto_trace=True) as emu:
+    with PCE500Emulator(trace_enabled=True, perfetto_trace=True, save_lcd_on_exit=save_lcd) as emu:
         print("Created emulator with Perfetto tracing enabled")
         print("Trace will be saved to pc-e500.trace")
 
@@ -73,5 +73,7 @@ if __name__ == "__main__":
                         help="PC address to trigger internal memory dump (hex or decimal, e.g., 0x0F119C)")
     parser.add_argument("--no-dump", action='store_true',
                         help="Disable internal memory dumps entirely")
+    parser.add_argument("--no-lcd", action='store_true',
+                        help="Don't save LCD displays as PNG files on exit")
     args = parser.parse_args()
-    main(dump_pc=args.dump_pc, no_dump=args.no_dump)
+    main(dump_pc=args.dump_pc, no_dump=args.no_dump, save_lcd=not args.no_lcd)

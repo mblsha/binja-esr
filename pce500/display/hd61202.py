@@ -2,6 +2,7 @@
 
 import numpy as np
 from typing import Optional
+from PIL import Image
 
 from ..trace_manager import g_tracer
 
@@ -205,6 +206,78 @@ class HD61202Controller:
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing."""
         self.perfetto_enabled = enabled
+        
+    def save_chip_to_png(self, chip_index: int, filename: str) -> None:
+        """Save a single chip's display memory to a PNG file.
+        
+        Args:
+            chip_index: 0 for left chip, 1 for right chip
+            filename: Path to save the PNG file
+        """
+        # Create a 64x32 buffer for the chip (HD61202 is 64x32)
+        # But PC-E500 uses 120x32 per chip
+        buffer = np.zeros((32, 120), dtype=np.uint8)
+        
+        # Select the appropriate VRAM
+        vram = self.left_vram if chip_index == 0 else self.right_vram
+        start_line = self.start_line[chip_index]
+        
+        # Render the chip's display memory
+        for y in range(32):
+            # Account for scrolling
+            ram_line = (start_line + y) % 64
+            page = ram_line // 8
+            bit = ram_line % 8
+            
+            for x in range(120):
+                addr = page * 120 + x
+                if addr < len(vram):
+                    byte_val = vram[addr]
+                    if (byte_val >> bit) & 1:
+                        buffer[y, x] = 255  # White pixel
+                        
+        # Convert to PIL Image and save
+        image = Image.fromarray(buffer, mode='L')
+        image.save(filename)
+        
+    def save_displays_to_png(self, left_filename: str = "lcd_left.png", 
+                           right_filename: str = "lcd_right.png") -> None:
+        """Save both LCD chip displays to separate PNG files.
+        
+        Args:
+            left_filename: Filename for left chip display
+            right_filename: Filename for right chip display
+        """
+        self.save_chip_to_png(0, left_filename)
+        self.save_chip_to_png(1, right_filename)
+        
+    def get_chip_buffer(self, chip_index: int) -> np.ndarray:
+        """Get display buffer for a single chip as numpy array.
+        
+        Args:
+            chip_index: 0 for left chip, 1 for right chip
+            
+        Returns:
+            32x120 numpy array with pixel values (0 or 1)
+        """
+        buffer = np.zeros((32, 120), dtype=np.uint8)
+        
+        vram = self.left_vram if chip_index == 0 else self.right_vram
+        start_line = self.start_line[chip_index]
+        
+        for y in range(32):
+            ram_line = (start_line + y) % 64
+            page = ram_line // 8
+            bit = ram_line % 8
+            
+            for x in range(120):
+                addr = page * 120 + x
+                if addr < len(vram):
+                    byte_val = vram[addr]
+                    if (byte_val >> bit) & 1:
+                        buffer[y, x] = 1
+                        
+        return buffer
 
 
 # Backward compatibility aliases

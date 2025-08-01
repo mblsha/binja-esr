@@ -82,17 +82,22 @@ class PCE500Emulator:
     MEMORY_DUMP_PC = 0x0F119C      # PC to trigger internal memory dump
     MEMORY_DUMP_DIR = "."          # Directory for dump files
 
-    def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False):
+    def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False, 
+                 save_lcd_on_exit: bool = True):
         """Initialize the PC-E500 emulator.
 
         Args:
             trace_enabled: Enable simple list-based tracing
             perfetto_trace: Enable Perfetto tracing (if available)
+            save_lcd_on_exit: Save LCD displays as PNG when exiting context manager
         """
         # Initialize performance counters first (needed by TrackedMemory)
         self.instruction_count = 0
         self.memory_read_count = 0
         self.memory_write_count = 0
+        
+        # Store save LCD option
+        self.save_lcd_on_exit = save_lcd_on_exit
         
         # Create memory and LCD controller
         self.memory = TrackedMemory(self)
@@ -394,6 +399,17 @@ class PCE500Emulator:
     def get_display_buffer(self):
         """Get the current display buffer."""
         return self.lcd.get_display_buffer()
+        
+    def save_lcd_displays(self, left_filename: str = "lcd_left.png", 
+                         right_filename: str = "lcd_right.png") -> None:
+        """Save LCD displays to PNG files.
+        
+        Args:
+            left_filename: Filename for left LCD chip display
+            right_filename: Filename for right LCD chip display
+        """
+        self.lcd.save_displays_to_png(left_filename, right_filename)
+        print(f"LCD displays saved to {left_filename} and {right_filename}")
 
     @property
     def display_on(self) -> bool:
@@ -420,7 +436,13 @@ class PCE500Emulator:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - ensure tracing is stopped."""
+        """Context manager exit - ensure tracing is stopped and optionally save LCD displays."""
+        # Save LCD displays as PNG images if enabled
+        if hasattr(self, 'save_lcd_on_exit') and self.save_lcd_on_exit:
+            self.lcd.save_displays_to_png("lcd_left.png", "lcd_right.png")
+            print("LCD displays saved to lcd_left.png and lcd_right.png")
+        
+        # Stop tracing
         self.stop_tracing()
         return False
     
