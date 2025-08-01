@@ -1399,8 +1399,9 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         value: ExpressionIndex,
         pre: Optional[AddressingMode] = None,
     ) -> None:
+        addr = self.lift_current_addr(il, pre=pre, side_effects=True)
         il.append(
-            il.store(self.width(), self.lift_current_addr(il, pre=pre, side_effects=True), value)
+            il.store(self.width(), addr, value)
         )
 
 # page 74 of the book
@@ -1453,14 +1454,33 @@ class RegIncrementDecrementHelper(OperandHelper):
             # increment it after using it
             tmp = TempReg(TempIncDecHelper, width=self.reg.width())
             tmp.lift_assign(il, value)
-            self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(1,
+            self.reg.lift_assign(il, il.add(self.reg.width(), value, il.const(self.reg.width(),
                                                                               self.width)))
             value = tmp.lift(il)
 
-        if self.mode == EMemRegMode.PRE_DEC:
-            value = il.sub(self.reg.width(), value, il.const(1, self.width))
-            if side_effects:
-                self.reg.lift_assign(il, value)
+        if side_effects and self.mode == EMemRegMode.PRE_DEC:
+            # For pre-decrement with side effects:
+            # 1. Calculate the decremented value expression
+            # 2. Store it in a temp register to capture the value
+            # 3. Update the actual register with the same expression
+            # 4. Return the temp register
+            
+            # Calculate the decremented value
+            new_value = il.sub(self.reg.width(), value, il.const(self.reg.width(), self.width))
+            
+            # Store the decremented value in a temp register
+            # This captures the value at this point in time
+            tmp = TempReg(TempIncDecHelper, width=self.reg.width())
+            tmp.lift_assign(il, new_value)
+            
+            # Update the actual register with the same expression
+            self.reg.lift_assign(il, new_value)
+            
+            # Return the temp register's value
+            value = tmp.lift(il)
+        elif self.mode == EMemRegMode.PRE_DEC:
+            # No side effects - just return the decremented value expression
+            value = il.sub(self.reg.width(), value, il.const(self.reg.width(), self.width))
 
         return value
 
@@ -1478,7 +1498,10 @@ class EMemRegOffsetHelper(HasOperands, OperandHelper):
         if self.mode in (EMemRegMode.SIMPLE,
                          EMemRegMode.POST_INC,
                          EMemRegMode.PRE_DEC):
-            reg = RegIncrementDecrementHelper(self.width, self.reg, self.mode)
+            # Create the helper only once and cache it
+            if not hasattr(self, '_cached_helper'):
+                self._cached_helper = RegIncrementDecrementHelper(self.width, self.reg, self.mode)
+            reg = self._cached_helper
         else:
             reg = self.reg
 

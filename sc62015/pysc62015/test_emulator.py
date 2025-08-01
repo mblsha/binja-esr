@@ -1153,6 +1153,29 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="INC   X",
     ),
+    # Test MV [--S], X instruction
+    InstructionTestCase(
+        test_id="MV_pre_dec_S_X", 
+        instr_bytes=bytes.fromhex("b437"),
+        init_regs={
+            RegisterName.S: 0x0BFC87,
+            RegisterName.X: 0x0F28F9
+        },
+        expected_regs={
+            RegisterName.S: 0x0BFC84  # S decremented by 3 (size of X)
+        },
+        expected_mem_writes=[
+            (0x0BFC84, 0xF9),  # Low byte of X
+            (0x0BFC85, 0x28),  # Middle byte of X
+            (0x0BFC86, 0x0F),  # High byte of X
+        ],
+        expected_mem_state={
+            0x0BFC84: 0xF9,
+            0x0BFC85: 0x28,
+            0x0BFC86: 0x0F
+        },
+        expected_asm_str="MV    [--S], X",
+    ),
 ]
 
 # --- New Centralized Test Runner ---

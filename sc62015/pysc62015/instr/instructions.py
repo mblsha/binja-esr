@@ -141,7 +141,24 @@ class MoveInstruction(Instruction):
     pass
 
 class MV(MoveInstruction):
-    pass
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
+        
+        # For single addressable operand instructions, always use PRE1
+        if self.opcode in SINGLE_ADDRESSABLE_OPCODES:
+            src_mode = dst_mode
+
+        operands = tuple(self.operands())
+        if len(operands) == 2:
+            # For MV instructions, we don't want to "lift" (load from) the destination
+            # We only need to get the source value and assign it to the destination
+            # This avoids the double-decrement issue for pre-dec destinations
+            src_value = operands[1].lift(il, src_mode)
+            operands[0].lift_assign(il, src_value, dst_mode)
+        else:
+            # Fall back to default behavior for other cases
+            super().lift(il, addr)
 
     def lift_operation2(self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex) -> ExpressionIndex:
         return il_arg2
@@ -185,9 +202,25 @@ class MVL(MoveInstruction):
             il, dst.lift_current_addr(il, pre=dst_mode, side_effects=False)
         )
         src_reg = TempReg(TempMvlSrc)
-        src_reg.lift_assign(
-            il, src.lift_current_addr(il, pre=src_mode, side_effects=False)
+        initial_src_addr = src.lift_current_addr(il, pre=src_mode, side_effects=False)
+        
+        # For pre-decrement sources, check if we need special handling
+        is_predec_src = (
+            isinstance(src, EMemValueOffsetHelper) and
+            isinstance(src.value, RegIncrementDecrementHelper) and
+            src.value.mode == EMemRegMode.PRE_DEC
         )
+        
+        # Store reference to the actual register for pre-decrement sources
+        predec_reg = None
+        if is_predec_src and isinstance(src, EMemValueOffsetHelper) and isinstance(src.value, RegIncrementDecrementHelper):
+            predec_reg = src.value.reg
+            # For pre-decrement, we need to get the actual pre-decremented address
+            # and perform the side effect once
+            predec_addr = src.lift_current_addr(il, pre=src_mode, side_effects=True)
+            src_reg.lift_assign(il, predec_addr)
+        else:
+            src_reg.lift_assign(il, initial_src_addr)
 
         # Debug: print initial addresses
         # print(f"MVL: dst_mode={dst_mode}, src_mode={src_mode}")
@@ -198,9 +231,16 @@ class MVL(MoveInstruction):
             # Use AddressingMode.N since src_reg and dst_reg already contain final addresses
             dst_mem.lift_assign(il, src_mem.lift(il, pre=AddressingMode.N), pre=AddressingMode.N)
 
-            # +1 index
+            # +1 index for normal MVL, -1 for MVLD
             func = self.modify_addr_il(il)
             dst_func = func
+            src_func = func
+            
+            # Special handling for pre-decrement sources
+            if is_predec_src:
+                # For pre-decrement sources, continue decrementing in the loop
+                src_func = il.sub
+                
             if (
                 isinstance(dst, IMem8)
                 and isinstance(src, EMemValueOffsetHelper)
@@ -212,16 +252,34 @@ class MVL(MoveInstruction):
             # Update destination address with wrapping for IMem8
             self._update_address_with_wrap(il, dst_reg, dst_func, dst)
 
-            if (
-                isinstance(src, EMemValueOffsetHelper)
-                and isinstance(src.value, RegIncrementDecrementHelper)
-                and src.value.mode == EMemRegMode.PRE_DEC
-            ):
-                updated_src = src.lift_current_addr(il, pre=src_mode)
-                src_reg.lift_assign(il, updated_src)
+            if is_predec_src:
+                # For pre-decrement sources, check if we need to continue
+                # Only update if there are more bytes to copy (I > 1)
+                loop_reg = Reg("I")
+                continue_cond = il.compare_signed_greater_than(
+                    loop_reg.width(), 
+                    loop_reg.lift(il), 
+                    il.const(loop_reg.width(), 1)
+                )
+                
+                # Create labels for conditional update
+                update_label = LowLevelILLabel()
+                skip_label = LowLevelILLabel()
+                
+                il.append(il.if_expr(continue_cond, update_label, skip_label))
+                il.mark_label(update_label)
+                
+                # Update the address using subtraction to continue decrementing
+                self._update_address_with_wrap(il, src_reg, src_func, src)
+                # Also sync the actual register with the temp register value
+                if predec_reg is not None:
+                    predec_reg.lift_assign(il, src_reg.lift(il))
+                    
+                il.append(il.goto(skip_label))
+                il.mark_label(skip_label)
             else:
                 # Update source address with wrapping for IMem8
-                self._update_address_with_wrap(il, src_reg, func, src)
+                self._update_address_with_wrap(il, src_reg, src_func, src)
                 src.lift_current_addr(il, pre=src_mode)
 
             # apply any addressing side effects for destination
