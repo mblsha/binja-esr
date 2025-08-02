@@ -8,6 +8,7 @@ mcp
 data/pc-e500.bin
 data/*.txt
 pc-e500.trace
+pce500/*.png
 *.trace
 *.perfetto-trace
 .claude/
