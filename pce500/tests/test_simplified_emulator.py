@@ -156,9 +156,10 @@ class TestSimplifiedEmulator:
         
         # Get memory info
         info = emu.get_memory_info()
-        assert "internal_rom: 0xC0000-0xFFFFF (256KB)" in info
-        assert "Base RAM: 0x00000-0xFFFFF (1MB)" in info
-        assert "lcd_controller: 0x0A000-0x0AFFF (4KB)" in info
+        # Updated format from new memory implementation
+        assert "internal_rom: 0xC0000-0xFFFFF (262144 bytes, R/O)" in info
+        assert "Base: 1MB external memory (0x00000-0xFFFFF)" in info
+        assert "lcd_controller: 0x0A000-0x0AFFF (4096 bytes, R/W)" in info
         
     def test_performance_stats(self):
         """Test performance statistics."""

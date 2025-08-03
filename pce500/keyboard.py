@@ -190,10 +190,7 @@ class PCE500KeyboardHandler:
         Returns:
             Byte value representing pressed keys in selected rows
         """
-        # WORKAROUND: Returning 0xFF causes severe performance issues
-        # in the LLIL evaluation when at address 0x1000F2.
-        # Return 0xFE instead (bit 0 clear) which doesn't trigger the issue.
-        result = 0xFE  # Default: no keys pressed (almost all bits high)
+        result = 0xFF  # Default: no keys pressed (all bits high)
         
         # Check each pressed key
         for key_code in self.pressed_keys:
@@ -218,6 +215,9 @@ class PCE500KeyboardHandler:
                 result &= ~(1 << column)
         
         # WORKAROUND: Avoid returning 0xFF which causes performance issues
+        # in the LLIL evaluation when at address 0x1000F2.
+        # If no keys are pressed (result is still 0xFF), set bit 0 to 0.
+        # This returns 0xFE instead which doesn't trigger the performance issue.
         if result == 0xFF:
             result = 0xFE
                 

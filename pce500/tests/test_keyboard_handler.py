@@ -24,9 +24,9 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
         # No keys should be pressed initially
         self.assertEqual(len(self.handler.pressed_keys), 0)
         
-        # KIL should read 0xFF (no keys pressed)
+        # KIL should read 0xFE (no keys pressed - workaround for performance)
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFF)
+        self.assertEqual(kil_value, 0xFE)
         
         # KOL/KOH should be 0
         self.assertEqual(self.handler._last_kol, 0)
@@ -73,7 +73,7 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
         # Select different row - KEY_Q should not be detected
         self.handler.handle_register_write(IMEMRegisters.KOL, 0x02)
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFF)  # No keys detected
+        self.assertEqual(kil_value, 0xFE)  # No keys detected
     
     def test_multiple_keys_same_row(self):
         """Test multiple keys pressed in the same row."""
@@ -143,10 +143,10 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
         self.handler.press_key('INVALID_KEY')
         self.assertEqual(len(self.handler.pressed_keys), 0)
         
-        # KIL should still read 0xFF
+        # KIL should still read 0xFE
         self.handler.handle_register_write(IMEMRegisters.KOL, 0xFF)
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFF)
+        self.assertEqual(kil_value, 0xFE)
     
     def test_debug_info(self):
         """Test debug information output."""
