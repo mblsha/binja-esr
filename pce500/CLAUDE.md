@@ -51,7 +51,7 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
 3. **HD61202Controller** (`display/controller_wrapper.py`): LCD controller emulation
    - Dual HD61202 chips for 240x32 pixel display
    - Complex address decoding: CPU address bits determine chip selection and command/data routing
-   - Each chip manages 64x64 pixels but PC-E500 only uses 4 pages (32 pixels) of each
+   - Each chip has 64x64 pixels; PC-E500 uses all 8 pages but arranges them uniquely
 
 4. **TraceManager** (`trace_manager.py`): Sophisticated tracing infrastructure
    - Singleton pattern for global trace management using retrobus-perfetto
@@ -75,9 +75,9 @@ System vectors:
 The PC-E500 uses two HD61202 LCD controllers to create its 240x32 pixel display:
 
 #### Hardware Configuration
-- **Left chip** (chip 0): Standard 64x64 HD61202 controller
-- **Right chip** (chip 1): Standard 64x64 HD61202 controller
-- Only 4 pages (32 pixels) of each chip are used for display
+- **Left chip** (chip 0): Standard 64x64 HD61202 controller (uses 56 columns)
+- **Right chip** (chip 1): Standard 64x64 HD61202 controller (uses all 64 columns)
+- Both chips use all 8 pages (64 pixels) internally
 - Total display resolution: 240x32 pixels
 
 #### Memory-Mapped I/O
@@ -88,17 +88,19 @@ LCD controllers are accessed through memory-mapped I/O at 0x0A000-0x0AFFF:
   - A3:A2: Chip select (00=both, 01=right, 10=left, 11=none)
 
 #### Display Layout
-The PC-E500's unique 240-pixel wide display is created by combining two chips in a specific arrangement:
-```
-Left side (120 pixels):  [Left chip 0-63] + [Right chip 0-55]
-Right side (120 pixels): [Right chip 56-63 flipped] + [Left chip 64-119 flipped]
-```
-This creates a seamless 240x32 display from two 64-column controllers.
+The PC-E500's unique 240x32 pixel display is created by arranging four 32-pixel tall sections from the two HD61202 chips:
+
+1. **Leftmost 64 pixels**: Right chip columns 0-63, rows 0-31
+2. **Center-left 56 pixels**: Left chip columns 0-55, rows 0-31  
+3. **Center-right 56 pixels**: Left chip columns 0-55, rows 32-63 (horizontally flipped)
+4. **Rightmost 64 pixels**: Right chip columns 0-63, rows 32-63 (horizontally flipped)
+
+This arrangement uses the full 64-pixel height of each chip, splitting it into top and bottom halves that are placed side-by-side with selective horizontal flipping to create the 240-pixel wide display.
 
 #### HD61202 Instructions
 - **ON/OFF** (0x3E/0x3F): Turn display on/off
-- **SET_Y_ADDRESS** (0x40-0x7F): Set column address (0-63)
-- **SET_PAGE** (0xB8-0xBF): Set page/row (0-7, but only 0-3 used)
+- **SET_Y_ADDRESS** (0x40-0x7F): Set column address (0-63 for right chip, 0-55 for left chip)
+- **SET_PAGE** (0xB8-0xBF): Set page/row (0-7, all pages used internally)
 - **START_LINE** (0xC0-0xFF): Set display start line for scrolling
 
 #### Implementation Architecture
