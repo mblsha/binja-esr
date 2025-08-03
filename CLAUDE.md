@@ -120,3 +120,60 @@ The PC-E500 emulator (`pce500/`) wraps the SC62015 emulator with Sharp PC-E500 s
 - HD61202 LCD controller emulation
 - Entry point at 0xFFFFD (3 bytes, little-endian)
 - Interrupt vector at 0xFFFFA (3 bytes, little-endian)
+
+### ROM Loading
+
+The `pc-e500.bin` file is a 1MB memory dump. When loading:
+- Extract bytes from offset 0xC0000 to 0x100000 (256KB) - this is the actual ROM
+- The ROM is loaded at address 0xC0000 in the emulator's memory space
+- Entry point 0xFFFFD typically contains 0xC2 0x10 0x0F (0x0F10C2 in little-endian)
+
+## Web-Based PC-E500 Emulator
+
+The web emulator (`web/`) provides a browser-based interface to the PC-E500 emulator:
+
+### Architecture
+- **Backend**: Flask server (`app.py`) managing emulator state and providing REST API
+- **Frontend**: JavaScript SPA with virtual keyboard and real-time display updates
+- **Keyboard**: Matrix-based keyboard emulation via KOL/KOH/KIL registers
+
+### Key Implementation Details
+
+1. **State Updates**: Triggered by either:
+   - 100ms elapsed (10 FPS target)
+   - 100,000 instructions executed
+
+2. **Keyboard Matrix**: 
+   - Output registers KOL (0xF0) and KOH (0xF1) select keyboard rows
+   - Input register KIL (0xF2) reads column states
+   - Keys mapped to specific row/column intersections
+
+3. **Critical Initialization**:
+   ```python
+   # Load only the ROM portion (last 256KB of 1MB file)
+   rom_portion = rom_data[0xC0000:0x100000]
+   emulator.load_rom(rom_portion)
+   emulator.reset()  # Must reset after loading to set PC from entry point
+   ```
+
+4. **API Endpoints**:
+   - `GET /api/v1/state`: Returns screen (base64 PNG), registers, flags, instruction count
+   - `POST /api/v1/control`: Commands: run, pause, step, reset
+   - `POST /api/v1/key`: Keyboard input with press/release actions
+
+### Running the Web Emulator
+
+```bash
+cd web
+pip install -r requirements.txt
+FORCE_BINJA_MOCK=1 python run.py
+# Open http://localhost:8080
+```
+
+### Testing
+
+The web emulator has comprehensive test coverage (51 tests):
+```bash
+cd web
+FORCE_BINJA_MOCK=1 python run_tests.py
+```
