@@ -6,17 +6,15 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Optional
 
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
-from PIL import Image
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))  # Add web directory too
 from pce500 import PCE500Emulator
-from sc62015.pysc62015.emulator import RegisterName
 from keyboard_handler import PCE500KeyboardHandler
 from keyboard_memory_overlay import KeyboardMemoryOverlay
 

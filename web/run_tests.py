@@ -6,7 +6,6 @@ import os
 import unittest
 import time
 from pathlib import Path
-from io import StringIO
 
 # Set environment variable for mock Binary Ninja API
 os.environ['FORCE_BINJA_MOCK'] = '1'

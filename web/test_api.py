@@ -2,7 +2,6 @@
 """Test script for PC-E500 web emulator API."""
 
 import requests
-import json
 import time
 
 BASE_URL = "http://localhost:8080/api/v1"
@@ -13,7 +12,7 @@ def test_get_state():
     response = requests.get(f"{BASE_URL}/state")
     if response.status_code == 200:
         state = response.json()
-        print(f"✓ State retrieved successfully")
+        print("✓ State retrieved successfully")
         print(f"  PC: 0x{state['registers']['pc']:06X}")
         print(f"  Instructions: {state['instruction_count']}")
         print(f"  Running: {state['is_running']}")
@@ -44,7 +43,7 @@ def test_key_press(key_code):
                            json={"key_code": key_code, "action": "press"})
     if response.status_code == 200:
         result = response.json()
-        print(f"✓ Key press sent")
+        print("✓ Key press sent")
         if 'debug' in result:
             print(f"  Debug: {result['debug']}")
     else:
@@ -57,7 +56,7 @@ def test_key_press(key_code):
     response = requests.post(f"{BASE_URL}/key", 
                            json={"key_code": key_code, "action": "release"})
     if response.status_code == 200:
-        print(f"✓ Key release sent")
+        print("✓ Key release sent")
         return True
     else:
         print(f"✗ Release failed: {response.status_code}")
