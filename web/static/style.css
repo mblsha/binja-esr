@@ -206,12 +206,6 @@ h1 {
     background-color: #f8f9fa;
 }
 
-.history-pc {
-    font-weight: bold;
-    color: #3498db;
-    min-width: 70px;
-}
-
 .history-instr {
     color: #2c3e50;
 }
@@ -377,5 +371,52 @@ h1 {
 }
 
 .pc-list span {
+    margin-right: 8px;
+}
+
+/* PC Address Component */
+.pc-address {
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-block;
+    padding: 1px 3px;
+    border-radius: 3px;
+}
+
+.pc-address:hover {
+    background-color: #e3f2fd;
+    color: #1976d2;
+}
+
+.pc-address.copied {
+    background-color: #27ae60;
+    color: white;
+    animation: copyFeedback 0.3s ease;
+}
+
+@keyframes copyFeedback {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* Context-specific styles */
+.pc-address.history-pc {
+    font-weight: bold;
+    color: #3498db;
+    min-width: 70px;
+}
+
+.pc-address.reg-value {
+    font-family: 'Courier New', monospace;
+}
+
+.pc-address.pc-list-item {
     margin-right: 8px;
 }

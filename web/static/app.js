@@ -3,6 +3,54 @@
 const API_BASE = '/api/v1';
 const POLL_INTERVAL = 100; // 100ms = 10fps
 
+// PC Address Component - Creates a clickable PC address element
+class PCAddress {
+    constructor(address, options = {}) {
+        this.address = address;
+        this.className = options.className || 'pc-address';
+        this.showTooltip = options.showTooltip !== false;
+    }
+    
+    render() {
+        const span = document.createElement('span');
+        span.className = this.className;
+        span.textContent = this.address;
+        
+        if (this.showTooltip) {
+            span.title = 'Click to copy';
+        }
+        
+        // Click to copy functionality
+        span.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            
+            try {
+                await navigator.clipboard.writeText(this.address);
+                
+                // Visual feedback
+                span.classList.add('copied');
+                const originalText = span.textContent;
+                span.textContent = 'Copied!';
+                
+                setTimeout(() => {
+                    span.textContent = originalText;
+                    span.classList.remove('copied');
+                }, 1000);
+                
+            } catch (err) {
+                console.error('Failed to copy:', err);
+            }
+        });
+        
+        return span;
+    }
+    
+    static create(address, options = {}) {
+        const component = new PCAddress(address, options);
+        return component.render();
+    }
+}
+
 let pollTimer = null;
 let isRunning = false;
 
@@ -284,7 +332,15 @@ async function updateState() {
         
         // Update registers
         if (state.registers) {
-            document.getElementById('reg-pc').textContent = `0x${state.registers.pc.toString(16).padStart(6, '0').toUpperCase()}`;
+            // Use PCAddress component for PC register
+            const pcElement = document.getElementById('reg-pc');
+            const pcValue = `0x${state.registers.pc.toString(16).padStart(6, '0').toUpperCase()}`;
+            if (pcElement.textContent !== pcValue) {
+                pcElement.innerHTML = '';
+                pcElement.appendChild(PCAddress.create(pcValue, { className: 'pc-address reg-value' }));
+            }
+            
+            // Regular registers
             document.getElementById('reg-a').textContent = `0x${state.registers.a.toString(16).padStart(2, '0').toUpperCase()}`;
             document.getElementById('reg-b').textContent = `0x${state.registers.b.toString(16).padStart(2, '0').toUpperCase()}`;
             document.getElementById('reg-ba').textContent = `0x${state.registers.ba.toString(16).padStart(4, '0').toUpperCase()}`;
@@ -403,15 +459,14 @@ function updateInstructionHistory(history) {
         const historyItem = document.createElement('div');
         historyItem.className = 'history-item';
         
-        const pcSpan = document.createElement('span');
-        pcSpan.className = 'history-pc';
-        pcSpan.textContent = item.pc;
+        // Use PCAddress component
+        const pcElement = PCAddress.create(item.pc, { className: 'pc-address history-pc' });
         
         const instrSpan = document.createElement('span');
         instrSpan.className = 'history-instr';
         instrSpan.textContent = item.disassembly;
         
-        historyItem.appendChild(pcSpan);
+        historyItem.appendChild(pcElement);
         historyItem.appendChild(instrSpan);
         historyContainer.appendChild(historyItem);
     });
@@ -563,9 +618,8 @@ async function updateRegisterWatch() {
             writesCell.className = 'pc-list';
             if (accesses.writes.length > 0) {
                 accesses.writes.forEach(pc => {
-                    const span = document.createElement('span');
-                    span.textContent = pc;
-                    writesCell.appendChild(span);
+                    const pcElement = PCAddress.create(pc, { className: 'pc-address pc-list-item' });
+                    writesCell.appendChild(pcElement);
                 });
             } else {
                 writesCell.textContent = '-';
@@ -577,9 +631,8 @@ async function updateRegisterWatch() {
             readsCell.className = 'pc-list';
             if (accesses.reads.length > 0) {
                 accesses.reads.forEach(pc => {
-                    const span = document.createElement('span');
-                    span.textContent = pc;
-                    readsCell.appendChild(span);
+                    const pcElement = PCAddress.create(pc, { className: 'pc-address pc-list-item' });
+                    readsCell.appendChild(pcElement);
                 });
             } else {
                 readsCell.textContent = '-';
