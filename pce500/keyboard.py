@@ -11,7 +11,12 @@ The keyboard is organized as a matrix where:
 """
 
 from typing import Dict, Set, Tuple, Optional
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+
+# Keyboard register addresses (offsets within internal memory)
+# These are at internal memory offsets 0xF0-0xF2
+KOL = 0xF0  # Key Output Low
+KOH = 0xF1  # Key Output High  
+KIL = 0xF2  # Key Input
 
 
 class PCE500KeyboardHandler:
@@ -149,12 +154,12 @@ class PCE500KeyboardHandler:
         Returns:
             Register value or None if not a keyboard register
         """
-        if register == IMEMRegisters.KIL:
+        if register == KIL:
             # Read keyboard input based on current KOL/KOH values
             return self._read_keyboard_input()
-        elif register == IMEMRegisters.KOL:
+        elif register == KOL:
             return self._last_kol
-        elif register == IMEMRegisters.KOH:
+        elif register == KOH:
             return self._last_koh
         return None
         
@@ -168,13 +173,13 @@ class PCE500KeyboardHandler:
         Returns:
             True if handled, False otherwise
         """
-        if register == IMEMRegisters.KOL:
+        if register == KOL:
             self._last_kol = value & 0xFF
             return True
-        elif register == IMEMRegisters.KOH:
+        elif register == KOH:
             self._last_koh = value & 0xFF
             return True
-        elif register == IMEMRegisters.KIL:
+        elif register == KIL:
             # KIL is read-only
             return True
         return False

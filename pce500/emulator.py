@@ -11,7 +11,11 @@ from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL, RetInstruction, JumpInstruction, IR
 )
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
+# Define constants locally to avoid heavy imports
+INTERNAL_MEMORY_START = 0x100000  # SC62015 internal memory starts at this address
+KOL = 0xF0  # Key Output Low register offset
+KOH = 0xF1  # Key Output High register offset
+KIL = 0xF2  # Key Input register offset
 
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
@@ -109,12 +113,12 @@ class PCE500Emulator:
         # Create and integrate keyboard handler
         self.keyboard = PCE500KeyboardHandler()
         keyboard_overlay = MemoryOverlay(
-            start=INTERNAL_MEMORY_START + IMEMRegisters.KOL,
-            end=INTERNAL_MEMORY_START + IMEMRegisters.KIL,
+            start=INTERNAL_MEMORY_START + KOL,
+            end=INTERNAL_MEMORY_START + KIL,
             name="keyboard_io",
             read_only=False,
-            read_handler=lambda addr, pc: self.keyboard.handle_register_read(addr - INTERNAL_MEMORY_START),
-            write_handler=lambda addr, val, pc: self.keyboard.handle_register_write(addr - INTERNAL_MEMORY_START, val),
+            read_handler=self._keyboard_read_handler,
+            write_handler=self._keyboard_write_handler,
             perfetto_thread="I/O"
         )
         self.memory.add_overlay(keyboard_overlay)
@@ -667,3 +671,11 @@ class PCE500Emulator:
         """Simulates releasing a key on the keyboard."""
         if self.keyboard:
             self.keyboard.release_key(key_code)
+    
+    def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
+        """Handle keyboard register reads."""
+        return self.keyboard.handle_register_read(address - INTERNAL_MEMORY_START)
+    
+    def _keyboard_write_handler(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
+        """Handle keyboard register writes."""
+        self.keyboard.handle_register_write(address - INTERNAL_MEMORY_START, value)
