@@ -6,13 +6,13 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    # import marimo as mo
+    import marimo as mo
     import sys
     from typing import Optional, List, Dict
     import enum
     import dataclasses
     from PIL import Image, ImageDraw
-    return Dict, Image, ImageDraw, List, Optional, dataclasses, enum, sys
+    return Dict, Image, ImageDraw, List, Optional, dataclasses, enum, mo, sys
 
 
 @app.cell
@@ -43,6 +43,31 @@ def _(Optional, sys):
 
     trace = load_perfetto_trace("../pc-e500.trace")
     return perfetto_pb2, trace
+
+
+@app.cell
+def _(find_all_threads, mo, trace):
+    threads = find_all_threads(trace)
+    selected_thread = mo.ui.dropdown(threads)
+    selected_thread
+    return (selected_thread,)
+
+
+@app.cell
+def _(extract_annotations, extract_events_from_thread, selected_thread, trace):
+    extract_events_from_thread(trace, selected_thread.value)
+
+    import collections
+    write_addrs = collections.defaultdict(int)
+    for e in extract_events_from_thread(trace, selected_thread.value):
+        ann = extract_annotations(e.track_event)
+        addr = int(ann['addr'], 16)
+        write_addrs[addr] += 1
+        # break
+
+    for a in sorted(list(write_addrs)):
+        print(f"{hex(a)}: {write_addrs[a]} writes")
+    return
 
 
 @app.cell
@@ -158,6 +183,8 @@ def _(
         for d in extract_events_from_thread(trace, threads['Display']):
             # ann: {'addr': '0x00A000', 'value': '0x3E', 'pc': '0x0F10CC', 'overlay': 'display_memory'}
             ann = extract_annotations(d.track_event)
+            addr_hi = int(ann['addr'], 16) & 0xF000
+            assert addr_hi == 0xA000, "Unexpected address high bits"
             addr = int(ann['addr'], 16) & 0xFFF
             rw = ReadWrite(addr & 1)
             assert rw == ReadWrite.WRITE, "Unexpected Read value"
@@ -179,7 +206,38 @@ def _(
             commands.append(Command(cs, instr, data))
 
         return commands
-    return ChipSelect, HD61202State, Instruction, draw_commands
+    return (
+        ChipSelect,
+        HD61202State,
+        Instruction,
+        draw_commands,
+        extract_annotations,
+    )
+
+
+@app.cell
+def _(draw_commands, trace):
+    def rle_commands(commands):
+        # Run-length encode the commands in tuples (Repeat, Command)
+        result = []
+        if not commands:
+            return result
+        current_command = commands[0]
+        count = 1
+        for command in commands[1:]:
+            if command == current_command:
+                count += 1
+            else:
+                result.append((count, current_command))
+                current_command = command
+                count = 1
+        result.append((count, current_command))
+        return result
+
+
+    commands = draw_commands(trace)
+    rle_commands(commands)
+    return (commands,)
 
 
 @app.cell
@@ -219,7 +277,7 @@ def _(HD61202State, Image, ImageDraw, Instruction):
             on_color = (0, 255, 0)
 
             img_width = len(self.vram[0]) * zoom
-            img_height = len(self.vram) * 6 * zoom
+            img_height = len(self.vram) * 4 * zoom
             image = Image.new("RGB", (img_width, img_height), off_color)
             draw = ImageDraw.Draw(image)
 
@@ -247,32 +305,7 @@ def _(HD61202State, Image, ImageDraw, Instruction):
 
 
 @app.cell
-def _(draw_commands, trace):
-    def rle_commands(commands):
-        # Run-length encode the commands in tuples (Repeat, Command)
-        result = []
-        if not commands:
-            return result
-        current_command = commands[0]
-        count = 1
-        for command in commands[1:]:
-            if command == current_command:
-                count += 1
-            else:
-                result.append((count, current_command))
-                current_command = command
-                count = 1
-        result.append((count, current_command))
-        return result
-
-
-    commands = draw_commands(trace)
-    rle_commands(commands)
-    return (commands,)
-
-
-@app.cell
-def _(ChipSelect, HD61202, Instruction, commands):
+def _(ChipSelect, HD61202, commands):
     def draw_lcds(commands):
         lcds = [HD61202(), HD61202()]
         lcd_cs = {
@@ -289,8 +322,9 @@ def _(ChipSelect, HD61202, Instruction, commands):
                     # START_LINE = 0b11
                     # SET_PAGE = 0b10
                     # SET_Y_ADDRESS = 0b01
-                    if c.instr in [Instruction.ON_OFF, Instruction.START_LINE, Instruction.SET_Y_ADDRESS]:
-                        lcd.write_instruction(c.instr, c.data)
+                    # if c.instr in [Instruction.ON_OFF, Instruction.START_LINE, Instruction.SET_Y_ADDRESS]:
+                    #     lcd.write_instruction(c.instr, c.data)
+                    pass
                 else:
                     if c.data != 0:
                         lcd.write_data(c.data)
@@ -299,14 +333,6 @@ def _(ChipSelect, HD61202, Instruction, commands):
 
     lcds = draw_lcds(commands)
     lcds[0].vram_image(zoom=4), lcds[1].vram_image(zoom=4)
-    return
-
-
-@app.cell
-def _(HD61202):
-    test_lcd = HD61202()
-    test_lcd.write_data(0xFF)
-    test_lcd.vram_image(zoom=4)
     return
 
 
