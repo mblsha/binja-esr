@@ -13,6 +13,9 @@ from .hd61202 import (
     render_combined_image
 )
 
+# Import the controller wrapper for emulator compatibility
+from .controller_wrapper import HD61202Controller
+
 # Import visualization functionality
 from .lcd_visualization import (
     generate_lcd_image_from_trace,
@@ -20,6 +23,9 @@ from .lcd_visualization import (
 )
 
 __all__ = [
+    # Controller for emulator
+    "HD61202Controller",
+    
     # Core HD61202 classes
     "HD61202",
     "HD61202Interpreter", 

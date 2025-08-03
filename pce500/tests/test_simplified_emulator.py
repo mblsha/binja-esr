@@ -66,8 +66,8 @@ class TestSimplifiedEmulator:
         emu = PCE500Emulator()
         
         # Write display on command to left chip
-        # Address: 0x20008 = instruction write to left chip
-        emu.memory.write_byte(0x20008, 0x3F)  # Display on
+        # Address: 0xA008 = instruction write to left chip
+        emu.memory.write_byte(0xA008, 0x3F)  # Display on
         
         # Verify display state
         assert emu.lcd.display_on[0] is True
@@ -158,7 +158,7 @@ class TestSimplifiedEmulator:
         info = emu.get_memory_info()
         assert "internal_rom: 0xC0000-0xFFFFF (256KB)" in info
         assert "Base RAM: 0x00000-0xFFFFF (1MB)" in info
-        assert "lcd_controller: 0x20000-0x2FFFF (64KB)" in info
+        assert "lcd_controller: 0x0A000-0x0AFFF (4KB)" in info
         
     def test_performance_stats(self):
         """Test performance statistics."""

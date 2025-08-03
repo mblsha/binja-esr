@@ -13,7 +13,7 @@ from sc62015.pysc62015.instr.instructions import (
 )
 
 from .memory import PCE500Memory
-from .display.hd61202 import HD61202Controller
+from .display import HD61202Controller
 
 from .trace_manager import g_tracer
 

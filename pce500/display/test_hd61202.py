@@ -4,8 +4,8 @@ import pytest
 import numpy as np
 from PIL import Image
 
-from .hd61202 import (
-    HD61202Controller, HD61202Chip, HD61202State, Command,
+from . import (
+    HD61202Controller, HD61202, HD61202State, Command,
     parse_command, ChipSelect, Instruction, DataInstruction, ReadWrite
 )
 
@@ -15,14 +15,14 @@ class TestCommandParsing:
     
     def test_parse_instruction_on_off(self):
         """Test ON/OFF instruction parsing."""
-        # ON command to both chips (0x20000)
-        cmd = parse_command(0x20000, 0b00111111)  # 0x3F
+        # ON command to both chips (0x2000)
+        cmd = parse_command(0x2000, 0b00111111)  # 0x3F
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr == Instruction.ON_OFF
         assert cmd.data == 1
         
         # OFF command to both chips
-        cmd = parse_command(0x20000, 0b00111110)  # 0x3E
+        cmd = parse_command(0x2000, 0b00111110)  # 0x3E
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr == Instruction.ON_OFF
         assert cmd.data == 0
@@ -30,7 +30,7 @@ class TestCommandParsing:
     def test_parse_instruction_set_page(self):
         """Test SET_PAGE instruction parsing."""
         # Set page 5
-        cmd = parse_command(0x20000, 0b10111101)  # 0xBD
+        cmd = parse_command(0x2000, 0b10111101)  # 0xBD
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr == Instruction.SET_PAGE
         assert cmd.data == 5  # Only lower 3 bits
@@ -38,7 +38,7 @@ class TestCommandParsing:
     def test_parse_instruction_set_y_address(self):
         """Test SET_Y_ADDRESS instruction parsing."""
         # Set Y address to 0x25
-        cmd = parse_command(0x20000, 0b01100101)  # 0x65
+        cmd = parse_command(0x2000, 0b01100101)  # 0x65
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr == Instruction.SET_Y_ADDRESS
         assert cmd.data == 0x25
@@ -46,7 +46,7 @@ class TestCommandParsing:
     def test_parse_instruction_start_line(self):
         """Test START_LINE instruction parsing."""
         # Set start line to 0x1A
-        cmd = parse_command(0x20000, 0b11011010)  # 0xDA
+        cmd = parse_command(0x2000, 0b11011010)  # 0xDA
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr == Instruction.START_LINE
         assert cmd.data == 0x1A
@@ -54,7 +54,7 @@ class TestCommandParsing:
     def test_parse_data_write(self):
         """Test data write parsing."""
         # Data write to both chips
-        cmd = parse_command(0x20002, 0xAA)  # A1=1 for data
+        cmd = parse_command(0x2002, 0xAA)  # A1=1 for data
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr is None
         assert cmd.data == 0xAA
@@ -62,45 +62,45 @@ class TestCommandParsing:
     def test_chip_select_decoding(self):
         """Test chip select address decoding."""
         # Both chips (CS=00)
-        cmd = parse_command(0x20000, 0x3F)
+        cmd = parse_command(0x2000, 0x3F)
         assert cmd.cs == ChipSelect.BOTH
         
         # Right chip (CS=01)
-        cmd = parse_command(0x20004, 0x3F)
+        cmd = parse_command(0x2004, 0x3F)
         assert cmd.cs == ChipSelect.RIGHT
         
         # Left chip (CS=10)
-        cmd = parse_command(0x20008, 0x3F)
+        cmd = parse_command(0x2008, 0x3F)
         assert cmd.cs == ChipSelect.LEFT
         
     def test_alternate_address_range(self):
         """Test 0xAxxxx address range support."""
-        cmd = parse_command(0xA0000, 0x3F)  # Need full address
+        cmd = parse_command(0xA000, 0x3F)  # Need full address
         assert cmd.cs == ChipSelect.BOTH
         assert cmd.instr == Instruction.ON_OFF
         
     def test_invalid_address(self):
         """Test invalid address handling."""
         with pytest.raises(ValueError):
-            parse_command(0x30000, 0x3F)  # Invalid range
+            parse_command(0x3000, 0x3F)  # Invalid range
             
     def test_read_operation_error(self):
         """Test that read operations raise error."""
         with pytest.raises(ValueError):
-            parse_command(0x20001, 0x3F)  # A0=1 is read
+            parse_command(0x2001, 0x3F)  # A0=1 is read
             
     def test_chip_select_none_error(self):
         """Test that CS=11 (NONE) raises error."""
         with pytest.raises(ValueError):
-            parse_command(0x2000C, 0x3F)  # CS=11
+            parse_command(0x200C, 0x3F)  # CS=11
 
 
-class TestHD61202Chip:
+class TestHD61202:
     """Test individual HD61202 chip functionality."""
     
     def test_chip_initialization(self):
         """Test chip initialization."""
-        chip = HD61202Chip(width=120, height_pages=4)
+        chip = HD61202()
         assert chip.width == 120
         assert chip.height_pages == 4
         assert chip.state.on is False
@@ -110,7 +110,7 @@ class TestHD61202Chip:
         
     def test_write_instruction_on_off(self):
         """Test ON/OFF instruction."""
-        chip = HD61202Chip()
+        chip = HD61202()
         
         # Turn on
         chip.write_instruction(Instruction.ON_OFF, 1)
@@ -122,7 +122,7 @@ class TestHD61202Chip:
         
     def test_write_instruction_set_page(self):
         """Test SET_PAGE instruction."""
-        chip = HD61202Chip()
+        chip = HD61202()
         chip.write_instruction(Instruction.SET_PAGE, 3)
         assert chip.state.page == 3
         
@@ -132,7 +132,7 @@ class TestHD61202Chip:
         
     def test_write_instruction_set_y_address(self):
         """Test SET_Y_ADDRESS instruction."""
-        chip = HD61202Chip(width=64)
+        chip = HD61202()
         chip.write_instruction(Instruction.SET_Y_ADDRESS, 45)
         assert chip.state.y_address == 45
         
@@ -142,7 +142,7 @@ class TestHD61202Chip:
         
     def test_write_instruction_start_line(self):
         """Test START_LINE instruction."""
-        chip = HD61202Chip()
+        chip = HD61202()
         chip.write_instruction(Instruction.START_LINE, 25)
         assert chip.state.start_line == 25
         
@@ -152,7 +152,7 @@ class TestHD61202Chip:
         
     def test_write_data(self):
         """Test data writing and auto-increment."""
-        chip = HD61202Chip(width=64)
+        chip = HD61202()
         chip.state.page = 2
         chip.state.y_address = 10
         
@@ -169,7 +169,7 @@ class TestHD61202Chip:
         
     def test_read_data(self):
         """Test data reading and auto-increment."""
-        chip = HD61202Chip(width=64)
+        chip = HD61202()
         chip.state.page = 1
         chip.state.y_address = 5
         chip.vram[1][5] = 0x42
@@ -181,7 +181,7 @@ class TestHD61202Chip:
         
     def test_read_status(self):
         """Test status register reading."""
-        chip = HD61202Chip()
+        chip = HD61202()
         
         # Initial state
         status = chip.read_status()
@@ -199,7 +199,7 @@ class TestHD61202Chip:
         
     def test_reset(self):
         """Test chip reset."""
-        chip = HD61202Chip(width=64)
+        chip = HD61202()
         chip.state.on = True
         chip.state.page = 3
         chip.vram[0][0] = 0xFF
@@ -213,7 +213,7 @@ class TestHD61202Chip:
         
     def test_get_display_buffer(self):
         """Test display buffer generation."""
-        chip = HD61202Chip(width=64, height_pages=8)
+        chip = HD61202()
         
         # Write some test patterns
         chip.vram[0][0] = 0b00000001  # Pixel at (0,0)
@@ -229,7 +229,7 @@ class TestHD61202Chip:
         
     def test_get_display_buffer_with_scrolling(self):
         """Test display buffer with start line scrolling."""
-        chip = HD61202Chip(width=64, height_pages=8)
+        chip = HD61202()
         chip.state.start_line = 8  # Scroll by one page
         
         # Write to page 0
@@ -243,7 +243,7 @@ class TestHD61202Chip:
             
     def test_get_vram_image(self):
         """Test VRAM image generation."""
-        chip = HD61202Chip(width=64, height_pages=8)
+        chip = HD61202()
         chip.vram[0][0] = 0xFF  # All pixels in first column of first page
         
         image = chip.get_vram_image(zoom=2)
@@ -273,7 +273,7 @@ class TestHD61202Controller:
         controller = HD61202Controller()
         
         # Turn on both displays
-        controller.write(0x20000, 0x3F)
+        controller.write(0x2000, 0x3F)
         
         assert controller.chips[0].state.on is True
         assert controller.chips[1].state.on is True
@@ -283,12 +283,12 @@ class TestHD61202Controller:
         controller = HD61202Controller()
         
         # Turn on left chip only
-        controller.write(0x20008, 0x3F)
+        controller.write(0x2008, 0x3F)
         assert controller.chips[0].state.on is True
         assert controller.chips[1].state.on is False
         
         # Turn on right chip only  
-        controller.write(0x20004, 0x3F)
+        controller.write(0x2004, 0x3F)
         assert controller.chips[1].state.on is True
         
     def test_write_data_both_chips(self):
@@ -296,7 +296,7 @@ class TestHD61202Controller:
         controller = HD61202Controller()
         
         # Write data to both chips
-        controller.write(0x20002, 0xAA)
+        controller.write(0x2002, 0xAA)
         
         assert controller.chips[0].vram[0][0] == 0xAA
         assert controller.chips[1].vram[0][0] == 0xAA
@@ -308,7 +308,7 @@ class TestHD61202Controller:
         controller.chips[1].busy = True
         
         # Read from both chips (OR'd together)
-        status = controller.read(0x20001)
+        status = controller.read(0x2001)
         assert status & 0x20  # Display on from chip 0
         assert status & 0x80  # Busy from chip 1
         
@@ -415,10 +415,10 @@ class TestIntegration:
         controller = HD61202Controller()
         
         # Typical init sequence
-        controller.write(0x20000, 0x3F)  # Display ON
-        controller.write(0x20000, 0xC0)  # Start line 0
-        controller.write(0x20000, 0xB0)  # Page 0
-        controller.write(0x20000, 0x40)  # Y address 0
+        controller.write(0x2000, 0x3F)  # Display ON
+        controller.write(0x2000, 0xC0)  # Start line 0
+        controller.write(0x2000, 0xB0)  # Page 0
+        controller.write(0x2000, 0x40)  # Y address 0
         
         # Verify state
         assert all(controller.display_on)
@@ -431,14 +431,14 @@ class TestIntegration:
         controller = HD61202Controller()
         
         # Initialize display
-        controller.write(0x20000, 0x3F)  # ON
-        controller.write(0x20000, 0xB0)  # Page 0
-        controller.write(0x20000, 0x40)  # Column 0
+        controller.write(0x2000, 0x3F)  # ON
+        controller.write(0x2000, 0xB0)  # Page 0
+        controller.write(0x2000, 0x40)  # Column 0
         
         # Write 5x7 character 'A' pattern
         char_data = [0x7E, 0x11, 0x11, 0x11, 0x7E]  # Simple 'A'
         for data in char_data:
-            controller.write(0x20002, data)
+            controller.write(0x2002, data)
             
         # Verify data was written
         for i, data in enumerate(char_data):
@@ -450,7 +450,7 @@ class TestIntegration:
         controller = HD61202Controller()
         
         # Turn on left chip only
-        controller.write(0x20008, 0x3F)
+        controller.write(0x2008, 0x3F)
         
         # Write data to left chip only
         controller.write(0x2000A, 0xAA)

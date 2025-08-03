@@ -143,21 +143,30 @@ def parse_command(addr: int, value: int) -> Command:
     return Command(cs, instr, data)
 
 def render_combined_image(lcds: List[HD61202], zoom: int = 1) -> Image.Image:
-    """Stitches images from two LCD controllers into the final wide display."""
+    """Stitches images from two LCD controllers into the final wide display.
+    
+    Expects lcds[0] = left chip, lcds[1] = right chip
+    PC-E500 display layout is 240x32 pixels arranged as:
+    Left half: right chip (64px) + left chip (56px) 
+    Right half: left chip (56px flipped) + right chip (64px flipped)
+    """
     images = [lcd.render_vram_image(zoom=1) for lcd in lcds]
     # This layout logic is specific to the device's display configuration
-    lcd0w, lcd1w = 64, 56
-    height = HD61202.LCD_HEIGHT_PIXELS // 2
+    right_width, left_width = 64, 56
+    height = HD61202.LCD_HEIGHT_PIXELS // 2  # 32 pixels
 
-    combined_width = lcd0w * 2 + lcd1w * 2
+    combined_width = right_width * 2 + left_width * 2  # 240 pixels
     image = Image.new("RGB", (combined_width, height), "black")
     
-    # Page 206 of a manual likely explains this layout
-    image.paste(images[0].crop((0, 0, lcd0w, height)), (0, 0))
-    image.paste(images[1].crop((0, 0, lcd1w, height)), (lcd0w, 0))
-    # The right half is a flipped view of the left VRAMs
-    image.paste(images[1].crop((0, height, lcd1w, height*2)).transpose(Image.FLIP_LEFT_RIGHT), (lcd0w + lcd1w, 0))
-    image.paste(images[0].crop((0, height, lcd0w, height*2)).transpose(Image.FLIP_LEFT_RIGHT), (lcd0w + lcd1w + lcd1w, 0))
+    # Layout based on PC-E500 display arrangement (with left/right swapped)
+    # Left portion: right chip[0-63]
+    image.paste(images[1].crop((0, 0, right_width, height)), (0, 0))
+    # Center-left portion: left chip[0-55]
+    image.paste(images[0].crop((0, 0, left_width, height)), (right_width, 0))
+    # Center-right portion: left chip[56-63] flipped
+    image.paste(images[0].crop((0, height, left_width, height*2)).transpose(Image.FLIP_LEFT_RIGHT), (right_width + left_width, 0))
+    # Right portion: right chip[64-119] flipped
+    image.paste(images[1].crop((0, height, right_width, height*2)).transpose(Image.FLIP_LEFT_RIGHT), (right_width + left_width + left_width, 0))
     
     if zoom > 1:
         return image.resize((image.width * zoom, image.height * zoom), Image.NEAREST)

@@ -5,8 +5,8 @@ from pathlib import Path
 from PIL import Image
 
 # Import the library to be tested
-import lcd_visualization as lv
-from lcd_visualization import Instruction, ChipSelect, perfetto_pb2
+from . import lcd_visualization as lv
+from .lcd_visualization import Instruction, ChipSelect, perfetto_pb2
 
 # --- Test Cases for command parsing ---
 @pytest.mark.parametrize("test_id, in_addr, in_data, out_cs, out_instr, out_data", [
