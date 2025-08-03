@@ -1,0 +1,1 @@
+"""Tests for PC-E500 web emulator."""
