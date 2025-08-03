@@ -62,6 +62,21 @@ def main(dump_pc=None, no_dump=False, save_lcd=True):
         print(f"  Display on: {emu.lcd.display_on}")
         print(f"  Page: {emu.lcd.page}")
         print(f"  Column: {emu.lcd.column}")
+        
+        # Display detailed statistics for each chip
+        print("\nDetailed LCD Chip Statistics:")
+        print(f"  Chip select usage: BOTH={emu.lcd.cs_both_count}, LEFT={emu.lcd.cs_left_count}, RIGHT={emu.lcd.cs_right_count}")
+        stats = emu.lcd.get_chip_statistics()
+        for stat in stats:
+            chip_name = "Left" if stat['chip'] == 0 else "Right"
+            print(f"\n  {chip_name} Chip (Chip {stat['chip']}):")
+            print(f"    Display ON: {stat['on']}")
+            print(f"    Instructions received: {stat['instructions']}")
+            print(f"    ON/OFF commands: {stat['on_off_commands']}")
+            print(f"    Data bytes written: {stat['data_written']}")
+            print(f"    Data bytes read: {stat['data_read']}")
+            print(f"    Current page: {stat['page']}")
+            print(f"    Current column: {stat['column']}")
 
 
 

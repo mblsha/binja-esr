@@ -113,9 +113,6 @@ class PCE500Emulator:
         # Give memory access to CPU for accessing internal registers
         self.memory.set_cpu(self.cpu)
         
-        # Add display memory region for CE0 (0xA0000-0xAFFFF)
-        self.memory.add_display_memory()
-        
         # After power-on reset, set PC to entry point (not reset vector)
         # The reset vector at 0xFFFFA is only used for RESET instruction
         # Normal startup uses entry point at 0xFFFFD

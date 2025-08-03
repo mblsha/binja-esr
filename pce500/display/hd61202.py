@@ -3,7 +3,7 @@
 import enum
 import dataclasses
 import numpy as np
-from typing import Optional, List
+from typing import Optional, List, Dict
 from PIL import Image, ImageDraw
 
 from ..trace_manager import g_tracer
@@ -64,8 +64,10 @@ def parse_command(addr: int, value: int) -> Command:
     - A3:A2: Chip select
     """
     # Support both 0x2xxxx and 0xAxxxx ranges
-    addr_hi = addr & 0xF0000
-    if addr_hi not in [0x20000, 0xA0000]:
+    # The marimo notebook masked with 0xF000 to check the lower 16 bits
+    # This handles addresses like 0x00A000 correctly
+    addr_lo = addr & 0xF000
+    if addr_lo not in [0x2000, 0xA000]:
         raise ValueError(f"Invalid LCD address: 0x{addr:06X}")
     
     addr = addr & 0xFFF
@@ -99,20 +101,28 @@ def parse_command(addr: int, value: int) -> Command:
 class HD61202Chip:
     """Single HD61202 LCD controller chip."""
     
-    def __init__(self, width: int = 64, height_pages: int = 8):
+    def __init__(self, width: int = 64, height_pages: int = 8, chip_id: int = -1):
         """Initialize HD61202 chip.
         
         Args:
             width: Number of columns (64 for standard, 120 for PC-E500)
             height_pages: Number of pages (8 for 64 pixels high)
+            chip_id: Chip identifier for debugging
         """
         self.width = width
         self.height_pages = height_pages
+        self.chip_id = chip_id
         self.state = HD61202State()
         # VRAM organized as pages (rows) x columns
         self.vram = [[0 for _ in range(width)] for _ in range(height_pages)]
         self.busy = False
         self.reset_flag = True
+        
+        # Statistics
+        self.instruction_count = 0
+        self.data_bytes_written = 0
+        self.data_bytes_read = 0
+        self.on_off_commands = 0  # Track ON/OFF commands specifically
         
     def reset(self) -> None:
         """Reset chip to initial state."""
@@ -120,11 +130,18 @@ class HD61202Chip:
         self.vram = [[0 for _ in range(self.width)] for _ in range(self.height_pages)]
         self.busy = False
         self.reset_flag = True
+        # Reset statistics
+        self.instruction_count = 0
+        self.data_bytes_written = 0
+        self.data_bytes_read = 0
+        self.on_off_commands = 0
         
     def write_instruction(self, instr: Instruction, data: int) -> None:
         """Execute an instruction."""
+        self.instruction_count += 1
         if instr == Instruction.ON_OFF:
             self.state.on = bool(data)
+            self.on_off_commands += 1
         elif instr == Instruction.START_LINE:
             self.state.start_line = data & 0x3F
         elif instr == Instruction.SET_PAGE:
@@ -136,6 +153,7 @@ class HD61202Chip:
             
     def write_data(self, data: int) -> None:
         """Write data byte to current page/column position."""
+        self.data_bytes_written += 1
         if self.state.page < self.height_pages and self.state.y_address < self.width:
             self.vram[self.state.page][self.state.y_address] = data & 0xFF
             # Auto-increment column
@@ -143,6 +161,7 @@ class HD61202Chip:
             
     def read_data(self) -> int:
         """Read data byte from current page/column position."""
+        self.data_bytes_read += 1
         if self.state.page < self.height_pages and self.state.y_address < self.width:
             data = self.vram[self.state.page][self.state.y_address]
             # Auto-increment column
@@ -231,12 +250,17 @@ class HD61202Controller:
         """Initialize dual HD61202 chips for 240x32 display."""
         # PC-E500 uses two 120-column chips (non-standard width)
         self.chips = [
-            HD61202Chip(width=120, height_pages=4),  # Left chip
-            HD61202Chip(width=120, height_pages=4)   # Right chip
+            HD61202Chip(width=120, height_pages=4, chip_id=0),  # Left chip
+            HD61202Chip(width=120, height_pages=4, chip_id=1)   # Right chip
         ]
         
         # Perfetto tracing
         self.perfetto_enabled = False
+        
+        # Debug counters for chip select
+        self.cs_both_count = 0
+        self.cs_left_count = 0
+        self.cs_right_count = 0
         
     def read(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read from LCD controller.
@@ -246,8 +270,9 @@ class HD61202Controller:
             cpu_pc: Optional CPU program counter for tracing context
         """
         # Check if in LCD address range (0x2xxxx or 0xAxxxx)
-        addr_hi = address & 0xF0000
-        if addr_hi not in [0x20000, 0xA0000]:
+        # Use same masking as marimo notebook
+        addr_lo = address & 0xF000
+        if addr_lo not in [0x2000, 0xA000]:
             return 0xFF
             
         # Decode address bits
@@ -290,13 +315,23 @@ class HD61202Controller:
             # Get chip indices based on chip select
             chip_indices = self._get_chip_indices(cmd.cs)
             
+            # Track chip select usage
+            if cmd.cs == ChipSelect.BOTH:
+                self.cs_both_count += 1
+            elif cmd.cs == ChipSelect.LEFT:
+                self.cs_left_count += 1
+            elif cmd.cs == ChipSelect.RIGHT:
+                self.cs_right_count += 1
+            
             # Execute command on selected chips
+                    
             for chip_idx in chip_indices:
                 chip = self.chips[chip_idx]
                 
                 if cmd.instr is not None:
                     # Instruction write
                     chip.write_instruction(cmd.instr, cmd.data)
+                    
                     
                     # Perfetto tracing
                     if self.perfetto_enabled:
@@ -431,6 +466,26 @@ class HD61202Controller:
             
         return self.chips[chip_index].get_display_buffer()
         
+    def get_chip_statistics(self) -> List[Dict[str, int]]:
+        """Get statistics for each chip.
+        
+        Returns:
+            List of dictionaries with statistics for each chip
+        """
+        stats = []
+        for i, chip in enumerate(self.chips):
+            stats.append({
+                'chip': i,
+                'on': chip.state.on,
+                'instructions': chip.instruction_count,
+                'data_written': chip.data_bytes_written,
+                'data_read': chip.data_bytes_read,
+                'on_off_commands': chip.on_off_commands,
+                'page': chip.state.page,
+                'column': chip.state.y_address
+            })
+        return stats
+    
     def get_combined_display(self, zoom: int = 2) -> Image.Image:
         """Get combined display as stitched image matching PC-E500 layout.
         

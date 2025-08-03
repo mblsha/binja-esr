@@ -235,9 +235,11 @@ class PCE500Memory:
         self.remove_overlay("lcd_controller")
         
         if controller:
+            # PC-E500 uses CE0 region at 0xA000 for LCD access
+            # This matches the marimo notebook implementation
             self.add_overlay(MemoryOverlay(
-                start=0x20000,
-                end=0x2FFFF,
+                start=0x0A000,
+                end=0x0AFFF,
                 name="lcd_controller",
                 read_only=False,
                 read_handler=lambda addr, pc: controller.read(addr, pc),
