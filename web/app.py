@@ -240,6 +240,29 @@ def get_imem_watch():
         return jsonify(result)
 
 
+@app.route('/api/v1/lcd_stats', methods=['GET'])
+def get_lcd_stats():
+    """Get LCD controller statistics."""
+    with emulator_lock:
+        if emulator is None:
+            return jsonify({"error": "Emulator not initialized"}), 500
+        
+        # Get chip select counts
+        chip_select_stats = {
+            "both": emulator.lcd.cs_both_count,
+            "left": emulator.lcd.cs_left_count,
+            "right": emulator.lcd.cs_right_count
+        }
+        
+        # Get per-chip statistics
+        chip_stats = emulator.lcd.get_chip_statistics()
+        
+        return jsonify({
+            "chip_select": chip_select_stats,
+            "chips": chip_stats
+        })
+
+
 @app.route('/api/v1/control', methods=['POST'])
 def control_emulator():
     """Control emulator execution (run/pause/step/reset)."""

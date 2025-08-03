@@ -59,10 +59,19 @@ class HD61202:
         self.vram = [[0] * self.LCD_WIDTH_PIXELS for _ in range(self.LCD_PAGES)]
         # Track PC source for each VRAM byte
         self.vram_pc_source = [[None] * self.LCD_WIDTH_PIXELS for _ in range(self.LCD_PAGES)]
+        
+        # Statistics counters
+        self.instruction_count = 0
+        self.data_write_count = 0
+        self.data_read_count = 0
+        self.on_off_count = 0
 
     def write_instruction(self, instr: Instruction, data: int):
+        self.instruction_count += 1
+        
         if instr == Instruction.ON_OFF:
             self.state.on = bool(data)
+            self.on_off_count += 1
         elif instr == Instruction.START_LINE:
             self.state.start_line = data
         elif instr == Instruction.SET_PAGE:
@@ -73,6 +82,7 @@ class HD61202:
             raise ValueError(f"Unknown instruction: {instr}")
 
     def write_data(self, data: int, pc_source: Optional[int] = None):
+        self.data_write_count += 1
         if 0 <= self.state.page < self.LCD_PAGES and 0 <= self.state.y_address < self.LCD_WIDTH_PIXELS:
             self.vram[self.state.page][self.state.y_address] = data
             self.vram_pc_source[self.state.page][self.state.y_address] = pc_source
@@ -107,6 +117,7 @@ class HD61202:
 
     def read_data(self) -> int:
         """Reads data from the current address and increments Y address."""
+        self.data_read_count += 1
         if 0 <= self.state.page < self.LCD_PAGES and 0 <= self.state.y_address < self.LCD_WIDTH_PIXELS:
             data = self.vram[self.state.page][self.state.y_address]
             self.state.y_address = (self.state.y_address + 1) % self.LCD_WIDTH_PIXELS
@@ -118,6 +129,24 @@ class HD61202:
         if 0 <= page < self.LCD_PAGES and 0 <= y_address < self.LCD_WIDTH_PIXELS:
             return self.vram_pc_source[page][y_address]
         return None
+    
+    def reset(self):
+        """Reset the HD61202 chip state and statistics."""
+        # Reset state
+        self.state.on = False
+        self.state.start_line = 0
+        self.state.page = 0
+        self.state.y_address = 0
+        
+        # Clear VRAM
+        self.vram = [[0] * self.LCD_WIDTH_PIXELS for _ in range(self.LCD_PAGES)]
+        self.vram_pc_source = [[None] * self.LCD_WIDTH_PIXELS for _ in range(self.LCD_PAGES)]
+        
+        # Reset statistics counters
+        self.instruction_count = 0
+        self.data_write_count = 0
+        self.data_read_count = 0
+        self.on_off_count = 0
 
 # Compatibility alias for existing code
 HD61202Interpreter = HD61202

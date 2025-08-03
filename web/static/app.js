@@ -151,6 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupLCDInteraction();
     startPolling();
     startRegisterWatchPolling();
+    startLcdStatsPolling();
 });
 
 // Set up the virtual keyboard
@@ -578,6 +579,15 @@ function startRegisterWatchPolling() {
     updateRegisterWatch();
 }
 
+// Start polling for LCD statistics updates
+let lcdStatsTimer = null;
+function startLcdStatsPolling() {
+    // Poll less frequently than main state (every 500ms)
+    lcdStatsTimer = setInterval(updateLcdStats, 500);
+    // Initial update
+    updateLcdStats();
+}
+
 // Register descriptions for tooltips
 const REGISTER_DESCRIPTIONS = {
     // RAM Pointers
@@ -685,5 +695,35 @@ async function updateRegisterWatch() {
         
     } catch (error) {
         console.error('Error fetching register watch data:', error);
+    }
+}
+
+// Update LCD statistics display
+async function updateLcdStats() {
+    try {
+        const response = await fetch(`${API_BASE}/lcd_stats`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        
+        // Update chip select counts
+        document.getElementById('cs-both-count').textContent = data.chip_select.both.toLocaleString();
+        document.getElementById('cs-left-count').textContent = data.chip_select.left.toLocaleString();
+        document.getElementById('cs-right-count').textContent = data.chip_select.right.toLocaleString();
+        
+        // Update per-chip statistics
+        data.chips.forEach(chip => {
+            const chipId = chip.chip;
+            document.getElementById(`chip${chipId}-on`).textContent = chip.on ? 'ON' : 'OFF';
+            document.getElementById(`chip${chipId}-instructions`).textContent = chip.instructions.toLocaleString();
+            document.getElementById(`chip${chipId}-on-off`).textContent = chip.on_off_commands.toLocaleString();
+            document.getElementById(`chip${chipId}-data-written`).textContent = chip.data_written.toLocaleString();
+            document.getElementById(`chip${chipId}-data-read`).textContent = chip.data_read.toLocaleString();
+            document.getElementById(`chip${chipId}-page`).textContent = chip.page;
+            document.getElementById(`chip${chipId}-column`).textContent = chip.column;
+        });
+        
+    } catch (error) {
+        console.error('Error fetching LCD statistics:', error);
     }
 }

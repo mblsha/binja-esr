@@ -407,6 +407,82 @@ h1 {
     }
 }
 
+/* LCD Statistics Section */
+.lcd-stats-section {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 30px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.lcd-stats-section h2 {
+    color: #2c3e50;
+    margin-bottom: 20px;
+    font-size: 20px;
+}
+
+.lcd-stats-section h3 {
+    color: #34495e;
+    margin-bottom: 15px;
+    font-size: 16px;
+}
+
+.lcd-stats-content {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 30px;
+}
+
+.chip-select-stats,
+.chip-stats {
+    background: #f8f9fa;
+    border-radius: 6px;
+    padding: 15px;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+}
+
+.stats-table th {
+    background-color: #34495e;
+    color: white;
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: bold;
+}
+
+.stats-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.stats-table tbody tr:hover {
+    background-color: white;
+}
+
+.stats-table td:first-child {
+    font-weight: 500;
+    color: #495057;
+}
+
+.stats-table td:not(:first-child) {
+    text-align: right;
+    color: #2c3e50;
+    font-weight: bold;
+}
+
+/* Responsive layout for smaller screens */
+@media (max-width: 1200px) {
+    .lcd-stats-content {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Context-specific styles */
 .pc-address.history-pc {
     font-weight: bold;

@@ -85,6 +85,73 @@
             </div>
         </div>
         
+        <!-- LCD Statistics Section -->
+        <div class="lcd-stats-section">
+            <h2>LCD Controller Statistics</h2>
+            <div class="lcd-stats-content">
+                <div class="chip-select-stats">
+                    <h3>Chip Select Usage</h3>
+                    <table class="stats-table">
+                        <tbody>
+                            <tr><td>Both Chips:</td><td id="cs-both-count">0</td></tr>
+                            <tr><td>Left Chip:</td><td id="cs-left-count">0</td></tr>
+                            <tr><td>Right Chip:</td><td id="cs-right-count">0</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="chip-stats">
+                    <h3>Per-Chip Statistics</h3>
+                    <table class="stats-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>Left Chip</th>
+                                <th>Right Chip</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Display ON:</td>
+                                <td id="chip0-on">OFF</td>
+                                <td id="chip1-on">OFF</td>
+                            </tr>
+                            <tr>
+                                <td>Instructions:</td>
+                                <td id="chip0-instructions">0</td>
+                                <td id="chip1-instructions">0</td>
+                            </tr>
+                            <tr>
+                                <td>ON/OFF Commands:</td>
+                                <td id="chip0-on-off">0</td>
+                                <td id="chip1-on-off">0</td>
+                            </tr>
+                            <tr>
+                                <td>Data Written:</td>
+                                <td id="chip0-data-written">0</td>
+                                <td id="chip1-data-written">0</td>
+                            </tr>
+                            <tr>
+                                <td>Data Read:</td>
+                                <td id="chip0-data-read">0</td>
+                                <td id="chip1-data-read">0</td>
+                            </tr>
+                            <tr>
+                                <td>Current Page:</td>
+                                <td id="chip0-page">0</td>
+                                <td id="chip1-page">0</td>
+                            </tr>
+                            <tr>
+                                <td>Current Column:</td>
+                                <td id="chip0-column">0</td>
+                                <td id="chip1-column">0</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
         <!-- Virtual Keyboard Section -->
         <div class="keyboard-section">
             <h2>Virtual Keyboard</h2>

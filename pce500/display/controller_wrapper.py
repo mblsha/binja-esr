@@ -60,13 +60,15 @@ class HD61202Controller:
             pass
             
     def reset(self) -> None:
-        """Reset both chips."""
+        """Reset both chips and all statistics."""
+        # Reset each chip (this now includes statistics counters)
         for chip in self.chips:
-            chip.state.on = False
-            chip.state.start_line = 0
-            chip.state.page = 0
-            chip.state.y_address = 0
-            chip.vram = [[0] * chip.LCD_WIDTH_PIXELS for _ in range(chip.LCD_PAGES)]
+            chip.reset()
+        
+        # Reset chip select counters
+        self.cs_both_count = 0
+        self.cs_left_count = 0
+        self.cs_right_count = 0
             
     def get_display_buffer(self) -> np.ndarray:
         """Get combined display buffer as numpy array (240x32).
@@ -153,10 +155,10 @@ class HD61202Controller:
             stats.append({
                 'chip': i,
                 'on': chip.state.on,
-                'instructions': 0,  # Not tracked in new implementation
-                'data_written': 0,  # Not tracked in new implementation
-                'data_read': 0,     # Not tracked in new implementation
-                'on_off_commands': 0,  # Not tracked in new implementation
+                'instructions': chip.instruction_count,
+                'data_written': chip.data_write_count,
+                'data_read': chip.data_read_count,
+                'on_off_commands': chip.on_off_count,
                 'page': chip.state.page,
                 'column': chip.state.y_address
             })
