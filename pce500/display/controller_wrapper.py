@@ -53,7 +53,7 @@ class HD61202Controller:
                 if cmd.instr is not None:
                     chip.write_instruction(cmd.instr, cmd.data)
                 else:
-                    chip.write_data(cmd.data)
+                    chip.write_data(cmd.data, pc_source=cpu_pc)
                     
         except ValueError:
             # Invalid command, ignore
@@ -161,3 +161,42 @@ class HD61202Controller:
                 'column': chip.state.y_address
             })
         return stats
+    
+    def get_pixel_pc_source(self, x: int, y: int) -> Optional[int]:
+        """Get the PC source for a specific pixel on the 240x32 display.
+        
+        Args:
+            x: X coordinate (0-239)
+            y: Y coordinate (0-31)
+            
+        Returns:
+            PC address that last wrote to this pixel, or None
+        """
+        # Convert y to page
+        page = y // 8
+        
+        # Determine which chip and column based on PC-E500 layout
+        # Left half: right chip (64px) + left chip (56px)
+        # Right half: left chip (56px flipped) + right chip (64px flipped)
+        
+        if x < 64:
+            # Left portion: right chip[0-63]
+            chip_idx = 1
+            col = x
+        elif x < 120:
+            # Center-left portion: left chip[0-55]
+            chip_idx = 0
+            col = x - 64
+        elif x < 176:
+            # Center-right portion: left chip[0-55] (flipped)
+            chip_idx = 0
+            col = 55 - (x - 120)  # Flip horizontally
+        else:
+            # Right portion: right chip[0-63] (flipped)
+            chip_idx = 1
+            col = 63 - (x - 176)  # Flip horizontally
+            
+        # Get the PC source from the appropriate chip
+        if 0 <= chip_idx < len(self.chips):
+            return self.chips[chip_idx].get_pc_source(page, col)
+        return None

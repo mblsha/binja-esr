@@ -100,7 +100,9 @@ const KEYBOARD_LAYOUT = [
 document.addEventListener('DOMContentLoaded', () => {
     setupKeyboard();
     setupControls();
+    setupLCDInteraction();
     startPolling();
+    startRegisterWatchPolling();
 });
 
 // Set up the virtual keyboard
@@ -304,6 +306,11 @@ async function updateState() {
             document.getElementById('instruction-count').textContent = state.instruction_count.toLocaleString();
         }
         
+        // Update instruction history
+        if (state.instruction_history) {
+            updateInstructionHistory(state.instruction_history);
+        }
+        
         // Update running state
         isRunning = state.is_running || false;
         updateControlButtons();
@@ -381,3 +388,178 @@ document.addEventListener('keyup', (e) => {
         handleKeyRelease(virtualKey);
     }
 });
+
+// Update instruction history display
+function updateInstructionHistory(history) {
+    const historyContainer = document.getElementById('instruction-history');
+    
+    // Clear existing content
+    historyContainer.innerHTML = '';
+    
+    // Display in reverse order (most recent first)
+    const reversedHistory = history.slice().reverse();
+    
+    reversedHistory.forEach(item => {
+        const historyItem = document.createElement('div');
+        historyItem.className = 'history-item';
+        
+        const pcSpan = document.createElement('span');
+        pcSpan.className = 'history-pc';
+        pcSpan.textContent = item.pc;
+        
+        const instrSpan = document.createElement('span');
+        instrSpan.className = 'history-instr';
+        instrSpan.textContent = item.disassembly;
+        
+        historyItem.appendChild(pcSpan);
+        historyItem.appendChild(instrSpan);
+        historyContainer.appendChild(historyItem);
+    });
+}
+
+// Set up LCD interaction
+function setupLCDInteraction() {
+    const lcdDisplay = document.getElementById('lcd-display');
+    const screenFrame = document.querySelector('.screen-frame');
+    let tooltip = null;
+    let columnHighlight = null;
+    
+    // Create tooltip element
+    tooltip = document.createElement('div');
+    tooltip.className = 'lcd-tooltip';
+    tooltip.style.display = 'none';
+    document.body.appendChild(tooltip);
+    
+    // Create column highlight element
+    columnHighlight = document.createElement('div');
+    columnHighlight.className = 'lcd-column-highlight';
+    columnHighlight.style.display = 'none';
+    screenFrame.appendChild(columnHighlight);
+    
+    lcdDisplay.addEventListener('mousemove', async (e) => {
+        // Get mouse position relative to the image
+        const rect = lcdDisplay.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        // Convert to actual pixel coordinates (accounting for 2x zoom)
+        const pixelX = Math.floor(x / 2);
+        const pixelY = Math.floor(y / 2);
+        
+        // Ensure coordinates are in bounds
+        if (pixelX >= 0 && pixelX < 240 && pixelY >= 0 && pixelY < 32) {
+            try {
+                // Fetch PC source for this pixel
+                const response = await fetch(`${API_BASE}/lcd_debug?x=${pixelX}&y=${pixelY}`);
+                const data = await response.json();
+                
+                if (data.pc) {
+                    // Show tooltip with PC address
+                    tooltip.textContent = `PC: ${data.pc}`;
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = `${e.pageX + 10}px`;
+                    tooltip.style.top = `${e.pageY - 30}px`;
+                    
+                    // Highlight the column (1x8 pixels)
+                    const columnX = Math.floor(pixelX) * 2; // Convert back to display coordinates
+                    columnHighlight.style.display = 'block';
+                    columnHighlight.style.left = `${columnX}px`;
+                } else {
+                    tooltip.style.display = 'none';
+                    columnHighlight.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error fetching LCD debug info:', error);
+                tooltip.style.display = 'none';
+                columnHighlight.style.display = 'none';
+            }
+        } else {
+            tooltip.style.display = 'none';
+            columnHighlight.style.display = 'none';
+        }
+    });
+    
+    lcdDisplay.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+        columnHighlight.style.display = 'none';
+    });
+}
+
+// Start polling for register watch updates
+let registerWatchTimer = null;
+function startRegisterWatchPolling() {
+    // Poll less frequently than main state (every 500ms)
+    registerWatchTimer = setInterval(updateRegisterWatch, 500);
+    // Initial update
+    updateRegisterWatch();
+}
+
+// Update register watch display
+async function updateRegisterWatch() {
+    try {
+        const response = await fetch(`${API_BASE}/imem_watch`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        const tbody = document.getElementById('register-watch-body');
+        
+        // Clear existing rows
+        tbody.innerHTML = '';
+        
+        // Create rows for each register that has been accessed
+        for (const [regName, accesses] of Object.entries(data)) {
+            const row = document.createElement('tr');
+            
+            // Register name cell
+            const nameCell = document.createElement('td');
+            nameCell.className = 'register-name';
+            nameCell.textContent = regName;
+            row.appendChild(nameCell);
+            
+            // Writes cell
+            const writesCell = document.createElement('td');
+            writesCell.className = 'pc-list';
+            if (accesses.writes.length > 0) {
+                accesses.writes.forEach(pc => {
+                    const span = document.createElement('span');
+                    span.textContent = pc;
+                    writesCell.appendChild(span);
+                });
+            } else {
+                writesCell.textContent = '-';
+            }
+            row.appendChild(writesCell);
+            
+            // Reads cell
+            const readsCell = document.createElement('td');
+            readsCell.className = 'pc-list';
+            if (accesses.reads.length > 0) {
+                accesses.reads.forEach(pc => {
+                    const span = document.createElement('span');
+                    span.textContent = pc;
+                    readsCell.appendChild(span);
+                });
+            } else {
+                readsCell.textContent = '-';
+            }
+            row.appendChild(readsCell);
+            
+            tbody.appendChild(row);
+        }
+        
+        // If no registers have been accessed, show a message
+        if (Object.keys(data).length === 0) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 3;
+            cell.textContent = 'No register accesses recorded yet';
+            cell.style.textAlign = 'center';
+            cell.style.fontStyle = 'italic';
+            row.appendChild(cell);
+            tbody.appendChild(row);
+        }
+        
+    } catch (error) {
+        console.error('Error fetching register watch data:', error);
+    }
+}

@@ -29,7 +29,8 @@ emulator_state = {
     "screen": None,
     "registers": {},
     "flags": {},
-    "instruction_count": 0
+    "instruction_count": 0,
+    "instruction_history": []
 }
 
 # Update thresholds
@@ -106,6 +107,7 @@ def update_emulator_state():
             "c": cpu_state["flags"]["c"]
         },
         "instruction_count": emulator.instruction_count,
+        "instruction_history": list(emulator.instruction_history),
         "last_update_time": time.time(),
         "last_update_instructions": emulator.instruction_count
     })
@@ -194,6 +196,48 @@ def handle_key():
             
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/v1/lcd_debug', methods=['GET'])
+def get_lcd_debug():
+    """Get PC source for a specific LCD pixel."""
+    x = request.args.get('x', type=int)
+    y = request.args.get('y', type=int)
+    
+    if x is None or y is None:
+        return jsonify({"error": "Missing x or y parameter"}), 400
+    
+    if not (0 <= x < 240 and 0 <= y < 32):
+        return jsonify({"error": "Coordinates out of range"}), 400
+    
+    with emulator_lock:
+        if emulator is None:
+            return jsonify({"error": "Emulator not initialized"}), 500
+        
+        pc_source = emulator.lcd.get_pixel_pc_source(x, y)
+        return jsonify({
+            "pc": f"0x{pc_source:06X}" if pc_source is not None else None
+        })
+
+
+@app.route('/api/v1/imem_watch', methods=['GET'])
+def get_imem_watch():
+    """Get IMEM register access tracking data."""
+    with emulator_lock:
+        if emulator is None:
+            return jsonify({"error": "Emulator not initialized"}), 500
+        
+        tracking_data = emulator.memory.get_imem_access_tracking()
+        
+        # Format the data for the API response
+        result = {}
+        for reg_name, accesses in tracking_data.items():
+            result[reg_name] = {
+                "reads": [f"0x{pc:06X}" for pc in accesses["reads"]],
+                "writes": [f"0x{pc:06X}" for pc in accesses["writes"]]
+            }
+        
+        return jsonify(result)
 
 
 @app.route('/api/v1/control', methods=['POST'])

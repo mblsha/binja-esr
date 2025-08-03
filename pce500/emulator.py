@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, Set
+from collections import deque
 
 # Import the SC62015 emulator
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -166,6 +167,9 @@ class PCE500Emulator:
         # PC tracking for memory context and jump analysis
         self._current_pc = 0
         self._last_pc = 0
+        
+        # Instruction history tracking
+        self.instruction_history: deque = deque(maxlen=100)
 
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
         """Load ROM data."""
@@ -215,6 +219,9 @@ class PCE500Emulator:
         self.start_time = time.time()
         if self.trace is not None:
             self.trace.clear()
+        
+        # Clear instruction history
+        self.instruction_history.clear()
 
     def step(self) -> bool:
         """Execute a single instruction.
@@ -280,6 +287,14 @@ class PCE500Emulator:
 
             # Update counters
             self.instruction_count += 1
+            
+            # Add to instruction history
+            from binja_test_mocks.tokens import asm_str
+            disassembly = asm_str(eval_info.instruction.render())
+            self.instruction_history.append({
+                "pc": f"0x{pc:06X}",
+                "disassembly": disassembly
+            })
 
             # Post-execution analysis - detailed tracing after execution
             if self.perfetto_enabled:

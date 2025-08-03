@@ -53,6 +53,35 @@
                     <p>Instructions: <span id="instruction-count">0</span></p>
                 </div>
             </div>
+            
+            <!-- Instruction History Panel -->
+            <div class="instruction-history-panel">
+                <h2>Instruction History</h2>
+                <div class="history-content">
+                    <div id="instruction-history" class="history-list">
+                        <!-- Instruction history will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Internal Register Watch Section -->
+        <div class="register-watch-section">
+            <h2>Internal Register Watch</h2>
+            <div class="register-watch-content">
+                <table id="register-watch-table">
+                    <thead>
+                        <tr>
+                            <th>Register</th>
+                            <th>Last Writes (PC)</th>
+                            <th>Last Reads (PC)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="register-watch-body">
+                        <!-- Register watch data will be populated here -->
+                    </tbody>
+                </table>
+            </div>
         </div>
         
         <!-- Virtual Keyboard Section -->

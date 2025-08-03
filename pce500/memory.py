@@ -5,7 +5,7 @@ including memory overlays for ROM, RAM expansions, and memory-mapped I/O.
 """
 
 from dataclasses import dataclass
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Dict
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -52,6 +52,9 @@ class PCE500Memory:
         # Reference to CPU emulator for accessing internal memory registers
         self.cpu = None
         
+        # Track IMEMRegisters access for debugging
+        self.imem_access_tracking: Dict[str, Dict[str, List[int]]] = {}
+        
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
         
@@ -77,6 +80,19 @@ class PCE500Memory:
                 
                 # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
+                
+                # Track IMEMRegisters reads
+                if cpu_pc is not None:
+                    for reg_name in IMEMRegisters.__members__:
+                        if IMEMRegisters[reg_name].value == offset:
+                            if reg_name not in self.imem_access_tracking:
+                                self.imem_access_tracking[reg_name] = {"reads": [], "writes": []}
+                            # Keep only last 10 accesses
+                            self.imem_access_tracking[reg_name]["reads"].append(cpu_pc)
+                            if len(self.imem_access_tracking[reg_name]["reads"]) > 10:
+                                self.imem_access_tracking[reg_name]["reads"].pop(0)
+                            break
+                
                 return self.external_memory[internal_offset]
             raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
         
@@ -138,6 +154,18 @@ class PCE500Memory:
                 # Internal memory stored at end of external_memory for compatibility
                 internal_offset = len(self.external_memory) - 256 + offset
                 self.external_memory[internal_offset] = value
+                
+                # Track IMEMRegisters writes
+                if cpu_pc is not None:
+                    for reg_name in IMEMRegisters.__members__:
+                        if IMEMRegisters[reg_name].value == offset:
+                            if reg_name not in self.imem_access_tracking:
+                                self.imem_access_tracking[reg_name] = {"reads": [], "writes": []}
+                            # Keep only last 10 accesses
+                            self.imem_access_tracking[reg_name]["writes"].append(cpu_pc)
+                            if len(self.imem_access_tracking[reg_name]["writes"]) > 10:
+                                self.imem_access_tracking[reg_name]["writes"].pop(0)
+                            break
                 
                 if self.perfetto_enabled:
                     # Get current BP value from internal memory if CPU is available
@@ -368,3 +396,12 @@ class PCE500Memory:
     def set_cpu(self, cpu) -> None:
         """Set reference to CPU emulator for accessing internal memory registers."""
         self.cpu = cpu
+    
+    def get_imem_access_tracking(self) -> Dict[str, Dict[str, List[int]]]:
+        """Get the IMEM register access tracking data.
+        
+        Returns:
+            Dictionary with register names as keys and read/write lists as values
+        """
+        # Return a copy of the tracking data
+        return dict(self.imem_access_tracking)

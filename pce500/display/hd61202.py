@@ -57,6 +57,8 @@ class HD61202:
     def __init__(self):
         self.state = HD61202State()
         self.vram = [[0] * self.LCD_WIDTH_PIXELS for _ in range(self.LCD_PAGES)]
+        # Track PC source for each VRAM byte
+        self.vram_pc_source = [[None] * self.LCD_WIDTH_PIXELS for _ in range(self.LCD_PAGES)]
 
     def write_instruction(self, instr: Instruction, data: int):
         if instr == Instruction.ON_OFF:
@@ -70,9 +72,10 @@ class HD61202:
         else:
             raise ValueError(f"Unknown instruction: {instr}")
 
-    def write_data(self, data: int):
+    def write_data(self, data: int, pc_source: Optional[int] = None):
         if 0 <= self.state.page < self.LCD_PAGES and 0 <= self.state.y_address < self.LCD_WIDTH_PIXELS:
             self.vram[self.state.page][self.state.y_address] = data
+            self.vram_pc_source[self.state.page][self.state.y_address] = pc_source
             self.state.y_address = (self.state.y_address + 1) % self.LCD_WIDTH_PIXELS
 
     def render_vram_image(self, zoom: int = 1) -> Image.Image:
@@ -109,6 +112,12 @@ class HD61202:
             self.state.y_address = (self.state.y_address + 1) % self.LCD_WIDTH_PIXELS
             return data
         return 0
+    
+    def get_pc_source(self, page: int, y_address: int) -> Optional[int]:
+        """Get the PC source for a specific VRAM location."""
+        if 0 <= page < self.LCD_PAGES and 0 <= y_address < self.LCD_WIDTH_PIXELS:
+            return self.vram_pc_source[page][y_address]
+        return None
 
 # Compatibility alias for existing code
 HD61202Interpreter = HD61202
