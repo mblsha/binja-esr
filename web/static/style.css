@@ -226,18 +226,7 @@ h1 {
 }
 
 /* Virtual Keyboard */
-.keyboard-section {
-    background: white;
-    border-radius: 8px;
-    padding: 20px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-}
-
-.keyboard-section h2 {
-    color: #2c3e50;
-    margin-bottom: 15px;
-    font-size: 20px;
-}
+/* .keyboard-section styles removed - keyboard now integrated into screen-section */
 
 .keyboard {
     display: grid;
@@ -245,6 +234,7 @@ h1 {
     padding: 10px;
     background: #34495e;
     border-radius: 4px;
+    margin-top: 20px;  /* Space from controls */
 }
 
 .keyboard-row {
