@@ -30,7 +30,7 @@ emulator_state = {
     "is_running": False,
     "last_update_time": 0,
     "last_update_instructions": 0,
-    "screen_data": None,
+    "screen": None,
     "registers": {},
     "flags": {},
     "instruction_count": 0
@@ -57,6 +57,9 @@ def initialize_emulator():
     with emulator_lock:
         emulator = PCE500Emulator(trace_enabled=False, perfetto_trace=False, save_lcd_on_exit=False)
         emulator.load_rom(rom_data)
+        
+        # Reset to properly set PC from the now-loaded ROM entry point
+        emulator.reset()
         
         # Create keyboard handler
         keyboard_handler = PCE500KeyboardHandler(emulator.cpu)
