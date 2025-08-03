@@ -11,10 +11,6 @@ The keyboard is organized as a matrix where:
 """
 
 from typing import Dict, Set, Tuple, Optional
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 
@@ -114,13 +110,8 @@ class PCE500KeyboardHandler:
         # ... more keys can be added here
     }
     
-    def __init__(self, cpu):
-        """Initialize keyboard handler.
-        
-        Args:
-            cpu: SC62015 CPU emulator instance
-        """
-        self.cpu = cpu
+    def __init__(self):
+        """Initialize keyboard handler."""
         self.pressed_keys: Set[str] = set()
         self._last_kol = 0
         self._last_koh = 0

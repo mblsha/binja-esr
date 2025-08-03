@@ -3,13 +3,11 @@
 import unittest
 import sys
 from pathlib import Path
-from unittest.mock import Mock
 
 # Add parent directories to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from keyboard_handler import PCE500KeyboardHandler
+from pce500.keyboard import PCE500KeyboardHandler
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 
@@ -18,9 +16,8 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        # Create mock CPU
-        self.mock_cpu = Mock()
-        self.handler = PCE500KeyboardHandler(self.mock_cpu)
+        # Create keyboard handler directly (no CPU needed)
+        self.handler = PCE500KeyboardHandler()
     
     def test_initial_state(self):
         """Test initial keyboard state."""

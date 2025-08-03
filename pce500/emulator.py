@@ -11,9 +11,11 @@ from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL, RetInstruction, JumpInstruction, IR
 )
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
 
-from .memory import PCE500Memory
+from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
+from .keyboard import PCE500KeyboardHandler
 
 from .trace_manager import g_tracer
 
@@ -103,6 +105,19 @@ class PCE500Emulator:
         self.memory = TrackedMemory(self)
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
+        
+        # Create and integrate keyboard handler
+        self.keyboard = PCE500KeyboardHandler()
+        keyboard_overlay = MemoryOverlay(
+            start=INTERNAL_MEMORY_START + IMEMRegisters.KOL,
+            end=INTERNAL_MEMORY_START + IMEMRegisters.KIL,
+            name="keyboard_io",
+            read_only=False,
+            read_handler=lambda addr, pc: self.keyboard.handle_register_read(addr - INTERNAL_MEMORY_START),
+            write_handler=lambda addr, val, pc: self.keyboard.handle_register_write(addr - INTERNAL_MEMORY_START, val),
+            perfetto_thread="I/O"
+        )
+        self.memory.add_overlay(keyboard_overlay)
 
         # Create CPU emulator with our memory (temporarily disable tracing during reset)
         old_perfetto_state = self.memory.perfetto_enabled
@@ -642,3 +657,13 @@ class PCE500Emulator:
         # For conditional jumps, only trace if taken
         if not condition or jump_taken:
             self._trace_jump(pc_before, pc_after, condition, jump_taken)
+    
+    def press_key(self, key_code: str):
+        """Simulates pressing a key on the keyboard."""
+        if self.keyboard:
+            self.keyboard.press_key(key_code)
+
+    def release_key(self, key_code: str):
+        """Simulates releasing a key on the keyboard."""
+        if self.keyboard:
+            self.keyboard.release_key(key_code)

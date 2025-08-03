@@ -58,10 +58,22 @@ class PCE500Memory:
         
         # Check for SC62015 internal memory (0x100000-0x1000FF)
         if address >= 0x100000:
-            # Internal 256-byte RAM
             offset = address - 0x100000
             if offset < 0x100:
-                # Internal memory stored at end of external_memory for compatibility
+                # Fast path: Check if this is a keyboard register (0xF0-0xF2)
+                # Only check overlays for these specific addresses
+                if 0xF0 <= offset <= 0xF2:
+                    for overlay in self.overlays:
+                        if overlay.start <= address <= overlay.end:
+                            if overlay.read_handler:
+                                return overlay.read_handler(address, cpu_pc)
+                            elif overlay.data:
+                                overlay_offset = address - overlay.start
+                                if overlay_offset < len(overlay.data):
+                                    return overlay.data[overlay_offset]
+                            return 0x00
+                
+                # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
                 return self.external_memory[internal_offset]
             raise ValueError(f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)")
@@ -96,9 +108,34 @@ class PCE500Memory:
         
         # Check for SC62015 internal memory (0x100000-0x1000FF)
         if address >= 0x100000:
-            # Internal 256-byte RAM
             offset = address - 0x100000
             if offset < 0x100:
+                # Fast path: Check if this is a keyboard register (0xF0-0xF2)
+                # Only check overlays for these specific addresses
+                if 0xF0 <= offset <= 0xF2:
+                    for overlay in self.overlays:
+                        if overlay.start <= address <= overlay.end:
+                            if overlay.write_handler:
+                                overlay.write_handler(address, value, cpu_pc)
+                                # Add tracing for write_handler overlays
+                                if self.perfetto_enabled:
+                                    trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                                    if cpu_pc is not None:
+                                        trace_data["pc"] = f"0x{cpu_pc:06X}"
+                                    trace_data["overlay"] = overlay.name
+                                    g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
+                                return
+                            elif overlay.read_only:
+                                # Silently ignore writes to read-only overlays
+                                return
+                            elif overlay.data and isinstance(overlay.data, bytearray):
+                                # Write to writable overlay data
+                                overlay_offset = address - overlay.start
+                                if overlay_offset < len(overlay.data):
+                                    overlay.data[overlay_offset] = value
+                                    return
+                
+                # Normal internal memory write (most common case)
                 # Internal memory stored at end of external_memory for compatibility
                 internal_offset = len(self.external_memory) - 256 + offset
                 self.external_memory[internal_offset] = value

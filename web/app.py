@@ -13,17 +13,13 @@ from flask_cors import CORS
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))  # Add web directory too
 from pce500 import PCE500Emulator
-from keyboard_handler import PCE500KeyboardHandler
-from keyboard_memory_overlay import KeyboardMemoryOverlay
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for API endpoints
 
 # Global emulator instance and control state
 emulator: Optional[PCE500Emulator] = None
-keyboard_handler: Optional[PCE500KeyboardHandler] = None
 emulator_lock = threading.Lock()
 emulator_thread: Optional[threading.Thread] = None
 emulator_state = {
@@ -43,7 +39,7 @@ UPDATE_INSTRUCTION_THRESHOLD = 100000  # 100k instructions
 
 def initialize_emulator():
     """Initialize the PC-E500 emulator with ROM."""
-    global emulator, keyboard_handler
+    global emulator
     
     # Load ROM file
     rom_path = Path(__file__).parent.parent / "data" / "pc-e500.bin"
@@ -67,13 +63,6 @@ def initialize_emulator():
         
         # Reset to properly set PC from the now-loaded ROM entry point
         emulator.reset()
-        
-        # Create keyboard handler
-        keyboard_handler = PCE500KeyboardHandler(emulator.cpu)
-        
-        # Add keyboard memory overlay
-        keyboard_overlay = KeyboardMemoryOverlay.create_overlay(keyboard_handler)
-        emulator.memory.add_overlay(keyboard_overlay)
         
         # Update initial state
         update_emulator_state()
@@ -183,21 +172,21 @@ def handle_key():
     action = data.get('action', 'press')  # 'press' or 'release'
     
     with emulator_lock:
-        if emulator is None or keyboard_handler is None:
+        if emulator is None:
             return jsonify({"error": "Emulator not initialized"}), 500
         
         try:
             if action == 'press':
-                keyboard_handler.press_key(key_code)
+                emulator.press_key(key_code)
                 print(f"Key pressed: {key_code}")
             elif action == 'release':
-                keyboard_handler.release_key(key_code)
+                emulator.release_key(key_code)
                 print(f"Key released: {key_code}")
             else:
                 return jsonify({"error": f"Invalid action: {action}"}), 400
             
             # Return debug info for development
-            debug_info = keyboard_handler.get_debug_info()
+            debug_info = emulator.keyboard.get_debug_info()
             return jsonify({
                 "status": "ok",
                 "debug": debug_info
