@@ -156,16 +156,16 @@ class HD61202Chip:
         self.data_bytes_written += 1
         if self.state.page < self.height_pages and self.state.y_address < self.width:
             self.vram[self.state.page][self.state.y_address] = data & 0xFF
-            # Auto-increment column
-            self.state.y_address = (self.state.y_address + 1) % self.width
+            # Auto-increment column (stop at max, don't wrap)
+            self.state.y_address = min(self.state.y_address + 1, self.width - 1)
             
     def read_data(self) -> int:
         """Read data byte from current page/column position."""
         self.data_bytes_read += 1
         if self.state.page < self.height_pages and self.state.y_address < self.width:
             data = self.vram[self.state.page][self.state.y_address]
-            # Auto-increment column
-            self.state.y_address = (self.state.y_address + 1) % self.width
+            # Auto-increment column (stop at max, don't wrap)
+            self.state.y_address = min(self.state.y_address + 1, self.width - 1)
             return data
         return 0xFF
         
