@@ -9,6 +9,9 @@ data/pc-e500.bin
 data/*.txt
 pc-e500.trace
 *.png
+lcd_display.png
+lcd_left.png
+lcd_right.png
 *.trace
 *.perfetto-trace
 .claude/

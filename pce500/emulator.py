@@ -400,16 +400,23 @@ class PCE500Emulator:
         """Get the current display buffer."""
         return self.lcd.get_display_buffer()
         
-    def save_lcd_displays(self, left_filename: str = "lcd_left.png", 
-                         right_filename: str = "lcd_right.png") -> None:
-        """Save LCD displays to PNG files.
+    def save_lcd_displays(self, combined_filename: str = "lcd_display.png",
+                         save_individual: bool = False) -> None:
+        """Save LCD display to PNG file.
         
         Args:
-            left_filename: Filename for left LCD chip display
-            right_filename: Filename for right LCD chip display
+            combined_filename: Filename for combined display image
+            save_individual: Also save individual chip displays for debugging
         """
-        self.lcd.save_displays_to_png(left_filename, right_filename)
-        print(f"LCD displays saved to {left_filename} and {right_filename}")
+        # Save combined display
+        combined = self.lcd.get_combined_display(zoom=2)
+        combined.save(combined_filename)
+        print(f"LCD display saved to {combined_filename}")
+        
+        # Optionally save individual chips
+        if save_individual:
+            self.lcd.save_displays_to_png("lcd_left.png", "lcd_right.png")
+            print("Individual chip displays saved to lcd_left.png and lcd_right.png")
 
     @property
     def display_on(self) -> bool:
@@ -439,8 +446,14 @@ class PCE500Emulator:
         """Context manager exit - ensure tracing is stopped and optionally save LCD displays."""
         # Save LCD displays as PNG images if enabled
         if hasattr(self, 'save_lcd_on_exit') and self.save_lcd_on_exit:
+            # Save combined display
+            combined = self.lcd.get_combined_display(zoom=2)
+            combined.save("lcd_display.png")
+            print("LCD display saved to lcd_display.png")
+            
+            # Also save individual chips for debugging
             self.lcd.save_displays_to_png("lcd_left.png", "lcd_right.png")
-            print("LCD displays saved to lcd_left.png and lcd_right.png")
+            print("Individual chip displays saved to lcd_left.png and lcd_right.png")
         
         # Stop tracing
         self.stop_tracing()
