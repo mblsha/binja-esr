@@ -67,7 +67,7 @@ h1 {
     border-radius: 4px;
     font-family: 'Courier New', monospace;
     font-size: 12px;
-    pointer-events: none;
+    pointer-events: auto;  /* Allow clicks on tooltip content */
     z-index: 1000;
     white-space: nowrap;
 }
@@ -419,4 +419,19 @@ h1 {
 
 .pc-address.pc-list-item {
     margin-right: 8px;
+}
+
+.pc-address.lcd-pc {
+    color: white;
+    font-weight: bold;
+}
+
+.pc-address.lcd-pc:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.pc-address.lcd-pc.copied {
+    background-color: #27ae60;
+    color: white;
 }

@@ -509,8 +509,18 @@ function setupLCDInteraction() {
                 const data = await response.json();
                 
                 if (data.pc) {
-                    // Show tooltip with PC address
-                    tooltip.textContent = `PC: ${data.pc}`;
+                    // Show tooltip with clickable PC address
+                    tooltip.innerHTML = '';
+                    const label = document.createElement('span');
+                    label.textContent = 'PC: ';
+                    tooltip.appendChild(label);
+                    
+                    const pcElement = PCAddress.create(data.pc, { 
+                        className: 'pc-address lcd-pc',
+                        showTooltip: false  // Don't show nested tooltip
+                    });
+                    tooltip.appendChild(pcElement);
+                    
                     tooltip.style.display = 'block';
                     tooltip.style.left = `${e.pageX + 10}px`;
                     tooltip.style.top = `${e.pageY - 30}px`;
