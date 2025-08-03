@@ -106,13 +106,7 @@ def _(Dict, List, perfetto_pb2):
 
 
 @app.cell
-def _(
-    Optional,
-    dataclasses,
-    enum,
-    extract_events_from_thread,
-    find_all_threads,
-):
+def _(List, Optional, dataclasses, enum):
     def extract_annotations(event):
         annotations = {}
         for annotation in event.debug_annotations:
@@ -153,7 +147,7 @@ def _(
         LEFT = 0b10
         NONE = 0b11
 
-    # upper two bytes encode Instruction Type
+    # upper two bytes encode Instruction Type (DB7-DB6)
     class Instruction(enum.Enum):
         ON_OFF = 0b00
         START_LINE = 0b11
@@ -176,43 +170,123 @@ def _(
         def __repr__(self):
             return f"Command(cs={self.cs}, instr={self.instr}, data=0x{self.data:02X})"
 
+    def parse_command(addr, value):
+        # ann: {'addr': '0x00A000', 'value': '0x3E', 'pc': '0x0F10CC', 'overlay': 'display_memory'}
+        # Addr Bit Encoding: 7 6 5 4 3 2 1 0
+        #                                  -
+        #                                  rw
+        #                                -
+        #                                di
+        #                            ---
+        #                            cs
+
+        addr_hi = addr & 0xF000
+        assert addr_hi in [0xA000, 0x2000], f"Unexpected address high bits: {hex(addr_hi)}"
+        addr = addr & 0xFFF
+        rw = ReadWrite(addr & 1)
+        assert rw == ReadWrite.WRITE, "Unexpected Read value"
+        di = DataInstruction((addr >> 1) & 1)
+        cs = ChipSelect((addr >> 2) & 0b11)
+        assert cs != ChipSelect.NONE, "Unexpected Chip Select NONE"
+
+        data = value
+        instr = None
+        if di == DataInstruction.INSTRUCTION:
+            instr = Instruction(data >> 6)
+            data = data & 0b111111
+            match instr:
+                case Instruction.ON_OFF:
+                    data = data & 1
+                case Instruction.SET_PAGE:
+                    data = data & 0b111
+
+        return Command(cs, instr, data)
+
+    @dataclasses.dataclass
+    class TestCase:
+        test_id: str
+        in_addr: int
+        in_data: int
+        out_cs: ChipSelect = ChipSelect.NONE
+        out_instr: Optional[Instruction] = None
+        out_data: int = 0
+
+    test_cases: List[TestCase] = [
+        TestCase(
+            test_id="on_both",
+            in_addr=0x2000,
+            in_data=0b00111111,
+            out_cs=ChipSelect.BOTH,
+            out_instr=Instruction.ON_OFF,
+            out_data=0x01
+        ),
+        TestCase(
+            test_id="off_both",
+            in_addr=0x2000,
+            in_data=0b00111110,
+            out_cs=ChipSelect.BOTH,
+            out_instr=Instruction.ON_OFF,
+            out_data=0x00
+        ),
+        TestCase(
+            test_id="on_left",
+            in_addr=0x2008,
+            in_data=0x3F,
+            out_cs=ChipSelect.LEFT,
+            out_instr=Instruction.ON_OFF,
+            out_data=0x01
+        ),
+        TestCase(
+            test_id="on_right",
+            in_addr=0x2004,
+            in_data=0x3F,
+            out_cs=ChipSelect.RIGHT,
+            out_instr=Instruction.ON_OFF,
+            out_data=0x01
+        ),
+    ]
+    return (
+        ChipSelect,
+        HD61202State,
+        Instruction,
+        extract_annotations,
+        parse_command,
+        test_cases,
+    )
+
+
+@app.cell
+def _(parse_command, test_cases: "List[TestCase]"):
+    def run_test_cases():
+        for t in test_cases:
+            command = parse_command(t.in_addr, t.in_data)
+            assert command.cs == t.out_cs, f"{t.test_id} failed: expected CS {t.out_cs}, got {command.cs}"
+            assert command.instr == t.out_instr, f"{t.test_id} failed: expected Instr {t.out_instr}, got {command.instr}"
+            assert command.data == t.out_data, f"{t.test_id} failed: expected Data {t.out_data}, got {command.data}"
+
+    run_test_cases()
+
+    return
+
+
+@app.cell
+def _(
+    extract_annotations,
+    extract_events_from_thread,
+    find_all_threads,
+    parse_command,
+):
     def draw_commands(trace):
         commands = []
 
         threads = find_all_threads(trace)
         for d in extract_events_from_thread(trace, threads['Display']):
-            # ann: {'addr': '0x00A000', 'value': '0x3E', 'pc': '0x0F10CC', 'overlay': 'display_memory'}
             ann = extract_annotations(d.track_event)
-            addr_hi = int(ann['addr'], 16) & 0xF000
-            assert addr_hi == 0xA000, "Unexpected address high bits"
-            addr = int(ann['addr'], 16) & 0xFFF
-            rw = ReadWrite(addr & 1)
-            assert rw == ReadWrite.WRITE, "Unexpected Read value"
-            di = DataInstruction((addr >> 1) & 1)
-            cs = ChipSelect((addr >> 2) & 0b11)
-            assert cs != ChipSelect.NONE, "Unexpected Chip Select NONE"
-
-            data = int(ann['value'], 16)
-            instr = None
-            if di == DataInstruction.INSTRUCTION:
-                instr = Instruction(data >> 6)
-                data = (data >> 2) & 0b111111
-                match instr:
-                    case Instruction.ON_OFF:
-                        data = data & 1
-                    case Instruction.SET_PAGE:
-                        data = data & 0b111
-
-            commands.append(Command(cs, instr, data))
+            command = parse_command(int(ann['addr'], 16), int(ann['value'], 16))
+            commands.append(command)
 
         return commands
-    return (
-        ChipSelect,
-        HD61202State,
-        Instruction,
-        draw_commands,
-        extract_annotations,
-    )
+    return (draw_commands,)
 
 
 @app.cell
@@ -242,7 +316,7 @@ def _(draw_commands, trace):
 
 @app.cell
 def _(HD61202State, Image, ImageDraw, Instruction):
-    class HD61202:
+    class HD61202Interpreter:
         LCD_WIDTH = 64
         LCD_HEIGHT = 8
 
@@ -277,7 +351,7 @@ def _(HD61202State, Image, ImageDraw, Instruction):
             on_color = (0, 255, 0)
 
             img_width = len(self.vram[0]) * zoom
-            img_height = len(self.vram) * 4 * zoom
+            img_height = len(self.vram) * 8 * zoom
             image = Image.new("RGB", (img_width, img_height), off_color)
             draw = ImageDraw.Draw(image)
 
@@ -301,17 +375,17 @@ def _(HD61202State, Image, ImageDraw, Instruction):
                         )
 
             return image #, draw
-    return (HD61202,)
+    return (HD61202Interpreter,)
 
 
 @app.cell
-def _(ChipSelect, HD61202, commands):
+def _(ChipSelect, HD61202Interpreter, commands):
     def draw_lcds(commands):
-        lcds = [HD61202(), HD61202()]
+        lcds = [HD61202Interpreter(), HD61202Interpreter()]
         lcd_cs = {
             ChipSelect.BOTH: [lcds[0], lcds[1]],
-            ChipSelect.RIGHT: [lcds[1]],
-            ChipSelect.LEFT: [lcds[0]],
+            ChipSelect.RIGHT: [lcds[0]],
+            ChipSelect.LEFT: [lcds[1]],
             ChipSelect.NONE: None
         }
 
@@ -323,7 +397,7 @@ def _(ChipSelect, HD61202, commands):
                     # SET_PAGE = 0b10
                     # SET_Y_ADDRESS = 0b01
                     # if c.instr in [Instruction.ON_OFF, Instruction.START_LINE, Instruction.SET_Y_ADDRESS]:
-                    #     lcd.write_instruction(c.instr, c.data)
+                    lcd.write_instruction(c.instr, c.data)
                     pass
                 else:
                     if c.data != 0:
