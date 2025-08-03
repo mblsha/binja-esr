@@ -2,7 +2,6 @@
 """Verify that the web emulator fixes are working correctly."""
 
 import requests
-import json
 import base64
 import io
 from PIL import Image
@@ -23,7 +22,7 @@ def verify_web_emulator():
         print(f"   - Has 'screen' key: {'screen' in state}")
         print(f"   - Has 'screen_data' key: {'screen_data' in state}")
         print(f"   - PC register: 0x{state['registers']['pc']:06X}")
-        print(f"   - Expected PC (entry point): 0x0F10C2")
+        print("   - Expected PC (entry point): 0x0F10C2")
         
         # Check if screen is valid base64 PNG
         if 'screen' in state and state['screen']:

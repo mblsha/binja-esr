@@ -4,15 +4,16 @@ This module implements the memory system for the PC-E500 emulator,
 including memory overlays for ROM, RAM expansions, and memory-mapped I/O.
 """
 
-from typing import Optional, List, Callable, Any
 from dataclasses import dataclass
+from typing import Optional, List, Callable
+
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+
+from .trace_manager import g_tracer
 
 # Import constants for accessing internal memory registers
 # Define locally to avoid circular imports
 INTERNAL_MEMORY_START = 0x100000
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters
-
-from .trace_manager import g_tracer
 
 
 @dataclass
@@ -344,8 +345,8 @@ class PCE500Memory:
     def get_memory_info(self) -> str:
         """Get information about memory configuration."""
         lines = ["Memory Configuration:"]
-        lines.append(f"  Base: 1MB external memory (0x00000-0xFFFFF)")
-        lines.append(f"  Internal: 256B internal memory (0x100000-0x1000FF)")
+        lines.append("  Base: 1MB external memory (0x00000-0xFFFFF)")
+        lines.append("  Internal: 256B internal memory (0x100000-0x1000FF)")
         
         if self.overlays:
             lines.append(f"\nOverlays ({len(self.overlays)}):")

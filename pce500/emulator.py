@@ -1,27 +1,27 @@
 """Simplified PC-E500 emulator combining machine and emulator functionality."""
 
+import sys
 import time
-from typing import Optional, Dict, Any, Set
 from pathlib import Path
+from typing import Optional, Dict, Any, Set
 
 # Import the SC62015 emulator
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL, RetInstruction, JumpInstruction, IR
 )
+
+from .memory import PCE500Memory, MemoryOverlay
+from .display import HD61202Controller
+from .keyboard import PCE500KeyboardHandler
+from .trace_manager import g_tracer
+
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000  # SC62015 internal memory starts at this address
 KOL = 0xF0  # Key Output Low register offset
 KOH = 0xF1  # Key Output High register offset
 KIL = 0xF2  # Key Input register offset
-
-from .memory import PCE500Memory, MemoryOverlay
-from .display import HD61202Controller
-from .keyboard import PCE500KeyboardHandler
-
-from .trace_manager import g_tracer
 
 
 class TrackedMemory(PCE500Memory):
