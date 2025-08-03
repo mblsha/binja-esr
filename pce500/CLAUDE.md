@@ -48,10 +48,10 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
    - Memory-mapped I/O for LCD controllers at 0x2xxxx as I/O overlay
    - Perfetto tracing integration for memory access with Internal/External categorization
 
-3. **HD61202Controller** (`display/hd61202.py`): LCD controller emulation
+3. **HD61202Controller** (`display/controller_wrapper.py`): LCD controller emulation
    - Dual HD61202 chips for 240x32 pixel display
    - Complex address decoding: CPU address bits determine chip selection and command/data routing
-   - Each chip manages 64x32 pixels with 8 pages of 8-bit data
+   - Each chip manages 64x64 pixels but PC-E500 only uses 4 pages (32 pixels) of each
 
 4. **TraceManager** (`trace_manager.py`): Sophisticated tracing infrastructure
    - Singleton pattern for global trace management using retrobus-perfetto
@@ -64,11 +64,47 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
 - **Internal ROM Overlay**: 0xC0000 - 0xFFFFF (256KB) - read-only, mapped over base memory
 - **SC62015 Internal Memory**: 0x100000 - 0x1000FF (256B) - separate from external memory
 - **Memory Card Overlay**: 0x40000 - 0x4FFFF (up to 64KB) - read-only when inserted
-- **LCD Controllers Overlay**: 0x20000 - 0x2FFFF (64KB) - I/O handlers for HD61202 chips
+- **LCD Controllers Overlay**: 0x0A000 - 0x0AFFF (4KB) - I/O handlers for HD61202 chips
 
 System vectors:
 - **Entry Point**: 0xFFFFD (3 bytes, little-endian)
 - **Interrupt Vector**: 0xFFFFA (3 bytes, little-endian)
+
+### LCD Display System
+
+The PC-E500 uses two HD61202 LCD controllers to create its 240x32 pixel display:
+
+#### Hardware Configuration
+- **Left chip** (chip 0): Standard 64x64 HD61202 controller
+- **Right chip** (chip 1): Standard 64x64 HD61202 controller
+- Only 4 pages (32 pixels) of each chip are used for display
+- Total display resolution: 240x32 pixels
+
+#### Memory-Mapped I/O
+LCD controllers are accessed through memory-mapped I/O at 0x0A000-0x0AFFF:
+- **Address bit encoding**:
+  - A0: R/W (0=write, 1=read)
+  - A1: D/I (0=instruction, 1=data)
+  - A3:A2: Chip select (00=both, 01=right, 10=left, 11=none)
+
+#### Display Layout
+The PC-E500's unique 240-pixel wide display is created by combining two chips in a specific arrangement:
+```
+Left side (120 pixels):  [Left chip 0-63] + [Right chip 0-55]
+Right side (120 pixels): [Right chip 56-63 flipped] + [Left chip 64-119 flipped]
+```
+This creates a seamless 240x32 display from two 64-column controllers.
+
+#### HD61202 Instructions
+- **ON/OFF** (0x3E/0x3F): Turn display on/off
+- **SET_Y_ADDRESS** (0x40-0x7F): Set column address (0-63)
+- **SET_PAGE** (0xB8-0xBF): Set page/row (0-7, but only 0-3 used)
+- **START_LINE** (0xC0-0xFF): Set display start line for scrolling
+
+#### Implementation Architecture
+- **`display/hd61202.py`**: Core HD61202 chip emulation and rendering logic
+- **`display/controller_wrapper.py`**: Wrapper providing PC-E500 specific dual-chip interface
+- **`display/lcd_visualization.py`**: Perfetto trace visualization tool for debugging
 
 ### Key Design Patterns
 
