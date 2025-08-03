@@ -53,10 +53,17 @@ def initialize_emulator():
     with open(rom_path, "rb") as f:
         rom_data = f.read()
     
+    # Extract the ROM portion from 0xC0000-0x100000 (256KB)
+    # The pc-e500.bin file is a full 1MB dump, but the ROM is only the last 256KB
+    if len(rom_data) >= 0x100000:
+        rom_portion = rom_data[0xC0000:0x100000]
+    else:
+        rom_portion = rom_data  # If file is smaller, use as-is
+    
     # Create emulator instance
     with emulator_lock:
         emulator = PCE500Emulator(trace_enabled=False, perfetto_trace=False, save_lcd_on_exit=False)
-        emulator.load_rom(rom_data)
+        emulator.load_rom(rom_portion)
         
         # Reset to properly set PC from the now-loaded ROM entry point
         emulator.reset()
