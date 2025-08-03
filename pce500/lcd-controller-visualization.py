@@ -375,7 +375,32 @@ def _(HD61202State, Image, ImageDraw, Instruction):
                         )
 
             return image #, draw
-    return (HD61202Interpreter,)
+
+    def combined_vram_image(lcds):
+        images = [lcd.vram_image(zoom=1) for lcd in lcds]
+        lcd0w = 64
+        lcd1w = 56
+        combined_width = lcd0w * 2 + lcd1w * 2
+        combined_height = HD61202Interpreter.LCD_HEIGHT * 8 // 2
+
+        image = Image.new("RGB", (combined_width, combined_height), (0, 0, 0))
+        # page 206 explains how two controllers are stitched horizontally
+        image.paste(images[0], (0, 0))
+        image.paste(images[1], (lcd0w, 0))
+        image.paste(images[1].transpose(Image.FLIP_LEFT_RIGHT).crop((lcd0w - lcd1w, combined_height, lcd0w, combined_height * 2)), (lcd0w + lcd1w, 0))
+        image.paste(images[0].transpose(Image.FLIP_LEFT_RIGHT).crop((0, combined_height, lcd0w, combined_height * 2)), (lcd0w + lcd1w + lcd1w, 0))
+
+        zoom = 2
+        image = image.resize((image.width * zoom, image.height * zoom), Image.NEAREST)
+        return image
+
+    return HD61202Interpreter, combined_vram_image
+
+
+@app.cell
+def _(combined_vram_image, lcds):
+    combined_vram_image(lcds)
+    return
 
 
 @app.cell
@@ -392,13 +417,7 @@ def _(ChipSelect, HD61202Interpreter, commands):
         for c in commands:
             for lcd in lcd_cs[c.cs]:
                 if c.instr is not None:
-                    # ON_OFF = 0b00
-                    # START_LINE = 0b11
-                    # SET_PAGE = 0b10
-                    # SET_Y_ADDRESS = 0b01
-                    # if c.instr in [Instruction.ON_OFF, Instruction.START_LINE, Instruction.SET_Y_ADDRESS]:
                     lcd.write_instruction(c.instr, c.data)
-                    pass
                 else:
                     if c.data != 0:
                         lcd.write_data(c.data)
@@ -406,7 +425,13 @@ def _(ChipSelect, HD61202Interpreter, commands):
         return lcds
 
     lcds = draw_lcds(commands)
-    lcds[0].vram_image(zoom=4), lcds[1].vram_image(zoom=4)
+    lcds[0].vram_image(zoom=2), lcds[1].vram_image(zoom=2)
+    return (lcds,)
+
+
+@app.cell
+def _(Image, lcds):
+    lcds[1].vram_image(zoom=2).transpose(Image.FLIP_LEFT_RIGHT) #.transpose(Image.FLIP_TOP_BOTTOM)
     return
 
 
