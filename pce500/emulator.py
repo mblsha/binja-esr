@@ -222,6 +222,9 @@ class PCE500Emulator:
         
         # Clear instruction history
         self.instruction_history.clear()
+        
+        # Clear IMEM register access tracking
+        self.memory.clear_imem_access_tracking()
 
     def step(self) -> bool:
         """Execute a single instruction.

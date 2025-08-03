@@ -5,7 +5,7 @@ including memory overlays for ROM, RAM expansions, and memory-mapped I/O.
 """
 
 from dataclasses import dataclass
-from typing import Optional, List, Callable, Dict
+from typing import Optional, List, Callable, Dict, Tuple
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -53,7 +53,8 @@ class PCE500Memory:
         self.cpu = None
         
         # Track IMEMRegisters access for debugging
-        self.imem_access_tracking: Dict[str, Dict[str, List[int]]] = {}
+        # Each entry is a list of (PC, count) tuples
+        self.imem_access_tracking: Dict[str, Dict[str, List[Tuple[int, int]]]] = {}
         
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -87,10 +88,16 @@ class PCE500Memory:
                         if IMEMRegisters[reg_name].value == offset:
                             if reg_name not in self.imem_access_tracking:
                                 self.imem_access_tracking[reg_name] = {"reads": [], "writes": []}
-                            # Keep only last 10 accesses
-                            self.imem_access_tracking[reg_name]["reads"].append(cpu_pc)
-                            if len(self.imem_access_tracking[reg_name]["reads"]) > 10:
-                                self.imem_access_tracking[reg_name]["reads"].pop(0)
+                            # Keep only last 10 accesses with counts
+                            reads_list = self.imem_access_tracking[reg_name]["reads"]
+                            if reads_list and reads_list[-1][0] == cpu_pc:
+                                # Increment count for same PC
+                                reads_list[-1] = (cpu_pc, reads_list[-1][1] + 1)
+                            else:
+                                # Add new PC with count 1
+                                reads_list.append((cpu_pc, 1))
+                                if len(reads_list) > 10:
+                                    reads_list.pop(0)
                             break
                 
                 return self.external_memory[internal_offset]
@@ -161,10 +168,16 @@ class PCE500Memory:
                         if IMEMRegisters[reg_name].value == offset:
                             if reg_name not in self.imem_access_tracking:
                                 self.imem_access_tracking[reg_name] = {"reads": [], "writes": []}
-                            # Keep only last 10 accesses
-                            self.imem_access_tracking[reg_name]["writes"].append(cpu_pc)
-                            if len(self.imem_access_tracking[reg_name]["writes"]) > 10:
-                                self.imem_access_tracking[reg_name]["writes"].pop(0)
+                            # Keep only last 10 accesses with counts
+                            writes_list = self.imem_access_tracking[reg_name]["writes"]
+                            if writes_list and writes_list[-1][0] == cpu_pc:
+                                # Increment count for same PC
+                                writes_list[-1] = (cpu_pc, writes_list[-1][1] + 1)
+                            else:
+                                # Add new PC with count 1
+                                writes_list.append((cpu_pc, 1))
+                                if len(writes_list) > 10:
+                                    writes_list.pop(0)
                             break
                 
                 if self.perfetto_enabled:
@@ -397,7 +410,7 @@ class PCE500Memory:
         """Set reference to CPU emulator for accessing internal memory registers."""
         self.cpu = cpu
     
-    def get_imem_access_tracking(self) -> Dict[str, Dict[str, List[int]]]:
+    def get_imem_access_tracking(self) -> Dict[str, Dict[str, List[Tuple[int, int]]]]:
         """Get the IMEM register access tracking data.
         
         Returns:
@@ -405,3 +418,7 @@ class PCE500Memory:
         """
         # Return a copy of the tracking data
         return dict(self.imem_access_tracking)
+    
+    def clear_imem_access_tracking(self) -> None:
+        """Clear all IMEM register access tracking data."""
+        self.imem_access_tracking.clear()

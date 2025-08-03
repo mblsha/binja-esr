@@ -233,8 +233,8 @@ def get_imem_watch():
         result = {}
         for reg_name, accesses in tracking_data.items():
             result[reg_name] = {
-                "reads": [f"0x{pc:06X}" for pc in accesses["reads"]],
-                "writes": [f"0x{pc:06X}" for pc in accesses["writes"]]
+                "reads": [{"pc": f"0x{pc:06X}", "count": count} for pc, count in accesses["reads"]],
+                "writes": [{"pc": f"0x{pc:06X}", "count": count} for pc, count in accesses["writes"]]
             }
         
         return jsonify(result)

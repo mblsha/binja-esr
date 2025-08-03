@@ -5,8 +5,10 @@ const POLL_INTERVAL = 100; // 100ms = 10fps
 
 // PC Address Component - Creates a clickable PC address element
 class PCAddress {
-    constructor(address, options = {}) {
-        this.address = address;
+    constructor(displayText, options = {}) {
+        this.displayText = displayText;
+        // Extract just the PC address for copying (remove count if present)
+        this.copyAddress = displayText.split(' ')[0];
         this.className = options.className || 'pc-address';
         this.showTooltip = options.showTooltip !== false;
     }
@@ -14,7 +16,7 @@ class PCAddress {
     render() {
         const span = document.createElement('span');
         span.className = this.className;
-        span.textContent = this.address;
+        span.textContent = this.displayText;
         
         if (this.showTooltip) {
             span.title = 'Click to copy';
@@ -25,7 +27,7 @@ class PCAddress {
             e.stopPropagation();
             
             try {
-                await navigator.clipboard.writeText(this.address);
+                await navigator.clipboard.writeText(this.copyAddress);
                 
                 // Visual feedback
                 span.classList.add('copied');
@@ -45,8 +47,8 @@ class PCAddress {
         return span;
     }
     
-    static create(address, options = {}) {
-        const component = new PCAddress(address, options);
+    static create(displayText, options = {}) {
+        const component = new PCAddress(displayText, options);
         return component.render();
     }
 }
@@ -656,8 +658,9 @@ async function updateRegisterWatch() {
             const writesCell = document.createElement('td');
             writesCell.className = 'pc-list';
             if (accesses.writes.length > 0) {
-                accesses.writes.forEach(pc => {
-                    const pcElement = PCAddress.create(pc, { className: 'pc-address pc-list-item' });
+                accesses.writes.forEach(access => {
+                    const pcText = access.count > 1 ? `${access.pc} (${access.count})` : access.pc;
+                    const pcElement = PCAddress.create(pcText, { className: 'pc-address pc-list-item' });
                     writesCell.appendChild(pcElement);
                 });
             } else {
@@ -669,8 +672,9 @@ async function updateRegisterWatch() {
             const readsCell = document.createElement('td');
             readsCell.className = 'pc-list';
             if (accesses.reads.length > 0) {
-                accesses.reads.forEach(pc => {
-                    const pcElement = PCAddress.create(pc, { className: 'pc-address pc-list-item' });
+                accesses.reads.forEach(access => {
+                    const pcText = access.count > 1 ? `${access.pc} (${access.count})` : access.pc;
+                    const pcElement = PCAddress.create(pcText, { className: 'pc-address pc-list-item' });
                     readsCell.appendChild(pcElement);
                 });
             } else {
