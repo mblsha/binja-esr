@@ -1,6 +1,6 @@
 """HD61202Controller wrapper to provide compatibility with the emulator."""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 import numpy as np
 from PIL import Image
 

@@ -17,10 +17,7 @@ from .hd61202 import (
 from .controller_wrapper import HD61202Controller
 
 # Import visualization functionality
-from .lcd_visualization import (
-    generate_lcd_image_from_trace,
-    HD61202Interpreter as HD61202Viz  # Alias to avoid confusion
-)
+from .lcd_visualization import generate_lcd_image_from_trace
 
 __all__ = [
     # Controller for emulator

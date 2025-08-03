@@ -1,10 +1,8 @@
 """Test the HD61202Controller wrapper for emulator compatibility."""
 
-import pytest
-import numpy as np
 from PIL import Image
 
-from . import HD61202Controller, parse_command, Instruction, ChipSelect
+from . import HD61202Controller
 
 
 class TestHD61202Controller:

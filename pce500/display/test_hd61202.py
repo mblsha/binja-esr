@@ -5,8 +5,7 @@ import numpy as np
 from PIL import Image
 
 from . import (
-    HD61202Controller, HD61202, HD61202State, Command,
-    parse_command, ChipSelect, Instruction, DataInstruction, ReadWrite
+    HD61202Controller, HD61202, parse_command, ChipSelect, Instruction
 )
 
 

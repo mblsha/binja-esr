@@ -6,34 +6,37 @@ from PIL import Image
 
 # Import the library to be tested
 from . import lcd_visualization as lv
-from .lcd_visualization import Instruction, ChipSelect, perfetto_pb2
+from .hd61202 import Instruction, ChipSelect
+from .lcd_visualization import perfetto_pb2
 
 # --- Test Cases for command parsing ---
 @pytest.mark.parametrize("test_id, in_addr, in_data, out_cs, out_instr, out_data", [
-    ("on_both", 0x2002, 0b00111111, ChipSelect.BOTH, Instruction.ON_OFF, 0x01),
-    ("off_both", 0x2002, 0b00111110, ChipSelect.BOTH, Instruction.ON_OFF, 0x00),
-    ("on_left", 0x200A, 0x3F, ChipSelect.LEFT, Instruction.ON_OFF, 0x01),
-    ("on_right", 0x2006, 0x3F, ChipSelect.RIGHT, Instruction.ON_OFF, 0x01),
-    ("set_page_2_left", 0xA00A, 0b10111010, ChipSelect.LEFT, Instruction.SET_PAGE, 2),
-    ("set_y_addr_40_right", 0xA006, 0b01101000, ChipSelect.RIGHT, Instruction.SET_Y_ADDRESS, 40),
-    ("set_start_line_15_both", 0x2002, 0b11001111, ChipSelect.BOTH, Instruction.START_LINE, 15),
-    ("write_data_AA", 0x2000, 0xAA, ChipSelect.BOTH, None, 0xAA),
+    ("on_both", 0x2000, 0b00111111, ChipSelect.BOTH, Instruction.ON_OFF, 0x01),
+    ("off_both", 0x2000, 0b00111110, ChipSelect.BOTH, Instruction.ON_OFF, 0x00),
+    ("on_left", 0x2008, 0x3F, ChipSelect.LEFT, Instruction.ON_OFF, 0x01),
+    ("on_right", 0x2004, 0x3F, ChipSelect.RIGHT, Instruction.ON_OFF, 0x01),
+    ("set_page_2_left", 0xA008, 0b10111010, ChipSelect.LEFT, Instruction.SET_PAGE, 2),
+    ("set_y_addr_40_right", 0xA004, 0b01101000, ChipSelect.RIGHT, Instruction.SET_Y_ADDRESS, 40),
+    ("set_start_line_15_both", 0x2000, 0b11001111, ChipSelect.BOTH, Instruction.START_LINE, 15),
+    ("write_data_AA", 0x2002, 0xAA, ChipSelect.BOTH, None, 0xAA),
 ])
 def test_parse_command(test_id, in_addr, in_data, out_cs, out_instr, out_data):
     """Tests the parse_command function with various inputs."""
-    command = lv.parse_command(in_addr, in_data)
+    from .hd61202 import parse_command
+    command = parse_command(in_addr, in_data)
     assert command.cs == out_cs, f"{test_id} failed: CS mismatch"
     assert command.instr == out_instr, f"{test_id} failed: Instruction mismatch"
     assert command.data == out_data, f"{test_id} failed: Data mismatch"
 
 def test_parse_command_invalid_input():
     """Tests that parse_command raises errors for invalid inputs."""
+    from .hd61202 import parse_command
     # Invalid Chip Select (NONE)
     with pytest.raises(ValueError):
-        lv.parse_command(0x200E, 0x00)
+        parse_command(0x200C, 0x00)
     # Read operation instead of write
     with pytest.raises(ValueError):
-        lv.parse_command(0x2001, 0x00)
+        parse_command(0x2001, 0x00)
 
 def create_dummy_trace_file(path: Path) -> Path:
     """Creates a small, valid Perfetto trace file for testing."""
