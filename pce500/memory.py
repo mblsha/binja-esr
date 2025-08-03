@@ -42,8 +42,8 @@ class PCE500Memory:
         # Overlays list (checked in order)
         self.overlays: List[MemoryOverlay] = []
         
-        # Track if we have keyboard overlays for optimization
-        self._has_keyboard_overlay = False
+        # Track keyboard overlay for optimization
+        self._keyboard_overlay: Optional[MemoryOverlay] = None
         
         # Perfetto tracing
         self.perfetto_enabled = False
@@ -64,20 +64,15 @@ class PCE500Memory:
         if address >= 0x100000:
             offset = address - 0x100000
             if offset < 0x100:
-                # Only check overlays if we have keyboard overlay AND we're in keyboard range
-                if self._has_keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    for overlay in self.overlays:
-                        # Skip external memory overlays
-                        if overlay.start < 0x100000:
-                            continue
-                        if overlay.start <= address <= overlay.end:
-                            if overlay.read_handler:
-                                return overlay.read_handler(address, cpu_pc)
-                            elif overlay.data:
-                                overlay_offset = address - overlay.start
-                                if overlay_offset < len(overlay.data):
-                                    return overlay.data[overlay_offset]
-                            return 0x00
+                # Fast path for keyboard overlay
+                if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                    if self._keyboard_overlay.read_handler:
+                        return self._keyboard_overlay.read_handler(address, cpu_pc)
+                    elif self._keyboard_overlay.data:
+                        overlay_offset = address - self._keyboard_overlay.start
+                        if overlay_offset < len(self._keyboard_overlay.data):
+                            return self._keyboard_overlay.data[overlay_offset]
+                    return 0x00
                 
                 # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
@@ -116,32 +111,27 @@ class PCE500Memory:
         if address >= 0x100000:
             offset = address - 0x100000
             if offset < 0x100:
-                # Only check overlays if we have keyboard overlay AND we're in keyboard range
-                if self._has_keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    for overlay in self.overlays:
-                        # Skip external memory overlays
-                        if overlay.start < 0x100000:
-                            continue
-                        if overlay.start <= address <= overlay.end:
-                            if overlay.write_handler:
-                                overlay.write_handler(address, value, cpu_pc)
-                                # Add tracing for write_handler overlays
-                                if self.perfetto_enabled:
-                                    trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-                                    if cpu_pc is not None:
-                                        trace_data["pc"] = f"0x{cpu_pc:06X}"
-                                    trace_data["overlay"] = overlay.name
-                                    g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
-                                return
-                            elif overlay.read_only:
-                                # Silently ignore writes to read-only overlays
-                                return
-                            elif overlay.data and isinstance(overlay.data, bytearray):
-                                # Write to writable overlay data
-                                overlay_offset = address - overlay.start
-                                if overlay_offset < len(overlay.data):
-                                    overlay.data[overlay_offset] = value
-                                    return
+                # Fast path for keyboard overlay
+                if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                    if self._keyboard_overlay.write_handler:
+                        self._keyboard_overlay.write_handler(address, value, cpu_pc)
+                        # Add tracing for write_handler overlays
+                        if self.perfetto_enabled:
+                            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+                            if cpu_pc is not None:
+                                trace_data["pc"] = f"0x{cpu_pc:06X}"
+                            trace_data["overlay"] = self._keyboard_overlay.name
+                            g_tracer.trace_instant(self._keyboard_overlay.perfetto_thread, "", trace_data)
+                        return
+                    elif self._keyboard_overlay.read_only:
+                        # Silently ignore writes to read-only overlays
+                        return
+                    elif self._keyboard_overlay.data and isinstance(self._keyboard_overlay.data, bytearray):
+                        # Write to writable overlay data
+                        overlay_offset = address - self._keyboard_overlay.start
+                        if overlay_offset < len(self._keyboard_overlay.data):
+                            self._keyboard_overlay.data[overlay_offset] = value
+                            return
                 
                 # Normal internal memory write (most common case)
                 # Internal memory stored at end of external_memory for compatibility
@@ -250,26 +240,17 @@ class PCE500Memory:
         # Optionally sort by start address for efficiency
         self.overlays.sort(key=lambda o: o.start)
         
-        # Track if we have keyboard overlays
-        if overlay.start >= 0x1000F0 and overlay.start <= 0x1000F2:
-            self._has_keyboard_overlay = True
+        # Track keyboard overlay for fast access
+        if overlay.start >= 0x1000F0 and overlay.end <= 0x1000F2:
+            self._keyboard_overlay = overlay
     
     def remove_overlay(self, name: str) -> None:
         """Remove overlay by name."""
-        # Check if we're removing a keyboard overlay
-        for overlay in self.overlays:
-            if overlay.name == name and overlay.start >= 0x1000F0 and overlay.start <= 0x1000F2:
-                self._has_keyboard_overlay = False
-                break
+        # Check if we're removing the keyboard overlay
+        if self._keyboard_overlay and self._keyboard_overlay.name == name:
+            self._keyboard_overlay = None
         
         self.overlays = [o for o in self.overlays if o.name != name]
-        
-        # Re-check if we still have keyboard overlays
-        if not self._has_keyboard_overlay:
-            for overlay in self.overlays:
-                if overlay.start >= 0x1000F0 and overlay.start <= 0x1000F2:
-                    self._has_keyboard_overlay = True
-                    break
     
     def load_rom(self, rom_data: bytes) -> None:
         """Load ROM as an overlay at 0xC0000."""
