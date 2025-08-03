@@ -45,6 +45,7 @@ h1 {
     border-radius: 4px;
     text-align: center;
     margin-bottom: 20px;
+    position: relative;  /* Establish positioning context */
 }
 
 #lcd-display {
@@ -56,7 +57,7 @@ h1 {
     background: #9b9;
     border: 2px solid #000;
     cursor: crosshair;
-    position: relative;
+    display: block;  /* Ensure it's a block element */
 }
 
 .lcd-tooltip {
@@ -77,7 +78,7 @@ h1 {
     background: rgba(255, 255, 0, 0.3);
     pointer-events: none;
     width: 2px;  /* 1 pixel * 2 zoom */
-    height: 64px;
+    z-index: 10;  /* Ensure it's above the image */
 }
 
 .controls {

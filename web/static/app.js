@@ -489,7 +489,8 @@ function setupLCDInteraction() {
     columnHighlight = document.createElement('div');
     columnHighlight.className = 'lcd-column-highlight';
     columnHighlight.style.display = 'none';
-    screenFrame.appendChild(columnHighlight);
+    columnHighlight.style.position = 'absolute';
+    lcdDisplay.parentElement.appendChild(columnHighlight);
     
     lcdDisplay.addEventListener('mousemove', async (e) => {
         // Get mouse position relative to the image
@@ -526,9 +527,21 @@ function setupLCDInteraction() {
                     tooltip.style.top = `${e.pageY - 30}px`;
                     
                     // Highlight the column (1x8 pixels)
+                    // Get the position of the LCD image relative to its container
+                    const imgRect = lcdDisplay.getBoundingClientRect();
+                    const containerRect = lcdDisplay.parentElement.getBoundingClientRect();
+                    
+                    // Calculate the offset of the image within its container
+                    const imgOffsetX = imgRect.left - containerRect.left;
+                    const imgOffsetY = imgRect.top - containerRect.top;
+                    
+                    // Calculate column position relative to the image
                     const columnX = Math.floor(pixelX) * 2; // Convert back to display coordinates
+                    
                     columnHighlight.style.display = 'block';
-                    columnHighlight.style.left = `${columnX}px`;
+                    columnHighlight.style.left = `${imgOffsetX + columnX}px`;
+                    columnHighlight.style.top = `${imgOffsetY}px`;
+                    columnHighlight.style.height = `${imgRect.height}px`;
                 } else {
                     tooltip.style.display = 'none';
                     columnHighlight.style.display = 'none';
@@ -545,6 +558,12 @@ function setupLCDInteraction() {
     });
     
     lcdDisplay.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+        columnHighlight.style.display = 'none';
+    });
+    
+    // Also hide tooltip when mouse leaves the screen frame entirely
+    screenFrame.addEventListener('mouseleave', () => {
         tooltip.style.display = 'none';
         columnHighlight.style.display = 'none';
     });
