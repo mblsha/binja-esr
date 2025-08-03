@@ -494,6 +494,41 @@ function startRegisterWatchPolling() {
     updateRegisterWatch();
 }
 
+// Register descriptions for tooltips
+const REGISTER_DESCRIPTIONS = {
+    // RAM Pointers
+    'BP': 'RAM Base Pointer - Base address for (BP) addressing mode',
+    'PX': 'RAM PX Pointer - X pointer for indexed addressing',
+    'PY': 'RAM PY Pointer - Y pointer for indexed addressing',
+    'AMC': 'Address Modify Control - Virtually joins CE0/CE1 RAM regions',
+    
+    // Keyboard I/O
+    'KOL': 'Key Output Low (KO0-KO7) - Controls keyboard matrix output pins',
+    'KOH': 'Key Output High (KO8-KO15) - Controls keyboard matrix output pins',
+    'KIL': 'Key Input (KI0-KI7) - Reads keyboard matrix input pins',
+    
+    // E Port I/O
+    'EOL': 'E Port Output Low (E0-E7) - General purpose I/O output',
+    'EOH': 'E Port Output High (E8-E15) - General purpose I/O output',
+    'EIL': 'E Port Input Low (E0-E7) - General purpose I/O input',
+    'EIH': 'E Port Input High (E8-E15) - General purpose I/O input',
+    
+    // UART
+    'UCR': 'UART Control Register - Baud rate, parity, data/stop bits',
+    'USR': 'UART Status Register - RX/TX ready, error flags',
+    'RXD': 'UART Receive Buffer - Last received character',
+    'TXD': 'UART Transmit Buffer - Character to transmit',
+    
+    // Interrupts
+    'IMR': 'Interrupt Mask Register - Enable/disable interrupt sources',
+    'ISR': 'Interrupt Status Register - Pending interrupt flags',
+    
+    // System Control
+    'SCR': 'System Control Register - Timer control, buzzer, display',
+    'LCC': 'LCD Contrast Control - Display contrast and key strobe',
+    'SSR': 'System Status Register - ON key, reset flag, test inputs'
+};
+
 // Update register watch display
 async function updateRegisterWatch() {
     try {
@@ -510,10 +545,17 @@ async function updateRegisterWatch() {
         for (const [regName, accesses] of Object.entries(data)) {
             const row = document.createElement('tr');
             
-            // Register name cell
+            // Register name cell with tooltip
             const nameCell = document.createElement('td');
             nameCell.className = 'register-name';
             nameCell.textContent = regName;
+            
+            // Add tooltip if description exists
+            if (REGISTER_DESCRIPTIONS[regName]) {
+                nameCell.title = REGISTER_DESCRIPTIONS[regName];
+                nameCell.style.cursor = 'help';
+            }
+            
             row.appendChild(nameCell);
             
             // Writes cell

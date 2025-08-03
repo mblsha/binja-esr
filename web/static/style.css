@@ -315,8 +315,15 @@ h1 {
 
 .register-watch-section h2 {
     color: #2c3e50;
-    margin-bottom: 15px;
+    margin-bottom: 10px;
     font-size: 20px;
+}
+
+.register-watch-hint {
+    font-size: 12px;
+    color: #7f8c8d;
+    font-style: italic;
+    margin-bottom: 15px;
 }
 
 .register-watch-content {
@@ -350,6 +357,19 @@ h1 {
 .register-name {
     font-weight: bold;
     color: #2c3e50;
+    position: relative;
+}
+
+.register-name[title] {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: #95a5a6;
+    text-underline-offset: 2px;
+}
+
+.register-name[title]:hover {
+    color: #3498db;
+    text-decoration-color: #3498db;
 }
 
 .pc-list {
