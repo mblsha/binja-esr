@@ -49,6 +49,18 @@ The CPU address bits control LCD operations:
 - **A12**: CS2 (active low)
 - **A13**: CS3 (active high) - must be 1 for valid LCD access
 
+#### Instruction Set - Access Addresses
+
+| Instruction | Controller 1 | Controller 2 | Simultaneous Access |
+| :---- | ----- | ----- | ----- |
+| Display ON/OFF | `0x2008` | `0x2004`  | `0x2000` |
+| Display Start Line |  |  |  |
+| Page (X Address) Set |  |  |  |
+| Y Address Set |  |  |  |
+| Status Read | `0x2009` | `0x2005` | — |
+| Display Data Write | `0x200A` | `0x2006` | `0x2002` |
+| Display Data Read | `0x200B` | `0x2007` | — |
+
 #### Access Examples
 
 Write command to left chip:
