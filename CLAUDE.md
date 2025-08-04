@@ -144,9 +144,10 @@ The web emulator (`web/`) provides a browser-based interface to the PC-E500 emul
    - 100,000 instructions executed
 
 2. **Keyboard Matrix**: 
-   - Output registers KOL (0xF0) and KOH (0xF1) select keyboard rows
-   - Input register KIL (0xF2) reads column states
-   - Keys mapped to specific row/column intersections
+   - Output registers KOL (0xF0) and KOH (0xF1) select keyboard columns (KO0-KO10)
+   - Input register KIL (0xF2) reads row states (KI0-KI7)
+   - Keys mapped to specific column/row intersections
+   - Hardware matrix correctly implemented with columns as outputs, rows as inputs
 
 3. **Critical Initialization**:
    ```python
@@ -177,3 +178,33 @@ The web emulator has comprehensive test coverage (51 tests):
 cd web
 FORCE_BINJA_MOCK=1 python run_tests.py
 ```
+
+## Keyboard Implementation Details
+
+### Hardware-Accurate Keyboard Matrix
+The PC-E500 keyboard uses a matrix scanning system that has been accurately implemented:
+- **Column Selection**: KOL (bits 0-7) and KOH (bits 0-2) control which columns are active
+- **Row Reading**: KIL reads the state of all 8 rows simultaneously
+- **Active Low**: Pressed keys pull their row bits low when their column is selected
+- **Visual Layout**: The keyboard matrix in `pce500/keyboard.py` visually matches the hardware
+
+### Key Queue with Debouncing
+The keyboard implementation includes realistic key debouncing:
+- Each key press is queued with a target read count (default 10 reads)
+- Keys must be read the target number of times before being considered "pressed"
+- Stuck key detection identifies keys not being read for >1 second
+- Queue visualization in web UI shows real-time key state and progress
+
+### Virtual Keyboard Layout
+The web UI virtual keyboard is split into two sections matching the physical PC-E500:
+- **Left Section**: QWERTY keyboard with function keys
+- **Right Section**: Scientific calculator layout
+- **Special Keys**: Tall Enter key spanning two rows, OFF/ON key pair
+- **Superscript Labels**: Keys show secondary functions where applicable
+
+### Debugging Features
+The implementation provides excellent visibility for debugging:
+- **Internal Register Watch**: KOL/KOH/KIL registers now tracked with PC addresses
+- **Key Queue Display**: Shows queued keys with their KOL/KOH/KIL values and read progress
+- **Keyboard Statistics**: Tracks read counts and identifies stuck keys
+- **Visual Feedback**: Progress bars and status indicators in the web UI
