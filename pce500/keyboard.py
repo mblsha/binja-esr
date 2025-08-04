@@ -45,8 +45,13 @@ class QueuedKey:
             # Column is in KOL (KO0-KO7)
             return bool(kol & (1 << self.column))
         else:
-            # Column is in KOH (KO8-KO10)
-            return bool(koh & (1 << (self.column - 8)))
+            # Column is in KOH with custom mapping
+            if self.column == 10:
+                return bool(koh & (1 << 1))  # KO10 uses bit 1
+            elif self.column == 9:
+                return bool(koh & (1 << 0))  # KO9 uses bit 0
+            else:  # column == 8
+                return bool(koh & (1 << 2))  # KO8 uses bit 2 (for now)
     
     def is_complete(self) -> bool:
         """Check if this key has been read enough times."""
@@ -66,11 +71,11 @@ class PCE500KeyboardHandler:
         # KO0    KO1    KO2    KO3     KO4    KO5    KO6  KO7  KO8     KO9   KO10
         ['P',    ')',   '↕',   'CA',   'STO', 'RCL', 'I', 'Y', 'R',    'W',  '▲▼'],     # KI0
         ['2ndF', 'FSE', 'tan', 'cos',  'sin', 'hyp', '0', 'U', 'T',    'E',  'Q'],      # KI1
-        ['PF5',  '1/x', 'log', 'ln',   '→DEG','→HEX','K', 'H', 'F',    'S',  'MENU'],   # KI2
-        ['PF4',  '(',   'x²',  '√',    'Y^x', 'EXP', 'L', 'J', 'G',    'D',  'A'],      # KI3
-        ['PF3',  'DEL', '÷',   '9',    '8',   '7',   ',', 'N', 'V',    'X',  'BASIC'],  # KI4
-        ['PF2',  'BS',  '×',   '6',    '5',   '4',   ';', 'M', 'B',    'C',  'Z'],      # KI5
-        ['PF1',  'INS', '-',   '3',    '2',   '1',   '▶', '↑', 'SPACE','CAPS','SHIFT'], # KI6
+        [None,   '1/x', 'log', 'ln',   '→DEG','→HEX','K', 'H', 'F',    'S',  'PF5'],    # KI2
+        [None,   '(',   'x²',  '√',    'Y^x', 'EXP', 'L', 'J', 'G',    'D',  'PF4'],    # KI3
+        [None,   'DEL', '÷',   '9',    '8',   '7',   ',', 'N', 'V',    'X',  'PF3'],    # KI4
+        [None,   'BS',  '×',   '6',    '5',   '4',   ';', 'M', 'B',    'C',  'PF2'],    # KI5
+        [None,   'INS', '-',   '3',    '2',   '1',   '▶', '↑', 'SPACE','CAPS','PF1'],   # KI6
         [None,   '=',   '+',   '.',    '+/-', '0',   '↵', '◀', '↓',    'ANS', 'CTRL']   # KI7
     ]
     
@@ -208,10 +213,19 @@ class PCE500KeyboardHandler:
         if column < 8:
             required_kol = 1 << column
         else:
-            required_koh = 1 << (column - 8)
+            # Based on user documentation:
+            # KO8 → ? (unclear, keeping original mapping for now)
+            # KO9 → KOH bit 0
+            # KO10 → KOH bit 1
+            if column == 10:
+                required_koh = 1 << 1  # KOH = 0x02
+            elif column == 9:
+                required_koh = 1 << 0  # KOH = 0x01
+            else:  # column == 8
+                required_koh = 1 << 2  # KOH = 0x04 (keeping original for now)
         
-        # Calculate target KIL value (clear the row bit)
-        target_kil = 0xFF & ~(1 << row)
+        # Calculate target KIL value (set the row bit - active high logic)
+        target_kil = 1 << row
         
         # Create queued key
         queued_key = QueuedKey(
@@ -295,7 +309,7 @@ class PCE500KeyboardHandler:
         Returns:
             Byte value representing pressed keys in selected columns
         """
-        result = 0xFF  # Default: no keys pressed (all bits high)
+        result = 0x00  # Default: no keys pressed (active high - all bits low)
         
         # Process key queue
         completed_keys = []
@@ -303,8 +317,8 @@ class PCE500KeyboardHandler:
         for queued_key in self.key_queue:
             # Check if this key matches current KOL/KOH
             if queued_key.matches_output(self._last_kol, self._last_koh):
-                # This key is active, apply its KIL contribution
-                result &= queued_key.target_kil
+                # This key is active, apply its KIL contribution (OR for active high)
+                result |= queued_key.target_kil
                 
                 # Increment read count
                 queued_key.increment_read()
@@ -319,13 +333,6 @@ class PCE500KeyboardHandler:
                 self.key_queue.remove(completed_key)
                 self.pressed_keys.discard(completed_key.key_code)
         
-        # WORKAROUND: Avoid returning 0xFF which causes performance issues
-        # in the LLIL evaluation when at address 0x1000F2.
-        # If no keys are pressed (result is still 0xFF), set bit 0 to 0.
-        # This returns 0xFE instead which doesn't trigger the performance issue.
-        if result == 0xFF:
-            result = 0xFE
-                
         return result
         
     def _update_keyboard_state(self) -> None:
