@@ -1,118 +1,126 @@
 """PC-E500 Keyboard Matrix Handler.
 
 The PC-E500 uses a keyboard matrix scanning system:
-- KOL (0xF0) and KOH (0xF1) are output registers that select which rows to scan
-- KIL (0xF2) is the input register that reads which keys in selected rows are pressed
+- KOL (0xF0) and KOH (0xF1) are output registers that select which columns to scan
+- KIL (0xF2) is the input register that reads which rows have keys pressed
 
 The keyboard is organized as a matrix where:
-- Rows are selected by setting bits in KOL/KOH
-- Columns are read from KIL
-- A pressed key connects its row to its column
+- Columns are selected by setting bits in KOL (KO0-KO7) and KOH (KO8-KO10)
+- Rows are read from KIL (KI0-KI7)
+- A pressed key connects its column to its row
 """
 
-from typing import Dict, Set, Tuple, Optional
+from typing import Dict, Set, Tuple, Optional, List
 
 # Keyboard register addresses (offsets within internal memory)
 # These are at internal memory offsets 0xF0-0xF2
-KOL = 0xF0  # Key Output Low
-KOH = 0xF1  # Key Output High  
-KIL = 0xF2  # Key Input
+KOL = 0xF0  # Key Output Low (controls KO0-KO7)
+KOH = 0xF1  # Key Output High (controls KO8-KO10)
+KIL = 0xF2  # Key Input (reads KI0-KI7)
 
 
 class PCE500KeyboardHandler:
     """Handles PC-E500 keyboard matrix emulation."""
     
-    # Keyboard matrix mapping
-    # Format: key_code -> (row_bit, column_bit)
-    # Row bits are across KOL (bits 0-7) and KOH (bits 0-7) 
-    # Column bits are read from KIL (bits 0-7)
-    KEYBOARD_MATRIX: Dict[str, Tuple[int, int]] = {
-        # This is a simplified example - the actual PC-E500 matrix needs to be reverse-engineered
-        # Row 0 (KOL bit 0)
-        'KEY_Q': (0, 0),
-        'KEY_W': (0, 1), 
-        'KEY_E': (0, 2),
-        'KEY_R': (0, 3),
-        'KEY_T': (0, 4),
-        'KEY_Y': (0, 5),
-        'KEY_U': (0, 6),
-        'KEY_I': (0, 7),
+    # Visual keyboard layout matching the hardware matrix
+    # Rows are KI0-KI7, Columns are KO0-KO10
+    KEYBOARD_LAYOUT: List[List[Optional[str]]] = [
+        # KO0    KO1    KO2    KO3     KO4    KO5    KO6  KO7  KO8     KO9   KO10
+        ['P',    ')',   '↕',   'CA',   'STO', 'RCL', 'I', 'Y', 'R',    'W',  '▲▼'],     # KI0
+        ['2ndF', 'FSE', 'tan', 'cos',  'sin', 'hyp', '0', 'U', 'T',    'E',  'Q'],      # KI1
+        ['PF5',  '1/x', 'log', 'ln',   '→DEG','→HEX','K', 'H', 'F',    'S',  'MENU'],   # KI2
+        ['PF4',  '(',   'x²',  '√',    'Y^x', 'EXP', 'L', 'J', 'G',    'D',  'A'],      # KI3
+        ['PF3',  'DEL', '÷',   '9',    '8',   '7',   ',', 'N', 'V',    'X',  'BASIC'],  # KI4
+        ['PF2',  'BS',  '×',   '6',    '5',   '4',   ';', 'M', 'B',    'C',  'Z'],      # KI5
+        ['PF1',  'INS', '-',   '3',    '2',   '1',   '▶', '↑', 'SPACE','CAPS','SHIFT'], # KI6
+        [None,   '=',   '+',   '.',    '+/-', '0',   '↵', '◀', '↓',    'ANS', 'CTRL']   # KI7
+    ]
+    
+    # Mapping from key labels to key codes
+    KEY_NAMES: Dict[str, str] = {
+        # Letters
+        'A': 'KEY_A', 'B': 'KEY_B', 'C': 'KEY_C', 'D': 'KEY_D',
+        'E': 'KEY_E', 'F': 'KEY_F', 'G': 'KEY_G', 'H': 'KEY_H',
+        'I': 'KEY_I', 'J': 'KEY_J', 'K': 'KEY_K', 'L': 'KEY_L',
+        'M': 'KEY_M', 'N': 'KEY_N', 'O': 'KEY_O', 'P': 'KEY_P',
+        'Q': 'KEY_Q', 'R': 'KEY_R', 'S': 'KEY_S', 'T': 'KEY_T',
+        'U': 'KEY_U', 'V': 'KEY_V', 'W': 'KEY_W', 'X': 'KEY_X',
+        'Y': 'KEY_Y', 'Z': 'KEY_Z',
         
-        # Row 1 (KOL bit 1)
-        'KEY_A': (1, 0),
-        'KEY_S': (1, 1),
-        'KEY_D': (1, 2),
-        'KEY_F': (1, 3),
-        'KEY_G': (1, 4),
-        'KEY_H': (1, 5),
-        'KEY_J': (1, 6),
-        'KEY_K': (1, 7),
+        # Numbers
+        '0': 'KEY_0', '1': 'KEY_1', '2': 'KEY_2', '3': 'KEY_3',
+        '4': 'KEY_4', '5': 'KEY_5', '6': 'KEY_6', '7': 'KEY_7',
+        '8': 'KEY_8', '9': 'KEY_9',
         
-        # Row 2 (KOL bit 2)
-        'KEY_Z': (2, 0),
-        'KEY_X': (2, 1),
-        'KEY_C': (2, 2),
-        'KEY_V': (2, 3),
-        'KEY_B': (2, 4),
-        'KEY_N': (2, 5),
-        'KEY_M': (2, 6),
-        'KEY_L': (2, 7),
+        # Special keys
+        'SPACE': 'KEY_SPACE',
+        'SHIFT': 'KEY_SHIFT',
+        'CTRL': 'KEY_CTRL',
+        'CAPS': 'KEY_CAPS',
+        'ANS': 'KEY_ANS',
+        '↑': 'KEY_UP',
+        '↓': 'KEY_DOWN',
+        '◀': 'KEY_LEFT',
+        '▶': 'KEY_RIGHT',
+        '↵': 'KEY_ENTER',
+        'BS': 'KEY_BACKSPACE',
+        'DEL': 'KEY_DELETE',  
+        'INS': 'KEY_INSERT',
+        'KANA': 'KEY_KANA',
+        'OFF': 'KEY_OFF',
+        'ON': 'KEY_ON',
+        'C.CE': 'KEY_C_CE',
         
-        # Row 3 (KOL bit 3)
-        'KEY_1': (3, 0),
-        'KEY_2': (3, 1),
-        'KEY_3': (3, 2),
-        'KEY_4': (3, 3),
-        'KEY_5': (3, 4),
-        'KEY_6': (3, 5),
-        'KEY_7': (3, 6),
-        'KEY_8': (3, 7),
+        # Function keys
+        'PF1': 'KEY_F1',
+        'PF2': 'KEY_F2',
+        'PF3': 'KEY_F3',
+        'PF4': 'KEY_F4',
+        'PF5': 'KEY_F5',
         
-        # Row 4 (KOL bit 4)
-        'KEY_9': (4, 0),
-        'KEY_0': (4, 1),
-        'KEY_MINUS': (4, 2),
-        'KEY_EQUALS': (4, 3),
-        'KEY_BACKSPACE': (4, 4),
-        'KEY_TAB': (4, 5),
-        'KEY_O': (4, 6),
-        'KEY_P': (4, 7),
+        # Operators
+        '+': 'KEY_PLUS',
+        '-': 'KEY_MINUS',
+        '×': 'KEY_MULTIPLY',
+        '÷': 'KEY_DIVIDE',
+        '=': 'KEY_EQUALS',
+        '.': 'KEY_PERIOD',
+        ',': 'KEY_COMMA',
+        ';': 'KEY_SEMICOLON',
+        '(': 'KEY_LPAREN',
+        ')': 'KEY_RPAREN',
         
-        # Row 5 (KOL bit 5)
-        'KEY_LBRACKET': (5, 0),
-        'KEY_RBRACKET': (5, 1),
-        'KEY_ENTER': (5, 2),
-        'KEY_CAPS': (5, 3),
-        'KEY_SEMICOLON': (5, 4),
-        'KEY_QUOTE': (5, 5),
-        'KEY_COMMA': (5, 6),
-        'KEY_PERIOD': (5, 7),
+        # PC-E500 specific keys
+        'BASIC': 'KEY_BASIC',
+        'CA': 'KEY_CALC',
+        'MENU': 'KEY_MENU',
+        '2ndF': 'KEY_2NDF',
+        'FSE': 'KEY_FSE',
+        'STO': 'KEY_STO',
+        'RCL': 'KEY_RCL',
+        'CALC': 'KEY_CALC',  # Alternative name for CA
         
-        # Row 6 (KOL bit 6)
-        'KEY_SLASH': (6, 0),
-        'KEY_SPACE': (6, 1),
-        'KEY_UP': (6, 2),
-        'KEY_DOWN': (6, 3),
-        'KEY_LEFT': (6, 4),
-        'KEY_RIGHT': (6, 5),
-        'KEY_SHIFT': (6, 6),
-        'KEY_CTRL': (6, 7),
+        # Math functions
+        'sin': 'KEY_SIN',
+        'cos': 'KEY_COS',
+        'tan': 'KEY_TAN',
+        'log': 'KEY_LOG',
+        'ln': 'KEY_LN',
+        'EXP': 'KEY_EXP',
+        'hyp': 'KEY_HYP',
+        '1/x': 'KEY_1_X',
+        'x²': 'KEY_X2',
+        '√': 'KEY_SQRT',
+        'Y^x': 'KEY_Y_X',
         
-        # Row 7 (KOL bit 7)
-        'KEY_F1': (7, 0),
-        'KEY_F2': (7, 1),
-        'KEY_F3': (7, 2),
-        'KEY_F4': (7, 3),
-        'KEY_F5': (7, 4),
-        'KEY_F6': (7, 5),
-        'KEY_INS': (7, 6),
-        'KEY_DEL': (7, 7),
+        # Mode keys
+        '→DEG': 'KEY_TO_DEG',
+        '→HEX': 'KEY_TO_HEX',
+        '+/-': 'KEY_PLUSMINUS',
         
-        # Row 8 (KOH bit 0) - Extended rows
-        'KEY_CALC': (8, 0),
-        'KEY_BASIC': (8, 1),
-        'KEY_ON': (8, 2),
-        # ... more keys can be added here
+        # Special function keys
+        '↕': 'KEY_UP_DOWN',
+        '▲▼': 'KEY_TRIANGLE_UP_DOWN',
     }
     
     def __init__(self):
@@ -120,6 +128,15 @@ class PCE500KeyboardHandler:
         self.pressed_keys: Set[str] = set()
         self._last_kol = 0
         self._last_koh = 0
+        
+        # Build the keyboard matrix from the layout
+        self.KEYBOARD_MATRIX: Dict[str, Tuple[int, int]] = {}
+        for row_idx, row in enumerate(self.KEYBOARD_LAYOUT):
+            for col_idx, key_label in enumerate(row):
+                if key_label and key_label in self.KEY_NAMES:
+                    key_code = self.KEY_NAMES[key_label]
+                    # Store as (column, row) since KO selects columns and KI reads rows
+                    self.KEYBOARD_MATRIX[key_code] = (col_idx, row_idx)
         
     def press_key(self, key_code: str) -> None:
         """Press a key.
@@ -185,10 +202,10 @@ class PCE500KeyboardHandler:
         return False
         
     def _read_keyboard_input(self) -> int:
-        """Read keyboard input based on current row selection.
+        """Read keyboard input based on current column selection.
         
         Returns:
-            Byte value representing pressed keys in selected rows
+            Byte value representing pressed keys in selected columns
         """
         result = 0xFF  # Default: no keys pressed (all bits high)
         
@@ -197,22 +214,22 @@ class PCE500KeyboardHandler:
             if key_code not in self.KEYBOARD_MATRIX:
                 continue
                 
-            row, column = self.KEYBOARD_MATRIX[key_code]
+            column, row = self.KEYBOARD_MATRIX[key_code]
             
-            # Check if this row is selected
-            row_selected = False
-            if row < 8:
-                # Row is in KOL
-                if self._last_kol & (1 << row):
-                    row_selected = True
-            else:
-                # Row is in KOH
-                if self._last_koh & (1 << (row - 8)):
-                    row_selected = True
+            # Check if this column is selected
+            column_selected = False
+            if column < 8:
+                # Column is in KOL (KO0-KO7)
+                if self._last_kol & (1 << column):
+                    column_selected = True
+            elif column < 11:
+                # Column is in KOH (KO8-KO10)
+                if self._last_koh & (1 << (column - 8)):
+                    column_selected = True
                     
-            if row_selected:
-                # Clear the corresponding column bit (active low)
-                result &= ~(1 << column)
+            if column_selected:
+                # Clear the corresponding row bit (active low)
+                result &= ~(1 << row)
         
         # WORKAROUND: Avoid returning 0xFF which causes performance issues
         # in the LLIL evaluation when at address 0x1000F2.
@@ -240,16 +257,16 @@ class PCE500KeyboardHandler:
             'kol': f'0x{self._last_kol:02X}',
             'koh': f'0x{self._last_koh:02X}',
             'kil': f'0x{self._read_keyboard_input():02X}',
-            'selected_rows': self._get_selected_rows()
+            'selected_columns': self._get_selected_columns()
         }
         
-    def _get_selected_rows(self) -> list:
-        """Get list of currently selected rows."""
-        rows = []
+    def _get_selected_columns(self) -> list:
+        """Get list of currently selected columns."""
+        columns = []
         for i in range(8):
             if self._last_kol & (1 << i):
-                rows.append(f'Row {i} (KOL bit {i})')
-        for i in range(8):
+                columns.append(f'KO{i}')
+        for i in range(3):  # Only KO8-KO10 exist
             if self._last_koh & (1 << i):
-                rows.append(f'Row {i+8} (KOH bit {i})')
-        return rows
+                columns.append(f'KO{i+8}')
+        return columns

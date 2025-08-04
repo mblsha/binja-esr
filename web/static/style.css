@@ -229,18 +229,34 @@ h1 {
 /* .keyboard-section styles removed - keyboard now integrated into screen-section */
 
 .keyboard {
-    display: grid;
+    display: flex;
+    gap: 20px;
+    margin-top: 20px;  /* Space from controls */
+    justify-content: center;
+}
+
+.keyboard-left, .keyboard-right {
+    display: flex;
+    flex-direction: column;
     gap: 5px;
     padding: 10px;
     background: #34495e;
     border-radius: 4px;
-    margin-top: 20px;  /* Space from controls */
+}
+
+.keyboard-left {
+    flex: 1.2;  /* Slightly wider for QWERTY section */
+}
+
+.keyboard-right {
+    flex: 0.8;  /* Narrower for calculator section */
 }
 
 .keyboard-row {
-    display: flex;
+    display: grid;
     gap: 5px;
-    justify-content: center;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
 }
 
 .key {
@@ -287,6 +303,99 @@ h1 {
 .key.special:active,
 .key.special.pressed {
     background: #21618c;
+}
+
+/* Specific key styles */
+.key.num {
+    background: #fff;
+    font-size: 18px;
+}
+
+.key.op {
+    background: #e8e8e8;
+    font-size: 20px;
+}
+
+.key.func {
+    background: #d0d0d0;
+    font-size: 12px;
+}
+
+.key.clear {
+    background: #e74c3c;
+    color: white;
+}
+
+.key.clear:hover {
+    background: #c0392b;
+}
+
+.key.equals {
+    background: #27ae60;
+    color: white;
+    font-size: 20px;
+}
+
+.key.equals:hover {
+    background: #229954;
+}
+
+.key.arrow {
+    background: #95a5a6;
+    color: white;
+}
+
+.key.control {
+    background: #7f8c8d;
+    color: white;
+}
+
+.key.off-on {
+    background: #e67e22;
+    color: white;
+    min-width: 45px;
+}
+
+/* Tall enter key - special handling needed */
+.key.tall-enter {
+    background: #3498db;
+    color: white;
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    width: 60px;
+    height: calc(80px + 5px); /* Height of 2 rows + gap */
+    z-index: 10;
+}
+
+/* Adjust the keyboard-left container for absolute positioning */
+.keyboard-left {
+    position: relative;
+}
+
+/* Add padding to last two rows in left keyboard for Enter key space */
+.keyboard-left .keyboard-row:nth-last-child(2),
+.keyboard-left .keyboard-row:nth-last-child(1) {
+    padding-right: 70px; /* Space for tall enter key */
+}
+
+/* Superscript text */
+.key-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1;
+}
+
+.key-superscript {
+    font-size: 8px;
+    color: #666;
+    margin-bottom: 2px;
+}
+
+.key-main {
+    font-size: 14px;
+    font-weight: bold;
 }
 
 /* Register Watch Section */

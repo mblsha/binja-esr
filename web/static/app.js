@@ -58,39 +58,22 @@ let isRunning = false;
 
 // PC-E500 Keyboard Layout
 // Based on the physical keyboard layout of the Sharp PC-E500
-const KEYBOARD_LAYOUT = [
-    // Function keys row
+
+// Left section - QWERTY keyboard
+const KEYBOARD_LEFT = [
+    // Row 1: Function keys
     [
-        { key: 'KEY_CALC', label: 'CALC', class: 'special' },
-        { key: 'KEY_BASIC', label: 'BASIC', class: 'special' },
-        { key: 'KEY_F1', label: 'F1' },
-        { key: 'KEY_F2', label: 'F2' },
-        { key: 'KEY_F3', label: 'F3' },
-        { key: 'KEY_F4', label: 'F4' },
-        { key: 'KEY_F5', label: 'F5' },
-        { key: 'KEY_F6', label: 'F6' },
-        { key: 'KEY_SHIFT', label: 'SHIFT', class: 'special wide' },
-        { key: 'KEY_ON', label: 'ON', class: 'special' }
+        { key: 'KEY_UP_DOWN', label: '↕', class: 'special' },
+        { key: 'KEY_F1', label: 'PF1', superscript: 'BASIC' },
+        { key: 'KEY_F2', label: 'PF2' },
+        { key: 'KEY_F3', label: 'PF3' },
+        { key: 'KEY_F4', label: 'PF4' },
+        { key: 'KEY_F5', label: 'PF5' },
+        { key: 'KEY_2NDF', label: '2ndF', class: 'special' }
     ],
-    // Numbers row
+    // Row 2: QWERTY top row
     [
-        { key: 'KEY_1', label: '1' },
-        { key: 'KEY_2', label: '2' },
-        { key: 'KEY_3', label: '3' },
-        { key: 'KEY_4', label: '4' },
-        { key: 'KEY_5', label: '5' },
-        { key: 'KEY_6', label: '6' },
-        { key: 'KEY_7', label: '7' },
-        { key: 'KEY_8', label: '8' },
-        { key: 'KEY_9', label: '9' },
-        { key: 'KEY_0', label: '0' },
-        { key: 'KEY_MINUS', label: '-' },
-        { key: 'KEY_EQUALS', label: '=' },
-        { key: 'KEY_BACKSPACE', label: '←', class: 'wide' }
-    ],
-    // QWERTY row 1
-    [
-        { key: 'KEY_TAB', label: 'TAB', class: 'wide' },
+        { key: 'KEY_MENU', label: 'MENU', class: 'special' },
         { key: 'KEY_Q', label: 'Q' },
         { key: 'KEY_W', label: 'W' },
         { key: 'KEY_E', label: 'E' },
@@ -101,12 +84,11 @@ const KEYBOARD_LAYOUT = [
         { key: 'KEY_I', label: 'I' },
         { key: 'KEY_O', label: 'O' },
         { key: 'KEY_P', label: 'P' },
-        { key: 'KEY_LBRACKET', label: '[' },
-        { key: 'KEY_RBRACKET', label: ']' }
+        { key: 'KEY_STO', label: 'STO', class: 'special' }
     ],
-    // QWERTY row 2
+    // Row 3: QWERTY middle row
     [
-        { key: 'KEY_CAPS', label: 'CAPS', class: 'wide' },
+        { key: 'KEY_BASIC', label: 'BASIC', class: 'special' },
         { key: 'KEY_A', label: 'A' },
         { key: 'KEY_S', label: 'S' },
         { key: 'KEY_D', label: 'D' },
@@ -116,12 +98,12 @@ const KEYBOARD_LAYOUT = [
         { key: 'KEY_J', label: 'J' },
         { key: 'KEY_K', label: 'K' },
         { key: 'KEY_L', label: 'L' },
-        { key: 'KEY_SEMICOLON', label: ';' },
-        { key: 'KEY_QUOTE', label: "'" },
-        { key: 'KEY_ENTER', label: 'ENTER', class: 'wide special' }
+        { key: 'KEY_RCL', label: 'RCL', class: 'special' }
     ],
-    // QWERTY row 3
+    // Row 4: QWERTY bottom row with OFF/ON
     [
+        { key: 'KEY_OFF', label: 'OFF', class: 'special off-on' },
+        { key: 'KEY_ON', label: 'ON', class: 'special off-on' },
         { key: 'KEY_Z', label: 'Z' },
         { key: 'KEY_X', label: 'X' },
         { key: 'KEY_C', label: 'C' },
@@ -130,19 +112,85 @@ const KEYBOARD_LAYOUT = [
         { key: 'KEY_N', label: 'N' },
         { key: 'KEY_M', label: 'M' },
         { key: 'KEY_COMMA', label: ',' },
-        { key: 'KEY_PERIOD', label: '.' },
-        { key: 'KEY_SLASH', label: '/' },
-        { key: 'KEY_UP', label: '↑', class: 'special' },
-        { key: 'KEY_DOWN', label: '↓', class: 'special' }
+        { key: 'KEY_SEMICOLON', label: ';' },
+        { key: 'KEY_ENTER', label: '↵', class: 'tall-enter', rowspan: 2 }
     ],
-    // Space bar row
+    // Row 5: Control row
     [
-        { key: 'KEY_CTRL', label: 'CTRL', class: 'wide' },
+        { key: 'KEY_SHIFT', label: 'SHIFT', class: 'special' },
+        { key: 'KEY_CTRL', label: 'CTRL', class: 'special' },
+        { key: 'KEY_CAPS', label: 'CAPS', class: 'special' },
+        { key: 'KEY_ANS', label: 'ANS', class: 'special' },
+        { key: 'KEY_KANA', label: 'KANA' },
         { key: 'KEY_SPACE', label: 'SPACE', class: 'space' },
-        { key: 'KEY_LEFT', label: '←', class: 'special' },
-        { key: 'KEY_RIGHT', label: '→', class: 'special' },
-        { key: 'KEY_INS', label: 'INS' },
-        { key: 'KEY_DEL', label: 'DEL' }
+        { key: 'KEY_DOWN', label: '↓', class: 'arrow' },
+        { key: 'KEY_UP', label: '↑', class: 'arrow' },
+        { key: 'KEY_LEFT', label: '◀', class: 'arrow' },
+        { key: 'KEY_RIGHT', label: '▶', class: 'arrow' }
+        // Enter key spans from row 4
+    ]
+];
+
+// Right section - Scientific calculator
+const KEYBOARD_RIGHT = [
+    // Row 1: Trigonometric functions
+    [
+        { key: 'KEY_HYP', label: 'hyp', class: 'func' },
+        { key: 'KEY_SIN', label: 'sin', superscript: 'sin⁻¹', class: 'func' },
+        { key: 'KEY_COS', label: 'cos', superscript: 'cos⁻¹', class: 'func' },
+        { key: 'KEY_TAN', label: 'tan', superscript: 'tan⁻¹', class: 'func' },
+        { key: 'KEY_FSE', label: 'FSE', class: 'func' },
+        { key: 'KEY_CALC', label: 'CA', class: 'clear' }
+    ],
+    // Row 2: Conversion and log functions
+    [
+        { key: 'KEY_TO_DEG', label: '→DEG', class: 'func' },
+        { key: 'KEY_TO_HEX', label: '→HEX', class: 'func' },
+        { key: 'KEY_LN', label: 'ln', class: 'func' },
+        { key: 'KEY_LOG', label: 'log', class: 'func' },
+        { key: 'KEY_1_X', label: '1/x', class: 'func' },
+        { key: 'KEY_TRIANGLE_UP_DOWN', label: '↕', class: 'func' }
+    ],
+    // Row 3: Power and root functions
+    [
+        { key: 'KEY_EXP', label: 'EXP', class: 'func' },
+        { key: 'KEY_Y_X', label: 'yˣ', class: 'func' },
+        { key: 'KEY_SQRT', label: '√', class: 'func' },
+        { key: 'KEY_X2', label: 'x²', class: 'func' },
+        { key: 'KEY_LPAREN', label: '(', class: 'func' },
+        { key: 'KEY_RPAREN', label: ')', class: 'func' }
+    ],
+    // Row 4: Number pad 7-8-9
+    [
+        { key: 'KEY_7', label: '7', class: 'num' },
+        { key: 'KEY_8', label: '8', class: 'num' },
+        { key: 'KEY_9', label: '9', class: 'num' },
+        { key: 'KEY_DIVIDE', label: '÷', class: 'op' },
+        { key: 'KEY_DELETE', label: 'DEL', class: 'control' }
+    ],
+    // Row 5: Number pad 4-5-6
+    [
+        { key: 'KEY_4', label: '4', class: 'num' },
+        { key: 'KEY_5', label: '5', class: 'num' },
+        { key: 'KEY_6', label: '6', class: 'num' },
+        { key: 'KEY_MULTIPLY', label: '×', class: 'op' },
+        { key: 'KEY_BACKSPACE', label: 'BS', class: 'control' }
+    ],
+    // Row 6: Number pad 1-2-3
+    [
+        { key: 'KEY_1', label: '1', class: 'num' },
+        { key: 'KEY_2', label: '2', class: 'num' },
+        { key: 'KEY_3', label: '3', class: 'num' },
+        { key: 'KEY_MINUS', label: '-', class: 'op' },
+        { key: 'KEY_INSERT', label: 'INS', class: 'control' }
+    ],
+    // Row 7: Number pad 0 and operators
+    [
+        { key: 'KEY_0', label: '0', class: 'num' },
+        { key: 'KEY_PLUSMINUS', label: '+/-', class: 'num' },
+        { key: 'KEY_PERIOD', label: '•', class: 'num' },
+        { key: 'KEY_PLUS', label: '+', class: 'op' },
+        { key: 'KEY_EQUALS', label: '=', class: 'equals' }
     ]
 ];
 
@@ -160,15 +208,84 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupKeyboard() {
     const keyboardContainer = document.getElementById('virtual-keyboard');
     
-    KEYBOARD_LAYOUT.forEach(row => {
+    // Create left section
+    const leftSection = document.createElement('div');
+    leftSection.className = 'keyboard-left';
+    
+    // Create right section
+    const rightSection = document.createElement('div');
+    rightSection.className = 'keyboard-right';
+    
+    // Process left keyboard
+    setupKeyboardSection(KEYBOARD_LEFT, leftSection);
+    
+    // Process right keyboard
+    setupKeyboardSection(KEYBOARD_RIGHT, rightSection);
+    
+    // Add sections to container
+    keyboardContainer.appendChild(leftSection);
+    keyboardContainer.appendChild(rightSection);
+}
+
+// Helper function to set up a keyboard section
+function setupKeyboardSection(layout, container) {
+    let enterButton = null; // Track the tall enter button
+    
+    layout.forEach((row, rowIndex) => {
         const rowDiv = document.createElement('div');
         rowDiv.className = 'keyboard-row';
         
         row.forEach(keyDef => {
+            // For tall enter key in row 4, create it but handle specially
+            if (keyDef.key === 'KEY_ENTER' && keyDef.rowspan === 2) {
+                // Create the enter button
+                const keyButton = document.createElement('button');
+                keyButton.className = 'key ' + (keyDef.class || '');
+                keyButton.dataset.keyCode = keyDef.key;
+                keyButton.textContent = keyDef.label;
+                
+                // Handle key press
+                keyButton.addEventListener('mousedown', () => handleKeyPress(keyDef.key));
+                keyButton.addEventListener('mouseup', () => handleKeyRelease(keyDef.key));
+                keyButton.addEventListener('mouseleave', () => handleKeyRelease(keyDef.key));
+                
+                // Prevent focus on click
+                keyButton.addEventListener('click', (e) => e.preventDefault());
+                
+                // Append directly to container, not row
+                container.appendChild(keyButton);
+                enterButton = keyButton;
+                return; // Don't add to row
+            }
+            
+            // Skip placeholder for tall enter button in row 5
+            if (rowIndex === 4 && keyDef.key === 'KEY_ENTER' && layout === KEYBOARD_LEFT) {
+                return; // Skip creating another enter button
+            }
+            
             const keyButton = document.createElement('button');
             keyButton.className = 'key ' + (keyDef.class || '');
-            keyButton.textContent = keyDef.label;
             keyButton.dataset.keyCode = keyDef.key;
+            
+            // Handle superscript text
+            if (keyDef.superscript) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'key-wrapper';
+                
+                const superscript = document.createElement('div');
+                superscript.className = 'key-superscript';
+                superscript.textContent = keyDef.superscript;
+                
+                const mainLabel = document.createElement('div');
+                mainLabel.className = 'key-main';
+                mainLabel.textContent = keyDef.label;
+                
+                wrapper.appendChild(superscript);
+                wrapper.appendChild(mainLabel);
+                keyButton.appendChild(wrapper);
+            } else {
+                keyButton.textContent = keyDef.label;
+            }
             
             // Handle key press
             keyButton.addEventListener('mousedown', () => handleKeyPress(keyDef.key));
@@ -181,7 +298,7 @@ function setupKeyboard() {
             rowDiv.appendChild(keyButton);
         });
         
-        keyboardContainer.appendChild(rowDiv);
+        container.appendChild(rowDiv);
     });
 }
 
