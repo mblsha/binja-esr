@@ -33,52 +33,59 @@ class TestKeyboardSimulation(unittest.TestCase):
         self.assertEqual(queued_key.read_count, 0)
         self.assertEqual(queued_key.target_reads, DEFAULT_DEBOUNCE_READS)
         
-        # Release the key
+        # Release the key - it should remain in queue until debounce completes
         self.handler.release_key('KEY_A')
-        self.assertEqual(len(self.handler.key_queue), 0)
+        self.assertEqual(len(self.handler.key_queue), 1)
     
     def test_key_debouncing(self):
         """Test key debouncing behavior."""
-        # Press KEY_Q (column 10, row 1)
+        # Press KEY_Q (column 0, row 1)
         self.handler.press_key('KEY_Q')
         
-        # Set KOH to select column 10 (bit 2 = KO10)
-        self.handler.handle_register_write(0xF1, 0x04)  # KOH bit 2
+        # Set KOL to select column 0 (bit 0)
+        self.handler.handle_register_write(0xF0, 0x01)  # KOL bit 0
         
         # Read KIL multiple times
         for i in range(DEFAULT_DEBOUNCE_READS):
             kil = self.handler.handle_register_read(0xF2)
-            # Should return the key's KIL value (bit 1 cleared)
-            self.assertEqual(kil, 0xFD)  # 0xFF & ~(1 << 1)
+            # Should return the key's KIL value (bit 1 set - active high)
+            self.assertEqual(kil, 0x02)  # (1 << 1)
             
-            # After the last read, key should be removed
-            if i < DEFAULT_DEBOUNCE_READS - 1:
-                # Key should still be in queue
-                self.assertEqual(len(self.handler.key_queue), 1)
-                self.assertEqual(self.handler.key_queue[0].read_count, i + 1)
+            # Check read count
+            self.assertEqual(self.handler.key_queue[0].read_count, i + 1)
         
-        # Key should be removed from queue after target reads
+        # Release the key
+        self.handler.release_key('KEY_Q')
+        
+        # Key is marked as released but still in queue
+        self.assertEqual(len(self.handler.key_queue), 1)
+        
+        # Next read will still show the key (it's complete but needs one more read to be removed)
+        kil = self.handler.handle_register_read(0xF2)
+        self.assertEqual(kil, 0x02)  # Key still active until removed from queue
+        
+        # Now key should be removed from queue
         self.assertEqual(len(self.handler.key_queue), 0)
         
-        # Next read should show no keys
+        # And next read should show no keys
         kil = self.handler.handle_register_read(0xF2)
-        self.assertEqual(kil, 0xFE)  # No keys pressed (default)
+        self.assertEqual(kil, 0x00)  # No keys pressed (active high)
     
     def test_multiple_keys_queue(self):
         """Test multiple keys in queue."""
         # Press multiple keys
-        self.handler.press_key('KEY_A')  # Column 10, row 3
-        self.handler.press_key('KEY_B')  # Column 8, row 5
-        self.handler.press_key('KEY_C')  # Column 9, row 5
+        self.handler.press_key('KEY_A')  # Column 0, row 3
+        self.handler.press_key('KEY_B')  # Column 2, row 5
+        self.handler.press_key('KEY_C')  # Column 1, row 5
         
         self.assertEqual(len(self.handler.key_queue), 3)
         
-        # Select column 10 (for KEY_A)
-        self.handler.handle_register_write(0xF1, 0x04)  # KOH bit 2
+        # Select column 0 (for KEY_A)
+        self.handler.handle_register_write(0xF0, 0x01)  # KOL bit 0
         
         # Read should only process KEY_A
         kil = self.handler.handle_register_read(0xF2)
-        self.assertEqual(kil, 0xF7)  # 0xFF & ~(1 << 3)
+        self.assertEqual(kil, 0x08)  # (1 << 3) - active high
         
         # Only KEY_A should have incremented read count
         self.assertEqual(self.handler.key_queue[0].read_count, 1)  # KEY_A
@@ -102,20 +109,30 @@ class TestKeyboardSimulation(unittest.TestCase):
         queued_key = self.handler.key_queue[0]
         self.assertEqual(queued_key.target_reads, 5)
         
-        # Set appropriate KOL/KOH
-        self.handler.handle_register_write(0xF1, 0x04)  # KOH bit 2 for column 10
+        # Set appropriate KOL for column 0
+        self.handler.handle_register_write(0xF0, 0x01)  # KOL bit 0 for column 0
         
         # Read 5 times
         for i in range(5):
             kil = self.handler.handle_register_read(0xF2)
-            self.assertEqual(kil, 0xF7)  # Key still active (row 3 bit cleared)
+            self.assertEqual(kil, 0x08)  # Key still active (row 3 bit set)
         
-        # Key should be removed after 5 reads
+        # Release the key
+        self.handler.release_key('KEY_A')
+        
+        # Key is marked as released but still in queue
+        self.assertEqual(len(self.handler.key_queue), 1)
+        
+        # Next read will still show the key (it's complete but needs one more read to be removed)
+        kil = self.handler.handle_register_read(0xF2)
+        self.assertEqual(kil, 0x08)  # Key still active until removed
+        
+        # Now key should be removed from queue
         self.assertEqual(len(self.handler.key_queue), 0)
         
-        # Next read should show no keys
+        # And next read should show no keys
         kil = self.handler.handle_register_read(0xF2)
-        self.assertEqual(kil, 0xFE)  # No keys
+        self.assertEqual(kil, 0x00)  # No keys
     
     def test_stuck_key_detection(self):
         """Test stuck key detection in get_queue_info."""
@@ -146,11 +163,11 @@ class TestKeyboardSimulation(unittest.TestCase):
         
         info = queue_info[0]
         self.assertEqual(info['key_code'], 'KEY_Q')
-        self.assertEqual(info['column'], 10)
+        self.assertEqual(info['column'], 0)
         self.assertEqual(info['row'], 1)
-        self.assertEqual(info['kol'], '0x00')
-        self.assertEqual(info['koh'], '0x04')
-        self.assertEqual(info['kil'], '0xFD')
+        self.assertEqual(info['kol'], '0x01')  # Column 0 requires KOL bit 0
+        self.assertEqual(info['koh'], '0x00')
+        self.assertEqual(info['kil'], '0x02')  # Row 1 sets bit 1
         self.assertEqual(info['read_count'], 0)
         self.assertEqual(info['target_reads'], DEFAULT_DEBOUNCE_READS)
         self.assertEqual(info['progress'], f'0/{DEFAULT_DEBOUNCE_READS}')
@@ -169,12 +186,12 @@ class TestKeyboardSimulation(unittest.TestCase):
         
         # Read KIL
         kil = self.handler.handle_register_read(0xF2)
-        self.assertEqual(kil, 0x7F)  # 0xFF & ~(1 << 7)
+        self.assertEqual(kil, 0x80)  # (1 << 7) - active high
         
         # Clear KOL, key should not be read
         self.handler.handle_register_write(0xF0, 0x00)
         kil = self.handler.handle_register_read(0xF2)
-        self.assertEqual(kil, 0xFE)  # No keys
+        self.assertEqual(kil, 0x00)  # No keys
     
     def test_release_all_keys(self):
         """Test releasing all keys clears queue."""

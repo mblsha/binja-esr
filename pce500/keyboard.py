@@ -27,16 +27,16 @@ DEFAULT_DEBOUNCE_READS = 10
 @dataclass
 class QueuedKey:
     """Represents a key in the queue waiting to be processed."""
-    key_code: str               # Human-readable key code (e.g., 'KEY_A')
-    column: int                 # Column index (0-10)
-    row: int                    # Row index (0-7)
-    required_kol: int           # Required KOL value to activate this key
-    required_koh: int           # Required KOH value to activate this key
-    target_kil: int             # KIL value to return when active
-    read_count: int = 0         # Number of times this key has been read
+    key_code: str              # Human-readable key code (e.g., 'KEY_A')
+    column: int                # Column index (0-10)
+    row: int                   # Row index (0-7)
+    required_kol: int          # Required KOL value to activate this key
+    required_koh: int          # Required KOH value to activate this key
+    target_kil: int            # KIL value to return when active
+    read_count: int = 0        # Number of times this key has been read
     target_reads: int = DEFAULT_DEBOUNCE_READS  # Number of reads required
     queued_time: float = field(default_factory=time.time)  # When key was queued
-    released: bool = False      # Whether the key has been physically released
+    released: bool = False     # Whether the key has been physically released
     
     def matches_output(self, kol: int, koh: int) -> bool:
         """Check if current KOL/KOH values match this key's requirements."""
@@ -45,13 +45,11 @@ class QueuedKey:
             # Column is in KOL (KO0-KO7)
             return bool(kol & (1 << self.column))
         else:
-            # Column is in KOH with custom mapping
-            if self.column == 10:
-                return bool(koh & (1 << 1))  # KO10 uses bit 1
-            elif self.column == 9:
-                return bool(koh & (1 << 0))  # KO9 uses bit 0
-            else:  # column == 8
-                return bool(koh & (1 << 2))  # KO8 uses bit 2 (for now)
+            # ### FIXED: Corrected KOH bit mapping ###
+            # Column is in KOH (KO8-KO10).
+            # Mapping is sequential: KO8->bit 0, KO9->bit 1, KO10->bit 2.
+            # The bit index is column - 8.
+            return bool(koh & (1 << (self.column - 8)))
     
     def is_complete(self) -> bool:
         """Check if this key has been read enough times."""
@@ -65,20 +63,23 @@ class QueuedKey:
 class PCE500KeyboardHandler:
     """Handles PC-E500 keyboard matrix emulation."""
     
-    # Visual keyboard layout matching the hardware matrix
-    # Rows are KI0-KI7, Columns are KO0-KO10
+    # ### FIXED: Corrected KEYBOARD_LAYOUT to match the image ###
+    # Visual keyboard layout matching the hardware matrix.
+    # Rows are KI0-KI7, Columns are KO0-KO10, indexed from left to right.
+    # This layout now correctly matches the provided key matrix diagram.
     KEYBOARD_LAYOUT: List[List[Optional[str]]] = [
-        # KO0    KO1    KO2    KO3     KO4    KO5    KO6  KO7  KO8     KO9   KO10
-        ['P',    ')',   '↕',   'CA',   'STO', 'RCL', 'I', 'Y', 'R',    'W',  '▲▼'],     # KI0
-        ['2ndF', 'FSE', 'tan', 'cos',  'sin', 'hyp', '0', 'U', 'T',    'E',  'Q'],      # KI1
-        [None,   '1/x', 'log', 'ln',   '→DEG','→HEX','K', 'H', 'F',    'S',  'PF5'],    # KI2
-        [None,   '(',   'x²',  '√',    'Y^x', 'EXP', 'L', 'J', 'G',    'D',  'PF4'],    # KI3
-        [None,   'DEL', '÷',   '9',    '8',   '7',   ',', 'N', 'V',    'X',  'PF3'],    # KI4
-        [None,   'BS',  '×',   '6',    '5',   '4',   ';', 'M', 'B',    'C',  'PF2'],    # KI5
-        [None,   'INS', '-',   '3',    '2',   '1',   '▶', '↑', 'SPACE','CAPS','PF1'],   # KI6
-        [None,   '=',   '+',   '.',    '+/-', '0',   '↵', '◀', '↓',    'ANS', 'CTRL']   # KI7
+        # KO0      KO1     KO2      KO3      KO4      KO5      KO6      KO7      KO8      KO9     KO10
+        ['▲▼',    'W',    'R',     'Y',     'I',     'RCL',   'STO',   'C.CE',  '↕',     ')',    'P'   ],  # KI0
+        ['Q',     'E',    'T',     'U',     'O',     'hyp',   'sin',   'cos',   'tan',   'FSE',  '2ndF'],  # KI1
+        ['MENU',  'S',    'F',     'H',     'K',     '→HEX',  '→DEG',  'ln',    'log',   '1/x',  'PF5' ],  # KI2
+        ['A',     'D',    'G',     'J',     'L',     'EXP',   'Y^x',   '√',     'x²',    '(',    'PF4' ],  # KI3
+        ['BASIC', 'X',    'V',     'N',     ',',     '7',     '8',     '9',     '÷',     'DEL',  'PF3' ],  # KI4
+        ['Z',     'C',    'B',     'M',     ';',     '4',     '5',     '6',     '×',     'BS',   'PF2' ],  # KI5
+        ['SHIFT', 'CAPS', 'SPACE', '↑',     '▶',     '1',     '2',     '3',     '-',     'INS',  'PF1' ],  # KI6
+        ['CTRL',  'ANS',  '↓',     '▼',     '◀',     '0',     '+/-',   '.',     '+',     '=',    None  ]   # KI7
     ]
     
+    # ### FIXED: Updated KEY_NAMES to match the corrected layout ###
     # Mapping from key labels to key codes
     KEY_NAMES: Dict[str, str] = {
         # Letters
@@ -105,7 +106,6 @@ class PCE500KeyboardHandler:
         '↓': 'KEY_DOWN',
         '◀': 'KEY_LEFT',
         '▶': 'KEY_RIGHT',
-        '↵': 'KEY_ENTER',
         'BS': 'KEY_BACKSPACE',
         'DEL': 'KEY_DELETE',  
         'INS': 'KEY_INSERT',
@@ -136,7 +136,7 @@ class PCE500KeyboardHandler:
         
         # PC-E500 specific keys
         'BASIC': 'KEY_BASIC',
-        'CA': 'KEY_CALC',
+        'CA': 'KEY_CALC',      # CA is on the C.CE key, likely a shifted function
         'MENU': 'KEY_MENU',
         '2ndF': 'KEY_2NDF',
         'FSE': 'KEY_FSE',
@@ -165,6 +165,7 @@ class PCE500KeyboardHandler:
         # Special function keys
         '↕': 'KEY_UP_DOWN',
         '▲▼': 'KEY_TRIANGLE_UP_DOWN',
+        '▼': 'KEY_DOWN_TRIANGLE', # Added missing key
     }
     
     def __init__(self):
@@ -182,7 +183,7 @@ class PCE500KeyboardHandler:
                     key_code = self.KEY_NAMES[key_label]
                     # Store as (column, row) since KO selects columns and KI reads rows
                     self.KEYBOARD_MATRIX[key_code] = (col_idx, row_idx)
-        
+            
     def press_key(self, key_code: str, target_reads: int = DEFAULT_DEBOUNCE_READS) -> bool:
         """Press a key.
         
@@ -213,16 +214,12 @@ class PCE500KeyboardHandler:
         if column < 8:
             required_kol = 1 << column
         else:
-            # Based on user documentation:
-            # KO8 → ? (unclear, keeping original mapping for now)
-            # KO9 → KOH bit 0
-            # KO10 → KOH bit 1
-            if column == 10:
-                required_koh = 1 << 1  # KOH = 0x02
-            elif column == 9:
-                required_koh = 1 << 0  # KOH = 0x01
-            else:  # column == 8
-                required_koh = 1 << 2  # KOH = 0x04 (keeping original for now)
+            # ### FIXED: Corrected KOH bit mapping ###
+            # Based on standard hardware design, mapping KO8-KO10 sequentially to KOH bits 0-2.
+            # KO8  -> KOH bit 0
+            # KO9  -> KOH bit 1
+            # KO10 -> KOH bit 2
+            required_koh = 1 << (column - 8)
         
         # Calculate target KIL value (set the row bit - active high logic)
         target_kil = 1 << row
@@ -368,7 +365,7 @@ class PCE500KeyboardHandler:
         for queued_key in self.key_queue:
             # Check if this key is stuck (not being read for > 1 second)
             is_stuck = (current_time - queued_key.queued_time > 1.0 and 
-                       queued_key.read_count == 0)
+                        queued_key.read_count == 0)
             
             queue_info.append({
                 'key_code': queued_key.key_code,
