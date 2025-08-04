@@ -154,6 +154,43 @@
                 </div>
             </div>
         </div>
+        
+        <!-- Keyboard Queue Section -->
+        <div class="key-queue-section">
+            <h2>Keyboard Queue</h2>
+            <div class="key-queue-content">
+                <div class="keyboard-registers">
+                    <h3>Keyboard Registers</h3>
+                    <table class="stats-table">
+                        <tbody>
+                            <tr><td>KOL (Output Low):</td><td id="key-reg-kol">0x00</td></tr>
+                            <tr><td>KOH (Output High):</td><td id="key-reg-koh">0x00</td></tr>
+                            <tr><td>KIL (Input):</td><td id="key-reg-kil">0xFE</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="key-queue-table">
+                    <h3>Queued Keys</h3>
+                    <table id="key-queue-table">
+                        <thead>
+                            <tr>
+                                <th>Key</th>
+                                <th>KOL</th>
+                                <th>KOH</th>
+                                <th>KIL</th>
+                                <th>Progress</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="key-queue-body">
+                            <tr>
+                                <td colspan="6" style="text-align: center; font-style: italic;">No keys in queue</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script src="/static/app.js"></script>

@@ -60,58 +60,58 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
     
     def test_keyboard_matrix_scanning(self):
         """Test keyboard matrix row/column scanning."""
-        # Press KEY_Q (row 0, column 0)
+        # Press KEY_Q (column 10, row 1)
         self.handler.press_key('KEY_Q')
         
-        # Select row 0 by setting KOL bit 0
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x01)
+        # Select column 10 by setting KOH bit 2
+        self.handler.handle_register_write(IMEMRegisters.KOH, 0x04)
         
-        # Read KIL - should have bit 0 cleared (active low)
+        # Read KIL - should have bit 1 cleared (active low)
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFE)  # 11111110
+        self.assertEqual(kil_value, 0xFD)  # 11111101
         
-        # Select different row - KEY_Q should not be detected
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x02)
+        # Select different column - KEY_Q should not be detected
+        self.handler.handle_register_write(IMEMRegisters.KOH, 0x02)
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
         self.assertEqual(kil_value, 0xFE)  # No keys detected
     
     def test_multiple_keys_same_row(self):
         """Test multiple keys pressed in the same row."""
-        # Press KEY_Q (row 0, col 0) and KEY_W (row 0, col 1)
-        self.handler.press_key('KEY_Q')
+        # Press KEY_W (column 9, row 0) and KEY_R (column 8, row 0) - same row
         self.handler.press_key('KEY_W')
+        self.handler.press_key('KEY_R')
         
-        # Select row 0
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x01)
+        # Select columns 8 and 9 by setting KOH bits 0 and 1
+        self.handler.handle_register_write(IMEMRegisters.KOH, 0x03)
         
-        # Read KIL - should have bits 0 and 1 cleared
+        # Read KIL - should have bit 0 cleared (both keys are in row 0)
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFC)  # 11111100
+        self.assertEqual(kil_value, 0xFE)  # 11111110
     
     def test_multiple_rows_selected(self):
-        """Test multiple rows selected simultaneously."""
-        # Press keys in different rows
-        self.handler.press_key('KEY_Q')  # Row 0, col 0
-        self.handler.press_key('KEY_A')  # Row 1, col 0
+        """Test multiple columns selected simultaneously."""
+        # Press keys in different columns
+        self.handler.press_key('KEY_Q')  # Column 10, row 1
+        self.handler.press_key('KEY_A')  # Column 10, row 3
         
-        # Select rows 0 and 1
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x03)  # bits 0 and 1
+        # Select column 10
+        self.handler.handle_register_write(IMEMRegisters.KOH, 0x04)  # bit 2 for column 10
         
-        # Both keys should be detected in column 0
+        # Both keys should be detected
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFE)  # bit 0 cleared
+        self.assertEqual(kil_value, 0xF5)  # bits 1 and 3 cleared
     
     def test_extended_rows_koh(self):
-        """Test extended rows using KOH register."""
-        # Press KEY_CALC (row 8, col 0)
-        self.handler.press_key('KEY_CALC')
+        """Test extended columns using KOH register."""
+        # Press KEY_MENU (column 10, row 2)
+        self.handler.press_key('KEY_MENU')
         
-        # Select row 8 by setting KOH bit 0
-        self.handler.handle_register_write(IMEMRegisters.KOH, 0x01)
+        # Select column 10 by setting KOH bit 2
+        self.handler.handle_register_write(IMEMRegisters.KOH, 0x04)
         
-        # Read KIL - should have bit 0 cleared
+        # Read KIL - should have bit 2 cleared
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0xFE)
+        self.assertEqual(kil_value, 0xFB)  # 11111011
     
     def test_register_read_write(self):
         """Test register read/write operations."""
@@ -166,8 +166,8 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
         self.assertEqual(debug['kol'], '0x03')
         self.assertEqual(debug['koh'], '0x01')
         self.assertIn('kil', debug)
-        self.assertIn('selected_rows', debug)
-        self.assertIsInstance(debug['selected_rows'], list)
+        self.assertIn('selected_columns', debug)
+        self.assertIsInstance(debug['selected_columns'], list)
     
     def test_non_keyboard_register(self):
         """Test handling of non-keyboard registers."""

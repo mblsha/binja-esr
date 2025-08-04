@@ -11,12 +11,49 @@ The keyboard is organized as a matrix where:
 """
 
 from typing import Dict, Set, Tuple, Optional, List
+from dataclasses import dataclass, field
+import time
 
 # Keyboard register addresses (offsets within internal memory)
 # These are at internal memory offsets 0xF0-0xF2
 KOL = 0xF0  # Key Output Low (controls KO0-KO7)
 KOH = 0xF1  # Key Output High (controls KO8-KO10)
 KIL = 0xF2  # Key Input (reads KI0-KI7)
+
+# Default number of reads required for debouncing
+DEFAULT_DEBOUNCE_READS = 10
+
+
+@dataclass
+class QueuedKey:
+    """Represents a key in the queue waiting to be processed."""
+    key_code: str               # Human-readable key code (e.g., 'KEY_A')
+    column: int                 # Column index (0-10)
+    row: int                    # Row index (0-7)
+    required_kol: int           # Required KOL value to activate this key
+    required_koh: int           # Required KOH value to activate this key
+    target_kil: int             # KIL value to return when active
+    read_count: int = 0         # Number of times this key has been read
+    target_reads: int = DEFAULT_DEBOUNCE_READS  # Number of reads required
+    queued_time: float = field(default_factory=time.time)  # When key was queued
+    
+    def matches_output(self, kol: int, koh: int) -> bool:
+        """Check if current KOL/KOH values match this key's requirements."""
+        # Check if the column bit is set
+        if self.column < 8:
+            # Column is in KOL (KO0-KO7)
+            return bool(kol & (1 << self.column))
+        else:
+            # Column is in KOH (KO8-KO10)
+            return bool(koh & (1 << (self.column - 8)))
+    
+    def is_complete(self) -> bool:
+        """Check if this key has been read enough times."""
+        return self.read_count >= self.target_reads
+    
+    def increment_read(self) -> None:
+        """Increment the read counter."""
+        self.read_count += 1
 
 
 class PCE500KeyboardHandler:
@@ -125,7 +162,8 @@ class PCE500KeyboardHandler:
     
     def __init__(self):
         """Initialize keyboard handler."""
-        self.pressed_keys: Set[str] = set()
+        self.pressed_keys: Set[str] = set()  # Keep for compatibility
+        self.key_queue: List[QueuedKey] = []  # Queue of keys to be processed
         self._last_kol = 0
         self._last_koh = 0
         
@@ -138,14 +176,47 @@ class PCE500KeyboardHandler:
                     # Store as (column, row) since KO selects columns and KI reads rows
                     self.KEYBOARD_MATRIX[key_code] = (col_idx, row_idx)
         
-    def press_key(self, key_code: str) -> None:
+    def press_key(self, key_code: str, target_reads: int = DEFAULT_DEBOUNCE_READS) -> None:
         """Press a key.
         
         Args:
             key_code: Key identifier (e.g., 'KEY_A')
+            target_reads: Number of reads required for debouncing
         """
         if key_code in self.KEYBOARD_MATRIX:
-            self.pressed_keys.add(key_code)
+            # Check if key is already queued
+            for queued_key in self.key_queue:
+                if queued_key.key_code == key_code and not queued_key.is_complete():
+                    # Key already queued and not complete, ignore
+                    return
+            
+            # Add key to queue
+            column, row = self.KEYBOARD_MATRIX[key_code]
+            
+            # Calculate required KOL/KOH values for this key
+            required_kol = 0
+            required_koh = 0
+            if column < 8:
+                required_kol = 1 << column
+            else:
+                required_koh = 1 << (column - 8)
+            
+            # Calculate target KIL value (clear the row bit)
+            target_kil = 0xFF & ~(1 << row)
+            
+            # Create queued key
+            queued_key = QueuedKey(
+                key_code=key_code,
+                column=column,
+                row=row,
+                required_kol=required_kol,
+                required_koh=required_koh,
+                target_kil=target_kil,
+                target_reads=target_reads
+            )
+            
+            self.key_queue.append(queued_key)
+            self.pressed_keys.add(key_code)  # Keep for compatibility
             self._update_keyboard_state()
             
     def release_key(self, key_code: str) -> None:
@@ -154,11 +225,14 @@ class PCE500KeyboardHandler:
         Args:
             key_code: Key identifier (e.g., 'KEY_A')
         """
+        # Remove from queue
+        self.key_queue = [k for k in self.key_queue if k.key_code != key_code]
         self.pressed_keys.discard(key_code)
         self._update_keyboard_state()
         
     def release_all_keys(self) -> None:
         """Release all pressed keys."""
+        self.key_queue.clear()
         self.pressed_keys.clear()
         self._update_keyboard_state()
         
@@ -209,27 +283,26 @@ class PCE500KeyboardHandler:
         """
         result = 0xFF  # Default: no keys pressed (all bits high)
         
-        # Check each pressed key
-        for key_code in self.pressed_keys:
-            if key_code not in self.KEYBOARD_MATRIX:
-                continue
+        # Process key queue
+        completed_keys = []
+        
+        for queued_key in self.key_queue:
+            # Check if this key matches current KOL/KOH
+            if queued_key.matches_output(self._last_kol, self._last_koh):
+                # This key is active, apply its KIL contribution
+                result &= queued_key.target_kil
                 
-            column, row = self.KEYBOARD_MATRIX[key_code]
-            
-            # Check if this column is selected
-            column_selected = False
-            if column < 8:
-                # Column is in KOL (KO0-KO7)
-                if self._last_kol & (1 << column):
-                    column_selected = True
-            elif column < 11:
-                # Column is in KOH (KO8-KO10)
-                if self._last_koh & (1 << (column - 8)):
-                    column_selected = True
-                    
-            if column_selected:
-                # Clear the corresponding row bit (active low)
-                result &= ~(1 << row)
+                # Increment read count
+                queued_key.increment_read()
+                
+                # Check if key is complete
+                if queued_key.is_complete():
+                    completed_keys.append(queued_key)
+        
+        # Remove completed keys from queue
+        for completed_key in completed_keys:
+            self.key_queue.remove(completed_key)
+            self.pressed_keys.discard(completed_key.key_code)
         
         # WORKAROUND: Avoid returning 0xFF which causes performance issues
         # in the LLIL evaluation when at address 0x1000F2.
@@ -257,8 +330,40 @@ class PCE500KeyboardHandler:
             'kol': f'0x{self._last_kol:02X}',
             'koh': f'0x{self._last_koh:02X}',
             'kil': f'0x{self._read_keyboard_input():02X}',
-            'selected_columns': self._get_selected_columns()
+            'selected_columns': self._get_selected_columns(),
+            'key_queue': self.get_queue_info()
         }
+    
+    def get_queue_info(self) -> List[Dict[str, any]]:
+        """Get information about queued keys.
+        
+        Returns:
+            List of dictionaries with queue information
+        """
+        queue_info = []
+        current_time = time.time()
+        
+        for queued_key in self.key_queue:
+            # Check if this key is stuck (not being read for > 1 second)
+            is_stuck = (current_time - queued_key.queued_time > 1.0 and 
+                       queued_key.read_count == 0)
+            
+            queue_info.append({
+                'key_code': queued_key.key_code,
+                'column': queued_key.column,
+                'row': queued_key.row,
+                'kol': f'0x{queued_key.required_kol:02X}',
+                'koh': f'0x{queued_key.required_koh:02X}',
+                'kil': f'0x{queued_key.target_kil:02X}',
+                'read_count': queued_key.read_count,
+                'target_reads': queued_key.target_reads,
+                'progress': f'{queued_key.read_count}/{queued_key.target_reads}',
+                'is_stuck': is_stuck,
+                'queued_time': queued_key.queued_time,
+                'age_seconds': current_time - queued_key.queued_time
+            })
+        
+        return queue_info
         
     def _get_selected_columns(self) -> list:
         """Get list of currently selected columns."""

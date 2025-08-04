@@ -202,6 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startPolling();
     startRegisterWatchPolling();
     startLcdStatsPolling();
+    startKeyQueuePolling();
 });
 
 // Set up the virtual keyboard
@@ -846,5 +847,112 @@ async function updateLcdStats() {
         
     } catch (error) {
         console.error('Error fetching LCD statistics:', error);
+    }
+}
+
+// Start polling for key queue updates
+let keyQueueTimer = null;
+function startKeyQueuePolling() {
+    // Poll every 200ms for responsive key feedback
+    keyQueueTimer = setInterval(updateKeyQueue, 200);
+    // Initial update
+    updateKeyQueue();
+}
+
+// Update key queue display
+async function updateKeyQueue() {
+    try {
+        const response = await fetch(`${API_BASE}/key_queue`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        
+        // Update keyboard registers
+        document.getElementById('key-reg-kol').textContent = data.registers.kol;
+        document.getElementById('key-reg-koh').textContent = data.registers.koh;
+        document.getElementById('key-reg-kil').textContent = data.registers.kil;
+        
+        // Update key queue table
+        const tbody = document.getElementById('key-queue-body');
+        tbody.innerHTML = '';
+        
+        if (data.queue.length === 0) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 6;
+            cell.textContent = 'No keys in queue';
+            cell.style.textAlign = 'center';
+            cell.style.fontStyle = 'italic';
+            row.appendChild(cell);
+            tbody.appendChild(row);
+        } else {
+            data.queue.forEach(key => {
+                const row = document.createElement('tr');
+                
+                // Key name
+                const keyCell = document.createElement('td');
+                keyCell.textContent = key.key_code;
+                row.appendChild(keyCell);
+                
+                // KOL
+                const kolCell = document.createElement('td');
+                kolCell.textContent = key.kol;
+                row.appendChild(kolCell);
+                
+                // KOH
+                const kohCell = document.createElement('td');
+                kohCell.textContent = key.koh;
+                row.appendChild(kohCell);
+                
+                // KIL
+                const kilCell = document.createElement('td');
+                kilCell.textContent = key.kil;
+                row.appendChild(kilCell);
+                
+                // Progress
+                const progressCell = document.createElement('td');
+                const progress = (key.read_count / key.target_reads) * 100;
+                
+                const progressDiv = document.createElement('div');
+                progressDiv.className = 'key-progress';
+                
+                const progressBar = document.createElement('div');
+                progressBar.className = 'key-progress-bar';
+                progressBar.style.width = `${progress}%`;
+                
+                const progressText = document.createElement('div');
+                progressText.className = 'key-progress-text';
+                progressText.textContent = key.progress;
+                
+                progressDiv.appendChild(progressBar);
+                progressDiv.appendChild(progressText);
+                progressCell.appendChild(progressDiv);
+                row.appendChild(progressCell);
+                
+                // Status
+                const statusCell = document.createElement('td');
+                const statusSpan = document.createElement('span');
+                statusSpan.className = 'key-status';
+                
+                if (key.is_stuck) {
+                    statusSpan.className += ' stuck';
+                    statusSpan.textContent = 'STUCK';
+                } else if (key.read_count > 0) {
+                    statusSpan.className += ' active';
+                    statusSpan.textContent = 'ACTIVE';
+                } else {
+                    statusSpan.className += ' waiting';
+                    statusSpan.textContent = 'WAITING';
+                }
+                
+                statusCell.appendChild(statusSpan);
+                row.appendChild(statusCell);
+                
+                tbody.appendChild(row);
+            });
+        }
+        
+    } catch (error) {
+        console.error('Error fetching key queue:', error);
     }
 }

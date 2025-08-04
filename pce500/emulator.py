@@ -692,8 +692,58 @@ class PCE500Emulator:
     
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Handle keyboard register reads."""
-        return self.keyboard.handle_register_read(address - INTERNAL_MEMORY_START)
+        offset = address - INTERNAL_MEMORY_START
+        
+        # Track register access for internal register watch
+        if cpu_pc is not None:
+            reg_name = None
+            if offset == 0xF0:
+                reg_name = "KOL"
+            elif offset == 0xF1:
+                reg_name = "KOH"
+            elif offset == 0xF2:
+                reg_name = "KIL"
+            
+            if reg_name:
+                if reg_name not in self.memory.imem_access_tracking:
+                    self.memory.imem_access_tracking[reg_name] = {"reads": [], "writes": []}
+                reads_list = self.memory.imem_access_tracking[reg_name]["reads"]
+                if reads_list and reads_list[-1][0] == cpu_pc:
+                    # Increment count for same PC
+                    reads_list[-1] = (cpu_pc, reads_list[-1][1] + 1)
+                else:
+                    # Add new PC with count 1
+                    reads_list.append((cpu_pc, 1))
+                    if len(reads_list) > 10:
+                        reads_list.pop(0)
+        
+        return self.keyboard.handle_register_read(offset)
     
     def _keyboard_write_handler(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Handle keyboard register writes."""
-        self.keyboard.handle_register_write(address - INTERNAL_MEMORY_START, value)
+        offset = address - INTERNAL_MEMORY_START
+        
+        # Track register access for internal register watch
+        if cpu_pc is not None:
+            reg_name = None
+            if offset == 0xF0:
+                reg_name = "KOL"
+            elif offset == 0xF1:
+                reg_name = "KOH"
+            elif offset == 0xF2:
+                reg_name = "KIL"
+            
+            if reg_name:
+                if reg_name not in self.memory.imem_access_tracking:
+                    self.memory.imem_access_tracking[reg_name] = {"reads": [], "writes": []}
+                writes_list = self.memory.imem_access_tracking[reg_name]["writes"]
+                if writes_list and writes_list[-1][0] == cpu_pc:
+                    # Increment count for same PC
+                    writes_list[-1] = (cpu_pc, writes_list[-1][1] + 1)
+                else:
+                    # Add new PC with count 1
+                    writes_list.append((cpu_pc, 1))
+                    if len(writes_list) > 10:
+                        writes_list.pop(0)
+        
+        self.keyboard.handle_register_write(offset, value)
