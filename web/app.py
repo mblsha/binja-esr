@@ -178,9 +178,13 @@ def handle_key():
             return jsonify({"error": "Emulator not initialized"}), 500
         
         try:
+            key_queued = False
             if action == 'press':
-                emulator.press_key(key_code)
-                print(f"Key pressed: {key_code}")
+                key_queued = emulator.press_key(key_code)
+                if key_queued:
+                    print(f"Key pressed and queued: {key_code}")
+                else:
+                    print(f"Key press ignored (not mapped or already queued): {key_code}")
             elif action == 'release':
                 emulator.release_key(key_code)
                 print(f"Key released: {key_code}")
@@ -191,6 +195,8 @@ def handle_key():
             debug_info = emulator.keyboard.get_debug_info()
             return jsonify({
                 "status": "ok",
+                "key_queued": key_queued if action == 'press' else None,
+                "message": f"Key {key_code} {'queued' if key_queued else 'not queued (unmapped or already pressed)'}" if action == 'press' else f"Key {key_code} released",
                 "debug": debug_info
             })
             

@@ -390,7 +390,7 @@ async function handleKeyPress(keyCode) {
     }
     
     try {
-        await fetch(`${API_BASE}/key`, {
+        const response = await fetch(`${API_BASE}/key`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
@@ -398,6 +398,14 @@ async function handleKeyPress(keyCode) {
                 action: 'press'
             })
         });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.key_queued === false) {
+                console.warn(`Key ${keyCode} was not queued: ${data.message}`);
+                // Could show a visual indicator here
+            }
+        }
     } catch (error) {
         console.error('Error sending key press:', error);
     }
@@ -937,6 +945,9 @@ async function updateKeyQueue() {
                 if (key.is_stuck) {
                     statusSpan.className += ' stuck';
                     statusSpan.textContent = 'STUCK';
+                } else if (key.released && key.read_count < key.target_reads) {
+                    statusSpan.className += ' released';
+                    statusSpan.textContent = 'RELEASED';
                 } else if (key.read_count > 0) {
                     statusSpan.className += ' active';
                     statusSpan.textContent = 'ACTIVE';

@@ -36,6 +36,7 @@ class QueuedKey:
     read_count: int = 0         # Number of times this key has been read
     target_reads: int = DEFAULT_DEBOUNCE_READS  # Number of reads required
     queued_time: float = field(default_factory=time.time)  # When key was queued
+    released: bool = False      # Whether the key has been physically released
     
     def matches_output(self, kol: int, koh: int) -> bool:
         """Check if current KOL/KOH values match this key's requirements."""
@@ -104,6 +105,7 @@ class PCE500KeyboardHandler:
         'DEL': 'KEY_DELETE',  
         'INS': 'KEY_INSERT',
         'KANA': 'KEY_KANA',
+        # Note: OFF/ON are hardware power buttons, not part of the keyboard matrix
         'OFF': 'KEY_OFF',
         'ON': 'KEY_ON',
         'C.CE': 'KEY_C_CE',
@@ -176,48 +178,56 @@ class PCE500KeyboardHandler:
                     # Store as (column, row) since KO selects columns and KI reads rows
                     self.KEYBOARD_MATRIX[key_code] = (col_idx, row_idx)
         
-    def press_key(self, key_code: str, target_reads: int = DEFAULT_DEBOUNCE_READS) -> None:
+    def press_key(self, key_code: str, target_reads: int = DEFAULT_DEBOUNCE_READS) -> bool:
         """Press a key.
         
         Args:
             key_code: Key identifier (e.g., 'KEY_A')
             target_reads: Number of reads required for debouncing
+            
+        Returns:
+            True if key was queued, False if key is not mapped or already queued
         """
-        if key_code in self.KEYBOARD_MATRIX:
-            # Check if key is already queued
-            for queued_key in self.key_queue:
-                if queued_key.key_code == key_code and not queued_key.is_complete():
-                    # Key already queued and not complete, ignore
-                    return
+        if key_code not in self.KEYBOARD_MATRIX:
+            # Key not in matrix - log for debugging
+            print(f"Warning: Key '{key_code}' not in keyboard matrix, ignoring press")
+            return False
             
-            # Add key to queue
-            column, row = self.KEYBOARD_MATRIX[key_code]
-            
-            # Calculate required KOL/KOH values for this key
-            required_kol = 0
-            required_koh = 0
-            if column < 8:
-                required_kol = 1 << column
-            else:
-                required_koh = 1 << (column - 8)
-            
-            # Calculate target KIL value (clear the row bit)
-            target_kil = 0xFF & ~(1 << row)
-            
-            # Create queued key
-            queued_key = QueuedKey(
-                key_code=key_code,
-                column=column,
-                row=row,
-                required_kol=required_kol,
-                required_koh=required_koh,
-                target_kil=target_kil,
-                target_reads=target_reads
-            )
-            
-            self.key_queue.append(queued_key)
-            self.pressed_keys.add(key_code)  # Keep for compatibility
-            self._update_keyboard_state()
+        # Check if key is already queued
+        for queued_key in self.key_queue:
+            if queued_key.key_code == key_code and not queued_key.is_complete():
+                # Key already queued and not complete, ignore
+                return False
+        
+        # Add key to queue
+        column, row = self.KEYBOARD_MATRIX[key_code]
+        
+        # Calculate required KOL/KOH values for this key
+        required_kol = 0
+        required_koh = 0
+        if column < 8:
+            required_kol = 1 << column
+        else:
+            required_koh = 1 << (column - 8)
+        
+        # Calculate target KIL value (clear the row bit)
+        target_kil = 0xFF & ~(1 << row)
+        
+        # Create queued key
+        queued_key = QueuedKey(
+            key_code=key_code,
+            column=column,
+            row=row,
+            required_kol=required_kol,
+            required_koh=required_koh,
+            target_kil=target_kil,
+            target_reads=target_reads
+        )
+        
+        self.key_queue.append(queued_key)
+        self.pressed_keys.add(key_code)  # Keep for compatibility
+        self._update_keyboard_state()
+        return True
             
     def release_key(self, key_code: str) -> None:
         """Release a key.
@@ -225,8 +235,12 @@ class PCE500KeyboardHandler:
         Args:
             key_code: Key identifier (e.g., 'KEY_A')
         """
-        # Remove from queue
-        self.key_queue = [k for k in self.key_queue if k.key_code != key_code]
+        # Mark key as released but keep it in queue until fully processed
+        for queued_key in self.key_queue:
+            if queued_key.key_code == key_code:
+                queued_key.released = True
+        
+        # Remove from pressed_keys set
         self.pressed_keys.discard(key_code)
         self._update_keyboard_state()
         
@@ -299,10 +313,11 @@ class PCE500KeyboardHandler:
                 if queued_key.is_complete():
                     completed_keys.append(queued_key)
         
-        # Remove completed keys from queue
+        # Remove completed keys from queue only if they've also been released
         for completed_key in completed_keys:
-            self.key_queue.remove(completed_key)
-            self.pressed_keys.discard(completed_key.key_code)
+            if completed_key.released:
+                self.key_queue.remove(completed_key)
+                self.pressed_keys.discard(completed_key.key_code)
         
         # WORKAROUND: Avoid returning 0xFF which causes performance issues
         # in the LLIL evaluation when at address 0x1000F2.
@@ -359,6 +374,7 @@ class PCE500KeyboardHandler:
                 'target_reads': queued_key.target_reads,
                 'progress': f'{queued_key.read_count}/{queued_key.target_reads}',
                 'is_stuck': is_stuck,
+                'released': queued_key.released,
                 'queued_time': queued_key.queued_time,
                 'age_seconds': current_time - queued_key.queued_time
             })

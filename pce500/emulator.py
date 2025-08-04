@@ -680,10 +680,15 @@ class PCE500Emulator:
         if not condition or jump_taken:
             self._trace_jump(pc_before, pc_after, condition, jump_taken)
     
-    def press_key(self, key_code: str):
-        """Simulates pressing a key on the keyboard."""
+    def press_key(self, key_code: str) -> bool:
+        """Simulates pressing a key on the keyboard.
+        
+        Returns:
+            True if key was queued, False if key is not mapped or already queued
+        """
         if self.keyboard:
-            self.keyboard.press_key(key_code)
+            return self.keyboard.press_key(key_code)
+        return False
 
     def release_key(self, key_code: str):
         """Simulates releasing a key on the keyboard."""

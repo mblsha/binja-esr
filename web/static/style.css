@@ -718,6 +718,11 @@ h1 {
     color: #95a5a6;
 }
 
+.key-status.released {
+    color: #f39c12;
+    font-style: italic;
+}
+
 /* Responsive layout for smaller screens */
 @media (max-width: 1200px) {
     .key-queue-content {
