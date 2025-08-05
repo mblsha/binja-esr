@@ -16,7 +16,9 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
-from .keyboard_hardware import KeyboardHardware
+# Temporary: Use old keyboard implementation to fix performance regression
+from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
+# from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
 
 # Define constants locally to avoid heavy imports
@@ -112,9 +114,9 @@ class PCE500Emulator:
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
         
-        # Create and integrate keyboard hardware
-        # Pass a lambda that reads from memory to access LCC register
-        self.keyboard = KeyboardHardware(lambda addr: self.memory.read_byte(addr))
+        # Create and integrate keyboard handler
+        # Using old implementation temporarily to fix performance regression
+        self.keyboard = KeyboardCompat()
         keyboard_overlay = MemoryOverlay(
             start=INTERNAL_MEMORY_START + KOL,
             end=INTERNAL_MEMORY_START + KIL,
@@ -692,22 +694,18 @@ class PCE500Emulator:
             return self.keyboard.press_key(key_code)
         return False
 
-    def release_key(self, key_code: str) -> bool:
-        """Simulates releasing a key on the keyboard.
-        
-        Returns:
-            True if key was released, False if key is not mapped
-        """
+    def release_key(self, key_code: str):
+        """Simulates releasing a key on the keyboard."""
         if self.keyboard:
-            return self.keyboard.release_key(key_code)
-        return False
+            self.keyboard.release_key(key_code)
     
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Handle keyboard register reads."""
         offset = address - INTERNAL_MEMORY_START
         
-        # Track register access for internal register watch
-        if cpu_pc is not None:
+        # Performance optimization: Skip tracking for KIL reads during normal operation
+        # Only track if perfetto tracing is enabled
+        if cpu_pc is not None and self.perfetto_enabled:
             reg_name = None
             if offset == 0xF0:
                 reg_name = "KOL"
@@ -729,14 +727,15 @@ class PCE500Emulator:
                     if len(reads_list) > 10:
                         reads_list.pop(0)
         
-        return self.keyboard.read_register(offset)
+        return self.keyboard.handle_register_read(offset)
     
     def _keyboard_write_handler(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Handle keyboard register writes."""
         offset = address - INTERNAL_MEMORY_START
         
-        # Track register access for internal register watch
-        if cpu_pc is not None:
+        # Performance optimization: Skip tracking during normal operation
+        # Only track if perfetto tracing is enabled
+        if cpu_pc is not None and self.perfetto_enabled:
             reg_name = None
             if offset == 0xF0:
                 reg_name = "KOL"
@@ -758,4 +757,4 @@ class PCE500Emulator:
                     if len(writes_list) > 10:
                         writes_list.pop(0)
         
-        self.keyboard.write_register(offset, value)
+        self.keyboard.handle_register_write(offset, value)
