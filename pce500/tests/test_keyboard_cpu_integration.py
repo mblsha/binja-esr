@@ -26,12 +26,12 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         
         # Create a simple test ROM that reads keyboard state
         # This program:
-        # 1. Sets KOL to 0x01 (select column 0)
+        # 1. Sets KOL to 0xFE (select column 0 with active-low logic)
         # 2. Reads KIL to register A
         # 3. Loops forever
         test_program = bytes([
-            # MV A, 0x01   - Load 0x01 into A
-            0x08, 0x01,
+            # MV A, 0xFE   - Load 0xFE into A (bit 0 low = column 0 active)
+            0x08, 0xFE,
             # MV (0xF0), A - Store A to KOL (internal memory address 0xF0)
             0xA0, 0xF0,
             # MV A, (0xF2) - Load KIL into A (internal memory address 0xF2)
@@ -49,22 +49,22 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
     def test_keyboard_register_access(self):
         """Test that CPU can access keyboard registers."""
         # Step through the program to set KOL
-        self.emulator.step()  # MV A, 0x01
+        self.emulator.step()  # MV A, 0xFE
         self.emulator.step()  # MV (0xF0), A - stores to KOL
         
         # Verify KOL was set
         kol_value = self.emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOL)
-        self.assertEqual(kol_value, 0x01)
+        self.assertEqual(kol_value, 0xFE)
         
-        # No keys pressed, so KIL should read 0x00 (active high logic)
+        # No keys pressed, so KIL should read 0xFF (all bits high with active-low logic)
         self.emulator.step()  # MV A, (0xF2) - reads KIL
         reg_a = self.emulator.cpu.regs.get(RegisterName.A)
-        self.assertEqual(reg_a, 0x00)
+        self.assertEqual(reg_a, 0xFF)
         
     def test_key_press_detection(self):
         """Test that key presses are detected by CPU."""
         # Step through to set KOL
-        self.emulator.step()  # MV A, 0x01
+        self.emulator.step()  # MV A, 0xFE
         self.emulator.step()  # MV (0xF0), A
         
         # Press KEY_Q (column 0, row 1)
@@ -74,14 +74,14 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         self.emulator.step()  # MV A, (0xF2)
         reg_a = self.emulator.cpu.regs.get(RegisterName.A)
         
-        # With KEY_Q pressed in column 0 row 1, bit 1 should be set (active high)
-        # Since the key is pressed, result will be 0x02 (bit 1 set)
-        self.assertEqual(reg_a, 0x02)
+        # With KEY_Q pressed in column 0 row 1, bit 1 should be low (active-low)
+        # Since the key is pressed, result will be 0xFD (bit 1 clear)
+        self.assertEqual(reg_a, 0xFD)
         
     def test_key_release(self):
         """Test that key releases are properly handled."""
         # Step through to set KOL
-        self.emulator.step()  # MV A, 0x01
+        self.emulator.step()  # MV A, 0xFE
         self.emulator.step()  # MV (0xF0), A
         
         # Press and release KEY_Q
@@ -92,9 +92,9 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         self.emulator.step()  # MV A, (0xF2)
         reg_a = self.emulator.cpu.regs.get(RegisterName.A)
         
-        # Key was released but still in queue until debounced
-        # Should still read 0x02 until debouncing completes
-        self.assertEqual(reg_a, 0x02)
+        # Key was released, hardware simulation doesn't have debouncing
+        # Should read 0xFF (no keys pressed)
+        self.assertEqual(reg_a, 0xFF)
         
     def test_multiple_rows(self):
         """Test scanning different keyboard rows."""
@@ -102,10 +102,10 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         emulator = PCE500Emulator(trace_enabled=False, perfetto_trace=False, save_lcd_on_exit=False)
         
         # Create a program that scans column 1
-        # MV A, 0x02   - Load 0x02 into A (column 1, bit 1)
+        # MV A, 0xFD   - Load 0xFD into A (bit 1 low = column 1 active)
         # MV (0xF0), A - Store A to KOL
         # MV A, (0xF2) - Load KIL into A
-        test_program = bytes([0x08, 0x02, 0xA0, 0xF0, 0x80, 0xF2])
+        test_program = bytes([0x08, 0xFD, 0xA0, 0xF0, 0x80, 0xF2])
         
         # Load and run the program
         emulator.load_rom(test_program, start_address=0x0000)
@@ -115,15 +115,15 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         emulator.press_key('KEY_W')
         
         # Step through program
-        emulator.step()  # MV A, 0x02
+        emulator.step()  # MV A, 0xFD
         emulator.step()  # MV (0xF0), A
         emulator.step()  # MV A, (0xF2)
         
         reg_a = emulator.cpu.regs.get(RegisterName.A)
         
-        # With KEY_W pressed in column 1 row 0, bit 0 should be set
-        # Since the key is pressed, result will be 0x01 (bit 0 set)
-        self.assertEqual(reg_a, 0x01)
+        # With KEY_W pressed in column 1 row 0, bit 0 should be low
+        # Since the key is pressed, result will be 0xFE (bit 0 clear)
+        self.assertEqual(reg_a, 0xFE)
 
 
 if __name__ == '__main__':

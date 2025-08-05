@@ -12,17 +12,18 @@ from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL, RetInstruction, JumpInstruction, IR
 )
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
-from .keyboard import PCE500KeyboardHandler
+from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
 
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000  # SC62015 internal memory starts at this address
-KOL = 0xF0  # Key Output Low register offset
-KOH = 0xF1  # Key Output High register offset
-KIL = 0xF2  # Key Input register offset
+KOL = IMEMRegisters.KOL  # 0xF0 - Key Output Low register offset
+KOH = IMEMRegisters.KOH  # 0xF1 - Key Output High register offset
+KIL = IMEMRegisters.KIL  # 0xF2 - Key Input register offset
 
 
 class TrackedMemory(PCE500Memory):
@@ -111,8 +112,9 @@ class PCE500Emulator:
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
         
-        # Create and integrate keyboard handler
-        self.keyboard = PCE500KeyboardHandler()
+        # Create and integrate keyboard hardware
+        # Pass a lambda that reads from memory to access LCC register
+        self.keyboard = KeyboardHardware(lambda addr: self.memory.read_byte(addr))
         keyboard_overlay = MemoryOverlay(
             start=INTERNAL_MEMORY_START + KOL,
             end=INTERNAL_MEMORY_START + KIL,
@@ -684,16 +686,21 @@ class PCE500Emulator:
         """Simulates pressing a key on the keyboard.
         
         Returns:
-            True if key was queued, False if key is not mapped or already queued
+            True if key was pressed, False if key is not mapped
         """
         if self.keyboard:
             return self.keyboard.press_key(key_code)
         return False
 
-    def release_key(self, key_code: str):
-        """Simulates releasing a key on the keyboard."""
+    def release_key(self, key_code: str) -> bool:
+        """Simulates releasing a key on the keyboard.
+        
+        Returns:
+            True if key was released, False if key is not mapped
+        """
         if self.keyboard:
-            self.keyboard.release_key(key_code)
+            return self.keyboard.release_key(key_code)
+        return False
     
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Handle keyboard register reads."""
@@ -722,7 +729,7 @@ class PCE500Emulator:
                     if len(reads_list) > 10:
                         reads_list.pop(0)
         
-        return self.keyboard.handle_register_read(offset)
+        return self.keyboard.read_register(offset)
     
     def _keyboard_write_handler(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Handle keyboard register writes."""
@@ -751,4 +758,4 @@ class PCE500Emulator:
                     if len(writes_list) > 10:
                         writes_list.pop(0)
         
-        self.keyboard.handle_register_write(offset, value)
+        self.keyboard.write_register(offset, value)
