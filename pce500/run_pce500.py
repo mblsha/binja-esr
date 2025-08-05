@@ -11,41 +11,61 @@ from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
-def main(dump_pc=None, no_dump=False, save_lcd=True):
-    """Example with Perfetto tracing enabled."""
-    # Note: Perfetto trace is automatically saved when exiting the context manager
-    # Create emulator with tracing
-    with PCE500Emulator(trace_enabled=True, perfetto_trace=True, save_lcd_on_exit=save_lcd) as emu:
-        print("Created emulator with Perfetto tracing enabled")
-        print("Trace will be saved to pc-e500.trace")
+def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True, 
+                 perfetto_trace=True, print_stats=True):
+    """Run PC-E500 emulator and return the instance.
+    
+    Args:
+        num_steps: Number of instructions to execute
+        dump_pc: PC address to trigger memory dump
+        no_dump: Disable memory dumps
+        save_lcd: Save LCD display on exit
+        perfetto_trace: Enable Perfetto tracing
+        print_stats: Print statistics to stdout
+        
+    Returns:
+        PCE500Emulator: The emulator instance after running
+    """
+    # Create emulator
+    emu = PCE500Emulator(trace_enabled=True, perfetto_trace=perfetto_trace, 
+                         save_lcd_on_exit=save_lcd)
+    
+    if print_stats:
+        print("Created emulator with Perfetto tracing enabled" if perfetto_trace else "Created emulator")
+        if perfetto_trace:
+            print("Trace will be saved to pc-e500.trace")
 
-        # Handle memory dump configuration
-        if no_dump:
-            # Disable dumps by setting an impossible PC value
-            emu.set_memory_dump_pc(0xFFFFFF)
+    # Handle memory dump configuration
+    if no_dump:
+        emu.set_memory_dump_pc(0xFFFFFF)
+        if print_stats:
             print("Internal memory dumps disabled")
-        elif dump_pc is not None:
-            emu.set_memory_dump_pc(dump_pc)
+    elif dump_pc is not None:
+        emu.set_memory_dump_pc(dump_pc)
+        if print_stats:
             print(f"Internal memory dump will trigger at PC=0x{dump_pc:06X}")
 
-        # Load ROM and run
-        rom_path = Path(__file__).parent.parent / "data" / "pc-e500.bin"
-        if rom_path.exists():
-            with open(rom_path, "rb") as f:
-                rom_data = f.read()
-                assert len(rom_data) >= 0x100000
-                rom_portion = rom_data[0xC0000:0x100000]
-                emu.load_rom(rom_portion)
+    # Load ROM
+    rom_path = Path(__file__).parent.parent / "data" / "pc-e500.bin"
+    if rom_path.exists():
+        with open(rom_path, "rb") as f:
+            rom_data = f.read()
+            assert len(rom_data) >= 0x100000
+            rom_portion = rom_data[0xC0000:0x100000]
+            emu.load_rom(rom_portion)
 
-        # Reset and run
-        emu.reset()
+    # Reset and run
+    emu.reset()
+    if print_stats:
         print(f"PC after reset: {emu.cpu.regs.get(RegisterName.PC):06X}")
 
-        num_steps = 20000
-        print(f"Running {num_steps} instructions with tracing...")
-        for _ in range(num_steps):
-            emu.step()
+    if print_stats:
+        print(f"Running {num_steps} instructions...")
+    
+    for _ in range(num_steps):
+        emu.step()
 
+    if print_stats:
         print(f"Executed {emu.instruction_count} instructions")
         print(f"Memory reads: {emu.memory_read_count}")
         print(f"Memory writes: {emu.memory_write_count}")
@@ -77,6 +97,15 @@ def main(dump_pc=None, no_dump=False, save_lcd=True):
             print(f"    Data bytes read: {stat['data_read']}")
             print(f"    Current page: {stat['page']}")
             print(f"    Current column: {stat['column']}")
+    
+    return emu
+
+
+def main(dump_pc=None, no_dump=False, save_lcd=True):
+    """Example with Perfetto tracing enabled."""
+    # Use context manager for automatic cleanup
+    with run_emulator(dump_pc=dump_pc, no_dump=no_dump, save_lcd=save_lcd):
+        pass  # Everything is done in run_emulator
 
 
 

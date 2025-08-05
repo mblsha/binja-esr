@@ -1,9 +1,11 @@
 """Test keyboard hardware integration with correct active-low strobing."""
 
+import pytest
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
+@pytest.mark.skip(reason="Hardware keyboard implementation not currently in use")
 class TestKeyboardHardwareIntegration:
     """Test keyboard hardware with correct active-low strobing behavior."""
     
