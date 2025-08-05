@@ -491,6 +491,32 @@ async function updateState() {
             document.getElementById('instruction-count').textContent = state.instruction_count.toLocaleString();
         }
         
+        // Update emulation speed
+        const speedElement = document.getElementById('emulation-speed');
+        if (speedElement) {
+            if (state.emulation_speed !== null && state.emulation_speed !== undefined) {
+                // Format speed with appropriate units
+                let speedText;
+                if (state.emulation_speed >= 1_000_000) {
+                    speedText = (state.emulation_speed / 1_000_000).toFixed(2) + 'M ips';
+                } else if (state.emulation_speed >= 1_000) {
+                    speedText = (state.emulation_speed / 1_000).toFixed(1) + 'K ips';
+                } else {
+                    speedText = Math.round(state.emulation_speed) + ' ips';
+                }
+                
+                // Add percentage if available
+                if (state.speed_ratio !== null && state.speed_ratio !== undefined) {
+                    const percentage = (state.speed_ratio * 100).toFixed(1);
+                    speedText += ` (${percentage}%)`;
+                }
+                
+                speedElement.textContent = speedText;
+            } else {
+                speedElement.textContent = '-';
+            }
+        }
+        
         // Update instruction history
         if (state.instruction_history) {
             updateInstructionHistory(state.instruction_history);

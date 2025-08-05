@@ -30,7 +30,11 @@ emulator_state = {
     "registers": {},
     "flags": {},
     "instruction_count": 0,
-    "instruction_history": []
+    "instruction_history": [],
+    "speed_calc_time": None,
+    "speed_calc_instructions": None,
+    "emulation_speed": None,
+    "speed_ratio": None
 }
 
 # Update thresholds
@@ -88,6 +92,41 @@ def update_emulator_state():
     img_buffer.seek(0)
     screen_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
     
+    # Calculate emulation speed
+    current_time = time.time()
+    current_instructions = emulator.instruction_count
+    
+    if emulator_state["is_running"]:
+        # Calculate speed only when running
+        prev_time = emulator_state.get("speed_calc_time")
+        prev_instructions = emulator_state.get("speed_calc_instructions")
+        
+        if prev_time is not None and prev_instructions is not None:
+            time_delta = current_time - prev_time
+            instruction_delta = current_instructions - prev_instructions
+            
+            if time_delta > 0:
+                speed = instruction_delta / time_delta
+                speed_ratio = speed / 2_000_000  # 2MHz CPU
+            else:
+                speed = 0
+                speed_ratio = 0
+        else:
+            # First update while running
+            speed = 0
+            speed_ratio = 0
+            
+        emulator_state["emulation_speed"] = speed
+        emulator_state["speed_ratio"] = speed_ratio
+    else:
+        # Not running, clear speed
+        emulator_state["emulation_speed"] = None
+        emulator_state["speed_ratio"] = None
+    
+    # Update tracking values
+    emulator_state["speed_calc_time"] = current_time
+    emulator_state["speed_calc_instructions"] = current_instructions
+    
     # Update state dictionary
     emulator_state.update({
         "screen": f"data:image/png;base64,{screen_base64}",
@@ -108,8 +147,8 @@ def update_emulator_state():
         },
         "instruction_count": emulator.instruction_count,
         "instruction_history": list(emulator.instruction_history),
-        "last_update_time": time.time(),
-        "last_update_instructions": emulator.instruction_count
+        "last_update_time": current_time,
+        "last_update_instructions": current_instructions
     })
 
 
@@ -316,6 +355,9 @@ def control_emulator():
             
         elif command == 'pause':
             emulator_state["is_running"] = False
+            # Clear speed tracking
+            emulator_state["speed_calc_time"] = None
+            emulator_state["speed_calc_instructions"] = None
             if emulator_thread:
                 emulator_thread.join()
                 emulator_thread = None
@@ -330,6 +372,9 @@ def control_emulator():
         elif command == 'reset':
             # Stop running if active
             emulator_state["is_running"] = False
+            # Clear speed tracking
+            emulator_state["speed_calc_time"] = None
+            emulator_state["speed_calc_instructions"] = None
             if emulator_thread:
                 emulator_thread.join()
                 emulator_thread = None
