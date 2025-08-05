@@ -32,15 +32,21 @@ class TestEmulatorStateUpdates(unittest.TestCase):
             "is_running": False,
             "last_update_time": 0,
             "last_update_instructions": 0,
-            "screen_data": None,
+            "screen": None,
             "registers": {},
             "flags": {},
-            "instruction_count": 0
+            "instruction_count": 0,
+            "instruction_history": [],
+            "speed_calc_time": None,
+            "speed_calc_instructions": None,
+            "emulation_speed": None,
+            "speed_ratio": None
         }
         
         # Create mock emulator
         self.mock_emulator = Mock()
         self.mock_emulator.instruction_count = 0
+        self.mock_emulator.instruction_history = []
         self.mock_emulator.get_cpu_state.return_value = {
             'pc': 0x100,
             'a': 0x00,

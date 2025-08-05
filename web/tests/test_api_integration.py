@@ -244,12 +244,10 @@ class TestAPIIntegration(unittest.TestCase):
         """Test API behavior when emulator is not initialized."""
         # Save original values
         original_emulator = app_module.emulator
-        original_keyboard = app_module.keyboard_handler
         
         try:
-            # Make emulator and keyboard handler None
+            # Make emulator None
             app_module.emulator = None
-            app_module.keyboard_handler = None
             
             # Key endpoint should return error
             response = self.client.post('/api/v1/key',
@@ -273,7 +271,6 @@ class TestAPIIntegration(unittest.TestCase):
         finally:
             # Restore original values
             app_module.emulator = original_emulator
-            app_module.keyboard_handler = original_keyboard
 
 
 if __name__ == '__main__':
