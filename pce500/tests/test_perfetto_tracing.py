@@ -130,6 +130,9 @@ class TestTraceEvents:
     
     def test_begin_end_function(self, mock_perfetto):
         """Test function begin/end tracing."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
@@ -145,6 +148,9 @@ class TestTraceEvents:
     
     def test_trace_instant(self, mock_perfetto):
         """Test instant event tracing."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
@@ -160,6 +166,9 @@ class TestTraceEvents:
     
     def test_trace_jump(self, mock_perfetto):
         """Test jump tracing."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
@@ -173,6 +182,9 @@ class TestTraceEvents:
     
     def test_trace_counter(self, mock_perfetto):
         """Test counter event tracing."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
@@ -186,6 +198,9 @@ class TestTraceEvents:
     
     def test_flow_events(self, mock_perfetto):
         """Test flow begin/end events."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
             g_tracer.start_tracing(f.name)
             
