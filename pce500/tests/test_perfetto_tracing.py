@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import threading
 import time
 
-from pce500.trace_manager import TraceManager, g_tracer, ENABLE_PERFETTO_TRACING, RETROBUS_PERFETTO_AVAILABLE
+from pce500.trace_manager import TraceManager, g_tracer, RETROBUS_PERFETTO_AVAILABLE
 
 
 class TestTraceManager:
