@@ -83,7 +83,8 @@ class PCE500Emulator:
         self.instruction_history: deque = deque(maxlen=100)
 
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
-        start_address = start_address or self.INTERNAL_ROM_START
+        if start_address is None:
+            start_address = self.INTERNAL_ROM_START
         if start_address in (self.INTERNAL_ROM_START, 0xC0000):
             self.memory.load_rom(rom_data)
         else:
