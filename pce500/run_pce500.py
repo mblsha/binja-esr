@@ -2,6 +2,7 @@
 """Example script to run PC-E500 emulator."""
 
 import sys
+import time
 from pathlib import Path
 
 # Add parent directory to path
@@ -11,10 +12,11 @@ from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
-def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True, 
-                 perfetto_trace=True, print_stats=True):
+def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
+                 perfetto_trace=True, print_stats=True, timeout_secs: float = 10.0,
+                 keyboard_impl: str = 'compat'):
     """Run PC-E500 emulator and return the instance.
-    
+
     Args:
         num_steps: Number of instructions to execute
         dump_pc: PC address to trigger memory dump
@@ -22,14 +24,14 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
         save_lcd: Save LCD display on exit
         perfetto_trace: Enable Perfetto tracing
         print_stats: Print statistics to stdout
-        
+
     Returns:
         PCE500Emulator: The emulator instance after running
     """
     # Create emulator
-    emu = PCE500Emulator(trace_enabled=True, perfetto_trace=perfetto_trace, 
-                         save_lcd_on_exit=save_lcd)
-    
+    emu = PCE500Emulator(trace_enabled=True, perfetto_trace=perfetto_trace,
+                         save_lcd_on_exit=save_lcd, keyboard_impl=keyboard_impl)
+
     if print_stats:
         print("Created emulator with Perfetto tracing enabled" if perfetto_trace else "Created emulator")
         if perfetto_trace:
@@ -61,9 +63,17 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
 
     if print_stats:
         print(f"Running {num_steps} instructions...")
-    
+
+    # Abort run after timeout_secs to avoid long hangs
+    start_time = time.perf_counter()
+    timed_out = False
     for _ in range(num_steps):
         emu.step()
+        if (time.perf_counter() - start_time) > timeout_secs:
+            timed_out = True
+            if print_stats:
+                print(f"ERROR: Aborting run after {timeout_secs:.0f}s timeout", file=sys.stderr)
+            break
 
     if print_stats:
         print(f"Executed {emu.instruction_count} instructions")
@@ -82,7 +92,7 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
         print(f"  Display on: {emu.lcd.display_on}")
         print(f"  Page: {emu.lcd.page}")
         print(f"  Column: {emu.lcd.column}")
-        
+
         # Display detailed statistics for each chip
         print("\nDetailed LCD Chip Statistics:")
         print(f"  Chip select usage: BOTH={emu.lcd.cs_both_count}, LEFT={emu.lcd.cs_left_count}, RIGHT={emu.lcd.cs_right_count}")
@@ -97,15 +107,33 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
             print(f"    Data bytes read: {stat['data_read']}")
             print(f"    Current page: {stat['page']}")
             print(f"    Current column: {stat['column']}")
-    
+
+        # Flag the emulator if we timed out so callers can fail with non-zero exit
+        setattr(emu, "_timed_out", timed_out)
+        # If available, print IMEM register access tracking for KOL/KOH/KIL
+        try:
+            tracking = emu.memory.get_imem_access_tracking()
+            for reg in ("KOL", "KOH", "KIL"):
+                if reg in tracking:
+                    reads = sum(c for _, c in tracking[reg]["reads"]) if tracking[reg]["reads"] else 0
+                    writes = sum(c for _, c in tracking[reg]["writes"]) if tracking[reg]["writes"] else 0
+                    print(f"IMEM {reg}: reads={reads} writes={writes}")
+        except Exception:
+            pass
+
     return emu
 
 
-def main(dump_pc=None, no_dump=False, save_lcd=True):
+def main(dump_pc=None, no_dump=False, save_lcd=True, perfetto=True, keyboard_impl='compat'):
     """Example with Perfetto tracing enabled."""
     # Use context manager for automatic cleanup
-    with run_emulator(dump_pc=dump_pc, no_dump=no_dump, save_lcd=save_lcd):
+    with run_emulator(dump_pc=dump_pc, no_dump=no_dump, save_lcd=save_lcd,
+                      perfetto_trace=perfetto, keyboard_impl=keyboard_impl) as emu:
         pass  # Everything is done in run_emulator
+
+    # Exit with error if we hit the timeout
+    if getattr(emu, "_timed_out", False):
+        sys.exit(1)
 
 
 
@@ -119,5 +147,10 @@ if __name__ == "__main__":
                         help="Disable internal memory dumps entirely")
     parser.add_argument("--no-lcd", action='store_true',
                         help="Don't save LCD displays as PNG files on exit")
+    parser.add_argument("--no-perfetto", action='store_true',
+                        help="Disable Perfetto tracing to isolate performance effects")
+    parser.add_argument("--keyboard", choices=["compat","hardware"], default="compat",
+                        help="Select keyboard implementation (default: compat)")
     args = parser.parse_args()
-    main(dump_pc=args.dump_pc, no_dump=args.no_dump, save_lcd=not args.no_lcd)
+    main(dump_pc=args.dump_pc, no_dump=args.no_dump, save_lcd=not args.no_lcd,
+         perfetto=not args.no_perfetto, keyboard_impl=args.keyboard)

@@ -113,7 +113,8 @@ const KEYBOARD_LEFT = [
         { key: 'KEY_M', label: 'M' },
         { key: 'KEY_COMMA', label: ',' },
         { key: 'KEY_SEMICOLON', label: ';' },
-        { key: 'KEY_ENTER', label: '↵', class: 'tall-enter', rowspan: 2 }
+        // Map the tall Enter to '=' to integrate with matrix
+        { key: 'KEY_EQUALS', label: '↵', class: 'tall-enter', rowspan: 2 }
     ],
     // Row 5: Control row
     [
@@ -544,8 +545,8 @@ document.addEventListener('keydown', (e) => {
         'ArrowDown': 'KEY_DOWN',
         'ArrowLeft': 'KEY_LEFT',
         'ArrowRight': 'KEY_RIGHT',
-        'Delete': 'KEY_DEL',
-        'Insert': 'KEY_INS',
+        'Delete': 'KEY_DELETE',
+        'Insert': 'KEY_INSERT',
         // Add letter keys
         ...Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ').reduce((acc, letter) => {
             acc[letter] = `KEY_${letter}`;
@@ -578,8 +579,8 @@ document.addEventListener('keyup', (e) => {
         'ArrowDown': 'KEY_DOWN',
         'ArrowLeft': 'KEY_LEFT',
         'ArrowRight': 'KEY_RIGHT',
-        'Delete': 'KEY_DEL',
-        'Insert': 'KEY_INS',
+        'Delete': 'KEY_DELETE',
+        'Insert': 'KEY_INSERT',
         // Add letter keys
         ...Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ').reduce((acc, letter) => {
             acc[letter] = `KEY_${letter}`;

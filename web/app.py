@@ -73,7 +73,8 @@ def initialize_emulator():
     
     # Create emulator instance
     with emulator_lock:
-        emulator = PCE500Emulator(trace_enabled=False, perfetto_trace=False, save_lcd_on_exit=False)
+        # Use hardware-accurate keyboard for the web UI to match ROM scanning
+        emulator = PCE500Emulator(trace_enabled=False, perfetto_trace=False, save_lcd_on_exit=False, keyboard_impl='hardware')
         emulator.load_rom(rom_portion)
         
         # Reset to properly set PC from the now-loaded ROM entry point

@@ -31,21 +31,39 @@ class KeyboardHardware:
     including proper column strobing and row reading.
     """
     
-    def __init__(self, memory_accessor: Callable[[int], int]):
+    def __init__(self, memory_accessor: Callable[[int], int], *, active_low: bool = True):
         """Initialize keyboard hardware.
         
         Args:
             memory_accessor: Function to read from memory (for accessing LCC register)
         """
         self.memory = memory_accessor
+        self.active_low = active_low  # True = hardware-accurate active-low; False = active-high mode
         
         # State of output registers
-        self.kol_value = 0x00  # KO0-KO7 output state
-        self.koh_value = 0x00  # KO8-KO10 output state
+        # Default idle state: all outputs high (no columns strobed)
+        self.kol_value = 0xFF  # KO0-KO7 output state (active-low)
+        self.koh_value = 0xFF  # KO8-KO10 output state (active-low)
         
         # 8x11 matrix state: matrix[row][column] = True if key pressed
         # Rows are KI0-KI7, Columns are KO0-KO10
         self.matrix_state = [[False for _ in range(11)] for _ in range(8)]
+        
+        # Per-column row masks for fast KIL computation (bit i set => KIi pressed in this column)
+        self._col_row_masks: List[int] = [0 for _ in range(11)]
+        
+        # Aggregate pressed rows across all columns (bit i set => some key in row i pressed)
+        self._rows_mask_all: int = 0x00
+        
+        # Cache for KIL computation
+        self._kil_dirty: bool = True
+        self._kil_cached: int = 0xFF
+        self._last_ksd: Optional[int] = None
+
+        # Lookup table: for each 11-bit output state (KOH[2:0]|KOL[7:0]),
+        # the OR of row masks for active columns. Rebuilt when matrix changes.
+        self._lookup_rows: List[int] = [0 for _ in range(1 << 11)]
+        self._lookup_dirty: bool = True
         
         # Keyboard layout matching hardware matrix
         self.KEYBOARD_LAYOUT: List[List[Optional[str]]] = [
@@ -135,7 +153,13 @@ class KeyboardHardware:
         """
         if key_code in self.key_locations:
             loc = self.key_locations[key_code]
-            self.matrix_state[loc.row][loc.column] = True
+            if not self.matrix_state[loc.row][loc.column]:
+                self.matrix_state[loc.row][loc.column] = True
+                # Update column mask and aggregates, mark KIL dirty
+                self._col_row_masks[loc.column] |= (1 << loc.row)
+                self._rows_mask_all |= (1 << loc.row)
+                self._kil_dirty = True
+                self._lookup_dirty = True
             return True
         return False
     
@@ -150,7 +174,17 @@ class KeyboardHardware:
         """
         if key_code in self.key_locations:
             loc = self.key_locations[key_code]
-            self.matrix_state[loc.row][loc.column] = False
+            if self.matrix_state[loc.row][loc.column]:
+                self.matrix_state[loc.row][loc.column] = False
+                # Update column mask and aggregates, mark KIL dirty
+                self._col_row_masks[loc.column] &= ~(1 << loc.row)
+                # Recompute aggregate rows mask (cheap, 11 columns)
+                mask = 0
+                for m in self._col_row_masks:
+                    mask |= m
+                self._rows_mask_all = mask & 0xFF
+                self._kil_dirty = True
+                self._lookup_dirty = True
             return True
         return False
     
@@ -159,6 +193,12 @@ class KeyboardHardware:
         for row in range(8):
             for col in range(11):
                 self.matrix_state[row][col] = False
+        # Clear masks and mark dirty
+        for col in range(11):
+            self._col_row_masks[col] = 0
+        self._rows_mask_all = 0
+        self._kil_dirty = True
+        self._lookup_dirty = True
     
     def write_register(self, offset: int, value: int) -> None:
         """Handle write to keyboard output register.
@@ -168,9 +208,15 @@ class KeyboardHardware:
             value: Byte value to write
         """
         if offset == KOL:
-            self.kol_value = value & 0xFF
+            new_val = value & 0xFF
+            if new_val != self.kol_value:
+                self.kol_value = new_val
+                self._kil_dirty = True
         elif offset == KOH:
-            self.koh_value = value & 0xFF
+            new_val = value & 0xFF
+            if new_val != self.koh_value:
+                self.koh_value = new_val
+                self._kil_dirty = True
     
     def read_register(self, offset: int) -> int:
         """Handle read from keyboard register.
@@ -186,47 +232,49 @@ class KeyboardHardware:
         elif offset == KOH:
             return self.koh_value
         elif offset == KIL:
-            return self._simulate_key_scan()
+            return self._read_kil_fast()
         return 0xFF
     
-    def _simulate_key_scan(self) -> int:
-        """Simulate hardware key scanning based on current KOL/KOH state.
-        
-        Returns:
-            KIL value representing which rows have pressed keys in active columns
-        """
-        # Check if keyboard strobing is disabled
+    def _read_kil_fast(self) -> int:
+        """Fast KIL read with caching and per-column masks."""
+        # Fast path: no keys pressed at all
+        if self._rows_mask_all == 0:
+            self._kil_cached = 0xFF
+            self._kil_dirty = False
+            return self._kil_cached
+
+        # Read KSD bit once (only if some key is pressed)
         lcc = self.memory(INTERNAL_MEMORY_START + LCC)
-        ksd_bit = (lcc >> 2) & 1  # KSD is bit 2 of LCC
+        ksd_bit = (lcc >> 2) & 1
+        # If KSD changed, mark dirty
+        if self._last_ksd is None or self._last_ksd != ksd_bit:
+            self._last_ksd = ksd_bit
+            self._kil_dirty = True
+        
         if ksd_bit:
-            # Keyboard strobing disabled - all KO lines forced low
-            # This means no columns are active, so no keys can be read
-            return 0xFF  # All bits high (no keys pressed)
+            # Strobing disabled: no columns active => no keys read
+            self._kil_cached = 0xFF if self.active_low else 0x00
+            self._kil_dirty = False
+            return self._kil_cached
+
+        if not self._kil_dirty:
+            return self._kil_cached
         
-        # Start with all input lines high (no keys pressed)
-        kil_value = 0xFF
+        # Ensure lookup is built if needed
+        if self._lookup_dirty:
+            self._rebuild_lookup()
+            self._lookup_dirty = False
+
+        idx = ((self.koh_value & 0x07) << 8) | (self.kol_value & 0xFF)
+        rows_mask = self._lookup_rows[idx]
+        if self.active_low:
+            kil_value = (~rows_mask) & 0xFF
+        else:
+            kil_value = rows_mask & 0xFF
         
-        # Check each column to see if it's being strobed (active low)
-        for col in range(11):
-            is_active = False
-            
-            if col < 8:  # KO0-KO7 controlled by KOL
-                # Column is active if its bit is LOW (active-low logic)
-                if not (self.kol_value & (1 << col)):
-                    is_active = True
-            else:  # KO8-KO10 controlled by KOH
-                bit_index = col - 8
-                if not (self.koh_value & (1 << bit_index)):
-                    is_active = True
-            
-            if is_active:
-                # This column is being strobed - check for pressed keys
-                for row in range(8):
-                    if self.matrix_state[row][col]:
-                        # Key is pressed - pull the corresponding KI line low
-                        kil_value &= ~(1 << row)
-        
-        return kil_value
+        self._kil_cached = kil_value
+        self._kil_dirty = False
+        return self._kil_cached
     
     def get_pressed_keys(self) -> List[str]:
         """Get list of currently pressed key codes.
@@ -276,12 +324,33 @@ class KeyboardHardware:
         return {
             'kol': f'0x{self.kol_value:02X}',
             'koh': f'0x{self.koh_value:02X}',
-            'kil': f'0x{self._simulate_key_scan():02X}',
+            'kil': f'0x{self._read_kil_fast():02X}',
             'active_columns': self.get_active_columns(),
             'pressed_keys': self.get_pressed_keys(),
             'ksd_enabled': bool((self.memory(INTERNAL_MEMORY_START + LCC) >> 2) & 1),
             'selected_columns': self._get_selected_columns()  # For compatibility
         }
+
+    def _rebuild_lookup(self) -> None:
+        """Recompute lookup table mapping output state to active rows mask."""
+        # For each possible output state, OR row masks for active columns
+        for idx in range(1 << 11):
+            kol = idx & 0xFF
+            koh = (idx >> 8) & 0x07
+            rows = 0
+            # KO0..KO7
+            for col in range(8):
+                bit = (kol >> col) & 1
+                active = (bit == 0) if self.active_low else (bit == 1)
+                if active:
+                    rows |= self._col_row_masks[col]
+            # KO8..KO10 from KOH bits 0..2
+            for col in range(3):
+                bit = (koh >> col) & 1
+                active = (bit == 0) if self.active_low else (bit == 1)
+                if active:
+                    rows |= self._col_row_masks[col + 8]
+            self._lookup_rows[idx] = rows & 0xFF
     
     def get_queue_info(self) -> List[Dict[str, any]]:
         """Get information about pressed keys (for web UI compatibility).

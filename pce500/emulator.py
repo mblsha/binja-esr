@@ -18,6 +18,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
+from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
 
 # Define constants locally to avoid heavy imports
@@ -35,19 +36,24 @@ class PCE500Emulator:
     MEMORY_DUMP_PC = 0x0F119C
     MEMORY_DUMP_DIR = "."
 
-    def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False, 
-                 save_lcd_on_exit: bool = True):
+    def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False,
+                 save_lcd_on_exit: bool = True, keyboard_impl: str = 'compat'):
         self.instruction_count = 0
         self.memory_read_count = 0
         self.memory_write_count = 0
         self.save_lcd_on_exit = save_lcd_on_exit
-        
+
         self.memory = PCE500Memory()
         self.memory._emulator = self  # Set reference for tracking counters
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
-        
-        self.keyboard = KeyboardCompat()
+
+        # Select keyboard implementation.
+        # Default is 'compat' to preserve CLI/tests behavior and performance.
+        if keyboard_impl == 'hardware':
+            self.keyboard = KeyboardHardware(self.memory.read_byte)
+        else:
+            self.keyboard = KeyboardCompat()
         self.memory.add_overlay(MemoryOverlay(
             start=INTERNAL_MEMORY_START + KOL,
             end=INTERNAL_MEMORY_START + KIL,
@@ -60,7 +66,7 @@ class PCE500Emulator:
 
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
-        
+
         if any(o.name == 'internal_rom' for o in self.memory.overlays):
             self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
 
@@ -128,9 +134,14 @@ class PCE500Emulator:
             eval_info = self.cpu.execute_instruction(pc)
             self.cycle_count += 1
             self.instruction_count += 1
-            
-            from binja_test_mocks.tokens import asm_str
-            self.instruction_history.append({"pc": f"0x{pc:06X}", "disassembly": asm_str(eval_info.instruction.render())})
+
+            # Only compute disassembly when tracing is enabled to avoid overhead
+            if self.trace is not None:
+                from binja_test_mocks.tokens import asm_str
+                self.instruction_history.append({
+                    "pc": f"0x{pc:06X}",
+                    "disassembly": asm_str(eval_info.instruction.render())
+                })
 
             if self.perfetto_enabled:
                 self._trace_execution(pc, opcode)
@@ -154,7 +165,7 @@ class PCE500Emulator:
 
     def add_breakpoint(self, address: int) -> None:
         self.breakpoints.add(address & 0xFFFFFF)
-        
+
     def set_memory_dump_pc(self, address: int) -> None:
         self.MEMORY_DUMP_PC = address & 0xFFFFFF
         print(f"Internal memory dump will trigger at PC=0x{self.MEMORY_DUMP_PC:06X}")
@@ -183,7 +194,7 @@ class PCE500Emulator:
 
     def get_display_buffer(self):
         return self.lcd.get_display_buffer()
-        
+
     def save_lcd_displays(self, combined_filename: str = "lcd_display.png", save_individual: bool = False) -> None:
         self.lcd.get_combined_display(zoom=2).save(combined_filename)
         print(f"LCD display saved to {combined_filename}")
@@ -231,14 +242,14 @@ class PCE500Emulator:
     def _trace_control_flow(self, pc_before: int, eval_info):
         instr = eval_info.instruction
         pc_after = self.cpu.regs.get(RegisterName.PC)
-        
+
         if isinstance(instr, CALL):
             dest_addr = instr.dest_addr(pc_before)
             event = g_tracer.begin_function("CPU", dest_addr, pc_before, f"func_0x{dest_addr:05X}")
             self.call_depth += 1
             self._add_register_annotations(event)
             g_tracer.trace_instant("CPU", "call", {"from": f"0x{pc_before:06X}", "to": f"0x{dest_addr:05X}", "depth": self.call_depth})
-        
+
         elif isinstance(instr, RetInstruction):
             g_tracer.end_function("CPU", pc_before)
             self.call_depth = max(0, self.call_depth - 1)
@@ -287,12 +298,19 @@ class PCE500Emulator:
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         offset = address - INTERNAL_MEMORY_START
         self._track_imem_access(offset, "reads", cpu_pc)
+        # Support both compat and hardware keyboard APIs
+        if hasattr(self.keyboard, 'read_register'):
+            return self.keyboard.read_register(offset)
         return self.keyboard.handle_register_read(offset)
-    
+
     def _keyboard_write_handler(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         offset = address - INTERNAL_MEMORY_START
         self._track_imem_access(offset, "writes", cpu_pc)
-        self.keyboard.handle_register_write(offset, value)
+        # Support both compat and hardware keyboard APIs
+        if hasattr(self.keyboard, 'write_register'):
+            self.keyboard.write_register(offset, value)
+        else:
+            self.keyboard.handle_register_write(offset, value)
 
     def _dump_internal_memory(self, pc: int):
         internal_mem = self.memory.get_internal_memory_bytes()
