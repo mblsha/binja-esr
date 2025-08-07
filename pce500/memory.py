@@ -56,6 +56,9 @@ class PCE500Memory:
         # Each entry is a list of (PC, count) tuples
         self.imem_access_tracking: Dict[str, Dict[str, List[Tuple[int, int]]]] = {}
         
+        # Reference to emulator for tracking counters
+        self._emulator = None
+        
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
         
@@ -63,6 +66,10 @@ class PCE500Memory:
             address: Memory address to read from
             cpu_pc: Optional CPU program counter for tracing context
         """
+        # Track memory reads
+        if self._emulator:
+            self._emulator.memory_read_count += 1
+            
         address &= 0xFFFFFF  # 24-bit address space
         
         # Check for SC62015 internal memory (0x100000-0x1000FF)
@@ -128,6 +135,10 @@ class PCE500Memory:
             value: Byte value to write
             cpu_pc: Optional CPU program counter for tracing context
         """
+        # Track memory writes
+        if self._emulator:
+            self._emulator.memory_write_count += 1
+            
         address &= 0xFFFFFF  # 24-bit address space
         value &= 0xFF
         
@@ -422,3 +433,36 @@ class PCE500Memory:
     def clear_imem_access_tracking(self) -> None:
         """Clear all IMEM register access tracking data."""
         self.imem_access_tracking.clear()
+    
+    def read_bytes(self, address: int, size: int) -> int:
+        """Read bytes according to binja_test_mocks.eval_llil.Memory interface.
+        
+        Args:
+            address: Memory address to read from
+            size: Number of bytes to read
+            
+        Returns:
+            Value as integer (little-endian)
+        """
+        result = 0
+        for i in range(size):
+            byte_val = self.read_byte(address + i)
+            result |= byte_val << (i * 8)
+        return result
+    
+    def write_bytes(self, size: int, address: int, value: int) -> None:
+        """Write bytes according to binja_test_mocks.eval_llil.Memory interface.
+        
+        Args:
+            size: Number of bytes to write
+            address: Memory address to write to
+            value: Value to write (as integer, little-endian)
+        """
+        for i in range(size):
+            byte_value = (value >> (i * 8)) & 0xFF
+            self.write_byte(address + i, byte_value)
+    
+    def set_context(self, context: dict) -> None:
+        """Set context for memory operations (compatibility method)."""
+        # Context is handled through cpu_pc parameter in read/write methods
+        pass
