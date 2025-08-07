@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import threading
 import time
 
-from pce500.trace_manager import TraceManager, g_tracer, ENABLE_PERFETTO_TRACING
+from pce500.trace_manager import TraceManager, g_tracer, ENABLE_PERFETTO_TRACING, RETROBUS_PERFETTO_AVAILABLE
 
 
 class TestTraceManager:
@@ -22,8 +22,8 @@ class TestTraceManager:
     
     def test_start_stop_tracing(self):
         """Test starting and stopping tracing."""
-        if not ENABLE_PERFETTO_TRACING:
-            pytest.skip("Tracing is disabled")
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
             
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
             trace_path = f.name
@@ -48,6 +48,9 @@ class TestTraceManager:
     
     def test_timestamp_monotonic(self):
         """Test that timestamps are monotonically increasing."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', True):
             if not g_tracer.is_tracing():
                 with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
@@ -201,6 +204,9 @@ class TestCallStackTracking:
     
     def test_call_stack_depth_limits(self):
         """Test that call stack respects depth limits."""
+        if not RETROBUS_PERFETTO_AVAILABLE:
+            pytest.skip("retrobus_perfetto module not available")
+            
         with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
             g_tracer.start_tracing(f.name)
         
