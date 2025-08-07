@@ -12,10 +12,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Deque, Dict, Optional, Union
 
-from retrobus_perfetto import PerfettoTraceBuilder
+try:
+    from retrobus_perfetto import PerfettoTraceBuilder
+    RETROBUS_PERFETTO_AVAILABLE = True
+except ImportError:
+    PerfettoTraceBuilder = None
+    RETROBUS_PERFETTO_AVAILABLE = False
 
 # Configuration flag to enable/disable tracing
-ENABLE_PERFETTO_TRACING = True
+ENABLE_PERFETTO_TRACING = RETROBUS_PERFETTO_AVAILABLE
 
 
 class TraceEventType(Enum):
@@ -88,6 +93,9 @@ class TraceManager:
                 return False
                 
             try:
+                if not RETROBUS_PERFETTO_AVAILABLE:
+                    raise RuntimeError("retrobus_perfetto module is not available. Please install it with: pip install -e ./pce500/third_party/retrobus-perfetto/py")
+                    
                 output_path = Path(output_path)
                 
                 # Create trace builder

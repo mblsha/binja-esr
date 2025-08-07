@@ -9,8 +9,12 @@ from pce500 import PCE500Emulator
 @pytest.fixture
 def emulator():
     """Create a PC-E500 emulator with Perfetto tracing enabled."""
-    # Create emulator with tracing
-    emu = PCE500Emulator(perfetto_trace=True)
+    # Try to create emulator with tracing, fall back to no tracing if not available
+    try:
+        emu = PCE500Emulator(perfetto_trace=True)
+    except RuntimeError:
+        # Perfetto not available, skip these tests
+        pytest.skip("Perfetto tracing not available")
     yield emu
     # Cleanup
     emu.stop_tracing()

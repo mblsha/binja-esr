@@ -23,6 +23,11 @@ class TestEmulatorPerformance:
         3. LCD controller statistics are within expected ranges
         4. Memory operation counts are reasonable
         """
+        # Check if ROM file exists
+        rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+        if not rom_path.exists():
+            pytest.skip(f"ROM file not found at {rom_path}")
+            
         # Record start time
         start_time = time.time()
         

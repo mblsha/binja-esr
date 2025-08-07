@@ -176,7 +176,7 @@ class TestSimplifiedEmulator:
         """Test MV (EC), C2 instruction execution - opcode 30ccecc2."""
         from sc62015.pysc62015.instr.opcodes import IMEMRegisters
         
-        emu = PCE500Emulator(perfetto_trace=True)
+        emu = PCE500Emulator(perfetto_trace=False)
         
         # Setup ROM with the MV (EC), C2 instruction (opcode: 30ccecc2)
         rom_data = bytearray(256 * 1024)

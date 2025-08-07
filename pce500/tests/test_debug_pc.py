@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import pytest
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.instr import decode, OPCODES
 from sc62015.pysc62015.emulator import RegisterName
@@ -12,6 +13,8 @@ from sc62015.pysc62015.emulator import RegisterName
 def test_debug_pc():
     """Debug why PC isn't advancing."""
     rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+    if not rom_path.exists():
+        pytest.skip(f"ROM file not found at {rom_path}")
     
     # Create emulator and load ROM
     emu = PCE500Emulator()

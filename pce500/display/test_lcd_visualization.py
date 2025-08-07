@@ -7,7 +7,6 @@ from PIL import Image
 # Import the library to be tested
 from . import lcd_visualization as lv
 from .hd61202 import Instruction, ChipSelect
-from .lcd_visualization import perfetto_pb2
 
 # --- Test Cases for command parsing ---
 @pytest.mark.parametrize("test_id, in_addr, in_data, out_cs, out_instr, out_data", [
@@ -40,7 +39,9 @@ def test_parse_command_invalid_input():
 
 def create_dummy_trace_file(path: Path) -> Path:
     """Creates a small, valid Perfetto trace file for testing."""
-    trace = perfetto_pb2.Trace()
+    if not lv.PERFETTO_AVAILABLE:
+        pytest.skip("Perfetto support not available")
+    trace = lv.perfetto_pb2.Trace()
     
     # 1. Define the 'Display' thread
     packet_thread = trace.packet.add()
