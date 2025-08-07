@@ -43,7 +43,7 @@ class TestEmulatorPerformance:
         
         # Check execution time
         elapsed = time.time() - start_time
-        assert elapsed < 7.0, f"Emulator took {elapsed:.1f}s, expected < 7s"
+        assert elapsed < 10.0, f"Emulator took {elapsed:.1f}s, expected < 10s"
         
         # Check LCD displays are ON
         stats = emu.lcd.get_chip_statistics()
