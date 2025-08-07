@@ -371,6 +371,8 @@ class PCE500KeyboardHandler:
                 'key_code': queued_key.key_code,
                 'column': queued_key.column,
                 'row': queued_key.row,
+                'ko_label': f'KO{queued_key.column}',
+                'ki_label': f'KI{queued_key.row}',
                 'kol': f'0x{queued_key.required_kol:02X}',
                 'koh': f'0x{queued_key.required_koh:02X}',
                 'kil': f'0x{queued_key.target_kil:02X}',

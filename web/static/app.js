@@ -913,7 +913,7 @@ async function updateKeyQueue() {
         if (data.queue.length === 0) {
             const row = document.createElement('tr');
             const cell = document.createElement('td');
-            cell.colSpan = 6;
+            cell.colSpan = 8;
             cell.textContent = 'No keys in queue';
             cell.style.textAlign = 'center';
             cell.style.fontStyle = 'italic';
@@ -927,6 +927,16 @@ async function updateKeyQueue() {
                 const keyCell = document.createElement('td');
                 keyCell.textContent = key.key_code;
                 row.appendChild(keyCell);
+                
+                // KO label
+                const koCell = document.createElement('td');
+                koCell.textContent = key.ko_label;
+                row.appendChild(koCell);
+                
+                // KI label
+                const kiCell = document.createElement('td');
+                kiCell.textContent = key.ki_label;
+                row.appendChild(kiCell);
                 
                 // KOL
                 const kolCell = document.createElement('td');
