@@ -14,8 +14,11 @@ from typing import Any, Deque, Dict, Optional, Union
 
 try:
     from retrobus_perfetto import PerfettoTraceBuilder
+    # Try to create a trace builder to verify protobuf files are built
+    test_builder = PerfettoTraceBuilder("test")
+    del test_builder
     RETROBUS_PERFETTO_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception):
     PerfettoTraceBuilder = None
     RETROBUS_PERFETTO_AVAILABLE = False
 
