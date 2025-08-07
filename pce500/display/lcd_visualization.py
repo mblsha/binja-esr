@@ -18,16 +18,18 @@ from .hd61202 import (
 # Attempt to import the Perfetto protobuf definitions
 try:
     from retrobus_perfetto.proto import perfetto_pb2
+    PERFETTO_AVAILABLE = True
 except ImportError:
-    print("Error: Could not import 'perfetto_pb2'.", file=sys.stderr)
-    print("Please ensure 'retrobus-perfetto' is installed.", file=sys.stderr)
-    print("Hint: `pip install -e ./third_party/retrobus-perfetto/py`", file=sys.stderr)
-    sys.exit(1)
+    perfetto_pb2 = None
+    PERFETTO_AVAILABLE = False
 
 # --- Perfetto Trace Parsing ---
 
-def load_perfetto_trace(trace_path: str) -> Optional[perfetto_pb2.Trace]:
+def load_perfetto_trace(trace_path: str) -> Optional['perfetto_pb2.Trace']:
     """Loads a Perfetto protobuf trace file into a Trace message object."""
+    if not PERFETTO_AVAILABLE:
+        print("Error: Perfetto support is not available. Please install retrobus-perfetto.", file=sys.stderr)
+        return None
     trace = perfetto_pb2.Trace()
     try:
         with open(trace_path, 'rb') as f:
@@ -41,7 +43,7 @@ def load_perfetto_trace(trace_path: str) -> Optional[perfetto_pb2.Trace]:
         print(f"Error parsing trace file: {e}", file=sys.stderr)
         return None
 
-def find_all_threads(trace: perfetto_pb2.Trace) -> Dict[str, int]:
+def find_all_threads(trace: 'perfetto_pb2.Trace') -> Dict[str, int]:
     """Finds all thread descriptors in a trace and maps their names to UUIDs."""
     found_threads = {}
     for packet in trace.packet:
@@ -53,14 +55,14 @@ def find_all_threads(trace: perfetto_pb2.Trace) -> Dict[str, int]:
                     found_threads[thread_name] = desc.uuid
     return found_threads
 
-def extract_events_from_thread(trace: perfetto_pb2.Trace, target_track_uuid: int) -> List[perfetto_pb2.TracePacket]:
+def extract_events_from_thread(trace: 'perfetto_pb2.Trace', target_track_uuid: int) -> List['perfetto_pb2.TracePacket']:
     """Extracts all trace packets for a given track UUID."""
     return [
         packet for packet in trace.packet
         if packet.HasField('track_event') and packet.track_event.track_uuid == target_track_uuid
     ]
 
-def extract_annotations(event: perfetto_pb2.TrackEvent) -> Dict[str, str]:
+def extract_annotations(event: 'perfetto_pb2.TrackEvent') -> Dict[str, str]:
     """Extracts debug annotations from a track event into a dictionary."""
     annotations = {}
     for annotation in event.debug_annotations:
@@ -148,6 +150,12 @@ def generate_lcd_image_from_trace(trace_path: str, zoom: int = 2) -> Optional[Im
 # --- Command-Line Interface ---
 def main():
     """Main function for command-line execution."""
+    if not PERFETTO_AVAILABLE:
+        print("Error: Perfetto support is not available.", file=sys.stderr)
+        print("Please install retrobus-perfetto:", file=sys.stderr)
+        print("  pip install -e ./third_party/retrobus-perfetto/py", file=sys.stderr)
+        sys.exit(1)
+    
     parser = argparse.ArgumentParser(
         description="Convert a Perfetto trace with LCD data to a PNG image."
     )
