@@ -43,7 +43,7 @@ UPDATE_TIME_THRESHOLD = 0.1  # 100ms (10fps)
 UPDATE_INSTRUCTION_THRESHOLD = 100000  # 100k instructions
 
 # Trace file path
-TRACE_PATH = "pc-e500.trace.json"
+TRACE_PATH = "pc-e500.perfetto-trace"
 
 
 def initialize_emulator():
@@ -440,7 +440,7 @@ def trace_download():
     """Download the trace file."""
     trace_file = Path(TRACE_PATH)
     if trace_file.exists():
-        return send_file(str(trace_file), as_attachment=True, download_name="pc-e500.trace.json")
+        return send_file(str(trace_file), as_attachment=True, download_name="pc-e500.perfetto-trace")
     else:
         return jsonify({"error": "Trace file not found"}), 404
 

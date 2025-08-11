@@ -14,7 +14,7 @@ from sc62015.pysc62015.emulator import RegisterName
 
 def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
                  perfetto_trace=True, print_stats=True, timeout_secs: float = 10.0,
-                 keyboard_impl: str = 'compat', new_perfetto=False, trace_file="pc-e500.trace.json"):
+                 keyboard_impl: str = 'compat', new_perfetto=False, trace_file="pc-e500.perfetto-trace"):
     """Run PC-E500 emulator and return the instance.
 
     Args:
@@ -138,7 +138,7 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
 
 
 def main(dump_pc=None, no_dump=False, save_lcd=True, perfetto=True, keyboard_impl='compat',
-         new_perfetto=False, trace_file="pc-e500.trace.json"):
+         new_perfetto=False, trace_file="pc-e500.perfetto-trace"):
     """Example with Perfetto tracing enabled."""
     # Use context manager for automatic cleanup
     with run_emulator(dump_pc=dump_pc, no_dump=no_dump, save_lcd=save_lcd,
@@ -168,8 +168,8 @@ if __name__ == "__main__":
                         help="Select keyboard implementation (default: compat)")
     parser.add_argument("--perfetto", action='store_true',
                         help="Enable new Perfetto tracing (wall-clock time)")
-    parser.add_argument("--trace-file", default="pc-e500.trace.json",
-                        help="Path to write trace JSON (default: pc-e500.trace.json)")
+    parser.add_argument("--trace-file", default="pc-e500.perfetto-trace",
+                        help="Path to write trace file (default: pc-e500.perfetto-trace)")
     args = parser.parse_args()
     main(dump_pc=args.dump_pc, no_dump=args.no_dump, save_lcd=not args.no_lcd,
          perfetto=not args.no_perfetto, keyboard_impl=args.keyboard,

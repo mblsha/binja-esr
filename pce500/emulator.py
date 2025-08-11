@@ -51,7 +51,7 @@ class PCE500Emulator:
 
     def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False,
                  save_lcd_on_exit: bool = True, keyboard_impl: str = 'compat',
-                 enable_new_tracing: bool = False, trace_path: str = "pc-e500.trace.json"):
+                 enable_new_tracing: bool = False, trace_path: str = "pc-e500.perfetto-trace"):
         self.instruction_count = 0
         self.memory_read_count = 0
         self.memory_write_count = 0
