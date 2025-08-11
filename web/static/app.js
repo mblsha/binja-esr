@@ -310,6 +310,10 @@ function setupControls() {
     document.getElementById('btn-pause').addEventListener('click', handlePause);
     document.getElementById('btn-step').addEventListener('click', handleStep);
     document.getElementById('btn-reset').addEventListener('click', handleReset);
+    
+    // Trace controls
+    document.getElementById('btn-trace-start').addEventListener('click', handleTraceStart);
+    document.getElementById('btn-trace-stop').addEventListener('click', handleTraceStop);
 }
 
 // Control button handlers
@@ -381,6 +385,43 @@ function updateControlButtons() {
     document.getElementById('btn-run').disabled = isRunning;
     document.getElementById('btn-pause').disabled = !isRunning;
     document.getElementById('btn-step').disabled = isRunning;
+}
+
+// Trace control handlers
+async function handleTraceStart() {
+    try {
+        const response = await fetch('/trace/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await response.json();
+        if (data.ok) {
+            document.getElementById('btn-trace-start').disabled = true;
+            document.getElementById('btn-trace-stop').disabled = false;
+            document.getElementById('trace-download').style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error starting trace:', error);
+    }
+}
+
+async function handleTraceStop() {
+    try {
+        const response = await fetch('/trace/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await response.json();
+        if (data.ok) {
+            document.getElementById('btn-trace-start').disabled = false;
+            document.getElementById('btn-trace-stop').disabled = true;
+            document.getElementById('trace-download').style.display = 'inline-block';
+        }
+    } catch (error) {
+        console.error('Error stopping trace:', error);
+    }
 }
 
 // Handle keyboard input

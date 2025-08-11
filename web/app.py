@@ -8,12 +8,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, jsonify, request, render_template, send_from_directory
+from flask import Flask, jsonify, request, render_template, send_from_directory, send_file
 from flask_cors import CORS
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from pce500 import PCE500Emulator
+from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for API endpoints
@@ -40,6 +41,9 @@ emulator_state = {
 # Update thresholds
 UPDATE_TIME_THRESHOLD = 0.1  # 100ms (10fps)
 UPDATE_INSTRUCTION_THRESHOLD = 100000  # 100k instructions
+
+# Trace file path
+TRACE_PATH = "pc-e500.trace.json"
 
 
 def initialize_emulator():
@@ -401,6 +405,54 @@ def control_emulator():
             
         else:
             return jsonify({"error": f"Unknown command: {command}"}), 400
+
+
+@app.route('/trace/start', methods=['POST'])
+def trace_start():
+    """Start Perfetto tracing."""
+    global emulator
+    
+    with emulator_lock:
+        if emulator and not perfetto_tracer.enabled:
+            # Enable tracing in the emulator
+            emulator._new_trace_enabled = True
+            emulator._trace_path = TRACE_PATH
+            perfetto_tracer.start(TRACE_PATH)
+            return jsonify({"ok": True, "enabled": True, "path": TRACE_PATH})
+        elif perfetto_tracer.enabled:
+            return jsonify({"ok": True, "enabled": True, "path": TRACE_PATH, "message": "Already tracing"})
+        else:
+            return jsonify({"ok": False, "error": "Emulator not initialized"}), 500
+
+
+@app.route('/trace/stop', methods=['POST'])
+def trace_stop():
+    """Stop Perfetto tracing."""
+    if perfetto_tracer.enabled:
+        perfetto_tracer.stop()
+        return jsonify({"ok": True, "enabled": False, "path": TRACE_PATH})
+    else:
+        return jsonify({"ok": True, "enabled": False, "message": "Not currently tracing"})
+
+
+@app.route('/trace/download', methods=['GET'])
+def trace_download():
+    """Download the trace file."""
+    trace_file = Path(TRACE_PATH)
+    if trace_file.exists():
+        return send_file(str(trace_file), as_attachment=True, download_name="pc-e500.trace.json")
+    else:
+        return jsonify({"error": "Trace file not found"}), 404
+
+
+@app.route('/trace/status', methods=['GET'])
+def trace_status():
+    """Get current trace status."""
+    return jsonify({
+        "enabled": perfetto_tracer.enabled,
+        "path": TRACE_PATH,
+        "file_exists": Path(TRACE_PATH).exists()
+    })
 
 
 @app.route('/static/<path:filename>')

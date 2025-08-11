@@ -20,10 +20,23 @@ from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
+from .tracing.perfetto_tracing import tracer as new_tracer
 
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
 KOL, KOH, KIL = IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL
+
+
+def _trace_probe_pc_and_opcode(emu):
+    """Extract PC and opcode for tracing without side effects."""
+    pc = emu.cpu.regs.get(RegisterName.PC) if hasattr(emu, 'cpu') else None
+    opcode = None
+    if pc is not None and hasattr(emu, 'memory'):
+        try:
+            opcode = emu.memory.read_byte(pc) & 0xFF
+        except Exception:
+            pass
+    return pc, opcode
 
 
 class PCE500Emulator:
@@ -37,7 +50,8 @@ class PCE500Emulator:
     MEMORY_DUMP_DIR = "."
 
     def __init__(self, trace_enabled: bool = False, perfetto_trace: bool = False,
-                 save_lcd_on_exit: bool = True, keyboard_impl: str = 'compat'):
+                 save_lcd_on_exit: bool = True, keyboard_impl: str = 'compat',
+                 enable_new_tracing: bool = False, trace_path: str = "pc-e500.trace.json"):
         self.instruction_count = 0
         self.memory_read_count = 0
         self.memory_write_count = 0
@@ -80,6 +94,13 @@ class PCE500Emulator:
             g_tracer.start_tracing("pc-e500.trace")
             self.lcd.set_perfetto_enabled(True)
             self.memory.set_perfetto_enabled(True)
+        
+        # New tracing system
+        self._new_trace_enabled = enable_new_tracing
+        self._trace_path = trace_path
+        self._trace_instr_count = 0
+        if self._new_trace_enabled:
+            new_tracer.start(self._trace_path)
 
         self.call_depth = 0
         self._interrupt_stack = []
@@ -129,7 +150,7 @@ class PCE500Emulator:
             self._dump_internal_memory(pc)
 
         try:
-            opcode = self.memory.read_byte(pc) if self.perfetto_enabled else None
+            opcode = self.memory.read_byte(pc) if (self.perfetto_enabled or self._new_trace_enabled) else None
             pc_before = pc
             eval_info = self.cpu.execute_instruction(pc)
             self.cycle_count += 1
@@ -147,6 +168,33 @@ class PCE500Emulator:
                 self._trace_execution(pc, opcode)
                 self._trace_control_flow(pc_before, eval_info)
                 self._update_perfetto_counters()
+            
+            # New tracing system
+            if new_tracer.enabled:
+                self._trace_instr_count += 1
+                pc, opcode = _trace_probe_pc_and_opcode(self)
+                
+                # Instruction instant event
+                name = f"Exec@{pc:#06x}" if isinstance(pc, int) else "Exec@?"
+                args = {}
+                if isinstance(pc, int):
+                    args["pc"] = pc
+                if isinstance(opcode, int):
+                    args["opcode"] = opcode
+                
+                # Add register values
+                state = self.get_cpu_state()
+                args["a"] = state['a'] & 0xFF
+                args["b"] = state['b'] & 0xFF
+                args["x"] = state['x'] & 0xFFFFFF
+                args["y"] = state['y'] & 0xFFFFFF
+                args["sp"] = state['s'] & 0xFFFFFF
+                args["flags"] = (state['flags']['c'] << 1) | state['flags']['z']
+                
+                new_tracer.instant("Execution", name, args)
+                
+                # Update counters
+                new_tracer.counter("Counters", "instructions", float(self._trace_instr_count))
         except Exception as e:
             if self.trace is not None:
                 self.trace.append(('error', pc, str(e)))
@@ -207,6 +255,9 @@ class PCE500Emulator:
         if self.perfetto_enabled:
             print("Stopping Perfetto tracing...")
             g_tracer.stop_tracing()
+        if self._new_trace_enabled and new_tracer.enabled:
+            print(f"Stopping new tracing, saved to {self._trace_path}")
+            new_tracer.stop()
 
     def __enter__(self):
         return self
@@ -279,10 +330,16 @@ class PCE500Emulator:
                 if condition: trace_data["condition"] = condition
                 g_tracer.trace_instant("CPU", "jump", trace_data)
     def press_key(self, key_code: str) -> bool:
-        return self.keyboard.press_key(key_code) if self.keyboard else False
+        result = self.keyboard.press_key(key_code) if self.keyboard else False
+        if new_tracer.enabled:
+            new_tracer.instant("I/O", "KeyPress", {"key": key_code})
+        return result
 
     def release_key(self, key_code: str):
-        if self.keyboard: self.keyboard.release_key(key_code)
+        if self.keyboard: 
+            self.keyboard.release_key(key_code)
+        if new_tracer.enabled:
+            new_tracer.instant("I/O", "KeyRelease", {"key": key_code})
     def _track_imem_access(self, offset: int, access_type: str, cpu_pc: Optional[int]):
         if cpu_pc is None or not self.perfetto_enabled: return
         reg_name = {0xF0: "KOL", 0xF1: "KOH", 0xF2: "KIL"}.get(offset)
@@ -300,12 +357,23 @@ class PCE500Emulator:
         self._track_imem_access(offset, "reads", cpu_pc)
         # Support both compat and hardware keyboard APIs
         if hasattr(self.keyboard, 'read_register'):
-            return self.keyboard.read_register(offset)
-        return self.keyboard.handle_register_read(offset)
+            result = self.keyboard.read_register(offset)
+        else:
+            result = self.keyboard.handle_register_read(offset)
+        
+        # Trace keyboard matrix I/O
+        if new_tracer.enabled and offset == KIL:
+            new_tracer.instant("I/O", "KB_InputRead", {"addr": offset, "value": result & 0xFF})
+        
+        return result
 
     def _keyboard_write_handler(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         offset = address - INTERNAL_MEMORY_START
         self._track_imem_access(offset, "writes", cpu_pc)
+        
+        # Trace keyboard matrix I/O
+        if new_tracer.enabled and offset in (KOL, KOH):
+            new_tracer.instant("I/O", "KB_ColumnStrobe", {"addr": offset, "value": value & 0xFF})
         # Support both compat and hardware keyboard APIs
         if hasattr(self.keyboard, 'write_register'):
             self.keyboard.write_register(offset, value)

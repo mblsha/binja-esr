@@ -1,284 +1,236 @@
-"""Unit tests for Perfetto tracing functionality."""
+"""Tests for the Perfetto tracing system."""
 
-import pytest
+import json
+import os
 import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-import threading
 import time
+import unittest
+from pathlib import Path
 
-from pce500.trace_manager import TraceManager, g_tracer, RETROBUS_PERFETTO_AVAILABLE
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from pce500.tracing.perfetto_tracing import PerfettoTracer, tracer
 
 
-class TestTraceManager:
-    """Test the TraceManager singleton and basic functionality."""
+class TestPerfettoTracer(unittest.TestCase):
+    """Test the Perfetto tracer implementation."""
     
-    def test_singleton_pattern(self):
-        """Test that TraceManager is a singleton."""
-        tm1 = TraceManager()
-        tm2 = TraceManager()
-        assert tm1 is tm2
-        assert tm1 is g_tracer
-    
-    def test_start_stop_tracing(self):
-        """Test starting and stopping tracing."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
-            
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
-            trace_path = f.name
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.trace_path = os.path.join(self.temp_dir, "test.trace.json")
         
-        try:
-            # Initially not tracing
-            assert not g_tracer.is_tracing()
+    def tearDown(self):
+        """Clean up test environment."""
+        # Clean up any trace files
+        if os.path.exists(self.trace_path):
+            os.remove(self.trace_path)
+        os.rmdir(self.temp_dir)
+        
+    def test_tracer_disabled_by_default(self):
+        """Test that tracer is disabled by default."""
+        t = PerfettoTracer()
+        self.assertFalse(t.enabled)
+        
+    def test_start_stop_creates_file(self):
+        """Test that starting and stopping creates a trace file."""
+        t = PerfettoTracer()
+        t.start(self.trace_path)
+        self.assertTrue(t.enabled)
+        
+        # Add some events
+        t.instant("Test", "event1", {"value": 42})
+        t.counter("Test", "counter1", 100)
+        
+        t.stop()
+        self.assertFalse(t.enabled)
+        
+        # Check file was created
+        self.assertTrue(os.path.exists(self.trace_path))
+        
+        # Verify JSON structure
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
             
-            # Start tracing
-            result = g_tracer.start_tracing(trace_path)
-            if result:  # Only if perfetto library is available
-                assert g_tracer.is_tracing()
+        self.assertIn("traceEvents", data)
+        self.assertIn("displayTimeUnit", data)
+        self.assertEqual(data["displayTimeUnit"], "us")
+        
+        # Check events are present
+        events = data["traceEvents"]
+        self.assertGreater(len(events), 0)
+        
+        # Find our test events
+        event_names = [e.get("name") for e in events]
+        self.assertIn("event1", event_names)
+        self.assertIn("counter1", event_names)
+        
+    def test_events_not_emitted_when_disabled(self):
+        """Test that events are not emitted when tracer is disabled."""
+        t = PerfettoTracer()
+        
+        # Try to emit without starting
+        t.instant("Test", "should_not_appear")
+        t.counter("Test", "should_not_appear", 0)
+        
+        # Start, stop immediately, then try to emit
+        t.start(self.trace_path)
+        t.stop()
+        
+        t.instant("Test", "should_not_appear_either")
+        
+        # Check file contents
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
+            
+        # Should only have metadata events
+        events = data["traceEvents"]
+        test_events = [e for e in events if "should_not_appear" in e.get("name", "")]
+        self.assertEqual(len(test_events), 0)
+        
+    def test_instant_event_format(self):
+        """Test instant event format."""
+        t = PerfettoTracer()
+        t.start(self.trace_path)
+        
+        t.instant("TestTrack", "TestEvent", {"key": "value", "number": 123})
+        
+        t.stop()
+        
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
+            
+        # Find the instant event
+        instant_event = None
+        for event in data["traceEvents"]:
+            if event.get("name") == "TestEvent" and event.get("ph") == "i":
+                instant_event = event
+                break
                 
-                # Stop tracing
-                assert g_tracer.stop_tracing()
-                assert not g_tracer.is_tracing()
+        self.assertIsNotNone(instant_event)
+        self.assertEqual(instant_event["ph"], "i")
+        self.assertEqual(instant_event["s"], "t")
+        self.assertIn("ts", instant_event)
+        self.assertIn("pid", instant_event)
+        self.assertIn("tid", instant_event)
+        self.assertEqual(instant_event["args"]["key"], "value")
+        self.assertEqual(instant_event["args"]["number"], 123)
+        
+    def test_counter_event_format(self):
+        """Test counter event format."""
+        t = PerfettoTracer()
+        t.start(self.trace_path)
+        
+        t.counter("CounterTrack", "test_counter", 42.5, {"extra": "data"})
+        
+        t.stop()
+        
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
+            
+        # Find the counter event
+        counter_event = None
+        for event in data["traceEvents"]:
+            if event.get("name") == "test_counter" and event.get("ph") == "C":
+                counter_event = event
+                break
                 
-                # Trace file should exist
-                assert Path(trace_path).exists()
-        finally:
-            Path(trace_path).unlink(missing_ok=True)
-    
-    def test_timestamp_monotonic(self):
-        """Test that timestamps are monotonically increasing."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
+        self.assertIsNotNone(counter_event)
+        self.assertEqual(counter_event["ph"], "C")
+        self.assertIn("ts", counter_event)
+        self.assertEqual(counter_event["args"]["test_counter"], 42.5)
+        self.assertEqual(counter_event["args"]["extra"], "data")
+        
+    def test_slice_events(self):
+        """Test begin/end slice events."""
+        t = PerfettoTracer()
+        t.start(self.trace_path)
+        
+        t.begin_slice("SliceTrack", "TestSlice", {"param": 1})
+        time.sleep(0.001)  # Small delay to ensure different timestamps
+        t.end_slice("SliceTrack")
+        
+        t.stop()
+        
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
             
-        with patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', True):
-            if not g_tracer.is_tracing():
-                with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
-                    g_tracer.start_tracing(f.name)
-                    cleanup = True
-            else:
-                cleanup = False
+        # Find begin and end events
+        begin_event = None
+        end_event = None
+        for event in data["traceEvents"]:
+            if event.get("name") == "TestSlice" and event.get("ph") == "B":
+                begin_event = event
+            elif event.get("name") == "TestSlice" and event.get("ph") == "E":
+                end_event = event
                 
-            try:
-                ts1 = g_tracer.get_timestamp()
-                time.sleep(0.001)  # Sleep 1ms
-                ts2 = g_tracer.get_timestamp()
+        self.assertIsNotNone(begin_event)
+        self.assertIsNotNone(end_event)
+        self.assertEqual(begin_event["args"]["param"], 1)
+        self.assertLess(begin_event["ts"], end_event["ts"])
+        
+    def test_multiple_tracks(self):
+        """Test that multiple tracks get different TIDs."""
+        t = PerfettoTracer()
+        t.start(self.trace_path)
+        
+        t.instant("Track1", "event1")
+        t.instant("Track2", "event2")
+        t.instant("Track1", "event3")
+        
+        t.stop()
+        
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
+            
+        # Find events and their TIDs
+        track1_tids = set()
+        track2_tids = set()
+        
+        for event in data["traceEvents"]:
+            if event.get("name") in ("event1", "event3"):
+                track1_tids.add(event.get("tid"))
+            elif event.get("name") == "event2":
+                track2_tids.add(event.get("tid"))
                 
-                assert ts2 > ts1
-                # Should be at least 1000 microseconds apart
-                assert ts2 - ts1 >= 1000
-            finally:
-                if cleanup:
-                    g_tracer.stop_tracing()
-                    Path(f.name).unlink(missing_ok=True)
-    
-    def test_thread_safety(self):
-        """Test thread-safe access to TraceManager."""
-        results = []
+        # Each track should have a consistent TID
+        self.assertEqual(len(track1_tids), 1)
+        self.assertEqual(len(track2_tids), 1)
         
-        def worker():
-            # Each thread gets same instance
-            tm = TraceManager()
-            results.append(tm)
-            
-            # Test thread-safe depth tracking
-            thread_id = threading.get_ident()
-            initial_depth = tm.get_call_depth(thread_id)
-            results.append(initial_depth)
+        # Different tracks should have different TIDs
+        self.assertNotEqual(track1_tids.pop(), track2_tids.pop())
         
-        threads = [threading.Thread(target=worker) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+    def test_global_tracer_singleton(self):
+        """Test that the global tracer is accessible."""
+        self.assertIsNotNone(tracer)
+        self.assertIsInstance(tracer, PerfettoTracer)
         
-        # All threads should get same TraceManager instance
-        assert all(tm is g_tracer for tm in results[::2])
-        # All threads should start with depth 0
-        assert all(depth == 0 for depth in results[1::2])
-
-
-class TestTraceEvents:
-    """Test different types of trace events."""
-    
-    @pytest.fixture
-    def mock_perfetto(self):
-        """Mock retrobus_perfetto module."""
-        # Create a mock instance of PerfettoTraceBuilder
-        mock_instance = MagicMock()
+    def test_timestamps_are_monotonic(self):
+        """Test that timestamps increase monotonically."""
+        t = PerfettoTracer()
+        t.start(self.trace_path)
         
-        # Mock required methods
-        mock_instance.add_process_track.return_value = "process_track_uuid"
-        mock_instance.add_thread = MagicMock(return_value="thread_track_uuid")
-        mock_instance.add_counter_track.return_value = "counter_track_uuid"
+        # Emit several events
+        for i in range(10):
+            t.instant("Test", f"event{i}")
+            time.sleep(0.0001)  # Small delay
+            
+        t.stop()
         
-        # Mock event methods that return event objects
-        mock_event = MagicMock()
-        mock_event.add_annotations = MagicMock()
-        
-        mock_instance.begin_slice = MagicMock(return_value=mock_event)
-        mock_instance.end_slice = MagicMock()
-        mock_instance.add_instant_event = MagicMock(return_value=mock_event)
-        mock_instance.update_counter = MagicMock()
-        mock_instance.add_flow = MagicMock()
-        mock_instance.finalize = MagicMock(return_value=b"trace_data")
-        
-        # Patch both the class and the ENABLE flag
-        with patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', True):
-            with patch('pce500.trace_manager.PerfettoTraceBuilder', return_value=mock_instance):
-                yield mock_instance
-    
-    def test_begin_end_function(self, mock_perfetto):
-        """Test function begin/end tracing."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
+        with open(self.trace_path, 'r') as f:
+            data = json.load(f)
             
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
-            g_tracer.start_tracing(f.name)
-            
-            # Trace a function
-            g_tracer.begin_function("CPU", pc=0x1000, caller_pc=0x500, name="test_func")
-            g_tracer.end_function("CPU", pc=0x1000)
-            
-            # Verify begin_slice and end_slice were called
-            mock_perfetto.begin_slice.assert_called()
-            mock_perfetto.end_slice.assert_called()
-            
-            g_tracer.stop_tracing()
-    
-    def test_trace_instant(self, mock_perfetto):
-        """Test instant event tracing."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
-            
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
-            g_tracer.start_tracing(f.name)
-            
-            # Trace instant event
-            g_tracer.trace_instant("CPU", "TestEvent", {"value": 42})
-            
-            # Verify add_instant_event was called
-            mock_perfetto.add_instant_event.assert_called()
-            call_args = mock_perfetto.add_instant_event.call_args
-            assert call_args[0][1] == "TestEvent"  # name is second argument
-            
-            g_tracer.stop_tracing()
-    
-    def test_trace_jump(self, mock_perfetto):
-        """Test jump tracing."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
-            
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
-            g_tracer.start_tracing(f.name)
-            
-            # Trace jump
-            g_tracer.trace_jump("CPU", from_pc=0x1000, to_pc=0x2000)
-            
-            # Should create instant event
-            mock_perfetto.add_instant_event.assert_called()
-            
-            g_tracer.stop_tracing()
-    
-    def test_trace_counter(self, mock_perfetto):
-        """Test counter event tracing."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
-            
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
-            g_tracer.start_tracing(f.name)
-            
-            # Trace counter
-            g_tracer.trace_counter("CPU", "instructions", 1000)
-            
-            # Verify update_counter was called
-            mock_perfetto.update_counter.assert_called()
-            
-            g_tracer.stop_tracing()
-    
-    def test_flow_events(self, mock_perfetto):
-        """Test flow begin/end events."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
-            
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
-            g_tracer.start_tracing(f.name)
-            
-            # Begin and end flow
-            g_tracer.begin_flow("Interrupt", flow_id=123)
-            g_tracer.end_flow("Interrupt", flow_id=123)
-            
-            # Should create flow events
-            assert mock_perfetto.add_flow.call_count >= 2
-            
-            g_tracer.stop_tracing()
-
-
-class TestCallStackTracking:
-    """Test call stack tracking functionality."""
-    
-    def test_call_stack_depth_limits(self):
-        """Test that call stack respects depth limits."""
-        if not RETROBUS_PERFETTO_AVAILABLE:
-            pytest.skip("retrobus_perfetto module not available")
-            
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace', delete=False) as f:
-            g_tracer.start_tracing(f.name)
-        
-        try:
-            thread_id = threading.get_ident()
-            
-            # Push many frames
-            for i in range(60):
-                g_tracer.begin_function("CPU", pc=0x1000 + i, caller_pc=0x1000 + i - 1)
-            
-            # Check depth is limited
-            depth = g_tracer.get_call_depth(thread_id)
-            assert depth <= TraceManager.MAX_CALL_DEPTH
-            
-            # Clean up
-            for i in range(60):
-                g_tracer.end_function("CPU", pc=0x1000 + i)
+        # Get all timestamps for our events
+        timestamps = []
+        for event in data["traceEvents"]:
+            if event.get("name", "").startswith("event"):
+                timestamps.append(event["ts"])
                 
-        finally:
-            g_tracer.stop_tracing()
-            Path(f.name).unlink(missing_ok=True)
-    
-    def test_stale_frame_cleanup(self):
-        """Test that old frames are cleaned up."""
-        # This would require mocking time or waiting, so we'll skip for now
-        pass
-
-
-class TestNoOpBehavior:
-    """Test behavior when tracing is disabled or perfetto library is not available."""
-    
-    def test_no_op_when_disabled(self):
-        """Test that trace operations are no-ops when tracing is disabled."""
-        # Ensure tracing is stopped
-        if g_tracer.is_tracing():
-            g_tracer.stop_tracing()
-        
-        # These should all be no-ops and not raise errors
-        g_tracer.begin_function("CPU", 0x1000, 0x500)
-        g_tracer.end_function("CPU", 0x1000)
-        g_tracer.trace_instant("CPU", "test", {})
-        g_tracer.trace_jump("CPU", 0x1000, 0x2000)
-        g_tracer.trace_counter("CPU", "test", 42)
-        g_tracer.begin_flow("test", 1)
-        g_tracer.end_flow("test", 1)
-        
-        # Should return 0 when not tracing
-        assert g_tracer.get_timestamp() == 0
-    
-    @patch('pce500.trace_manager.ENABLE_PERFETTO_TRACING', False)
-    def test_tracing_disabled(self):
-        """Test behavior when tracing is disabled."""
-        with tempfile.NamedTemporaryFile(suffix='.perfetto-trace') as f:
-            # Should return False when tracing is disabled
-            assert not g_tracer.start_tracing(f.name)
-            assert not g_tracer.is_tracing()
+        # Check monotonic increase
+        for i in range(1, len(timestamps)):
+            self.assertGreaterEqual(timestamps[i], timestamps[i-1])
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    unittest.main()

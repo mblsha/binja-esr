@@ -14,7 +14,7 @@ from sc62015.pysc62015.emulator import RegisterName
 
 def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
                  perfetto_trace=True, print_stats=True, timeout_secs: float = 10.0,
-                 keyboard_impl: str = 'compat'):
+                 keyboard_impl: str = 'compat', new_perfetto=False, trace_file="pc-e500.trace.json"):
     """Run PC-E500 emulator and return the instance.
 
     Args:
@@ -24,18 +24,31 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
         save_lcd: Save LCD display on exit
         perfetto_trace: Enable Perfetto tracing
         print_stats: Print statistics to stdout
+        new_perfetto: Enable new Perfetto tracing system
+        trace_file: Path for new trace file
 
     Returns:
         PCE500Emulator: The emulator instance after running
     """
     # Create emulator
     emu = PCE500Emulator(trace_enabled=True, perfetto_trace=perfetto_trace,
-                         save_lcd_on_exit=save_lcd, keyboard_impl=keyboard_impl)
+                         save_lcd_on_exit=save_lcd, keyboard_impl=keyboard_impl,
+                         enable_new_tracing=new_perfetto, trace_path=trace_file)
 
     if print_stats:
-        print("Created emulator with Perfetto tracing enabled" if perfetto_trace else "Created emulator")
+        trace_msgs = []
         if perfetto_trace:
-            print("Trace will be saved to pc-e500.trace")
+            trace_msgs.append("retrobus-perfetto tracing")
+        if new_perfetto:
+            trace_msgs.append(f"new Perfetto tracing to {trace_file}")
+        
+        if trace_msgs:
+            print(f"Created emulator with {' and '.join(trace_msgs)} enabled")
+        else:
+            print("Created emulator")
+        
+        if perfetto_trace:
+            print("Retrobus trace will be saved to pc-e500.trace")
 
     # Handle memory dump configuration
     if no_dump:
@@ -124,11 +137,13 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
     return emu
 
 
-def main(dump_pc=None, no_dump=False, save_lcd=True, perfetto=True, keyboard_impl='compat'):
+def main(dump_pc=None, no_dump=False, save_lcd=True, perfetto=True, keyboard_impl='compat',
+         new_perfetto=False, trace_file="pc-e500.trace.json"):
     """Example with Perfetto tracing enabled."""
     # Use context manager for automatic cleanup
     with run_emulator(dump_pc=dump_pc, no_dump=no_dump, save_lcd=save_lcd,
-                      perfetto_trace=perfetto, keyboard_impl=keyboard_impl) as emu:
+                      perfetto_trace=perfetto, keyboard_impl=keyboard_impl,
+                      new_perfetto=new_perfetto, trace_file=trace_file) as emu:
         pass  # Everything is done in run_emulator
 
     # Exit with error if we hit the timeout
@@ -151,6 +166,11 @@ if __name__ == "__main__":
                         help="Disable Perfetto tracing to isolate performance effects")
     parser.add_argument("--keyboard", choices=["compat","hardware"], default="compat",
                         help="Select keyboard implementation (default: compat)")
+    parser.add_argument("--perfetto", action='store_true',
+                        help="Enable new Perfetto tracing (wall-clock time)")
+    parser.add_argument("--trace-file", default="pc-e500.trace.json",
+                        help="Path to write trace JSON (default: pc-e500.trace.json)")
     args = parser.parse_args()
     main(dump_pc=args.dump_pc, no_dump=args.no_dump, save_lcd=not args.no_lcd,
-         perfetto=not args.no_perfetto, keyboard_impl=args.keyboard)
+         perfetto=not args.no_perfetto, keyboard_impl=args.keyboard,
+         new_perfetto=args.perfetto, trace_file=args.trace_file)

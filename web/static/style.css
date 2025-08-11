@@ -87,6 +87,13 @@ h1 {
     gap: 10px;
 }
 
+.trace-controls {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin: 10px 0;
+}
+
 .control-btn {
     padding: 10px 20px;
     font-size: 16px;
