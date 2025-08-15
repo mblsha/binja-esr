@@ -14,19 +14,22 @@ if os.path.isdir(bn_path) and bn_path not in sys.path:
 
 try:
     import binaryninja  # noqa: F401
+
     has_binja = True
 except ImportError:
     has_binja = False
 
 if not has_binja:
     from binja_test_mocks import binja_api  # noqa: F401
+
     print("Using stubs from binja-test-mocks package")
 else:
     print(f"Using Binary Ninja from {bn_path}")
 
 # Run pyright on the target directory
-result = subprocess.run(["pyright", "sc62015/pysc62015"], capture_output=True, text=True)
+result = subprocess.run(
+    ["pyright", "sc62015/pysc62015"], capture_output=True, text=True
+)
 print(result.stdout, end="")
 print(result.stderr, end="", file=sys.stderr)
 sys.exit(result.returncode)
-

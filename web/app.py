@@ -8,7 +8,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, jsonify, request, render_template, send_from_directory, send_file
+from flask import (
+    Flask,
+    jsonify,
+    request,
+    render_template,
+    send_from_directory,
+    send_file,
+)
 from flask_cors import CORS
 
 # Add parent directory to path for imports
@@ -35,7 +42,7 @@ emulator_state = {
     "speed_calc_time": None,
     "speed_calc_instructions": None,
     "emulation_speed": None,
-    "speed_ratio": None
+    "speed_ratio": None,
 }
 
 # Update thresholds
@@ -49,10 +56,10 @@ TRACE_PATH = "pc-e500.perfetto-trace"
 def initialize_emulator():
     """Initialize the PC-E500 emulator with ROM."""
     global emulator
-    
+
     # Load ROM file
     rom_path = Path(__file__).parent.parent / "data" / "pc-e500.bin"
-    
+
     # For testing, create a minimal ROM if the file doesn't exist
     if not rom_path.exists():
         # Create a minimal test ROM with a simple program
@@ -67,23 +74,28 @@ def initialize_emulator():
     else:
         with open(rom_path, "rb") as f:
             rom_data = f.read()
-    
+
     # Extract the ROM portion from 0xC0000-0x100000 (256KB)
     # The pc-e500.bin file is a full 1MB dump, but the ROM is only the last 256KB
     if len(rom_data) >= 0x100000:
         rom_portion = rom_data[0xC0000:0x100000]
     else:
         rom_portion = rom_data  # If file is smaller, use as-is
-    
+
     # Create emulator instance
     with emulator_lock:
         # Use hardware-accurate keyboard for the web UI to match ROM scanning
-        emulator = PCE500Emulator(trace_enabled=False, perfetto_trace=False, save_lcd_on_exit=False, keyboard_impl='hardware')
+        emulator = PCE500Emulator(
+            trace_enabled=False,
+            perfetto_trace=False,
+            save_lcd_on_exit=False,
+            keyboard_impl="hardware",
+        )
         emulator.load_rom(rom_portion)
-        
+
         # Reset to properly set PC from the now-loaded ROM entry point
         emulator.reset()
-        
+
         # Update initial state
         update_emulator_state()
 
@@ -91,35 +103,35 @@ def initialize_emulator():
 def update_emulator_state():
     """Capture current emulator state for API responses."""
     global emulator_state
-    
+
     if emulator is None:
         return
-    
+
     # Get CPU state
     cpu_state = emulator.get_cpu_state()
-    
+
     # Get screen as PNG
     lcd_image = emulator.lcd.get_combined_display(zoom=1)  # 240x32 pixels
-    
+
     # Convert PIL image to base64 PNG
     img_buffer = io.BytesIO()
-    lcd_image.save(img_buffer, format='PNG')
+    lcd_image.save(img_buffer, format="PNG")
     img_buffer.seek(0)
-    screen_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-    
+    screen_base64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+
     # Calculate emulation speed
     current_time = time.time()
     current_instructions = emulator.instruction_count
-    
+
     if emulator_state["is_running"]:
         # Calculate speed only when running
         prev_time = emulator_state.get("speed_calc_time")
         prev_instructions = emulator_state.get("speed_calc_instructions")
-        
+
         if prev_time is not None and prev_instructions is not None:
             time_delta = current_time - prev_time
             instruction_delta = current_instructions - prev_instructions
-            
+
             if time_delta > 0:
                 speed = instruction_delta / time_delta
                 speed_ratio = speed / 2_000_000  # 2MHz CPU
@@ -130,245 +142,252 @@ def update_emulator_state():
             # First update while running
             speed = 0
             speed_ratio = 0
-            
+
         emulator_state["emulation_speed"] = speed
         emulator_state["speed_ratio"] = speed_ratio
     else:
         # Not running, clear speed
         emulator_state["emulation_speed"] = None
         emulator_state["speed_ratio"] = None
-    
+
     # Update tracking values
     emulator_state["speed_calc_time"] = current_time
     emulator_state["speed_calc_instructions"] = current_instructions
-    
+
     # Update state dictionary
-    emulator_state.update({
-        "screen": f"data:image/png;base64,{screen_base64}",
-        "registers": {
-            "pc": cpu_state["pc"],
-            "a": cpu_state["a"],
-            "b": cpu_state["b"],
-            "ba": cpu_state["ba"],
-            "i": cpu_state["i"],
-            "x": cpu_state["x"],
-            "y": cpu_state["y"],
-            "u": cpu_state["u"],
-            "s": cpu_state["s"]
-        },
-        "flags": {
-            "z": cpu_state["flags"]["z"],
-            "c": cpu_state["flags"]["c"]
-        },
-        "instruction_count": emulator.instruction_count,
-        "instruction_history": list(emulator.instruction_history),
-        "last_update_time": current_time,
-        "last_update_instructions": current_instructions
-    })
+    emulator_state.update(
+        {
+            "screen": f"data:image/png;base64,{screen_base64}",
+            "registers": {
+                "pc": cpu_state["pc"],
+                "a": cpu_state["a"],
+                "b": cpu_state["b"],
+                "ba": cpu_state["ba"],
+                "i": cpu_state["i"],
+                "x": cpu_state["x"],
+                "y": cpu_state["y"],
+                "u": cpu_state["u"],
+                "s": cpu_state["s"],
+            },
+            "flags": {"z": cpu_state["flags"]["z"], "c": cpu_state["flags"]["c"]},
+            "instruction_count": emulator.instruction_count,
+            "instruction_history": list(emulator.instruction_history),
+            "last_update_time": current_time,
+            "last_update_instructions": current_instructions,
+        }
+    )
 
 
 def emulator_run_loop():
     """Background thread for running the emulator."""
     global emulator_state
-    
+
     while emulator_state["is_running"]:
         if emulator is None:
             break
-            
+
         with emulator_lock:
             try:
                 # Execute one instruction
                 emulator.step()
-                
+
                 # Check if we should update state
                 current_time = time.time()
                 current_instructions = emulator.instruction_count
-                
+
                 time_delta = current_time - emulator_state["last_update_time"]
-                instruction_delta = current_instructions - emulator_state["last_update_instructions"]
-                
-                if (time_delta >= UPDATE_TIME_THRESHOLD or 
-                    instruction_delta >= UPDATE_INSTRUCTION_THRESHOLD):
+                instruction_delta = (
+                    current_instructions - emulator_state["last_update_instructions"]
+                )
+
+                if (
+                    time_delta >= UPDATE_TIME_THRESHOLD
+                    or instruction_delta >= UPDATE_INSTRUCTION_THRESHOLD
+                ):
                     update_emulator_state()
-                    
+
             except Exception as e:
                 print(f"Emulator error: {e}")
                 emulator_state["is_running"] = False
                 break
-        
+
         # Small delay to prevent CPU spinning too fast
         time.sleep(0.0001)
 
 
-@app.route('/')
+@app.route("/")
 def index():
     """Serve the main web interface."""
-    return render_template('index.html')
+    return render_template("index.html")
 
 
-@app.route('/api/v1/state', methods=['GET'])
+@app.route("/api/v1/state", methods=["GET"])
 def get_state():
     """Get current emulator state."""
     with emulator_lock:
         # Always update state when explicitly requested
         if emulator is not None:
             update_emulator_state()
-        
+
         return jsonify(emulator_state)
 
 
-@app.route('/api/v1/key', methods=['POST'])
+@app.route("/api/v1/key", methods=["POST"])
 def handle_key():
     """Handle keyboard input."""
     data = request.get_json()
-    if not data or 'key_code' not in data:
+    if not data or "key_code" not in data:
         return jsonify({"error": "Missing key_code"}), 400
-    
-    key_code = data['key_code']
-    action = data.get('action', 'press')  # 'press' or 'release'
-    
+
+    key_code = data["key_code"]
+    action = data.get("action", "press")  # 'press' or 'release'
+
     with emulator_lock:
         if emulator is None:
             return jsonify({"error": "Emulator not initialized"}), 500
-        
+
         try:
             key_queued = False
-            if action == 'press':
+            if action == "press":
                 key_queued = emulator.press_key(key_code)
                 if key_queued:
                     print(f"Key pressed and queued: {key_code}")
                 else:
-                    print(f"Key press ignored (not mapped or already queued): {key_code}")
-            elif action == 'release':
+                    print(
+                        f"Key press ignored (not mapped or already queued): {key_code}"
+                    )
+            elif action == "release":
                 emulator.release_key(key_code)
                 print(f"Key released: {key_code}")
             else:
                 return jsonify({"error": f"Invalid action: {action}"}), 400
-            
+
             # Return debug info for development
             debug_info = emulator.keyboard.get_debug_info()
-            return jsonify({
-                "status": "ok",
-                "key_queued": key_queued if action == 'press' else None,
-                "message": f"Key {key_code} {'queued' if key_queued else 'not queued (unmapped or already pressed)'}" if action == 'press' else f"Key {key_code} released",
-                "debug": debug_info
-            })
-            
+            return jsonify(
+                {
+                    "status": "ok",
+                    "key_queued": key_queued if action == "press" else None,
+                    "message": f"Key {key_code} {'queued' if key_queued else 'not queued (unmapped or already pressed)'}"
+                    if action == "press"
+                    else f"Key {key_code} released",
+                    "debug": debug_info,
+                }
+            )
+
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/v1/lcd_debug', methods=['GET'])
+@app.route("/api/v1/lcd_debug", methods=["GET"])
 def get_lcd_debug():
     """Get PC source for a specific LCD pixel."""
-    x = request.args.get('x', type=int)
-    y = request.args.get('y', type=int)
-    
+    x = request.args.get("x", type=int)
+    y = request.args.get("y", type=int)
+
     if x is None or y is None:
         return jsonify({"error": "Missing x or y parameter"}), 400
-    
+
     if not (0 <= x < 240 and 0 <= y < 32):
         return jsonify({"error": "Coordinates out of range"}), 400
-    
+
     with emulator_lock:
         if emulator is None:
             return jsonify({"error": "Emulator not initialized"}), 500
-        
+
         pc_source = emulator.lcd.get_pixel_pc_source(x, y)
-        return jsonify({
-            "pc": f"0x{pc_source:06X}" if pc_source is not None else None
-        })
+        return jsonify({"pc": f"0x{pc_source:06X}" if pc_source is not None else None})
 
 
-@app.route('/api/v1/imem_watch', methods=['GET'])
+@app.route("/api/v1/imem_watch", methods=["GET"])
 def get_imem_watch():
     """Get IMEM register access tracking data."""
     with emulator_lock:
         if emulator is None:
             return jsonify({"error": "Emulator not initialized"}), 500
-        
+
         tracking_data = emulator.memory.get_imem_access_tracking()
-        
+
         # Format the data for the API response
         result = {}
         for reg_name, accesses in tracking_data.items():
             result[reg_name] = {
-                "reads": [{"pc": f"0x{pc:06X}", "count": count} for pc, count in accesses["reads"]],
-                "writes": [{"pc": f"0x{pc:06X}", "count": count} for pc, count in accesses["writes"]]
+                "reads": [
+                    {"pc": f"0x{pc:06X}", "count": count}
+                    for pc, count in accesses["reads"]
+                ],
+                "writes": [
+                    {"pc": f"0x{pc:06X}", "count": count}
+                    for pc, count in accesses["writes"]
+                ],
             }
-        
+
         return jsonify(result)
 
 
-@app.route('/api/v1/lcd_stats', methods=['GET'])
+@app.route("/api/v1/lcd_stats", methods=["GET"])
 def get_lcd_stats():
     """Get LCD controller statistics."""
     with emulator_lock:
         if emulator is None:
             return jsonify({"error": "Emulator not initialized"}), 500
-        
+
         # Get chip select counts
         chip_select_stats = {
             "both": emulator.lcd.cs_both_count,
             "left": emulator.lcd.cs_left_count,
-            "right": emulator.lcd.cs_right_count
+            "right": emulator.lcd.cs_right_count,
         }
-        
+
         # Get per-chip statistics
         chip_stats = emulator.lcd.get_chip_statistics()
-        
-        return jsonify({
-            "chip_select": chip_select_stats,
-            "chips": chip_stats
-        })
+
+        return jsonify({"chip_select": chip_select_stats, "chips": chip_stats})
 
 
-@app.route('/api/v1/key_queue', methods=['GET'])
+@app.route("/api/v1/key_queue", methods=["GET"])
 def get_key_queue():
     """Get keyboard queue state."""
     with emulator_lock:
         if emulator is None:
             return jsonify({"error": "Emulator not initialized"}), 500
-        
+
         # Get key queue info
         queue_info = emulator.keyboard.get_queue_info()
-        
+
         # Get current KOL/KOH/KIL values
         keyboard_state = {
             "kol": f"0x{emulator.keyboard._last_kol:02X}",
             "koh": f"0x{emulator.keyboard._last_koh:02X}",
-            "kil": f"0x{emulator.keyboard._read_keyboard_input():02X}"
+            "kil": f"0x{emulator.keyboard._read_keyboard_input():02X}",
         }
-        
-        return jsonify({
-            "queue": queue_info,
-            "registers": keyboard_state
-        })
+
+        return jsonify({"queue": queue_info, "registers": keyboard_state})
 
 
-@app.route('/api/v1/control', methods=['POST'])
+@app.route("/api/v1/control", methods=["POST"])
 def control_emulator():
     """Control emulator execution (run/pause/step/reset)."""
     global emulator_thread, emulator_state
-    
+
     data = request.get_json()
-    if not data or 'command' not in data:
+    if not data or "command" not in data:
         return jsonify({"error": "Missing command"}), 400
-    
-    command = data['command']
-    
+
+    command = data["command"]
+
     with emulator_lock:
-        if emulator is None and command != 'reset':
+        if emulator is None and command != "reset":
             return jsonify({"error": "Emulator not initialized"}), 500
-        
-        if command == 'run':
+
+        if command == "run":
             if not emulator_state["is_running"]:
                 emulator_state["is_running"] = True
                 emulator_thread = threading.Thread(target=emulator_run_loop)
                 emulator_thread.start()
             return jsonify({"status": "running"})
-            
-        elif command == 'pause':
+
+        elif command == "pause":
             emulator_state["is_running"] = False
             # Clear speed tracking
             emulator_state["speed_calc_time"] = None
@@ -377,14 +396,14 @@ def control_emulator():
                 emulator_thread.join()
                 emulator_thread = None
             return jsonify({"status": "paused"})
-            
-        elif command == 'step':
+
+        elif command == "step":
             if not emulator_state["is_running"]:
                 emulator.step()
                 update_emulator_state()
             return jsonify({"status": "stepped"})
-            
-        elif command == 'reset':
+
+        elif command == "reset":
             # Stop running if active
             emulator_state["is_running"] = False
             # Clear speed tracking
@@ -393,25 +412,25 @@ def control_emulator():
             if emulator_thread:
                 emulator_thread.join()
                 emulator_thread = None
-                
+
             # Reset or reinitialize emulator
             if emulator:
                 emulator.reset()
             else:
                 initialize_emulator()
-                
+
             update_emulator_state()
             return jsonify({"status": "reset"})
-            
+
         else:
             return jsonify({"error": f"Unknown command: {command}"}), 400
 
 
-@app.route('/trace/start', methods=['POST'])
+@app.route("/trace/start", methods=["POST"])
 def trace_start():
     """Start Perfetto tracing."""
     global emulator
-    
+
     with emulator_lock:
         if emulator and not perfetto_tracer.enabled:
             # Enable tracing in the emulator
@@ -420,54 +439,67 @@ def trace_start():
             perfetto_tracer.start(TRACE_PATH)
             return jsonify({"ok": True, "enabled": True, "path": TRACE_PATH})
         elif perfetto_tracer.enabled:
-            return jsonify({"ok": True, "enabled": True, "path": TRACE_PATH, "message": "Already tracing"})
+            return jsonify(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "path": TRACE_PATH,
+                    "message": "Already tracing",
+                }
+            )
         else:
             return jsonify({"ok": False, "error": "Emulator not initialized"}), 500
 
 
-@app.route('/trace/stop', methods=['POST'])
+@app.route("/trace/stop", methods=["POST"])
 def trace_stop():
     """Stop Perfetto tracing."""
     if perfetto_tracer.enabled:
         perfetto_tracer.stop()
         return jsonify({"ok": True, "enabled": False, "path": TRACE_PATH})
     else:
-        return jsonify({"ok": True, "enabled": False, "message": "Not currently tracing"})
+        return jsonify(
+            {"ok": True, "enabled": False, "message": "Not currently tracing"}
+        )
 
 
-@app.route('/trace/download', methods=['GET'])
+@app.route("/trace/download", methods=["GET"])
 def trace_download():
     """Download the trace file."""
     trace_file = Path(TRACE_PATH)
     if trace_file.exists():
-        return send_file(str(trace_file), as_attachment=True, download_name="pc-e500.perfetto-trace")
+        return send_file(
+            str(trace_file), as_attachment=True, download_name="pc-e500.perfetto-trace"
+        )
     else:
         return jsonify({"error": "Trace file not found"}), 404
 
 
-@app.route('/trace/status', methods=['GET'])
+@app.route("/trace/status", methods=["GET"])
 def trace_status():
     """Get current trace status."""
-    return jsonify({
-        "enabled": perfetto_tracer.enabled,
-        "path": TRACE_PATH,
-        "file_exists": Path(TRACE_PATH).exists()
-    })
+    return jsonify(
+        {
+            "enabled": perfetto_tracer.enabled,
+            "path": TRACE_PATH,
+            "file_exists": Path(TRACE_PATH).exists(),
+        }
+    )
 
 
-@app.route('/static/<path:filename>')
+@app.route("/static/<path:filename>")
 def static_files(filename):
     """Serve static files."""
-    return send_from_directory('static', filename)
+    return send_from_directory("static", filename)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Initialize emulator on startup
     try:
         initialize_emulator()
         print("PC-E500 emulator initialized successfully")
     except Exception as e:
         print(f"Failed to initialize emulator: {e}")
-    
+
     # Run Flask app
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    app.run(debug=True, host="0.0.0.0", port=8080)

@@ -30,7 +30,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @0000
             00 97 9F DE
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="register_and_stack_ops",
@@ -47,7 +47,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @0000
             75 EE 4F 5F 06
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="user_stack_register_ops",
@@ -73,7 +73,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @0000
             28 29 2A 2B 2C 2D 2E 2F 38 39 3A 3B 3C 3D 3E 3F
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="data_directive_defb_with_code",
@@ -91,7 +91,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @80000
             DE AD BE EF
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="defm_and_unambiguous_ops",
@@ -110,7 +110,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @80000
             4F 4B
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="bss_section_is_not_in_output",
@@ -126,7 +126,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @0000
             00
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="symbols_in_data_directives",
@@ -146,28 +146,28 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @80000
             00 00 01 00
             q
-        """
+        """,
     ),
     # --- Tests for PRE byte generation in MV instructions ---
     AssemblerTestCase(
         test_id="mv_imem_imem_simple_pre",
-        asm_code='MV (0x10), (0x20)',
+        asm_code="MV (0x10), (0x20)",
         # Should generate PRE=0x32, then MV=0xC8, then operands
         expected_ti="""
             @0000
             32 C8 10 20
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="mv_imem_imem_complex_pre_1",
-        asm_code='MV (BP+0x10), (PY+0x20)',
+        asm_code="MV (BP+0x10), (PY+0x20)",
         # Should generate PRE=0x23, then MV=0xC8, then operands
         expected_ti="""
             @0000
             23 C8 10 20
             q
-        """
+        """,
     ),
     AssemblerTestCase(
         test_id="mv_imem_imem_complex_pre_2",
@@ -180,11 +180,10 @@ assembler_test_cases: List[AssemblerTestCase] = [
             @0000
             24 C8 30
             q
-        """
+        """,
     ),
     AssemblerTestCase(
-        test_id="mv_imem_imem_invalid_combo",
-        asm_code='MV (BP+PX), (BP+PY)'
+        test_id="mv_imem_imem_invalid_combo", asm_code="MV (BP+PX), (BP+PY)"
     ),
     AssemblerTestCase(
         test_id="mv_reg_imm_8bit",
@@ -417,9 +416,9 @@ assembler_test_cases: List[AssemblerTestCase] = [
             70 55 71 10 01 72 45 23 01 02 73 20 77 30 32 76
             40 50
             q
-        """
+        """,
     ),
-    AssemblerTestCase(  
+    AssemblerTestCase(
         test_id="call_and_callf",
         asm_code="""
             CALL 0xAABB
@@ -1554,14 +1553,14 @@ def test_assembler_e2e(case: AssemblerTestCase) -> None:
 
         if case.expected_ti:
             expected_ti = dedent(case.expected_ti).strip()
-            assert (
-                actual_ti.splitlines() == expected_ti.splitlines()
-            ), f"TI output mismatch for test '{case.test_id}'"
+            assert actual_ti.splitlines() == expected_ti.splitlines(), (
+                f"TI output mismatch for test '{case.test_id}'"
+            )
 
         if case.expected_ihex:
-            assert (
-                actual_ihex.splitlines() == expected_ihex.splitlines()
-            ), f"IHEX output mismatch for test '{case.test_id}'"
+            assert actual_ihex.splitlines() == expected_ihex.splitlines(), (
+                f"IHEX output mismatch for test '{case.test_id}'"
+            )
 
     except (AssemblerError, lark_exceptions.LarkError) as e:
         # Re-raise with a cleaner message for test reports

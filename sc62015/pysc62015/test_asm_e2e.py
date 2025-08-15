@@ -129,9 +129,9 @@ def test_assembler_e2e(case: AssemblerTestCase) -> None:
         actual_lines = actual_ihex.splitlines()
         expected_lines = expected_ihex.splitlines()
 
-        assert (
-            actual_lines == expected_lines
-        ), f"IHEX output mismatch for test '{case.test_id}'"
+        assert actual_lines == expected_lines, (
+            f"IHEX output mismatch for test '{case.test_id}'"
+        )
 
     except AssemblerError as e:
         # Re-raise with a cleaner message for test reports

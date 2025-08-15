@@ -1,5 +1,6 @@
 from .instructions import *  # noqa: F401,F403
 from .opcodes import *  # noqa: F401,F403
+
 OPCODES = {
     # 00h
     0x00: NOP,
@@ -93,8 +94,20 @@ OPCODES = {
     0x53: (ADC, Opts(ops=[IMem8(), Reg("A")])),
     0x54: (ADCL, Opts(ops=[IMem8(), IMem8()])),
     0x55: (ADCL, Opts(ops=[IMem8(), Reg("A")])),
-    0x56: (MVL, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM,
-                                        allowed_modes=[EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET])])),
+    0x56: (
+        MVL,
+        Opts(
+            ops=[
+                RegIMemOffset(
+                    order=RegIMemOffsetOrder.DEST_IMEM,
+                    allowed_modes=[
+                        EMemRegMode.POSITIVE_OFFSET,
+                        EMemRegMode.NEGATIVE_OFFSET,
+                    ],
+                )
+            ]
+        ),
+    ),
     0x57: (PMDF, Opts(ops=[IMem8(), Reg("A")])),
     0x58: (SBC, Opts(ops=[Reg("A"), Imm8()])),
     0x59: (SBC, Opts(ops=[IMem8(), Imm8()])),
@@ -102,8 +115,20 @@ OPCODES = {
     0x5B: (SBC, Opts(ops=[IMem8(), Reg("A")])),
     0x5C: (SBCL, Opts(ops=[IMem8(), IMem8()])),
     0x5D: (SBCL, Opts(ops=[IMem8(), Reg("A")])),
-    0x5E: (MVL, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET,
-                                        allowed_modes=[EMemRegMode.POSITIVE_OFFSET, EMemRegMode.NEGATIVE_OFFSET])])),
+    0x5E: (
+        MVL,
+        Opts(
+            ops=[
+                RegIMemOffset(
+                    order=RegIMemOffsetOrder.DEST_REG_OFFSET,
+                    allowed_modes=[
+                        EMemRegMode.POSITIVE_OFFSET,
+                        EMemRegMode.NEGATIVE_OFFSET,
+                    ],
+                )
+            ]
+        ),
+    ),
     0x5F: (POPS, Opts(ops=[RegF()])),
     # 60h
     0x60: (CMP, Opts(ops=[Reg("A"), Imm8()])),
@@ -243,24 +268,40 @@ OPCODES = {
     0xDF: OFF,
     # E0h
     0xE0: (MV, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
-    0xE1: (MV, Opts(name="MVW",
-                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
-    0xE2: (MV, Opts(name="MVP",
-                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)])),
+    0xE1: (
+        MV,
+        Opts(name="MVW", ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)]),
+    ),
+    0xE2: (
+        MV,
+        Opts(name="MVP", ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)]),
+    ),
     # FIXME: verify width
-    0xE3: (MVL, Opts(ops_reversed=True, ops=[IMem8(),
-                                             EMemReg(width=1,
-                                                     allowed_modes=[EMemRegMode.POST_INC,
-                                                                    EMemRegMode.PRE_DEC])])),
+    0xE3: (
+        MVL,
+        Opts(
+            ops_reversed=True,
+            ops=[
+                IMem8(),
+                EMemReg(
+                    width=1, allowed_modes=[EMemRegMode.POST_INC, EMemRegMode.PRE_DEC]
+                ),
+            ],
+        ),
+    ),
     0xE4: (ROR, Opts(ops=[Reg("A")])),
     0xE5: (ROR, Opts(ops=[IMem8()])),
     0xE6: (ROL, Opts(ops=[Reg("A")])),
     0xE7: (ROL, Opts(ops=[IMem8()])),
     0xE8: (MV, Opts(ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
-    0xE9: (MV, Opts(name="MVW",
-                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
-    0xEA: (MV, Opts(name="MVP",
-                    ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)])),
+    0xE9: (
+        MV,
+        Opts(name="MVW", ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)]),
+    ),
+    0xEA: (
+        MV,
+        Opts(name="MVP", ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)]),
+    ),
     # FIXME: verify width
     0xEB: (MVL, Opts(ops=[EMemReg(width=1), IMem8()])),
     0xEC: (DSLL, Opts(ops=[IMem8()])),
@@ -269,20 +310,31 @@ OPCODES = {
     0xEF: WAIT,
     # F0h
     0xF0: (MV, Opts(ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_INT_MEM)])),
-    0xF1: (MV, Opts(name='MVW', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_INT_MEM)])),
-    0xF2: (MV, Opts(name='MVP', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_INT_MEM)])),
+    0xF1: (
+        MV,
+        Opts(name="MVW", ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_INT_MEM)]),
+    ),
+    0xF2: (
+        MV,
+        Opts(name="MVP", ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_INT_MEM)]),
+    ),
     0xF3: (MVL, Opts(ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_INT_MEM)])),
     0xF4: (SHR, Opts(ops=[Reg("A")])),
     0xF5: (SHR, Opts(ops=[IMem8()])),
     0xF6: (SHL, Opts(ops=[Reg("A")])),
     0xF7: (SHL, Opts(ops=[IMem8()])),
     0xF8: (MV, Opts(ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
-    0xF9: (MV, Opts(name='MVW', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
-    0xFA: (MV, Opts(name='MVP', ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
+    0xF9: (
+        MV,
+        Opts(name="MVW", ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)]),
+    ),
+    0xFA: (
+        MV,
+        Opts(name="MVP", ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)]),
+    ),
     0xFB: (MVL, Opts(ops=[EMemIMemOffset(order=EMemIMemOffsetOrder.DEST_EXT_MEM)])),
     0xFC: (DSRL, Opts(ops=[IMem8()])),
     0xFD: (MV, Opts(ops=[RegPair(size=2)])),
     0xFE: IR,
     0xFF: RESET,
 }
-

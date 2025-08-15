@@ -9,6 +9,7 @@ _plugin_dir = str(Path(__file__).resolve().parent)
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
 
+
 def module_exists(module_name):
     if module_name in sys.modules:
         return True
@@ -67,4 +68,3 @@ if module_exists("binaryninja") and __package__:
 # arch.register_calling_convention(
 #     ParametersInRegistersCallingConvention(arch, "default")
 # )
-

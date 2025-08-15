@@ -1,4 +1,3 @@
-
 from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from .instr.opcode_table import OPCODES
 from .instr import (
@@ -45,7 +44,13 @@ from binja_test_mocks.tokens import (
 from binja_test_mocks.tokens import asm_str
 from binja_test_mocks.coding import Decoder, Encoder
 from binja_test_mocks.mock_analysis import MockAnalysisInfo
-from binja_test_mocks.mock_llil import MockLowLevelILFunction, MockLLIL, MockFlag, mllil, mreg
+from binja_test_mocks.mock_llil import (
+    MockLowLevelILFunction,
+    MockLLIL,
+    MockFlag,
+    mllil,
+    mreg,
+)
 from binaryninja.lowlevelil import (  # type: ignore
     LLIL_TEMP,
 )
@@ -271,43 +276,52 @@ def test_emem_value_offset_helper_lifting() -> None:
 
     il = MockLowLevelILFunction()
     # With default BP_N addressing, imem uses BP+AB addressing
-    assert h.lift(il) == mllil(
-        "LOAD.b",
-        [
-            mllil(
-                "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
-                [
-                    mllil(
-                        "LOAD.l", [  # For indirect addressing, we load 3 bytes (20-bit address)
-                            mllil(
-                                "ADD.l",
-                                [
-                                    mllil(
-                                        "ADD.b",
-                                        [
-                                            mllil(
-                                                "LOAD.b",
-                                                [
-                                                    mllil(
-                                                        "CONST_PTR.l",
-                                                        [INTERNAL_MEMORY_START + IMEMRegisters.BP],
-                                                    )
-                                                ],
-                                            ),  # BP value
-                                            mllil("CONST.b", [0xAB]),  # n
-                                        ],
-                                    ),
-                                    mllil(
-                                        "CONST.l", [INTERNAL_MEMORY_START]
-                                    ),  # Add base for internal memory
-                                ],
-                            )
-                        ]
-                    ),
-                    mllil("CONST.l", [0xCD]),  # offset (now 3-byte for external addresses)
-                ],
-            )
-        ],
+    assert (
+        h.lift(il)
+        == mllil(
+            "LOAD.b",
+            [
+                mllil(
+                    "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
+                    [
+                        mllil(
+                            "LOAD.l",
+                            [  # For indirect addressing, we load 3 bytes (20-bit address)
+                                mllil(
+                                    "ADD.l",
+                                    [
+                                        mllil(
+                                            "ADD.b",
+                                            [
+                                                mllil(
+                                                    "LOAD.b",
+                                                    [
+                                                        mllil(
+                                                            "CONST_PTR.l",
+                                                            [
+                                                                INTERNAL_MEMORY_START
+                                                                + IMEMRegisters.BP
+                                                            ],
+                                                        )
+                                                    ],
+                                                ),  # BP value
+                                                mllil("CONST.b", [0xAB]),  # n
+                                            ],
+                                        ),
+                                        mllil(
+                                            "CONST.l", [INTERNAL_MEMORY_START]
+                                        ),  # Add base for internal memory
+                                    ],
+                                )
+                            ],
+                        ),
+                        mllil(
+                            "CONST.l", [0xCD]
+                        ),  # offset (now 3-byte for external addresses)
+                    ],
+                )
+            ],
+        )
     )
 
 
@@ -322,43 +336,52 @@ def test_emem_value_offset_helper_widths() -> None:
         h = EMemValueOffsetHelper(imem, offset, width=width)
         il = MockLowLevelILFunction()
         # With default BP_N addressing, imem uses BP+10 addressing
-        assert h.lift(il) == mllil(
-            f"LOAD.{suffix}",
-            [
-                mllil(
-                    "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
-                    [
-                        mllil(
-                            "LOAD.l", [  # For indirect addressing, we load 3 bytes (20-bit address)
-                                mllil(
-                                    "ADD.l",
-                                    [
-                                        mllil(
-                                            "ADD.b",
-                                            [
-                                                mllil(
-                                                    "LOAD.b",
-                                                    [
-                                                        mllil(
-                                                            "CONST_PTR.l",
-                                                            [INTERNAL_MEMORY_START + IMEMRegisters.BP],
-                                                        )
-                                                    ],
-                                                ),  # BP value
-                                                mllil("CONST.b", [0x10]),  # n
-                                            ],
-                                        ),
-                                        mllil(
-                                            "CONST.l", [INTERNAL_MEMORY_START]
-                                        ),  # Add base for internal memory
-                                    ],
-                                )
-                            ]
-                        ),
-                        mllil("CONST.l", [1]),  # offset (now 3-byte for external addresses)
-                    ],
-                )
-            ],
+        assert (
+            h.lift(il)
+            == mllil(
+                f"LOAD.{suffix}",
+                [
+                    mllil(
+                        "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
+                        [
+                            mllil(
+                                "LOAD.l",
+                                [  # For indirect addressing, we load 3 bytes (20-bit address)
+                                    mllil(
+                                        "ADD.l",
+                                        [
+                                            mllil(
+                                                "ADD.b",
+                                                [
+                                                    mllil(
+                                                        "LOAD.b",
+                                                        [
+                                                            mllil(
+                                                                "CONST_PTR.l",
+                                                                [
+                                                                    INTERNAL_MEMORY_START
+                                                                    + IMEMRegisters.BP
+                                                                ],
+                                                            )
+                                                        ],
+                                                    ),  # BP value
+                                                    mllil("CONST.b", [0x10]),  # n
+                                                ],
+                                            ),
+                                            mllil(
+                                                "CONST.l", [INTERNAL_MEMORY_START]
+                                            ),  # Add base for internal memory
+                                        ],
+                                    )
+                                ],
+                            ),
+                            mllil(
+                                "CONST.l", [1]
+                            ),  # offset (now 3-byte for external addresses)
+                        ],
+                    )
+                ],
+            )
         )
 
 
@@ -397,9 +420,9 @@ class TestIMemHelperLifting:
         # For simplicity, we'll assume addr_expr is the primary result.
         # If it complexly appends to il.ils, this might need adjustment.
         # However, imem_addr is designed to *return* the address expression.
-        assert isinstance(
-            addr_expr, MockLLIL
-        ), f"Expected MockLLIL, got {type(addr_expr)}"
+        assert isinstance(addr_expr, MockLLIL), (
+            f"Expected MockLLIL, got {type(addr_expr)}"
+        )
         return addr_expr
 
     def test_imem_helper_direct_n_mode(self) -> None:
@@ -944,7 +967,10 @@ def test_lift_mv() -> None:
                                             [
                                                 mllil(
                                                     "CONST_PTR.l",
-                                                    [INTERNAL_MEMORY_START + IMEMRegisters.BP],
+                                                    [
+                                                        INTERNAL_MEMORY_START
+                                                        + IMEMRegisters.BP
+                                                    ],
                                                 )
                                             ],
                                         ),  # BP value
@@ -1054,7 +1080,15 @@ def test_cmp_with_pre() -> None:
                                     [
                                         mllil(
                                             "LOAD.b",
-                                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEMRegisters.BP])],
+                                            [
+                                                mllil(
+                                                    "CONST_PTR.l",
+                                                    [
+                                                        INTERNAL_MEMORY_START
+                                                        + IMEMRegisters.BP
+                                                    ],
+                                                )
+                                            ],
                                         ),
                                         mllil("CONST.b", [0x34]),
                                     ],
@@ -1099,12 +1133,22 @@ def test_test_with_pre() -> None:
                                                     [
                                                         mllil(
                                                             "LOAD.b",
-                                                            [mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + IMEMRegisters.BP])],
+                                                            [
+                                                                mllil(
+                                                                    "CONST_PTR.l",
+                                                                    [
+                                                                        INTERNAL_MEMORY_START
+                                                                        + IMEMRegisters.BP
+                                                                    ],
+                                                                )
+                                                            ],
                                                         ),
                                                         mllil("CONST.b", [0x12]),
                                                     ],
                                                 ),
-                                                mllil("CONST.l", [INTERNAL_MEMORY_START]),
+                                                mllil(
+                                                    "CONST.l", [INTERNAL_MEMORY_START]
+                                                ),
                                             ],
                                         )
                                     ],
@@ -1168,9 +1212,9 @@ def test_test_with_pre() -> None:
 
 # Format:
 # F90F0F00: MVW   [(0F)],(00)
-def opcode_generator() -> (
-    Generator[Tuple[Optional[bytearray], Optional[str]], None, None]
-):
+def opcode_generator() -> Generator[
+    Tuple[Optional[bytearray], Optional[str]], None, None
+]:
     dirname = os.path.dirname(__file__)
     with open(os.path.join(dirname, "opcodes.txt")) as f:
         for line in f:
@@ -1224,47 +1268,55 @@ def test_compare_opcodes() -> None:
                 )
 
         except Exception as exc:
-            raise ValueError(f"Failed to decode {b.hex()} at line {i+1}: {s}") from exc
+            raise ValueError(
+                f"Failed to decode {b.hex()} at line {i + 1}: {s}"
+            ) from exc
 
         if not instr:
-            raise ValueError(f"Failed to decode {b.hex()} at line {i+1}: {s}")
+            raise ValueError(f"Failed to decode {b.hex()} at line {i + 1}: {s}")
         try:
             rendered = instr.render()
         except Exception as exc:
-            raise ValueError(f"Failed to render {b.hex()} at line {i+1}: {s}") from exc
+            raise ValueError(
+                f"Failed to render {b.hex()} at line {i + 1}: {s}"
+            ) from exc
         if not rendered:
-            raise ValueError(f"Failed to render {b.hex()} at line {i+1}: {s}")
+            raise ValueError(f"Failed to render {b.hex()} at line {i + 1}: {s}")
 
         rendered_str = asm_str(rendered)
         rendered_str = " ".join(rendered_str.split())
         rendered_str = rendered_str.replace(", ", ",")
-        
+
         # Handle the BP_N default addressing mode change
         # When there's no PRE, memory operands now default to BP+n notation
         # Try to match both with and without BP+ prefix
         expected_str = s
-        
+
         # Check if rendered output has BP+ but expected doesn't
         if s and "BP+" in rendered_str and "BP+" not in s:
             # Add BP+ to expected string for comparison
             import re
+
             # Match patterns like (XX) where XX is hex digits
-            expected_str = re.sub(r'\(([0-9A-F]+)\)', r'(BP+\1)', s)
-        
+            expected_str = re.sub(r"\(([0-9A-F]+)\)", r"(BP+\1)", s)
+
         # Also handle the reverse case where expected has BP+ but rendered doesn't
         # (this can happen for unknown instructions)
         if expected_str and "BP+" not in rendered_str and "BP+" in expected_str:
             # Remove BP+ from expected for comparison
             import re
-            expected_str = re.sub(r'\(BP\+([0-9A-F]+)\)', r'(\1)', expected_str)
-        
-        assert rendered_str == expected_str, f"Failed at line {i+1}: expected '{expected_str}', got '{rendered_str}'"
+
+            expected_str = re.sub(r"\(BP\+([0-9A-F]+)\)", r"(\1)", expected_str)
+
+        assert rendered_str == expected_str, (
+            f"Failed at line {i + 1}: expected '{expected_str}', got '{rendered_str}'"
+        )
 
         # test that no assertions are raised
         info = MockAnalysisInfo()
         try:
             instr.analyze(info, 0x1234)
-            assert info.length == len(b), f"Failed at line {i+1}: {s}"
+            assert info.length == len(b), f"Failed at line {i + 1}: {s}"
         except InvalidInstruction:
             # Skip unfused PRE instructions - they're invalid on their own
             if isinstance(instr, PRE):
@@ -1281,14 +1333,14 @@ def test_compare_opcodes() -> None:
                 continue
             raise
         except Exception as exc:
-            raise ValueError(f"Failed to lift {b.hex()} at line {i+1}: {s}") from exc
+            raise ValueError(f"Failed to lift {b.hex()} at line {i + 1}: {s}") from exc
 
         def check_no_unimplemented(instr: MockLLIL) -> None:
             if isinstance(instr, MockLLIL):
                 if instr.op == "UNIMPL":
                     pprint(il.ils)
                     raise ValueError(
-                        f"Unimplemented instruction: {instr} for {rendered_str} at line {i+1}"
+                        f"Unimplemented instruction: {instr} for {rendered_str} at line {i + 1}"
                     )
 
                 for op in instr.ops:
@@ -1296,7 +1348,7 @@ def test_compare_opcodes() -> None:
 
         def start_check_lifting(ils: List[MockLLIL]) -> None:
             assert b is not None  # Already checked above
-            assert len(ils) > 0, f"Failed to lift {b.hex()} at line {i+1}: {s}"
+            assert len(ils) > 0, f"Failed to lift {b.hex()} at line {i + 1}: {s}"
             for instr in ils:
                 check_no_unimplemented(instr)
 

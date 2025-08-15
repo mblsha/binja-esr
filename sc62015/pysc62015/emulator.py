@@ -175,20 +175,19 @@ class Registers:
         self.set(reg, value)
 
 
-
 class Emulator:
     def __init__(self, memory: Memory, reset_on_init: bool = True) -> None:
         # Register SC62015-specific intrinsics with the evaluation system
         register_sc62015_intrinsics()
-        
+
         self.regs = Registers()
         self.memory = memory
         self.state = State()
-        
+
         # Track last PC for tracing
         self._last_pc: int = 0
         self._current_pc: int = 0
-        
+
         # Perform power-on reset if requested
         if reset_on_init:
             self.power_on_reset()
@@ -204,14 +203,14 @@ class Emulator:
         # Track PC history for tracing
         self._last_pc = self._current_pc
         self._current_pc = address
-        
+
         self.regs.set(RegisterName.PC, address)
         instr = self.decode_instruction(address)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
-        
+
         # Track call stack depth based on opcode
         opcode = self.memory.read_byte(address)
-        
+
         # Monitor specific opcodes for call stack tracking
         if opcode == 0x04:  # CALL mn
             self.regs.call_sub_level += 1
@@ -235,9 +234,9 @@ class Emulator:
         # Type checker fix: Cast info.length to int.
         # Although type-hinted as int, type checker might not be able to prove it in all contexts.
         current_instr_length = cast(int, info.length)
-        assert (
-            current_instr_length is not None
-        ), "InstructionInfo.length was not set by analyze()"
+        assert current_instr_length is not None, (
+            "InstructionInfo.length was not set by analyze()"
+        )
         self.regs.set(RegisterName.PC, address + current_instr_length)
 
         label_to_index: Dict[Any, int] = {}
@@ -255,29 +254,29 @@ class Emulator:
 
             if isinstance(node, MockIfExpr):
                 # Type checker fix: Ensure node.cond is MockLLIL for eval
-                assert isinstance(
-                    node.cond, MockLLIL
-                ), "Condition for IF expression must be MockLLIL"
+                assert isinstance(node.cond, MockLLIL), (
+                    "Condition for IF expression must be MockLLIL"
+                )
                 cond_val, _ = self.evaluate(node.cond)
-                assert (
-                    cond_val is not None
-                ), "Condition for IF expression evaluated to None"
+                assert cond_val is not None, (
+                    "Condition for IF expression evaluated to None"
+                )
                 target_label = node.t if cond_val else node.f
                 assert target_label in label_to_index, f"Unknown label {target_label}"
                 pc_llil = label_to_index[target_label]
                 continue
 
             if isinstance(node, MockGoto):
-                assert (
-                    node.label in label_to_index
-                ), f"Unknown goto target label {node.label}"
+                assert node.label in label_to_index, (
+                    f"Unknown goto target label {node.label}"
+                )
                 pc_llil = label_to_index[node.label]
                 continue
 
             assert isinstance(node, MockLLIL), f"Expected MockLLIL, got {type(node)}"
             self.evaluate(node)
             pc_llil += 1
-        
+
         return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
     def evaluate(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
@@ -289,10 +288,10 @@ class Emulator:
             self.regs.get_flag,
             self.regs.set_flag,
         )
-    
+
     def power_on_reset(self) -> None:
         """Perform power-on reset per SC62015 spec.
-        
+
         This method calls the RESET intrinsic evaluator directly to avoid duplicating
         the reset logic. The RESET intrinsic performs all necessary operations:
         - LCC (FEH) bit 7 is reset to 0 (documented as ACM bit 7)
@@ -307,6 +306,7 @@ class Emulator:
         """
         # Directly call the RESET intrinsic evaluator
         from .intrinsics import eval_intrinsic_reset
+
         eval_intrinsic_reset(
             None,  # llil not needed
             None,  # size not needed
@@ -316,6 +316,6 @@ class Emulator:
             self.regs.get_flag,
             self.regs.set_flag,
         )
-        
+
         # Clear halted state (RESET doesn't set this, but power-on should clear it)
         self.state.halted = False

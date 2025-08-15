@@ -164,7 +164,9 @@ class Assembler:
                             converted_match = False
                             break
                         continue
-                    if isinstance(t_op, RegIMemOffset) and isinstance(p_op, RegIMemOffset):
+                    if isinstance(t_op, RegIMemOffset) and isinstance(
+                        p_op, RegIMemOffset
+                    ):
                         if t_op.order != p_op.order:
                             converted_match = False
                             break
@@ -190,7 +192,9 @@ class Assembler:
                             converted_match = False
                             break
                         continue
-                    if isinstance(t_op, EMemIMemOffset) and isinstance(p_op, EMemIMemOffset):
+                    if isinstance(t_op, EMemIMemOffset) and isinstance(
+                        p_op, EMemIMemOffset
+                    ):
                         if t_op.order != p_op.order:
                             converted_match = False
                             break
@@ -228,11 +232,15 @@ class Assembler:
                     # Determine if a PRE prefix byte is required based on
                     # internal memory operands.
                     operands_list = list(instr.operands())
-                    imem_ops = [op for op in operands_list if isinstance(op, IMemOperand)]
+                    imem_ops = [
+                        op for op in operands_list if isinstance(op, IMemOperand)
+                    ]
 
                     pre_byte: Optional[int] = None
                     if len(imem_ops) == 2:
-                        pre_byte = REVERSE_PRE_TABLE.get((imem_ops[0].mode, imem_ops[1].mode))
+                        pre_byte = REVERSE_PRE_TABLE.get(
+                            (imem_ops[0].mode, imem_ops[1].mode)
+                        )
                         if pre_byte is None:
                             raise AssemblerError(
                                 f"Invalid addressing mode combination for {mnemonic}: "
@@ -256,22 +264,28 @@ class Assembler:
                     if pre_byte is not None:
                         instr_for_size._pre = pre_byte
                     for op in instr_for_size.operands():
-                        if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
+                        if hasattr(op, "value") and isinstance(
+                            getattr(op, "value"), str
+                        ):
                             try:
                                 setattr(op, "value", int(getattr(op, "value"), 0))
                             except ValueError:
                                 setattr(op, "value", 0)
                         offset = getattr(op, "offset", None)
-                        if (
-                            isinstance(offset, ImmOffset)
-                            and isinstance(offset.value, str)
+                        if isinstance(offset, ImmOffset) and isinstance(
+                            offset.value, str
                         ):
                             try:
                                 offset.value = int(offset.value, 0)
                             except ValueError:
                                 offset.value = 0
-                        if hasattr(op, "extra_hi") and getattr(op, "value", None) is not None:
-                            setattr(op, "extra_hi", (int(getattr(op, "value")) >> 16) & 0xFF)
+                        if (
+                            hasattr(op, "extra_hi")
+                            and getattr(op, "value", None) is not None
+                        ):
+                            setattr(
+                                op, "extra_hi", (int(getattr(op, "value")) >> 16) & 0xFF
+                            )
                         if isinstance(op, Imm20) and isinstance(op.value, int):
                             op.extra_hi = (op.value >> 16) & 0xFF
 
@@ -382,7 +396,9 @@ class Assembler:
                     current_section_pointers[current_section] += len(encoded_bytes)
                 except Exception as e:
                     source_line = program_ast["source_text"].splitlines()[i]
-                    raise AssemblerError(f"on line {i+1}: {e}\n> {source_line}") from e
+                    raise AssemblerError(
+                        f"on line {i + 1}: {e}\n> {source_line}"
+                    ) from e
         return binfile
 
     def _encode_statement(self, statement: Dict[str, Any], line_num: int) -> bytearray:
@@ -405,10 +421,7 @@ class Assembler:
                     if isinstance(op, Imm20) and isinstance(val, int):
                         op.extra_hi = (val >> 16) & 0xFF
                 offset = getattr(op, "offset", None)
-                if (
-                    isinstance(offset, ImmOffset)
-                    and isinstance(offset.value, str)
-                ):
+                if isinstance(offset, ImmOffset) and isinstance(offset.value, str):
                     offset.value = self._evaluate_operand(offset.value)
             encoder = Encoder()
             instr.encode(encoder, self.current_address)

@@ -133,9 +133,12 @@ class AsmTransformer(Transformer):
         return {
             "instruction": {
                 "instr_class": instr_class,
-                "instr_opts": Opts(name=name, cond=cond, ops=list(ops) if ops else None),
+                "instr_opts": Opts(
+                    name=name, cond=cond, ops=list(ops) if ops else None
+                ),
             }
         }
+
     def start(self, items: List[LineNode]) -> ProgramNode:
         # Filter out empty lines and stray NEWLINE tokens
         return {"lines": [line for line in items if isinstance(line, dict) and line]}
@@ -511,7 +514,7 @@ class AsmTransformer(Transformer):
         return self._instr_node(instr_cls, op, name=name)
 
     @staticmethod
-    def _imm_offset(sign: Literal['+', '-'], value: Any) -> ImmOffset:
+    def _imm_offset(sign: Literal["+", "-"], value: Any) -> ImmOffset:
         imm = ImmOffset(sign)
         imm.value = value
         return imm
@@ -667,18 +670,14 @@ class AsmTransformer(Transformer):
 
     def mv_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[op1, op2])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[op1, op2])}}
 
     def mv_reg_reg(self, items: List[Any]) -> InstructionNode:
         reg1 = cast(Reg, items[0])
         reg2 = cast(Reg, items[1])
         rp = self._make_reg_pair(reg1, reg2)
         rp.size = 2
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[rp])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[rp])}}
 
     def mv_reg_imm(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
@@ -692,16 +691,12 @@ class AsmTransformer(Transformer):
         else:
             imm = Imm20()
         imm.value = val
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, imm])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, imm])}}
 
     def mv_reg_imem(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
         mem = cast(IMemOperand, items[1])
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}}
 
     def mv_reg_emem(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
@@ -713,55 +708,41 @@ class AsmTransformer(Transformer):
         # mismatches during opcode lookup.
         if isinstance(mem, EMemReg):
             mem.width = reg.width()
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}}
 
     def mv_imem_reg(self, items: List[Any]) -> InstructionNode:
         mem = cast(IMemOperand, items[0])
         reg = cast(Reg, items[1])
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}}
 
     def mv_emem_reg(self, items: List[Any]) -> InstructionNode:
         mem = cast(EMemAddr | EMemReg, items[0])
         reg = cast(Reg, items[1])
         if isinstance(mem, EMemReg):
             mem.width = reg.width()
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}}
 
     def mv_reg_ememreg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
         mem = cast(EMemReg, items[1])
         mem.width = reg.width()
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}}
 
     def mv_ememreg_reg(self, items: List[Any]) -> InstructionNode:
         mem = cast(EMemReg, items[0])
         reg = cast(Reg, items[1])
         mem.width = reg.width()
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}}
 
     def mv_reg_ememimem(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
         mem = cast(EMemIMem, items[1])
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[reg, mem])}}
 
     def mv_ememimem_reg(self, items: List[Any]) -> InstructionNode:
         mem = cast(EMemIMem, items[0])
         reg = cast(Reg, items[1])
-        return {
-            "instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}
-        }
+        return {"instruction": {"instr_class": MV, "instr_opts": Opts(ops=[mem, reg])}}
 
     def mv_imem_imm(self, items: List[Any]) -> InstructionNode:
         mem, val = items
@@ -786,9 +767,7 @@ class AsmTransformer(Transformer):
     def mv_imem_ememreg(self, items: List[Any]) -> InstructionNode:
         imem = cast(IMemOperand, items[0])
         regop = cast(EMemReg, items[1])
-        return self._reg_imem_offset(
-            MV, imem, regop, RegIMemOffsetOrder.DEST_IMEM
-        )
+        return self._reg_imem_offset(MV, imem, regop, RegIMemOffsetOrder.DEST_IMEM)
 
     def mv_ememreg_imem(self, items: List[Any]) -> InstructionNode:
         regop = cast(EMemReg, items[0])
@@ -806,7 +785,11 @@ class AsmTransformer(Transformer):
         im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
@@ -819,7 +802,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
@@ -900,7 +887,11 @@ class AsmTransformer(Transformer):
         im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
@@ -913,7 +904,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM, width=2)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
@@ -962,7 +957,11 @@ class AsmTransformer(Transformer):
         im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
@@ -975,7 +974,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
@@ -1065,7 +1068,11 @@ class AsmTransformer(Transformer):
         im1.value = imem.n_val
         op.imem1 = im1
         im2 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im2.value = src_val
         op.imem2 = im2
         op.mode = src.mode
@@ -1078,7 +1085,11 @@ class AsmTransformer(Transformer):
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM)
         op.mode_imm.value = src.value
         im1 = IMem8()
-        src_val = cast(IMemOperand, src.imem).n_val if isinstance(src.imem, IMemOperand) else src.imem.value
+        src_val = (
+            cast(IMemOperand, src.imem).n_val
+            if isinstance(src.imem, IMemOperand)
+            else src.imem.value
+        )
         im1.value = src_val
         op.imem1 = im1
         im2 = IMem8()
@@ -1393,4 +1404,3 @@ class AsmTransformer(Transformer):
         """Pass through the single parsed instruction node."""
         assert len(items) == 1
         return cast(InstructionNode, items[0])
-

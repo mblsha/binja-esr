@@ -80,7 +80,7 @@ def test_opcode_table_roundtrip() -> None:
             output = assembler.assemble(source).as_binary()
         except Exception as e:
             text = str(e).replace("\n", " ")
-            mismatches.append(f"Line {idx+1}: {asm_text} -> Exception: {text}")
+            mismatches.append(f"Line {idx + 1}: {asm_text} -> Exception: {text}")
             continue
 
         if _strip_pre(output) != _strip_pre(expected_bytes):
@@ -89,13 +89,13 @@ def test_opcode_table_roundtrip() -> None:
                 output_instr = decode(output, 0)
             except Exception:
                 mismatches.append(
-                    f"Line {idx+1}: {asm_text} -> {output.hex()} expected {expected_bytes.hex()}"
+                    f"Line {idx + 1}: {asm_text} -> {output.hex()} expected {expected_bytes.hex()}"
                 )
                 continue
 
             if expected_instr.render() != output_instr.render():
                 mismatches.append(
-                    f"Line {idx+1}: {asm_text} -> {output.hex()} expected {expected_bytes.hex()}"
+                    f"Line {idx + 1}: {asm_text} -> {output.hex()} expected {expected_bytes.hex()}"
                 )
 
     if mismatches:

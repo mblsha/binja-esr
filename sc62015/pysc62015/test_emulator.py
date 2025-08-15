@@ -1,4 +1,3 @@
-
 from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from .emulator import (
     Registers,
@@ -273,7 +272,10 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.BA: 0x1234,  # BA unchanged
             RegisterName.Y: 0x2002,  # Y incremented by 2 (data width for BA)
         },
-        expected_mem_writes=[(0x2000, 0x34), (0x2001, 0x12)],  # Write BA at Y, then increment
+        expected_mem_writes=[
+            (0x2000, 0x34),
+            (0x2001, 0x12),
+        ],  # Write BA at Y, then increment
         expected_mem_state={0x2000: 0x34, 0x2001: 0x12},
         expected_asm_str="MV    [Y++], BA",
     ),
@@ -307,9 +309,9 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes([0x09, 0x09]),  # MV IL, 09
         init_regs={RegisterName.I: 0xAABB},  # Initialize I to 0xAABB
         expected_regs={
-            RegisterName.IL: 0x09,   # IL should be 0x09
-            RegisterName.IH: 0x00,   # IH should be cleared to 0x00
-            RegisterName.I: 0x0009   # Full I register should be 0x0009
+            RegisterName.IL: 0x09,  # IL should be 0x09
+            RegisterName.IH: 0x00,  # IH should be cleared to 0x00
+            RegisterName.I: 0x0009,  # Full I register should be 0x0009
         },
         expected_asm_str="MV    IL, 09",
     ),
@@ -319,9 +321,9 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes([0x0B, 0x34, 0x12]),  # MV I, 1234 (0x0B is opcode for MV I)
         init_regs={RegisterName.I: 0xAABB},  # Initialize I to 0xAABB
         expected_regs={
-            RegisterName.I: 0x1234,   # Full I register set to 0x1234
-            RegisterName.IL: 0x34,    # IL is low byte
-            RegisterName.IH: 0x12     # IH is high byte
+            RegisterName.I: 0x1234,  # Full I register set to 0x1234
+            RegisterName.IL: 0x34,  # IL is low byte
+            RegisterName.IH: 0x12,  # IH is high byte
         },
         expected_asm_str="MV    I, 1234",
     ),
@@ -526,14 +528,18 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0x02: 0x44,  # First byte from 0x1FFF
             INTERNAL_MEMORY_START + 0x01: 0x33,  # Second byte from 0x1FFE
             INTERNAL_MEMORY_START + 0x00: 0x22,  # Third byte from 0x1FFD
-            INTERNAL_MEMORY_START + 0xFF: 0x11,  # Fourth byte from 0x1FFC (wrapped from -1)
-            INTERNAL_MEMORY_START + 0xFE: 0x55,  # Fifth byte from 0x1FFB (wrapped from -2)
+            INTERNAL_MEMORY_START
+            + 0xFF: 0x11,  # Fourth byte from 0x1FFC (wrapped from -1)
+            INTERNAL_MEMORY_START
+            + 0xFE: 0x55,  # Fifth byte from 0x1FFB (wrapped from -2)
         },
         expected_asm_str="MVL   (BP+02), [--X]",
     ),
     InstructionTestCase(
         test_id="MVL_(FE)_(50)_I5_wrap",
-        instr_bytes=bytes.fromhex("CBFE50"),  # MVL (FE), (50) - no PRE, both use BP_N by default
+        instr_bytes=bytes.fromhex(
+            "CBFE50"
+        ),  # MVL (FE), (50) - no PRE, both use BP_N by default
         init_regs={
             RegisterName.I: 5,
         },
@@ -726,7 +732,9 @@ instruction_test_cases: List[InstructionTestCase] = [
         test_id="MV_BP_register_immediate",
         instr_bytes=bytes.fromhex("30ccecc2"),
         init_mem={INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x00},  # Initial BP = 0x00
-        expected_mem_state={INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xC2},  # BP = 0xC2
+        expected_mem_state={
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xC2
+        },  # BP = 0xC2
         expected_asm_str="MV    (EC), C2",
     ),
     # --- AND Instructions ---
@@ -735,28 +743,44 @@ instruction_test_cases: List[InstructionTestCase] = [
         test_id="AND_A_imm_zero_result",
         instr_bytes=bytes.fromhex("7000"),  # AND A, 00
         init_regs={RegisterName.A: 0xFF, RegisterName.FC: 1},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="AND   A, 00",
     ),
     InstructionTestCase(
         test_id="AND_A_imm_non_zero_result",
         instr_bytes=bytes.fromhex("700F"),  # AND A, 0F
         init_regs={RegisterName.A: 0x55, RegisterName.FC: 0},
-        expected_regs={RegisterName.A: 0x05, RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x05,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 0,
+        },  # FC unchanged
         expected_asm_str="AND   A, 0F",
     ),
     InstructionTestCase(
         test_id="AND_A_imm_all_ones",
         instr_bytes=bytes.fromhex("70FF"),  # AND A, FF
         init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
-        expected_regs={RegisterName.A: 0xAA, RegisterName.FZ: 0, RegisterName.FC: 1},  # A unchanged, FC unchanged
+        expected_regs={
+            RegisterName.A: 0xAA,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 1,
+        },  # A unchanged, FC unchanged
         expected_asm_str="AND   A, FF",
     ),
     InstructionTestCase(
         test_id="AND_A_imm_zero_operand",
         instr_bytes=bytes.fromhex("700F"),  # AND A, 0F
         init_regs={RegisterName.A: 0xF0, RegisterName.FC: 0},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},  # Zero result
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 0,
+        },  # Zero result
         expected_asm_str="AND   A, 0F",
     ),
     # 0x71: AND (n), imm8
@@ -786,21 +810,33 @@ instruction_test_cases: List[InstructionTestCase] = [
         test_id="OR_A_imm_zero_result",
         instr_bytes=bytes.fromhex("7800"),  # OR A, 00
         init_regs={RegisterName.A: 0x00, RegisterName.FC: 1},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="OR    A, 00",
     ),
     InstructionTestCase(
         test_id="OR_A_imm_non_zero_result",
         instr_bytes=bytes.fromhex("780F"),  # OR A, 0F
         init_regs={RegisterName.A: 0x00, RegisterName.FC: 0},
-        expected_regs={RegisterName.A: 0x0F, RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x0F,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 0,
+        },  # FC unchanged
         expected_asm_str="OR    A, 0F",
     ),
     InstructionTestCase(
         test_id="OR_A_imm_all_ones",
         instr_bytes=bytes.fromhex("78FF"),  # OR A, FF
         init_regs={RegisterName.A: 0x00, RegisterName.FC: 1},
-        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0xFF,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="OR    A, FF",
     ),
     InstructionTestCase(
@@ -837,28 +873,44 @@ instruction_test_cases: List[InstructionTestCase] = [
         test_id="XOR_A_imm_zero_result_same",
         instr_bytes=bytes.fromhex("68FF"),  # XOR A, FF
         init_regs={RegisterName.A: 0xFF, RegisterName.FC: 1},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="XOR   A, FF",
     ),
     InstructionTestCase(
         test_id="XOR_A_imm_zero_result_pattern",
         instr_bytes=bytes.fromhex("6855"),  # XOR A, 55
         init_regs={RegisterName.A: 0x55, RegisterName.FC: 0},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 0,
+        },  # FC unchanged
         expected_asm_str="XOR   A, 55",
     ),
     InstructionTestCase(
         test_id="XOR_A_imm_non_zero_result",
         instr_bytes=bytes.fromhex("6855"),  # XOR A, 55
         init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
-        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0xFF,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="XOR   A, 55",
     ),
     InstructionTestCase(
         test_id="XOR_A_imm_with_zero",
         instr_bytes=bytes.fromhex("6800"),  # XOR A, 00
         init_regs={RegisterName.A: 0xAA, RegisterName.FC: 0},
-        expected_regs={RegisterName.A: 0xAA, RegisterName.FZ: 0, RegisterName.FC: 0},  # A unchanged
+        expected_regs={
+            RegisterName.A: 0xAA,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 0,
+        },  # A unchanged
         expected_asm_str="XOR   A, 00",
     ),
     # 0x69: XOR (n), imm8
@@ -889,7 +941,11 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("7710"),  # AND A, (BP+10)
         init_regs={RegisterName.A: 0xF0, RegisterName.FC: 1},
         init_mem={INTERNAL_MEMORY_START + 0x10: 0x0F},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="AND   A, (BP+10)",
     ),
     # 0x7F: OR A, (n)
@@ -898,7 +954,11 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("7F10"),  # OR A, (BP+10)
         init_regs={RegisterName.A: 0xF0, RegisterName.FC: 0},
         init_mem={INTERNAL_MEMORY_START + 0x10: 0x0F},
-        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 0},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0xFF,
+            RegisterName.FZ: 0,
+            RegisterName.FC: 0,
+        },  # FC unchanged
         expected_asm_str="OR    A, (BP+10)",
     ),
     # 0x6F: XOR A, (n)
@@ -907,10 +967,13 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("6F10"),  # XOR A, (BP+10)
         init_regs={RegisterName.A: 0xAA, RegisterName.FC: 1},
         init_mem={INTERNAL_MEMORY_START + 0x10: 0xAA},
-        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},  # FC unchanged
+        expected_regs={
+            RegisterName.A: 0x00,
+            RegisterName.FZ: 1,
+            RegisterName.FC: 1,
+        },  # FC unchanged
         expected_asm_str="XOR   A, (BP+10)",
     ),
-
     # Test case for b204 instruction with BA=0x5AA5
     InstructionTestCase(
         test_id="MV_emem_BA_b204",
@@ -919,20 +982,25 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.BA: 0x5AA5,
             RegisterName.X: 0xBE000,  # X points to address 0xBE000
             RegisterName.FC: 0,
-            RegisterName.FZ: 0
+            RegisterName.FZ: 0,
         },
-        init_mem={0xBE000: 0x00, 0xBE001: 0x00},  # Clear external memory at 0xBE000-0xBE001
+        init_mem={
+            0xBE000: 0x00,
+            0xBE001: 0x00,
+        },  # Clear external memory at 0xBE000-0xBE001
         expected_regs={
             RegisterName.BA: 0x5AA5,
             RegisterName.X: 0xBE000,  # X unchanged
             RegisterName.FC: 0,
-            RegisterName.FZ: 0
+            RegisterName.FZ: 0,
         },
-        expected_mem_writes=[(0xBE000, 0xA5), (0xBE001, 0x5A)],  # Little-endian: LSB first
+        expected_mem_writes=[
+            (0xBE000, 0xA5),
+            (0xBE001, 0x5A),
+        ],  # Little-endian: LSB first
         expected_mem_state={0xBE000: 0xA5, 0xBE001: 0x5A},  # BA=0x5AA5 stored as A5 5A
         expected_asm_str="MV    [X], BA",
     ),
-
     # Test case for 30e904d4 instruction - MVW [X], (BP+D4)
     InstructionTestCase(
         test_id="MVW_X_indirect_from_BP_30e904d4",
@@ -940,7 +1008,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={
             RegisterName.X: 0x080000,  # X points to external memory address 0x080000
             RegisterName.FC: 0,
-            RegisterName.FZ: 0
+            RegisterName.FZ: 0,
         },
         init_mem={
             # Initialize internal memory at BP+D4 with test data
@@ -953,7 +1021,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_regs={
             RegisterName.X: 0x080000,  # X unchanged
             RegisterName.FC: 0,  # Flags unchanged
-            RegisterName.FZ: 0
+            RegisterName.FZ: 0,
         },
         expected_mem_writes=[
             (0x080000, 0x34),  # Low byte written first
@@ -994,7 +1062,8 @@ instruction_test_cases: List[InstructionTestCase] = [
             # MVP writes 20-bit value 0x0BFCDE in little-endian order to internal memory offset 0xE6
             INTERNAL_MEMORY_START + 0xE6: 0xDE,  # Low byte
             INTERNAL_MEMORY_START + 0xE7: 0xFC,  # Mid byte
-            INTERNAL_MEMORY_START + 0xE8: 0x0B,  # High byte (only low 4 bits used for 20-bit)
+            INTERNAL_MEMORY_START
+            + 0xE8: 0x0B,  # High byte (only low 4 bits used for 20-bit)
         },
         expected_asm_str="MVP   (E6), BFCDE",
     ),
@@ -1007,12 +1076,10 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_mem={
             # Set BP to 0x34 to ensure it's not being used
             INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x34,  # BP = 0x34
-
             # Internal memory at 0xE6 contains 20-bit external address (little-endian)
             INTERNAL_MEMORY_START + 0xE6: 0x00,  # Low byte
             INTERNAL_MEMORY_START + 0xE7: 0x10,  # Mid byte
             INTERNAL_MEMORY_START + 0xE8: 0x02,  # High byte (20-bit address = 0x021000)
-
             # External memory at 0x021000 + 0x08 = 0x021008 contains test value
             0x021008: 0x42,  # Test value to be loaded into A
         },
@@ -1037,7 +1104,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_regs={
             RegisterName.Y: 0x332211,  # Y should contain the 3 bytes from external memory (little-endian)
-            RegisterName.X: 0x3000,    # X should remain unchanged (positive offset, not inc/dec)
+            RegisterName.X: 0x3000,  # X should remain unchanged (positive offset, not inc/dec)
         },
         expected_asm_str="MV    Y, [X+12]",
     ),
@@ -1113,7 +1180,10 @@ instruction_test_cases: List[InstructionTestCase] = [
             # PUSHU IMR pushes the value to stack and always clears bit 7
             (0x7FFF, 0x7F),  # Original IMR value pushed to stack
             # Even though bit 7 is already 0, the instruction still writes
-            (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x7F),  # IMR written (unchanged)
+            (
+                INTERNAL_MEMORY_START + IMEMRegisters.IMR,
+                0x7F,
+            ),  # IMR written (unchanged)
         ],
         expected_asm_str="PUSHU IMR",
     ),
@@ -1149,18 +1219,15 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={RegisterName.X: 0x0DF820},
         expected_regs={
             RegisterName.X: 0x0DF821,
-            RegisterName.FZ: 0  # Z flag cleared since result is non-zero
+            RegisterName.FZ: 0,  # Z flag cleared since result is non-zero
         },
         expected_asm_str="INC   X",
     ),
     # Test MV [--S], X instruction
     InstructionTestCase(
-        test_id="MV_pre_dec_S_X", 
+        test_id="MV_pre_dec_S_X",
         instr_bytes=bytes.fromhex("b437"),
-        init_regs={
-            RegisterName.S: 0x0BFC87,
-            RegisterName.X: 0x0F28F9
-        },
+        init_regs={RegisterName.S: 0x0BFC87, RegisterName.X: 0x0F28F9},
         expected_regs={
             RegisterName.S: 0x0BFC84  # S decremented by 3 (size of X)
         },
@@ -1169,11 +1236,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             (0x0BFC85, 0x28),  # Middle byte of X
             (0x0BFC86, 0x0F),  # High byte of X
         ],
-        expected_mem_state={
-            0x0BFC84: 0xF9,
-            0x0BFC85: 0x28,
-            0x0BFC86: 0x0F
-        },
+        expected_mem_state={0x0BFC84: 0xF9, 0x0BFC85: 0x28, 0x0BFC86: 0x0F},
         expected_asm_str="MV    [--S], X",
     ),
 ]
@@ -1359,6 +1422,7 @@ def test_pushu_popu_r2() -> None:
     assert cpu.regs.get(RegisterName.U) == 0x8000
     assert cpu.regs.get(RegisterName.BA) == 0x1234
 
+
 def test_call_ret() -> None:
     cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("042000"))
     raw[0x20] = 0x06
@@ -1458,7 +1522,6 @@ def test_rol_ror_a() -> None:
     assert cpu.regs.get(RegisterName.FZ) == 0
 
 
-
 class PreTestCase(NamedTuple):
     test_id: str  # Descriptive name for the test case
     instr_bytes: bytes  # The full instruction byte sequence (PRE + MV + operands)
@@ -1467,15 +1530,17 @@ class PreTestCase(NamedTuple):
         RegisterName, int
     ]  # Initial register values {reg_name: value}
     expected_asm_str: str  # Expected assembly string after decoding
-    expected_pre_val_in_instr: int  # The PRE byte value itself, as stored in the decoded instr
+    expected_pre_val_in_instr: (
+        int  # The PRE byte value itself, as stored in the decoded instr
+    )
 
     # For tests like MV A, (mem_source)
     expected_A_val_after: Optional[int] = None
 
     # For tests like MV (mem_dest), A
-    expected_mem_writes_after: Optional[
-        List[Tuple[int, int]]
-    ] = None  # List of (address, value)
+    expected_mem_writes_after: Optional[List[Tuple[int, int]]] = (
+        None  # List of (address, value)
+    )
 
 
 def get_pre_test_cases() -> List[PreTestCase]:
@@ -1601,9 +1666,7 @@ def get_pre_test_cases() -> List[PreTestCase]:
         ),
         PreTestCase(
             test_id="PRE_0x31_Single_Addressable_MV_A_(n)",  # 0x31 with single addressable operand uses PRE1
-            instr_bytes=bytes(
-                [0x31, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]
-            ),
+            instr_bytes=bytes([0x31, MV_A_DEST_MEM_SRC_OPCODE, N_OPERAND_VAL]),
             init_memory_state={
                 INTERNAL_MEMORY_START + IMEMRegisters.BP: BP_REG_VAL,
                 INTERNAL_MEMORY_START + IMEMRegisters.PY: PY_REG_VAL,
@@ -1638,9 +1701,9 @@ def test_pre_addressing_modes(tc: PreTestCase) -> None:
 
     # --- Decode and Verify Assembly and PRE Byte ---
     decoded_instr = cpu.decode_instruction(0x00)  # Instructions are at address 0x00
-    assert (
-        decoded_instr is not None
-    ), f"Test '{tc.test_id}': Failed to decode instruction bytes: {tc.instr_bytes.hex()}"
+    assert decoded_instr is not None, (
+        f"Test '{tc.test_id}': Failed to decode instruction bytes: {tc.instr_bytes.hex()}"
+    )
 
     assert decoded_instr._pre == tc.expected_pre_val_in_instr, (
         f"Test '{tc.test_id}': Decoded instruction's _pre value (0x{decoded_instr._pre:02X if decoded_instr._pre is not None else 'None'}) "
@@ -1852,18 +1915,18 @@ def test_adcl_instruction(tc: AdclDadlTestCase) -> None:
     decoded_instr = cpu.decode_instruction(0x00)
     assert decoded_instr is not None, f"Test '{tc.test_id}': Failed to decode"
     actual_asm_str = asm_str(decoded_instr.render())
-    assert (
-        actual_asm_str == tc.expected_asm_str
-    ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    assert actual_asm_str == tc.expected_asm_str, (
+        f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    )
 
     # debug_instruction(cpu, 0x00)
     _ = cpu.execute_instruction(0x00)
 
     for i, expected_val in enumerate(tc.expected_m_values_after):
         actual_val = raw_memory_array[tc.expected_m_addr_start + i]
-        assert (
-            actual_val == expected_val
-        ), f"Test '{tc.test_id}': Memory mismatch at offset {i}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        assert actual_val == expected_val, (
+            f"Test '{tc.test_id}': Memory mismatch at offset {i}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        )
 
     # Verify logged writes if needed, though direct memory check is more robust here
     # For ADCL, (m) is destination, so writes should match expected_m_values_after
@@ -1881,20 +1944,20 @@ def test_adcl_instruction(tc: AdclDadlTestCase) -> None:
             < tc.expected_m_addr_start + len(tc.expected_m_values_after)
         ]
     )
-    assert actual_writes_to_m == sorted(
-        expected_writes_to_m
-    ), f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+    assert actual_writes_to_m == sorted(expected_writes_to_m), (
+        f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+    )
 
-    assert (
-        cpu.regs.get(RegisterName.I) == tc.expected_I_after
-    ), f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
-    assert (
-        cpu.regs.get(RegisterName.FC) == tc.expected_FC_after
-    ), f"Test '{tc.test_id}': Flag C. Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    assert cpu.regs.get(RegisterName.I) == tc.expected_I_after, (
+        f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
+    )
+    assert cpu.regs.get(RegisterName.FC) == tc.expected_FC_after, (
+        f"Test '{tc.test_id}': Flag C. Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    )
 
-    assert (
-        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
-    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    assert cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after, (
+        f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    )
 
 
 # DADL Tests
@@ -2029,18 +2092,18 @@ def test_dadl_instruction(tc: AdclDadlTestCase) -> None:
     decoded_instr = cpu.decode_instruction(0x00)
     assert decoded_instr is not None, f"Test '{tc.test_id}': Failed to decode"
     actual_asm_str = asm_str(decoded_instr.render())
-    assert (
-        actual_asm_str == tc.expected_asm_str
-    ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    assert actual_asm_str == tc.expected_asm_str, (
+        f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    )
 
     # debug_instruction(cpu, 0x00)
     _ = cpu.execute_instruction(0x00)
 
     for i, expected_val in enumerate(tc.expected_m_values_after):
         actual_val = raw_memory_array[tc.expected_m_addr_start + i]
-        assert (
-            actual_val == expected_val
-        ), f"Test '{tc.test_id}': Memory mismatch at offset {i} from MSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        assert actual_val == expected_val, (
+            f"Test '{tc.test_id}': Memory mismatch at offset {i} from MSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        )
 
     expected_writes_to_m = []
     num_bytes = len(tc.expected_m_values_after)
@@ -2059,19 +2122,19 @@ def test_dadl_instruction(tc: AdclDadlTestCase) -> None:
             if tc.expected_m_addr_start <= w[0] < tc.expected_m_addr_start + num_bytes
         ]
     )
-    assert actual_writes_to_m == sorted(
-        expected_writes_to_m
-    ), f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+    assert actual_writes_to_m == sorted(expected_writes_to_m), (
+        f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+    )
 
-    assert (
-        cpu.regs.get(RegisterName.I) == tc.expected_I_after
-    ), f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
-    assert (
-        cpu.regs.get(RegisterName.FC) == tc.expected_FC_after
-    ), f"Test '{tc.test_id}': Flag C. Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
-    assert (
-        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
-    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    assert cpu.regs.get(RegisterName.I) == tc.expected_I_after, (
+        f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
+    )
+    assert cpu.regs.get(RegisterName.FC) == tc.expected_FC_after, (
+        f"Test '{tc.test_id}': Flag C. Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    )
+    assert cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after, (
+        f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    )
 
 
 # Add this to test_emulator.py
@@ -2258,18 +2321,18 @@ def test_sbcl_instruction(tc: SbclDsblTestCase) -> None:
     decoded_instr = cpu.decode_instruction(0x00)
     assert decoded_instr is not None, f"Test '{tc.test_id}': Failed to decode"
     actual_asm_str = asm_str(decoded_instr.render())
-    assert (
-        actual_asm_str == tc.expected_asm_str
-    ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    assert actual_asm_str == tc.expected_asm_str, (
+        f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    )
 
     # debug_instruction(cpu, 0x00)
     _ = cpu.execute_instruction(0x00)
 
     for i, expected_val in enumerate(tc.expected_m_values_after):
         actual_val = raw_memory_array[tc.expected_m_addr_start + i]
-        assert (
-            actual_val == expected_val
-        ), f"Test '{tc.test_id}': Memory mismatch at offset {i} from LSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        assert actual_val == expected_val, (
+            f"Test '{tc.test_id}': Memory mismatch at offset {i} from LSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        )
 
     expected_writes_to_m = [
         (tc.expected_m_addr_start + i, val)
@@ -2284,19 +2347,19 @@ def test_sbcl_instruction(tc: SbclDsblTestCase) -> None:
             < tc.expected_m_addr_start + len(tc.expected_m_values_after)
         ]
     )
-    assert actual_writes_to_m == sorted(
-        expected_writes_to_m
-    ), f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+    assert actual_writes_to_m == sorted(expected_writes_to_m), (
+        f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected: {sorted(expected_writes_to_m)}\nGot: {actual_writes_to_m}"
+    )
 
-    assert (
-        cpu.regs.get(RegisterName.I) == tc.expected_I_after
-    ), f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
-    assert (
-        cpu.regs.get(RegisterName.FC) == tc.expected_FC_after
-    ), f"Test '{tc.test_id}': Flag C (Borrow). Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
-    assert (
-        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
-    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    assert cpu.regs.get(RegisterName.I) == tc.expected_I_after, (
+        f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
+    )
+    assert cpu.regs.get(RegisterName.FC) == tc.expected_FC_after, (
+        f"Test '{tc.test_id}': Flag C (Borrow). Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    )
+    assert cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after, (
+        f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    )
 
 
 # DSBL Tests
@@ -2461,9 +2524,9 @@ def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
     decoded_instr = cpu.decode_instruction(0x00)
     assert decoded_instr is not None, f"Test '{tc.test_id}': Failed to decode"
     actual_asm_str = asm_str(decoded_instr.render())
-    assert (
-        actual_asm_str == tc.expected_asm_str
-    ), f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    assert actual_asm_str == tc.expected_asm_str, (
+        f"Test '{tc.test_id}': ASM string mismatch. Expected '{tc.expected_asm_str}', Got '{actual_asm_str}'"
+    )
 
     # debug_instruction(cpu, 0x00)
     _ = cpu.execute_instruction(0x00)
@@ -2475,9 +2538,9 @@ def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
         actual_val = raw_memory_array[
             tc.expected_m_addr_start + i
         ]  # Iterates from MSB_addr
-        assert (
-            actual_val == expected_val
-        ), f"Test '{tc.test_id}': Memory mismatch at offset {i} from MSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        assert actual_val == expected_val, (
+            f"Test '{tc.test_id}': Memory mismatch at offset {i} from MSB_addr 0x{tc.expected_m_addr_start:04X}. Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        )
 
     # Verify logged writes. Addresses are written from LSB_addr_m downwards.
     num_bytes = len(tc.expected_m_values_after)
@@ -2509,19 +2572,19 @@ def test_dsbl_instruction(tc: SbclDsblTestCase) -> None:
     # Sort expected_writes_to_m because the order of processing is LSB->MSB for writes,
     # but comparison should be order-agnostic if elements are correct or sorted if order matters.
     # Here, we sort both to compare contents.
-    assert actual_writes_to_m == sorted(
-        expected_writes_to_m
-    ), f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected (sorted): {sorted(expected_writes_to_m)}\nGot (sorted): {actual_writes_to_m}"
+    assert actual_writes_to_m == sorted(expected_writes_to_m), (
+        f"Test '{tc.test_id}': Logged memory writes to (m) mismatch.\nExpected (sorted): {sorted(expected_writes_to_m)}\nGot (sorted): {actual_writes_to_m}"
+    )
 
-    assert (
-        cpu.regs.get(RegisterName.I) == tc.expected_I_after
-    ), f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
-    assert (
-        cpu.regs.get(RegisterName.FC) == tc.expected_FC_after
-    ), f"Test '{tc.test_id}': Flag C (Borrow). Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
-    assert (
-        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
-    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    assert cpu.regs.get(RegisterName.I) == tc.expected_I_after, (
+        f"Test '{tc.test_id}': Reg I. Expected {tc.expected_I_after}, Got {cpu.regs.get(RegisterName.I)}"
+    )
+    assert cpu.regs.get(RegisterName.FC) == tc.expected_FC_after, (
+        f"Test '{tc.test_id}': Flag C (Borrow). Expected {tc.expected_FC_after}, Got {cpu.regs.get(RegisterName.FC)}"
+    )
+    assert cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after, (
+        f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    )
 
 
 # Add new NamedTuple for DSLL/DSRL test cases
@@ -2761,33 +2824,33 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
     # Note: This relies on OPCODES dict in instr.py having IMem8 for DSLL/DSRL.
     # If it's IMem20, this part of test might fail or look weird, but execution test is main goal.
     decoded_instr = cpu.decode_instruction(0x00)
-    assert (
-        decoded_instr is not None
-    ), f"Test '{tc.test_id}': Failed to decode instruction"
+    assert decoded_instr is not None, (
+        f"Test '{tc.test_id}': Failed to decode instruction"
+    )
 
     expected_mnemonic = "DSLL " if tc.is_dsll else "DSRL "
     # Assuming IMem8 is rendered as (BP+XX)
     expected_asm_str = f"{expected_mnemonic:6s}(BP+{tc.instr_operand_n_val:02X})"
     actual_asm_str = asm_str(decoded_instr.render())
 
-    assert (
-        actual_asm_str == expected_asm_str
-    ), f"Test '{tc.test_id}': ASM string mismatch.\n  Expected: '{expected_asm_str}'\n  Actual  : '{actual_asm_str}'"
+    assert actual_asm_str == expected_asm_str, (
+        f"Test '{tc.test_id}': ASM string mismatch.\n  Expected: '{expected_asm_str}'\n  Actual  : '{actual_asm_str}'"
+    )
 
     # --- Execute ---
     # debug_instruction(cpu, 0x00)
     _ = cpu.execute_instruction(0x00)
 
     # --- Verify Registers ---
-    assert (
-        cpu.regs.get(RegisterName.I) == 0
-    ), f"Test '{tc.test_id}': Reg I. Expected 0, Got {cpu.regs.get(RegisterName.I)}"
-    assert (
-        cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after
-    ), f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
-    assert (
-        cpu.regs.get(RegisterName.FC) == initial_fc
-    ), f"Test '{tc.test_id}': Flag C should not change. Initial {initial_fc}, Got {cpu.regs.get(RegisterName.FC)}"
+    assert cpu.regs.get(RegisterName.I) == 0, (
+        f"Test '{tc.test_id}': Reg I. Expected 0, Got {cpu.regs.get(RegisterName.I)}"
+    )
+    assert cpu.regs.get(RegisterName.FZ) == tc.expected_FZ_after, (
+        f"Test '{tc.test_id}': Flag Z. Expected {tc.expected_FZ_after}, Got {cpu.regs.get(RegisterName.FZ)}"
+    )
+    assert cpu.regs.get(RegisterName.FC) == initial_fc, (
+        f"Test '{tc.test_id}': Flag C should not change. Initial {initial_fc}, Got {cpu.regs.get(RegisterName.FC)}"
+    )
 
     # --- Verify Memory ---
     # For DSLL, tc.expected_final_bcd_logical_bytes is [MSB_val, MSB-1_val, ..., LSB_val]
@@ -2797,9 +2860,9 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
             addr_in_mem = INTERNAL_MEMORY_START + tc.instr_operand_n_val - i
             actual_val = raw_memory_array[addr_in_mem]
             expected_val = tc.expected_final_bcd_logical_bytes[i]
-            assert (
-                actual_val == expected_val
-            ), f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+            assert actual_val == expected_val, (
+                f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+            )
     else:  # DSRL
         # For DSRL, tc.expected_final_bcd_logical_bytes is [LSB_val, LSB+1_val, ..., MSB_val]
         # Check mem[n], mem[n+1], ...
@@ -2807,9 +2870,9 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
             addr_in_mem = INTERNAL_MEMORY_START + tc.instr_operand_n_val + i
             actual_val = raw_memory_array[addr_in_mem]
             expected_val = tc.expected_final_bcd_logical_bytes[i]
-            assert (
-                actual_val == expected_val
-            ), f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+            assert actual_val == expected_val, (
+                f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+            )
 
 
 def test_decode_all_opcodes() -> None:
@@ -2868,10 +2931,12 @@ def test_decode_all_opcodes() -> None:
         cpu.regs.set(RegisterName.S, 0x1000)  # Set stack pointer to a valid location
         cpu.regs.set(RegisterName.U, 0x2000)  # Set stack pointer to a valid location
 
-        cpu.regs.set(RegisterName.X, 0x1000)  # Set X to larger value to avoid negative addresses
+        cpu.regs.set(
+            RegisterName.X, 0x1000
+        )  # Set X to larger value to avoid negative addresses
 
         try:
             _ = cpu.execute_instruction(address)
         except Exception as e:
             debug_instruction(cpu, address)
-            raise ValueError(f"Failed to evaluate {s} at line {i+1}") from e
+            raise ValueError(f"Failed to evaluate {s} at line {i + 1}") from e

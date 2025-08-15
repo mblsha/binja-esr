@@ -227,7 +227,7 @@ class TestRunner:
             print(f"{reg_name:<5} | 0x{hw_val:<8X} | 0x{emu_val:<8X} | {status}")
 
         summary = "TEST FAILED" if has_failed else "TEST PASSED"
-        print("\n" + f"{'='*15} {summary} {'='*16}")
+        print("\n" + f"{'=' * 15} {summary} {'=' * 16}")
         return not has_failed
 
 

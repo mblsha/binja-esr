@@ -41,19 +41,21 @@ def orch() -> types.ModuleType:
     return import_orchestrator()
 
 
-def test_hardware_interface_ping(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_hardware_interface_ping(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"PONG\n", b"OK\n"]
     ms = MockSerial(responses)
-    hw = orch.HardwareInterface(
-        "dummy", serial_cls=lambda *a, **k: ms
-    )
+    hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
     monkeypatch.setattr(orch.time, "sleep", lambda s: None)
     with hw:
         assert hw.ping() is True
     assert ms.written == ["P\n"]
 
 
-def test_run_test_case_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_run_test_case_success(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     # Prepare expected final state
     final_state = {"F": 0, "BA": 0x11, "I": 0, "X": 0, "Y": 0, "S": 0}
     final_bytes: list[int] = []
@@ -128,7 +130,9 @@ def test_ping_not_open(orch: types.ModuleType) -> None:
         hw.ping()
 
 
-def test_load_code_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_load_code_success(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"OK\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
@@ -144,7 +148,9 @@ def test_load_code_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleTy
     ]
 
 
-def test_load_code_zero_length(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_load_code_zero_length(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"OK\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
@@ -154,7 +160,9 @@ def test_load_code_zero_length(monkeypatch: pytest.MonkeyPatch, orch: types.Modu
     assert ms.written == ["L\n", "&H8000\n", "0\n"]
 
 
-def test_load_code_error(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_load_code_error(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"FAIL\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
@@ -163,7 +171,9 @@ def test_load_code_error(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
         hw.load_code(0x8000, bytearray([0x00]))
 
 
-def test_execute_code_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_execute_code_success(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"OK\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
@@ -173,7 +183,9 @@ def test_execute_code_success(monkeypatch: pytest.MonkeyPatch, orch: types.Modul
     assert ms.written == ["X\n", "&H9000\n"]
 
 
-def test_execute_code_error(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_execute_code_error(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"ERR\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
@@ -182,7 +194,9 @@ def test_execute_code_error(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleT
         hw.execute_code(0x9000)
 
 
-def test_read_memory_success(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_read_memory_success(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"AA\n", b"BB\n", b"OK\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)
@@ -193,7 +207,9 @@ def test_read_memory_success(monkeypatch: pytest.MonkeyPatch, orch: types.Module
     assert ms.written == ["R\n", "&H9000\n", "2\n"]
 
 
-def test_read_memory_invalid_hex(monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType) -> None:
+def test_read_memory_invalid_hex(
+    monkeypatch: pytest.MonkeyPatch, orch: types.ModuleType
+) -> None:
     responses = [b"GG\n", b"OK\n"]
     ms = MockSerial(responses)
     hw = orch.HardwareInterface("dummy", serial_cls=lambda *a, **k: ms)

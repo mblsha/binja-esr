@@ -12,9 +12,18 @@ from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
 
-def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
-                 perfetto_trace=True, print_stats=True, timeout_secs: float = 10.0,
-                 keyboard_impl: str = 'compat', new_perfetto=False, trace_file="pc-e500.perfetto-trace"):
+def run_emulator(
+    num_steps=20000,
+    dump_pc=None,
+    no_dump=False,
+    save_lcd=True,
+    perfetto_trace=True,
+    print_stats=True,
+    timeout_secs: float = 10.0,
+    keyboard_impl: str = "compat",
+    new_perfetto=False,
+    trace_file="pc-e500.perfetto-trace",
+):
     """Run PC-E500 emulator and return the instance.
 
     Args:
@@ -31,9 +40,14 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
         PCE500Emulator: The emulator instance after running
     """
     # Create emulator
-    emu = PCE500Emulator(trace_enabled=True, perfetto_trace=perfetto_trace,
-                         save_lcd_on_exit=save_lcd, keyboard_impl=keyboard_impl,
-                         enable_new_tracing=new_perfetto, trace_path=trace_file)
+    emu = PCE500Emulator(
+        trace_enabled=True,
+        perfetto_trace=perfetto_trace,
+        save_lcd_on_exit=save_lcd,
+        keyboard_impl=keyboard_impl,
+        enable_new_tracing=new_perfetto,
+        trace_path=trace_file,
+    )
 
     if print_stats:
         trace_msgs = []
@@ -41,12 +55,12 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
             trace_msgs.append("retrobus-perfetto tracing")
         if new_perfetto:
             trace_msgs.append(f"new Perfetto tracing to {trace_file}")
-        
+
         if trace_msgs:
             print(f"Created emulator with {' and '.join(trace_msgs)} enabled")
         else:
             print("Created emulator")
-        
+
         if perfetto_trace:
             print("Retrobus trace will be saved to pc-e500.trace")
 
@@ -85,7 +99,10 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
         if (time.perf_counter() - start_time) > timeout_secs:
             timed_out = True
             if print_stats:
-                print(f"ERROR: Aborting run after {timeout_secs:.0f}s timeout", file=sys.stderr)
+                print(
+                    f"ERROR: Aborting run after {timeout_secs:.0f}s timeout",
+                    file=sys.stderr,
+                )
             break
 
     if print_stats:
@@ -95,9 +112,15 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
 
         print(f"\nCPU State after {emu.cycle_count} cycles:")
         print(f"  PC: {emu.cpu.regs.get(RegisterName.PC):06X}")
-        print(f"  A: {emu.cpu.regs.get(RegisterName.A):02X}  B: {emu.cpu.regs.get(RegisterName.B):02X}")
-        print(f"  X: {emu.cpu.regs.get(RegisterName.X):06X}  Y: {emu.cpu.regs.get(RegisterName.Y):06X}")
-        print(f"  S: {emu.cpu.regs.get(RegisterName.S):06X}  U: {emu.cpu.regs.get(RegisterName.U):06X}")
+        print(
+            f"  A: {emu.cpu.regs.get(RegisterName.A):02X}  B: {emu.cpu.regs.get(RegisterName.B):02X}"
+        )
+        print(
+            f"  X: {emu.cpu.regs.get(RegisterName.X):06X}  Y: {emu.cpu.regs.get(RegisterName.Y):06X}"
+        )
+        print(
+            f"  S: {emu.cpu.regs.get(RegisterName.S):06X}  U: {emu.cpu.regs.get(RegisterName.U):06X}"
+        )
         print(f"  Flags: Z={emu.cpu.regs.get_flag('Z')} C={emu.cpu.regs.get_flag('C')}")
 
         # Display LCD state
@@ -108,10 +131,12 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
 
         # Display detailed statistics for each chip
         print("\nDetailed LCD Chip Statistics:")
-        print(f"  Chip select usage: BOTH={emu.lcd.cs_both_count}, LEFT={emu.lcd.cs_left_count}, RIGHT={emu.lcd.cs_right_count}")
+        print(
+            f"  Chip select usage: BOTH={emu.lcd.cs_both_count}, LEFT={emu.lcd.cs_left_count}, RIGHT={emu.lcd.cs_right_count}"
+        )
         stats = emu.lcd.get_chip_statistics()
         for stat in stats:
-            chip_name = "Left" if stat['chip'] == 0 else "Right"
+            chip_name = "Left" if stat["chip"] == 0 else "Right"
             print(f"\n  {chip_name} Chip (Chip {stat['chip']}):")
             print(f"    Display ON: {stat['on']}")
             print(f"    Instructions received: {stat['instructions']}")
@@ -128,8 +153,16 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
             tracking = emu.memory.get_imem_access_tracking()
             for reg in ("KOL", "KOH", "KIL"):
                 if reg in tracking:
-                    reads = sum(c for _, c in tracking[reg]["reads"]) if tracking[reg]["reads"] else 0
-                    writes = sum(c for _, c in tracking[reg]["writes"]) if tracking[reg]["writes"] else 0
+                    reads = (
+                        sum(c for _, c in tracking[reg]["reads"])
+                        if tracking[reg]["reads"]
+                        else 0
+                    )
+                    writes = (
+                        sum(c for _, c in tracking[reg]["writes"])
+                        if tracking[reg]["writes"]
+                        else 0
+                    )
                     print(f"IMEM {reg}: reads={reads} writes={writes}")
         except Exception:
             pass
@@ -137,13 +170,26 @@ def run_emulator(num_steps=20000, dump_pc=None, no_dump=False, save_lcd=True,
     return emu
 
 
-def main(dump_pc=None, no_dump=False, save_lcd=True, perfetto=True, keyboard_impl='compat',
-         new_perfetto=False, trace_file="pc-e500.perfetto-trace"):
+def main(
+    dump_pc=None,
+    no_dump=False,
+    save_lcd=True,
+    perfetto=True,
+    keyboard_impl="compat",
+    new_perfetto=False,
+    trace_file="pc-e500.perfetto-trace",
+):
     """Example with Perfetto tracing enabled."""
     # Use context manager for automatic cleanup
-    with run_emulator(dump_pc=dump_pc, no_dump=no_dump, save_lcd=save_lcd,
-                      perfetto_trace=perfetto, keyboard_impl=keyboard_impl,
-                      new_perfetto=new_perfetto, trace_file=trace_file) as emu:
+    with run_emulator(
+        dump_pc=dump_pc,
+        no_dump=no_dump,
+        save_lcd=save_lcd,
+        perfetto_trace=perfetto,
+        keyboard_impl=keyboard_impl,
+        new_perfetto=new_perfetto,
+        trace_file=trace_file,
+    ) as emu:
         pass  # Everything is done in run_emulator
 
     # Exit with error if we hit the timeout
@@ -151,26 +197,51 @@ def main(dump_pc=None, no_dump=False, save_lcd=True, perfetto=True, keyboard_imp
         sys.exit(1)
 
 
-
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="PC-E500 Emulator Example")
-    parser.add_argument("--dump-pc", type=lambda x: int(x, 0),
-                        help="PC address to trigger internal memory dump (hex or decimal, e.g., 0x0F119C)")
-    parser.add_argument("--no-dump", action='store_true',
-                        help="Disable internal memory dumps entirely")
-    parser.add_argument("--no-lcd", action='store_true',
-                        help="Don't save LCD displays as PNG files on exit")
-    parser.add_argument("--no-perfetto", action='store_true',
-                        help="Disable Perfetto tracing to isolate performance effects")
-    parser.add_argument("--keyboard", choices=["compat","hardware"], default="compat",
-                        help="Select keyboard implementation (default: compat)")
-    parser.add_argument("--perfetto", action='store_true',
-                        help="Enable new Perfetto tracing (wall-clock time)")
-    parser.add_argument("--trace-file", default="pc-e500.perfetto-trace",
-                        help="Path to write trace file (default: pc-e500.perfetto-trace)")
+    parser.add_argument(
+        "--dump-pc",
+        type=lambda x: int(x, 0),
+        help="PC address to trigger internal memory dump (hex or decimal, e.g., 0x0F119C)",
+    )
+    parser.add_argument(
+        "--no-dump", action="store_true", help="Disable internal memory dumps entirely"
+    )
+    parser.add_argument(
+        "--no-lcd",
+        action="store_true",
+        help="Don't save LCD displays as PNG files on exit",
+    )
+    parser.add_argument(
+        "--no-perfetto",
+        action="store_true",
+        help="Disable Perfetto tracing to isolate performance effects",
+    )
+    parser.add_argument(
+        "--keyboard",
+        choices=["compat", "hardware"],
+        default="compat",
+        help="Select keyboard implementation (default: compat)",
+    )
+    parser.add_argument(
+        "--perfetto",
+        action="store_true",
+        help="Enable new Perfetto tracing (wall-clock time)",
+    )
+    parser.add_argument(
+        "--trace-file",
+        default="pc-e500.perfetto-trace",
+        help="Path to write trace file (default: pc-e500.perfetto-trace)",
+    )
     args = parser.parse_args()
-    main(dump_pc=args.dump_pc, no_dump=args.no_dump, save_lcd=not args.no_lcd,
-         perfetto=not args.no_perfetto, keyboard_impl=args.keyboard,
-         new_perfetto=args.perfetto, trace_file=args.trace_file)
+    main(
+        dump_pc=args.dump_pc,
+        no_dump=args.no_dump,
+        save_lcd=not args.no_lcd,
+        perfetto=not args.no_perfetto,
+        keyboard_impl=args.keyboard,
+        new_perfetto=args.perfetto,
+        trace_file=args.trace_file,
+    )
