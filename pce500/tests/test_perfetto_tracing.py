@@ -7,11 +7,9 @@ import time
 import unittest
 from pathlib import Path
 
-# Add path for retrobus-perfetto
-sys.path.insert(0, str(Path(__file__).parent.parent / "third_party" / "retrobus-perfetto" / "py"))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pce500.tracing.perfetto_tracing import PerfettoTracer, tracer, RETROBUS_AVAILABLE
+from pce500.tracing.perfetto_tracing import PerfettoTracer, tracer
 
 
 class TestPerfettoTracer(unittest.TestCase):
@@ -19,8 +17,6 @@ class TestPerfettoTracer(unittest.TestCase):
     
     def setUp(self):
         """Set up test environment."""
-        if not RETROBUS_AVAILABLE:
-            self.skipTest("retrobus-perfetto not available")
         self.temp_dir = tempfile.mkdtemp()
         self.trace_path = os.path.join(self.temp_dir, "test.perfetto-trace")
         

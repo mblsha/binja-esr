@@ -12,18 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Deque, Dict, Optional, Union
 
-try:
-    from retrobus_perfetto import PerfettoTraceBuilder
-    # Try to create a trace builder to verify protobuf files are built
-    test_builder = PerfettoTraceBuilder("test")
-    del test_builder
-    RETROBUS_PERFETTO_AVAILABLE = True
-except (ImportError, Exception):
-    PerfettoTraceBuilder = None
-    RETROBUS_PERFETTO_AVAILABLE = False
-
-# Configuration flag to enable/disable tracing
-ENABLE_PERFETTO_TRACING = RETROBUS_PERFETTO_AVAILABLE
+from retrobus_perfetto import PerfettoTraceBuilder
 
 
 class TraceEventType(Enum):
@@ -86,9 +75,6 @@ class TraceManager:
     def start_tracing(self, output_path: Union[str, Path]) -> bool:
         """Start tracing to a file."""
         print(f"DEBUG: start_tracing called with output_path={output_path}")
-        print(f"DEBUG: ENABLE_PERFETTO_TRACING={ENABLE_PERFETTO_TRACING}")
-        if not ENABLE_PERFETTO_TRACING:
-            return False
             
         with self._rlock:
             if self._tracing_enabled:
@@ -96,9 +82,6 @@ class TraceManager:
                 return False
                 
             try:
-                if not RETROBUS_PERFETTO_AVAILABLE:
-                    raise RuntimeError("retrobus_perfetto module is not available. Please install it with: pip install -e ./pce500/third_party/retrobus-perfetto/py")
-                    
                 output_path = Path(output_path)
                 
                 # Create trace builder
@@ -405,8 +388,6 @@ g_tracer = TraceManager()
 def trace_function(thread: str):
     """Decorator to automatically trace function execution."""
     def decorator(func):
-        if not ENABLE_PERFETTO_TRACING:
-            return func
             
         def wrapper(*args, **kwargs):
             # Extract PC if available from self

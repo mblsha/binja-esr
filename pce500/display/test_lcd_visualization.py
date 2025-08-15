@@ -39,8 +39,6 @@ def test_parse_command_invalid_input():
 
 def create_dummy_trace_file(path: Path) -> Path:
     """Creates a small, valid Perfetto trace file for testing."""
-    if not lv.PERFETTO_AVAILABLE:
-        pytest.skip("Perfetto support not available")
     trace = lv.perfetto_pb2.Trace()
     
     # 1. Define the 'Display' thread

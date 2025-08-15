@@ -16,7 +16,6 @@ from typing import List, Dict, Tuple, Optional, Iterator
 import difflib
 
 # Import perfetto protobuf definitions
-sys.path.append(str(Path(__file__).parent.parent / "py"))
 from retrobus_perfetto.proto import perfetto_pb2
 
 class ExecutionEvent:

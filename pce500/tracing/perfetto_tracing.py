@@ -6,17 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-# Add the retrobus-perfetto path to sys.path
-retrobus_path = Path(__file__).parent.parent / "third_party" / "retrobus-perfetto" / "py"
-if str(retrobus_path) not in sys.path:
-    sys.path.insert(0, str(retrobus_path))
-
-try:
-    from retrobus_perfetto import PerfettoTraceBuilder
-    RETROBUS_AVAILABLE = True
-except ImportError:
-    PerfettoTraceBuilder = None
-    RETROBUS_AVAILABLE = False
+from retrobus_perfetto import PerfettoTraceBuilder
 
 
 class PerfettoTracer:
@@ -76,10 +66,6 @@ class PerfettoTracer:
         """Start tracing to the specified file."""
         with self._lock:
             if self._enabled:
-                return
-            
-            if not RETROBUS_AVAILABLE:
-                print("Warning: retrobus-perfetto not available, tracing disabled")
                 return
             
             self._enabled = True

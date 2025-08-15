@@ -13,6 +13,7 @@ dependencies = [
     "bincopy",
     "plumbum",
     "binja-test-mocks",
+    "protobuf>=5.26.0",
 ]
 
 [project.optional-dependencies]
@@ -26,8 +27,7 @@ dev = [
 pce500 = [
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
-    # Note: grpcio-tools and retrobus-perfetto require separate installation
-    # due to build complexities with local dependencies
+    "retrobus-perfetto>=0.2.2",
 ]
 web = [
     "Flask>=2.3.0",

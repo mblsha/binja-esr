@@ -15,21 +15,12 @@ from .hd61202 import (
     render_combined_image
 )
 
-# Attempt to import the Perfetto protobuf definitions
-try:
-    from retrobus_perfetto.proto import perfetto_pb2
-    PERFETTO_AVAILABLE = True
-except ImportError:
-    perfetto_pb2 = None
-    PERFETTO_AVAILABLE = False
+from retrobus_perfetto.proto import perfetto_pb2
 
 # --- Perfetto Trace Parsing ---
 
 def load_perfetto_trace(trace_path: str) -> Optional['perfetto_pb2.Trace']:
     """Loads a Perfetto protobuf trace file into a Trace message object."""
-    if not PERFETTO_AVAILABLE:
-        print("Error: Perfetto support is not available. Please install retrobus-perfetto.", file=sys.stderr)
-        return None
     trace = perfetto_pb2.Trace()
     try:
         with open(trace_path, 'rb') as f:
@@ -150,12 +141,6 @@ def generate_lcd_image_from_trace(trace_path: str, zoom: int = 2) -> Optional[Im
 # --- Command-Line Interface ---
 def main():
     """Main function for command-line execution."""
-    if not PERFETTO_AVAILABLE:
-        print("Error: Perfetto support is not available.", file=sys.stderr)
-        print("Please install retrobus-perfetto:", file=sys.stderr)
-        print("  pip install -e ./third_party/retrobus-perfetto/py", file=sys.stderr)
-        sys.exit(1)
-    
     parser = argparse.ArgumentParser(
         description="Convert a Perfetto trace with LCD data to a PNG image."
     )
