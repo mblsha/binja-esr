@@ -1,9 +1,7 @@
 # pce500/tracing/perfetto_tracing.py
 import atexit
-import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from retrobus_perfetto import PerfettoTraceBuilder
