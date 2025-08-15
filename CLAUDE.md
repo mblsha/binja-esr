@@ -6,23 +6,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Development Setup
 ```bash
-# Install the package in editable mode with development dependencies
-python -m pip install -e .[dev]
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# or on macOS: brew install uv
+
+# Install dependencies and create virtual environment
+uv sync
+uv sync --extra dev  # Include development dependencies
+uv sync --extra pce500  # Include PC-E500 emulator dependencies
+uv sync --extra web  # Include web interface dependencies
 ```
 
 ### Code Quality Commands
 ```bash
 # Run linting
-ruff check .
+uv run ruff check .
+uv run ruff format .  # Format code
 
 # Run type checking (focused on pysc62015 module)
-pyright sc62015/pysc62015
+uv run pyright sc62015/pysc62015
 
 # Run tests with coverage
-pytest --cov=sc62015/pysc62015 --cov-report=term-missing --cov-report=xml
+# Note: FORCE_BINJA_MOCK=1 forces use of mock Binary Ninja API (needed if Binary Ninja is installed)
+FORCE_BINJA_MOCK=1 uv run pytest --cov=sc62015/pysc62015 --cov-report=term-missing --cov-report=xml
 
 # Run a single test
-pytest path/to/test_file.py::test_function_name
+uv run pytest path/to/test_file.py::test_function_name
+
+# Run tests for specific modules
+uv run pytest sc62015 -v
+uv run pytest pce500 -v
+cd web && uv run pytest tests/ -v
 
 # Continuous testing with file watching (requires Fish shell and fswatch)
 ./run-tests.fish

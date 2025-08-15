@@ -23,26 +23,39 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        cache-dependency-glob: "pyproject.toml"
+    
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install pytest pytest-cov
-        pip install -e ".[dev,pce500,web]"
+        uv sync --extra dev --extra pce500 --extra web
     
     - name: Run SC62015 tests
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        pytest sc62015 -v --cov=sc62015/pysc62015 --cov-report=term-missing
+        uv run pytest sc62015 -v --cov=sc62015/pysc62015 --cov-report=term-missing
     
     - name: Run PCE500 tests
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        pytest pce500 -v --cov=pce500 --cov-report=term-missing
+        uv run pytest pce500 -v --cov=pce500 --cov-report=term-missing
     
     - name: Run Web tests
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        cd web && pytest tests/ -v --cov=. --cov-report=term-missing
+        cd web && uv run pytest tests/ -v --cov=. --cov-report=term-missing
+    
+    - name: Run linting
+      run: |
+        uv run ruff check .
+        uv run ruff format --check .
+    
+    - name: Run type checking
+      run: |
+        uv run pyright sc62015/pysc62015

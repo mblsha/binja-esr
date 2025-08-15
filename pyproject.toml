@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "binja-esr"
@@ -8,22 +8,26 @@ version = "0.1.0"
 description = "Binary Ninja SC62015 architecture plugin"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["lark", "bincopy", "plumbum", "binja-test-mocks"]
+dependencies = [
+    "lark",
+    "bincopy",
+    "plumbum",
+    "binja-test-mocks",
+]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-cov",
-    "pyright",
-    "ruff",
-    "serial",  # for testing with real hardware
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pyright>=1.1.0",
+    "ruff>=0.1.0",
+    "pyserial",  # for testing with real hardware
 ]
 pce500 = [
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
-    "grpcio-tools>=1.48.0",  # Required to build retrobus-perfetto
-    "protobuf>=3.20.0,<5.0.0",  # Required by retrobus-perfetto
-    "retrobus-perfetto @ file:./pce500/third_party/retrobus-perfetto/py",
+    # Note: grpcio-tools and retrobus-perfetto require separate installation
+    # due to build complexities with local dependencies
 ]
 web = [
     "Flask>=2.3.0",
@@ -32,9 +36,52 @@ web = [
     "numpy>=1.24.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-exclude = ["sc62015/pysc62015/test*"]
+[tool.hatch.build.targets.wheel]
+packages = [
+    "sc62015",
+    "pce500",
+    "web",
+    "__init__.py",
+]
+exclude = [
+    "sc62015/pysc62015/test*",
+    "*/tests/*",
+    "**/test_*.py",
+]
 
 [tool.coverage.run]
 source = ["sc62015/pysc62015"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+reportMissingImports = true
+reportMissingTypeStubs = false
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/build",
+    "**/dist",
+]

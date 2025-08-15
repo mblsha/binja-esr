@@ -16,3 +16,7 @@ lcd_right.png
 *.perfetto-trace
 .claude/
 *.bin
+
+# uv
+.venv/
+uv.lock
