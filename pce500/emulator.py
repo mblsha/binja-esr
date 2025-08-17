@@ -181,10 +181,34 @@ class PCE500Emulator:
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
         # Check for pending synthetic interrupt before executing next instruction
-        if self._irq_pending and not self._in_interrupt:
+        if getattr(self, "_irq_pending", False) and not getattr(self, "_in_interrupt", False):
             try:
+                # Respect masks if desired; for now, deliver unconditionally to validate flow
+                # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
+                cur_pc = self.cpu.regs.get(RegisterName.PC)
+                s = self.cpu.regs.get(RegisterName.S)
+                # push PC (little-endian 3 bytes)
+                s_new = s - 3
+                self.memory.write_bytes(3, s_new, cur_pc)
+                self.cpu.regs.set(RegisterName.S, s_new)
+                # push F (1 byte)
+                f_val = self.cpu.regs.get(RegisterName.F)
+                s_new = self.cpu.regs.get(RegisterName.S) - 1
+                self.memory.write_bytes(1, s_new, f_val)
+                self.cpu.regs.set(RegisterName.S, s_new)
+                # push IMR (1 byte) and clear IRM bit 7
+                imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                imr_val = self.memory.read_byte(imr_addr)
+                s_new = self.cpu.regs.get(RegisterName.S) - 1
+                self.memory.write_bytes(1, s_new, imr_val)
+                self.cpu.regs.set(RegisterName.S, s_new)
+                self.memory.write_byte(imr_addr, imr_val & 0x7F)
+                # Set ISR.KEYI bit to indicate keyboard interrupt
+                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                isr_val = self.memory.read_byte(isr_addr)
+                self.memory.write_byte(isr_addr, isr_val | 0x04)
+                # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
                 vector_addr = self.memory.read_long(0xFFFFA)
-                # Jump to interrupt vector (simplified: no stack push)
                 self.cpu.regs.set(RegisterName.PC, vector_addr)
                 self._in_interrupt = True
                 self._irq_pending = False
@@ -569,7 +593,7 @@ class PCE500Emulator:
                         self._kb_col_hist[col] += 1
         except Exception:
             pass
-        # If IRQ wiring enabled: trigger when a pressed key's column is active
+        # If IRQ wiring enabled: set pending IRQ when a pressed key's column is active
         try:
             if self._kb_irq_enabled and hasattr(self.keyboard, "get_pressed_keys"):
                 pressed = set(self.keyboard.get_pressed_keys())
@@ -585,7 +609,8 @@ class PCE500Emulator:
                     for kc in pressed:
                         loc = getattr(self.keyboard, "key_locations", {}).get(kc)
                         if loc and loc.column in active_cols:
-                            self._irq_pending = True
+                            # Arm pending interrupt
+                            setattr(self, "_irq_pending", True)
                             break
         except Exception:
             pass

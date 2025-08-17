@@ -283,7 +283,7 @@ def run_emulator(
         # If available, print IMEM register access tracking for KOL/KOH/KIL
         try:
             tracking = emu.memory.get_imem_access_tracking()
-            for reg in ("KOL", "KOH", "KIL", "EIL", "EIH"):
+            for reg in ("KOL", "KOH", "KIL", "IMR", "ISR", "EIL", "EIH"):
                 if reg in tracking:
                     reads = (
                         sum(c for _, c in tracking[reg]["reads"])
