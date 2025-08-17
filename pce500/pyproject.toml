@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "Pillow",
     "retrobus-perfetto>=0.2.2",
+    "pytesseract>=0.3.10",
 ]
 
 [project.optional-dependencies]

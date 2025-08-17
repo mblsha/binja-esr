@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pce500 import PCE500Emulator
+from PIL import Image
 from sc62015.pysc62015.emulator import RegisterName
 
 
@@ -371,6 +372,32 @@ def main(
     # Exit with error if we hit the timeout
     if getattr(emu, "_timed_out", False):
         sys.exit(1)
+
+    # After emulator run completes, attempt OCR on saved LCD image
+    try:
+        ocr_path = Path("lcd_display.png")
+        if ocr_path.exists():
+            try:
+                import pytesseract  # type: ignore
+            except Exception as e:
+                print(f"OCR: pytesseract not available: {e}")
+            else:
+                # Load and preprocess: invert (dark text), upscale, binarize
+                im = Image.open(ocr_path).convert("L")
+                im = im.resize((im.width * 2, im.height * 2))
+                im = Image.eval(im, lambda v: 255 - v)
+                th = 128
+                im = im.point(lambda v: 255 if v > th else 0, mode="1")
+                try:
+                    text = pytesseract.image_to_string(im, config="--psm 6")
+                    print("\nOCR (lcd_display.png):")
+                    print(text.strip() or "<no text recognized>")
+                except Exception as e:
+                    print(f"OCR failed: {e}")
+        else:
+            print("OCR: lcd_display.png not found (skipping)")
+    except Exception as e:
+        print(f"OCR error: {e}")
 
 
 if __name__ == "__main__":
