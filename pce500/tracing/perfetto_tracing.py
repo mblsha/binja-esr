@@ -2,7 +2,9 @@
 import atexit
 import threading
 import time
-from typing import Any, Dict, Optional
+from contextlib import contextmanager
+from functools import wraps
+from typing import Any, Callable, Dict, Optional
 
 from retrobus_perfetto import PerfettoTraceBuilder
 
@@ -79,6 +81,10 @@ class PerfettoTracer:
 
             # Pre-create common tracks
             for t in ("CPU", "Execution", "I/O"):
+                self._ensure_track(t)
+            
+            # Add performance profiling tracks
+            for t in ("Emulation", "Opcodes", "Memory", "Display", "Lifting", "System"):
                 self._ensure_track(t)
 
             # Pre-create counter track
@@ -183,6 +189,77 @@ class PerfettoTracer:
 
         self._builder.end_slice(track_uuid, self._now_ns())
 
+    @contextmanager
+    def slice(self, track: str, name: str, args: Optional[Dict[str, Any]] = None):
+        """Context manager for duration slices.
+        
+        Always runs but checks internally if tracing is enabled.
+        When disabled, this is a no-op with minimal overhead.
+        """
+        if not self._enabled or not self._builder:
+            yield
+            return
+        
+        self.begin_slice(track, name, args)
+        try:
+            yield
+        finally:
+            self.end_slice(track)
+
 
 # Global tracer for convenience
 tracer = PerfettoTracer()
+
+
+def perf_trace(
+    track: str, 
+    sample_rate: int = 1,
+    extract_args: Optional[Callable[[Any], Dict[str, Any]]] = None
+) -> Callable:
+    """Decorator for automatic performance tracing.
+    
+    Always wraps the function but checks internally if tracing is enabled.
+    
+    Args:
+        track: Perfetto track name for this function
+        sample_rate: Only trace every Nth call (1 = trace all)
+        extract_args: Optional function to extract trace arguments from function args
+    """
+    def decorator(func: Callable) -> Callable:
+        call_count = 0
+        
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            
+            # Check inside wrapper - minimal overhead when disabled
+            if not tracer.enabled or (call_count % sample_rate) != 0:
+                return func(*args, **kwargs)
+            
+            # Extract trace arguments
+            trace_args = {}
+            if extract_args:
+                try:
+                    trace_args = extract_args(*args, **kwargs)
+                except:
+                    pass  # Ignore extraction errors
+            
+            func_name = func.__name__
+            with tracer.slice(track, func_name, trace_args):
+                return func(*args, **kwargs)
+        
+        return wrapper
+    return decorator
+
+
+def enable_profiling(path: str = "emulator-profile.perfetto-trace") -> None:
+    """Enable performance profiling globally."""
+    tracer.start(path)
+    print(f"Performance profiling enabled → {path}")
+
+
+def disable_profiling() -> None:
+    """Disable performance profiling and save trace."""
+    tracer.stop()
+    print("Performance profiling stopped")

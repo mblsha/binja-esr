@@ -23,7 +23,7 @@ from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
-from .tracing.perfetto_tracing import tracer as new_tracer
+from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
@@ -91,6 +91,10 @@ class PCE500Emulator:
 
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
+        
+        # Set performance tracer for SC62015 integration if available
+        if new_tracer.enabled:
+            self.memory.set_perf_tracer(new_tracer)
 
         if any(o.name == "internal_rom" for o in self.memory.overlays):
             self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
@@ -120,6 +124,7 @@ class PCE500Emulator:
         self._last_pc = 0
         self.instruction_history: deque = deque(maxlen=100)
 
+    @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
         if start_address is None:
             start_address = self.INTERNAL_ROM_START
@@ -134,6 +139,7 @@ class PCE500Emulator:
     def expand_ram(self, size: int, start_address: int) -> None:
         self.memory.add_ram(start_address, size, f"RAM Expansion ({size // 1024}KB)")
 
+    @perf_trace("System")
     def reset(self) -> None:
         self.memory.reset()
         self.lcd.reset()
@@ -147,6 +153,7 @@ class PCE500Emulator:
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
 
+    @perf_trace("Emulation")
     def step(self) -> bool:
         pc = self.cpu.regs.get(RegisterName.PC)
         self._last_pc, self._current_pc = self._current_pc, pc
@@ -161,13 +168,22 @@ class PCE500Emulator:
             self._dump_internal_memory(pc)
 
         try:
+            # Decode instruction first to get opcode name for tracing
+            instr = self.cpu.decode_instruction(pc)
             opcode = (
                 self.memory.read_byte(pc)
                 if (self.perfetto_enabled or self._new_trace_enabled)
                 else None
             )
+            
+            # Build opcode name for performance tracing
+            opcode_name = instr.name()
+            
+            # Execute instruction with opcode-level tracing
             pc_before = pc
-            eval_info = self.cpu.execute_instruction(pc)
+            with new_tracer.slice("Opcodes", opcode_name, {"pc": f"0x{pc:06X}", "opcode": f"0x{opcode:02X}" if opcode else None}):
+                eval_info = self.cpu.execute_instruction(pc)
+            
             self.cycle_count += 1
             self.instruction_count += 1
 

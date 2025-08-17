@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 
 from .hd61202 import HD61202, parse_command, render_combined_image
+from ..tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
 
 class HD61202Controller:
@@ -30,6 +31,7 @@ class HD61202Controller:
         # Just return 0xFF for reads (not implemented in new version)
         return 0xFF
 
+    @perf_trace("Display")
     def write(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Write to LCD controller at given address."""
         try:
@@ -70,6 +72,7 @@ class HD61202Controller:
         self.cs_left_count = 0
         self.cs_right_count = 0
 
+    @perf_trace("Display")
     def get_display_buffer(self) -> np.ndarray:
         """Get combined display buffer as numpy array (240x32).
 

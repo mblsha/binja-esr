@@ -178,8 +178,14 @@ def main(
     keyboard_impl="compat",
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
+    profile_emulator=False,
 ):
     """Example with Perfetto tracing enabled."""
+    # Enable performance profiling if requested
+    if profile_emulator:
+        from pce500.tracing.perfetto_tracing import enable_profiling, tracer
+        enable_profiling("emulator-profile.perfetto-trace")
+    
     # Use context manager for automatic cleanup
     with run_emulator(
         dump_pc=dump_pc,
@@ -190,8 +196,16 @@ def main(
         new_perfetto=new_perfetto,
         trace_file=trace_file,
     ) as emu:
+        # Set performance tracer for SC62015 if profiling
+        if profile_emulator:
+            emu.memory.set_perf_tracer(tracer)
         pass  # Everything is done in run_emulator
 
+    # Stop profiling if it was enabled
+    if profile_emulator:
+        from pce500.tracing.perfetto_tracing import disable_profiling
+        disable_profiling()
+    
     # Exit with error if we hit the timeout
     if getattr(emu, "_timed_out", False):
         sys.exit(1)
@@ -235,6 +249,11 @@ if __name__ == "__main__":
         default="pc-e500.perfetto-trace",
         help="Path to write trace file (default: pc-e500.perfetto-trace)",
     )
+    parser.add_argument(
+        "--profile-emulator",
+        action="store_true",
+        help="Enable performance profiling of emulator execution (outputs emulator-profile.perfetto-trace)",
+    )
     args = parser.parse_args()
     main(
         dump_pc=args.dump_pc,
@@ -244,4 +263,5 @@ if __name__ == "__main__":
         keyboard_impl=args.keyboard,
         new_perfetto=args.perfetto,
         trace_file=args.trace_file,
+        profile_emulator=args.profile_emulator,
     )

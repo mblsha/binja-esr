@@ -200,6 +200,15 @@ class Emulator:
         return decode(decoder, address, OPCODES)  # type: ignore
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
+        # Check if performance tracing is available through memory context
+        tracer = getattr(self.memory, '_perf_tracer', None)
+        if tracer and hasattr(tracer, 'slice'):
+            with tracer.slice("Lifting", "execute_instruction", {"pc": f"0x{address:06X}"}):
+                return self._execute_instruction_impl(address)
+        else:
+            return self._execute_instruction_impl(address)
+    
+    def _execute_instruction_impl(self, address: int) -> InstructionEvalInfo:
         # Track PC history for tracing
         self._last_pc = self._current_pc
         self._current_pc = address

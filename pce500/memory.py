@@ -10,6 +10,7 @@ from typing import Optional, List, Callable, Dict, Tuple
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .trace_manager import g_tracer
+from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
 # Import constants for accessing internal memory registers
 # Define locally to avoid circular imports
@@ -64,6 +65,7 @@ class PCE500Memory:
         # Reference to emulator for tracking counters
         self._emulator = None
 
+    @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
 
@@ -137,6 +139,7 @@ class PCE500Memory:
         # Default to external memory
         return self.external_memory[address]
 
+    @perf_trace("Memory", sample_rate=100)
     def write_byte(
         self, address: int, value: int, cpu_pc: Optional[int] = None
     ) -> None:
@@ -299,12 +302,14 @@ class PCE500Memory:
                 trace_data["pc"] = f"0x{cpu_pc:06X}"
             g_tracer.trace_instant("Memory_External", "", trace_data)
 
+    @perf_trace("Memory", sample_rate=100)
     def read_word(self, address: int) -> int:
         """Read 16-bit word (little-endian)."""
         low = self.read_byte(address)
         high = self.read_byte(address + 1)
         return low | (high << 8)
 
+    @perf_trace("Memory", sample_rate=100)
     def write_word(
         self, address: int, value: int, cpu_pc: Optional[int] = None
     ) -> None:
@@ -518,3 +523,7 @@ class PCE500Memory:
         """Set context for memory operations (compatibility method)."""
         # Context is handled through cpu_pc parameter in read/write methods
         pass
+    
+    def set_perf_tracer(self, tracer) -> None:
+        """Set performance tracer for SC62015 emulator integration."""
+        self._perf_tracer = tracer
