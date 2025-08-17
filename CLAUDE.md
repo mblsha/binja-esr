@@ -45,6 +45,10 @@ cd web && uv run pytest tests/ -v
 ./mcp/binja-cli.py python "print(bv.functions)"
 ```
 
+### Important: PC-E500 ROM Requirement
+
+**Alert the user if `data/pc-e500.bin` is not present in the repository.** This ROM file is required for full test coverage of the PC-E500 emulator functionality. Without it, certain integration tests and emulator features cannot be properly tested.
+
 ## Architecture Overview
 
 This is a Binary Ninja plugin for the SC62015 (ESR-L) processor, used in Sharp PC-E500 and Sharp Organizers. The architecture separates the SC62015 implementation from Binary Ninja integration for testability.
