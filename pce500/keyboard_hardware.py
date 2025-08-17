@@ -386,15 +386,15 @@ class KeyboardHardware:
             # Keyboard strobing disabled
             return active
 
-        # Check KOL columns
+        # KOH controls KO0..KO7
         for col in range(8):
-            bit_set = (self.kol_value & (1 << col)) != 0
+            bit_set = (self.koh_value & (1 << col)) != 0
             if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col)
 
-        # Check KOH columns
-        for col in range(3):  # Only 3 bits used in KOH
-            bit_set = (self.koh_value & (1 << col)) != 0
+        # KOL controls KO8..KO10 (bits 0..2)
+        for col in range(3):  # Only 3 bits used in KOL
+            bit_set = (self.kol_value & (1 << col)) != 0
             if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col + 8)
 
@@ -423,15 +423,15 @@ class KeyboardHardware:
             kol = idx & 0xFF
             koh = (idx >> 8) & 0x07
             rows = 0
-            # KO0..KO7
+            # KO0..KO7 from KOH bits 0..7
             for col in range(8):
-                bit = (kol >> col) & 1
+                bit = (koh >> col) & 1
                 active = (bit == 0) if self.active_low else (bit == 1)
                 if active:
                     rows |= self._col_row_masks[col]
-            # KO8..KO10 from KOH bits 0..2
+            # KO8..KO10 from KOL bits 0..2
             for col in range(3):
-                bit = (koh >> col) & 1
+                bit = (kol >> col) & 1
                 active = (bit == 0) if self.active_low else (bit == 1)
                 if active:
                     rows |= self._col_row_masks[col + 8]

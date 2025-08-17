@@ -42,15 +42,13 @@ class QueuedKey:
     def matches_output(self, kol: int, koh: int) -> bool:
         """Check if current KOL/KOH values match this key's requirements."""
         # Check if the column bit is set
+        # Hardware mapping per IMEMRegisters doc: KOH carries KO0..KO7, KOL carries KO8..KO10
         if self.column < 8:
-            # Column is in KOL (KO0-KO7)
-            return bool(kol & (1 << self.column))
+            # Column is in KOH (KO0-KO7)
+            return bool(koh & (1 << self.column))
         else:
-            # ### FIXED: Corrected KOH bit mapping ###
-            # Column is in KOH (KO8-KO10).
-            # Mapping is sequential: KO8->bit 0, KO9->bit 1, KO10->bit 2.
-            # The bit index is column - 8.
-            return bool(koh & (1 << (self.column - 8)))
+            # Column is in KOL (KO8-KO10)
+            return bool(kol & (1 << (self.column - 8)))
 
     def is_complete(self) -> bool:
         """Check if this key has been read enough times."""
@@ -233,14 +231,11 @@ class PCE500KeyboardHandler:
         required_kol = 0
         required_koh = 0
         if column < 8:
-            required_kol = 1 << column
+            # KO0..KO7 are in KOH bits 0..7
+            required_koh = 1 << column
         else:
-            # ### FIXED: Corrected KOH bit mapping ###
-            # Based on standard hardware design, mapping KO8-KO10 sequentially to KOH bits 0-2.
-            # KO8  -> KOH bit 0
-            # KO9  -> KOH bit 1
-            # KO10 -> KOH bit 2
-            required_koh = 1 << (column - 8)
+            # KO8..KO10 are in KOL bits 0..2
+            required_kol = 1 << (column - 8)
 
         # Calculate target KIL value (set the row bit - active high logic)
         target_kil = 1 << row

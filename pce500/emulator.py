@@ -136,6 +136,11 @@ class PCE500Emulator:
         self._current_pc = 0
         self._last_pc = 0
         self.instruction_history: deque = deque(maxlen=100)
+        # Keyboard read monitoring
+        self._kil_read_count = 0
+        self._last_kil_columns = []
+        self._last_kol = 0
+        self._last_koh = 0
 
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
@@ -485,6 +490,26 @@ class PCE500Emulator:
             new_tracer.instant(
                 "I/O", "KB_InputRead", {"addr": offset, "value": result & 0xFF}
             )
+
+        # Monitor KIL reads and active columns (for test harness automation)
+        if offset == KIL:
+            self._kil_read_count += 1
+            # Capture active columns if available
+            cols = []
+            try:
+                if hasattr(self.keyboard, "get_active_columns"):
+                    cols = list(self.keyboard.get_active_columns())
+            except Exception:
+                cols = []
+            self._last_kil_columns = cols
+            # Capture last KOL/KOH values for debugging
+            try:
+                if hasattr(self.keyboard, "kol_value"):
+                    self._last_kol = int(self.keyboard.kol_value) & 0xFF
+                if hasattr(self.keyboard, "koh_value"):
+                    self._last_koh = int(self.keyboard.koh_value) & 0xFF
+            except Exception:
+                pass
 
         return result
 

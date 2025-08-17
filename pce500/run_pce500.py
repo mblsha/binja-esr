@@ -23,6 +23,10 @@ def run_emulator(
     keyboard_impl: str = "compat",
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
+    # Optional auto key-press controls
+    auto_press_key: str | None = None,
+    auto_press_after_pc: int | None = None,
+    auto_release_after_instr: int | None = None,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -94,8 +98,42 @@ def run_emulator(
     # Abort run after timeout_secs to avoid long hangs
     start_time = time.perf_counter()
     timed_out = False
+    pressed = False
+    release_countdown = None
+    latched_kil_seen = False
     for _ in range(num_steps):
+        # Check PC before executing the next instruction
+        pc_before = emu.cpu.regs.get(RegisterName.PC)
+
+        # Auto-press once when we first reach or pass the threshold PC
+        if (
+            not pressed
+            and auto_press_key
+            and auto_press_after_pc is not None
+            and pc_before >= auto_press_after_pc
+        ):
+            emu.press_key(auto_press_key)
+            pressed = True
+            if auto_release_after_instr and auto_release_after_instr > 0:
+                release_countdown = auto_release_after_instr
+
         emu.step()
+
+        # If we are holding the key, and we see a KIL read on PF1's column (KO10),
+        # latch that we've been sampled and allow countdown-based release
+        # PF1 is column 10 in the matrix
+        if pressed and not latched_kil_seen:
+            try:
+                if 10 in getattr(emu, "_last_kil_columns", []):
+                    latched_kil_seen = True
+            except Exception:
+                pass
+
+        if pressed and release_countdown is not None and latched_kil_seen:
+            release_countdown -= 1
+            if release_countdown <= 0:
+                emu.release_key(auto_press_key)
+                release_countdown = None
         if (time.perf_counter() - start_time) > timeout_secs:
             timed_out = True
             if print_stats:
@@ -164,6 +202,11 @@ def run_emulator(
                         else 0
                     )
                     print(f"IMEM {reg}: reads={reads} writes={writes}")
+            # Print last observed keyboard scan state (hardware keyboard)
+            if hasattr(emu, "_kil_read_count"):
+                print(
+                    f"Keyboard reads: {getattr(emu, '_kil_read_count', 0)} last_cols={getattr(emu, '_last_kil_columns', [])} last KOL=0x{getattr(emu, '_last_kol', 0):02X} KOH=0x{getattr(emu, '_last_koh', 0):02X}"
+                )
         except Exception:
             pass
 
@@ -181,6 +224,9 @@ def main(
     profile_emulator=False,
     steps: int = 20000,
     timeout_secs: float = 10.0,
+    auto_press_key: str | None = None,
+    auto_press_after_pc: int | None = None,
+    auto_release_after_instr: int | None = None,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -199,6 +245,9 @@ def main(
         new_perfetto=new_perfetto,
         trace_file=trace_file,
         timeout_secs=timeout_secs,
+        auto_press_key=auto_press_key,
+        auto_press_after_pc=auto_press_after_pc,
+        auto_release_after_instr=auto_release_after_instr,
     ) as emu:
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
@@ -270,6 +319,21 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable performance profiling of emulator execution (outputs emulator-profile.perfetto-trace)",
     )
+    parser.add_argument(
+        "--auto-press-key",
+        help="Automatically press a key (e.g., KEY_F1) once when PC threshold is reached",
+    )
+    parser.add_argument(
+        "--auto-press-after-pc",
+        type=lambda x: int(x, 0),
+        help="PC threshold (hex or dec). First time PC >= this, the key is pressed",
+    )
+    parser.add_argument(
+        "--auto-release-after-instr",
+        type=int,
+        default=500,
+        help="Release the auto-pressed key after N instructions (default: 500)",
+    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -282,4 +346,7 @@ if __name__ == "__main__":
         new_perfetto=args.perfetto,
         trace_file=args.trace_file,
         profile_emulator=args.profile_emulator,
+        auto_press_key=args.auto_press_key,
+        auto_press_after_pc=args.auto_press_after_pc,
+        auto_release_after_instr=args.auto_release_after_instr,
     )
