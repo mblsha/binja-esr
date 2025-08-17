@@ -27,6 +27,11 @@ def run_emulator(
     auto_press_key: str | None = None,
     auto_press_after_pc: int | None = None,
     auto_release_after_instr: int | None = None,
+    require_strobes: int | None = None,
+    min_hold_instr: int | None = None,
+    # Sweep controls: iterate rows on active column, one bit at a time
+    sweep_rows: bool = False,
+    sweep_hold_instr: int = 2000,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -101,6 +106,11 @@ def run_emulator(
     pressed = False
     release_countdown = None
     latched_kil_seen = False
+    strobe_target = None
+    hold_until_instr = None
+    current_sweep_row = 0
+    sweep_hold_until = None
+    last_active_cols = []
     for _ in range(num_steps):
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
@@ -116,8 +126,75 @@ def run_emulator(
             pressed = True
             if auto_release_after_instr and auto_release_after_instr > 0:
                 release_countdown = auto_release_after_instr
+            # Set strobe target if requested
+            if require_strobes and require_strobes > 0:
+                try:
+                    strobe_target = getattr(emu, "_kb_strobe_count", 0) + int(
+                        require_strobes
+                    )
+                except Exception:
+                    strobe_target = None
+            # Set minimum hold instructions if requested
+            if min_hold_instr and min_hold_instr > 0:
+                hold_until_instr = emu.instruction_count + int(min_hold_instr)
 
         emu.step()
+
+        # If sweeping, find active columns from last KOL/KOH and press one row at a time
+        if sweep_rows:
+            koh = getattr(emu, "_last_koh", 0)
+            kol = getattr(emu, "_last_kol", 0)
+            # Derive active columns for active-high mapping
+            active_cols = []
+            for col in range(8):
+                if koh & (1 << col):
+                    active_cols.append(col)
+            for col in range(3):
+                if kol & (1 << col):
+                    active_cols.append(col + 8)
+
+            # If an active column exists, pick the first and sweep rows
+            if active_cols:
+                active_col = active_cols[0]
+                # If columns changed, reset sweep row
+                if active_cols != last_active_cols:
+                    current_sweep_row = 0
+                    sweep_hold_until = None
+                    # Release any currently held key
+                    try:
+                        if pressed and auto_press_key:
+                            emu.release_key(auto_press_key)
+                            pressed = False
+                    except Exception:
+                        pass
+                last_active_cols = active_cols
+
+                # If not currently holding, press key at (active_col, current_sweep_row)
+                if sweep_hold_until is None or emu.instruction_count >= sweep_hold_until:
+                    # Release previous key
+                    try:
+                        if pressed and auto_press_key:
+                            emu.release_key(auto_press_key)
+                            pressed = False
+                    except Exception:
+                        pass
+                    # Find a key at (active_col, current_sweep_row)
+                    keycode = None
+                    try:
+                        locs = getattr(emu.keyboard, "key_locations", {})
+                        for kc, loc in locs.items():
+                            if loc.column == active_col and loc.row == current_sweep_row:
+                                keycode = kc
+                                break
+                    except Exception:
+                        keycode = None
+                    if keycode:
+                        emu.press_key(keycode)
+                        auto_press_key = keycode
+                        pressed = True
+                        sweep_hold_until = emu.instruction_count + max(1, int(sweep_hold_instr))
+                    # Advance to next row for next time
+                    current_sweep_row = (current_sweep_row + 1) % 8
 
         # If we are holding the key, and we see a KIL read on PF1's column (KO10),
         # latch that we've been sampled and allow countdown-based release
@@ -129,7 +206,24 @@ def run_emulator(
             except Exception:
                 pass
 
-        if pressed and release_countdown is not None and latched_kil_seen:
+        # Enforce strobe-run hold and/or min hold
+        ready_by_strobes = True
+        if pressed and strobe_target is not None:
+            try:
+                ready_by_strobes = getattr(emu, "_kb_strobe_count", 0) >= strobe_target
+            except Exception:
+                ready_by_strobes = True
+        ready_by_min_hold = True
+        if pressed and hold_until_instr is not None:
+            ready_by_min_hold = emu.instruction_count >= hold_until_instr
+
+        if (
+            pressed
+            and release_countdown is not None
+            and latched_kil_seen
+            and ready_by_strobes
+            and ready_by_min_hold
+        ):
             release_countdown -= 1
             if release_countdown <= 0:
                 emu.release_key(auto_press_key)
@@ -189,7 +283,7 @@ def run_emulator(
         # If available, print IMEM register access tracking for KOL/KOH/KIL
         try:
             tracking = emu.memory.get_imem_access_tracking()
-            for reg in ("KOL", "KOH", "KIL"):
+            for reg in ("KOL", "KOH", "KIL", "EIL", "EIH"):
                 if reg in tracking:
                     reads = (
                         sum(c for _, c in tracking[reg]["reads"])
@@ -202,11 +296,18 @@ def run_emulator(
                         else 0
                     )
                     print(f"IMEM {reg}: reads={reads} writes={writes}")
-            # Print last observed keyboard scan state (hardware keyboard)
+            # Print last observed keyboard scan state and strobe count (hardware keyboard)
             if hasattr(emu, "_kil_read_count"):
                 print(
-                    f"Keyboard reads: {getattr(emu, '_kil_read_count', 0)} last_cols={getattr(emu, '_last_kil_columns', [])} last KOL=0x{getattr(emu, '_last_kol', 0):02X} KOH=0x{getattr(emu, '_last_koh', 0):02X}"
+                    f"Keyboard reads: {getattr(emu, '_kil_read_count', 0)} last_cols={getattr(emu, '_last_kil_columns', [])} last KOL=0x{getattr(emu, '_last_kol', 0):02X} KOH=0x{getattr(emu, '_last_koh', 0):02X} strobe_writes={getattr(emu, '_kb_strobe_count', 0)}"
                 )
+                try:
+                    hist = list(getattr(emu, '_kb_col_hist', []))
+                    if hist:
+                        hist_str = ", ".join(f"KO{i}:{c}" for i,c in enumerate(hist))
+                        print(f"Column strobe histogram: {hist_str}")
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -227,6 +328,10 @@ def main(
     auto_press_key: str | None = None,
     auto_press_after_pc: int | None = None,
     auto_release_after_instr: int | None = None,
+    require_strobes: int | None = None,
+    min_hold_instr: int | None = None,
+    sweep_rows: bool = False,
+    sweep_hold_instr: int = 2000,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -248,6 +353,10 @@ def main(
         auto_press_key=auto_press_key,
         auto_press_after_pc=auto_press_after_pc,
         auto_release_after_instr=auto_release_after_instr,
+        require_strobes=require_strobes,
+        min_hold_instr=min_hold_instr,
+        sweep_rows=sweep_rows,
+        sweep_hold_instr=sweep_hold_instr,
     ) as emu:
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
@@ -334,6 +443,27 @@ if __name__ == "__main__":
         default=500,
         help="Release the auto-pressed key after N instructions (default: 500)",
     )
+    parser.add_argument(
+        "--require-strobes",
+        type=int,
+        help="Hold the key until at least this many KOL/KOH writes have occurred after press",
+    )
+    parser.add_argument(
+        "--min-hold-instr",
+        type=int,
+        help="Hold the key for at least this many instructions after press",
+    )
+    parser.add_argument(
+        "--sweep-rows",
+        action="store_true",
+        help="After threshold, iterate one row at a time on the active column (one-bit KIL patterns)",
+    )
+    parser.add_argument(
+        "--sweep-hold-instr",
+        type=int,
+        default=2000,
+        help="Instructions to hold each row during sweep (default: 2000)",
+    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -349,4 +479,8 @@ if __name__ == "__main__":
         auto_press_key=args.auto_press_key,
         auto_press_after_pc=args.auto_press_after_pc,
         auto_release_after_instr=args.auto_release_after_instr,
+        require_strobes=args.require_strobes,
+        min_hold_instr=args.min_hold_instr,
+        sweep_rows=args.sweep_rows,
+        sweep_hold_instr=args.sweep_hold_instr,
     )

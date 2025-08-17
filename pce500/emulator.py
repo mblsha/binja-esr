@@ -141,6 +141,13 @@ class PCE500Emulator:
         self._last_kil_columns = []
         self._last_kol = 0
         self._last_koh = 0
+        # Keyboard strobe monitoring (KOL/KOH writes)
+        self._kb_strobe_count = 0
+        self._kb_col_hist = [0 for _ in range(11)]
+        # Synthetic keyboard interrupt wiring
+        self._kb_irq_enabled = keyboard_impl == "hardware"
+        self._irq_pending = False
+        self._in_interrupt = False
 
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
@@ -173,6 +180,17 @@ class PCE500Emulator:
 
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
+        # Check for pending synthetic interrupt before executing next instruction
+        if self._irq_pending and not self._in_interrupt:
+            try:
+                vector_addr = self.memory.read_long(0xFFFFA)
+                # Jump to interrupt vector (simplified: no stack push)
+                self.cpu.regs.set(RegisterName.PC, vector_addr)
+                self._in_interrupt = True
+                self._irq_pending = False
+            except Exception:
+                pass
+
         pc = self.cpu.regs.get(RegisterName.PC)
         self._last_pc, self._current_pc = self._current_pc, pc
 
@@ -257,6 +275,13 @@ class PCE500Emulator:
                     "CPU", "Error", {"error": str(e), "pc": f"0x{pc:06X}"}
                 )
             raise
+        # Detect end of interrupt roughly by RETI opcode name
+        try:
+            instr_name = type(eval_info.instruction).__name__
+            if instr_name == "RETI":
+                self._in_interrupt = False
+        except Exception:
+            pass
         return True
 
     def run(self, max_instructions: Optional[int] = None) -> int:
@@ -524,6 +549,46 @@ class PCE500Emulator:
             new_tracer.instant(
                 "I/O", "KB_ColumnStrobe", {"addr": offset, "value": value & 0xFF}
             )
+        # Monitor strobe count on changes
+        try:
+            if offset == KOL:
+                if getattr(self.keyboard, "kol_value", None) != (value & 0xFF):
+                    self._kb_strobe_count += 1
+                self._last_kol = value & 0xFF
+                # Update column histogram for KO8..KO10
+                for col in range(3):
+                    if self._last_kol & (1 << col):  # active-high
+                        self._kb_col_hist[col + 8] += 1
+            elif offset == KOH:
+                if getattr(self.keyboard, "koh_value", None) != (value & 0xFF):
+                    self._kb_strobe_count += 1
+                self._last_koh = value & 0xFF
+                # Update column histogram for KO0..KO7
+                for col in range(8):
+                    if self._last_koh & (1 << col):  # active-high
+                        self._kb_col_hist[col] += 1
+        except Exception:
+            pass
+        # If IRQ wiring enabled: trigger when a pressed key's column is active
+        try:
+            if self._kb_irq_enabled and hasattr(self.keyboard, "get_pressed_keys"):
+                pressed = set(self.keyboard.get_pressed_keys())
+                if pressed:
+                    active_cols = []
+                    for col in range(8):
+                        if self._last_koh & (1 << col):
+                            active_cols.append(col)
+                    for col in range(3):
+                        if self._last_kol & (1 << col):
+                            active_cols.append(col + 8)
+                    # Any pressed key in active columns?
+                    for kc in pressed:
+                        loc = getattr(self.keyboard, "key_locations", {}).get(kc)
+                        if loc and loc.column in active_cols:
+                            self._irq_pending = True
+                            break
+        except Exception:
+            pass
         # Support both compat and hardware keyboard APIs
         if hasattr(self.keyboard, "write_register"):
             self.keyboard.write_register(offset, value)
