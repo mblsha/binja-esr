@@ -1,5 +1,6 @@
 """Cached FetchDecoder for improved performance."""
 
+import struct
 from typing import Callable
 from binja_test_mocks.coding import Decoder, BufferTooShortErrorError
 
@@ -16,6 +17,10 @@ class CachedFetchDecoder(Decoder):
         self._cache_hits = 0
         self._cache_misses = 0
     
+    def get_pos(self) -> int:
+        """Get current position in the decoder."""
+        return self.pos
+    
     def peek(self, offset: int) -> int:
         """Peek at a byte without advancing position."""
         addr = self.pos + offset
@@ -29,7 +34,7 @@ class CachedFetchDecoder(Decoder):
         
         # Cache miss - read from memory
         self._cache_misses += 1
-        value = self.read_mem(offset)
+        value = self.read_mem(addr)
         self._cache[addr] = value
         
         # Limit cache size to prevent memory bloat
@@ -52,7 +57,7 @@ class CachedFetchDecoder(Decoder):
             value = self._cache[self.pos]
         else:
             self._cache_misses += 1
-            value = self.read_mem(0)
+            value = self.read_mem(self.pos)
             self._cache[self.pos] = value
             
             # Limit cache size
@@ -70,9 +75,32 @@ class CachedFetchDecoder(Decoder):
         if self.pos > self.address_space_size:
             raise BufferTooShortErrorError
     
-    def _unpack(self, fmt: str) -> tuple:
-        """Unpack binary data (not used in SC62015)."""
-        raise NotImplementedError("_unpack not implemented for CachedFetchDecoder")
+    def _unpack(self, fmt: str) -> int:
+        """Unpack binary data according to format string."""
+        size = struct.calcsize(fmt)
+        if self.pos + size > self.address_space_size:
+            raise BufferTooShortErrorError
+        
+        # Read bytes from memory (using cache where possible)
+        fmt = "<" + fmt if fmt[0] != ">" else fmt
+        bytes_data = bytearray()
+        for i in range(size):
+            addr = self.pos + i
+            if addr in self._cache:
+                self._cache_hits += 1
+                bytes_data.append(self._cache[addr])
+            else:
+                self._cache_misses += 1
+                value = self.read_mem(addr)
+                self._cache[addr] = value
+                bytes_data.append(value)
+        
+        items = struct.unpack_from(fmt, bytes_data)
+        self.pos += size
+        
+        if len(items) == 1:
+            return items[0]  # type: ignore
+        raise ValueError("Unpacking more than one item is not supported")
     
     def get_cache_stats(self) -> tuple[int, int]:
         """Get cache hit/miss statistics."""
