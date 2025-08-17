@@ -2,6 +2,11 @@ from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
 from dataclasses import dataclass
 from binja_test_mocks.coding import FetchDecoder
+try:
+    from .cached_decoder import CachedFetchDecoder
+    USE_CACHED_DECODER = True
+except ImportError:
+    USE_CACHED_DECODER = False
 from .constants import PC_MASK, ADDRESS_SPACE_SIZE
 
 from .instr.opcode_table import OPCODES
@@ -196,7 +201,11 @@ class Emulator:
         def fecher(offset: int) -> int:
             return self.memory.read_byte(address + offset)
 
-        decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
+        # Use cached decoder if available for better performance
+        if USE_CACHED_DECODER:
+            decoder = CachedFetchDecoder(fecher, ADDRESS_SPACE_SIZE)
+        else:
+            decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
         return decode(decoder, address, OPCODES)  # type: ignore
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:

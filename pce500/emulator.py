@@ -88,6 +88,19 @@ class PCE500Emulator:
                 perfetto_thread="I/O",
             )
         )
+        
+        # Add LCC register overlay for hardware keyboard (if applicable)
+        if keyboard_impl == "hardware":
+            self.memory.add_overlay(
+                MemoryOverlay(
+                    start=INTERNAL_MEMORY_START + 0xFE,  # LCC register
+                    end=INTERNAL_MEMORY_START + 0xFE,
+                    name="lcc_register",
+                    read_only=False,
+                    write_handler=self._lcc_write_handler,
+                    perfetto_thread="I/O",
+                )
+            )
 
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
@@ -491,6 +504,17 @@ class PCE500Emulator:
             self.keyboard.write_register(offset, value)
         else:
             self.keyboard.handle_register_write(offset, value)
+    
+    def _lcc_write_handler(
+        self, address: int, value: int, cpu_pc: Optional[int] = None
+    ) -> None:
+        """Handle LCC register write for hardware keyboard."""
+        offset = address - INTERNAL_MEMORY_START
+        self._track_imem_access(offset, "writes", cpu_pc)
+        
+        # Invalidate KSD cache in hardware keyboard
+        if hasattr(self.keyboard, "invalidate_ksd_cache"):
+            self.keyboard.invalidate_ksd_cache()
 
     def _dump_internal_memory(self, pc: int):
         internal_mem = self.memory.get_internal_memory_bytes()

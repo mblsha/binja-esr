@@ -734,6 +734,8 @@ def fusion(
 def _create_decoder(
     decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]
 ) -> Iterator[Tuple["Instruction", int]]:
+    # TODO: Investigate why double fusion is needed for PRE instructions
+    # For now, keeping double fusion but need to optimize memory reads elsewhere
     return fusion(fusion(iter_decode(decoder, addr, opcodes)))
 
 

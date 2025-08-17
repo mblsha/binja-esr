@@ -33,17 +33,22 @@ class KeyboardHardware:
     """
 
     def __init__(
-        self, memory_accessor: Callable[[int], int], *, active_low: bool = True
+        self, memory_accessor: Optional[Callable[[int], int]] = None, *, active_low: bool = True
     ):
         """Initialize keyboard hardware.
 
         Args:
-            memory_accessor: Function to read from memory (for accessing LCC register)
+            memory_accessor: Function to read from memory (for accessing LCC register). 
+                           If None, KSD bit is assumed to be 0 (strobing enabled).
         """
         self.memory = memory_accessor
         self.active_low = (
             active_low  # True = hardware-accurate active-low; False = active-high mode
         )
+        
+        # Cache for KSD bit to avoid expensive memory reads
+        self._ksd_cache = None
+        self._ksd_cache_valid = False
 
         # State of output registers
         # Default idle state: all outputs high (no columns strobed)
@@ -285,7 +290,7 @@ class KeyboardHardware:
         """Handle write to keyboard output register.
 
         Args:
-            offset: Register offset (KOL or KOH)
+            offset: Register offset (KOL, KOH, or LCC)
             value: Byte value to write
         """
         if offset == KOL:
@@ -298,6 +303,9 @@ class KeyboardHardware:
             if new_val != self.koh_value:
                 self.koh_value = new_val
                 self._kil_dirty = True
+        elif offset == LCC:
+            # LCC register write - invalidate KSD cache
+            self.invalidate_ksd_cache()
 
     def read_register(self, offset: int) -> int:
         """Handle read from keyboard register.
@@ -318,26 +326,11 @@ class KeyboardHardware:
 
     def _read_kil_fast(self) -> int:
         """Fast KIL read with caching and per-column masks."""
-        # Fast path: no keys pressed at all
+        # Fast path: no keys pressed at all - this should be most common
         if self._rows_mask_all == 0:
-            self._kil_cached = 0xFF
-            self._kil_dirty = False
-            return self._kil_cached
+            return 0xFF if self.active_low else 0x00
 
-        # Read KSD bit once (only if some key is pressed)
-        lcc = self.memory(INTERNAL_MEMORY_START + LCC)
-        ksd_bit = (lcc >> 2) & 1
-        # If KSD changed, mark dirty
-        if self._last_ksd is None or self._last_ksd != ksd_bit:
-            self._last_ksd = ksd_bit
-            self._kil_dirty = True
-
-        if ksd_bit:
-            # Strobing disabled: no columns active => no keys read
-            self._kil_cached = 0xFF if self.active_low else 0x00
-            self._kil_dirty = False
-            return self._kil_cached
-
+        # Return cached value if clean
         if not self._kil_dirty:
             return self._kil_cached
 
@@ -356,6 +349,13 @@ class KeyboardHardware:
         self._kil_cached = kil_value
         self._kil_dirty = False
         return self._kil_cached
+    
+    def invalidate_ksd_cache(self):
+        """Invalidate the KSD bit cache.
+        
+        Call this when the LCC register might have changed.
+        """
+        self._ksd_cache_valid = False
 
     def get_pressed_keys(self) -> List[str]:
         """Get list of currently pressed key codes.
