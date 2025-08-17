@@ -153,7 +153,7 @@ class PCE500Emulator:
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
 
-    @perf_trace("Emulation")
+    @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
         pc = self.cpu.regs.get(RegisterName.PC)
         self._last_pc, self._current_pc = self._current_pc, pc
@@ -181,7 +181,7 @@ class PCE500Emulator:
             
             # Execute instruction with opcode-level tracing
             pc_before = pc
-            with new_tracer.slice("Opcodes", opcode_name, {"pc": f"0x{pc:06X}", "opcode": f"0x{opcode:02X}" if opcode else None}):
+            with new_tracer.slice("Opcodes", opcode_name, {"pc": f"0x{pc:06X}", "opcode": f"0x{opcode:02X}" if opcode else None, "op_num": self.instruction_count}):
                 eval_info = self.cpu.execute_instruction(pc)
             
             self.cycle_count += 1

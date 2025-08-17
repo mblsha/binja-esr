@@ -214,7 +214,8 @@ tracer = PerfettoTracer()
 def perf_trace(
     track: str, 
     sample_rate: int = 1,
-    extract_args: Optional[Callable[[Any], Dict[str, Any]]] = None
+    extract_args: Optional[Callable[[Any], Dict[str, Any]]] = None,
+    include_op_num: bool = False
 ) -> Callable:
     """Decorator for automatic performance tracing.
     
@@ -224,6 +225,7 @@ def perf_trace(
         track: Perfetto track name for this function
         sample_rate: Only trace every Nth call (1 = trace all)
         extract_args: Optional function to extract trace arguments from function args
+        include_op_num: Include instruction_count as op_num in trace args (for Emulation track)
     """
     def decorator(func: Callable) -> Callable:
         call_count = 0
@@ -244,6 +246,10 @@ def perf_trace(
                     trace_args = extract_args(*args, **kwargs)
                 except:
                     pass  # Ignore extraction errors
+            
+            # Add operation number if requested (for step function)
+            if include_op_num and args and hasattr(args[0], 'instruction_count'):
+                trace_args['op_num'] = args[0].instruction_count
             
             func_name = func.__name__
             with tracer.slice(track, func_name, trace_args):
