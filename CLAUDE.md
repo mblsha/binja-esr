@@ -146,6 +146,88 @@ The `pc-e500.bin` file is a 1MB memory dump. When loading:
 - The ROM is loaded at address 0xC0000 in the emulator's memory space
 - Entry point 0xFFFFD typically contains 0xC2 0x10 0x0F (0x0F10C2 in little-endian)
 
+## Performance Profiling
+
+The emulator includes sophisticated wall-clock performance profiling using Perfetto tracing to identify bottlenecks and optimization opportunities.
+
+### Running Performance Profiling
+
+```bash
+# Profile emulator execution
+uv run -- env FORCE_BINJA_MOCK=1 python3 pce500/run_pce500.py --profile-emulator
+
+# Output: emulator-profile.perfetto-trace
+# View at: https://ui.perfetto.dev/
+```
+
+### Architecture
+
+The profiling system uses a clean, zero-conditional approach:
+- **Always-on decorators and context managers** that check internally if profiling is enabled
+- **No conditional branches** in instrumented code - decorators/context managers are always present
+- **Minimal overhead** when disabled (just function call + flag check)
+- **Wall-clock timing** via `time.perf_counter()` separate from virtual CPU cycles
+
+### Performance Tracks
+
+The trace includes these specialized tracks:
+- **Emulation**: High-level operations (`step()`, `reset()`, `load_rom()`) with `op_num` sequential counter
+- **Opcodes**: Individual instruction execution with opcode names and `op_num` counter
+- **Memory**: Read/write operations (sampled at 1/100 to reduce overhead)
+- **Display**: LCD controller operations
+- **Lifting**: SC62015 instruction decoding and LLIL evaluation
+- **System**: System-level operations like reset and ROM loading
+
+### Implementation Details
+
+#### Clean Instrumentation Pattern
+```python
+# Decorator always present, checks internally
+@perf_trace("Emulation", include_op_num=True)
+def step(self):
+    # Context manager always runs, checks internally
+    with tracer.slice("Opcodes", opcode_name, {"pc": f"0x{pc:06X}", "op_num": self.instruction_count}):
+        eval_info = self.cpu.execute_instruction(pc)
+```
+
+#### Sampled Tracing for High-Frequency Operations
+```python
+@perf_trace("Memory", sample_rate=100)  # Only trace every 100th call
+def read_byte(self, address: int) -> int:
+    # Implementation
+```
+
+#### Key Files
+- `pce500/tracing/perfetto_tracing.py`: Core tracing infrastructure with `@perf_trace` decorator and `slice()` context manager
+- `pce500/emulator.py`: Instrumented with opcode-level tracing
+- `pce500/memory.py`: Sampled memory operation tracing
+- `pce500/display/controller_wrapper.py`: Display operation tracing
+
+### Trace Analysis Tips
+
+1. **Operation Numbers**: Each instruction has a sequential `op_num` (0-based) in both Emulation and Opcodes tracks
+2. **Sampling**: Memory operations are sampled (1/100) to reduce trace size while maintaining insights
+3. **Hierarchical View**: Opcodes are nested under Emulation steps for clear execution flow
+4. **Wall-Clock Time**: All measurements are real-time, not virtual CPU cycles
+
+### Performance Optimization Workflow
+
+1. Run with `--profile-emulator` flag
+2. Load trace in https://ui.perfetto.dev/
+3. Look for:
+   - Hot spots in the flame graph
+   - Long-duration slices in Opcodes track
+   - Memory operation patterns
+   - Unexpected delays in Display operations
+4. Focus optimization on bottlenecks identified in traces
+
+### Technical Notes
+
+- Uses `retrobus-perfetto` library for protobuf trace generation
+- Zero overhead when disabled - all instrumentation checks flag internally
+- SC62015 emulator integration via `memory.set_perf_tracer()` for cross-module tracing
+- Trace files are binary protobuf format compatible with Perfetto ecosystem
+
 ## Web-Based PC-E500 Emulator
 
 The web emulator (`web/`) provides a browser-based interface to the PC-E500 emulator:
