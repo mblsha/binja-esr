@@ -179,6 +179,8 @@ def main(
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
     profile_emulator=False,
+    steps: int = 20000,
+    timeout_secs: float = 10.0,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -188,6 +190,7 @@ def main(
     
     # Use context manager for automatic cleanup
     with run_emulator(
+        num_steps=steps,
         dump_pc=dump_pc,
         no_dump=no_dump,
         save_lcd=save_lcd,
@@ -195,6 +198,7 @@ def main(
         keyboard_impl=keyboard_impl,
         new_perfetto=new_perfetto,
         trace_file=trace_file,
+        timeout_secs=timeout_secs,
     ) as emu:
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
@@ -240,6 +244,18 @@ if __name__ == "__main__":
         help="Select keyboard implementation (default: compat)",
     )
     parser.add_argument(
+        "--steps",
+        type=int,
+        default=20000,
+        help="Number of instructions to execute (default: 20000)",
+    )
+    parser.add_argument(
+        "--timeout-secs",
+        type=float,
+        default=10.0,
+        help="Abort run after this many seconds (default: 10.0)",
+    )
+    parser.add_argument(
         "--perfetto",
         action="store_true",
         help="Enable new Perfetto tracing (wall-clock time)",
@@ -256,6 +272,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(
+        steps=args.steps,
+        timeout_secs=args.timeout_secs,
         dump_pc=args.dump_pc,
         no_dump=args.no_dump,
         save_lcd=not args.no_lcd,

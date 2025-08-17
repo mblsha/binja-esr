@@ -33,7 +33,7 @@ class KeyboardHardware:
     """
 
     def __init__(
-        self, memory_accessor: Optional[Callable[[int], int]] = None, *, active_low: bool = True
+        self, memory_accessor: Optional[Callable[[int], int]] = None, *, active_low: bool = False
     ):
         """Initialize keyboard hardware.
 
@@ -42,18 +42,20 @@ class KeyboardHardware:
                            If None, KSD bit is assumed to be 0 (strobing enabled).
         """
         self.memory = memory_accessor
-        self.active_low = (
-            active_low  # True = hardware-accurate active-low; False = active-high mode
-        )
+        # True = hardware-accurate active-low; False = compat (active-high)
+        # Default to active-high to match existing compat behavior and tests.
+        self.active_low = active_low
         
         # Cache for KSD bit to avoid expensive memory reads
         self._ksd_cache = None
         self._ksd_cache_valid = False
 
         # State of output registers
-        # Default idle state: all outputs high (no columns strobed)
-        self.kol_value = 0xFF  # KO0-KO7 output state (active-low)
-        self.koh_value = 0xFF  # KO8-KO10 output state (active-low)
+        # Default idle state depends on polarity:
+        # - active_low=True  => outputs high (0xFF) means no columns strobed
+        # - active_low=False => outputs low  (0x00) means no columns strobed
+        self.kol_value = 0xFF if self.active_low else 0x00
+        self.koh_value = 0xFF if self.active_low else 0x00
 
         # 8x11 matrix state: matrix[row][column] = True if key pressed
         # Rows are KI0-KI7, Columns are KO0-KO10
@@ -384,14 +386,16 @@ class KeyboardHardware:
             # Keyboard strobing disabled
             return active
 
-        # Check KOL columns (active-low)
+        # Check KOL columns
         for col in range(8):
-            if not (self.kol_value & (1 << col)):
+            bit_set = (self.kol_value & (1 << col)) != 0
+            if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col)
 
-        # Check KOH columns (active-low)
+        # Check KOH columns
         for col in range(3):  # Only 3 bits used in KOH
-            if not (self.koh_value & (1 << col)):
+            bit_set = (self.koh_value & (1 << col)) != 0
+            if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col + 8)
 
         return active
