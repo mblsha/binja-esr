@@ -20,6 +20,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
+from PIL import ImageOps
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
@@ -363,7 +364,8 @@ class PCE500Emulator:
     def save_lcd_displays(
         self, combined_filename: str = "lcd_display.png", save_individual: bool = False
     ) -> None:
-        self.lcd.get_combined_display(zoom=2).save(combined_filename)
+        img = self.lcd.get_combined_display(zoom=1)
+        img.save(combined_filename)
         print(f"LCD display saved to {combined_filename}")
         if save_individual:
             self.lcd.save_displays_to_png("lcd_left.png", "lcd_right.png")

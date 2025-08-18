@@ -384,7 +384,6 @@ def main(
             else:
                 # Load and preprocess: invert (dark text), upscale, binarize
                 im = Image.open(ocr_path).convert("L")
-                im = im.resize((im.width * 2, im.height * 2))
                 im = Image.eval(im, lambda v: 255 - v)
                 th = 128
                 im = im.point(lambda v: 255 if v > th else 0, mode="1")
@@ -449,6 +448,11 @@ if __name__ == "__main__":
         "--trace-file",
         default="pc-e500.perfetto-trace",
         help="Path to write trace file (default: pc-e500.perfetto-trace)",
+    )
+    parser.add_argument(
+        "--invert-lcd",
+        action="store_true",
+        help="Invert LCD colors in saved PNGs (helpful for readability)",
     )
     parser.add_argument(
         "--profile-emulator",

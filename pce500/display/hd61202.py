@@ -110,7 +110,7 @@ class HD61202:
             for y_addr in range(self.LCD_WIDTH_PIXELS):
                 byte = self.vram[page][y_addr]
                 for bit in range(self.PAGE_HEIGHT_PIXELS):
-                    if (byte >> bit) & 1:
+                    if not ((byte >> bit) & 1):
                         pixels[y_addr, page * self.PAGE_HEIGHT_PIXELS + bit] = 1
 
         if zoom > 1:
