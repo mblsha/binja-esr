@@ -33,6 +33,10 @@ def run_emulator(
     # Sweep controls: iterate rows on active column, one bit at a time
     sweep_rows: bool = False,
     sweep_hold_instr: int = 2000,
+    debug_draw_on_key: bool = False,
+    force_display_on: bool = False,
+    fast_mode: bool = False,
+    boot_skip_steps: int = 0,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -51,13 +55,26 @@ def run_emulator(
     """
     # Create emulator
     emu = PCE500Emulator(
-        trace_enabled=True,
+        trace_enabled=False,
         perfetto_trace=perfetto_trace,
         save_lcd_on_exit=save_lcd,
         keyboard_impl=keyboard_impl,
         enable_new_tracing=new_perfetto,
         trace_path=trace_file,
     )
+    # Enable debug draw-on-key if requested
+    try:
+        setattr(emu, "debug_draw_on_key", bool(debug_draw_on_key))
+    except Exception:
+        pass
+    try:
+        setattr(emu, "force_display_on", bool(force_display_on))
+    except Exception:
+        pass
+    try:
+        setattr(emu, "fast_mode", bool(fast_mode))
+    except Exception:
+        pass
 
     if print_stats:
         trace_msgs = []
@@ -100,6 +117,36 @@ def run_emulator(
 
     if print_stats:
         print(f"Running {num_steps} instructions...")
+
+    # Optional: skip initial boot instructions without tracing to reach post-init state
+    if boot_skip_steps and boot_skip_steps > 0:
+        if print_stats:
+            print(f"Boot-skip: executing {boot_skip_steps} instructions without tracing...")
+        # Stop new tracing if enabled
+        try:
+            if new_tracer.enabled:
+                new_tracer.stop()
+        except Exception:
+            pass
+        # Speed up skip phase
+        try:
+            setattr(emu, "fast_mode", True)
+        except Exception:
+            pass
+        for _ in range(int(boot_skip_steps)):
+            emu.step()
+        # Restore requested fast_mode after skip
+        try:
+            setattr(emu, "fast_mode", bool(fast_mode))
+        except Exception:
+            pass
+        # Restart new tracer if requested for this run
+        try:
+            if new_perfetto and not new_tracer.enabled:
+                new_tracer.start(trace_file)
+                emu.memory.set_perf_tracer(new_tracer)
+        except Exception:
+            pass
 
     # Abort run after timeout_secs to avoid long hangs
     start_time = time.perf_counter()
@@ -261,6 +308,12 @@ def run_emulator(
         print(f"  Display on: {emu.lcd.display_on}")
         print(f"  Page: {emu.lcd.page}")
         print(f"  Column: {emu.lcd.column}")
+        # Keyboard/IRQ debug stats (hardware keyboard only)
+        try:
+            if hasattr(emu, "_kb_irq_count"):
+                print(f"\nKeyboard IRQs delivered: {getattr(emu, '_kb_irq_count', 0)}")
+        except Exception:
+            pass
 
         # Display detailed statistics for each chip
         print("\nDetailed LCD Chip Statistics:")
@@ -333,6 +386,10 @@ def main(
     min_hold_instr: int | None = None,
     sweep_rows: bool = False,
     sweep_hold_instr: int = 2000,
+    debug_draw_on_key: bool = False,
+    force_display_on: bool = False,
+    fast_mode: bool = False,
+    boot_skip: int = 0,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -358,6 +415,10 @@ def main(
         min_hold_instr=min_hold_instr,
         sweep_rows=sweep_rows,
         sweep_hold_instr=sweep_hold_instr,
+        debug_draw_on_key=debug_draw_on_key,
+        force_display_on=force_display_on,
+        fast_mode=fast_mode,
+        boot_skip_steps=boot_skip,
     ) as emu:
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
@@ -382,8 +443,14 @@ def main(
             except Exception as e:
                 print(f"OCR: pytesseract not available: {e}")
             else:
-                # Load and preprocess: invert (dark text), upscale, binarize
+                # Load and preprocess: add border, invert (dark text), upscale, binarize
                 im = Image.open(ocr_path).convert("L")
+                try:
+                    # Add a 5px white border to help OCR segmentation
+                    from PIL import ImageOps as _ImageOps  # type: ignore
+                    im = _ImageOps.expand(im, border=5, fill=255)
+                except Exception:
+                    pass
                 im = Image.eval(im, lambda v: 255 - v)
                 th = 128
                 im = im.point(lambda v: 255 if v > th else 0, mode="1")
@@ -450,11 +517,6 @@ if __name__ == "__main__":
         help="Path to write trace file (default: pc-e500.perfetto-trace)",
     )
     parser.add_argument(
-        "--invert-lcd",
-        action="store_true",
-        help="Invert LCD colors in saved PNGs (helpful for readability)",
-    )
-    parser.add_argument(
         "--profile-emulator",
         action="store_true",
         help="Enable performance profiling of emulator execution (outputs emulator-profile.perfetto-trace)",
@@ -495,6 +557,27 @@ if __name__ == "__main__":
         default=2000,
         help="Instructions to hold each row during sweep (default: 2000)",
     )
+    parser.add_argument(
+        "--debug-draw-on-key",
+        action="store_true",
+        help="Debug: draw a visible marker on the LCD when a key is pressed",
+    )
+    parser.add_argument(
+        "--force-display-on",
+        action="store_true",
+        help="Debug: force both LCD chips on at reset",
+    )
+    parser.add_argument(
+        "--fast-mode",
+        action="store_true",
+        help="Minimize step() overhead to run more instructions",
+    )
+    parser.add_argument(
+        "--boot-skip",
+        type=int,
+        default=0,
+        help="Execute this many instructions first without tracing (skip boot)",
+    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -514,4 +597,8 @@ if __name__ == "__main__":
         min_hold_instr=args.min_hold_instr,
         sweep_rows=args.sweep_rows,
         sweep_hold_instr=args.sweep_hold_instr,
+        debug_draw_on_key=args.debug_draw_on_key,
+        force_display_on=args.force_display_on,
+        fast_mode=args.fast_mode,
+        boot_skip=args.boot_skip,
     )

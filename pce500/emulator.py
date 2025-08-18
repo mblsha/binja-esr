@@ -149,6 +149,17 @@ class PCE500Emulator:
         self._kb_irq_enabled = keyboard_impl == "hardware"
         self._irq_pending = False
         self._in_interrupt = False
+        self._kb_irq_count = 0
+        # Simple periodic timers (rough emulation)
+        self._timer_enabled = True
+        # Periods in instructions (tunable): main ~ msec, sub ~ 10x slower here
+        self._timer_mti_period = 500  # MTI (bit 0)
+        self._timer_sti_period = 5000  # STI (bit 1)
+        self._timer_next_mti = self._timer_mti_period
+        self._timer_next_sti = self._timer_sti_period
+        self._irq_source: Optional[str] = None
+        # Fast mode: minimize step() overhead to run many instructions
+        self.fast_mode = False
 
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
@@ -169,6 +180,13 @@ class PCE500Emulator:
     def reset(self) -> None:
         self.memory.reset()
         self.lcd.reset()
+        # Optional debug: force display ON at reset
+        try:
+            if getattr(self, "force_display_on", False) and hasattr(self.lcd, "chips"):
+                for chip in self.lcd.chips:
+                    chip.state.on = True
+        except Exception:
+            pass
         self.cpu.power_on_reset()
         if any(o.name == "internal_rom" for o in self.memory.overlays):
             self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
@@ -181,6 +199,12 @@ class PCE500Emulator:
 
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
+        # Tick rough timers to set ISR bits and arm IRQ when due
+        try:
+            if self._timer_enabled:
+                self._tick_timers()
+        except Exception:
+            pass
         # Check for pending synthetic interrupt before executing next instruction
         if getattr(self, "_irq_pending", False) and not getattr(self, "_in_interrupt", False):
             try:
@@ -188,6 +212,9 @@ class PCE500Emulator:
                 # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
                 cur_pc = self.cpu.regs.get(RegisterName.PC)
                 s = self.cpu.regs.get(RegisterName.S)
+                # Require a valid, initialized stack pointer; defer IRQ until firmware sets SP
+                if not isinstance(s, int) or s < 5:
+                    raise RuntimeError("IRQ deferred: stack pointer not initialized")
                 # push PC (little-endian 3 bytes)
                 s_new = s - 3
                 self.memory.write_bytes(3, s_new, cur_pc)
@@ -207,12 +234,31 @@ class PCE500Emulator:
                 # Set ISR.KEYI bit to indicate keyboard interrupt
                 isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 isr_val = self.memory.read_byte(isr_addr)
-                self.memory.write_byte(isr_addr, isr_val | 0x04)
+                # Preserve any previously set bits, keep KEYI if keyboard, else keep timer bits
+                src = getattr(self, "_irq_source", None)
+                if src == "KEY":
+                    isr_new = isr_val | 0x04  # KEYI bit 2
+                elif src == "STI":
+                    isr_new = isr_val | 0x02  # STI bit 1
+                elif src == "MTI":
+                    isr_new = isr_val | 0x01  # MTI bit 0
+                else:
+                    isr_new = isr_val | 0x04
+                self.memory.write_byte(isr_addr, isr_new)
                 # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
                 vector_addr = self.memory.read_long(0xFFFFA)
                 self.cpu.regs.set(RegisterName.PC, vector_addr)
                 self._in_interrupt = True
                 self._irq_pending = False
+                # Debug/trace: note interrupt delivery
+                try:
+                    if self.trace is not None:
+                        self.trace.append(("irq", cur_pc, vector_addr, getattr(self, "_irq_source", "?")))
+                    if new_tracer.enabled:
+                        new_tracer.instant("CPU", "IRQ_Delivered", {"from": cur_pc, "to": vector_addr, "src": getattr(self, "_irq_source", "?")})
+                    self._kb_irq_count += 1
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -229,69 +275,103 @@ class PCE500Emulator:
             self._dump_internal_memory(pc)
 
         try:
-            # Decode instruction first to get opcode name for tracing
-            instr = self.cpu.decode_instruction(pc)
-            opcode = (
-                self.memory.read_byte(pc)
-                if (self.perfetto_enabled or self._new_trace_enabled)
-                else None
-            )
-            
-            # Build opcode name for performance tracing
-            opcode_name = instr.name()
-            
-            # Execute instruction with opcode-level tracing
-            pc_before = pc
-            with new_tracer.slice("Opcodes", opcode_name, {"pc": f"0x{pc:06X}", "opcode": f"0x{opcode:02X}" if opcode else None, "op_num": self.instruction_count}):
+            if getattr(self, "fast_mode", False):
+                # Minimal execution path for speed
+                pc_before = pc
                 eval_info = self.cpu.execute_instruction(pc)
-            
-            self.cycle_count += 1
-            self.instruction_count += 1
-
-            # Only compute disassembly when tracing is enabled to avoid overhead
-            if self.trace is not None:
-                from binja_test_mocks.tokens import asm_str
-
-                self.instruction_history.append(
+                self.cycle_count += 1
+                self.instruction_count += 1
+                if self.perfetto_enabled:
+                    # In fast mode, keep lightweight counters only
+                    self._update_perfetto_counters()
+                # Emit lightweight Exec@ events for new tracer even in fast mode
+                if new_tracer.enabled:
+                    pc2, opcode2 = _trace_probe_pc_and_opcode(self)
+                    name = f"Exec@{pc2:#06x}" if isinstance(pc2, int) else "Exec@?"
+                    args = {}
+                    if isinstance(pc2, int):
+                        args["pc"] = pc2
+                    if isinstance(opcode2, int):
+                        args["opcode"] = opcode2
+                    # Minimal register state to keep overhead low
+                    try:
+                        state = self.get_cpu_state()
+                        args["sp"] = state["s"] & 0xFFFFFF
+                        args["flags"] = (state["flags"]["c"] << 1) | state["flags"]["z"]
+                    except Exception:
+                        pass
+                    new_tracer.instant("Execution", name, args)
+                    new_tracer.counter("Counters", "instructions", float(self.instruction_count))
+            else:
+                # Decode instruction first to get opcode name for tracing
+                instr = self.cpu.decode_instruction(pc)
+                opcode = (
+                    self.memory.read_byte(pc)
+                    if (self.perfetto_enabled or self._new_trace_enabled)
+                    else None
+                )
+                # Build opcode name for performance tracing
+                opcode_name = instr.name()
+                # Execute instruction with opcode-level tracing
+                pc_before = pc
+                with new_tracer.slice(
+                    "Opcodes",
+                    opcode_name,
                     {
                         "pc": f"0x{pc:06X}",
-                        "disassembly": asm_str(eval_info.instruction.render()),
-                    }
-                )
+                        "opcode": f"0x{opcode:02X}" if opcode else None,
+                        "op_num": self.instruction_count,
+                    },
+                ):
+                    eval_info = self.cpu.execute_instruction(pc)
 
-            if self.perfetto_enabled:
-                self._trace_execution(pc, opcode)
-                self._trace_control_flow(pc_before, eval_info)
-                self._update_perfetto_counters()
+                self.cycle_count += 1
+                self.instruction_count += 1
 
-            # New tracing system
-            if new_tracer.enabled:
-                self._trace_instr_count += 1
-                pc, opcode = _trace_probe_pc_and_opcode(self)
+                # Only compute disassembly when tracing is enabled to avoid overhead
+                if self.trace is not None:
+                    from binja_test_mocks.tokens import asm_str
 
-                # Instruction instant event
-                name = f"Exec@{pc:#06x}" if isinstance(pc, int) else "Exec@?"
-                args = {}
-                if isinstance(pc, int):
-                    args["pc"] = pc
-                if isinstance(opcode, int):
-                    args["opcode"] = opcode
+                    self.instruction_history.append(
+                        {
+                            "pc": f"0x{pc:06X}",
+                            "disassembly": asm_str(eval_info.instruction.render()),
+                        }
+                    )
 
-                # Add register values
-                state = self.get_cpu_state()
-                args["a"] = state["a"] & 0xFF
-                args["b"] = state["b"] & 0xFF
-                args["x"] = state["x"] & 0xFFFFFF
-                args["y"] = state["y"] & 0xFFFFFF
-                args["sp"] = state["s"] & 0xFFFFFF
-                args["flags"] = (state["flags"]["c"] << 1) | state["flags"]["z"]
+                if self.perfetto_enabled:
+                    self._trace_execution(pc, opcode)
+                    self._trace_control_flow(pc_before, eval_info)
+                    self._update_perfetto_counters()
 
-                new_tracer.instant("Execution", name, args)
+                # New tracing system
+                if new_tracer.enabled:
+                    self._trace_instr_count += 1
+                    pc, opcode = _trace_probe_pc_and_opcode(self)
 
-                # Update counters
-                new_tracer.counter(
-                    "Counters", "instructions", float(self._trace_instr_count)
-                )
+                    # Instruction instant event
+                    name = f"Exec@{pc:#06x}" if isinstance(pc, int) else "Exec@?"
+                    args = {}
+                    if isinstance(pc, int):
+                        args["pc"] = pc
+                    if isinstance(opcode, int):
+                        args["opcode"] = opcode
+
+                    # Add register values
+                    state = self.get_cpu_state()
+                    args["a"] = state["a"] & 0xFF
+                    args["b"] = state["b"] & 0xFF
+                    args["x"] = state["x"] & 0xFFFFFF
+                    args["y"] = state["y"] & 0xFFFFFF
+                    args["sp"] = state["s"] & 0xFFFFFF
+                    args["flags"] = (state["flags"]["c"] << 1) | state["flags"]["z"]
+
+                    new_tracer.instant("Execution", name, args)
+
+                    # Update counters
+                    new_tracer.counter(
+                        "Counters", "instructions", float(self._trace_instr_count)
+                    )
         except Exception as e:
             if self.trace is not None:
                 self.trace.append(("error", pc, str(e)))
@@ -305,6 +385,8 @@ class PCE500Emulator:
             instr_name = type(eval_info.instruction).__name__
             if instr_name == "RETI":
                 self._in_interrupt = False
+                # After returning from interrupt, clear IRQ source marker
+                self._irq_source = None
         except Exception:
             pass
         return True
@@ -501,9 +583,57 @@ class PCE500Emulator:
 
     def press_key(self, key_code: str) -> bool:
         result = self.keyboard.press_key(key_code) if self.keyboard else False
+        # Arm an interrupt eagerly in hardware mode to ensure delivery
+        try:
+            if self._kb_irq_enabled and result:
+                setattr(self, "_irq_pending", True)
+                self._irq_source = "KEY"
+        except Exception:
+            pass
+        # Optional debug: make a visible mark on LCD to confirm key handling
+        try:
+            if result and getattr(self, "debug_draw_on_key", False):
+                # Turn displays on and draw a simple pattern
+                for chip in getattr(self.lcd, "chips", []):
+                    chip.state.on = True
+                # Draw a small block in the top-left corner
+                # Left chip page 0, columns 0..7 with alternating bits
+                if getattr(self.lcd, "chips", None):
+                    for col in range(8):
+                        # Write zeros to render as dark pixels on a white background
+                        self.lcd.chips[0].vram[0][col] = 0x00 if (col % 2 == 0) else 0x18
+        except Exception:
+            pass
         if new_tracer.enabled:
             new_tracer.instant("I/O", "KeyPress", {"key": key_code})
         return result
+
+    def _set_isr_bits(self, mask: int) -> None:
+        """OR mask into ISR register."""
+        isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+        val = self.memory.read_byte(isr_addr)
+        self.memory.write_byte(isr_addr, (val | (mask & 0xFF)) & 0xFF)
+
+    def _tick_timers(self) -> None:
+        """Rough timer emulation: set ISR bits periodically and arm IRQ."""
+        ic = self.instruction_count
+        fired = False
+        # Main timer (MTI, bit 0)
+        if ic >= self._timer_next_mti:
+            self._set_isr_bits(0x01)
+            self._timer_next_mti = ic + self._timer_mti_period
+            self._irq_pending = True
+            self._irq_source = "MTI"
+            fired = True
+        # Sub timer (STI, bit 1) – less frequent
+        if ic >= self._timer_next_sti:
+            self._set_isr_bits(0x02)
+            self._timer_next_sti = ic + self._timer_sti_period
+            self._irq_pending = True
+            self._irq_source = "STI"
+            fired = True
+        if fired and new_tracer.enabled:
+            new_tracer.instant("CPU", "TimerIRQ", {"ic": ic, "src": self._irq_source})
 
     def release_key(self, key_code: str):
         if self.keyboard:
@@ -575,24 +705,24 @@ class PCE500Emulator:
             new_tracer.instant(
                 "I/O", "KB_ColumnStrobe", {"addr": offset, "value": value & 0xFF}
             )
-        # Monitor strobe count on changes
+        # Monitor strobe count on changes and track active columns correctly (active-low)
         try:
             if offset == KOL:
                 if getattr(self.keyboard, "kol_value", None) != (value & 0xFF):
                     self._kb_strobe_count += 1
                 self._last_kol = value & 0xFF
-                # Update column histogram for KO8..KO10
-                for col in range(3):
-                    if self._last_kol & (1 << col):  # active-high
-                        self._kb_col_hist[col + 8] += 1
             elif offset == KOH:
                 if getattr(self.keyboard, "koh_value", None) != (value & 0xFF):
                     self._kb_strobe_count += 1
                 self._last_koh = value & 0xFF
-                # Update column histogram for KO0..KO7
-                for col in range(8):
-                    if self._last_koh & (1 << col):  # active-high
-                        self._kb_col_hist[col] += 1
+
+            # Update histogram using hardware keyboard's active column calculation
+            active_cols = []
+            if hasattr(self.keyboard, "get_active_columns"):
+                active_cols = list(self.keyboard.get_active_columns())
+            for col in active_cols:
+                if 0 <= col < len(self._kb_col_hist):
+                    self._kb_col_hist[col] += 1
         except Exception:
             pass
         # If IRQ wiring enabled: set pending IRQ when a pressed key's column is active
@@ -601,18 +731,15 @@ class PCE500Emulator:
                 pressed = set(self.keyboard.get_pressed_keys())
                 if pressed:
                     active_cols = []
-                    for col in range(8):
-                        if self._last_koh & (1 << col):
-                            active_cols.append(col)
-                    for col in range(3):
-                        if self._last_kol & (1 << col):
-                            active_cols.append(col + 8)
+                    if hasattr(self.keyboard, "get_active_columns"):
+                        active_cols = list(self.keyboard.get_active_columns())
                     # Any pressed key in active columns?
                     for kc in pressed:
                         loc = getattr(self.keyboard, "key_locations", {}).get(kc)
                         if loc and loc.column in active_cols:
-                            # Arm pending interrupt
+                            # Arm pending interrupt (delivered at next step)
                             setattr(self, "_irq_pending", True)
+                            self._irq_source = "KEY"
                             break
         except Exception:
             pass
