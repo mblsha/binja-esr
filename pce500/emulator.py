@@ -4,7 +4,7 @@ import sys
 import time
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any, Set
+from typing import Optional, Dict, Any, Set, List
 from collections import deque
 from datetime import datetime
 
@@ -75,9 +75,15 @@ class PCE500Emulator:
         self.control_flow_edges: Dict[int, Set[int]] = {}  # dest_pc -> set(source_pcs)
         self.execution_order: list[int] = []  # PCs in execution order
         self.last_pc: Optional[int] = None
+        self.register_accesses: Dict[int, List[Dict[str, Any]]] = {}  # PC -> list of register accesses
+        self.current_instruction_accesses: List[Dict[str, Any]] = []  # Accumulate during instruction
 
         self.memory = PCE500Memory()
         self.memory._emulator = self  # Set reference for tracking counters
+        
+        # Set callback for IMEM register access tracking
+        if self.disasm_trace_enabled:
+            self.memory.set_imem_access_callback(self._on_imem_register_access)
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
 
@@ -287,7 +293,19 @@ class PCE500Emulator:
             if getattr(self, "fast_mode", False):
                 # Minimal execution path for speed
                 pc_before = pc
+                
+                # Clear current instruction accesses before execution
+                if self.disasm_trace_enabled:
+                    self.current_instruction_accesses = []
+                
                 eval_info = self.cpu.execute_instruction(pc)
+                
+                # Associate accumulated register accesses with this instruction
+                if self.disasm_trace_enabled and self.current_instruction_accesses:
+                    if pc_before not in self.register_accesses:
+                        self.register_accesses[pc_before] = []
+                    self.register_accesses[pc_before].extend(self.current_instruction_accesses)
+                
                 self.cycle_count += 1
                 self.instruction_count += 1
                 if self.perfetto_enabled:
@@ -323,6 +341,11 @@ class PCE500Emulator:
                 opcode_name = instr.name()
                 # Execute instruction with opcode-level tracing
                 pc_before = pc
+                
+                # Clear current instruction accesses before execution
+                if self.disasm_trace_enabled:
+                    self.current_instruction_accesses = []
+                
                 with new_tracer.slice(
                     "Opcodes",
                     opcode_name,
@@ -333,6 +356,12 @@ class PCE500Emulator:
                     },
                 ):
                     eval_info = self.cpu.execute_instruction(pc)
+                
+                # Associate accumulated register accesses with this instruction
+                if self.disasm_trace_enabled and self.current_instruction_accesses:
+                    if pc_before not in self.register_accesses:
+                        self.register_accesses[pc_before] = []
+                    self.register_accesses[pc_before].extend(self.current_instruction_accesses)
 
                 self.cycle_count += 1
                 self.instruction_count += 1
@@ -838,6 +867,26 @@ class PCE500Emulator:
         self.execution_order.append(pc)
         self.last_pc = pc
     
+    def _on_imem_register_access(self, pc: int, reg_name: str, access_type: str, value: int) -> None:
+        """Callback for internal memory register accesses.
+        
+        Args:
+            pc: Program counter where access occurred
+            reg_name: Name of the register (e.g., 'KOL', 'ISR')
+            access_type: 'read' or 'write'
+            value: Value read or written
+        """
+        # Skip BP, PX, PY as they're too frequent
+        if reg_name in ('BP', 'PX', 'PY'):
+            return
+        
+        # Add to current instruction's accesses
+        self.current_instruction_accesses.append({
+            'register': reg_name,
+            'type': access_type,
+            'value': value
+        })
+    
     def save_disasm_trace(self, output_dir: str = "data") -> str:
         """Generate and save the disassembly trace to a file."""
         if not self.disasm_trace_enabled:
@@ -923,6 +972,46 @@ class PCE500Emulator:
                     if pc in self.control_flow_edges:
                         sources = sorted(self.control_flow_edges[pc])
                         annotations.append(f"From: {', '.join(f'0x{s:06X}' for s in sources)}")
+                    
+                    # Annotate register accesses
+                    if pc in self.register_accesses:
+                        reads = {}
+                        writes = {}
+                        for access in self.register_accesses[pc]:
+                            if access['type'] == 'read':
+                                # Store only unique values per register
+                                if access['register'] not in reads:
+                                    reads[access['register']] = set()
+                                reads[access['register']].add(access['value'])
+                            else:  # write
+                                # Store only unique values per register
+                                if access['register'] not in writes:
+                                    writes[access['register']] = set()
+                                writes[access['register']].add(access['value'])
+                        
+                        # Format unique reads
+                        if reads:
+                            read_strs = []
+                            for reg, values in sorted(reads.items()):
+                                if len(values) == 1:
+                                    read_strs.append(f"{reg}=0x{list(values)[0]:02X}")
+                                else:
+                                    # Multiple unique values - show them all
+                                    vals = ','.join(f"0x{v:02X}" for v in sorted(values))
+                                    read_strs.append(f"{reg}=[{vals}]")
+                            annotations.append(f"Reads: {', '.join(read_strs)}")
+                        
+                        # Format unique writes
+                        if writes:
+                            write_strs = []
+                            for reg, values in sorted(writes.items()):
+                                if len(values) == 1:
+                                    write_strs.append(f"{reg}=0x{list(values)[0]:02X}")
+                                else:
+                                    # Multiple unique values - show them all
+                                    vals = ','.join(f"0x{v:02X}" for v in sorted(values))
+                                    write_strs.append(f"{reg}=[{vals}]")
+                            annotations.append(f"Writes: {', '.join(write_strs)}")
                     
                     # Special annotation for entry point
                     if pc == 0x0F10C2:  # Common PC-E500 entry point

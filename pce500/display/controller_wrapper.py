@@ -19,11 +19,26 @@ class HD61202Controller:
         # PC-E500 uses two standard 64x64 chips, but only uses 4 pages each
         self.chips = [HD61202(), HD61202()]
         self.perfetto_enabled = False
+        self._cpu = None  # Reference to CPU for getting current PC
 
         # Debug counters
         self.cs_both_count = 0
         self.cs_left_count = 0
         self.cs_right_count = 0
+    
+    def set_cpu(self, cpu) -> None:
+        """Set reference to CPU emulator for getting current PC."""
+        self._cpu = cpu
+    
+    def _get_current_pc(self) -> Optional[int]:
+        """Get current PC from CPU if available."""
+        if self._cpu and hasattr(self._cpu, 'regs'):
+            try:
+                from sc62015.pysc62015.emulator import RegisterName
+                return self._cpu.regs.get(RegisterName.PC)
+            except:
+                pass
+        return None
 
     def read(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read from LCD controller at given address."""
@@ -54,8 +69,36 @@ class HD61202Controller:
                 chip = self.chips[chip_idx]
                 if cmd.instr is not None:
                     chip.write_instruction(cmd.instr, cmd.data)
+                    
+                    # Log display instruction to Perfetto
+                    if new_tracer.enabled:
+                        instr_name = cmd.instr.__class__.__name__ if cmd.instr else "Unknown"
+                        new_tracer.instant(
+                            "Display",
+                            f"LCD_{instr_name}",
+                            {
+                                "chip": chip_idx,
+                                "data": f"0x{cmd.data:02X}",
+                                "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}"
+                            }
+                        )
                 else:
+                    # Data write - log to Perfetto Display thread
                     chip.write_data(cmd.data, pc_source=cpu_pc)
+                    
+                    # Log display write to Perfetto
+                    if new_tracer.enabled:
+                        new_tracer.instant(
+                            "Display",
+                            "VRAM_Write",
+                            {
+                                "chip": chip_idx,
+                                "page": chip.state.page,
+                                "col": chip.state.y_address - 1,  # -1 because write_data increments it
+                                "data": f"0x{cmd.data:02X}",
+                                "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}"
+                            }
+                        )
 
         except ValueError:
             # Invalid command, ignore

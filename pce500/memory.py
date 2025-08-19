@@ -64,7 +64,21 @@ class PCE500Memory:
 
         # Reference to emulator for tracking counters
         self._emulator = None
+        
+        # Reference to LCD controller
+        self._lcd_controller = None
+        
+        # Callback for IMEM register access tracking
+        self._imem_access_callback: Optional[Callable[[int, str, str, int], None]] = None
 
+    def set_imem_access_callback(self, callback: Callable[[int, str, str, int], None]) -> None:
+        """Set callback for IMEM register access notifications.
+        
+        Args:
+            callback: Function(pc, reg_name, access_type, value) to call on IMEM access
+        """
+        self._imem_access_callback = callback
+    
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -95,9 +109,12 @@ class PCE500Memory:
 
                 # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
+                value = self.external_memory[internal_offset]
 
                 # Track IMEMRegisters reads
-                if cpu_pc is not None:
+                # Get PC from CPU if not provided
+                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                if effective_pc is not None:
                     for reg_name in IMEMRegisters.__members__:
                         if IMEMRegisters[reg_name].value == offset:
                             if reg_name not in self.imem_access_tracking:
@@ -107,17 +124,21 @@ class PCE500Memory:
                                 }
                             # Keep only last 10 accesses with counts
                             reads_list = self.imem_access_tracking[reg_name]["reads"]
-                            if reads_list and reads_list[-1][0] == cpu_pc:
+                            if reads_list and reads_list[-1][0] == effective_pc:
                                 # Increment count for same PC
-                                reads_list[-1] = (cpu_pc, reads_list[-1][1] + 1)
+                                reads_list[-1] = (effective_pc, reads_list[-1][1] + 1)
                             else:
                                 # Add new PC with count 1
-                                reads_list.append((cpu_pc, 1))
+                                reads_list.append((effective_pc, 1))
                                 if len(reads_list) > 10:
                                     reads_list.pop(0)
+                            
+                            # Notify callback if set (for disasm trace)
+                            if self._imem_access_callback:
+                                self._imem_access_callback(effective_pc, reg_name, 'read', value)
                             break
 
-                return self.external_memory[internal_offset]
+                return value
             raise ValueError(
                 f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)"
             )
@@ -196,7 +217,9 @@ class PCE500Memory:
                 self.external_memory[internal_offset] = value
 
                 # Track IMEMRegisters writes
-                if cpu_pc is not None:
+                # Get PC from CPU if not provided
+                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                if effective_pc is not None:
                     for reg_name in IMEMRegisters.__members__:
                         if IMEMRegisters[reg_name].value == offset:
                             if reg_name not in self.imem_access_tracking:
@@ -206,14 +229,18 @@ class PCE500Memory:
                                 }
                             # Keep only last 10 accesses with counts
                             writes_list = self.imem_access_tracking[reg_name]["writes"]
-                            if writes_list and writes_list[-1][0] == cpu_pc:
+                            if writes_list and writes_list[-1][0] == effective_pc:
                                 # Increment count for same PC
-                                writes_list[-1] = (cpu_pc, writes_list[-1][1] + 1)
+                                writes_list[-1] = (effective_pc, writes_list[-1][1] + 1)
                             else:
                                 # Add new PC with count 1
-                                writes_list.append((cpu_pc, 1))
+                                writes_list.append((effective_pc, 1))
                                 if len(writes_list) > 10:
                                     writes_list.pop(0)
+                            
+                            # Notify callback if set (for disasm trace)
+                            if self._imem_access_callback:
+                                self._imem_access_callback(effective_pc, reg_name, 'write', value)
                             break
 
                 if self.perfetto_enabled:
@@ -426,6 +453,11 @@ class PCE500Memory:
 
     def set_lcd_controller(self, lcd_controller) -> None:
         """Set LCD controller and add memory-mapped I/O overlay."""
+        self._lcd_controller = lcd_controller
+        
+        # Pass CPU reference to LCD controller if available
+        if self.cpu and hasattr(lcd_controller, 'set_cpu'):
+            lcd_controller.set_cpu(self.cpu)
         # LCD controllers at 0xA000-0xAFFF
         self.add_overlay(
             MemoryOverlay(
@@ -477,6 +509,20 @@ class PCE500Memory:
     def set_cpu(self, cpu) -> None:
         """Set reference to CPU emulator for accessing internal memory registers."""
         self.cpu = cpu
+        
+        # Also pass CPU to LCD controller if already set
+        if self._lcd_controller and hasattr(self._lcd_controller, 'set_cpu'):
+            self._lcd_controller.set_cpu(cpu)
+    
+    def _get_current_pc(self) -> Optional[int]:
+        """Get current PC from CPU if available."""
+        if self.cpu and hasattr(self.cpu, 'regs'):
+            try:
+                from sc62015.pysc62015.emulator import RegisterName
+                return self.cpu.regs.get(RegisterName.PC)
+            except:
+                pass
+        return None
 
     def get_imem_access_tracking(self) -> Dict[str, Dict[str, List[Tuple[int, int]]]]:
         """Get the IMEM register access tracking data.
