@@ -326,6 +326,14 @@ class KeyboardHardware:
 
     def _read_kil_fast(self) -> int:
         """Fast KIL read with caching and per-column masks."""
+        # Check KSD bit if memory accessor is available
+        if self.memory:
+            lcc = self.memory(INTERNAL_MEMORY_START + LCC)
+            ksd_bit = (lcc >> 2) & 1
+            if ksd_bit:
+                # Keyboard strobing disabled - return no keys pressed
+                return 0xFF if self.active_low else 0x00
+        
         # Fast path: no keys pressed at all - this should be most common
         if self._rows_mask_all == 0:
             return 0xFF if self.active_low else 0x00

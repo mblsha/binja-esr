@@ -110,7 +110,7 @@ class HD61202:
             for y_addr in range(self.LCD_WIDTH_PIXELS):
                 byte = self.vram[page][y_addr]
                 for bit in range(self.PAGE_HEIGHT_PIXELS):
-                    if not ((byte >> bit) & 1):
+                    if (byte >> bit) & 1:
                         pixels[y_addr, page * self.PAGE_HEIGHT_PIXELS + bit] = 1
 
         if zoom > 1:
@@ -210,7 +210,8 @@ def render_combined_image(lcds: List[HD61202], zoom: int = 1) -> Image.Image:
     Left half: right chip (64px) + left chip (56px)
     Right half: left chip (56px flipped) + right chip (64px flipped)
     """
-    images = [lcd.render_vram_image(zoom=1) for lcd in lcds]
+    # Convert mode "1" images to RGB for proper pasting
+    images = [lcd.render_vram_image(zoom=1).convert("RGB") for lcd in lcds]
     # This layout logic is specific to the device's display configuration
     right_width, left_width = 64, 56
     height = HD61202.LCD_HEIGHT_PIXELS // 2  # 32 pixels
