@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pce500 import PCE500Emulator
 from PIL import Image, ImageOps
+from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from sc62015.pysc62015.emulator import RegisterName
 
 
@@ -27,6 +28,8 @@ def run_emulator(
     # Optional auto key-press controls
     auto_press_key: str | None = None,
     auto_press_after_pc: int | None = None,
+    auto_press_after_steps: int | None = None,
+    auto_hold_instr: int | None = None,
     auto_release_after_instr: int | None = None,
     require_strobes: int | None = None,
     min_hold_instr: int | None = None,
@@ -165,28 +168,39 @@ def run_emulator(
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
 
-        # Auto-press once when we first reach or pass the threshold PC
-        if (
-            not pressed
-            and auto_press_key
-            and auto_press_after_pc is not None
-            and pc_before >= auto_press_after_pc
-        ):
-            emu.press_key(auto_press_key)
-            pressed = True
-            if auto_release_after_instr and auto_release_after_instr > 0:
-                release_countdown = auto_release_after_instr
-            # Set strobe target if requested
-            if require_strobes and require_strobes > 0:
-                try:
-                    strobe_target = getattr(emu, "_kb_strobe_count", 0) + int(
-                        require_strobes
-                    )
-                except Exception:
-                    strobe_target = None
-            # Set minimum hold instructions if requested
-            if min_hold_instr and min_hold_instr > 0:
-                hold_until_instr = emu.instruction_count + int(min_hold_instr)
+        # Auto-press once when we first reach thresholds (PC or instruction count)
+        if not pressed and auto_press_key:
+            # PC-based trigger
+            if (
+                auto_press_after_pc is not None
+                and pc_before >= int(auto_press_after_pc)
+            ):
+                emu.press_key(auto_press_key)
+                pressed = True
+                if auto_release_after_instr and auto_release_after_instr > 0:
+                    release_countdown = int(auto_release_after_instr)
+                # Set strobe target if requested
+                if require_strobes and require_strobes > 0:
+                    try:
+                        strobe_target = getattr(emu, "_kb_strobe_count", 0) + int(
+                            require_strobes
+                        )
+                    except Exception:
+                        strobe_target = None
+                # Set minimum hold instructions if requested
+                if min_hold_instr and min_hold_instr > 0:
+                    hold_until_instr = emu.instruction_count + int(min_hold_instr)
+            # Step-count-based trigger
+            elif (
+                auto_press_after_steps is not None
+                and emu.instruction_count >= int(auto_press_after_steps)
+            ):
+                emu.press_key(auto_press_key)
+                pressed = True
+                if auto_hold_instr and int(auto_hold_instr) > 0:
+                    release_countdown = int(auto_hold_instr)
+                    # Consider latched so countdown can proceed without requiring a KIL read
+                    latched_kil_seen = True
 
         emu.step()
 
@@ -387,6 +401,8 @@ def main(
     timeout_secs: float = 10.0,
     auto_press_key: str | None = None,
     auto_press_after_pc: int | None = None,
+    auto_press_after_steps: int | None = None,
+    auto_hold_instr: int | None = None,
     auto_release_after_instr: int | None = None,
     require_strobes: int | None = None,
     min_hold_instr: int | None = None,
@@ -417,6 +433,8 @@ def main(
         timeout_secs=timeout_secs,
         auto_press_key=auto_press_key,
         auto_press_after_pc=auto_press_after_pc,
+        auto_press_after_steps=auto_press_after_steps,
+        auto_hold_instr=auto_hold_instr,
         auto_release_after_instr=auto_release_after_instr,
         require_strobes=require_strobes,
         min_hold_instr=min_hold_instr,
@@ -542,6 +560,16 @@ if __name__ == "__main__":
         help="PC threshold (hex or dec). First time PC >= this, the key is pressed",
     )
     parser.add_argument(
+        "--auto-press-after-steps",
+        type=int,
+        help="Auto-press key after executing this many instructions",
+    )
+    parser.add_argument(
+        "--auto-hold-instr",
+        type=int,
+        help="Hold the auto-pressed key for this many instructions, then release",
+    )
+    parser.add_argument(
         "--auto-release-after-instr",
         type=int,
         default=500,
@@ -608,6 +636,8 @@ if __name__ == "__main__":
         profile_emulator=args.profile_emulator,
         auto_press_key=args.auto_press_key,
         auto_press_after_pc=args.auto_press_after_pc,
+        auto_press_after_steps=args.auto_press_after_steps,
+        auto_hold_instr=args.auto_hold_instr,
         auto_release_after_instr=args.auto_release_after_instr,
         require_strobes=args.require_strobes,
         min_hold_instr=args.min_hold_instr,
