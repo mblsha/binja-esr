@@ -133,7 +133,7 @@ class HD61202Controller:
                 for col in range(64):
                     byte = self.chips[0].vram[page][col]
                     for bit in range(8):
-                        if (byte >> bit) & 1:
+                        if not ((byte >> bit) & 1):
                             buffer[page * 8 + bit, col] = 1
 
         # Right chip contributes to right side
@@ -142,7 +142,7 @@ class HD61202Controller:
                 for col in range(64):
                     byte = self.chips[1].vram[page][col]
                     for bit in range(8):
-                        if (byte >> bit) & 1:
+                        if not ((byte >> bit) & 1):
                             # Right chip starts at column 120
                             buffer[page * 8 + bit, 120 + col] = 1
 

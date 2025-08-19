@@ -250,12 +250,12 @@ class TestHD61202:
 
         assert image.size == (128, 128)  # 64x64 * 2
 
-        # Check that pixels are white (mode "1" image returns boolean array)
+        # Check that pixels are black (inverted display - when bits are set, pixels are black)
         pixels = np.array(image)
-        # First 8 rows, first column should be True (white)
+        # First 8 rows, first column should be False (black) due to inverted display
         for y in range(16):
             for x in range(2):
-                assert pixels[y, x]  # True for white pixels
+                assert not pixels[y, x]  # False for black pixels (inverted)
 
 
 class TestHD61202Controller:
@@ -327,16 +327,16 @@ class TestHD61202Controller:
         controller.chips[1].state.on = True
 
         # Write test patterns
-        controller.chips[0].vram[0][0] = 0xFF
-        controller.chips[1].vram[0][0] = 0xFF
+        controller.chips[0].vram[0][0] = 0xFF  # All bits set
+        controller.chips[1].vram[0][0] = 0xFF  # All bits set
 
         buffer = controller.get_display_buffer()
 
         assert buffer.shape == (32, 240)
-        # Check pixels from both chips
+        # Check pixels from both chips (inverted display - all bits set means black)
         for y in range(8):
-            assert buffer[y, 0] == 1  # Left chip at column 0
-            assert buffer[y, 120] == 1  # Right chip at column 120
+            assert buffer[y, 0] == 0  # Left chip at column 0 (black due to inversion)
+            assert buffer[y, 120] == 0  # Right chip at column 120 (black due to inversion)
 
     def test_reset(self):
         """Test controller reset."""
@@ -388,16 +388,16 @@ class TestHD61202Controller:
         """Test combined display image generation."""
         controller = HD61202Controller()
 
-        # Set some test patterns
+        # Set some test patterns (inverted display - 0x00 means white pixels)
         # Left chip: pixels at column 0 (HD61202 only has 64 columns)
-        controller.chips[0].vram[0][0] = 0xFF
+        controller.chips[0].vram[0][0] = 0x00  # No bits set = white pixels
         controller.chips[0].vram[0][55] = (
-            0xFF  # Max column for left chip in PC-E500 layout
+            0x00  # Max column for left chip in PC-E500 layout
         )
 
         # Right chip: pixels at column 0 and 56
-        controller.chips[1].vram[0][0] = 0xFF
-        controller.chips[1].vram[0][56] = 0xFF
+        controller.chips[1].vram[0][0] = 0x00  # No bits set = white pixels
+        controller.chips[1].vram[0][56] = 0x00
 
         image = controller.get_combined_display(zoom=1)
 
@@ -405,7 +405,7 @@ class TestHD61202Controller:
 
         # Verify the layout
         pixels = np.array(image)
-        # Check green channel for lit pixels
+        # Check green channel for lit pixels (inverted display - 0x00 VRAM = white)
         green = pixels[:, :, 1]
 
         # Right chip column 0 should appear at x=0 in display
