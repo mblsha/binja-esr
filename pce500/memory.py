@@ -99,13 +99,42 @@ class PCE500Memory:
             if offset < 0x100:
                 # Fast path for keyboard overlay
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                    value: int
                     if self._keyboard_overlay.read_handler:
-                        return self._keyboard_overlay.read_handler(address, cpu_pc)
+                        value = int(self._keyboard_overlay.read_handler(address, cpu_pc)) & 0xFF
                     elif self._keyboard_overlay.data:
                         overlay_offset = address - self._keyboard_overlay.start
                         if overlay_offset < len(self._keyboard_overlay.data):
-                            return self._keyboard_overlay.data[overlay_offset]
-                    return 0x00
+                            value = int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
+                        else:
+                            value = 0x00
+                    else:
+                        value = 0x00
+
+                    # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
+                    effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                    if effective_pc is not None:
+                        for reg_name in IMEMRegisters.__members__:
+                            if IMEMRegisters[reg_name].value == offset:
+                                if reg_name not in self.imem_access_tracking:
+                                    self.imem_access_tracking[reg_name] = {
+                                        "reads": [],
+                                        "writes": [],
+                                    }
+                                reads_list = self.imem_access_tracking[reg_name]["reads"]
+                                if reads_list and reads_list[-1][0] == effective_pc:
+                                    reads_list[-1] = (effective_pc, reads_list[-1][1] + 1)
+                                else:
+                                    reads_list.append((effective_pc, 1))
+                                    if len(reads_list) > 10:
+                                        reads_list.pop(0)
+                                # Notify callback if set (for disasm trace)
+                                if self._imem_access_callback:
+                                    self._imem_access_callback(
+                                        effective_pc, reg_name, "read", value
+                                    )
+                                break
+                    return value
 
                 # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
@@ -186,6 +215,29 @@ class PCE500Memory:
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
                     if self._keyboard_overlay.write_handler:
                         self._keyboard_overlay.write_handler(address, value, cpu_pc)
+                        # Track IMEMRegisters writes (ensure disasm trace sees KOL/KOH/KIL)
+                        effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                        if effective_pc is not None:
+                            for reg_name in IMEMRegisters.__members__:
+                                if IMEMRegisters[reg_name].value == offset:
+                                    if reg_name not in self.imem_access_tracking:
+                                        self.imem_access_tracking[reg_name] = {
+                                            "reads": [],
+                                            "writes": [],
+                                        }
+                                    writes_list = self.imem_access_tracking[reg_name]["writes"]
+                                    if writes_list and writes_list[-1][0] == effective_pc:
+                                        writes_list[-1] = (effective_pc, writes_list[-1][1] + 1)
+                                    else:
+                                        writes_list.append((effective_pc, 1))
+                                        if len(writes_list) > 10:
+                                            writes_list.pop(0)
+                                    # Notify callback if set (for disasm trace)
+                                    if self._imem_access_callback:
+                                        self._imem_access_callback(
+                                            effective_pc, reg_name, "write", value & 0xFF
+                                        )
+                                    break
                         # Add tracing for write_handler overlays
                         if self.perfetto_enabled:
                             trace_data = {
