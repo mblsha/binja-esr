@@ -7,6 +7,7 @@ htmlcov/
 mcp
 data/pc-e500.bin
 data/*.txt
+data/execution_trace_*.txt
 pc-e500.trace
 *.png
 lcd_display.png

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Optional, Dict, Any, Set
 from collections import deque
+from datetime import datetime
 
 # Import the SC62015 emulator
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -61,11 +62,19 @@ class PCE500Emulator:
         keyboard_impl: str = "compat",
         enable_new_tracing: bool = False,
         trace_path: str = "pc-e500.perfetto-trace",
+        disasm_trace: bool = False,
     ):
         self.instruction_count = 0
         self.memory_read_count = 0
         self.memory_write_count = 0
         self.save_lcd_on_exit = save_lcd_on_exit
+        
+        # Disassembly trace data structures
+        self.disasm_trace_enabled = disasm_trace
+        self.executed_instructions: Dict[int, Dict[str, Any]] = {}  # PC -> instruction info
+        self.control_flow_edges: Dict[int, Set[int]] = {}  # dest_pc -> set(source_pcs)
+        self.execution_order: list[int] = []  # PCs in execution order
+        self.last_pc: Optional[int] = None
 
         self.memory = PCE500Memory()
         self.memory._emulator = self  # Set reference for tracking counters
@@ -338,11 +347,26 @@ class PCE500Emulator:
                             "disassembly": asm_str(eval_info.instruction.render()),
                         }
                     )
+                
+                # Capture disassembly trace if enabled
+                if self.disasm_trace_enabled:
+                    self._capture_disasm_trace(pc_before, eval_info.instruction, instr)
 
                 if self.perfetto_enabled:
                     self._trace_execution(pc, opcode)
                     self._trace_control_flow(pc_before, eval_info)
                     self._update_perfetto_counters()
+                    
+                # Track control flow edges for disassembly trace
+                if self.disasm_trace_enabled:
+                    pc_after = self.cpu.regs.get(RegisterName.PC)
+                    # Detect non-sequential control flow
+                    expected_next = pc_before + eval_info.instruction.length()
+                    if pc_after != expected_next:
+                        # This was a taken branch/jump/call/return
+                        if pc_after not in self.control_flow_edges:
+                            self.control_flow_edges[pc_after] = set()
+                        self.control_flow_edges[pc_after].add(pc_before)
 
                 # New tracing system
                 if new_tracer.enabled:
@@ -778,3 +802,136 @@ class PCE500Emulator:
                 "trigger": f"PC match 0x{self.MEMORY_DUMP_PC:06X}",
             },
         )
+    
+    def _capture_disasm_trace(self, pc: int, instruction: Any, decoded_instr: Any) -> None:
+        """Capture disassembly trace information for an executed instruction."""
+        if pc not in self.executed_instructions:
+            # Read instruction bytes
+            instr_length = instruction.length()
+            instr_bytes = bytearray()
+            for i in range(instr_length):
+                instr_bytes.append(self.memory.read_byte(pc + i))
+            
+            # Get disassembly text
+            from binja_test_mocks.tokens import asm_str
+            disasm_text = asm_str(instruction.render())
+            
+            # Determine instruction type
+            instr_type = "normal"
+            if isinstance(instruction, JumpInstruction):
+                instr_type = "jump"
+            elif isinstance(instruction, CALL):
+                instr_type = "call"
+            elif isinstance(instruction, RetInstruction):
+                instr_type = "return"
+            elif isinstance(instruction, IR):
+                instr_type = "interrupt"
+            
+            self.executed_instructions[pc] = {
+                "bytes": bytes(instr_bytes),
+                "disasm": disasm_text,
+                "type": instr_type,
+                "length": instr_length,
+            }
+        
+        # Track execution order
+        self.execution_order.append(pc)
+        self.last_pc = pc
+    
+    def save_disasm_trace(self, output_dir: str = "data") -> str:
+        """Generate and save the disassembly trace to a file."""
+        if not self.disasm_trace_enabled:
+            return ""
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"execution_trace_{timestamp}.txt"
+        filepath = os.path.join(output_dir, filename)
+        
+        # Build reverse edge map for source annotations
+        source_edges: Dict[int, Set[int]] = {}  # source_pc -> set(dest_pcs)
+        for dest, sources in self.control_flow_edges.items():
+            for source in sources:
+                if source not in source_edges:
+                    source_edges[source] = set()
+                source_edges[source].add(dest)
+        
+        # Generate output
+        with open(filepath, "w") as f:
+            # Write header
+            f.write("; PC-E500 Execution Trace\n")
+            f.write(f"; Instructions executed: {len(self.execution_order)}\n")
+            f.write(f"; Unique PCs: {len(self.executed_instructions)}\n")
+            f.write(f"; Control flow edges: {sum(len(s) for s in self.control_flow_edges.values())}\n")
+            f.write("\n")
+            
+            # Get all executed PCs in address order
+            sorted_pcs = sorted(self.executed_instructions.keys())
+            
+            # Group instructions into basic blocks
+            blocks = []
+            current_block = []
+            for pc in sorted_pcs:
+                if current_block:
+                    last_pc = current_block[-1]
+                    last_info = self.executed_instructions[last_pc]
+                    expected_next = last_pc + last_info["length"]
+                    # Check if this PC is the expected sequential next instruction
+                    if pc != expected_next:
+                        # End current block and start new one
+                        blocks.append(current_block)
+                        current_block = [pc]
+                    else:
+                        current_block.append(pc)
+                else:
+                    current_block.append(pc)
+            if current_block:
+                blocks.append(current_block)
+            
+            # Write each block
+            for block_idx, block in enumerate(blocks):
+                if block_idx > 0:
+                    f.write("\n")  # Separator between blocks
+                
+                for pc in block:
+                    info = self.executed_instructions[pc]
+                    
+                    # Format instruction bytes
+                    bytes_str = " ".join(f"{b:02X}" for b in info["bytes"])
+                    bytes_str = bytes_str.ljust(12)  # Align to 12 chars (4 bytes max)
+                    
+                    # Format base line
+                    line = f"0x{pc:06X}: {bytes_str} {info['disasm']}"
+                    
+                    # Add annotations
+                    annotations = []
+                    
+                    # Annotate control flow sources (where this instruction jumps/calls to)
+                    if pc in source_edges:
+                        dests = sorted(source_edges[pc])
+                        if info["type"] == "call":
+                            annotations.append(f"Calls: {', '.join(f'0x{d:06X}' for d in dests)}")
+                        elif info["type"] == "jump":
+                            annotations.append(f"Jumps to: {', '.join(f'0x{d:06X}' for d in dests)}")
+                        elif info["type"] == "return":
+                            annotations.append(f"Returns to: {', '.join(f'0x{d:06X}' for d in dests)}")
+                    
+                    # Annotate control flow destinations (where jumps to this instruction)
+                    if pc in self.control_flow_edges:
+                        sources = sorted(self.control_flow_edges[pc])
+                        annotations.append(f"From: {', '.join(f'0x{s:06X}' for s in sources)}")
+                    
+                    # Special annotation for entry point
+                    if pc == 0x0F10C2:  # Common PC-E500 entry point
+                        annotations.append("Entry point")
+                    
+                    # Write line with annotations
+                    if annotations:
+                        line += "    ; " + "; ".join(annotations)
+                    f.write(line + "\n")
+        
+        print(f"\nDisassembly trace saved to: {filepath}")
+        return filepath

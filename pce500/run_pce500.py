@@ -37,6 +37,7 @@ def run_emulator(
     force_display_on: bool = False,
     fast_mode: bool = False,
     boot_skip_steps: int = 0,
+    disasm_trace: bool = False,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -61,6 +62,7 @@ def run_emulator(
         keyboard_impl=keyboard_impl,
         enable_new_tracing=new_perfetto,
         trace_path=trace_file,
+        disasm_trace=disasm_trace,
     )
     # Enable debug draw-on-key if requested
     try:
@@ -364,6 +366,10 @@ def run_emulator(
                     pass
         except Exception:
             pass
+    
+    # Save disassembly trace if enabled
+    if disasm_trace:
+        emu.save_disasm_trace()
 
     return emu
 
@@ -390,6 +396,7 @@ def main(
     force_display_on: bool = False,
     fast_mode: bool = False,
     boot_skip: int = 0,
+    disasm_trace: bool = False,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -419,6 +426,7 @@ def main(
         force_display_on=force_display_on,
         fast_mode=fast_mode,
         boot_skip_steps=boot_skip,
+        disasm_trace=disasm_trace,
     ) as emu:
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
@@ -578,6 +586,11 @@ if __name__ == "__main__":
         default=0,
         help="Execute this many instructions first without tracing (skip boot)",
     )
+    parser.add_argument(
+        "--disasm-trace",
+        action="store_true",
+        help="Generate disassembly trace of executed instructions with control flow annotations",
+    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -601,4 +614,5 @@ if __name__ == "__main__":
         force_display_on=args.force_display_on,
         fast_mode=args.fast_mode,
         boot_skip=args.boot_skip,
+        disasm_trace=args.disasm_trace,
     )
