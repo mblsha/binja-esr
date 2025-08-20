@@ -331,8 +331,9 @@ class KeyboardHardware:
             lcc = self.memory(INTERNAL_MEMORY_START + LCC)
             ksd_bit = (lcc >> 2) & 1
             if ksd_bit:
-                # Keyboard strobing disabled - return no keys pressed
-                return 0xFF if self.active_low else 0x00
+                # Keyboard strobing disabled - firmware expects 0x00 on PC-E500
+                # (observed: 0x0F1CFB compares KIL to 0x00 while KSD is set)
+                return 0x00
         
         # Fast path: no keys pressed at all - this should be most common
         if self._rows_mask_all == 0:
@@ -398,8 +399,8 @@ class KeyboardHardware:
             if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col)
 
-        # KOH controls KO8..KO10 (bits 0..2)
-        for col in range(3):  # Only 3 bits used in KOH
+        # KOH controls KO8..KO11 (bits 0..3)
+        for col in range(4):
             bit_set = (self.koh_value & (1 << col)) != 0
             if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col + 8)
@@ -427,7 +428,7 @@ class KeyboardHardware:
         # For each possible output state, OR row masks for active columns
         for idx in range(1 << 11):
             kol = idx & 0xFF
-            koh = (idx >> 8) & 0x07
+            koh = (idx >> 8) & 0x0F
             rows = 0
             # KO0..KO7 from KOL bits 0..7
             for col in range(8):
@@ -436,7 +437,7 @@ class KeyboardHardware:
                 if active:
                     rows |= self._col_row_masks[col]
             # KO8..KO10 from KOH bits 0..2
-            for col in range(3):
+            for col in range(4):
                 bit = (koh >> col) & 1
                 active = (bit == 0) if self.active_low else (bit == 1)
                 if active:

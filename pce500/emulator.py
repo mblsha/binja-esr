@@ -92,7 +92,8 @@ class PCE500Emulator:
         if keyboard_impl == "hardware":
             self.keyboard = KeyboardHardware(self.memory.read_byte)
         else:
-            self.keyboard = KeyboardCompat()
+            # Pass memory accessor so compat can honor KSD (LCC bit)
+            self.keyboard = KeyboardCompat(self.memory.read_byte)
         self.memory.add_overlay(
             MemoryOverlay(
                 start=INTERNAL_MEMORY_START + KOL,
@@ -160,8 +161,8 @@ class PCE500Emulator:
         # Keyboard strobe monitoring (KOL/KOH writes)
         self._kb_strobe_count = 0
         self._kb_col_hist = [0 for _ in range(11)]
-        # Synthetic keyboard interrupt wiring
-        self._kb_irq_enabled = keyboard_impl == "hardware"
+        # Synthetic keyboard interrupt wiring (enable for both compat and hardware)
+        self._kb_irq_enabled = True
         self._irq_pending = False
         self._in_interrupt = False
         self._kb_irq_count = 0
@@ -290,6 +291,17 @@ class PCE500Emulator:
             self._dump_internal_memory(pc)
 
         try:
+            # Pre-read opcode and I for WAIT simulation (so we can model time passing)
+            wait_sim_count = 0
+            try:
+                opcode_peek = self.memory.read_byte(pc) & 0xFF
+                if opcode_peek == 0xEF:  # WAIT
+                    i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
+                    if i_before > 0:
+                        wait_sim_count = i_before
+            except Exception:
+                pass
+
             if getattr(self, "fast_mode", False):
                 # Minimal execution path for speed
                 pc_before = pc
@@ -308,6 +320,16 @@ class PCE500Emulator:
                 
                 self.cycle_count += 1
                 self.instruction_count += 1
+                # If this was WAIT, simulate the skipped loop to keep timers aligned
+                if wait_sim_count:
+                    for _ in range(int(wait_sim_count)):
+                        # Advance instruction counter and tick timers
+                        self.instruction_count += 1
+                        if self._timer_enabled:
+                            try:
+                                self._tick_timers()
+                            except Exception:
+                                pass
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
@@ -365,6 +387,16 @@ class PCE500Emulator:
 
                 self.cycle_count += 1
                 self.instruction_count += 1
+                # If this was WAIT, simulate the skipped loop to keep timers aligned
+                if wait_sim_count:
+                    for _ in range(int(wait_sim_count)):
+                        # Advance instruction counter and tick timers
+                        self.instruction_count += 1
+                        if self._timer_enabled:
+                            try:
+                                self._tick_timers()
+                            except Exception:
+                                pass
 
                 # Only compute disassembly when tracing is enabled to avoid overhead
                 if self.trace is not None:
@@ -713,6 +745,21 @@ class PCE500Emulator:
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         offset = address - INTERNAL_MEMORY_START
         self._track_imem_access(offset, "reads", cpu_pc)
+        # Honor KSD (keyboard strobe disable) bit: when set, firmware expects KIL=0x00
+        if offset == KIL:
+            try:
+                lcc_addr = INTERNAL_MEMORY_START + IMEMRegisters.LCC
+                lcc_val = self.memory.read_byte(lcc_addr)
+                if (lcc_val & 0x04) != 0:
+                    result = 0x00
+                    # Trace keyboard matrix I/O
+                    if new_tracer.enabled:
+                        new_tracer.instant("I/O", "KB_InputRead", {"addr": offset, "value": result})
+                    self._kil_read_count += 1
+                    self._last_kil_columns = []
+                    return result
+            except Exception:
+                pass
         # Support both compat and hardware keyboard APIs
         if hasattr(self.keyboard, "read_register"):
             result = self.keyboard.read_register(offset)

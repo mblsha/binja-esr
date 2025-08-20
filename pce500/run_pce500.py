@@ -41,6 +41,7 @@ def run_emulator(
     fast_mode: bool = False,
     boot_skip_steps: int = 0,
     disasm_trace: bool = False,
+    press_when_col: int | None = None,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -158,6 +159,12 @@ def run_emulator(
     timed_out = False
     pressed = False
     release_countdown = None
+    # Secondary scheduled press (optional):
+    auto2_key = None
+    auto2_after_steps = None
+    auto2_hold = None
+    auto2_pressed = False
+    auto2_release = None
     latched_kil_seen = False
     strobe_target = None
     hold_until_instr = None
@@ -201,6 +208,40 @@ def run_emulator(
                     release_countdown = int(auto_hold_instr)
                     # Consider latched so countdown can proceed without requiring a KIL read
                     latched_kil_seen = True
+            elif press_when_col is not None:
+                # Column-based trigger using last observed KOL/KOH (compat mapping)
+                kol = getattr(emu, "_last_kol", 0)
+                koh = getattr(emu, "_last_koh", 0)
+                active_cols = []
+                for col in range(8):
+                    if kol & (1 << col):
+                        active_cols.append(col)
+                for col in range(3):
+                    if koh & (1 << col):
+                        active_cols.append(col + 8)
+                if int(press_when_col) in active_cols:
+                    emu.press_key(auto_press_key)
+                    pressed = True
+                    if auto_hold_instr and int(auto_hold_instr) > 0:
+                        release_countdown = int(auto_hold_instr)
+                        latched_kil_seen = True
+
+        # Secondary press scheduling (only step-based for simplicity):
+        if auto2_key is None:
+            # Read from attributes if provided by caller (set on emu for quick pass-through)
+            auto2_key = getattr(emu, "_auto2_key", None)
+            auto2_after_steps = getattr(emu, "_auto2_after_steps", None)
+            auto2_hold = getattr(emu, "_auto2_hold", None)
+        if (
+            auto2_key
+            and not auto2_pressed
+            and auto2_after_steps is not None
+            and emu.instruction_count >= int(auto2_after_steps)
+        ):
+            emu.press_key(auto2_key)
+            auto2_pressed = True
+            if auto2_hold and int(auto2_hold) > 0:
+                auto2_release = int(auto2_hold)
 
         emu.step()
 
@@ -208,13 +249,14 @@ def run_emulator(
         if sweep_rows:
             koh = getattr(emu, "_last_koh", 0)
             kol = getattr(emu, "_last_kol", 0)
-            # Derive active columns for active-high mapping
+            # Derive active columns for active-high mapping (compat):
+            # KO0..KO7 from KOL bits 0..7, KO8..KO10 from KOH bits 0..2
             active_cols = []
             for col in range(8):
-                if koh & (1 << col):
+                if kol & (1 << col):
                     active_cols.append(col)
             for col in range(3):
-                if kol & (1 << col):
+                if koh & (1 << col):
                     active_cols.append(col + 8)
 
             # If an active column exists, pick the first and sweep rows
@@ -292,6 +334,12 @@ def run_emulator(
             if release_countdown <= 0:
                 emu.release_key(auto_press_key)
                 release_countdown = None
+        # Secondary release countdown (does not require latch)
+        if auto2_pressed and auto2_release is not None:
+            auto2_release -= 1
+            if auto2_release <= 0:
+                emu.release_key(auto2_key)
+                auto2_release = None
         if (time.perf_counter() - start_time) > timeout_secs:
             timed_out = True
             if print_stats:
@@ -413,6 +461,11 @@ def main(
     fast_mode: bool = False,
     boot_skip: int = 0,
     disasm_trace: bool = False,
+    press_when_col: int | None = None,
+    # Secondary auto-press experimental controls
+    auto2_press_key: str | None = None,
+    auto2_press_after_steps: int | None = None,
+    auto2_hold_instr: int | None = None,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -445,7 +498,13 @@ def main(
         fast_mode=fast_mode,
         boot_skip_steps=boot_skip,
         disasm_trace=disasm_trace,
+        press_when_col=press_when_col,
     ) as emu:
+        # Pass-through secondary scheduling parameters via emulator attributes
+        if auto2_press_key and auto2_press_after_steps is not None:
+            setattr(emu, "_auto2_key", auto2_press_key)
+            setattr(emu, "_auto2_after_steps", int(auto2_press_after_steps))
+            setattr(emu, "_auto2_hold", int(auto2_hold_instr or 0))
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
             emu.memory.set_perf_tracer(tracer)
@@ -622,6 +681,26 @@ if __name__ == "__main__":
         action="store_true",
         help="Generate disassembly trace of executed instructions with control flow annotations",
     )
+    parser.add_argument(
+        "--press-when-col",
+        type=int,
+        help="Press the auto key when this KO column becomes active (compat mapping)",
+    )
+    # Secondary auto-key scheduling for experiments (step-based)
+    parser.add_argument(
+        "--auto2-press-key",
+        help="Secondary key to press (e.g., KEY_EQUALS)",
+    )
+    parser.add_argument(
+        "--auto2-press-after-steps",
+        type=int,
+        help="Execute secondary key press after this many instructions",
+    )
+    parser.add_argument(
+        "--auto2-hold-instr",
+        type=int,
+        help="Hold the secondary key for this many instructions",
+    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -648,4 +727,8 @@ if __name__ == "__main__":
         fast_mode=args.fast_mode,
         boot_skip=args.boot_skip,
         disasm_trace=args.disasm_trace,
+        press_when_col=args.press_when_col,
+        auto2_press_key=args.auto2_press_key,
+        auto2_press_after_steps=args.auto2_press_after_steps,
+        auto2_hold_instr=args.auto2_hold_instr,
     )

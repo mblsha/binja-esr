@@ -40,13 +40,15 @@ class QueuedKey:
     released: bool = False  # Whether the key has been physically released
 
     def matches_output(self, kol: int, koh: int) -> bool:
-        """Check if current KOL/KOH values match this key's requirements."""
-        # Check if the column bit is set
-        # Mapping: KO0..KO7 in KOL bits 0..7; KO8..KO10 in KOH bits 0..2
+        """Check if current KOL/KOH values match this key's column (compat, active-high).
+
+        - KO0..KO7 are active when the corresponding KOL bit is 1
+        - KO8..KO11 are active when the corresponding KOH bit (0..3) is 1
+        """
         if self.column < 8:
-            return bool(kol & (1 << self.column))
+            return (kol & (1 << self.column)) != 0
         else:
-            return bool(koh & (1 << (self.column - 8)))
+            return (koh & (1 << (self.column - 8))) != 0
 
     def is_complete(self) -> bool:
         """Check if this key has been read enough times."""
@@ -183,8 +185,9 @@ class PCE500KeyboardHandler:
         "▼": "KEY_DOWN_TRIANGLE",  # Added missing key
     }
 
-    def __init__(self):
+    def __init__(self, memory_accessor=None):
         """Initialize keyboard handler."""
+        self._memory = memory_accessor
         self.pressed_keys: Set[str] = set()  # Keep for compatibility
         self.key_queue: List[QueuedKey] = []  # Queue of keys to be processed
         self._last_kol = 0
@@ -283,6 +286,16 @@ class PCE500KeyboardHandler:
             Register value or None if not a keyboard register
         """
         if register == KIL:
+            # Honor KSD (keyboard strobe disable) bit if memory is available
+            try:
+                if self._memory is not None:
+                    from sc62015.pysc62015.instr.opcodes import IMEMRegisters as _IMR
+                    INTERNAL_MEMORY_START = 0x100000
+                    lcc = self._memory(INTERNAL_MEMORY_START + _IMR.LCC)
+                    if (lcc & 0x04) != 0:
+                        return 0x00
+            except Exception:
+                pass
             # Read keyboard input based on current KOL/KOH values
             return self._read_keyboard_input()
         elif register == KOL:
@@ -318,7 +331,8 @@ class PCE500KeyboardHandler:
         Returns:
             Byte value representing pressed keys in selected columns
         """
-        result = 0x00  # Default: no keys pressed (active high - all bits low)
+        # Default: no keys pressed (active-high: 0)
+        result = 0x00
 
         # Process key queue
         completed_keys = []
@@ -326,8 +340,8 @@ class PCE500KeyboardHandler:
         for queued_key in self.key_queue:
             # Check if this key matches current KOL/KOH
             if queued_key.matches_output(self._last_kol, self._last_koh):
-                # This key is active, apply its KIL contribution (OR for active high)
-                result |= queued_key.target_kil
+                # This key is active: set the row bit (active-high)
+                result |= (1 << queued_key.row) & 0xFF
 
                 # Increment read count
                 queued_key.increment_read()
@@ -342,13 +356,42 @@ class PCE500KeyboardHandler:
                 self.key_queue.remove(completed_key)
                 self.pressed_keys.discard(completed_key.key_code)
 
-        return result
+        return result & 0xFF
 
     def _update_keyboard_state(self) -> None:
         """Update keyboard state in CPU memory."""
         # The keyboard state is automatically reflected when KIL is read
         # This method can be used for any additional state updates if needed
         pass
+
+    # Expose last KOL/KOH values for instrumentation compatibility
+    @property
+    def kol_value(self) -> int:
+        return int(self._last_kol) & 0xFF
+
+    @property
+    def koh_value(self) -> int:
+        return int(self._last_koh) & 0xFF
+
+    def get_active_columns(self) -> List[int]:
+        """Return list of currently active (strobed) columns in compat mode.
+
+        In compat (active-high) mapping:
+        - KO0..KO7 active when KOL bit 0..7 is 1
+        - KO8..KO11 active when KOH bit 0..3 is 1
+        """
+        active: List[int] = []
+        kol = self._last_kol & 0xFF
+        koh = self._last_koh & 0xFF
+        # KO0..KO7 from KOL bits 0..7
+        for col in range(8):
+            if kol & (1 << col):
+                active.append(col)
+        # KO8..KO11 from KOH bits 0..3
+        for col in range(4):
+            if koh & (1 << col):
+                active.append(col + 8)
+        return active
 
     def get_debug_info(self) -> Dict[str, any]:
         """Get debug information about keyboard state.
@@ -409,7 +452,7 @@ class PCE500KeyboardHandler:
         for i in range(8):
             if self._last_kol & (1 << i):
                 columns.append(f"KO{i}")
-        for i in range(3):  # Only KO8-KO10 exist
+        for i in range(4):  # KO8-KO11 in compat mapping
             if self._last_koh & (1 << i):
                 columns.append(f"KO{i + 8}")
         return columns
