@@ -42,6 +42,20 @@ def run_emulator(
     boot_skip_steps: int = 0,
     disasm_trace: bool = False,
     press_when_col: int | None = None,
+    # Press-on-KIL-read controls
+    press_on_kil_read: str | None = None,
+    press_on_kil_hold: int = 100,
+    press_on_kil_repeats: int = 6,
+    # Macro: PF1 press→release→confirm '='
+    macro_pf1_seq: bool = False,
+    macro_hold: int = 100,
+    macro_repeats: int = 6,
+    # Stop when the first LCD data byte is written
+    stop_on_lcd_write: bool = False,
+    # Instrumentation hooks
+    stop_on_branch: int | None = None,
+    kb_snapshots: int | None = None,
+    trace_keyi: bool = False,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -124,6 +138,20 @@ def run_emulator(
     if print_stats:
         print(f"Running {num_steps} instructions...")
 
+    # Configure press-on-KIL-read or macro before stepping
+    try:
+        if macro_pf1_seq:
+            emu.set_press_on_kil_read('KEY_F1', int(macro_hold), int(macro_repeats))
+        elif press_on_kil_read:
+            emu.set_press_on_kil_read(press_on_kil_read, int(press_on_kil_hold), int(press_on_kil_repeats))
+        # Instrumentation hooks
+        if stop_on_branch is not None:
+            emu.set_branch_watch(int(stop_on_branch))
+        if kb_snapshots is not None and kb_snapshots > 0:
+            emu.set_kb_snapshot_limit(int(kb_snapshots))
+    except Exception:
+        pass
+
     # Optional: skip initial boot instructions without tracing to reach post-init state
     if boot_skip_steps and boot_skip_steps > 0:
         if print_stats:
@@ -171,6 +199,17 @@ def run_emulator(
     current_sweep_row = 0
     sweep_hold_until = None
     last_active_cols = []
+    # Baseline LCD data_written counter (for stop-on-lcd-write)
+    baseline_lcd_writes = 0
+    try:
+        stats = emu.lcd.get_chip_statistics()
+        baseline_lcd_writes = sum(s.get('data_written', 0) for s in stats)
+    except Exception:
+        baseline_lcd_writes = 0
+
+    # Macro stage tracking
+    macro_stage = 0 if macro_pf1_seq else -1
+
     for _ in range(num_steps):
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
@@ -216,7 +255,7 @@ def run_emulator(
                 for col in range(8):
                     if kol & (1 << col):
                         active_cols.append(col)
-                for col in range(3):
+                for col in range(4):
                     if koh & (1 << col):
                         active_cols.append(col + 8)
                 if int(press_when_col) in active_cols:
@@ -243,19 +282,37 @@ def run_emulator(
             if auto2_hold and int(auto2_hold) > 0:
                 auto2_release = int(auto2_hold)
 
+        # Advance macro to '=' once PF1 repeats complete
+        if macro_stage == 0 and getattr(emu, '_po_repeats', 0) == 0 and not getattr(emu, '_po_pressed', False):
+            try:
+                emu.set_press_on_kil_read('KEY_EQUALS', int(macro_hold), int(macro_repeats))
+                macro_stage = 1
+            except Exception:
+                macro_stage = -1
+
         emu.step()
+
+        # Stop on first LCD data write
+        if stop_on_lcd_write:
+            try:
+                stats = emu.lcd.get_chip_statistics()
+                cur = sum(s.get('data_written', 0) for s in stats)
+                if cur > baseline_lcd_writes:
+                    break
+            except Exception:
+                pass
 
         # If sweeping, find active columns from last KOL/KOH and press one row at a time
         if sweep_rows:
             koh = getattr(emu, "_last_koh", 0)
             kol = getattr(emu, "_last_kol", 0)
             # Derive active columns for active-high mapping (compat):
-            # KO0..KO7 from KOL bits 0..7, KO8..KO10 from KOH bits 0..2
+            # KO0..KO7 from KOL bits 0..7, KO8..KO11 from KOH bits 0..3
             active_cols = []
             for col in range(8):
                 if kol & (1 << col):
                     active_cols.append(col)
-            for col in range(3):
+            for col in range(4):
                 if koh & (1 << col):
                     active_cols.append(col + 8)
 
@@ -348,6 +405,14 @@ def run_emulator(
                     file=sys.stderr,
                 )
             break
+        # Stop when watched branch is taken
+        try:
+            if getattr(emu, "_branch_hit", False):
+                if print_stats:
+                    print(f"Stop-on-branch hit at PC=0x{int(getattr(emu, '_branch_watch_pc', 0)) & 0xFFFFFF:06X}")
+                break
+        except Exception:
+            pass
 
     if print_stats:
         print(f"Executed {emu.instruction_count} instructions")
@@ -395,6 +460,27 @@ def run_emulator(
             print(f"    Data bytes read: {stat['data_read']}")
             print(f"    Current page: {stat['page']}")
             print(f"    Current column: {stat['column']}")
+
+        # Print optional instrumentation summaries
+        try:
+            if trace_keyi:
+                keyi_log = emu.get_keyi_trace()
+                print(f"\nKEYI entries: {len(keyi_log)}")
+                for i, e in enumerate(keyi_log[:20]):
+                    print(
+                        f"  #{i+1}: ic={e['ic']} pc_before=0x{(e['pc_before'] or 0):06X} KOL=0x{e['last_kol']:02X} KOH=0x{e['last_koh']:02X} "
+                        f"KIL=0x{e['last_kil']:02X} dt_ko={e['dt_since_ko']} dt_kil={e['dt_since_kil']} cols={e['last_kil_cols']}"
+                    )
+            if kb_snapshots:
+                snaps = emu.get_kb_snapshots()
+                if snaps:
+                    print(f"\nKeyboard snapshots (last {min(len(snaps), kb_snapshots)}):")
+                    for s in snaps[-min(len(snaps), int(kb_snapshots)):]:
+                        print(
+                            f"  ic={s['ic']} pc=0x{(s['pc'] or 0):06X} KOL=0x{s['kol']:02X} KOH=0x{s['koh']:02X} KIL=0x{s['kil']:02X} LCC=0x{s['lcc']:02X} cols={s['active_cols']}"
+                        )
+        except Exception:
+            pass
 
         # Flag the emulator if we timed out so callers can fail with non-zero exit
         setattr(emu, "_timed_out", timed_out)
@@ -462,6 +548,13 @@ def main(
     boot_skip: int = 0,
     disasm_trace: bool = False,
     press_when_col: int | None = None,
+    press_on_kil_read: str | None = None,
+    press_on_kil_hold: int = 100,
+    press_on_kil_repeats: int = 6,
+    macro_pf1_seq: bool = False,
+    macro_hold: int = 100,
+    macro_repeats: int = 6,
+    stop_on_lcd_write: bool = False,
     # Secondary auto-press experimental controls
     auto2_press_key: str | None = None,
     auto2_press_after_steps: int | None = None,
@@ -499,6 +592,13 @@ def main(
         boot_skip_steps=boot_skip,
         disasm_trace=disasm_trace,
         press_when_col=press_when_col,
+        press_on_kil_read=press_on_kil_read,
+        press_on_kil_hold=press_on_kil_hold,
+        press_on_kil_repeats=press_on_kil_repeats,
+        macro_pf1_seq=macro_pf1_seq,
+        macro_hold=macro_hold,
+        macro_repeats=macro_repeats,
+        stop_on_lcd_write=stop_on_lcd_write,
     ) as emu:
         # Pass-through secondary scheduling parameters via emulator attributes
         if auto2_press_key and auto2_press_after_steps is not None:
@@ -682,6 +782,59 @@ if __name__ == "__main__":
         help="Generate disassembly trace of executed instructions with control flow annotations",
     )
     parser.add_argument(
+        "--press-on-kil-read",
+        help="Press a key (e.g., KEY_F1) in short windows aligned to KIL reads",
+    )
+    parser.add_argument(
+        "--press-on-kil-hold",
+        type=int,
+        default=100,
+        help="Instructions to hold after a KIL-read-aligned press (default: 100)",
+    )
+    parser.add_argument(
+        "--press-on-kil-repeats",
+        type=int,
+        default=6,
+        help="Number of KIL-read windows to trigger a press (default: 6)",
+    )
+    parser.add_argument(
+        "--macro-pf1-seq",
+        action="store_true",
+        help="Run PF1 press→release→confirm '=' macro with KIL-read alignment",
+    )
+    parser.add_argument(
+        "--macro-hold",
+        type=int,
+        default=100,
+        help="Instructions to hold for macro presses (default: 100)",
+    )
+    parser.add_argument(
+        "--macro-repeats",
+        type=int,
+        default=6,
+        help="KIL-read windows per macro press (default: 6)",
+    )
+    parser.add_argument(
+        "--stop-on-lcd-write",
+        action="store_true",
+        help="Stop run when the first LCD data write occurs",
+    )
+    parser.add_argument(
+        "--stop-on-branch",
+        type=lambda x: int(x, 0),
+        help="Stop when a branch at this PC is taken (e.g., 0x0F1D75)",
+    )
+    parser.add_argument(
+        "--kb-snapshots",
+        type=int,
+        help="Record and print last N KIL-read register snapshots",
+    )
+    parser.add_argument(
+        "--trace-keyi",
+        action="store_true",
+        help="Trace KEYI entries and basic timing vs KO/KIL",
+    )
+    parser.add_argument(
         "--press-when-col",
         type=int,
         help="Press the auto key when this KO column becomes active (compat mapping)",
@@ -727,6 +880,16 @@ if __name__ == "__main__":
         fast_mode=args.fast_mode,
         boot_skip=args.boot_skip,
         disasm_trace=args.disasm_trace,
+        press_on_kil_read=args.press_on_kil_read,
+        press_on_kil_hold=args.press_on_kil_hold,
+        press_on_kil_repeats=args.press_on_kil_repeats,
+        macro_pf1_seq=args.macro_pf1_seq,
+        macro_hold=args.macro_hold,
+        macro_repeats=args.macro_repeats,
+        stop_on_lcd_write=args.stop_on_lcd_write,
+        stop_on_branch=args.stop_on_branch,
+        kb_snapshots=args.kb_snapshots,
+        trace_keyi=args.trace_keyi,
         press_when_col=args.press_when_col,
         auto2_press_key=args.auto2_press_key,
         auto2_press_after_steps=args.auto2_press_after_steps,
