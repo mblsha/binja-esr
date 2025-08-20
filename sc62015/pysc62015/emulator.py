@@ -243,6 +243,26 @@ class Emulator:
         elif opcode == 0x01:  # RETI - Return from interrupt
             self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
 
+        # Fast-path: optimize WAIT (opcode 0xEF) to avoid long LLIL loops
+        # Semantics: WAIT performs an idle loop, decrementing I until zero.
+        # This has no side effects other than I reaching 0, so we can skip
+        # lifting/evaluating the loop and set I:=0 directly.
+        if opcode == 0xEF:  # WAIT
+            # Build minimal instruction info/length via analyze, and set I to 0
+            il = MockLowLevelILFunction()
+            info = InstructionInfo()
+            instr.analyze(info, address)
+            current_instr_length = cast(int, info.length)
+            assert current_instr_length is not None, (
+                "InstructionInfo.length was not set by analyze()"
+            )
+            # Advance PC (we return early and skip common PC update)
+            self.regs.set(RegisterName.PC, address + current_instr_length)
+            # Emulate loop effect: I decremented to 0
+            self.regs.set(RegisterName.I, 0)
+            # Return without evaluating any LLIL
+            return InstructionEvalInfo(instruction_info=info, instruction=instr)
+
         il = MockLowLevelILFunction()
         instr.lift(il, address)
 
