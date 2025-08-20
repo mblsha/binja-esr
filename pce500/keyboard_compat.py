@@ -21,7 +21,8 @@ KOH = 0xF1  # Key Output High (controls KO8-KO10)
 KIL = 0xF2  # Key Input (reads KI0-KI7)
 
 # Default number of reads required for debouncing
-DEFAULT_DEBOUNCE_READS = 10
+DEFAULT_DEBOUNCE_READS = 6  # reads needed while strobed to accept a press
+DEFAULT_RELEASE_READS = 6   # reads needed while strobed to accept a release
 
 
 @dataclass
@@ -34,8 +35,12 @@ class QueuedKey:
     required_kol: int  # Required KOL value to activate this key
     required_koh: int  # Required KOH value to activate this key
     target_kil: int  # KIL value to return when active
-    read_count: int = 0  # Number of times this key has been read
-    target_reads: int = DEFAULT_DEBOUNCE_READS  # Number of reads required
+    # Debounce state
+    read_count: int = 0  # Number of times this key has been read while strobed
+    target_reads: int = DEFAULT_DEBOUNCE_READS  # Reads required to accept press
+    active: bool = False  # Becomes True after stable-press threshold
+    release_reads: int = 0  # Number of times seen as not strobed for release
+    release_target_reads: int = DEFAULT_RELEASE_READS  # Reads to accept release
     queued_time: float = field(default_factory=time.time)  # When key was queued
     released: bool = False  # Whether the key has been physically released
 
@@ -51,12 +56,15 @@ class QueuedKey:
             return (koh & (1 << (self.column - 8))) != 0
 
     def is_complete(self) -> bool:
-        """Check if this key has been read enough times."""
-        return self.read_count >= self.target_reads
+        """Check if this key has completed its full press-release debounce."""
+        return self.released and not self.active
 
     def increment_read(self) -> None:
-        """Increment the read counter."""
-        self.read_count += 1
+        """Increment the read counter and update active state after threshold."""
+        if not self.active:
+            self.read_count += 1
+            if self.read_count >= self.target_reads:
+                self.active = True
 
 
 class PCE500KeyboardHandler:
@@ -192,6 +200,8 @@ class PCE500KeyboardHandler:
         self.key_queue: List[QueuedKey] = []  # Queue of keys to be processed
         self._last_kol = 0
         self._last_koh = 0
+        # Track last computed KIL for optional smoothing
+        self._last_kil_value = 0x00
 
         # Build the keyboard matrix from the layout
         self.KEYBOARD_MATRIX: Dict[str, Tuple[int, int]] = {}
@@ -265,6 +275,8 @@ class PCE500KeyboardHandler:
         for queued_key in self.key_queue:
             if queued_key.key_code == key_code:
                 queued_key.released = True
+                # Start release debounce counting anew
+                queued_key.release_reads = 0
 
         # Remove from pressed_keys set
         self.pressed_keys.discard(key_code)
@@ -338,23 +350,29 @@ class PCE500KeyboardHandler:
         completed_keys = []
 
         for queued_key in self.key_queue:
-            # Check if this key matches current KOL/KOH
-            if queued_key.matches_output(self._last_kol, self._last_koh):
-                # This key is active: set the row bit (active-high)
-                result |= (1 << queued_key.row) & 0xFF
-
-                # Increment read count
+            strobed = queued_key.matches_output(self._last_kol, self._last_koh)
+            if strobed:
+                # Count towards press debounce if not yet active
                 queued_key.increment_read()
-
-                # Check if key is complete
+                # If active (after debounce), expose the row bit
+                if queued_key.active:
+                    result |= (1 << queued_key.row) & 0xFF
+                # While strobed, do not count release
+                queued_key.release_reads = 0
+            else:
+                # Not strobed this read; if released, count towards release debounce
+                if queued_key.released and queued_key.active:
+                    queued_key.release_reads += 1
+                    if queued_key.release_reads >= queued_key.release_target_reads:
+                        queued_key.active = False
+                # If fully complete (released and inactive), schedule removal
                 if queued_key.is_complete():
                     completed_keys.append(queued_key)
 
-        # Remove completed keys from queue only if they've also been released
+        # Remove completed keys (released and inactive)
         for completed_key in completed_keys:
-            if completed_key.released:
-                self.key_queue.remove(completed_key)
-                self.pressed_keys.discard(completed_key.key_code)
+            self.key_queue.remove(completed_key)
+            self.pressed_keys.discard(completed_key.key_code)
 
         return result & 0xFF
 
