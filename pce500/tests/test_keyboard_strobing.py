@@ -114,7 +114,7 @@ class TestKeyboardStrobing:
         )  # Set KSD bit (bit 2)
         keyboard.write_register(KOL, 0b11111110)  # Try to strobe KO0
         kil = keyboard.read_register(KIL)
-        assert kil == 0xFF, "No keys should be detected when KSD is set"
+        assert kil == 0x00, "ROM expects KIL==0x00 when KSD is set (release debounce)"
 
         # Re-enable keyboard strobing
         memory.write_byte(INTERNAL_MEMORY_START + LCC, 0b00000000)  # Clear KSD bit

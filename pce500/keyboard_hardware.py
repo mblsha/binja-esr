@@ -42,9 +42,8 @@ class KeyboardHardware:
                            If None, KSD bit is assumed to be 0 (strobing enabled).
         """
         self.memory = memory_accessor
-        # True = hardware-accurate active-low; False = compat (active-high)
-        # Default to active-high to match existing compat behavior and tests.
-        self.active_low = active_low
+        # Use hardware-accurate active-low semantics
+        self.active_low = True
         
         # Cache for KSD bit to avoid expensive memory reads
         self._ksd_cache = None
@@ -337,7 +336,7 @@ class KeyboardHardware:
         
         # Fast path: no keys pressed at all - this should be most common
         if self._rows_mask_all == 0:
-            return 0xFF if self.active_low else 0x00
+            return 0xFF  # idle high for active-low
 
         # Return cached value if clean
         if not self._kil_dirty:
@@ -350,10 +349,8 @@ class KeyboardHardware:
 
         idx = ((self.koh_value & 0x07) << 8) | (self.kol_value & 0xFF)
         rows_mask = self._lookup_rows[idx]
-        if self.active_low:
-            kil_value = (~rows_mask) & 0xFF
-        else:
-            kil_value = rows_mask & 0xFF
+        # Active-low: pressed keys pull rows low
+        kil_value = (~rows_mask) & 0xFF
 
         self._kil_cached = kil_value
         self._kil_dirty = False
@@ -386,23 +383,22 @@ class KeyboardHardware:
         """
         active = []
 
-        # Check KSD bit
-        lcc = self.memory(INTERNAL_MEMORY_START + LCC)
-        ksd_bit = (lcc >> 2) & 1
-        if ksd_bit:
-            # Keyboard strobing disabled
-            return active
+        # Check KSD bit if memory accessor is available
+        if self.memory:
+            lcc = self.memory(INTERNAL_MEMORY_START + LCC)
+            ksd_bit = (lcc >> 2) & 1
+            if ksd_bit:
+                # Keyboard strobing disabled
+                return active
 
-        # KOL controls KO0..KO7
+        # KOL controls KO0..KO7 (active-low)
         for col in range(8):
-            bit_set = (self.kol_value & (1 << col)) != 0
-            if (self.active_low and not bit_set) or (not self.active_low and bit_set):
+            if (self.kol_value & (1 << col)) == 0:
                 active.append(col)
 
-        # KOH controls KO8..KO11 (bits 0..3)
-        for col in range(4):
-            bit_set = (self.koh_value & (1 << col)) != 0
-            if (self.active_low and not bit_set) or (not self.active_low and bit_set):
+        # KOH controls KO8..KO10 (bits 0..2) - active-low
+        for col in range(3):  # Only KO8-KO10 exist
+            if (self.koh_value & (1 << col)) == 0:
                 active.append(col + 8)
 
         return active
@@ -430,17 +426,15 @@ class KeyboardHardware:
             kol = idx & 0xFF
             koh = (idx >> 8) & 0x0F
             rows = 0
-            # KO0..KO7 from KOL bits 0..7
+            # KO0..KO7 from KOL bits 0..7 (active-low)
             for col in range(8):
                 bit = (kol >> col) & 1
-                active = (bit == 0) if self.active_low else (bit == 1)
-                if active:
+                if bit == 0:  # active-low
                     rows |= self._col_row_masks[col]
-            # KO8..KO10 from KOH bits 0..2
-            for col in range(4):
+            # KO8..KO10 from KOH bits 0..2 (active-low)
+            for col in range(3):  # Only KO8-KO10 exist
                 bit = (koh >> col) & 1
-                active = (bit == 0) if self.active_low else (bit == 1)
-                if active:
+                if bit == 0:  # active-low
                     rows |= self._col_row_masks[col + 8]
             self._lookup_rows[idx] = rows & 0xFF
 
@@ -456,7 +450,7 @@ class KeyboardHardware:
 
         for key_code in self.get_pressed_keys():
             loc = self.key_locations[key_code]
-            # Calculate KOL/KOH values that would strobe this key
+            # Calculate KOL/KOH values that would strobe this key (active-low)
             required_kol = 0xFF
             required_koh = 0xFF
 
@@ -465,7 +459,7 @@ class KeyboardHardware:
             else:
                 required_koh &= ~(1 << (loc.column - 8))  # Clear bit for active-low
 
-            # Calculate KIL value when this key is pressed
+            # Calculate KIL value when this key is pressed (active-low)
             target_kil = ~(1 << loc.row) & 0xFF  # Clear bit for active-low
 
             queue_info.append(
@@ -512,4 +506,64 @@ class KeyboardHardware:
 
     def _read_keyboard_input(self) -> int:
         """Read keyboard input (for web UI compatibility)."""
-        return self._simulate_key_scan()
+        return self._read_kil_fast()
+
+
+def get_active_columns(kol: int, koh: int) -> int:
+    """Get 11-bit mask of active columns (bit i set => KOi active).
+    
+    Args:
+        kol: KOL register value (controls KO0-KO7) 
+        koh: KOH register value (controls KO8-KO10)
+        
+    Returns:
+        11-bit mask where bit i indicates if column KOi is active
+    """
+    low = (~kol) & 0xFF              # KO0..7 active when bit is 0 
+    high = ((~koh) & 0x07) << 8      # KO8..10 only (bits 0-2)
+    return (low | high) & 0x7FF
+
+
+def compute_kil(kol: int, koh: int, pressed_keys: set[tuple[int, int]], ksd: bool) -> int:
+    """Compute KIL value based on column strobing and pressed keys.
+    
+    Args:
+        kol: KOL register value
+        koh: KOH register value  
+        pressed_keys: Set of (column, row) tuples for pressed keys
+        ksd: KSD (keyboard strobe disable) bit state
+        
+    Returns:
+        KIL register value (0x00-0xFF)
+    """
+    if ksd:
+        return 0x00  # ROM expects KIL==0 under KSD (release debounce)
+    
+    active = get_active_columns(kol, koh)
+    kil = 0xFF  # idle high
+    
+    for (ko, ki) in pressed_keys:
+        if (active >> ko) & 1:
+            kil &= ~(1 << ki)  # pull the row low if its column is active
+    
+    return kil
+
+
+def should_raise_keyi(kol: int, koh: int, pressed_keys: set[tuple[int, int]], ksd: bool) -> bool:
+    """Determine if KEYI interrupt should be raised.
+    
+    Args:
+        kol: KOL register value
+        koh: KOH register value
+        pressed_keys: Set of (column, row) tuples for pressed keys  
+        ksd: KSD (keyboard strobe disable) bit state
+        
+    Returns:
+        True if KEYI interrupt should be raised
+    """
+    if ksd:
+        return False
+    
+    active = get_active_columns(kol, koh)
+    # Raise when any pressed key is in any currently active column
+    return any(((active >> ko) & 1) for (ko, _ki) in pressed_keys)
