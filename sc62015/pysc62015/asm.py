@@ -57,6 +57,7 @@ from .instr import (
     ImmOffset,
     IMem20,
     IMem16,
+    IMEMRegisters,
     INC,
     DEC,
     Reg3,
@@ -531,8 +532,31 @@ class AsmTransformer(Transformer):
     # --- Internal Memory Operand Rules ---
 
     def imem_n(self, items: List[Any]) -> IMemOperand:
-        value = int(str(items[0]), 0)
-        return IMemOperand(AddressingMode.N, n=value)
+        raw = items[0]
+        # Accept IMEM register names (e.g., KIL) in addition to numeric literals.
+        value_str = str(raw)
+        name_upper = value_str.upper()
+        op = IMemOperand(AddressingMode.N, n=0)
+        # Mark how this operand was specified for downstream validation.
+        # - imem_symbol_name: provided symbolic IMEM name (e.g., "KIL")
+        # - imem_numeric_literal: True if provided as a numeric literal
+        try:
+            # Try name lookup first
+            reg = IMEMRegisters[name_upper]  # type: ignore[index]
+            op.n_val = int(reg)
+            setattr(op, "imem_symbol_name", name_upper)
+        except Exception:
+            # Fallback to numeric literal
+            val = int(value_str, 0)
+            op.n_val = val
+            setattr(op, "imem_numeric_literal", True)
+            # If the numeric happens to match a known IMEM register, record its name
+            try:
+                match_name = IMEMRegisters(val).name  # type: ignore[call-arg]
+                setattr(op, "imem_register_name", match_name)
+            except Exception:
+                pass
+        return op
 
     def imem_bp_n(self, items: List[Any]) -> IMemOperand:
         value = items[0]
@@ -542,16 +566,59 @@ class AsmTransformer(Transformer):
                 return IMemOperand(AddressingMode.BP_PX)
             if upper == "PY":
                 return IMemOperand(AddressingMode.BP_PY)
-            value = int(value, 0)
-        return IMemOperand(AddressingMode.BP_N, n=int(value))
+        # Build operand and carry metadata as with imem_n
+        op = IMemOperand(AddressingMode.BP_N, n=0)
+        value_str = str(value)
+        try:
+            reg = IMEMRegisters[value_str.upper()]  # type: ignore[index]
+            op.n_val = int(reg)
+            setattr(op, "imem_symbol_name", value_str.upper())
+        except Exception:
+            val = int(value_str, 0)
+            op.n_val = val
+            setattr(op, "imem_numeric_literal", True)
+            try:
+                match_name = IMEMRegisters(val).name  # type: ignore[call-arg]
+                setattr(op, "imem_register_name", match_name)
+            except Exception:
+                pass
+        return op
 
     def imem_px_n(self, items: List[Any]) -> IMemOperand:
-        value = int(str(items[0]), 0)
-        return IMemOperand(AddressingMode.PX_N, n=value)
+        value_str = str(items[0])
+        op = IMemOperand(AddressingMode.PX_N, n=0)
+        try:
+            reg = IMEMRegisters[value_str.upper()]  # type: ignore[index]
+            op.n_val = int(reg)
+            setattr(op, "imem_symbol_name", value_str.upper())
+        except Exception:
+            val = int(value_str, 0)
+            op.n_val = val
+            setattr(op, "imem_numeric_literal", True)
+            try:
+                match_name = IMEMRegisters(val).name  # type: ignore[call-arg]
+                setattr(op, "imem_register_name", match_name)
+            except Exception:
+                pass
+        return op
 
     def imem_py_n(self, items: List[Any]) -> IMemOperand:
-        value = int(str(items[0]), 0)
-        return IMemOperand(AddressingMode.PY_N, n=value)
+        value_str = str(items[0])
+        op = IMemOperand(AddressingMode.PY_N, n=0)
+        try:
+            reg = IMEMRegisters[value_str.upper()]  # type: ignore[index]
+            op.n_val = int(reg)
+            setattr(op, "imem_symbol_name", value_str.upper())
+        except Exception:
+            val = int(value_str, 0)
+            op.n_val = val
+            setattr(op, "imem_numeric_literal", True)
+            try:
+                match_name = IMEMRegisters(val).name  # type: ignore[call-arg]
+                setattr(op, "imem_register_name", match_name)
+            except Exception:
+                pass
+        return op
 
     def imem_bp_px(self, items: List[Any]) -> IMemOperand:
         return IMemOperand(AddressingMode.BP_PX)
