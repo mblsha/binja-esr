@@ -45,15 +45,15 @@ class QueuedKey:
     released: bool = False  # Whether the key has been physically released
 
     def matches_output(self, kol: int, koh: int) -> bool:
-        """Check if current KOL/KOH values match this key's column (active-low).
+        """Check if current KOL/KOH values match this key's column (compat, active-high).
 
-        - KO0..KO7 are active when the corresponding KOL bit is 0 (active-low)
-        - KO8..KO10 are active when the corresponding KOH bit (0..2) is 0 (active-low)
+        - KO0..KO7 are active when the corresponding KOL bit is 1
+        - KO8..KO11 are active when the corresponding KOH bit (0..3) is 1
         """
         if self.column < 8:
-            return (kol & (1 << self.column)) == 0
+            return (kol & (1 << self.column)) != 0
         else:
-            return (koh & (1 << (self.column - 8))) == 0
+            return (koh & (1 << (self.column - 8))) != 0
 
     def is_complete(self) -> bool:
         """Check if this key has completed its full press-release debounce."""
@@ -202,22 +202,15 @@ class PCE500KeyboardHandler:
         self._last_koh = 0
         # Track last computed KIL for optional smoothing
         self._last_kil_value = 0x00
-        # Expose key_locations mapping for sweep tooling
-        class _Loc:
-            def __init__(self, column: int, row: int) -> None:
-                self.column = column
-                self.row = row
 
         # Build the keyboard matrix from the layout
         self.KEYBOARD_MATRIX: Dict[str, Tuple[int, int]] = {}
-        self.key_locations: Dict[str, object] = {}
         for row_idx, row in enumerate(self.KEYBOARD_LAYOUT):
             for col_idx, key_label in enumerate(row):
                 if key_label and key_label in self.KEY_NAMES:
                     key_code = self.KEY_NAMES[key_label]
                     # Store as (column, row) since KO selects columns and KI reads rows
                     self.KEYBOARD_MATRIX[key_code] = (col_idx, row_idx)
-                    self.key_locations[key_code] = _Loc(col_idx, row_idx)
 
     def press_key(
         self, key_code: str, target_reads: int = DEFAULT_DEBOUNCE_READS
@@ -245,16 +238,16 @@ class PCE500KeyboardHandler:
         # Add key to queue
         column, row = self.KEYBOARD_MATRIX[key_code]
 
-        # Calculate required KOL/KOH values for this key (active-low)
-        required_kol = 0xFF
-        required_koh = 0xFF
+        # Calculate required KOL/KOH values for this key
+        required_kol = 0
+        required_koh = 0
         if column < 8:
-            required_kol &= ~(1 << column)  # Clear bit for active-low
+            required_kol = 1 << column
         else:
-            required_koh &= ~(1 << (column - 8))  # Clear bit for active-low
+            required_koh = 1 << (column - 8)
 
-        # Calculate target KIL value (clear the row bit - active-low logic)
-        target_kil = ~(1 << row) & 0xFF
+        # Calculate target KIL value (set the row bit - active high logic)
+        target_kil = 1 << row
 
         # Create queued key
         queued_key = QueuedKey(
@@ -305,6 +298,16 @@ class PCE500KeyboardHandler:
             Register value or None if not a keyboard register
         """
         if register == KIL:
+            # Honor KSD (keyboard strobe disable) bit if memory is available
+            try:
+                if self._memory is not None:
+                    from sc62015.pysc62015.instr.opcodes import IMEMRegisters as _IMR
+                    INTERNAL_MEMORY_START = 0x100000
+                    lcc = self._memory(INTERNAL_MEMORY_START + _IMR.LCC)
+                    if (lcc & 0x04) != 0:
+                        return 0x00
+            except Exception:
+                pass
             # Read keyboard input based on current KOL/KOH values
             return self._read_keyboard_input()
         elif register == KOL:
@@ -340,20 +343,8 @@ class PCE500KeyboardHandler:
         Returns:
             Byte value representing pressed keys in selected columns
         """
-        # Honor KSD (keyboard strobe disable) bit if memory is available
-        try:
-            if self._memory is not None:
-                from sc62015.pysc62015.instr.opcodes import IMEMRegisters as _IMR
-                INTERNAL_MEMORY_START = 0x100000
-                lcc = self._memory(INTERNAL_MEMORY_START + _IMR.LCC)
-                ksd = (lcc & 0x04) != 0
-                if ksd:
-                    return 0x00  # ROM expects KIL==0 under KSD (release debounce)
-        except Exception:
-            pass
-            
-        # Default: idle high (active-low: all bits high when no keys pressed)
-        result = 0xFF
+        # Default: no keys pressed (active-high: 0)
+        result = 0x00
 
         # Process key queue
         completed_keys = []
@@ -363,9 +354,9 @@ class PCE500KeyboardHandler:
             if strobed:
                 # Count towards press debounce if not yet active
                 queued_key.increment_read()
-                # If active (after debounce), pull the row bit low
+                # If active (after debounce), expose the row bit
                 if queued_key.active:
-                    result &= ~(1 << queued_key.row)
+                    result |= (1 << queued_key.row) & 0xFF
                 # While strobed, do not count release
                 queued_key.release_reads = 0
             else:
@@ -401,22 +392,22 @@ class PCE500KeyboardHandler:
         return int(self._last_koh) & 0xFF
 
     def get_active_columns(self) -> List[int]:
-        """Return list of currently active (strobed) columns (active-low).
+        """Return list of currently active (strobed) columns in compat mode.
 
-        In active-low mapping:
-        - KO0..KO7 active when KOL bit 0..7 is 0
-        - KO8..KO10 active when KOH bit 0..2 is 0
+        In compat (active-high) mapping:
+        - KO0..KO7 active when KOL bit 0..7 is 1
+        - KO8..KO11 active when KOH bit 0..3 is 1
         """
         active: List[int] = []
         kol = self._last_kol & 0xFF
         koh = self._last_koh & 0xFF
-        # KO0..KO7 from KOL bits 0..7 (active-low)
+        # KO0..KO7 from KOL bits 0..7
         for col in range(8):
-            if (kol & (1 << col)) == 0:
+            if kol & (1 << col):
                 active.append(col)
-        # KO8..KO10 from KOH bits 0..2 (active-low)
-        for col in range(3):  # Only KO8-KO10 exist
-            if (koh & (1 << col)) == 0:
+        # KO8..KO11 from KOH bits 0..3
+        for col in range(4):
+            if koh & (1 << col):
                 active.append(col + 8)
         return active
 
@@ -477,69 +468,9 @@ class PCE500KeyboardHandler:
         """Get list of currently selected columns."""
         columns = []
         for i in range(8):
-            if (self._last_kol & (1 << i)) == 0:  # active-low
+            if self._last_kol & (1 << i):
                 columns.append(f"KO{i}")
-        for i in range(3):  # Only KO8-KO10 exist
-            if (self._last_koh & (1 << i)) == 0:  # active-low
+        for i in range(4):  # KO8-KO11 in compat mapping
+            if self._last_koh & (1 << i):
                 columns.append(f"KO{i + 8}")
         return columns
-
-
-def get_active_columns(kol: int, koh: int) -> int:
-    """Get 11-bit mask of active columns (bit i set => KOi active).
-    
-    Args:
-        kol: KOL register value (controls KO0-KO7) 
-        koh: KOH register value (controls KO8-KO10)
-        
-    Returns:
-        11-bit mask where bit i indicates if column KOi is active
-    """
-    low = (~kol) & 0xFF              # KO0..7 active when bit is 0 
-    high = ((~koh) & 0x07) << 8      # KO8..10 only (bits 0-2)
-    return (low | high) & 0x7FF
-
-
-def compute_kil(kol: int, koh: int, pressed_keys: set[tuple[int, int]], ksd: bool) -> int:
-    """Compute KIL value based on column strobing and pressed keys.
-    
-    Args:
-        kol: KOL register value
-        koh: KOH register value  
-        pressed_keys: Set of (column, row) tuples for pressed keys
-        ksd: KSD (keyboard strobe disable) bit state
-        
-    Returns:
-        KIL register value (0x00-0xFF)
-    """
-    if ksd:
-        return 0x00  # ROM expects KIL==0 under KSD (release debounce)
-    
-    active = get_active_columns(kol, koh)
-    kil = 0xFF  # idle high
-    
-    for (ko, ki) in pressed_keys:
-        if (active >> ko) & 1:
-            kil &= ~(1 << ki)  # pull the row low if its column is active
-    
-    return kil
-
-
-def should_raise_keyi(kol: int, koh: int, pressed_keys: set[tuple[int, int]], ksd: bool) -> bool:
-    """Determine if KEYI interrupt should be raised.
-    
-    Args:
-        kol: KOL register value
-        koh: KOH register value
-        pressed_keys: Set of (column, row) tuples for pressed keys  
-        ksd: KSD (keyboard strobe disable) bit state
-        
-    Returns:
-        True if KEYI interrupt should be raised
-    """
-    if ksd:
-        return False
-    
-    active = get_active_columns(kol, koh)
-    # Raise when any pressed key is in any currently active column
-    return any(((active >> ko) & 1) for (ko, _ki) in pressed_keys)

@@ -12,7 +12,6 @@ from pce500 import PCE500Emulator
 from PIL import Image, ImageOps
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from sc62015.pysc62015.emulator import RegisterName
-from sc62015.pysc62015.constants import INTERNAL_MEMORY_START
 
 
 def run_emulator(
@@ -57,7 +56,6 @@ def run_emulator(
     stop_on_branch: int | None = None,
     kb_snapshots: int | None = None,
     trace_keyi: bool = False,
-    assert_scan_sense: bool = False,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -149,7 +147,6 @@ def run_emulator(
         # Instrumentation hooks
         if stop_on_branch is not None:
             emu.set_branch_watch(int(stop_on_branch))
-            emu.set_stop_on_branch(int(stop_on_branch))
         if kb_snapshots is not None and kb_snapshots > 0:
             emu.set_kb_snapshot_limit(int(kb_snapshots))
     except Exception:
@@ -216,25 +213,6 @@ def run_emulator(
     for _ in range(num_steps):
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
-        
-        # Assert-scan-sense check at specific address
-        if assert_scan_sense and pc_before == 0x0F1D75:
-            try:
-                # Read current KIL value
-                kil_value = emu.memory.read_byte(INTERNAL_MEMORY_START + 0xF2)  # KIL register
-                print(f"Assert-scan-sense at PC=0x{pc_before:06X}: KIL=0x{kil_value:02X}")
-                # Execute the instruction to see if branch is taken
-                pc_after_step = emu.cpu.regs.get(RegisterName.PC)
-                emu.step()
-                pc_after = emu.cpu.regs.get(RegisterName.PC)
-                # Check if branch was taken (non-sequential PC change)
-                expected_next = pc_before + 2  # Assuming 2-byte branch instruction
-                branch_taken = pc_after != expected_next
-                print(f"Branch at 0x{pc_before:06X}: taken={branch_taken}, KIL=0x{kil_value:02X}, next_pc=0x{pc_after:06X}")
-                continue  # Skip normal step() since we already executed
-            except Exception as e:
-                print(f"Assert-scan-sense error: {e}")
-                pass
 
         # Auto-press once when we first reach thresholds (PC or instruction count)
         if not pressed and auto_press_key:
@@ -581,10 +559,6 @@ def main(
     auto2_press_key: str | None = None,
     auto2_press_after_steps: int | None = None,
     auto2_hold_instr: int | None = None,
-    assert_scan_sense: bool = False,
-    stop_on_branch: int | None = None,
-    kb_snapshots: int | None = None,
-    trace_keyi: bool = False,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -625,10 +599,6 @@ def main(
         macro_hold=macro_hold,
         macro_repeats=macro_repeats,
         stop_on_lcd_write=stop_on_lcd_write,
-        assert_scan_sense=assert_scan_sense,
-        stop_on_branch=stop_on_branch,
-        kb_snapshots=kb_snapshots,
-        trace_keyi=trace_keyi,
     ) as emu:
         # Pass-through secondary scheduling parameters via emulator attributes
         if auto2_press_key and auto2_press_after_steps is not None:
@@ -884,11 +854,6 @@ if __name__ == "__main__":
         type=int,
         help="Hold the secondary key for this many instructions",
     )
-    parser.add_argument(
-        "--assert-scan-sense",
-        action="store_true",
-        help="Assert TEST (KIL) interpretation at address 0x0F1D75 and log branch sense",
-    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -922,7 +887,6 @@ if __name__ == "__main__":
         macro_hold=args.macro_hold,
         macro_repeats=args.macro_repeats,
         stop_on_lcd_write=args.stop_on_lcd_write,
-        assert_scan_sense=args.assert_scan_sense,
         stop_on_branch=args.stop_on_branch,
         kb_snapshots=args.kb_snapshots,
         trace_keyi=args.trace_keyi,
