@@ -22,7 +22,7 @@ KIL = 0xF2  # Key Input (reads KI0-KI7)
 
 # Default number of reads required for debouncing
 DEFAULT_DEBOUNCE_READS = 6  # reads needed while strobed to accept a press
-DEFAULT_RELEASE_READS = 6   # reads needed while strobed to accept a release
+DEFAULT_RELEASE_READS = 6  # reads needed while strobed to accept a release
 
 
 @dataclass
@@ -302,6 +302,7 @@ class PCE500KeyboardHandler:
             try:
                 if self._memory is not None:
                     from sc62015.pysc62015.instr.opcodes import IMEMRegisters as _IMR
+
                     INTERNAL_MEMORY_START = 0x100000
                     lcc = self._memory(INTERNAL_MEMORY_START + _IMR.LCC)
                     if (lcc & 0x04) != 0:

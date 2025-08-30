@@ -10,7 +10,7 @@ from typing import Optional, List, Callable, Dict, Tuple
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .trace_manager import g_tracer
-from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
+from .tracing.perfetto_tracing import perf_trace
 
 # Import constants for accessing internal memory registers
 # Define locally to avoid circular imports
@@ -64,21 +64,25 @@ class PCE500Memory:
 
         # Reference to emulator for tracking counters
         self._emulator = None
-        
+
         # Reference to LCD controller
         self._lcd_controller = None
-        
-        # Callback for IMEM register access tracking
-        self._imem_access_callback: Optional[Callable[[int, str, str, int], None]] = None
 
-    def set_imem_access_callback(self, callback: Callable[[int, str, str, int], None]) -> None:
+        # Callback for IMEM register access tracking
+        self._imem_access_callback: Optional[Callable[[int, str, str, int], None]] = (
+            None
+        )
+
+    def set_imem_access_callback(
+        self, callback: Callable[[int, str, str, int], None]
+    ) -> None:
         """Set callback for IMEM register access notifications.
-        
+
         Args:
             callback: Function(pc, reg_name, access_type, value) to call on IMEM access
         """
         self._imem_access_callback = callback
-    
+
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -101,18 +105,25 @@ class PCE500Memory:
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
                     value: int
                     if self._keyboard_overlay.read_handler:
-                        value = int(self._keyboard_overlay.read_handler(address, cpu_pc)) & 0xFF
+                        value = (
+                            int(self._keyboard_overlay.read_handler(address, cpu_pc))
+                            & 0xFF
+                        )
                     elif self._keyboard_overlay.data:
                         overlay_offset = address - self._keyboard_overlay.start
                         if overlay_offset < len(self._keyboard_overlay.data):
-                            value = int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
+                            value = (
+                                int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
+                            )
                         else:
                             value = 0x00
                     else:
                         value = 0x00
 
                     # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
-                    effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                    effective_pc = (
+                        cpu_pc if cpu_pc is not None else self._get_current_pc()
+                    )
                     if effective_pc is not None:
                         for reg_name in IMEMRegisters.__members__:
                             if IMEMRegisters[reg_name].value == offset:
@@ -121,9 +132,14 @@ class PCE500Memory:
                                         "reads": [],
                                         "writes": [],
                                     }
-                                reads_list = self.imem_access_tracking[reg_name]["reads"]
+                                reads_list = self.imem_access_tracking[reg_name][
+                                    "reads"
+                                ]
                                 if reads_list and reads_list[-1][0] == effective_pc:
-                                    reads_list[-1] = (effective_pc, reads_list[-1][1] + 1)
+                                    reads_list[-1] = (
+                                        effective_pc,
+                                        reads_list[-1][1] + 1,
+                                    )
                                 else:
                                     reads_list.append((effective_pc, 1))
                                     if len(reads_list) > 10:
@@ -161,10 +177,12 @@ class PCE500Memory:
                                 reads_list.append((effective_pc, 1))
                                 if len(reads_list) > 10:
                                     reads_list.pop(0)
-                            
+
                             # Notify callback if set (for disasm trace)
                             if self._imem_access_callback:
-                                self._imem_access_callback(effective_pc, reg_name, 'read', value)
+                                self._imem_access_callback(
+                                    effective_pc, reg_name, "read", value
+                                )
                             break
 
                 return value
@@ -216,7 +234,9 @@ class PCE500Memory:
                     if self._keyboard_overlay.write_handler:
                         self._keyboard_overlay.write_handler(address, value, cpu_pc)
                         # Track IMEMRegisters writes (ensure disasm trace sees KOL/KOH/KIL)
-                        effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                        effective_pc = (
+                            cpu_pc if cpu_pc is not None else self._get_current_pc()
+                        )
                         if effective_pc is not None:
                             for reg_name in IMEMRegisters.__members__:
                                 if IMEMRegisters[reg_name].value == offset:
@@ -225,9 +245,17 @@ class PCE500Memory:
                                             "reads": [],
                                             "writes": [],
                                         }
-                                    writes_list = self.imem_access_tracking[reg_name]["writes"]
-                                    if writes_list and writes_list[-1][0] == effective_pc:
-                                        writes_list[-1] = (effective_pc, writes_list[-1][1] + 1)
+                                    writes_list = self.imem_access_tracking[reg_name][
+                                        "writes"
+                                    ]
+                                    if (
+                                        writes_list
+                                        and writes_list[-1][0] == effective_pc
+                                    ):
+                                        writes_list[-1] = (
+                                            effective_pc,
+                                            writes_list[-1][1] + 1,
+                                        )
                                     else:
                                         writes_list.append((effective_pc, 1))
                                         if len(writes_list) > 10:
@@ -235,7 +263,10 @@ class PCE500Memory:
                                     # Notify callback if set (for disasm trace)
                                     if self._imem_access_callback:
                                         self._imem_access_callback(
-                                            effective_pc, reg_name, "write", value & 0xFF
+                                            effective_pc,
+                                            reg_name,
+                                            "write",
+                                            value & 0xFF,
                                         )
                                     break
                         # Add tracing for write_handler overlays
@@ -289,10 +320,12 @@ class PCE500Memory:
                                 writes_list.append((effective_pc, 1))
                                 if len(writes_list) > 10:
                                     writes_list.pop(0)
-                            
+
                             # Notify callback if set (for disasm trace)
                             if self._imem_access_callback:
-                                self._imem_access_callback(effective_pc, reg_name, 'write', value)
+                                self._imem_access_callback(
+                                    effective_pc, reg_name, "write", value
+                                )
                             break
 
                 if self.perfetto_enabled:
@@ -506,9 +539,9 @@ class PCE500Memory:
     def set_lcd_controller(self, lcd_controller) -> None:
         """Set LCD controller and add memory-mapped I/O overlay."""
         self._lcd_controller = lcd_controller
-        
+
         # Pass CPU reference to LCD controller if available
-        if self.cpu and hasattr(lcd_controller, 'set_cpu'):
+        if self.cpu and hasattr(lcd_controller, "set_cpu"):
             lcd_controller.set_cpu(self.cpu)
         # LCD controllers at 0xA000-0xAFFF
         self.add_overlay(
@@ -561,18 +594,19 @@ class PCE500Memory:
     def set_cpu(self, cpu) -> None:
         """Set reference to CPU emulator for accessing internal memory registers."""
         self.cpu = cpu
-        
+
         # Also pass CPU to LCD controller if already set
-        if self._lcd_controller and hasattr(self._lcd_controller, 'set_cpu'):
+        if self._lcd_controller and hasattr(self._lcd_controller, "set_cpu"):
             self._lcd_controller.set_cpu(cpu)
-    
+
     def _get_current_pc(self) -> Optional[int]:
         """Get current PC from CPU if available."""
-        if self.cpu and hasattr(self.cpu, 'regs'):
+        if self.cpu and hasattr(self.cpu, "regs"):
             try:
                 from sc62015.pysc62015.emulator import RegisterName
+
                 return self.cpu.regs.get(RegisterName.PC)
-            except:
+            except Exception:
                 pass
         return None
 
@@ -621,7 +655,7 @@ class PCE500Memory:
         """Set context for memory operations (compatibility method)."""
         # Context is handled through cpu_pc parameter in read/write methods
         pass
-    
+
     def set_perf_tracer(self, tracer) -> None:
         """Set performance tracer for SC62015 emulator integration."""
         self._perf_tracer = tracer
