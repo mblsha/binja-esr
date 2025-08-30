@@ -107,10 +107,12 @@ def assemble_and_load(emu: PCE500Emulator, cfg: ProgramConfig) -> None:
 
     # Minimal ROM overlay with interrupt vector at 0xFFFFA → handler
     rom_size = 0x40000
-    rom = bytearray(b"\xFF" * rom_size)
+    rom = bytearray(b"\xff" * rom_size)
     vec_off = 0x3FFFA  # 0xFFFFA - 0xC0000
     vec = cfg.handler & 0xFFFFF
-    rom[vec_off : vec_off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    rom[vec_off : vec_off + 3] = bytes(
+        [vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF]
+    )
     emu.load_rom(bytes(rom))
 
 
@@ -131,8 +133,12 @@ def test_keyboard_interrupt_masking_dataclass(scenario: Expectation) -> None:
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, scenario.imr_value)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
     # Program strobe selection (compat mapping: KOL bits for KO0..7, KOH bits 0..3 for KO8..KO11)
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOL, scenario.kol_value & 0xFF)
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOH, scenario.koh_value & 0xFF)
+    emu.memory.write_byte(
+        INTERNAL_MEMORY_START + IMEMRegisters.KOL, scenario.kol_value & 0xFF
+    )
+    emu.memory.write_byte(
+        INTERNAL_MEMORY_START + IMEMRegisters.KOH, scenario.koh_value & 0xFF
+    )
 
     u_before = emu.cpu.regs.get(RegisterName.U)
 
