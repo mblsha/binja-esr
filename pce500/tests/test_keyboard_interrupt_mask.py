@@ -87,12 +87,12 @@ def assemble_and_load(emu: PCE500Emulator, cfg: ProgramConfig) -> None:
             MV A, 0x{cfg.handler_push_value:02X}
             PUSHU A
             ; Debounce compat keyboard: read KIL multiple times while strobed
-            MV A, (0xF2)
-            MV A, (0xF2)
-            MV A, (0xF2)
-            MV A, (0xF2)
-            MV A, (0xF2)
-            MV A, (0xF2)
+            MV A, (KIL)
+            MV A, (KIL)
+            MV A, (KIL)
+            MV A, (KIL)
+            MV A, (KIL)
+            MV A, (KIL)
             PUSHU A
             RETI
         """
