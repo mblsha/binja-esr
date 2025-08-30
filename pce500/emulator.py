@@ -166,15 +166,6 @@ class PCE500Emulator:
         self._irq_pending = False
         self._in_interrupt = False
         self._kb_irq_count = 0
-        # Lightweight instrumentation hooks
-        self._branch_watch_pc: Optional[int] = None
-        self._branch_hit: bool = False
-        self._kb_snapshots: list[dict] = []
-        self._kb_snapshots_limit: int = 0
-        self._last_kil_value_read: Optional[int] = None
-        self._last_kil_read_ic: Optional[int] = None
-        self._last_ko_write_ic: Optional[int] = None
-        self._keyi_log: list[dict] = []
         # Simple periodic timers (rough emulation)
         self._timer_enabled = True
         # Periods in instructions (tunable): main ~ msec, sub ~ 10x slower here
@@ -185,38 +176,6 @@ class PCE500Emulator:
         self._irq_source: Optional[str] = None
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
-
-        # Press-on-KIL-read automation (optional)
-        self._po_key: Optional[str] = None
-        self._po_hold: int = 0
-        self._po_repeats: int = 0
-        self._po_pressed: bool = False
-        self._po_release_countdown: Optional[int] = None
-
-    def set_press_on_kil_read(self, key: str, hold_instr: int, repeats: int) -> None:
-        """Configure a key to auto-press when KIL is read on its active column.
-
-        Args:
-            key: Key code (e.g., 'KEY_F1')
-            hold_instr: Instructions to hold after each press
-            repeats: Number of KIL-read windows to trigger a press
-        """
-        self._po_key = key
-        self._po_hold = max(1, int(hold_instr))
-        self._po_repeats = max(0, int(repeats))
-        self._po_pressed = False
-        self._po_release_countdown = None
-
-    def set_branch_watch(self, pc: Optional[int]) -> None:
-        """Watch a branch at PC and mark hit when taken (between-instruction)."""
-        self._branch_watch_pc = pc if pc is None else int(pc) & 0xFFFFFF
-        self._branch_hit = False
-
-    def set_kb_snapshot_limit(self, limit: int) -> None:
-        """Limit number of keyboard KIL-read snapshots to retain (0 disables)."""
-        self._kb_snapshots_limit = max(0, int(limit))
-        if self._kb_snapshots_limit == 0:
-            self._kb_snapshots.clear()
 
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
@@ -314,28 +273,6 @@ class PCE500Emulator:
                     if new_tracer.enabled:
                         new_tracer.instant("CPU", "IRQ_Delivered", {"from": cur_pc, "to": vector_addr, "src": getattr(self, "_irq_source", "?")})
                     self._kb_irq_count += 1
-                    # Lightweight KEYI trace
-                    if getattr(self, "_irq_source", None) == "KEY":
-                        self._keyi_log.append(
-                            {
-                                "ic": int(self.instruction_count),
-                                "pc_before": int(cur_pc) if isinstance(cur_pc, int) else None,
-                                "last_kol": int(getattr(self, "_last_kol", 0)) & 0xFF,
-                                "last_koh": int(getattr(self, "_last_koh", 0)) & 0xFF,
-                                "last_kil": int(getattr(self, "_last_kil_value_read", 0xFF)) & 0xFF,
-                                "last_kil_cols": list(getattr(self, "_last_kil_columns", [])),
-                                "dt_since_ko": (
-                                    int(self.instruction_count) - int(self._last_ko_write_ic)
-                                    if isinstance(self._last_ko_write_ic, int)
-                                    else None
-                                ),
-                                "dt_since_kil": (
-                                    int(self.instruction_count) - int(self._last_kil_read_ic)
-                                    if isinstance(self._last_kil_read_ic, int)
-                                    else None
-                                ),
-                            }
-                        )
                 except Exception:
                     pass
             except Exception:
@@ -528,16 +465,6 @@ class PCE500Emulator:
                     "CPU", "Error", {"error": str(e), "pc": f"0x{pc:06X}"}
                 )
             raise
-        # Handle press-on-KIL-read release countdown (after instruction)
-        try:
-            if self._po_pressed and self._po_release_countdown is not None:
-                self._po_release_countdown -= 1
-                if self._po_release_countdown <= 0:
-                    self.release_key(self._po_key or "")
-                    self._po_pressed = False
-                    self._po_release_countdown = None
-        except Exception:
-            pass
         # Detect end of interrupt roughly by RETI opcode name
         try:
             instr_name = type(eval_info.instruction).__name__
@@ -739,19 +666,6 @@ class PCE500Emulator:
                     trace_data["condition"] = condition
                 g_tracer.trace_instant("CPU", "jump", trace_data)
 
-    # Public accessors for lightweight instrumentation
-    def get_keyi_trace(self) -> List[Dict]:
-        return list(self._keyi_log)
-
-    def get_kb_snapshots(self) -> List[Dict]:
-        return list(self._kb_snapshots)
-                # Branch watch: mark hit when this specific PC's branch is taken
-                try:
-                    if self._branch_watch_pc is not None and (pc_before & 0xFFFFFF) == self._branch_watch_pc:
-                        self._branch_hit = True
-                except Exception:
-                    pass
-
     def press_key(self, key_code: str) -> bool:
         result = self.keyboard.press_key(key_code) if self.keyboard else False
         # Arm an interrupt eagerly in hardware mode to ensure delivery
@@ -831,20 +745,6 @@ class PCE500Emulator:
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         offset = address - INTERNAL_MEMORY_START
         self._track_imem_access(offset, "reads", cpu_pc)
-        # If reading KIL, optionally press a key aligned with the sampling window
-        if offset == KIL and self._po_key and self._po_repeats > 0 and not self._po_pressed:
-            try:
-                active_cols = []
-                if hasattr(self.keyboard, "get_active_columns"):
-                    active_cols = list(self.keyboard.get_active_columns())
-                loc = getattr(self.keyboard, "key_locations", {}).get(self._po_key)
-                if loc and getattr(loc, 'column', None) in active_cols:
-                    if self.press_key(self._po_key):
-                        self._po_pressed = True
-                        self._po_release_countdown = int(self._po_hold)
-                        self._po_repeats -= 1
-            except Exception:
-                pass
         # Honor KSD (keyboard strobe disable) bit: when set, firmware expects KIL=0x00
         if offset == KIL:
             try:
@@ -875,13 +775,6 @@ class PCE500Emulator:
         # Monitor KIL reads and active columns (for test harness automation)
         if offset == KIL:
             self._kil_read_count += 1
-            # Record last KIL value and time for timing correlation
-            try:
-                self._last_kil_value_read = int(result) & 0xFF
-                self.instruction_count  # ensure exists
-                self._last_kil_read_ic = int(self.instruction_count)
-            except Exception:
-                pass
             # Capture active columns if available
             cols = []
             try:
@@ -896,25 +789,6 @@ class PCE500Emulator:
                     self._last_kol = int(self.keyboard.kol_value) & 0xFF
                 if hasattr(self.keyboard, "koh_value"):
                     self._last_koh = int(self.keyboard.koh_value) & 0xFF
-                # Snapshot registers if enabled
-                if self._kb_snapshots_limit > 0:
-                    try:
-                        from sc62015.pysc62015.instr.opcodes import IMEMRegisters as _IMR
-                        lcc_val = self.memory.read_byte(INTERNAL_MEMORY_START + _IMR.LCC)
-                    except Exception:
-                        lcc_val = 0
-                    snap = {
-                        "pc": int(cpu_pc) if isinstance(cpu_pc, int) else None,
-                        "ic": int(self.instruction_count),
-                        "kol": int(self._last_kol) & 0xFF,
-                        "koh": int(self._last_koh) & 0xFF,
-                        "kil": int(result) & 0xFF,
-                        "lcc": int(lcc_val) & 0xFF,
-                        "active_cols": list(cols),
-                    }
-                    self._kb_snapshots.append(snap)
-                    if len(self._kb_snapshots) > self._kb_snapshots_limit:
-                        self._kb_snapshots.pop(0)
             except Exception:
                 pass
 
@@ -941,9 +815,7 @@ class PCE500Emulator:
                 if getattr(self.keyboard, "koh_value", None) != (value & 0xFF):
                     self._kb_strobe_count += 1
                 self._last_koh = value & 0xFF
-            # Timestamp last KO write for IRQ timing analysis
-            self._last_ko_write_ic = int(self.instruction_count)
-            
+
             # Update histogram using hardware keyboard's active column calculation
             active_cols = []
             if hasattr(self.keyboard, "get_active_columns"):
