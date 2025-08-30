@@ -26,7 +26,7 @@ class TestKeyboardStrobing:
         """Test basic key press detection with proper column strobing."""
         # Create keyboard with mock memory
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Press 'Q' key (KI1, KO0)
         keyboard.press_key("KEY_Q")
@@ -52,7 +52,7 @@ class TestKeyboardStrobing:
     def test_multiple_columns_strobed(self):
         """Test multiple columns being strobed simultaneously."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Press keys in different columns
         keyboard.press_key("KEY_Q")  # KI1, KO0
@@ -67,7 +67,7 @@ class TestKeyboardStrobing:
     def test_keys_in_different_rows(self):
         """Test keys in different rows of same column."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Press keys in same column but different rows
         keyboard.press_key("KEY_Q")  # KI1, KO0
@@ -82,7 +82,7 @@ class TestKeyboardStrobing:
     def test_koh_column_strobing(self):
         """Test strobing columns controlled by KOH register."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Press 'P' key (KI0, KO10)
         keyboard.press_key("KEY_P")
@@ -103,7 +103,7 @@ class TestKeyboardStrobing:
     def test_keyboard_strobe_disable(self):
         """Test KSD (Key Strobe Disable) bit functionality."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Press a key
         keyboard.press_key("KEY_Q")  # KI1, KO0
@@ -112,19 +112,19 @@ class TestKeyboardStrobing:
         memory.write_byte(
             INTERNAL_MEMORY_START + LCC, 0b00000100
         )  # Set KSD bit (bit 2)
-        keyboard.write_register(KOL, 0b11111110)  # Try to strobe KO0
+        keyboard.write_register(KOL, 0b11111110)  # Strobe KO0 (active-low)
         kil = keyboard.read_register(KIL)
-        assert kil == 0xFF, "No keys should be detected when KSD is set"
+        assert kil == 0x00, "ROM expects KIL==0x00 when KSD is set (release debounce)"
 
         # Re-enable keyboard strobing
         memory.write_byte(INTERNAL_MEMORY_START + LCC, 0b00000000)  # Clear KSD bit
         kil = keyboard.read_register(KIL)
-        assert kil == 0b11111101, "Key should be detected when KSD is cleared"
+        assert kil == 0b11111101, "Key should be detected when KSD is cleared (active-low: bit 1 clear for row 1)"
 
     def test_no_keys_pressed(self):
         """Test that KIL returns 0xFF when no keys are pressed."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Strobe all columns
         keyboard.write_register(KOL, 0x00)  # All KO0-KO7 low
@@ -135,7 +135,7 @@ class TestKeyboardStrobing:
     def test_active_columns_list(self):
         """Test getting list of active (strobed) columns."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Strobe KO0 and KO2
         keyboard.write_register(KOL, 0b11111010)  # KO0 and KO2 low
@@ -157,7 +157,7 @@ class TestKeyboardStrobing:
     def test_debug_info(self):
         """Test debug information output."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Set up some state
         keyboard.write_register(KOL, 0xFE)
@@ -175,7 +175,7 @@ class TestKeyboardStrobing:
     def test_all_register_operations(self):
         """Test all register read/write operations."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Test KOL write/read
         keyboard.write_register(KOL, 0x55)
@@ -192,7 +192,7 @@ class TestKeyboardStrobing:
     def test_realistic_scanning_sequence(self):
         """Test a realistic keyboard scanning sequence."""
         memory = MockMemory()
-        keyboard = KeyboardHardware(memory.read_byte)
+        keyboard = KeyboardHardware(memory.read_byte, active_low=True)
 
         # Press '5' key (KI5, KO6)
         keyboard.press_key("KEY_5")

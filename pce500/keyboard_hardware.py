@@ -33,7 +33,7 @@ class KeyboardHardware:
     """
 
     def __init__(
-        self, memory_accessor: Optional[Callable[[int], int]] = None, *, active_low: bool = True
+        self, memory_accessor: Optional[Callable[[int], int]] = None, *, active_low: bool = False
     ):
         """Initialize keyboard hardware.
 
@@ -399,8 +399,8 @@ class KeyboardHardware:
             if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col)
 
-        # KOH controls KO8..KO11 (bits 0..3)
-        for col in range(4):
+        # KOH controls KO8..KO10 (bits 0..2)
+        for col in range(3):
             bit_set = (self.koh_value & (1 << col)) != 0
             if (self.active_low and not bit_set) or (not self.active_low and bit_set):
                 active.append(col + 8)
@@ -437,7 +437,7 @@ class KeyboardHardware:
                 if active:
                     rows |= self._col_row_masks[col]
             # KO8..KO10 from KOH bits 0..2
-            for col in range(4):
+            for col in range(3):
                 bit = (koh >> col) & 1
                 active = (bit == 0) if self.active_low else (bit == 1)
                 if active:
