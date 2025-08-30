@@ -118,18 +118,6 @@ class PCE500Emulator:
                     perfetto_thread="I/O",
                 )
             )
-        
-        # Add ISR register overlay to handle KEYI clearing
-        self.memory.add_overlay(
-            MemoryOverlay(
-                start=INTERNAL_MEMORY_START + IMEMRegisters.ISR,  # ISR register (0xFC)
-                end=INTERNAL_MEMORY_START + IMEMRegisters.ISR,
-                name="isr_register",
-                read_only=False,
-                write_handler=self._isr_write_handler,
-                perfetto_thread="CPU",
-            )
-        )
 
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
@@ -197,12 +185,6 @@ class PCE500Emulator:
         self._irq_source: Optional[str] = None
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
-        
-        # Edge-triggered KEYI state tracking
-        self._prev_keyi_should_raise = False
-        
-        # Stop-on-branch functionality
-        self._stop_on_branch_addr: Optional[int] = None
 
         # Press-on-KIL-read automation (optional)
         self._po_key: Optional[str] = None
@@ -229,50 +211,12 @@ class PCE500Emulator:
         """Watch a branch at PC and mark hit when taken (between-instruction)."""
         self._branch_watch_pc = pc if pc is None else int(pc) & 0xFFFFFF
         self._branch_hit = False
-    
-    def set_stop_on_branch(self, pc: Optional[int]) -> None:
-        """Stop emulation when a branch at PC is taken."""
-        self._stop_on_branch_addr = pc if pc is None else int(pc) & 0xFFFFFF
 
     def set_kb_snapshot_limit(self, limit: int) -> None:
         """Limit number of keyboard KIL-read snapshots to retain (0 disables)."""
         self._kb_snapshots_limit = max(0, int(limit))
         if self._kb_snapshots_limit == 0:
             self._kb_snapshots.clear()
-    
-    def _should_raise_keyi_interrupt(self) -> bool:
-        """Check if KEYI interrupt should be raised (edge-triggered)."""
-        try:
-            # Check if keyboard implementation has should_raise_keyi method
-            if hasattr(self.keyboard, 'should_raise_keyi'):
-                # Hardware keyboard implementation
-                lcc_addr = INTERNAL_MEMORY_START + IMEMRegisters.LCC
-                lcc_val = self.memory.read_byte(lcc_addr)
-                ksd_bit = (lcc_val >> 2) & 1
-                pressed_keys = set()
-                if hasattr(self.keyboard, 'key_locations') and hasattr(self.keyboard, 'matrix_state'):
-                    for key_code, loc in self.keyboard.key_locations.items():
-                        if self.keyboard.matrix_state[loc.row][loc.column]:
-                            pressed_keys.add((loc.column, loc.row))
-                return self.keyboard.should_raise_keyi(
-                    self.keyboard.kol_value, 
-                    self.keyboard.koh_value, 
-                    pressed_keys, 
-                    bool(ksd_bit)
-                )
-            else:
-                # Compatibility keyboard - use simple logic
-                pressed_keys = self.keyboard.get_pressed_keys() if hasattr(self.keyboard, 'get_pressed_keys') else []
-                active_cols = self.keyboard.get_active_columns() if hasattr(self.keyboard, 'get_active_columns') else []
-                # Raise KEYI if any pressed key is in an active column
-                for key_code in pressed_keys:
-                    if hasattr(self.keyboard, 'key_locations'):
-                        loc = self.keyboard.key_locations.get(key_code)
-                        if loc and loc.column in active_cols:
-                            return True
-                return False
-        except Exception:
-            return False
 
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
@@ -318,19 +262,6 @@ class PCE500Emulator:
                 self._tick_timers()
         except Exception:
             pass
-        
-        # Check for edge-triggered KEYI interrupt
-        try:
-            current_keyi_should_raise = self._should_raise_keyi_interrupt()
-            # Edge-triggered: only set KEYI on transition from False to True
-            if current_keyi_should_raise and not self._prev_keyi_should_raise:
-                if self._kb_irq_enabled:
-                    self._irq_pending = True
-                    self._irq_source = "KEY"
-            self._prev_keyi_should_raise = current_keyi_should_raise
-        except Exception:
-            pass
-        
         # Check for pending synthetic interrupt before executing next instruction
         if getattr(self, "_irq_pending", False) and not getattr(self, "_in_interrupt", False):
             try:
@@ -616,20 +547,6 @@ class PCE500Emulator:
                 self._irq_source = None
         except Exception:
             pass
-        
-        # Check stop-on-branch functionality
-        try:
-            pc_after = self.cpu.regs.get(RegisterName.PC)
-            # Detect if this was a branch (PC changed to non-sequential address)
-            expected_next = pc + eval_info.instruction.length()
-            if (self._stop_on_branch_addr is not None and 
-                pc_after == self._stop_on_branch_addr and 
-                pc_after != expected_next):
-                # Branch taken to the watched address - stop execution
-                return False
-        except Exception:
-            pass
-            
         return True
 
     def run(self, max_instructions: Optional[int] = None) -> int:
@@ -828,6 +745,12 @@ class PCE500Emulator:
 
     def get_kb_snapshots(self) -> List[Dict]:
         return list(self._kb_snapshots)
+                # Branch watch: mark hit when this specific PC's branch is taken
+                try:
+                    if self._branch_watch_pc is not None and (pc_before & 0xFFFFFF) == self._branch_watch_pc:
+                        self._branch_hit = True
+                except Exception:
+                    pass
 
     def press_key(self, key_code: str) -> bool:
         result = self.keyboard.press_key(key_code) if self.keyboard else False
@@ -1064,26 +987,6 @@ class PCE500Emulator:
         # Invalidate KSD cache in hardware keyboard
         if hasattr(self.keyboard, "invalidate_ksd_cache"):
             self.keyboard.invalidate_ksd_cache()
-    
-    def _isr_write_handler(
-        self, address: int, value: int, cpu_pc: Optional[int] = None
-    ) -> None:
-        """Handle ISR register write to clear interrupt bits."""
-        offset = address - INTERNAL_MEMORY_START
-        self._track_imem_access(offset, "writes", cpu_pc)
-        
-        # Write to the actual ISR register in memory first
-        internal_offset = len(self.memory.external_memory) - 256 + offset
-        self.memory.external_memory[internal_offset] = value & 0xFF
-        
-        # Check if KEYI bit (bit 2) is being cleared
-        if (value & 0x04) == 0:  # KEYI bit is clear in written value
-            # Reset edge-triggered KEYI state when KEYI is acknowledged
-            self._prev_keyi_should_raise = False
-        
-        # Trace the ISR write
-        if new_tracer.enabled:
-            new_tracer.instant("CPU", "ISR_Write", {"value": f"0x{value:02X}", "pc": f"0x{cpu_pc:06X}" if cpu_pc else "N/A"})
 
     def _dump_internal_memory(self, pc: int):
         internal_mem = self.memory.get_internal_memory_bytes()
