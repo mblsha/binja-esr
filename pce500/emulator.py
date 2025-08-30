@@ -245,7 +245,9 @@ class PCE500Emulator:
                     s = self.cpu.regs.get(RegisterName.S)
                     # Require a valid, initialized stack pointer; defer IRQ until firmware sets SP
                     if not isinstance(s, int) or s < 5:
-                        raise RuntimeError("IRQ deferred: stack pointer not initialized")
+                        raise RuntimeError(
+                            "IRQ deferred: stack pointer not initialized"
+                        )
                     # push PC (little-endian 3 bytes)
                     s_new = s - 3
                     self.memory.write_bytes(3, s_new, cur_pc)
