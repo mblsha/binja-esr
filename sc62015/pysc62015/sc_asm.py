@@ -26,6 +26,7 @@ from .instr import (
     REVERSE_PRE_TABLE,
     SINGLE_OPERAND_PRE_LOOKUP,
     AddressingMode,
+    IMEMRegisters,
 )
 
 # A simple cache for the reverse lookup table
@@ -229,6 +230,24 @@ class Assembler:
                     )
                     instr.opcode = template["opcode"]
 
+                    # Enforce using IMEM register names (e.g., KIL) instead of raw
+                    # numeric literals for direct internal memory operands.
+                    for p_op in provided_ops:
+                        from_numeric = bool(getattr(p_op, "imem_numeric_literal", False))
+                        reg_name = getattr(p_op, "imem_register_name", None)
+                        mode = getattr(p_op, "mode", None)
+                        n_val = getattr(p_op, "n_val", None)
+                        if (
+                            isinstance(p_op, IMemOperand)
+                            and mode == AddressingMode.N
+                            and from_numeric
+                            and reg_name is not None
+                            and isinstance(n_val, int)
+                        ):
+                            raise AssemblerError(
+                                f"Use IMEM register name {reg_name} instead of 0x{n_val:02X}"
+                            )
+
                     # Determine if a PRE prefix byte is required based on
                     # internal memory operands.
                     operands_list = list(instr.operands())
@@ -320,9 +339,27 @@ class Assembler:
         elif stmt_type == "defm":
             return len(args or "")
         elif "instruction" in statement:
-            instr = self._build_instruction(
-                cast(ParsedInstruction, statement["instruction"])
-            )
+            parsed = cast(ParsedInstruction, statement["instruction"])
+            # Early validation: disallow numeric literals for IMEM registers where a
+            # symbolic name exists, for direct addressing mode.
+            ops = parsed["instr_opts"].ops or []
+            for p_op in ops:
+                from_numeric = bool(getattr(p_op, "imem_numeric_literal", False))
+                reg_name = getattr(p_op, "imem_register_name", None)
+                mode = getattr(p_op, "mode", None)
+                n_val = getattr(p_op, "n_val", None)
+                if (
+                    isinstance(p_op, IMemOperand)
+                    and mode == AddressingMode.N
+                    and from_numeric
+                    and reg_name is not None
+                    and isinstance(n_val, int)
+                ):
+                    raise AssemblerError(
+                        f"Use IMEM register name {reg_name} instead of 0x{n_val:02X}"
+                    )
+
+            instr = self._build_instruction(parsed)
             self.instructions_cache[line_num] = instr  # Cache for second pass
             return instr.length()
         return 0
