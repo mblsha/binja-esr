@@ -1,0 +1,22 @@
+name: Private ROM tests (PRs, non-forks)
+on:
+  pull_request:
+    branches: [ master ]
+    types: [opened, reopened, synchronize]
+
+jobs:
+  dispatch:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger private run for PR head
+        env:
+          TOKEN: ${{ secrets.PRIVATE_REPO_DISPATCH_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR:  ${{ github.event.number }}
+        run: |
+          curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $TOKEN" \
+            https://api.github.com/repos/mblsha/binja-esr-tests/dispatches \
+            -d "{\"event_type\":\"rom-tests\",\"client_payload\":{\"sha\":\"$SHA\",\"pr\":$PR}}"
