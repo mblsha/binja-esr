@@ -81,9 +81,13 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         # Press KEY_Q (column 0, row 1)
         self.emulator.press_key("KEY_Q")
 
-        # Read KIL
-        self.emulator.step()  # MV A, (0xF2)
-        reg_a = self.emulator.cpu.regs.get(RegisterName.A)
+        # Read KIL multiple times to trigger debouncing (default 6 reads needed)
+        reg_a = 0x00
+        for _ in range(6):
+            self.emulator.step()  # MV A, (0xF2)
+            reg_a = self.emulator.cpu.regs.get(RegisterName.A)
+            # Reset PC to read KIL again
+            self.emulator.cpu.regs.set(RegisterName.PC, 0x0004)
 
         # With KEY_Q pressed in column 0 row 1, bit 1 should be high (active-high)
         # Since the key is pressed, result will be 0x02 (bit 1 set)
@@ -95,11 +99,16 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         self.emulator.step()  # MV A, 0x01
         self.emulator.step()  # MV (0xF0), A
 
-        # Press and release KEY_Q
+        # Press KEY_Q and debounce it to active state
         self.emulator.press_key("KEY_Q")
+        for _ in range(6):  # Debounce to active
+            self.emulator.step()  # MV A, (0xF2)
+            self.emulator.cpu.regs.set(RegisterName.PC, 0x0004)
+
+        # Release the key
         self.emulator.release_key("KEY_Q")
 
-        # Read KIL
+        # Read KIL immediately after release
         self.emulator.step()  # MV A, (0xF2)
         reg_a = self.emulator.cpu.regs.get(RegisterName.A)
 
@@ -130,9 +139,14 @@ class TestKeyboardCPUIntegration(unittest.TestCase):
         # Step through program
         emulator.step()  # MV A, 0x02
         emulator.step()  # MV (0xF0), A
-        emulator.step()  # MV A, (0xF2)
 
-        reg_a = emulator.cpu.regs.get(RegisterName.A)
+        # Read KIL multiple times to trigger debouncing
+        reg_a = 0x00
+        for _ in range(6):
+            emulator.step()  # MV A, (0xF2)
+            reg_a = emulator.cpu.regs.get(RegisterName.A)
+            # Reset PC to read KIL again
+            emulator.cpu.regs.set(RegisterName.PC, 0x0004)
 
         # With KEY_W pressed in column 1 row 0, bit 0 should be high
         # Since the key is pressed, result will be 0x01 (bit 0 set)
