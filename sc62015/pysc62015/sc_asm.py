@@ -26,7 +26,6 @@ from .instr import (
     REVERSE_PRE_TABLE,
     SINGLE_OPERAND_PRE_LOOKUP,
     AddressingMode,
-    IMEMRegisters,
 )
 
 # A simple cache for the reverse lookup table
@@ -233,7 +232,9 @@ class Assembler:
                     # Enforce using IMEM register names (e.g., KIL) instead of raw
                     # numeric literals for direct internal memory operands.
                     for p_op in provided_ops:
-                        from_numeric = bool(getattr(p_op, "imem_numeric_literal", False))
+                        from_numeric = bool(
+                            getattr(p_op, "imem_numeric_literal", False)
+                        )
                         reg_name = getattr(p_op, "imem_register_name", None)
                         mode = getattr(p_op, "mode", None)
                         n_val = getattr(p_op, "n_val", None)
