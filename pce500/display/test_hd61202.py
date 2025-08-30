@@ -336,7 +336,9 @@ class TestHD61202Controller:
         # Check pixels from both chips (inverted display - all bits set means black)
         for y in range(8):
             assert buffer[y, 0] == 0  # Left chip at column 0 (black due to inversion)
-            assert buffer[y, 120] == 0  # Right chip at column 120 (black due to inversion)
+            assert (
+                buffer[y, 120] == 0
+            )  # Right chip at column 120 (black due to inversion)
 
     def test_reset(self):
         """Test controller reset."""

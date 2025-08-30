@@ -33,19 +33,22 @@ class KeyboardHardware:
     """
 
     def __init__(
-        self, memory_accessor: Optional[Callable[[int], int]] = None, *, active_low: bool = False
+        self,
+        memory_accessor: Optional[Callable[[int], int]] = None,
+        *,
+        active_low: bool = False,
     ):
         """Initialize keyboard hardware.
 
         Args:
-            memory_accessor: Function to read from memory (for accessing LCC register). 
+            memory_accessor: Function to read from memory (for accessing LCC register).
                            If None, KSD bit is assumed to be 0 (strobing enabled).
         """
         self.memory = memory_accessor
         # True = hardware-accurate active-low; False = compat (active-high)
         # Default to active-high to match existing compat behavior and tests.
         self.active_low = active_low
-        
+
         # Cache for KSD bit to avoid expensive memory reads
         self._ksd_cache = None
         self._ksd_cache_valid = False
@@ -334,7 +337,7 @@ class KeyboardHardware:
                 # Keyboard strobing disabled - firmware expects 0x00 on PC-E500
                 # (observed: 0x0F1CFB compares KIL to 0x00 while KSD is set)
                 return 0x00
-        
+
         # Fast path: no keys pressed at all - this should be most common
         if self._rows_mask_all == 0:
             return 0xFF if self.active_low else 0x00
@@ -358,10 +361,10 @@ class KeyboardHardware:
         self._kil_cached = kil_value
         self._kil_dirty = False
         return self._kil_cached
-    
+
     def invalidate_ksd_cache(self):
         """Invalidate the KSD bit cache.
-        
+
         Call this when the LCC register might have changed.
         """
         self._ksd_cache_valid = False

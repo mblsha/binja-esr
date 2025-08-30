@@ -119,7 +119,9 @@ class TestKeyboardStrobing:
         # Re-enable keyboard strobing
         memory.write_byte(INTERNAL_MEMORY_START + LCC, 0b00000000)  # Clear KSD bit
         kil = keyboard.read_register(KIL)
-        assert kil == 0b11111101, "Key should be detected when KSD is cleared (active-low: bit 1 clear for row 1)"
+        assert kil == 0b11111101, (
+            "Key should be detected when KSD is cleared (active-low: bit 1 clear for row 1)"
+        )
 
     def test_no_keys_pressed(self):
         """Test that KIL returns 0xFF when no keys are pressed."""

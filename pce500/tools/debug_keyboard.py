@@ -35,6 +35,7 @@ print(f"PC after reset: {emu.cpu.regs.get(RegisterName.PC):06X}")
 kil_reads = 0
 original_read_register = emu.keyboard.read_register
 
+
 def tracked_read_register(offset):
     global kil_reads
     if offset == 0xF2:  # KIL
@@ -43,28 +44,29 @@ def tracked_read_register(offset):
             print(f"KIL read #{kil_reads}")
     return original_read_register(offset)
 
+
 emu.keyboard.read_register = tracked_read_register
 
 # Run a few instructions
 print("\nRunning 10 instructions...")
 for i in range(10):
     pc = emu.cpu.regs.get(RegisterName.PC)
-    print(f"Instruction {i+1}: PC=0x{pc:06X}")
-    
+    print(f"Instruction {i + 1}: PC=0x{pc:06X}")
+
     # Get instruction
     instr = emu.cpu.decode_instruction(pc)
     print(f"  Opcode: {instr.name()}")
-    
+
     # Track memory reads before and after
     reads_before = emu.memory_read_count
     emu.step()
     reads_after = emu.memory_read_count
-    
+
     print(f"  Memory reads: {reads_after - reads_before}")
     print(f"  Total KIL reads so far: {kil_reads}")
-    
+
     if reads_after - reads_before > 10:
-        print(f"  WARNING: High memory read count!")
+        print("  WARNING: High memory read count!")
         break
 
 print(f"\nTotal KIL reads: {kil_reads}")

@@ -127,7 +127,9 @@ def run_emulator(
     # Optional: skip initial boot instructions without tracing to reach post-init state
     if boot_skip_steps and boot_skip_steps > 0:
         if print_stats:
-            print(f"Boot-skip: executing {boot_skip_steps} instructions without tracing...")
+            print(
+                f"Boot-skip: executing {boot_skip_steps} instructions without tracing..."
+            )
         # Stop new tracing if enabled
         try:
             if new_tracer.enabled:
@@ -178,9 +180,8 @@ def run_emulator(
         # Auto-press once when we first reach thresholds (PC or instruction count)
         if not pressed and auto_press_key:
             # PC-based trigger
-            if (
-                auto_press_after_pc is not None
-                and pc_before >= int(auto_press_after_pc)
+            if auto_press_after_pc is not None and pc_before >= int(
+                auto_press_after_pc
             ):
                 emu.press_key(auto_press_key)
                 pressed = True
@@ -198,9 +199,8 @@ def run_emulator(
                 if min_hold_instr and min_hold_instr > 0:
                     hold_until_instr = emu.instruction_count + int(min_hold_instr)
             # Step-count-based trigger
-            elif (
-                auto_press_after_steps is not None
-                and emu.instruction_count >= int(auto_press_after_steps)
+            elif auto_press_after_steps is not None and emu.instruction_count >= int(
+                auto_press_after_steps
             ):
                 emu.press_key(auto_press_key)
                 pressed = True
@@ -276,7 +276,10 @@ def run_emulator(
                 last_active_cols = active_cols
 
                 # If not currently holding, press key at (active_col, current_sweep_row)
-                if sweep_hold_until is None or emu.instruction_count >= sweep_hold_until:
+                if (
+                    sweep_hold_until is None
+                    or emu.instruction_count >= sweep_hold_until
+                ):
                     # Release previous key
                     try:
                         if pressed and auto_press_key:
@@ -289,7 +292,10 @@ def run_emulator(
                     try:
                         locs = getattr(emu.keyboard, "key_locations", {})
                         for kc, loc in locs.items():
-                            if loc.column == active_col and loc.row == current_sweep_row:
+                            if (
+                                loc.column == active_col
+                                and loc.row == current_sweep_row
+                            ):
                                 keycode = kc
                                 break
                     except Exception:
@@ -298,7 +304,9 @@ def run_emulator(
                         emu.press_key(keycode)
                         auto_press_key = keycode
                         pressed = True
-                        sweep_hold_until = emu.instruction_count + max(1, int(sweep_hold_instr))
+                        sweep_hold_until = emu.instruction_count + max(
+                            1, int(sweep_hold_instr)
+                        )
                     # Advance to next row for next time
                     current_sweep_row = (current_sweep_row + 1) % 8
 
@@ -420,15 +428,15 @@ def run_emulator(
                     f"Keyboard reads: {getattr(emu, '_kil_read_count', 0)} last_cols={getattr(emu, '_last_kil_columns', [])} last KOL=0x{getattr(emu, '_last_kol', 0):02X} KOH=0x{getattr(emu, '_last_koh', 0):02X} strobe_writes={getattr(emu, '_kb_strobe_count', 0)}"
                 )
                 try:
-                    hist = list(getattr(emu, '_kb_col_hist', []))
+                    hist = list(getattr(emu, "_kb_col_hist", []))
                     if hist:
-                        hist_str = ", ".join(f"KO{i}:{c}" for i,c in enumerate(hist))
+                        hist_str = ", ".join(f"KO{i}:{c}" for i, c in enumerate(hist))
                         print(f"Column strobe histogram: {hist_str}")
                 except Exception:
                     pass
         except Exception:
             pass
-    
+
     # Save disassembly trace if enabled
     if disasm_trace:
         emu.save_disasm_trace()
@@ -471,8 +479,9 @@ def main(
     # Enable performance profiling if requested
     if profile_emulator:
         from pce500.tracing.perfetto_tracing import enable_profiling, tracer
+
         enable_profiling("emulator-profile.perfetto-trace")
-    
+
     # Use context manager for automatic cleanup
     with run_emulator(
         num_steps=steps,
@@ -513,8 +522,9 @@ def main(
     # Stop profiling if it was enabled
     if profile_emulator:
         from pce500.tracing.perfetto_tracing import disable_profiling
+
         disable_profiling()
-    
+
     # Exit with error if we hit the timeout
     if getattr(emu, "_timed_out", False):
         sys.exit(1)

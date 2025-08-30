@@ -82,7 +82,7 @@ class PerfettoTracer:
             # Pre-create common tracks
             for t in ("CPU", "Execution", "I/O"):
                 self._ensure_track(t)
-            
+
             # Add performance profiling tracks
             for t in ("Emulation", "Opcodes", "Memory", "Display", "Lifting", "System"):
                 self._ensure_track(t)
@@ -192,14 +192,14 @@ class PerfettoTracer:
     @contextmanager
     def slice(self, track: str, name: str, args: Optional[Dict[str, Any]] = None):
         """Context manager for duration slices.
-        
+
         Always runs but checks internally if tracing is enabled.
         When disabled, this is a no-op with minimal overhead.
         """
         if not self._enabled or not self._builder:
             yield
             return
-        
+
         self.begin_slice(track, name, args)
         try:
             yield
@@ -212,50 +212,52 @@ tracer = PerfettoTracer()
 
 
 def perf_trace(
-    track: str, 
+    track: str,
     sample_rate: int = 1,
     extract_args: Optional[Callable[[Any], Dict[str, Any]]] = None,
-    include_op_num: bool = False
+    include_op_num: bool = False,
 ) -> Callable:
     """Decorator for automatic performance tracing.
-    
+
     Always wraps the function but checks internally if tracing is enabled.
-    
+
     Args:
         track: Perfetto track name for this function
         sample_rate: Only trace every Nth call (1 = trace all)
         extract_args: Optional function to extract trace arguments from function args
         include_op_num: Include instruction_count as op_num in trace args (for Emulation track)
     """
+
     def decorator(func: Callable) -> Callable:
         call_count = 0
-        
+
         @wraps(func)
         def wrapper(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            
+
             # Check inside wrapper - minimal overhead when disabled
             if not tracer.enabled or (call_count % sample_rate) != 0:
                 return func(*args, **kwargs)
-            
+
             # Extract trace arguments
             trace_args = {}
             if extract_args:
                 try:
                     trace_args = extract_args(*args, **kwargs)
-                except:
+                except Exception:
                     pass  # Ignore extraction errors
-            
+
             # Add operation number if requested (for step function)
-            if include_op_num and args and hasattr(args[0], 'instruction_count'):
-                trace_args['op_num'] = args[0].instruction_count
-            
+            if include_op_num and args and hasattr(args[0], "instruction_count"):
+                trace_args["op_num"] = args[0].instruction_count
+
             func_name = func.__name__
             with tracer.slice(track, func_name, trace_args):
                 return func(*args, **kwargs)
-        
+
         return wrapper
+
     return decorator
 
 

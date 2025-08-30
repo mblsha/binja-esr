@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+from collections import Counter
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -13,14 +14,16 @@ from sc62015.pysc62015.emulator import RegisterName
 # Keep track of all memory reads
 memory_reads = []
 
+
 class MemoryTracer:
     def __init__(self, original_read):
         self.original_read = original_read
         self.reads = []
-    
+
     def __call__(self, address, cpu_pc=None):
         self.reads.append(address)
         return self.original_read(address, cpu_pc)
+
 
 # Create emulator with hardware keyboard
 print("Creating emulator with hardware keyboard...")
@@ -62,11 +65,10 @@ emu.step()
 print(f"\nMemory reads during execution: {len(tracer.reads)}")
 
 # Group reads by address
-from collections import Counter
 read_counts = Counter(tracer.reads)
 print("\nMemory access pattern:")
 for addr, count in sorted(read_counts.items(), key=lambda x: -x[1])[:10]:
     if addr >= 0x100000:
-        print(f"  Internal 0x{addr-0x100000:02X}: {count} reads")
+        print(f"  Internal 0x{addr - 0x100000:02X}: {count} reads")
     else:
         print(f"  0x{addr:06X}: {count} reads")

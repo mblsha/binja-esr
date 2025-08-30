@@ -1,5 +1,3 @@
-import pytest
-
 from pce500.keyboard_hardware import KeyboardHardware, KOL, KOH, KIL
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
@@ -40,4 +38,3 @@ def test_pf1_active_low_kil_and_column_mapping():
     kb.write_register(KOL, 0xFF)
     kb.write_register(KOH, 0xFF & ~(1 << 2))
     assert 10 in kb.get_active_columns()
-
