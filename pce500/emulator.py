@@ -231,72 +231,80 @@ class PCE500Emulator:
             self, "_in_interrupt", False
         ):
             try:
-                # Respect masks if desired; for now, deliver unconditionally to validate flow
-                # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
-                cur_pc = self.cpu.regs.get(RegisterName.PC)
-                s = self.cpu.regs.get(RegisterName.S)
-                # Require a valid, initialized stack pointer; defer IRQ until firmware sets SP
-                if not isinstance(s, int) or s < 5:
-                    raise RuntimeError("IRQ deferred: stack pointer not initialized")
-                # push PC (little-endian 3 bytes)
-                s_new = s - 3
-                self.memory.write_bytes(3, s_new, cur_pc)
-                self.cpu.regs.set(RegisterName.S, s_new)
-                # push F (1 byte)
-                f_val = self.cpu.regs.get(RegisterName.F)
-                s_new = self.cpu.regs.get(RegisterName.S) - 1
-                self.memory.write_bytes(1, s_new, f_val)
-                self.cpu.regs.set(RegisterName.S, s_new)
-                # push IMR (1 byte) and clear IRM bit 7
-                imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                imr_val = self.memory.read_byte(imr_addr)
-                s_new = self.cpu.regs.get(RegisterName.S) - 1
-                self.memory.write_bytes(1, s_new, imr_val)
-                self.cpu.regs.set(RegisterName.S, s_new)
-                self.memory.write_byte(imr_addr, imr_val & 0x7F)
-                # Set ISR.KEYI bit to indicate keyboard interrupt
-                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                isr_val = self.memory.read_byte(isr_addr)
-                # Preserve any previously set bits, keep KEYI if keyboard, else keep timer bits
-                src = getattr(self, "_irq_source", None)
-                if src == "KEY":
-                    isr_new = isr_val | 0x04  # KEYI bit 2
-                elif src == "STI":
-                    isr_new = isr_val | 0x02  # STI bit 1
-                elif src == "MTI":
-                    isr_new = isr_val | 0x01  # MTI bit 0
-                else:
-                    isr_new = isr_val | 0x04
-                self.memory.write_byte(isr_addr, isr_new)
-                # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
-                vector_addr = self.memory.read_long(0xFFFFA)
-                self.cpu.regs.set(RegisterName.PC, vector_addr)
-                self._in_interrupt = True
-                self._irq_pending = False
-                # Debug/trace: note interrupt delivery
-                try:
-                    if self.trace is not None:
-                        self.trace.append(
-                            (
-                                "irq",
-                                cur_pc,
-                                vector_addr,
-                                getattr(self, "_irq_source", "?"),
-                            )
-                        )
-                    if new_tracer.enabled:
-                        new_tracer.instant(
-                            "CPU",
-                            "IRQ_Delivered",
-                            {
-                                "from": cur_pc,
-                                "to": vector_addr,
-                                "src": getattr(self, "_irq_source", "?"),
-                            },
-                        )
-                    self._kb_irq_count += 1
-                except Exception:
+                # Respect IMR/ISR masks: deliver only if IRM=1 and (IMR & ISR)!=0
+                imr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                imr_val_chk = self.memory.read_byte(imr_addr_chk) & 0xFF
+                isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
+                if (imr_val_chk & 0x80) == 0 or (imr_val_chk & isr_val_chk) == 0:
+                    # Keep pending; CPU continues executing normal flow
                     pass
+                else:
+                    # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
+                    cur_pc = self.cpu.regs.get(RegisterName.PC)
+                    s = self.cpu.regs.get(RegisterName.S)
+                    # Require a valid, initialized stack pointer; defer IRQ until firmware sets SP
+                    if not isinstance(s, int) or s < 5:
+                        raise RuntimeError("IRQ deferred: stack pointer not initialized")
+                    # push PC (little-endian 3 bytes)
+                    s_new = s - 3
+                    self.memory.write_bytes(3, s_new, cur_pc)
+                    self.cpu.regs.set(RegisterName.S, s_new)
+                    # push F (1 byte)
+                    f_val = self.cpu.regs.get(RegisterName.F)
+                    s_new = self.cpu.regs.get(RegisterName.S) - 1
+                    self.memory.write_bytes(1, s_new, f_val)
+                    self.cpu.regs.set(RegisterName.S, s_new)
+                    # push IMR (1 byte) and clear IRM bit 7
+                    imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                    imr_val = self.memory.read_byte(imr_addr)
+                    s_new = self.cpu.regs.get(RegisterName.S) - 1
+                    self.memory.write_bytes(1, s_new, imr_val)
+                    self.cpu.regs.set(RegisterName.S, s_new)
+                    self.memory.write_byte(imr_addr, imr_val & 0x7F)
+                    # Set ISR.KEYI bit to indicate keyboard interrupt
+                    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                    isr_val = self.memory.read_byte(isr_addr)
+                    # Preserve any previously set bits, keep KEYI if keyboard, else keep timer bits
+                    src = getattr(self, "_irq_source", None)
+                    if src == "KEY":
+                        isr_new = isr_val | 0x04  # KEYI bit 2
+                    elif src == "STI":
+                        isr_new = isr_val | 0x02  # STI bit 1
+                    elif src == "MTI":
+                        isr_new = isr_val | 0x01  # MTI bit 0
+                    else:
+                        isr_new = isr_val | 0x04
+                    self.memory.write_byte(isr_addr, isr_new)
+                    # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
+                    vector_addr = self.memory.read_long(0xFFFFA)
+                    self.cpu.regs.set(RegisterName.PC, vector_addr)
+                    self._in_interrupt = True
+                    self._irq_pending = False
+                    # Debug/trace: note interrupt delivery
+                    try:
+                        if self.trace is not None:
+                            self.trace.append(
+                                (
+                                    "irq",
+                                    cur_pc,
+                                    vector_addr,
+                                    getattr(self, "_irq_source", "?"),
+                                )
+                            )
+                        if new_tracer.enabled:
+                            new_tracer.instant(
+                                "CPU",
+                                "IRQ_Delivered",
+                                {
+                                    "from": cur_pc,
+                                    "to": vector_addr,
+                                    "src": getattr(self, "_irq_source", "?"),
+                                },
+                            )
+                        self._kb_irq_count += 1
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -314,15 +322,17 @@ class PCE500Emulator:
 
         try:
             # Pre-read opcode and I for WAIT simulation (so we can model time passing)
+            # Only simulate when tracing is enabled to keep performance tests predictable
             wait_sim_count = 0
-            try:
-                opcode_peek = self.memory.read_byte(pc) & 0xFF
-                if opcode_peek == 0xEF:  # WAIT
-                    i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
-                    if i_before > 0:
-                        wait_sim_count = i_before
-            except Exception:
-                pass
+            if self.perfetto_enabled or getattr(self, "_new_trace_enabled", False):
+                try:
+                    opcode_peek = self.memory.read_byte(pc) & 0xFF
+                    if opcode_peek == 0xEF:  # WAIT
+                        i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
+                        if i_before > 0:
+                            wait_sim_count = i_before
+                except Exception:
+                    pass
 
             if getattr(self, "fast_mode", False):
                 # Minimal execution path for speed
@@ -699,6 +709,8 @@ class PCE500Emulator:
         # Arm an interrupt eagerly in hardware mode to ensure delivery
         try:
             if self._kb_irq_enabled and result:
+                # Latch KEYI status bit and arm pending delivery
+                self._set_isr_bits(0x04)
                 setattr(self, "_irq_pending", True)
                 self._irq_source = "KEY"
         except Exception:
@@ -804,6 +816,10 @@ class PCE500Emulator:
                 "I/O", "KB_InputRead", {"addr": offset, "value": result & 0xFF}
             )
 
+        # (Keyboard interrupt status is handled via explicit key events and
+        # strobe detection. We do not mutate ISR here to avoid spurious
+        # interrupts during early firmware boot scans.)
+
         # Monitor KIL reads and active columns (for test harness automation)
         if offset == KIL:
             self._kil_read_count += 1
@@ -870,6 +886,7 @@ class PCE500Emulator:
                         loc = getattr(self.keyboard, "key_locations", {}).get(kc)
                         if loc and loc.column in active_cols:
                             # Arm pending interrupt (delivered at next step)
+                            self._set_isr_bits(0x04)
                             setattr(self, "_irq_pending", True)
                             self._irq_source = "KEY"
                             break

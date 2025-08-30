@@ -10,6 +10,7 @@
 
 ## Setup, Build, and Dev Commands
 - Environment (preferred): `uv sync` then `uv sync --extra dev [--extra pce500] [--extra web]`
+- Install all deps at once: `uv sync --extra dev --extra pce500 --extra web`  # recommended
 - Alternative: `python -m pip install -e .[dev]` (extras: `.[pce500]`, `.[web]`)
 - Lint: `uv run ruff check .` (format: `uv run ruff format .`)
 - Type check: `uv run pyright sc62015/pysc62015` or `python scripts/run_pyright.py`

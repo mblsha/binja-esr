@@ -11,10 +11,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # or on macOS: brew install uv
 
 # Install dependencies and create virtual environment
-uv sync
-uv sync --extra dev  # Include development dependencies
-uv sync --extra pce500  # Include PC-E500 emulator dependencies
-uv sync --extra web  # Include web interface dependencies
+uv sync --extra dev --extra pce500 --extra web  # Install ALL dependencies (required for full functionality)
 ```
 
 ### Code Quality Commands
@@ -33,10 +30,10 @@ FORCE_BINJA_MOCK=1 uv run pytest --cov=sc62015/pysc62015 --cov-report=term-missi
 # Run a single test
 uv run pytest path/to/test_file.py::test_function_name
 
-# Run tests for specific modules
-uv run pytest sc62015 -v
-uv run pytest pce500 -v
-cd web && uv run pytest tests/ -v
+# Run tests for specific modules (requires all extras installed)
+FORCE_BINJA_MOCK=1 uv run pytest  # SC62015 core tests (353 tests)
+FORCE_BINJA_MOCK=1 uv run pytest pce500/ -v  # PCE500 tests (140 tests)
+cd web && FORCE_BINJA_MOCK=1 uv run pytest tests/ -v  # Web tests (22 tests)
 
 # Continuous testing with file watching (requires Fish shell and fswatch)
 ./run-tests.fish
