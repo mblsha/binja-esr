@@ -17,6 +17,7 @@ from flask import (
     send_file,
 )
 from flask_cors import CORS
+from PIL import Image, ImageOps
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -177,6 +178,40 @@ def update_emulator_state():
             "interrupts": emulator.get_interrupt_stats() if hasattr(emulator, "get_interrupt_stats") else None,
         }
     )
+
+
+@app.route("/api/v1/ocr", methods=["GET"])
+def get_ocr_text():
+    """Return OCR text extracted from the current LCD image.
+
+    Polling target is ~2 Hz from the UI when the emulator is running.
+    """
+    global emulator
+    with emulator_lock:
+        if emulator is None:
+            return jsonify({"ok": False, "error": "Emulator not initialized"}), 500
+        try:
+            img = emulator.lcd.get_combined_display(zoom=1)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Failed to capture LCD: {e}"}), 500
+
+    # Preprocess image for OCR
+    try:
+        import pytesseract  # type: ignore
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"pytesseract not available: {e}", "text": ""}), 200
+
+    try:
+        im = img.convert("L")
+        # Add a small white border and upscale to help OCR
+        im = ImageOps.expand(im, border=4, fill=255)
+        im = im.resize((im.width * 3, im.height * 3), Image.LANCZOS)
+        # Binarize quickly
+        im = im.point(lambda v: 255 if v > 128 else 0, mode="1")
+        text = pytesseract.image_to_string(im, config="--psm 3")
+        return jsonify({"ok": True, "text": text})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"OCR failed: {e}", "text": ""}), 200
 
 
 def emulator_run_loop():

@@ -55,6 +55,7 @@ class PCAddress {
 
 let pollTimer = null;
 let isRunning = false;
+let ocrTimer = null;
 
 // PC-E500 Keyboard Layout
 // Based on the physical keyboard layout of the Sharp PC-E500
@@ -488,6 +489,39 @@ function stopPolling() {
     }
 }
 
+// OCR polling helpers
+async function updateOcr() {
+    try {
+        const resp = await fetch(`${API_BASE}/ocr`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const el = document.getElementById('ocr-text');
+        if (!el) return;
+        if (data && data.ok) {
+            const txt = (data.text || '').trim();
+            el.textContent = txt || '(no text)';
+        } else {
+            el.textContent = '(ocr unavailable)';
+        }
+    } catch (e) {
+        const el = document.getElementById('ocr-text');
+        if (el) el.textContent = '(ocr error)';
+    }
+}
+
+function startOcrPolling() {
+    if (ocrTimer) return;
+    updateOcr();
+    ocrTimer = setInterval(updateOcr, 500);
+}
+
+function stopOcrPolling() {
+    if (ocrTimer) {
+        clearInterval(ocrTimer);
+        ocrTimer = null;
+    }
+}
+
 // Update emulator state from API
 async function updateState() {
     try {
@@ -588,6 +622,12 @@ async function updateState() {
         // Update running state
         isRunning = state.is_running || false;
         updateControlButtons();
+        // Manage OCR polling at ~2 Hz while running
+        if (isRunning && !ocrTimer) {
+            startOcrPolling();
+        } else if (!isRunning && ocrTimer) {
+            stopOcrPolling();
+        }
         
     } catch (error) {
         console.error('Error fetching state:', error);
