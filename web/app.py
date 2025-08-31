@@ -17,6 +17,7 @@ from flask import (
     send_file,
 )
 from flask_cors import CORS
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from PIL import Image, ImageOps
 
 # Add parent directory to path for imports
@@ -174,10 +175,33 @@ def update_emulator_state():
             "instruction_history": list(emulator.instruction_history),
             "last_update_time": current_time,
             "last_update_instructions": current_instructions,
-            # Interrupt stats (if available)
-            "interrupts": emulator.get_interrupt_stats() if hasattr(emulator, "get_interrupt_stats") else None,
+            # Interrupt stats (if available) + current IMR/ISR bits
+            "interrupts": (emulator.get_interrupt_stats() if hasattr(emulator, "get_interrupt_stats") else None),
         }
     )
+    # Enrich interrupts with IMR/ISR flag info
+    try:
+        ints = emulator_state.get("interrupts") or {}
+        INTERNAL_MEMORY_START = 0x100000
+        imr_val = emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF
+        isr_val = emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
+        irm = 1 if (imr_val & 0x80) else 0
+        keym = 1 if (imr_val & 0x04) else 0
+        isr_key = 1 if (isr_val & 0x04) else 0
+        pending = bool(getattr(emulator, "_irq_pending", False))
+        ints.update(
+            {
+                "imr": f"0x{imr_val:02X}",
+                "isr": f"0x{isr_val:02X}",
+                "irm": irm,
+                "keym": keym,
+                "isr_key": isr_key,
+                "pending": pending,
+            }
+        )
+        emulator_state["interrupts"] = ints
+    except Exception:
+        pass
 
 
 @app.route("/api/v1/ocr", methods=["GET"])

@@ -297,6 +297,7 @@ class PCE500Memory:
                 # Normal internal memory write (most common case)
                 # Internal memory stored at end of external_memory for compatibility
                 internal_offset = len(self.external_memory) - 256 + offset
+                prev_val = int(self.external_memory[internal_offset])
                 self.external_memory[internal_offset] = value
 
                 # Track IMEMRegisters writes
@@ -320,6 +321,16 @@ class PCE500Memory:
                                 writes_list.append((effective_pc, 1))
                                 if len(writes_list) > 10:
                                     writes_list.pop(0)
+
+                            # Interrupt bit watch for IMR/ISR
+                            if reg_name in ("IMR", "ISR"):
+                                try:
+                                    if self._emulator and hasattr(self._emulator, "_record_irq_bit_watch") and effective_pc is not None:
+                                        self._emulator._record_irq_bit_watch(
+                                            reg_name, prev_val & 0xFF, value & 0xFF, int(effective_pc)
+                                        )
+                                except Exception:
+                                    pass
 
                             # Notify callback if set (for disasm trace)
                             if self._imem_access_callback:

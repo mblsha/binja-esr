@@ -65,7 +65,6 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
     # Poll OCR endpoint every 500ms until non-empty and stable for ~1s (best effort)
     last_txt = None
     last_change = time.time()
-    stable_ok = False
     timeout_end = min(time.time() + 10.0, deadline)
     while time.time() < timeout_end:
         ocr = _get_json(client, "/api/v1/ocr")
@@ -77,7 +76,6 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
                     last_change = time.time()
                 else:
                     if (time.time() - last_change) >= 1.0:
-                        stable_ok = True
                         break
         time.sleep(0.5)
     # Proceed either way; OCR stability is not required for IRQ verification
