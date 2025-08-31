@@ -30,6 +30,8 @@ def _post_json(client, path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def test_web_keyboard_triggers_key_interrupt() -> None:
+    start_time = time.time()
+    deadline = start_time + 30.0  # hard cap for this test
     # Initialize app + emulator
     webapp.initialize_emulator()
     client = webapp.app.test_client()
@@ -64,7 +66,7 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
     last_txt = None
     last_change = time.time()
     stable_ok = False
-    timeout_end = time.time() + 10.0
+    timeout_end = min(time.time() + 10.0, deadline)
     while time.time() < timeout_end:
         ocr = _get_json(client, "/api/v1/ocr")
         if ocr.get("ok"):
@@ -92,8 +94,8 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
         INTERNAL_MEMORY_START = 0x100000
         emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x04)
 
-    # Wait up to 5s for KEY IRQ count to increase
-    end = time.time() + 5.0
+    # Wait up to 5s for KEY IRQ count to increase (bounded by total deadline)
+    end = min(time.time() + 5.0, deadline)
     delivered = False
     while time.time() < end:
         s = _get_json(client, "/api/v1/state")
@@ -108,3 +110,5 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
 
     assert delivered, "KEY interrupt did not trigger within 5 seconds"
 
+    # Final total timeout guard
+    assert time.time() <= deadline, "Test exceeded 30s total execution time"
