@@ -736,3 +736,42 @@ h1 {
         grid-template-columns: 1fr;
     }
 }
+
+/* Compact debug styling to shrink fonts/padding across debug panels */
+:root {
+    --debug-font-size: 6px;
+    --debug-font-size-small: 6px;
+    --debug-pad-y: 1px;
+    --debug-pad-x: 4px;
+}
+
+.debug-compact .history-list {
+    font-size: var(--debug-font-size);
+}
+
+.debug-compact .history-item {
+    padding: var(--debug-pad-y) var(--debug-pad-x);
+}
+
+.debug-compact .pc-address {
+    font-size: var(--debug-font-size);
+}
+
+.debug-compact .stats-table,
+.debug-compact #register-watch-table,
+.debug-compact #key-queue-table {
+    font-size: var(--debug-font-size);
+}
+
+.debug-compact .stats-table td,
+.debug-compact .stats-table th,
+.debug-compact #register-watch-table td,
+.debug-compact #register-watch-table th,
+.debug-compact #key-queue-table td,
+.debug-compact #key-queue-table th {
+    padding: 4px 8px;
+}
+
+.debug-compact .register-watch-hint {
+    font-size: var(--debug-font-size-small);
+}
