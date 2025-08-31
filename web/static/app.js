@@ -54,6 +54,7 @@ class PCAddress {
 }
 
 let isRunning = false;
+const pressedKeysClient = new Set();
 
 // Unified PollManager to orchestrate all polling tasks
 class PollManager {
@@ -528,6 +529,8 @@ async function handleKeyPress(keyCode) {
             if (data.key_queued === false) {
                 console.warn(`Key ${keyCode} was not queued: ${data.message}`);
                 // Could show a visual indicator here
+            } else {
+                pressedKeysClient.add(keyCode);
             }
         }
     } catch (error) {
@@ -541,8 +544,10 @@ async function handleKeyRelease(keyCode) {
         keyElement.classList.remove('pressed');
     }
     
+    // Only send release if we believe this key is currently pressed
+    if (!pressedKeysClient.has(keyCode)) return;
     try {
-        await fetch(`${API_BASE}/key`, {
+        const response = await fetch(`${API_BASE}/key`, {
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
@@ -550,6 +555,9 @@ async function handleKeyRelease(keyCode) {
                 action: 'release'
             })
         });
+        if (response.ok) {
+            pressedKeysClient.delete(keyCode);
+        }
     } catch (error) {
         console.error('Error sending key release:', error);
     }
