@@ -10,13 +10,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
-# Create emulator with hardware keyboard
-print("Creating emulator with hardware keyboard...")
+# Create emulator (single compat keyboard implementation)
+print("Creating emulator...")
 emu = PCE500Emulator(
     trace_enabled=False,
     perfetto_trace=False,
     save_lcd_on_exit=False,
-    keyboard_impl="hardware",
 )
 
 # Load ROM

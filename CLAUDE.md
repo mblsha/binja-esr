@@ -42,6 +42,18 @@ cd web && FORCE_BINJA_MOCK=1 uv run pytest tests/ -v  # Web tests (22 tests)
 ./mcp/binja-cli.py python "print(bv.functions)"
 ```
 
+### Git Commands
+```bash
+# Update master branch (use rebase to maintain clean history)
+git pull --rebase origin master
+
+# Create feature branch
+git checkout -b feature-name
+
+# Push feature branch and set upstream
+git push -u origin feature-name
+```
+
 ### Important: PC-E500 ROM Requirement
 
 **Alert the user if `data/pc-e500.bin` is not present in the repository.** This ROM file is required for full test coverage of the PC-E500 emulator functionality. Without it, certain integration tests and emulator features cannot be properly tested.
@@ -232,7 +244,7 @@ The web emulator (`web/`) provides a browser-based interface to the PC-E500 emul
 ### Architecture
 - **Backend**: Flask server (`app.py`) managing emulator state and providing REST API
 - **Frontend**: JavaScript SPA with virtual keyboard and real-time display updates
-- **Keyboard**: Matrix-based keyboard emulation via KOL/KOH/KIL registers
+- **Keyboard**: Single compat keyboard implementation (matrix via KOL/KOH/KIL)
 
 ### Key Implementation Details
 
@@ -240,11 +252,12 @@ The web emulator (`web/`) provides a browser-based interface to the PC-E500 emul
    - 100ms elapsed (10 FPS target)
    - 100,000 instructions executed
 
-2. **Keyboard Matrix**: 
-   - Output registers KOL (0xF0) and KOH (0xF1) select keyboard columns (KO0-KO10)
-   - Input register KIL (0xF2) reads row states (KI0-KI7)
-   - Keys mapped to specific column/row intersections
-   - Hardware matrix correctly implemented with columns as outputs, rows as inputs
+2. **Keyboard Matrix**:
+   - Output registers KOL (0xF0) and KOH (0xF1) select keyboard columns (KO0–KO10)
+     - KOL bits 0–7 map to KO0–KO7; KOH bits 0–2 map to KO8–KO10
+     - Compat semantics: bits set = column active
+   - Input register KIL (0xF2) reads row states (KI0–KI7)
+   - Keys mapped to specific column/row intersections; columns are outputs, rows are inputs
 
 3. **Critical Initialization**:
    ```python
@@ -278,19 +291,11 @@ FORCE_BINJA_MOCK=1 python run_tests.py
 
 ## Keyboard Implementation Details
 
-### Hardware-Accurate Keyboard Matrix
-The PC-E500 keyboard uses a matrix scanning system that has been accurately implemented:
-- **Column Selection**: KOL (bits 0-7) and KOH (bits 0-2) control which columns are active
-- **Row Reading**: KIL reads the state of all 8 rows simultaneously
-- **Active Low**: Pressed keys pull their row bits low when their column is selected
-- **Visual Layout**: The keyboard matrix in `pce500/keyboard.py` visually matches the hardware
-
-### Key Queue with Debouncing
-The keyboard implementation includes realistic key debouncing:
-- Each key press is queued with a target read count (default 10 reads)
-- Keys must be read the target number of times before being considered "pressed"
-- Stuck key detection identifies keys not being read for >1 second
-- Queue visualization in web UI shows real-time key state and progress
+The project uses a single compat keyboard implementation (`pce500/keyboard_compat.py`):
+- **Column Selection**: KOL (bits 0–7) and KOH (bits 0–2) control columns KO0–KO10 (active-high)
+- **Row Reading**: KIL returns row bits KI0–KI7 according to currently strobed columns
+- **Debouncing**: Queue-based press/release debouncing with configurable read thresholds
+- **Layout**: The layout mapping matches the PC‑E500 matrix and is used by the Web UI
 
 ### Virtual Keyboard Layout
 The web UI virtual keyboard is split into two sections matching the physical PC-E500:
@@ -300,8 +305,8 @@ The web UI virtual keyboard is split into two sections matching the physical PC-
 - **Superscript Labels**: Keys show secondary functions where applicable
 
 ### Debugging Features
-The implementation provides excellent visibility for debugging:
-- **Internal Register Watch**: KOL/KOH/KIL registers now tracked with PC addresses
-- **Key Queue Display**: Shows queued keys with their KOL/KOH/KIL values and read progress
-- **Keyboard Statistics**: Tracks read counts and identifies stuck keys
+The implementation provides visibility for keyboard debugging:
+- **Internal Register Watch**: KOL/KOH/KIL accesses tracked with PC addresses
+- **Key Queue Display**: Queued keys with KOL/KOH/KIL and read progress
+- **Keyboard Statistics**: Read counts and detection of stuck keys
 - **Visual Feedback**: Progress bars and status indicators in the web UI

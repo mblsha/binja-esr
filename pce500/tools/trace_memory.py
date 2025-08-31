@@ -25,13 +25,12 @@ class MemoryTracer:
         return self.original_read(address, cpu_pc)
 
 
-# Create emulator with hardware keyboard
-print("Creating emulator with hardware keyboard...")
+# Create emulator (single compat keyboard implementation)
+print("Creating emulator...")
 emu = PCE500Emulator(
     trace_enabled=False,
     perfetto_trace=False,
     save_lcd_on_exit=False,
-    keyboard_impl="compat",
 )
 
 # Load ROM

@@ -95,54 +95,24 @@ def analyze_with_simplified_approach():
         "implementation": "compat",
     }
 
-    hardware_stats = {
-        "instructions": 296,
-        "time": "10s (timeout)",
-        "implementation": "hardware",
-        "memory_reads": 8771,
-        "memory_writes": 130,
-    }
+    # Historical hardware keyboard stats removed; project now uses a single keyboard
 
-    print("Compat keyboard:")
+    print("Keyboard (compat):")
     print(f"  - Instructions executed: ~{compat_stats['instructions']}")
     print(f"  - Time taken: {compat_stats['time']}")
     print("  - Performance: ~2000+ instructions/second")
 
-    print("\nHardware keyboard:")
-    print(f"  - Instructions executed: {hardware_stats['instructions']}")
-    print(f"  - Time taken: {hardware_stats['time']}")
-    print(
-        f"  - Performance: ~{hardware_stats['instructions'] / 10:.1f} instructions/second"
-    )
-    print(
-        f"  - Memory reads: {hardware_stats['memory_reads']} ({hardware_stats['memory_reads'] / hardware_stats['instructions']:.1f} per instruction)"
-    )
-    print(f"  - Memory writes: {hardware_stats['memory_writes']}")
-
-    print(f"\nSLOWDOWN FACTOR: ~{2000 / 29.6:.1f}x")
+    print("\nNote: Project now uses a single keyboard implementation (compat).")
+    print("Previous hardware-vs-compat divergence references are historical.")
 
     print("\n" + "=" * 80)
     print("ANALYSIS:")
     print("-" * 80)
 
     print("""
-The hardware keyboard implementation is approximately 67x slower than compat.
-
-Key observations:
-1. Hardware keyboard: 29.6 instructions/second
-2. Compat keyboard: ~2000+ instructions/second  
-3. Memory reads per instruction: 29.6 (extremely high)
-
-This suggests the bottleneck is in keyboard register reads, specifically:
-- Each instruction that reads KIL (0xF2) is triggering expensive operations
-- The hardware implementation is doing ~30 memory reads per instruction
-- This points to inefficient keyboard matrix scanning
-
-RECOMMENDED OPTIMIZATIONS:
-1. Cache KIL value between reads in the same instruction
-2. Optimize the lookup table access in _read_kil_fast()
-3. Avoid reading LCC register (for KSD bit) on every KIL read
-4. Implement fast path for idle keyboard (no keys pressed)
+Historic notes referenced a hardware keyboard variant being slower primarily
+due to CPU emulator instruction pipeline inefficiencies. The single compat
+keyboard remains, and optimization focus should be on the SC62015 pipeline.
 """)
 
     print("\nTo see detailed trace analysis, open the traces in Perfetto UI:")
@@ -188,11 +158,9 @@ def main():
         sys.exit(1)
 
     if not hardware_path.exists():
-        print(f"Error: Hardware trace not found: {hardware_path}")
-        print(
-            "Please run: uv run python pce500/run_pce500.py --keyboard hardware --profile-emulator"
-        )
-        sys.exit(1)
+        print(f"Warning: Secondary trace not found: {hardware_path}")
+        print("Proceeding with simplified analysis of the primary trace only.")
+        return
 
     if args.simplified:
         # Use simplified approach

@@ -792,10 +792,10 @@ const REGISTER_DESCRIPTIONS = {
     'PY': 'RAM PY Pointer - Y pointer for indexed addressing',
     'AMC': 'Address Modify Control - Virtually joins CE0/CE1 RAM regions',
     
-    // Keyboard I/O
-    'KOL': 'Key Output Low (KO0-KO7) - Controls keyboard matrix output pins',
-    'KOH': 'Key Output High (KO8-KO15) - Controls keyboard matrix output pins',
-    'KIL': 'Key Input (KI0-KI7) - Reads keyboard matrix input pins',
+    // Keyboard I/O (compat keyboard semantics)
+    'KOL': 'Key Output Low (KO0–KO7) - Selects columns (active-high)',
+    'KOH': 'Key Output High (KO8–KO10 via bits 0–2) - Selects columns (active-high)',
+    'KIL': 'Key Input (KI0–KI7) - Reads keyboard matrix rows',
     
     // E Port I/O
     'EOL': 'E Port Output Low (E0-E7) - General purpose I/O output',
