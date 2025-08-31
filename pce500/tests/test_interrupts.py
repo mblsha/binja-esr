@@ -198,3 +198,122 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
         assert u_after == u_before
         # Interrupt not recorded
         assert emu.last_irq.get("src") in (None, "")
+
+
+def _common_setup_with_halt(emu: PCE500Emulator) -> int:
+    """Assemble program, reset, execute HALT and return U before value."""
+    emu.reset()
+    assemble_and_load(emu, PROGRAM)
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
+    # Execute HALT
+    emu.step()
+    assert emu.cpu.state.halted is True
+    return emu.cpu.regs.get(RegisterName.U)
+
+
+@pytest.mark.timeout(10)
+def test_timer_mti_unmasked_wakes_and_delivers() -> None:
+    """Main timer (MTI, ISR bit 0) cancels HALT and delivers when unmasked.
+
+    Emulator uses rough periods (~500 instructions for MTI). While halted, each
+    step increases instruction_count by 1, so ~600 steps are enough to fire MTI.
+    """
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    # Ensure timers enabled and isolate MTI (disable STI by pushing it far away)
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
+    emu._timer_next_sti = emu.instruction_count + emu._timer_sti_period  # type: ignore[attr-defined]
+    u_before = _common_setup_with_halt(emu)
+
+    # Unmask MTI (bit 0) and IRM
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x01)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+
+    # Step enough to allow MTI to set
+    for _ in range(600):
+        emu.step()
+
+    # Expect delivery: U decreased by 2; ISR with bit0 pushed
+    u_after = emu.cpu.regs.get(RegisterName.U)
+    assert u_after - u_before == -2
+    assert (emu.memory.read_byte(u_after) & 0x01) == 0x01
+    assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
+    # HALT canceled and last_irq recorded
+    assert emu.cpu.state.halted is False
+    assert (
+        emu.last_irq.get("src") in ("MTI", "KEY", "STI")
+        or emu.last_irq.get("src") is not None
+    )
+
+
+@pytest.mark.timeout(10)
+def test_timer_mti_masked_wakes_but_no_delivery() -> None:
+    """Main timer masked: HALT cancels (ISR set) but handler not executed."""
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
+    emu._timer_next_sti = emu.instruction_count + emu._timer_sti_period  # type: ignore[attr-defined]
+    u_before = _common_setup_with_halt(emu)
+
+    # IRM=1, MTM=0 (masked)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+
+    for _ in range(600):
+        emu.step()
+
+    u_after = emu.cpu.regs.get(RegisterName.U)
+    assert u_after == u_before  # No handler
+    assert emu.cpu.state.halted is False  # HALT canceled due to ISR
+    assert emu.last_irq.get("src") in (None, "")  # Not delivered
+
+
+@pytest.mark.timeout(10)
+def test_timer_sti_unmasked_wakes_and_delivers() -> None:
+    """Sub timer (STI, ISR bit 1) cancels HALT and delivers when unmasked.
+
+    Rough period is ~5000 instructions; step ~6000 while halted to trigger.
+    """
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    # Isolate STI: push MTI far away
+    emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
+    emu._timer_next_mti = emu.instruction_count + emu._timer_mti_period  # type: ignore[attr-defined]
+    u_before = _common_setup_with_halt(emu)
+
+    # Unmask STI (bit 1) and IRM
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x02)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+
+    for _ in range(6000):
+        emu.step()
+
+    u_after = emu.cpu.regs.get(RegisterName.U)
+    assert u_after - u_before == -2
+    assert (emu.memory.read_byte(u_after) & 0x02) == 0x02
+    assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
+    assert emu.cpu.state.halted is False
+    assert emu.last_irq.get("src") is not None
+
+
+@pytest.mark.timeout(10)
+def test_timer_sti_masked_wakes_but_no_delivery() -> None:
+    """Sub timer masked: HALT cancels (ISR set) but handler not executed."""
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
+    emu._timer_next_mti = emu.instruction_count + emu._timer_mti_period  # type: ignore[attr-defined]
+    u_before = _common_setup_with_halt(emu)
+
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+
+    for _ in range(6000):
+        emu.step()
+
+    u_after = emu.cpu.regs.get(RegisterName.U)
+    assert u_after == u_before
+    assert emu.cpu.state.halted is False
+    assert emu.last_irq.get("src") in (None, "")
