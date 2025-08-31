@@ -1,7 +1,10 @@
-# PC-E500 Emulator Performance Analysis Findings
+# PC‑E500 Emulator Performance Analysis Findings
 
 ## Executive Summary
-The performance issue is NOT related to the keyboard implementation. Both `compat` and `hardware` keyboards have identical poor performance because the root cause is in the SC62015 CPU emulator's instruction decoding/execution pipeline.
+Current performance limitations are primarily in the SC62015 CPU emulator’s
+instruction decoding/execution pipeline (excessive memory reads and re‑decoding).
+The project now uses a single keyboard implementation (compat); previous hardware
+keyboard comparisons are historical and not relevant to current code paths.
 
 ## Key Findings
 
@@ -27,10 +30,9 @@ Address     Reads
 Total:      33 reads
 ```
 
-### 3. Performance Metrics
-- **Current**: ~29.6 instructions/second (with timeout after 10s)
-- **Expected**: ~2000+ instructions/second
-- **Slowdown**: 67x
+### 3. Performance Metrics (indicative)
+- Example observed (pre‑optimization): ~29.6 instructions/second with heavy re‑reads
+- Target (order of magnitude): ~2000+ instructions/second
 
 ### 4. Root Cause
 The issue is in the SC62015 emulator's `execute_instruction` pipeline:
@@ -53,14 +55,12 @@ The issue is in the SC62015 emulator's `execute_instruction` pipeline:
 - Decode once, execute once principle
 - Pass decoded instruction data through the pipeline instead of re-fetching
 
-## Keyboard Implementation Status
-The hardware keyboard implementation itself is fine:
-- Optimizations already implemented (caching, fast paths)
-- Performance: ~5 million KIL reads/second when tested in isolation
-- The issue was misattributed due to the CPU emulator bottleneck
+## Keyboard
+The emulator uses a single compat keyboard implementation with debounced press/release.
+Keyboard code is not the performance bottleneck; focus should remain on CPU pipeline
+optimizations listed above.
 
 ## Next Steps
 1. Fix the instruction decoding/execution pipeline in SC62015 emulator
 2. Implement byte caching in FetchDecoder
-3. Re-test both keyboard implementations after CPU fix
-4. Hardware keyboard can become default once CPU performance is fixed
+3. Re-test overall performance after CPU fixes

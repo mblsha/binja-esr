@@ -84,12 +84,11 @@ def initialize_emulator():
 
     # Create emulator instance
     with emulator_lock:
-        # Use hardware-accurate keyboard for the web UI to match ROM scanning
+        # Use compat keyboard implementation
         emulator = PCE500Emulator(
             trace_enabled=False,
             perfetto_trace=False,
             save_lcd_on_exit=False,
-            keyboard_impl="hardware",
         )
         emulator.load_rom(rom_portion)
 

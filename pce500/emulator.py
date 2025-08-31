@@ -23,7 +23,6 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
-from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
@@ -67,7 +66,7 @@ class PCE500Emulator:
         trace_enabled: bool = False,
         perfetto_trace: bool = False,
         save_lcd_on_exit: bool = True,
-        keyboard_impl: str = "compat",
+        # Single keyboard implementation (compat); parameter removed
         enable_new_tracing: bool = False,
         trace_path: str = "pc-e500.perfetto-trace",
         disasm_trace: bool = False,
@@ -101,13 +100,9 @@ class PCE500Emulator:
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
 
-        # Select keyboard implementation.
-        # Default is 'compat' to preserve CLI/tests behavior and performance.
-        if keyboard_impl == "hardware":
-            self.keyboard = KeyboardHardware(self.memory.read_byte)
-        else:
-            # Pass memory accessor so compat can honor KSD (LCC bit)
-            self.keyboard = KeyboardCompat(self.memory.read_byte)
+        # Keyboard implementation: compat only (hardware impl removed)
+        # Pass memory accessor so compat can honor KSD (LCC bit)
+        self.keyboard = KeyboardCompat(self.memory.read_byte)
         self.memory.add_overlay(
             MemoryOverlay(
                 start=INTERNAL_MEMORY_START + KOL,
@@ -120,18 +115,7 @@ class PCE500Emulator:
             )
         )
 
-        # Add LCC register overlay for hardware keyboard (if applicable)
-        if keyboard_impl == "hardware":
-            self.memory.add_overlay(
-                MemoryOverlay(
-                    start=INTERNAL_MEMORY_START + 0xFE,  # LCC register
-                    end=INTERNAL_MEMORY_START + 0xFE,
-                    name="lcc_register",
-                    read_only=False,
-                    write_handler=self._lcc_write_handler,
-                    perfetto_thread="I/O",
-                )
-            )
+        # Note: LCC overlay not needed for compat keyboard
 
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
@@ -816,11 +800,8 @@ class PCE500Emulator:
                     return result
             except Exception:
                 pass
-        # Support both compat and hardware keyboard APIs
-        if hasattr(self.keyboard, "read_register"):
-            result = self.keyboard.read_register(offset)
-        else:
-            result = self.keyboard.handle_register_read(offset)
+        # Single keyboard implementation: use compat handler
+        result = self.keyboard.handle_register_read(offset)
 
         # Trace keyboard matrix I/O
         if new_tracer.enabled and offset == KIL:
@@ -865,7 +846,7 @@ class PCE500Emulator:
             new_tracer.instant(
                 "I/O", "KB_ColumnStrobe", {"addr": offset, "value": value & 0xFF}
             )
-        # Monitor strobe count on changes and track active columns correctly (active-low)
+        # Monitor strobe count on changes and track active columns
         try:
             if offset == KOL:
                 if getattr(self.keyboard, "kol_value", None) != (value & 0xFF):
@@ -876,7 +857,7 @@ class PCE500Emulator:
                     self._kb_strobe_count += 1
                 self._last_koh = value & 0xFF
 
-            # Update histogram using hardware keyboard's active column calculation
+            # Update histogram using keyboard's active column calculation
             active_cols = []
             if hasattr(self.keyboard, "get_active_columns"):
                 active_cols = list(self.keyboard.get_active_columns())
@@ -904,22 +885,10 @@ class PCE500Emulator:
                             break
         except Exception:
             pass
-        # Support both compat and hardware keyboard APIs
-        if hasattr(self.keyboard, "write_register"):
-            self.keyboard.write_register(offset, value)
-        else:
-            self.keyboard.handle_register_write(offset, value)
+        # Single keyboard implementation: use compat handler
+        self.keyboard.handle_register_write(offset, value)
 
-    def _lcc_write_handler(
-        self, address: int, value: int, cpu_pc: Optional[int] = None
-    ) -> None:
-        """Handle LCC register write for hardware keyboard."""
-        offset = address - INTERNAL_MEMORY_START
-        self._track_imem_access(offset, "writes", cpu_pc)
-
-        # Invalidate KSD cache in hardware keyboard
-        if hasattr(self.keyboard, "invalidate_ksd_cache"):
-            self.keyboard.invalidate_ksd_cache()
+    # Note: LCC write handler not required with single compat keyboard
 
     def _dump_internal_memory(self, pc: int):
         internal_mem = self.memory.get_internal_memory_bytes()

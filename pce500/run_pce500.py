@@ -22,7 +22,6 @@ def run_emulator(
     perfetto_trace=True,
     print_stats=True,
     timeout_secs: float = 10.0,
-    keyboard_impl: str = "compat",
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
     # Optional auto key-press controls
@@ -63,7 +62,6 @@ def run_emulator(
         trace_enabled=False,
         perfetto_trace=perfetto_trace,
         save_lcd_on_exit=save_lcd,
-        keyboard_impl=keyboard_impl,
         enable_new_tracing=new_perfetto,
         trace_path=trace_file,
         disasm_trace=disasm_trace,
@@ -380,7 +378,7 @@ def run_emulator(
         print(f"  Display on: {emu.lcd.display_on}")
         print(f"  Page: {emu.lcd.page}")
         print(f"  Column: {emu.lcd.column}")
-        # Keyboard/IRQ debug stats (hardware keyboard only)
+        # Keyboard/IRQ debug stats
         try:
             if hasattr(emu, "_kb_irq_count"):
                 print(f"\nKeyboard IRQs delivered: {getattr(emu, '_kb_irq_count', 0)}")
@@ -422,7 +420,7 @@ def run_emulator(
                         else 0
                     )
                     print(f"IMEM {reg}: reads={reads} writes={writes}")
-            # Print last observed keyboard scan state and strobe count (hardware keyboard)
+            # Print last observed keyboard scan state and strobe count
             if hasattr(emu, "_kil_read_count"):
                 print(
                     f"Keyboard reads: {getattr(emu, '_kil_read_count', 0)} last_cols={getattr(emu, '_last_kil_columns', [])} last KOL=0x{getattr(emu, '_last_kol', 0):02X} KOH=0x{getattr(emu, '_last_koh', 0):02X} strobe_writes={getattr(emu, '_kb_strobe_count', 0)}"
@@ -449,7 +447,6 @@ def main(
     no_dump=False,
     save_lcd=True,
     perfetto=True,
-    keyboard_impl="compat",
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
     profile_emulator=False,
@@ -489,7 +486,6 @@ def main(
         no_dump=no_dump,
         save_lcd=save_lcd,
         perfetto_trace=perfetto,
-        keyboard_impl=keyboard_impl,
         new_perfetto=new_perfetto,
         trace_file=trace_file,
         timeout_secs=timeout_secs,
@@ -585,12 +581,6 @@ if __name__ == "__main__":
         "--no-perfetto",
         action="store_true",
         help="Disable Perfetto tracing to isolate performance effects",
-    )
-    parser.add_argument(
-        "--keyboard",
-        choices=["compat", "hardware"],
-        default="compat",
-        help="Select keyboard implementation (default: compat)",
     )
     parser.add_argument(
         "--steps",
@@ -719,7 +709,6 @@ if __name__ == "__main__":
         no_dump=args.no_dump,
         save_lcd=not args.no_lcd,
         perfetto=not args.no_perfetto,
-        keyboard_impl=args.keyboard,
         new_perfetto=args.perfetto,
         trace_file=args.trace_file,
         profile_emulator=args.profile_emulator,
