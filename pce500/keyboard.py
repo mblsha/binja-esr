@@ -48,7 +48,9 @@ class PCE500KeyboardHandler(_CompatHandler):
                     if queued_key.release_reads >= queued_key.release_target_reads:
                         queued_key.active = False
                 # If fully complete (released and inactive), schedule removal
-                if queued_key.released and (queued_key.read_count >= queued_key.target_reads):
+                if queued_key.released and (
+                    queued_key.read_count >= queued_key.target_reads
+                ):
                     completed_keys.append(queued_key)
 
         for ck in completed_keys:
