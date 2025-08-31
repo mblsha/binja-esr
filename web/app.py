@@ -327,8 +327,23 @@ def handle_key():
                         f"Key press ignored (not mapped or already queued): {key_code}"
                     )
             elif action == "release":
-                emulator.release_key(key_code)
-                print(f"Key released: {key_code}")
+                # Ignore release if key isn't currently pressed to avoid noise from hover events
+                try:
+                    currently_pressed = set()
+                    if hasattr(emulator, "keyboard"):
+                        kb = emulator.keyboard
+                        if hasattr(kb, "pressed_keys"):
+                            currently_pressed = set(kb.pressed_keys)  # type: ignore[attr-defined]
+                        elif hasattr(kb, "get_pressed_keys"):
+                            currently_pressed = set(kb.get_pressed_keys())  # type: ignore[attr-defined]
+                    if key_code in currently_pressed:
+                        emulator.release_key(key_code)
+                        print(f"Key released: {key_code}")
+                    else:
+                        # Silently ignore spurious release
+                        pass
+                except Exception:
+                    emulator.release_key(key_code)
             else:
                 return jsonify({"error": f"Invalid action: {action}"}), 400
 
