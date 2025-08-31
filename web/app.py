@@ -504,8 +504,17 @@ def control_emulator():
             else:
                 initialize_emulator()
 
+            # Immediately start running after reset
+            emulator_state["is_running"] = True
             update_emulator_state()
-            return jsonify({"status": "reset"})
+            # Start background run loop
+            def _start_thread():
+                global emulator_thread
+                emulator_thread = threading.Thread(target=emulator_run_loop)
+                emulator_thread.start()
+
+            _start_thread()
+            return jsonify({"status": "reset", "is_running": True})
 
         else:
             return jsonify({"error": f"Unknown command: {command}"}), 400
