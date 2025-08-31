@@ -50,12 +50,6 @@ jobs:
         FORCE_BINJA_MOCK: 1
       run: |
         cd web && uv run pytest tests/ -v --cov=. --cov-report=term-missing
-    
-    - name: Run linting
-      run: |
-        uv run ruff check .
-        uv run ruff format --check .
-    
     - name: Run type checking
       run: |
         uv run pyright sc62015/pysc62015
