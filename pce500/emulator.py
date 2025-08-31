@@ -136,6 +136,11 @@ class PCE500Emulator:
         # Interrupt accounting (counts since last reset)
         self.irq_counts: Dict[str, int] = {"total": 0, "KEY": 0, "MTI": 0, "STI": 0}
         self.last_irq: Dict[str, Any] = {"src": None, "pc": None, "vector": None}
+        # Track IMR/ISR bit set/clear PCs (last few)
+        self.irq_bit_watch: Dict[str, Dict[int, Dict[str, list[int]]]] = {
+            "IMR": {i: {"set": [], "clear": []} for i in range(8)},
+            "ISR": {i: {"set": [], "clear": []} for i in range(8)},
+        }
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
             g_tracer.start_tracing("pc-e500.trace")
@@ -218,6 +223,10 @@ class PCE500Emulator:
         try:
             self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
             self.last_irq.update({"src": None, "pc": None, "vector": None})
+            self.irq_bit_watch = {
+                "IMR": {i: {"set": [], "clear": []} for i in range(8)},
+                "ISR": {i: {"set": [], "clear": []} for i in range(8)},
+            }
         except Exception:
             pass
 
@@ -806,9 +815,40 @@ class PCE500Emulator:
                     "pc": self.last_irq.get("pc"),
                     "vector": self.last_irq.get("vector"),
                 },
+                # Provide recent set/clear PCs for key bits of interest; full data remains on emulator
+                "watch": {
+                    "IMR": {
+                        7: self.irq_bit_watch.get("IMR", {}).get(7, {"set": [], "clear": []}),
+                        2: self.irq_bit_watch.get("IMR", {}).get(2, {"set": [], "clear": []}),
+                    },
+                    "ISR": {
+                        2: self.irq_bit_watch.get("ISR", {}).get(2, {"set": [], "clear": []}),
+                    },
+                },
             }
         except Exception:
             return {"total": 0, "by_source": {"KEY": 0, "MTI": 0, "STI": 0}, "last": {"src": None, "pc": None, "vector": None}}
+
+    def _record_irq_bit_watch(self, reg_name: str, prev_val: int, new_val: int, pc: int) -> None:
+        try:
+            table = self.irq_bit_watch.get(reg_name)
+            if not table:
+                return
+            for bit in range(8):
+                prev_b = (prev_val >> bit) & 1
+                new_b = (new_val >> bit) & 1
+                if prev_b == new_b:
+                    continue
+                action = "set" if new_b == 1 else "clear"
+                lst = table[bit][action]
+                if lst and lst[-1] == pc:
+                    # coalesce consecutive entries from same PC
+                    continue
+                lst.append(pc)
+                if len(lst) > 10:
+                    lst.pop(0)
+        except Exception:
+            pass
 
     def release_key(self, key_code: str):
         if self.keyboard:

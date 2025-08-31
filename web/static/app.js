@@ -609,6 +609,25 @@ async function updateState() {
                 set('irq-mti', (by.MTI ?? 0).toString());
                 set('irq-sti', (by.STI ?? 0).toString());
                 set('irq-last', lastText);
+                // IMR/ISR flags at poll time
+                set('irq-irm', (ints.irm ?? 0).toString());
+                set('irq-keym', (ints.keym ?? 0).toString());
+                set('irq-isr-key', (ints.isr_key ?? 0).toString());
+                set('irq-pending', (ints.pending ? 'true' : 'false'));
+
+                // Interrupt Bit Watch: IMR.7, IMR.2, ISR.2
+                const w = ints.watch || {};
+                const imr = w.IMR || {};
+                const isr = w.ISR || {};
+                const fmtList = (arr) => (Array.isArray(arr) && arr.length)
+                    ? arr.map(pc => '0x' + Number(pc).toString(16).padStart(6, '0').toUpperCase()).join(' ')
+                    : '-';
+                set('irqw-imr-7-set', fmtList((imr[7] || {}).set));
+                set('irqw-imr-7-clear', fmtList((imr[7] || {}).clear));
+                set('irqw-imr-2-set', fmtList((imr[2] || {}).set));
+                set('irqw-imr-2-clear', fmtList((imr[2] || {}).clear));
+                set('irqw-isr-2-set', fmtList((isr[2] || {}).set));
+                set('irqw-isr-2-clear', fmtList((isr[2] || {}).clear));
             } catch (e) {
                 // ignore UI update errors
             }
