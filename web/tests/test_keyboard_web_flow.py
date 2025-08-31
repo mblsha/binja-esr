@@ -82,7 +82,9 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
 
     # Baseline KEY IRQ count
     state = _get_json(client, "/api/v1/state")
-    base_key = int(((state.get("interrupts") or {}).get("by_source") or {}).get("KEY", 0))
+    base_key = int(
+        ((state.get("interrupts") or {}).get("by_source") or {}).get("KEY", 0)
+    )
 
     # Press PF1, then enable IRM|KEYM to deliver the armed key IRQ
     _post_json(client, "/api/v1/key", {"key_code": "KEY_F1", "action": "press"})

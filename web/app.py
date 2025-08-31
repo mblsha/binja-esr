@@ -176,15 +176,23 @@ def update_emulator_state():
             "last_update_time": current_time,
             "last_update_instructions": current_instructions,
             # Interrupt stats (if available) + current IMR/ISR bits
-            "interrupts": (emulator.get_interrupt_stats() if hasattr(emulator, "get_interrupt_stats") else None),
+            "interrupts": (
+                emulator.get_interrupt_stats()
+                if hasattr(emulator, "get_interrupt_stats")
+                else None
+            ),
         }
     )
     # Enrich interrupts with IMR/ISR flag info
     try:
         ints = emulator_state.get("interrupts") or {}
         INTERNAL_MEMORY_START = 0x100000
-        imr_val = emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF
-        isr_val = emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
+        imr_val = (
+            emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF
+        )
+        isr_val = (
+            emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
+        )
         irm = 1 if (imr_val & 0x80) else 0
         keym = 1 if (imr_val & 0x04) else 0
         isr_key = 1 if (isr_val & 0x04) else 0
@@ -223,7 +231,9 @@ def get_ocr_text():
     try:
         import pytesseract  # type: ignore
     except Exception as e:
-        return jsonify({"ok": False, "error": f"pytesseract not available: {e}", "text": ""}), 200
+        return jsonify(
+            {"ok": False, "error": f"pytesseract not available: {e}", "text": ""}
+        ), 200
 
     try:
         im = img.convert("L")
