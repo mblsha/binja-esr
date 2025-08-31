@@ -178,7 +178,11 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
     assert u_after - u_before == sc.expect_u_delta
 
     # Validate HALT cancellation semantics
-    assert emu.cpu.state.halted is (not sc.expect_halt_canceled) if False else emu.cpu.state.halted == (not sc.expect_halt_canceled)
+    assert (
+        emu.cpu.state.halted is (not sc.expect_halt_canceled)
+        if False
+        else emu.cpu.state.halted == (not sc.expect_halt_canceled)
+    )
 
     # Delivery vs masking: last_irq should be set only when delivered
     delivered = sc.expect_isr_mask is not None and sc.trigger is not Trigger.NONE
