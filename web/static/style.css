@@ -739,10 +739,15 @@ h1 {
 
 /* Compact debug styling to shrink fonts/padding across debug panels */
 :root {
-    --debug-font-size: 6px;
-    --debug-font-size-small: 6px;
-    --debug-pad-y: 1px;
-    --debug-pad-x: 4px;
+    --debug-font-size: 10px;
+    --debug-font-size-small: 9px;
+    --debug-pad-y: 2px;
+    --debug-pad-x: 6px;
+}
+
+/* Instruction History specifically at 10px for readability */
+.debug-compact .history-list {
+    font-size: 10px;
 }
 
 .debug-compact .history-list {
