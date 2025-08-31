@@ -10,6 +10,7 @@ This file verifies:
 from dataclasses import dataclass
 from textwrap import dedent
 import pytest
+from enum import Enum
 
 from sc62015.pysc62015.sc_asm import Assembler
 from sc62015.pysc62015.emulator import RegisterName
@@ -19,6 +20,12 @@ from pce500 import PCE500Emulator
 
 
 INTERNAL_MEMORY_START = 0x100000
+
+
+class Trigger(Enum):
+    KEY_F1 = "KEY_F1"
+    KEY_ON = "KEY_ON"
+    NONE = "NONE"  # No trigger; CPU should remain halted
 
 
 @dataclass(frozen=True)
@@ -73,7 +80,7 @@ def assemble_and_load(emu: PCE500Emulator, cfg: ProgramConfig) -> None:
 class Scenario:
     name: str
     imr: int
-    trigger: str  # 'KEY_F1' or 'KEY_ON'
+    trigger: Trigger  # which source to trigger (or NONE)
     expect_u_delta: int
     expect_isr_mask: int | None  # pushed ISR value when interrupt delivered
 
@@ -82,23 +89,30 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="key_unmasked",
         imr=0x80 | 0x04,  # IRM=1, KEYM=1
-        trigger="KEY_F1",
+        trigger=Trigger.KEY_F1,
         expect_u_delta=-2,
         expect_isr_mask=0x04,  # ISR[2]
     ),
     Scenario(
         name="key_masked",
         imr=0x80,  # IRM=1, KEYM=0 → HALT cancels but no interrupt delivery
-        trigger="KEY_F1",
+        trigger=Trigger.KEY_F1,
         expect_u_delta=0,
         expect_isr_mask=None,
     ),
     Scenario(
         name="on_unmasked",
         imr=0x80 | 0x08,  # IRM=1, ONKM=1
-        trigger="KEY_ON",
+        trigger=Trigger.KEY_ON,
         expect_u_delta=-2,
         expect_isr_mask=0x08,  # ISR[3]
+    ),
+    Scenario(
+        name="no_trigger_halts",
+        imr=0x80,  # IRM on (mask values irrelevant since no source)
+        trigger=Trigger.NONE,
+        expect_u_delta=0,
+        expect_isr_mask=None,
     ),
 ]
 
@@ -133,12 +147,21 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
         # Stack unchanged while halted
         assert emu.cpu.regs.get(RegisterName.U) == u_before
 
-    # Trigger specific source
-    assert emu.press_key(sc.trigger) is True
+    if sc.trigger is Trigger.NONE:
+        # With no trigger, CPU must remain halted and U unchanged
+        for _ in range(20):
+            emu.step()
+            assert emu.cpu.state.halted is True
+            assert emu.cpu.regs.get(RegisterName.U) == u_before
+        return
+    else:
+        # Trigger specific source
+        key_code = sc.trigger.value
+        assert emu.press_key(key_code) is True
 
-    # Step enough times to allow delivery (pending + entry)
-    for _ in range(20):
-        emu.step()
+        # Step enough times to allow delivery (pending + entry)
+        for _ in range(20):
+            emu.step()
 
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after - u_before == sc.expect_u_delta
