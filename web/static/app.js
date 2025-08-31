@@ -53,9 +53,85 @@ class PCAddress {
     }
 }
 
-let pollTimer = null;
 let isRunning = false;
-let ocrTimer = null;
+
+// Unified PollManager to orchestrate all polling tasks
+class PollManager {
+    constructor() {
+        this.tasks = new Map(); // name -> task
+        this.isRunning = false;
+    }
+    register(cfg) {
+        const task = {
+            name: cfg.name,
+            fn: cfg.fn,
+            // Either provide a fixed intervalMs, or split running/paused
+            intervalMs: cfg.intervalMs,
+            intervalMsRunning: cfg.intervalMsRunning,
+            intervalMsPaused: cfg.intervalMsPaused,
+            requiresRunning: !!cfg.requiresRunning,
+            immediate: cfg.immediate !== false,
+            timer: null,
+            busy: false,
+            currentInterval: null,
+        };
+        this.tasks.set(task.name, task);
+        this._maybeStart(task);
+    }
+    setRunning(running) {
+        this.isRunning = !!running;
+        for (const task of this.tasks.values()) {
+            this._maybeStart(task);
+        }
+    }
+    stopAll() {
+        for (const task of this.tasks.values()) this._stop(task);
+    }
+    _maybeStart(task) {
+        const shouldRun = !task.requiresRunning || this.isRunning;
+        const interval = this._effectiveInterval(task);
+        if (shouldRun) {
+            if (!task.timer) {
+                this._start(task, interval);
+            } else if (task.currentInterval !== interval) {
+                // Interval changed (e.g., switching between paused/running): restart timer
+                this._stop(task);
+                this._start(task, interval);
+            }
+        } else {
+            this._stop(task);
+        }
+    }
+    _start(task, interval) {
+        const invoke = async () => {
+            if (task.busy) return;
+            task.busy = true;
+            try { await task.fn(); } catch (e) { /* swallow */ }
+            task.busy = false;
+        };
+        task.currentInterval = interval;
+        if (task.immediate) invoke();
+        task.timer = setInterval(invoke, interval);
+    }
+    _stop(task) {
+        if (task.timer) {
+            clearInterval(task.timer);
+            task.timer = null;
+            task.currentInterval = null;
+        }
+    }
+    _effectiveInterval(task) {
+        // Prefer split intervals if provided
+        if (typeof task.intervalMsRunning === 'number' || typeof task.intervalMsPaused === 'number') {
+            return this.isRunning ? (task.intervalMsRunning ?? task.intervalMs ?? 1000)
+                                  : (task.intervalMsPaused ?? task.intervalMs ?? 1000);
+        }
+        // Fallback to fixed interval
+        return task.intervalMs ?? 1000;
+    }
+}
+
+const polls = new PollManager();
 
 // PC-E500 Keyboard Layout
 // Based on the physical keyboard layout of the Sharp PC-E500
@@ -201,8 +277,12 @@ document.addEventListener('DOMContentLoaded', () => {
     setupKeyboard();
     setupControls();
     setupLCDInteraction();
-    startPolling();
-    // Extra polling starts only when running (managed in updateState/handlers)
+    // Register polling tasks
+    polls.register({ name: 'state', fn: updateState, intervalMsRunning: POLL_INTERVAL, intervalMsPaused: 10000, requiresRunning: false });
+    polls.register({ name: 'ocr', fn: updateOcr, intervalMs: 500, requiresRunning: true });
+    polls.register({ name: 'imem', fn: updateRegisterWatch, intervalMs: 500, requiresRunning: true });
+    polls.register({ name: 'lcd', fn: updateLcdStats, intervalMs: 500, requiresRunning: true });
+    polls.register({ name: 'keys', fn: updateKeyQueue, intervalMs: 200, requiresRunning: true });
 });
 
 // Set up the virtual keyboard
@@ -327,10 +407,7 @@ async function handleRun() {
         if (response.ok) {
             isRunning = true;
             updateControlButtons();
-            startOcrPolling();
-            startRegisterWatchPolling();
-            startLcdStatsPolling();
-            startKeyQueuePolling();
+            polls.setRunning(true);
         }
     } catch (error) {
         console.error('Error starting emulator:', error);
@@ -348,10 +425,7 @@ async function handlePause() {
         if (response.ok) {
             isRunning = false;
             updateControlButtons();
-            stopOcrPolling();
-            stopRegisterWatchPolling();
-            stopLcdStatsPolling();
-            stopKeyQueuePolling();
+            polls.setRunning(false);
         }
     } catch (error) {
         console.error('Error pausing emulator:', error);
@@ -381,10 +455,7 @@ async function handleReset() {
         if (response.ok) {
             isRunning = false;
             updateControlButtons();
-            stopOcrPolling();
-            stopRegisterWatchPolling();
-            stopLcdStatsPolling();
-            stopKeyQueuePolling();
+            polls.setRunning(false);
         }
     } catch (error) {
         console.error('Error resetting emulator:', error);
@@ -519,18 +590,7 @@ async function updateOcr() {
     }
 }
 
-function startOcrPolling() {
-    if (ocrTimer) return;
-    updateOcr();
-    ocrTimer = setInterval(updateOcr, 500);
-}
-
-function stopOcrPolling() {
-    if (ocrTimer) {
-        clearInterval(ocrTimer);
-        ocrTimer = null;
-    }
-}
+// (OCR scheduling handled by PollManager)
 
 // Update emulator state from API
 async function updateState() {
@@ -651,22 +711,9 @@ async function updateState() {
         // Update running state
         isRunning = state.is_running || false;
         updateControlButtons();
-        // Manage OCR polling at ~2 Hz while running
-        if (isRunning && !ocrTimer) {
-            startOcrPolling();
-        } else if (!isRunning && ocrTimer) {
-            stopOcrPolling();
-        }
-        // Manage extra polling (register watch, LCD stats, key queue)
-        if (isRunning) {
-            if (!registerWatchTimer) startRegisterWatchPolling();
-            if (!lcdStatsTimer) startLcdStatsPolling();
-            if (!keyQueueTimer) startKeyQueuePolling();
-        } else {
-            if (registerWatchTimer) stopRegisterWatchPolling();
-            if (lcdStatsTimer) stopLcdStatsPolling();
-            if (keyQueueTimer) stopKeyQueuePolling();
-        }
+        // Inform PollManager to (re)configure required tasks
+        polls.setRunning(isRunning);
+        // Extra polling managed by PollManager
         
     } catch (error) {
         console.error('Error fetching state:', error);
@@ -866,35 +913,7 @@ function setupLCDInteraction() {
     });
 }
 
-// Start polling for register watch updates
-let registerWatchTimer = null;
-function startRegisterWatchPolling() {
-    // Poll less frequently than main state (every 500ms)
-    registerWatchTimer = setInterval(updateRegisterWatch, 500);
-    // Initial update
-    updateRegisterWatch();
-}
-function stopRegisterWatchPolling() {
-    if (registerWatchTimer) {
-        clearInterval(registerWatchTimer);
-        registerWatchTimer = null;
-    }
-}
-
-// Start polling for LCD statistics updates
-let lcdStatsTimer = null;
-function startLcdStatsPolling() {
-    // Poll less frequently than main state (every 500ms)
-    lcdStatsTimer = setInterval(updateLcdStats, 500);
-    // Initial update
-    updateLcdStats();
-}
-function stopLcdStatsPolling() {
-    if (lcdStatsTimer) {
-        clearInterval(lcdStatsTimer);
-        lcdStatsTimer = null;
-    }
-}
+// (PollManager handles scheduling for register watch and LCD stats)
 
 // Register descriptions for tooltips
 const REGISTER_DESCRIPTIONS = {
@@ -1039,19 +1058,7 @@ async function updateLcdStats() {
 }
 
 // Start polling for key queue updates
-let keyQueueTimer = null;
-function startKeyQueuePolling() {
-    // Poll every 200ms for responsive key feedback
-    keyQueueTimer = setInterval(updateKeyQueue, 200);
-    // Initial update
-    updateKeyQueue();
-}
-function stopKeyQueuePolling() {
-    if (keyQueueTimer) {
-        clearInterval(keyQueueTimer);
-        keyQueueTimer = null;
-    }
-}
+// (PollManager handles scheduling for key queue)
 
 // Update key queue display
 async function updateKeyQueue() {
