@@ -291,10 +291,16 @@ class PCE500Emulator:
                             else "KEY"
                         )
                         # Increment counts at delivery time
-                        self.irq_counts["total"] = int(self.irq_counts.get("total", 0)) + 1
+                        self.irq_counts["total"] = (
+                            int(self.irq_counts.get("total", 0)) + 1
+                        )
                         if src in ("KEY", "MTI", "STI"):
                             self.irq_counts[src] = int(self.irq_counts.get(src, 0)) + 1
-                        self.last_irq = {"src": src, "pc": cur_pc, "vector": vector_addr}
+                        self.last_irq = {
+                            "src": src,
+                            "pc": cur_pc,
+                            "vector": vector_addr,
+                        }
                     except Exception:
                         pass
                     # Debug/trace: note interrupt delivery
@@ -818,18 +824,30 @@ class PCE500Emulator:
                 # Provide recent set/clear PCs for key bits of interest; full data remains on emulator
                 "watch": {
                     "IMR": {
-                        7: self.irq_bit_watch.get("IMR", {}).get(7, {"set": [], "clear": []}),
-                        2: self.irq_bit_watch.get("IMR", {}).get(2, {"set": [], "clear": []}),
+                        7: self.irq_bit_watch.get("IMR", {}).get(
+                            7, {"set": [], "clear": []}
+                        ),
+                        2: self.irq_bit_watch.get("IMR", {}).get(
+                            2, {"set": [], "clear": []}
+                        ),
                     },
                     "ISR": {
-                        2: self.irq_bit_watch.get("ISR", {}).get(2, {"set": [], "clear": []}),
+                        2: self.irq_bit_watch.get("ISR", {}).get(
+                            2, {"set": [], "clear": []}
+                        ),
                     },
                 },
             }
         except Exception:
-            return {"total": 0, "by_source": {"KEY": 0, "MTI": 0, "STI": 0}, "last": {"src": None, "pc": None, "vector": None}}
+            return {
+                "total": 0,
+                "by_source": {"KEY": 0, "MTI": 0, "STI": 0},
+                "last": {"src": None, "pc": None, "vector": None},
+            }
 
-    def _record_irq_bit_watch(self, reg_name: str, prev_val: int, new_val: int, pc: int) -> None:
+    def _record_irq_bit_watch(
+        self, reg_name: str, prev_val: int, new_val: int, pc: int
+    ) -> None:
         try:
             table = self.irq_bit_watch.get(reg_name)
             if not table:

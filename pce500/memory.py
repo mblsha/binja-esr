@@ -325,9 +325,18 @@ class PCE500Memory:
                             # Interrupt bit watch for IMR/ISR
                             if reg_name in ("IMR", "ISR"):
                                 try:
-                                    if self._emulator and hasattr(self._emulator, "_record_irq_bit_watch") and effective_pc is not None:
+                                    if (
+                                        self._emulator
+                                        and hasattr(
+                                            self._emulator, "_record_irq_bit_watch"
+                                        )
+                                        and effective_pc is not None
+                                    ):
                                         self._emulator._record_irq_bit_watch(
-                                            reg_name, prev_val & 0xFF, value & 0xFF, int(effective_pc)
+                                            reg_name,
+                                            prev_val & 0xFF,
+                                            value & 0xFF,
+                                            int(effective_pc),
                                         )
                                 except Exception:
                                     pass
