@@ -83,6 +83,7 @@ class Scenario:
     trigger: Trigger  # which source to trigger (or NONE)
     expect_u_delta: int
     expect_isr_mask: int | None  # pushed ISR value when interrupt delivered
+    expect_halt_canceled: bool = True  # whether HALT should cancel after trigger
 
 
 SCENARIOS: list[Scenario] = [
@@ -99,6 +100,7 @@ SCENARIOS: list[Scenario] = [
         trigger=Trigger.KEY_F1,
         expect_u_delta=0,
         expect_isr_mask=None,
+        expect_halt_canceled=True,
     ),
     Scenario(
         name="on_unmasked",
@@ -108,11 +110,20 @@ SCENARIOS: list[Scenario] = [
         expect_isr_mask=0x08,  # ISR[3]
     ),
     Scenario(
+        name="on_masked",
+        imr=0x80,  # IRM=1, ONKM=0 → HALT cancels but no interrupt delivery
+        trigger=Trigger.KEY_ON,
+        expect_u_delta=0,
+        expect_isr_mask=None,
+        expect_halt_canceled=True,
+    ),
+    Scenario(
         name="no_trigger_halts",
         imr=0x80,  # IRM on (mask values irrelevant since no source)
         trigger=Trigger.NONE,
         expect_u_delta=0,
         expect_isr_mask=None,
+        expect_halt_canceled=False,
     ),
 ]
 
@@ -166,10 +177,20 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after - u_before == sc.expect_u_delta
 
-    if sc.expect_isr_mask is not None:
+    # Validate HALT cancellation semantics
+    assert emu.cpu.state.halted is (not sc.expect_halt_canceled) if False else emu.cpu.state.halted == (not sc.expect_halt_canceled)
+
+    # Delivery vs masking: last_irq should be set only when delivered
+    delivered = sc.expect_isr_mask is not None and sc.trigger is not Trigger.NONE
+
+    if delivered:
         # Top of U is ISR value; next is marker
         assert emu.memory.read_byte(u_after) & sc.expect_isr_mask == sc.expect_isr_mask
         assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
+        # Interrupt delivery recorded
+        assert emu.last_irq.get("src") is not None
     else:
         # Interrupt masked: handler not executed; HALT cancelled by ISR but no pushes
         assert u_after == u_before
+        # Interrupt not recorded
+        assert emu.last_irq.get("src") in (None, "")
