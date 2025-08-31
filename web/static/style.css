@@ -582,6 +582,33 @@ h1 {
     font-weight: bold;
 }
 
+/* Interrupt overview LEDs */
+.irq-bit-cell {
+    text-align: center;
+}
+.bit-led {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid #bdc3c7;
+    background-color: #ecf0f1; /* off */
+}
+.bit-led.on {
+    background-color: #27ae60; /* green when set */
+    border-color: #1e8449;
+}
+.bit-led.isr.on {
+    background-color: #e67e22; /* orange for ISR pending */
+    border-color: #d35400;
+}
+.bit-count {
+    display: block;
+    font-size: 10px;
+    color: #7f8c8d;
+    margin-top: 2px;
+}
+
 /* Responsive layout for smaller screens */
 @media (max-width: 1200px) {
     .lcd-stats-content {

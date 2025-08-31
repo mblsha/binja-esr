@@ -741,6 +741,44 @@ async function updateState() {
                     renderRows('IMR', (INTERRUPT_BITS.IMR || {}), (w.IMR || {}));
                     renderRows('ISR', (INTERRUPT_BITS.ISR || {}), (w.ISR || {}));
                 }
+
+                // Interrupt Overview LEDs (IMR/ISR live bits + counts)
+                const imrHex = (ints.imr || '0x00');
+                const isrHex = (ints.isr || '0x00');
+                const imrVal = parseInt(imrHex, 16) || 0;
+                const isrVal = parseInt(isrHex, 16) || 0;
+                const makeCell = (reg, bit, isSet) => {
+                    const cell = document.createElement('td');
+                    cell.className = 'irq-bit-cell';
+                    const info = (INTERRUPT_BITS[reg] || {})[bit] || { name: `b${bit}`, desc: '' };
+                    const led = document.createElement('span');
+                    led.className = 'bit-led' + (reg === 'ISR' ? ' isr' : '') + (isSet ? ' on' : '');
+                    led.title = `${reg}.${bit} (${info.name})` + (info.desc ? `\n${info.desc}` : '');
+                    cell.appendChild(led);
+                    if (reg === 'ISR') {
+                        const map = { 0: 'MTI', 1: 'STI', 2: 'KEY', 3: 'ONK', 4: 'TXR', 5: 'RXR', 6: 'EXI', 7: 'RES' };
+                        const key = map[bit];
+                        const count = (key && by[key]) ? by[key] : 0;
+                        const countEl = document.createElement('span');
+                        countEl.className = 'bit-count';
+                        countEl.textContent = count ? `×${count}` : '–';
+                        cell.appendChild(countEl);
+                    }
+                    return cell;
+                };
+                const imrRow = document.getElementById('irq-overview-imr-row');
+                const isrRow = document.getElementById('irq-overview-isr-row');
+                if (imrRow && isrRow) {
+                    // Clear existing bit cells (keep first label cell)
+                    while (imrRow.cells.length > 1) imrRow.deleteCell(1);
+                    while (isrRow.cells.length > 1) isrRow.deleteCell(1);
+                    for (let bit = 7; bit >= 0; bit--) {
+                        const imrSet = ((imrVal >> bit) & 1) === 1;
+                        const isrSet = ((isrVal >> bit) & 1) === 1;
+                        imrRow.appendChild(makeCell('IMR', bit, imrSet));
+                        isrRow.appendChild(makeCell('ISR', bit, isrSet));
+                    }
+                }
             } catch (e) {
                 // ignore UI update errors
             }
