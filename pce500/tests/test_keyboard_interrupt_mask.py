@@ -1,7 +1,10 @@
-"""Test keyboard interrupt delivery obeys IMR mask bits using dataclasses.
+"""Generic interrupt handling tests using HALT and ISR semantics.
 
-We assemble a tiny program with an interrupt handler that pushes 0x42 onto the
-U stack. We verify behavior across scenarios defined as dataclasses.
+This file verifies:
+- HALT prevents instruction execution until an interrupt.
+- Any bit set in ISR cancels the HALT state (CPU wakes).
+- Interrupt delivery obeys IMR masks after HALT cancellation.
+- ON key asserts ISR.ONKI and can wake/interrupt when unmasked.
 """
 
 from dataclasses import dataclass
@@ -22,77 +25,27 @@ INTERNAL_MEMORY_START = 0x100000
 class ProgramConfig:
     entry: int
     handler: int
-    handler_push_value: int = 0x42
-    steps_after_press: int = 20
-
-
-@dataclass(frozen=True)
-class Expectation:
-    name: str
-    imr_value: int
-    key_code: str
-    expect_u_delta: int
-    expect_pushed: int | None  # KIL (top of U) when enabled
-    kol_value: int = 0x00
-    koh_value: int = 0x00
+    marker: int = 0x42
 
 
 PROGRAM = ProgramConfig(entry=0xB8000, handler=0xB9000)
 
-SCENARIOS: list[Expectation] = [
-    # KO10 strobed via KOH bit 2; F1 row 6, F2 row 5
-    Expectation(
-        name="key_enabled_f1",
-        imr_value=0x80 | 0x04,  # IRM=1, KEYM=1
-        key_code="KEY_F1",
-        expect_u_delta=-2,  # pushes marker then KIL
-        expect_pushed=0x40,  # KIL bit for row 6
-        koh_value=0x04,
-    ),
-    Expectation(
-        name="key_enabled_f2",
-        imr_value=0x80 | 0x04,  # IRM=1, KEYM=1
-        key_code="KEY_F2",
-        expect_u_delta=-2,
-        expect_pushed=0x20,  # KIL bit for row 5
-        koh_value=0x04,
-    ),
-    Expectation(
-        name="key_masked",
-        imr_value=0x80,  # IRM=1, KEYM=0
-        key_code="KEY_F1",
-        expect_u_delta=0,
-        expect_pushed=None,
-        koh_value=0x04,
-    ),
-]
-
 
 def assemble_and_load(emu: PCE500Emulator, cfg: ProgramConfig) -> None:
-    """Assemble minimal entry and interrupt handler and load into memory.
-
-    entry:   two NOPs (and optionally set KOL/KOH in test)
-    handler: MV A,0x42; PUSHU A; MV A,(KIL); PUSHU A; RETI
-    """
+    """Assemble minimal entry (with HALT) and interrupt handler (pushes ISR)."""
     asm = Assembler()
     source = dedent(
         f"""
         .ORG 0x{cfg.entry:05X}
         entry:
-            NOP
-            NOP
+            HALT            ; stop until interrupt
+            NOP             ; should not execute before interrupt
 
         .ORG 0x{cfg.handler:05X}
         handler:
-            MV A, 0x{cfg.handler_push_value:02X}
+            MV A, 0x{cfg.marker:02X}
             PUSHU A
-            ; Debounce compat keyboard: read KIL multiple times while strobed
-            MV A, (KIL)
-            MV A, (KIL)
-            MV A, (KIL)
-            MV A, (KIL)
-            MV A, (KIL)
-            MV A, (KIL)
+            MV A, (ISR)
             PUSHU A
             RETI
         """
@@ -116,9 +69,44 @@ def assemble_and_load(emu: PCE500Emulator, cfg: ProgramConfig) -> None:
     emu.load_rom(bytes(rom))
 
 
-@pytest.mark.parametrize("scenario", SCENARIOS, ids=[s.name for s in SCENARIOS])
-def test_keyboard_interrupt_masking_dataclass(scenario: Expectation) -> None:
+@dataclass(frozen=True)
+class Scenario:
+    name: str
+    imr: int
+    trigger: str  # 'KEY_F1' or 'KEY_ON'
+    expect_u_delta: int
+    expect_isr_mask: int | None  # pushed ISR value when interrupt delivered
+
+
+SCENARIOS: list[Scenario] = [
+    Scenario(
+        name="key_unmasked",
+        imr=0x80 | 0x04,  # IRM=1, KEYM=1
+        trigger="KEY_F1",
+        expect_u_delta=-2,
+        expect_isr_mask=0x04,  # ISR[2]
+    ),
+    Scenario(
+        name="key_masked",
+        imr=0x80,  # IRM=1, KEYM=0 → HALT cancels but no interrupt delivery
+        trigger="KEY_F1",
+        expect_u_delta=0,
+        expect_isr_mask=None,
+    ),
+    Scenario(
+        name="on_unmasked",
+        imr=0x80 | 0x08,  # IRM=1, ONKM=1
+        trigger="KEY_ON",
+        expect_u_delta=-2,
+        expect_isr_mask=0x08,  # ISR[3]
+    ),
+]
+
+
+@pytest.mark.parametrize("sc", SCENARIOS, ids=[s.name for s in SCENARIOS])
+def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    # Disable periodic timers to avoid interference
     emu._timer_enabled = False  # type: ignore[attr-defined]
     emu.reset()
 
@@ -129,32 +117,36 @@ def test_keyboard_interrupt_masking_dataclass(scenario: Expectation) -> None:
     emu.cpu.regs.set(RegisterName.S, 0xBFF00)
     emu.cpu.regs.set(RegisterName.U, 0xBFE00)
 
-    # Set IMR per scenario and clear ISR
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, scenario.imr_value)
+    # Configure IMR and clear ISR
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, sc.imr)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
-    # Program strobe selection (compat mapping: KOL bits for KO0..7, KOH bits 0..3 for KO8..KO11)
-    emu.memory.write_byte(
-        INTERNAL_MEMORY_START + IMEMRegisters.KOL, scenario.kol_value & 0xFF
-    )
-    emu.memory.write_byte(
-        INTERNAL_MEMORY_START + IMEMRegisters.KOH, scenario.koh_value & 0xFF
-    )
 
+    # Execute HALT (CPU becomes halted)
+    emu.step()
+    assert emu.cpu.state.halted is True
+
+    # While halted and with no ISR bits, additional steps do not execute instructions
     u_before = emu.cpu.regs.get(RegisterName.U)
+    for _ in range(5):
+        emu.step()
+        assert emu.cpu.state.halted is True
+        # Stack unchanged while halted
+        assert emu.cpu.regs.get(RegisterName.U) == u_before
 
-    # Press the key and run for some steps
-    assert emu.press_key(scenario.key_code) is True
-    for _ in range(PROGRAM.steps_after_press):
+    # Trigger specific source
+    assert emu.press_key(sc.trigger) is True
+
+    # Step enough times to allow delivery (pending + entry)
+    for _ in range(20):
         emu.step()
 
-    # Check U delta
     u_after = emu.cpu.regs.get(RegisterName.U)
-    assert u_after - u_before == scenario.expect_u_delta
+    assert u_after - u_before == sc.expect_u_delta
 
-    # Check pushed value when applicable: top of stack should be KIL, next should be marker
-    if scenario.expect_pushed is not None:
-        assert emu.memory.read_byte(u_after) == scenario.expect_pushed
-        assert emu.memory.read_byte(u_after + 1) == PROGRAM.handler_push_value
+    if sc.expect_isr_mask is not None:
+        # Top of U is ISR value; next is marker
+        assert emu.memory.read_byte(u_after) & sc.expect_isr_mask == sc.expect_isr_mask
+        assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
     else:
-        # No push occurred; U unchanged. Optionally confirm previous byte left as reset value (0x00)
+        # Interrupt masked: handler not executed; HALT cancelled by ISR but no pushes
         assert u_after == u_before

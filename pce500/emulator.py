@@ -32,6 +32,7 @@ class IRQSource(Enum):
     MTI = 0  # Main timer interrupt → ISR bit 0
     STI = 1  # Sub timer interrupt  → ISR bit 1
     KEY = 2  # Keyboard interrupt   → ISR bit 2
+    ONK = 3  # On-key interrupt     → ISR bit 3
 
 
 # Define constants locally to avoid heavy imports
@@ -236,6 +237,28 @@ class PCE500Emulator:
         try:
             if self._timer_enabled:
                 self._tick_timers()
+        except Exception:
+            pass
+        # Honor HALT: do not execute instructions while halted. Any ISR bit cancels HALT.
+        try:
+            if getattr(self.cpu.state, "halted", False):
+                isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
+                if isr_val_chk != 0:
+                    # Cancel HALT and arm a pending interrupt; infer a plausible source
+                    self.cpu.state.halted = False
+                    for b in (IRQSource.MTI.value, IRQSource.STI.value, IRQSource.KEY.value, IRQSource.ONK.value):
+                        if isr_val_chk & (1 << b):
+                            self._irq_source = IRQSource(b)
+                            break
+                    setattr(self, "_irq_pending", True)
+                else:
+                    # Remain halted; model passage of one instruction worth of time
+                    try:
+                        self.instruction_count += 1
+                    except Exception:
+                        pass
+                    return True
         except Exception:
             pass
         # Check for pending synthetic interrupt before executing next instruction
@@ -728,6 +751,18 @@ class PCE500Emulator:
                 g_tracer.trace_instant("CPU", "jump", trace_data)
 
     def press_key(self, key_code: str) -> bool:
+        # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ
+        if key_code == "KEY_ON":
+            try:
+                self._set_isr_bits(1 << IRQSource.ONK.value)
+                setattr(self, "_irq_pending", True)
+                self._irq_source = IRQSource.ONK
+            except Exception:
+                pass
+            if new_tracer.enabled:
+                new_tracer.instant("I/O", "KeyPress", {"key": key_code})
+            return True
+
         result = self.keyboard.press_key(key_code) if self.keyboard else False
         # Arm an interrupt eagerly in hardware mode to ensure delivery
         try:

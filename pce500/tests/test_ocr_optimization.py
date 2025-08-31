@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from PIL import Image, ImageOps, ImageFilter
+import pytest
 import pytesseract
 
 
@@ -150,6 +151,7 @@ def ocr_image(
     return text, im
 
 
+@pytest.mark.timeout(300)
 def test_ocr_configurations():
     """
     Test various OCR configurations on lcd_display.png and find the best one.
@@ -350,6 +352,7 @@ def test_ocr_configurations():
                     print(f"  Line {i}: '{line}' ✓")
 
 
+@pytest.mark.timeout(60)
 def test_single_configuration():
     """Quick test with default configuration."""
     test_image = "lcd_display.png"
@@ -395,6 +398,7 @@ def test_single_configuration():
             print(f"  Recognized: '{recognized}'")
 
 
+@pytest.mark.timeout(120)
 def test_best_configurations():
     """Test only the best-performing configurations based on initial analysis."""
     # Expected text (4 lines with second line empty)

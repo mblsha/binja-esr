@@ -461,33 +461,35 @@ def control_emulator():
 
     command = data["command"]
 
+    # We'll do minimal critical sections to avoid deadlocks with the run loop
+    join_needed = False
+    thread_to_join = None
+    response = None
     with emulator_lock:
         if emulator is None and command != "reset":
-            return jsonify({"error": "Emulator not initialized"}), 500
-
-        if command == "run":
+            response = (jsonify({"error": "Emulator not initialized"}), 500)
+        elif command == "run":
             if not emulator_state["is_running"]:
                 emulator_state["is_running"] = True
                 emulator_thread = threading.Thread(target=emulator_run_loop)
                 emulator_thread.start()
-            return jsonify({"status": "running"})
-
+            response = jsonify({"status": "running"})
         elif command == "pause":
             emulator_state["is_running"] = False
             # Clear speed tracking
             emulator_state["speed_calc_time"] = None
             emulator_state["speed_calc_instructions"] = None
             if emulator_thread:
-                emulator_thread.join()
+                # Defer join until after releasing the lock to avoid deadlock
+                thread_to_join = emulator_thread
+                join_needed = True
                 emulator_thread = None
-            return jsonify({"status": "paused"})
-
+            response = jsonify({"status": "paused"})
         elif command == "step":
             if not emulator_state["is_running"]:
                 emulator.step()
                 update_emulator_state()
-            return jsonify({"status": "stepped"})
-
+            response = jsonify({"status": "stepped"})
         elif command == "reset":
             # Stop running if active
             emulator_state["is_running"] = False
@@ -495,7 +497,9 @@ def control_emulator():
             emulator_state["speed_calc_time"] = None
             emulator_state["speed_calc_instructions"] = None
             if emulator_thread:
-                emulator_thread.join()
+                # Defer join to outside lock
+                thread_to_join = emulator_thread
+                join_needed = True
                 emulator_thread = None
 
             # Reset or reinitialize emulator
@@ -515,10 +519,13 @@ def control_emulator():
                 emulator_thread.start()
 
             _start_thread()
-            return jsonify({"status": "reset", "is_running": True})
-
+            response = jsonify({"status": "reset", "is_running": True})
         else:
-            return jsonify({"error": f"Unknown command: {command}"}), 400
+            response = (jsonify({"error": f"Unknown command: {command}"}), 400)
+    # Perform join outside the emulator_lock critical section
+    if join_needed and thread_to_join:
+        thread_to_join.join()
+    return response
 
 
 @app.route("/trace/start", methods=["POST"])
