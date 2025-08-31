@@ -75,48 +75,16 @@
             </div>
         </div>
         
-        <!-- Interrupt Overview Section -->
-        <div class="register-watch-section debug-compact">
-            <h2>Interrupt Overview</h2>
-            <div class="register-watch-content">
-                <table class="stats-table" id="irq-overview-table">
-                    <thead>
-                        <tr>
-                            <th>Register</th>
-                            <th>7</th>
-                            <th>6</th>
-                            <th>5</th>
-                            <th>4</th>
-                            <th>3</th>
-                            <th>2</th>
-                            <th>1</th>
-                            <th>0</th>
-                        </tr>
-                    </thead>
-                    <tbody id="irq-overview-body">
-                        <tr id="irq-overview-imr-row">
-                            <td>IMR</td>
-                            <td></td><td></td><td></td><td></td>
-                            <td></td><td></td><td></td><td></td>
-                        </tr>
-                        <tr id="irq-overview-isr-row">
-                            <td>ISR</td>
-                            <td></td><td></td><td></td><td></td>
-                            <td></td><td></td><td></td><td></td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Interrupt Bit Watch Section -->
+        <!-- Interrupt Bit Watch Section (with live LEDs + counts) -->
         <div class="register-watch-section debug-compact">
             <h2>Interrupt Bit Watch</h2>
             <div class="register-watch-content">
                 <table class="stats-table">
                     <thead>
                         <tr>
+                            <th></th>
                             <th>Register.Bit</th>
+                            <th>Count</th>
                             <th>Set (PCs)</th>
                             <th>Clear (PCs)</th>
                         </tr>

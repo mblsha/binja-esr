@@ -703,18 +703,42 @@ async function updateState() {
                 const tbody = document.getElementById('irq-bit-watch-body');
                 if (tbody) {
                     tbody.innerHTML = '';
+                    const imrHex = (ints.imr || '0x00');
+                    const isrHex = (ints.isr || '0x00');
+                    const imrVal = parseInt(imrHex, 16) || 0;
+                    const isrVal = parseInt(isrHex, 16) || 0;
+
                     const renderRows = (regName, bitsMap, watchMap) => {
                         // Order bits from high to low
                         const bits = Object.keys(bitsMap).map(Number).sort((a,b)=>b-a);
                         for (const bit of bits) {
                             const info = bitsMap[bit] || { name: `b${bit}`, desc: '' };
                             const row = document.createElement('tr');
+                            // LED cell
+                            const ledCell = document.createElement('td');
+                            ledCell.className = 'irq-bit-cell';
+                            const led = document.createElement('span');
+                            const isSet = regName === 'IMR' ? (((imrVal >> bit) & 1) === 1)
+                                                            : (((isrVal >> bit) & 1) === 1);
+                            led.className = 'bit-led' + (regName === 'ISR' ? ' isr' : '') + (isSet ? ' on' : '');
+                            led.title = `${regName}.${bit} (${info.name})` + (info.desc ? `\n${info.desc}` : '');
+                            ledCell.appendChild(led);
                             const labelCell = document.createElement('td');
                             labelCell.textContent = `${regName}.${bit} (${info.name})`;
                             if (info.desc) {
                                 labelCell.title = info.desc;
                                 labelCell.style.cursor = 'help';
                             }
+                            // Count cell (ISR shows delivered interrupts; IMR shows dash)
+                            const countCell = document.createElement('td');
+                            let countText = '–';
+                            if (regName === 'ISR') {
+                                const map = { 0: 'MTI', 1: 'STI', 2: 'KEY', 3: 'ONK', 4: 'TXR', 5: 'RXR', 6: 'EXI', 7: 'RES' };
+                                const key = map[bit];
+                                const count = (key && by[key]) ? by[key] : 0;
+                                countText = count ? `×${count}` : '0';
+                            }
+                            countCell.textContent = countText;
                             const setCell = document.createElement('td');
                             setCell.className = 'pc-list';
                             const clearCell = document.createElement('td');
@@ -732,7 +756,9 @@ async function updateState() {
                             };
                             addList(setCell, rec.set);
                             addList(clearCell, rec.clear);
+                            row.appendChild(ledCell);
                             row.appendChild(labelCell);
+                            row.appendChild(countCell);
                             row.appendChild(setCell);
                             row.appendChild(clearCell);
                             tbody.appendChild(row);
@@ -740,44 +766,6 @@ async function updateState() {
                     };
                     renderRows('IMR', (INTERRUPT_BITS.IMR || {}), (w.IMR || {}));
                     renderRows('ISR', (INTERRUPT_BITS.ISR || {}), (w.ISR || {}));
-                }
-
-                // Interrupt Overview LEDs (IMR/ISR live bits + counts)
-                const imrHex = (ints.imr || '0x00');
-                const isrHex = (ints.isr || '0x00');
-                const imrVal = parseInt(imrHex, 16) || 0;
-                const isrVal = parseInt(isrHex, 16) || 0;
-                const makeCell = (reg, bit, isSet) => {
-                    const cell = document.createElement('td');
-                    cell.className = 'irq-bit-cell';
-                    const info = (INTERRUPT_BITS[reg] || {})[bit] || { name: `b${bit}`, desc: '' };
-                    const led = document.createElement('span');
-                    led.className = 'bit-led' + (reg === 'ISR' ? ' isr' : '') + (isSet ? ' on' : '');
-                    led.title = `${reg}.${bit} (${info.name})` + (info.desc ? `\n${info.desc}` : '');
-                    cell.appendChild(led);
-                    if (reg === 'ISR') {
-                        const map = { 0: 'MTI', 1: 'STI', 2: 'KEY', 3: 'ONK', 4: 'TXR', 5: 'RXR', 6: 'EXI', 7: 'RES' };
-                        const key = map[bit];
-                        const count = (key && by[key]) ? by[key] : 0;
-                        const countEl = document.createElement('span');
-                        countEl.className = 'bit-count';
-                        countEl.textContent = count ? `×${count}` : '–';
-                        cell.appendChild(countEl);
-                    }
-                    return cell;
-                };
-                const imrRow = document.getElementById('irq-overview-imr-row');
-                const isrRow = document.getElementById('irq-overview-isr-row');
-                if (imrRow && isrRow) {
-                    // Clear existing bit cells (keep first label cell)
-                    while (imrRow.cells.length > 1) imrRow.deleteCell(1);
-                    while (isrRow.cells.length > 1) isrRow.deleteCell(1);
-                    for (let bit = 7; bit >= 0; bit--) {
-                        const imrSet = ((imrVal >> bit) & 1) === 1;
-                        const isrSet = ((isrVal >> bit) & 1) === 1;
-                        imrRow.appendChild(makeCell('IMR', bit, imrSet));
-                        isrRow.appendChild(makeCell('ISR', bit, isrSet));
-                    }
                 }
             } catch (e) {
                 // ignore UI update errors
