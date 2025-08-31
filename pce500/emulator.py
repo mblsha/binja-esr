@@ -247,7 +247,12 @@ class PCE500Emulator:
                 if isr_val_chk != 0:
                     # Cancel HALT and arm a pending interrupt; infer a plausible source
                     self.cpu.state.halted = False
-                    for b in (IRQSource.MTI.value, IRQSource.STI.value, IRQSource.KEY.value, IRQSource.ONK.value):
+                    for b in (
+                        IRQSource.MTI.value,
+                        IRQSource.STI.value,
+                        IRQSource.KEY.value,
+                        IRQSource.ONK.value,
+                    ):
                         if isr_val_chk & (1 << b):
                             self._irq_source = IRQSource(b)
                             break
