@@ -454,9 +454,10 @@ async function handleReset() {
         });
         
         if (response.ok) {
-            isRunning = false;
+            // Server resets and immediately unpauses; switch UI to running mode
+            isRunning = true;
             updateControlButtons();
-            polls.setRunning(false);
+            polls.setRunning(true);
         }
     } catch (error) {
         console.error('Error resetting emulator:', error);
