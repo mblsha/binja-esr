@@ -507,6 +507,7 @@ def control_emulator():
             # Immediately start running after reset
             emulator_state["is_running"] = True
             update_emulator_state()
+
             # Start background run loop
             def _start_thread():
                 global emulator_thread
