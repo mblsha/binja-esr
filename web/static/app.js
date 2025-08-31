@@ -558,6 +558,27 @@ async function updateState() {
                 speedElement.textContent = '-';
             }
         }
+
+        // Update interrupt stats
+        if (state.interrupts) {
+            try {
+                const ints = state.interrupts;
+                const by = ints.by_source || {};
+                const last = ints.last || {};
+                const fmtHex = (v, w) => (typeof v === 'number' ? '0x' + v.toString(16).padStart(w, '0').toUpperCase() : '-');
+                const lastText = (last.src ? last.src : '-') +
+                                (last.pc != null ? ` @ ${fmtHex(last.pc, 6)}` : '') +
+                                (last.vector != null ? ` → ${fmtHex(last.vector, 6)}` : '');
+                const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+                set('irq-total', (ints.total ?? 0).toString());
+                set('irq-key', (by.KEY ?? 0).toString());
+                set('irq-mti', (by.MTI ?? 0).toString());
+                set('irq-sti', (by.STI ?? 0).toString());
+                set('irq-last', lastText);
+            } catch (e) {
+                // ignore UI update errors
+            }
+        }
         
         // Update instruction history
         if (state.instruction_history) {

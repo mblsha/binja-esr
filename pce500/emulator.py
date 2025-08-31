@@ -132,6 +132,10 @@ class PCE500Emulator:
         self.start_time = time.time()
         self.trace_enabled = trace_enabled
         self.trace: Optional[list] = [] if trace_enabled else None
+
+        # Interrupt accounting (counts since last reset)
+        self.irq_counts: Dict[str, int] = {"total": 0, "KEY": 0, "MTI": 0, "STI": 0}
+        self.last_irq: Dict[str, Any] = {"src": None, "pc": None, "vector": None}
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
             g_tracer.start_tracing("pc-e500.trace")
@@ -210,6 +214,12 @@ class PCE500Emulator:
             self.trace.clear()
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
+        # Reset interrupt accounting
+        try:
+            self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
+            self.last_irq.update({"src": None, "pc": None, "vector": None})
+        except Exception:
+            pass
 
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
@@ -264,6 +274,20 @@ class PCE500Emulator:
                     self.cpu.regs.set(RegisterName.PC, vector_addr)
                     self._in_interrupt = True
                     self._irq_pending = False
+                    # Interrupt accounting
+                    try:
+                        src = (
+                            self._irq_source.name
+                            if isinstance(self._irq_source, IRQSource)
+                            else "KEY"
+                        )
+                        # Increment counts at delivery time
+                        self.irq_counts["total"] = int(self.irq_counts.get("total", 0)) + 1
+                        if src in ("KEY", "MTI", "STI"):
+                            self.irq_counts[src] = int(self.irq_counts.get(src, 0)) + 1
+                        self.last_irq = {"src": src, "pc": cur_pc, "vector": vector_addr}
+                    except Exception:
+                        pass
                     # Debug/trace: note interrupt delivery
                     try:
                         assert isinstance(self._irq_source, IRQSource)
@@ -757,6 +781,34 @@ class PCE500Emulator:
                 "TimerIRQ",
                 {"ic": ic, "src": self._irq_source.name},
             )
+
+    def get_interrupt_stats(self) -> Dict[str, Any]:
+        """Return interrupt counts and last delivery info.
+
+        Structure:
+            {
+              "total": int,
+              "by_source": {"KEY": int, "MTI": int, "STI": int},
+              "last": {"src": str|None, "pc": int|None, "vector": int|None},
+            }
+        """
+        try:
+            by_source = {
+                "KEY": int(self.irq_counts.get("KEY", 0)),
+                "MTI": int(self.irq_counts.get("MTI", 0)),
+                "STI": int(self.irq_counts.get("STI", 0)),
+            }
+            return {
+                "total": int(self.irq_counts.get("total", 0)),
+                "by_source": by_source,
+                "last": {
+                    "src": self.last_irq.get("src"),
+                    "pc": self.last_irq.get("pc"),
+                    "vector": self.last_irq.get("vector"),
+                },
+            }
+        except Exception:
+            return {"total": 0, "by_source": {"KEY": 0, "MTI": 0, "STI": 0}, "last": {"src": None, "pc": None, "vector": None}}
 
     def release_key(self, key_code: str):
         if self.keyboard:

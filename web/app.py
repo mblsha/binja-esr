@@ -173,6 +173,8 @@ def update_emulator_state():
             "instruction_history": list(emulator.instruction_history),
             "last_update_time": current_time,
             "last_update_instructions": current_instructions,
+            # Interrupt stats (if available)
+            "interrupts": emulator.get_interrupt_stats() if hasattr(emulator, "get_interrupt_stats") else None,
         }
     )
 
