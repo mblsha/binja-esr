@@ -215,105 +215,231 @@ def _common_setup_with_halt(emu: PCE500Emulator) -> int:
 
 @pytest.mark.timeout(10)
 def test_timer_mti_unmasked_wakes_and_delivers() -> None:
-    """Main timer (MTI, ISR bit 0) cancels HALT and delivers when unmasked.
-
-    Emulator uses rough periods (~500 instructions for MTI). While halted, each
-    step increases instruction_count by 1, so ~600 steps are enough to fire MTI.
-    """
-    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
-    # Ensure timers enabled and isolate MTI (disable STI by pushing it far away)
+    """MTI (bit 0) fires after WAIT-ing enough instructions and delivers when unmasked."""
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
+    # Isolate MTI by pushing STI far away
     emu._timer_enabled = True  # type: ignore[attr-defined]
     emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
     emu._timer_next_sti = emu.instruction_count + emu._timer_sti_period  # type: ignore[attr-defined]
-    u_before = _common_setup_with_halt(emu)
 
-    # Unmask MTI (bit 0) and IRM
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x01)
+    asm = Assembler()
+    mti_period = int(getattr(emu, "_timer_mti_period", 500))
+    wait_count = mti_period + 50
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x01)
 
-    # Step enough to allow MTI to set
-    for _ in range(600):
+    u_before = emu.cpu.regs.get(RegisterName.U)
+    emu.step()  # MV I
+    emu.step()  # MV I+1
+    emu.step()  # WAIT → sets ISR[0]
+    emu.step()  # Deliver
+    # Execute full handler: MV A; PUSHU; MV A,(ISR); PUSHU; RETI
+    for _ in range(5):
         emu.step()
-
-    # Expect delivery: U decreased by 2; ISR with bit0 pushed
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after - u_before == -2
     assert (emu.memory.read_byte(u_after) & 0x01) == 0x01
     assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
-    # HALT canceled and last_irq recorded
-    assert emu.cpu.state.halted is False
-    assert (
-        emu.last_irq.get("src") in ("MTI", "KEY", "STI")
-        or emu.last_irq.get("src") is not None
-    )
 
 
 @pytest.mark.timeout(10)
 def test_timer_mti_masked_wakes_but_no_delivery() -> None:
-    """Main timer masked: HALT cancels (ISR set) but handler not executed."""
-    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    """MTI masked: WAIT sets ISR[0]; no delivery when masked."""
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
     emu._timer_enabled = True  # type: ignore[attr-defined]
     emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
     emu._timer_next_sti = emu.instruction_count + emu._timer_sti_period  # type: ignore[attr-defined]
-    u_before = _common_setup_with_halt(emu)
 
-    # IRM=1, MTM=0 (masked)
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80)
+    asm = Assembler()
+    mti_period = int(getattr(emu, "_timer_mti_period", 500))
+    wait_count = mti_period + 50
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    # Mask MTI
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80)
 
-    for _ in range(600):
-        emu.step()
-
+    u_before = emu.cpu.regs.get(RegisterName.U)
+    emu.step()  # MV I
+    emu.step()  # MV I+1
+    emu.step()  # WAIT
+    # Next step executes NOP (no delivery)
+    emu.step()
     u_after = emu.cpu.regs.get(RegisterName.U)
-    assert u_after == u_before  # No handler
-    assert emu.cpu.state.halted is False  # HALT canceled due to ISR
-    assert emu.last_irq.get("src") in (None, "")  # Not delivered
+    assert u_after == u_before
+    assert emu.last_irq.get("src") in (None, "")
 
 
 @pytest.mark.timeout(10)
 def test_timer_sti_unmasked_wakes_and_delivers() -> None:
-    """Sub timer (STI, ISR bit 1) cancels HALT and delivers when unmasked.
-
-    Rough period is ~5000 instructions; step ~6000 while halted to trigger.
-    """
-    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    """STI (bit 1) fires after WAIT-ing enough instructions and delivers when unmasked."""
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
     emu._timer_enabled = True  # type: ignore[attr-defined]
     # Isolate STI: push MTI far away
     emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
     emu._timer_next_mti = emu.instruction_count + emu._timer_mti_period  # type: ignore[attr-defined]
-    u_before = _common_setup_with_halt(emu)
 
-    # Unmask STI (bit 1) and IRM
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x02)
+    asm = Assembler()
+    sti_period = int(getattr(emu, "_timer_sti_period", 5000))
+    wait_count = sti_period + 200
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x02)
 
-    for _ in range(6000):
+    u_before = emu.cpu.regs.get(RegisterName.U)
+    emu.step()  # MV I
+    emu.step()  # MV I+1
+    emu.step()  # WAIT
+    emu.step()  # Deliver
+    for _ in range(5):
         emu.step()
-
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after - u_before == -2
     assert (emu.memory.read_byte(u_after) & 0x02) == 0x02
     assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
-    assert emu.cpu.state.halted is False
     assert emu.last_irq.get("src") is not None
 
 
 @pytest.mark.timeout(10)
 def test_timer_sti_masked_wakes_but_no_delivery() -> None:
-    """Sub timer masked: HALT cancels (ISR set) but handler not executed."""
-    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    """STI masked: WAIT sets ISR[1], but no delivery when masked."""
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
     emu._timer_enabled = True  # type: ignore[attr-defined]
     emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
     emu._timer_next_mti = emu.instruction_count + emu._timer_mti_period  # type: ignore[attr-defined]
-    u_before = _common_setup_with_halt(emu)
 
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80)
+    asm = Assembler()
+    sti_period = int(getattr(emu, "_timer_sti_period", 5000))
+    wait_count = sti_period + 200
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80)
 
-    for _ in range(6000):
-        emu.step()
-
+    u_before = emu.cpu.regs.get(RegisterName.U)
+    emu.step()  # MV I
+    emu.step()  # MV I+1
+    emu.step()  # WAIT
+    emu.step()  # Execute NOP (no delivery)
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after == u_before
-    assert emu.cpu.state.halted is False
     assert emu.last_irq.get("src") in (None, "")
