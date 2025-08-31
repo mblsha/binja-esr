@@ -87,8 +87,10 @@ def initialize_emulator():
     # Create emulator instance
     with emulator_lock:
         # Use compat keyboard implementation
+        # Enable lightweight opcode/disassembly tracing so Instruction History populates
+        # (emulator maintains a bounded deque, so overhead remains reasonable)
         emulator = PCE500Emulator(
-            trace_enabled=False,
+            trace_enabled=True,
             perfetto_trace=False,
             save_lcd_on_exit=False,
         )
