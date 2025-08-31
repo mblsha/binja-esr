@@ -689,24 +689,58 @@ async function updateState() {
                 set('irq-sti', (by.STI ?? 0).toString());
                 set('irq-last', lastText);
                 // IMR/ISR flags at poll time
+                // Hex snapshots of IMR/ISR
+                set('irq-imr-hex', (ints.imr ?? '0x00').toString());
+                set('irq-isr-hex', (ints.isr ?? '0x00').toString());
+                // Selected convenience flags
                 set('irq-irm', (ints.irm ?? 0).toString());
                 set('irq-keym', (ints.keym ?? 0).toString());
                 set('irq-isr-key', (ints.isr_key ?? 0).toString());
                 set('irq-pending', (ints.pending ? 'true' : 'false'));
 
-                // Interrupt Bit Watch: IMR.7, IMR.2, ISR.2
+                // Interrupt Bit Watch: render all IMR/ISR bits with tooltips
                 const w = ints.watch || {};
-                const imr = w.IMR || {};
-                const isr = w.ISR || {};
-                const fmtList = (arr) => (Array.isArray(arr) && arr.length)
-                    ? arr.map(pc => '0x' + Number(pc).toString(16).padStart(6, '0').toUpperCase()).join(' ')
-                    : '-';
-                set('irqw-imr-7-set', fmtList((imr[7] || {}).set));
-                set('irqw-imr-7-clear', fmtList((imr[7] || {}).clear));
-                set('irqw-imr-2-set', fmtList((imr[2] || {}).set));
-                set('irqw-imr-2-clear', fmtList((imr[2] || {}).clear));
-                set('irqw-isr-2-set', fmtList((isr[2] || {}).set));
-                set('irqw-isr-2-clear', fmtList((isr[2] || {}).clear));
+                const tbody = document.getElementById('irq-bit-watch-body');
+                if (tbody) {
+                    tbody.innerHTML = '';
+                    const renderRows = (regName, bitsMap, watchMap) => {
+                        // Order bits from high to low
+                        const bits = Object.keys(bitsMap).map(Number).sort((a,b)=>b-a);
+                        for (const bit of bits) {
+                            const info = bitsMap[bit] || { name: `b${bit}`, desc: '' };
+                            const row = document.createElement('tr');
+                            const labelCell = document.createElement('td');
+                            labelCell.textContent = `${regName}.${bit} (${info.name})`;
+                            if (info.desc) {
+                                labelCell.title = info.desc;
+                                labelCell.style.cursor = 'help';
+                            }
+                            const setCell = document.createElement('td');
+                            setCell.className = 'pc-list';
+                            const clearCell = document.createElement('td');
+                            clearCell.className = 'pc-list';
+                            const rec = (watchMap[bit]) || { set: [], clear: [] };
+                            const addList = (cell, arr) => {
+                                if (Array.isArray(arr) && arr.length) {
+                                    arr.forEach(pc => {
+                                        const pcText = '0x' + Number(pc).toString(16).padStart(6, '0').toUpperCase();
+                                        cell.appendChild(PCAddress.create(pcText, { className: 'pc-address pc-list-item' }));
+                                    });
+                                } else {
+                                    cell.textContent = '-';
+                                }
+                            };
+                            addList(setCell, rec.set);
+                            addList(clearCell, rec.clear);
+                            row.appendChild(labelCell);
+                            row.appendChild(setCell);
+                            row.appendChild(clearCell);
+                            tbody.appendChild(row);
+                        }
+                    };
+                    renderRows('IMR', (INTERRUPT_BITS.IMR || {}), (w.IMR || {}));
+                    renderRows('ISR', (INTERRUPT_BITS.ISR || {}), (w.ISR || {}));
+                }
             } catch (e) {
                 // ignore UI update errors
             }
@@ -957,6 +991,30 @@ const REGISTER_DESCRIPTIONS = {
     'SCR': 'System Control Register - Timer control, buzzer, display',
     'LCC': 'LCD Contrast Control - Display contrast and key strobe',
     'SSR': 'System Status Register - ON key, reset flag, test inputs'
+};
+
+// Interrupt bit descriptions for tooltips
+const INTERRUPT_BITS = {
+    IMR: {
+        7: { name: 'IRM',  desc: 'Global interrupt mask: 0 disables all sources' },
+        6: { name: 'EXM',  desc: 'External IRQ mask (EXI enable)' },
+        5: { name: 'RXRM', desc: 'UART Receiver Ready interrupt mask' },
+        4: { name: 'TXRM', desc: 'UART Transmitter Ready interrupt mask' },
+        3: { name: 'ONKM', desc: 'ON-Key interrupt mask' },
+        2: { name: 'KEYM', desc: 'Key matrix interrupt mask (KI pins)' },
+        1: { name: 'STM',  desc: 'SEC (sub-CG) timer interrupt mask' },
+        0: { name: 'MTM',  desc: 'MSEC (main-CG) timer interrupt mask' }
+    },
+    ISR: {
+        7: { name: 'RES',  desc: 'Reserved (unused)' },
+        6: { name: 'EXI',  desc: 'External IRQ pending' },
+        5: { name: 'RXRI', desc: 'UART Receiver Ready pending' },
+        4: { name: 'TXRI', desc: 'UART Transmitter Ready pending' },
+        3: { name: 'ONKI', desc: 'ON-Key pending' },
+        2: { name: 'KEYI', desc: 'Key matrix pending (any enabled KI high)' },
+        1: { name: 'STI',  desc: 'SEC (sub-CG) timer pending' },
+        0: { name: 'MTI',  desc: 'MSEC (main-CG) timer pending' }
+    }
 };
 
 // Update register watch display
