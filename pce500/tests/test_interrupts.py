@@ -25,6 +25,8 @@ INTERNAL_MEMORY_START = 0x100000
 class Trigger(Enum):
     KEY_F1 = "KEY_F1"
     KEY_ON = "KEY_ON"
+    MTI = "MTI"  # Main timer
+    STI = "STI"  # Sub timer
     NONE = "NONE"  # No trigger; CPU should remain halted
 
 
@@ -165,7 +167,7 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
             assert emu.cpu.state.halted is True
             assert emu.cpu.regs.get(RegisterName.U) == u_before
         return
-    else:
+    elif sc.trigger in (Trigger.KEY_F1, Trigger.KEY_ON):
         # Trigger specific source
         key_code = sc.trigger.value
         assert emu.press_key(key_code) is True
@@ -173,6 +175,8 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
         # Step enough times to allow delivery (pending + entry)
         for _ in range(20):
             emu.step()
+    else:
+        pytest.skip("Timer triggers are validated in WAIT-based tests below")
 
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after - u_before == sc.expect_u_delta
@@ -197,6 +201,141 @@ def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
         # Interrupt masked: handler not executed; HALT cancelled by ISR but no pushes
         assert u_after == u_before
         # Interrupt not recorded
+        assert emu.last_irq.get("src") in (None, "")
+
+
+# -------- WAIT-based timer tests (dataclass-driven) --------
+
+
+@dataclass(frozen=True)
+class TimerScenario:
+    name: str
+    imr: int
+    trigger: Trigger  # MTI or STI
+    wait_extra: int  # extra instructions beyond period
+    expect_isr_mask: int | None
+
+
+TIMER_SCENARIOS: list[TimerScenario] = [
+    TimerScenario(
+        name="mti_unmasked",
+        imr=0x80 | 0x01,
+        trigger=Trigger.MTI,
+        wait_extra=50,
+        expect_isr_mask=0x01,
+    ),
+    TimerScenario(
+        name="mti_masked",
+        imr=0x80,
+        trigger=Trigger.MTI,
+        wait_extra=50,
+        expect_isr_mask=None,
+    ),
+    TimerScenario(
+        name="sti_unmasked",
+        imr=0x80 | 0x02,
+        trigger=Trigger.STI,
+        wait_extra=200,
+        expect_isr_mask=0x02,
+    ),
+    TimerScenario(
+        name="sti_masked",
+        imr=0x80,
+        trigger=Trigger.STI,
+        wait_extra=200,
+        expect_isr_mask=None,
+    ),
+]
+
+
+def _assemble_wait_program(emu: PCE500Emulator, wait_count: int) -> None:
+    asm = Assembler()
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    # Interrupt vector
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+
+
+def _isolate_other_timer(emu: PCE500Emulator, trigger: Trigger) -> None:
+    # Push the non-target timer far into the future to avoid cross-triggering
+    if trigger == Trigger.MTI:
+        emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
+        emu._timer_next_sti = emu.instruction_count + emu._timer_sti_period  # type: ignore[attr-defined]
+    elif trigger == Trigger.STI:
+        emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
+        emu._timer_next_mti = emu.instruction_count + emu._timer_mti_period  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("ts", TIMER_SCENARIOS, ids=[t.name for t in TIMER_SCENARIOS])
+@pytest.mark.timeout(10)
+def test_wait_timer_interrupts(ts: TimerScenario) -> None:
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    _isolate_other_timer(emu, ts.trigger)
+
+    # Determine period and compute wait_count
+    if ts.trigger == Trigger.MTI:
+        period = int(getattr(emu, "_timer_mti_period", 500))
+        mask_bit = 0x01
+    else:
+        period = int(getattr(emu, "_timer_sti_period", 5000))
+        mask_bit = 0x02
+    wait_count = period + ts.wait_extra
+
+    _assemble_wait_program(emu, wait_count)
+
+    # Init state
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, ts.imr)
+
+    u_before = emu.cpu.regs.get(RegisterName.U)
+
+    # Execute: MV I; WAIT; delivery; then either handler (5 steps) or NOP
+    emu.step()  # MV I
+    emu.step()  # WAIT
+    emu.step()  # Delivery attempt
+
+    if ts.expect_isr_mask is not None:
+        for _ in range(5):
+            emu.step()
+        u_after = emu.cpu.regs.get(RegisterName.U)
+        assert u_after - u_before == -2
+        assert (emu.memory.read_byte(u_after) & mask_bit) == mask_bit
+        assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
+        assert emu.last_irq.get("src") is not None
+    else:
+        # Masked: should execute NOP next, no delivery
+        emu.step()
+        u_after = emu.cpu.regs.get(RegisterName.U)
+        assert u_after == u_before
         assert emu.last_irq.get("src") in (None, "")
 
 
