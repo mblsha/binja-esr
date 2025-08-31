@@ -813,6 +813,22 @@ class PCE500Emulator:
                 "MTI": int(self.irq_counts.get("MTI", 0)),
                 "STI": int(self.irq_counts.get("STI", 0)),
             }
+            # Build watch table for all 8 bits of IMR/ISR
+            watch_imr: Dict[int, Dict[str, list[int]]] = {}
+            watch_isr: Dict[int, Dict[str, list[int]]] = {}
+            try:
+                for bit in range(8):
+                    watch_imr[bit] = self.irq_bit_watch.get("IMR", {}).get(
+                        bit, {"set": [], "clear": []}
+                    )
+                    watch_isr[bit] = self.irq_bit_watch.get("ISR", {}).get(
+                        bit, {"set": [], "clear": []}
+                    )
+            except Exception:
+                # Fallback to empty structure if any issue
+                watch_imr = {bit: {"set": [], "clear": []} for bit in range(8)}
+                watch_isr = {bit: {"set": [], "clear": []} for bit in range(8)}
+
             return {
                 "total": int(self.irq_counts.get("total", 0)),
                 "by_source": by_source,
@@ -821,22 +837,7 @@ class PCE500Emulator:
                     "pc": self.last_irq.get("pc"),
                     "vector": self.last_irq.get("vector"),
                 },
-                # Provide recent set/clear PCs for key bits of interest; full data remains on emulator
-                "watch": {
-                    "IMR": {
-                        7: self.irq_bit_watch.get("IMR", {}).get(
-                            7, {"set": [], "clear": []}
-                        ),
-                        2: self.irq_bit_watch.get("IMR", {}).get(
-                            2, {"set": [], "clear": []}
-                        ),
-                    },
-                    "ISR": {
-                        2: self.irq_bit_watch.get("ISR", {}).get(
-                            2, {"set": [], "clear": []}
-                        ),
-                    },
-                },
+                "watch": {"IMR": watch_imr, "ISR": watch_isr},
             }
         except Exception:
             return {

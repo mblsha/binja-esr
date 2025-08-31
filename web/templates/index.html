@@ -69,10 +69,12 @@
                             <tr><td>MTI:</td><td id="irq-mti">0</td></tr>
                             <tr><td>STI:</td><td id="irq-sti">0</td></tr>
                             <tr><td>Last:</td><td id="irq-last">-</td></tr>
-                            <tr><td>IRM (IMR.7):</td><td id="irq-irm">0</td></tr>
-                            <tr><td>KEYM (IMR.2):</td><td id="irq-keym">0</td></tr>
-                            <tr><td>ISR.KEY (ISR.2):</td><td id="irq-isr-key">0</td></tr>
-                            <tr><td>Pending:</td><td id="irq-pending">false</td></tr>
+                            <tr><td title="Current Interrupt Mask Register value">IMR (hex):</td><td id="irq-imr-hex">0x00</td></tr>
+                            <tr><td title="Current Interrupt Status Register value">ISR (hex):</td><td id="irq-isr-hex">0x00</td></tr>
+                            <tr><td title="Global interrupt mask - 0 disables all">IRM (IMR.7):</td><td id="irq-irm">0</td></tr>
+                            <tr><td title="Key Interrupt Mask - enables KI-based IRQs">KEYM (IMR.2):</td><td id="irq-keym">0</td></tr>
+                            <tr><td title="Key Interrupt Pending - any enabled KI high">ISR.KEY (ISR.2):</td><td id="irq-isr-key">0</td></tr>
+                            <tr><td title="An interrupt source is pending delivery">Pending:</td><td id="irq-pending">false</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -101,22 +103,8 @@
                             <th>Clear (PCs)</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        <tr>
-                            <td>IMR.7 (IRM)</td>
-                            <td id="irqw-imr-7-set">-</td>
-                            <td id="irqw-imr-7-clear">-</td>
-                        </tr>
-                        <tr>
-                            <td>IMR.2 (KEYM)</td>
-                            <td id="irqw-imr-2-set">-</td>
-                            <td id="irqw-imr-2-clear">-</td>
-                        </tr>
-                        <tr>
-                            <td>ISR.2 (KEY)</td>
-                            <td id="irqw-isr-2-set">-</td>
-                            <td id="irqw-isr-2-clear">-</td>
-                        </tr>
+                    <tbody id="irq-bit-watch-body">
+                        <!-- Filled dynamically with all IMR/ISR bits -->
                     </tbody>
                 </table>
             </div>
