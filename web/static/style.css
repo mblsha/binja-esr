@@ -768,6 +768,17 @@ h1 {
     font-size: var(--debug-font-size);
 }
 
+/* Also compact CPU State when the panel is marked debug-compact */
+.debug-compact.state-panel table,
+.debug-compact .state-panel table {
+    font-size: var(--debug-font-size);
+}
+
+.debug-compact.state-panel td,
+.debug-compact .state-panel td {
+    padding: 2px 6px;
+}
+
 .debug-compact .stats-table td,
 .debug-compact .stats-table th,
 .debug-compact #register-watch-table td,
