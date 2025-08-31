@@ -202,9 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupControls();
     setupLCDInteraction();
     startPolling();
-    startRegisterWatchPolling();
-    startLcdStatsPolling();
-    startKeyQueuePolling();
+    // Extra polling starts only when running (managed in updateState/handlers)
 });
 
 // Set up the virtual keyboard
@@ -329,6 +327,10 @@ async function handleRun() {
         if (response.ok) {
             isRunning = true;
             updateControlButtons();
+            startOcrPolling();
+            startRegisterWatchPolling();
+            startLcdStatsPolling();
+            startKeyQueuePolling();
         }
     } catch (error) {
         console.error('Error starting emulator:', error);
@@ -346,6 +348,10 @@ async function handlePause() {
         if (response.ok) {
             isRunning = false;
             updateControlButtons();
+            stopOcrPolling();
+            stopRegisterWatchPolling();
+            stopLcdStatsPolling();
+            stopKeyQueuePolling();
         }
     } catch (error) {
         console.error('Error pausing emulator:', error);
@@ -375,6 +381,10 @@ async function handleReset() {
         if (response.ok) {
             isRunning = false;
             updateControlButtons();
+            stopOcrPolling();
+            stopRegisterWatchPolling();
+            stopLcdStatsPolling();
+            stopKeyQueuePolling();
         }
     } catch (error) {
         console.error('Error resetting emulator:', error);
@@ -647,6 +657,16 @@ async function updateState() {
         } else if (!isRunning && ocrTimer) {
             stopOcrPolling();
         }
+        // Manage extra polling (register watch, LCD stats, key queue)
+        if (isRunning) {
+            if (!registerWatchTimer) startRegisterWatchPolling();
+            if (!lcdStatsTimer) startLcdStatsPolling();
+            if (!keyQueueTimer) startKeyQueuePolling();
+        } else {
+            if (registerWatchTimer) stopRegisterWatchPolling();
+            if (lcdStatsTimer) stopLcdStatsPolling();
+            if (keyQueueTimer) stopKeyQueuePolling();
+        }
         
     } catch (error) {
         console.error('Error fetching state:', error);
@@ -854,6 +874,12 @@ function startRegisterWatchPolling() {
     // Initial update
     updateRegisterWatch();
 }
+function stopRegisterWatchPolling() {
+    if (registerWatchTimer) {
+        clearInterval(registerWatchTimer);
+        registerWatchTimer = null;
+    }
+}
 
 // Start polling for LCD statistics updates
 let lcdStatsTimer = null;
@@ -862,6 +888,12 @@ function startLcdStatsPolling() {
     lcdStatsTimer = setInterval(updateLcdStats, 500);
     // Initial update
     updateLcdStats();
+}
+function stopLcdStatsPolling() {
+    if (lcdStatsTimer) {
+        clearInterval(lcdStatsTimer);
+        lcdStatsTimer = null;
+    }
 }
 
 // Register descriptions for tooltips
@@ -1013,6 +1045,12 @@ function startKeyQueuePolling() {
     keyQueueTimer = setInterval(updateKeyQueue, 200);
     // Initial update
     updateKeyQueue();
+}
+function stopKeyQueuePolling() {
+    if (keyQueueTimer) {
+        clearInterval(keyQueueTimer);
+        keyQueueTimer = null;
+    }
 }
 
 // Update key queue display
