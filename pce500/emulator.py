@@ -5,6 +5,7 @@ import time
 import os
 from pathlib import Path
 from typing import Optional, Dict, Any, Set, List
+from enum import Enum
 from collections import deque
 from datetime import datetime
 
@@ -25,6 +26,14 @@ from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .keyboard_hardware import KeyboardHardware
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
+
+
+class IRQSource(Enum):
+    # Enum values store ISR bit index directly
+    MTI = 0  # Main timer interrupt → ISR bit 0
+    STI = 1  # Sub timer interrupt  → ISR bit 1
+    KEY = 2  # Keyboard interrupt   → ISR bit 2
+
 
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
@@ -178,7 +187,7 @@ class PCE500Emulator:
         self._timer_sti_period = 5000  # STI (bit 1)
         self._timer_next_mti = self._timer_mti_period
         self._timer_next_sti = self._timer_sti_period
-        self._irq_source: Optional[str] = None
+        self._irq_source: Optional["IRQSource"] = None
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
 
@@ -264,20 +273,8 @@ class PCE500Emulator:
                     self.memory.write_bytes(1, s_new, imr_val)
                     self.cpu.regs.set(RegisterName.S, s_new)
                     self.memory.write_byte(imr_addr, imr_val & 0x7F)
-                    # Set ISR.KEYI bit to indicate keyboard interrupt
-                    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                    isr_val = self.memory.read_byte(isr_addr)
-                    # Preserve any previously set bits, keep KEYI if keyboard, else keep timer bits
-                    src = getattr(self, "_irq_source", None)
-                    if src == "KEY":
-                        isr_new = isr_val | 0x04  # KEYI bit 2
-                    elif src == "STI":
-                        isr_new = isr_val | 0x02  # STI bit 1
-                    elif src == "MTI":
-                        isr_new = isr_val | 0x01  # MTI bit 0
-                    else:
-                        isr_new = isr_val | 0x04
-                    self.memory.write_byte(isr_addr, isr_new)
+                    # ISR status was set by the triggering source (device/timer)
+                    # Do not modify ISR here; only deliver the interrupt.
                     # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
                     vector_addr = self.memory.read_long(0xFFFFA)
                     self.cpu.regs.set(RegisterName.PC, vector_addr)
@@ -285,13 +282,14 @@ class PCE500Emulator:
                     self._irq_pending = False
                     # Debug/trace: note interrupt delivery
                     try:
+                        assert isinstance(self._irq_source, IRQSource)
                         if self.trace is not None:
                             self.trace.append(
                                 (
                                     "irq",
                                     cur_pc,
                                     vector_addr,
-                                    getattr(self, "_irq_source", "?"),
+                                    self._irq_source.name,
                                 )
                             )
                         if new_tracer.enabled:
@@ -301,7 +299,7 @@ class PCE500Emulator:
                                 {
                                     "from": cur_pc,
                                     "to": vector_addr,
-                                    "src": getattr(self, "_irq_source", "?"),
+                                    "src": self._irq_source.name,
                                 },
                             )
                         self._kb_irq_count += 1
@@ -711,10 +709,17 @@ class PCE500Emulator:
         # Arm an interrupt eagerly in hardware mode to ensure delivery
         try:
             if self._kb_irq_enabled and result:
-                # Latch KEYI status bit and arm pending delivery
-                self._set_isr_bits(0x04)
+                # Arm pending and record source
                 setattr(self, "_irq_pending", True)
-                self._irq_source = "KEY"
+                self._irq_source = IRQSource.KEY
+                # Ensure ISR.KEY asserts for delivery if not already set, but avoid duplicates
+                try:
+                    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                    isr_val = self.memory.read_byte(isr_addr) & 0xFF
+                    if (isr_val & (1 << IRQSource.KEY.value)) == 0:
+                        self._set_isr_bits(1 << IRQSource.KEY.value)
+                except Exception:
+                    pass
         except Exception:
             pass
         # Optional debug: make a visible mark on LCD to confirm key handling
@@ -749,20 +754,25 @@ class PCE500Emulator:
         fired = False
         # Main timer (MTI, bit 0)
         if ic >= self._timer_next_mti:
-            self._set_isr_bits(0x01)
+            self._set_isr_bits(1 << IRQSource.MTI.value)
             self._timer_next_mti = ic + self._timer_mti_period
             self._irq_pending = True
-            self._irq_source = "MTI"
+            self._irq_source = IRQSource.MTI
             fired = True
         # Sub timer (STI, bit 1) – less frequent
         if ic >= self._timer_next_sti:
-            self._set_isr_bits(0x02)
+            self._set_isr_bits(1 << IRQSource.STI.value)
             self._timer_next_sti = ic + self._timer_sti_period
             self._irq_pending = True
-            self._irq_source = "STI"
+            self._irq_source = IRQSource.STI
             fired = True
         if fired and new_tracer.enabled:
-            new_tracer.instant("CPU", "TimerIRQ", {"ic": ic, "src": self._irq_source})
+            assert isinstance(self._irq_source, IRQSource)
+            new_tracer.instant(
+                "CPU",
+                "TimerIRQ",
+                {"ic": ic, "src": self._irq_source.name},
+            )
 
     def release_key(self, key_code: str):
         if self.keyboard:
@@ -888,9 +898,9 @@ class PCE500Emulator:
                         loc = getattr(self.keyboard, "key_locations", {}).get(kc)
                         if loc and loc.column in active_cols:
                             # Arm pending interrupt (delivered at next step)
-                            self._set_isr_bits(0x04)
+                            self._set_isr_bits(1 << IRQSource.KEY.value)
                             setattr(self, "_irq_pending", True)
-                            self._irq_source = "KEY"
+                            self._irq_source = IRQSource.KEY
                             break
         except Exception:
             pass
