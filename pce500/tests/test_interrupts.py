@@ -90,6 +90,7 @@ class InterruptScenario:
     expect_halt_canceled: bool | None = None  # Only meaningful for HALT program
     # Harness knobs
     isolate_timers: bool = False
+    timers_enabled: bool | None = None  # HALT: override default (None→disable timers)
 
 
 SCENARIOS: list[InterruptScenario] = [
@@ -189,6 +190,27 @@ SCENARIOS: list[InterruptScenario] = [
         expect_deliver=False,
         isolate_timers=True,
     ),
+    # HALT + timers (verify timers wake and deliver when masked in IMR)
+    InterruptScenario(
+        "halt_mti_unmasked",
+        Trigger.MTI,
+        0x80 | 0x01,
+        Program.HALT,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    InterruptScenario(
+        "halt_sti_unmasked",
+        Trigger.STI,
+        0x80 | 0x02,
+        Program.HALT,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
 ]
 
 
@@ -253,15 +275,18 @@ def test_interrupts(sc: InterruptScenario) -> None:
 
     # HALT prelude
     if sc.program is Program.HALT:
-        emu._timer_enabled = False  # focus on keyboard/ON behavior
+        # Default timers disabled unless explicitly enabled in scenario
+        timers_on = False if sc.timers_enabled is None else bool(sc.timers_enabled)
+        emu._timer_enabled = timers_on  # type: ignore[attr-defined]
         emu.step()  # HALT
         assert emu.cpu.state.halted is True
-        # Stable halt check
-        u_stable = emu.cpu.regs.get(RegisterName.U)
-        for _ in range(3):
-            emu.step()
-            assert emu.cpu.state.halted is True
-            assert emu.cpu.regs.get(RegisterName.U) == u_stable
+        # Stable halt check only when timers are disabled
+        if not timers_on:
+            u_stable = emu.cpu.regs.get(RegisterName.U)
+            for _ in range(3):
+                emu.step()
+                assert emu.cpu.state.halted is True
+                assert emu.cpu.regs.get(RegisterName.U) == u_stable
 
     u_before = emu.cpu.regs.get(RegisterName.U)
 
@@ -271,8 +296,21 @@ def test_interrupts(sc: InterruptScenario) -> None:
 
     # Execute program to the point of delivery
     if sc.program is Program.HALT:
-        for _ in range(24):
-            emu.step()
+        if sc.timers_enabled:
+            # Let timers advance enough cycles to fire
+            if sc.trigger is Trigger.MTI:
+                period = int(getattr(emu, "_timer_mti_period", 500))
+                steps = period + 50
+            elif sc.trigger is Trigger.STI:
+                period = int(getattr(emu, "_timer_sti_period", 5000))
+                steps = period + 200
+            else:
+                steps = 24
+            for _ in range(int(steps)):
+                emu.step()
+        else:
+            for _ in range(24):
+                emu.step()
     else:
         emu.step()  # MV I
         emu.step()  # WAIT
