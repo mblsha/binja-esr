@@ -19,6 +19,7 @@ from sc62015.pysc62015.instr.instructions import (
     IR,
 )
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from sc62015.pysc62015.constants import IMRFlag
 
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
@@ -282,7 +283,9 @@ class PCE500Emulator:
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 imr_val_chk = self.memory.read_byte(imr_addr_chk) & 0xFF
                 isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
-                if (imr_val_chk & 0x80) == 0 or (imr_val_chk & isr_val_chk) == 0:
+                if (imr_val_chk & int(IMRFlag.IRM)) == 0 or (
+                    imr_val_chk & isr_val_chk
+                ) == 0:
                     # Keep pending; CPU continues executing normal flow
                     pass
                 else:
@@ -309,7 +312,9 @@ class PCE500Emulator:
                     s_new = self.cpu.regs.get(RegisterName.S) - 1
                     self.memory.write_bytes(1, s_new, imr_val)
                     self.cpu.regs.set(RegisterName.S, s_new)
-                    self.memory.write_byte(imr_addr, imr_val & 0x7F)
+                    self.memory.write_byte(
+                        imr_addr, imr_val & (~int(IMRFlag.IRM) & 0xFF)
+                    )
                     # ISR status was set by the triggering source (device/timer)
                     # Do not modify ISR here; only deliver the interrupt.
                     # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
