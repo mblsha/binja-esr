@@ -7,7 +7,7 @@ triggers, IMR masks, program shape, and expected delivery succinctly.
 from dataclasses import dataclass
 from textwrap import dedent
 import pytest
-from enum import Enum
+from enum import Enum, auto
 
 from sc62015.pysc62015.sc_asm import Assembler
 from sc62015.pysc62015.emulator import RegisterName
@@ -25,6 +25,11 @@ class Trigger(Enum):
     MTI = "MTI"  # Main timer
     STI = "STI"  # Sub timer
     NONE = "NONE"  # No source
+
+
+class Program(Enum):
+    HALT = auto()
+    WAIT = auto()
 
 
 TRIGGER_MASK = {
@@ -77,7 +82,7 @@ class InterruptScenario:
     name: str
     trigger: Trigger
     imr: int
-    program: str  # "HALT" or "WAIT"
+    program: Program  # HALT or WAIT
     # WAIT-only: relative offset from period in cycles (positive → after; negative → before)
     wait_delta: int | None = None
     # Concise expectations
@@ -93,7 +98,7 @@ SCENARIOS: list[InterruptScenario] = [
         "key_unmasked",
         Trigger.KEY_F1,
         0x80 | 0x04,
-        "HALT",
+        Program.HALT,
         expect_deliver=True,
         expect_halt_canceled=True,
     ),
@@ -101,7 +106,7 @@ SCENARIOS: list[InterruptScenario] = [
         "key_masked",
         Trigger.KEY_F1,
         0x80,
-        "HALT",
+        Program.HALT,
         expect_deliver=False,
         expect_halt_canceled=True,
     ),
@@ -109,7 +114,7 @@ SCENARIOS: list[InterruptScenario] = [
         "on_unmasked",
         Trigger.KEY_ON,
         0x80 | 0x08,
-        "HALT",
+        Program.HALT,
         expect_deliver=True,
         expect_halt_canceled=True,
     ),
@@ -117,7 +122,7 @@ SCENARIOS: list[InterruptScenario] = [
         "on_masked",
         Trigger.KEY_ON,
         0x80,
-        "HALT",
+        Program.HALT,
         expect_deliver=False,
         expect_halt_canceled=True,
     ),
@@ -125,7 +130,7 @@ SCENARIOS: list[InterruptScenario] = [
         "no_trigger_halts",
         Trigger.NONE,
         0x80,
-        "HALT",
+        Program.HALT,
         expect_deliver=False,
         expect_halt_canceled=False,
     ),
@@ -134,7 +139,7 @@ SCENARIOS: list[InterruptScenario] = [
         "mti_unmasked",
         Trigger.MTI,
         0x80 | 0x01,
-        "WAIT",
+        Program.WAIT,
         wait_delta=50,
         expect_deliver=True,
         isolate_timers=True,
@@ -143,7 +148,7 @@ SCENARIOS: list[InterruptScenario] = [
         "mti_masked",
         Trigger.MTI,
         0x80,
-        "WAIT",
+        Program.WAIT,
         wait_delta=50,
         expect_deliver=False,
         isolate_timers=True,
@@ -152,7 +157,7 @@ SCENARIOS: list[InterruptScenario] = [
         "mti_unmasked_not_enough",
         Trigger.MTI,
         0x80 | 0x01,
-        "WAIT",
+        Program.WAIT,
         wait_delta=-20,
         expect_deliver=False,
         isolate_timers=True,
@@ -161,7 +166,7 @@ SCENARIOS: list[InterruptScenario] = [
         "sti_unmasked",
         Trigger.STI,
         0x80 | 0x02,
-        "WAIT",
+        Program.WAIT,
         wait_delta=200,
         expect_deliver=True,
         isolate_timers=True,
@@ -170,7 +175,7 @@ SCENARIOS: list[InterruptScenario] = [
         "sti_masked",
         Trigger.STI,
         0x80,
-        "WAIT",
+        Program.WAIT,
         wait_delta=200,
         expect_deliver=False,
         isolate_timers=True,
@@ -179,7 +184,7 @@ SCENARIOS: list[InterruptScenario] = [
         "sti_unmasked_not_enough",
         Trigger.STI,
         0x80 | 0x02,
-        "WAIT",
+        Program.WAIT,
         wait_delta=-50,
         expect_deliver=False,
         isolate_timers=True,
@@ -188,12 +193,12 @@ SCENARIOS: list[InterruptScenario] = [
 
 
 def _assemble_program(
-    emu: PCE500Emulator, program: str, wait_count: int | None
+    emu: PCE500Emulator, program: Program, wait_count: int | None
 ) -> None:
     asm = Assembler()
     entry = (
         ENTRY_HALT.format(entry=PROGRAM.entry)
-        if program == "HALT"
+        if program is Program.HALT
         else ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
     )
     handler = HANDLER_TEMPLATE.format(handler=PROGRAM.handler, marker=PROGRAM.marker)
@@ -229,7 +234,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
 
     # WAIT: compute wait_count = period + delta
     wait_count = None
-    if sc.program == "WAIT":
+    if sc.program is Program.WAIT:
         period = (
             int(getattr(emu, "_timer_mti_period", 500))
             if sc.trigger == Trigger.MTI
@@ -247,7 +252,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, sc.imr)
 
     # HALT prelude
-    if sc.program == "HALT":
+    if sc.program is Program.HALT:
         emu._timer_enabled = False  # focus on keyboard/ON behavior
         emu.step()  # HALT
         assert emu.cpu.state.halted is True
@@ -265,7 +270,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
         assert emu.press_key(sc.trigger.value) is True
 
     # Execute program to the point of delivery
-    if sc.program == "HALT":
+    if sc.program is Program.HALT:
         for _ in range(24):
             emu.step()
     else:
@@ -282,7 +287,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
     expected_u_delta = -2 if sc.expect_deliver else 0
     assert u_after - u_before == expected_u_delta
 
-    if sc.program == "HALT" and sc.expect_halt_canceled is not None:
+    if sc.program is Program.HALT and sc.expect_halt_canceled is not None:
         assert emu.cpu.state.halted == (not sc.expect_halt_canceled)
 
     if sc.expect_deliver:
