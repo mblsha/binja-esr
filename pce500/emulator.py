@@ -26,6 +26,10 @@ from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
+# Default timer periods in cycles (rough emulation)
+MTI_PERIOD_CYCLES_DEFAULT = 500
+STI_PERIOD_CYCLES_DEFAULT = 5000
+
 
 class IRQSource(Enum):
     # Enum values store ISR bit index directly
@@ -176,9 +180,9 @@ class PCE500Emulator:
         self._kb_irq_count = 0
         # Simple periodic timers (rough emulation)
         self._timer_enabled = True
-        # Periods in instructions (tunable): main ~ msec, sub ~ 10x slower here
-        self._timer_mti_period = 500  # MTI (bit 0)
-        self._timer_sti_period = 5000  # STI (bit 1)
+        # Periods in cycles (tunable): main ~ msec, sub ~ 10x slower here
+        self._timer_mti_period = MTI_PERIOD_CYCLES_DEFAULT  # MTI (bit 0)
+        self._timer_sti_period = STI_PERIOD_CYCLES_DEFAULT  # STI (bit 1)
         self._timer_next_mti = self._timer_mti_period
         self._timer_next_sti = self._timer_sti_period
         self._irq_source: Optional["IRQSource"] = None
@@ -258,9 +262,11 @@ class PCE500Emulator:
                             break
                     setattr(self, "_irq_pending", True)
                 else:
-                    # Remain halted; model passage of one instruction worth of time
+                    # Remain halted; model passage of one cycle of time
                     try:
+                        # Keep instruction_count aligned with steps for perf tests
                         self.instruction_count += 1
+                        self.cycle_count += 1
                     except Exception:
                         pass
                     return True
@@ -373,17 +379,16 @@ class PCE500Emulator:
 
         try:
             # Pre-read opcode and I for WAIT simulation (so we can model time passing)
-            # Only simulate when tracing is enabled to keep performance tests predictable
+            # Always simulate WAIT loops to advance timers, regardless of tracing.
             wait_sim_count = 0
-            if self.perfetto_enabled or getattr(self, "_new_trace_enabled", False):
-                try:
-                    opcode_peek = self.memory.read_byte(pc) & 0xFF
-                    if opcode_peek == 0xEF:  # WAIT
-                        i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
-                        if i_before > 0:
-                            wait_sim_count = i_before
-                except Exception:
-                    pass
+            try:
+                opcode_peek = self.memory.read_byte(pc) & 0xFF
+                if opcode_peek == 0xEF:  # WAIT
+                    i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
+                    if i_before > 0:
+                        wait_sim_count = i_before
+            except Exception:
+                pass
 
             if getattr(self, "fast_mode", False):
                 # Minimal execution path for speed
@@ -409,7 +414,7 @@ class PCE500Emulator:
                 if wait_sim_count:
                     for _ in range(int(wait_sim_count)):
                         # Advance instruction counter and tick timers
-                        self.instruction_count += 1
+                        self.cycle_count += 1
                         if self._timer_enabled:
                             try:
                                 self._tick_timers()
@@ -480,7 +485,7 @@ class PCE500Emulator:
                 if wait_sim_count:
                     for _ in range(int(wait_sim_count)):
                         # Advance instruction counter and tick timers
-                        self.instruction_count += 1
+                        self.cycle_count += 1
                         if self._timer_enabled:
                             try:
                                 self._tick_timers()
@@ -813,7 +818,7 @@ class PCE500Emulator:
 
     def _tick_timers(self) -> None:
         """Rough timer emulation: set ISR bits periodically and arm IRQ."""
-        ic = self.instruction_count
+        ic = self.cycle_count
         fired = False
         # Main timer (MTI, bit 0)
         if ic >= self._timer_next_mti:
