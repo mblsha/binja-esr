@@ -363,10 +363,11 @@ def test_interrupts(sc: InterruptScenario) -> None:
                     for _ in range(5):
                         emu.step()
                 else:
+                    # Exceed the longest timer period to be robust to off-by-one
                     mti = int(getattr(emu, "_timer_mti_period", 500))
                     sti = int(getattr(emu, "_timer_sti_period", 5000))
                     longest = max(mti, sti)
-                    for _ in range(int(longest)):
+                    for _ in range(int(longest + 200)):
                         emu.step()
             else:
                 for _ in range(24):
