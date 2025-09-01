@@ -18,6 +18,14 @@ from pce500 import PCE500Emulator
 
 INTERNAL_MEMORY_START = 0x100000
 
+# Readability constants used throughout the scenarios
+HALT_STABLE_STEPS = 3
+HALT_POLL_STEPS = 24
+HANDLER_STEPS = 5
+MTI_DEFAULT = 500
+STI_DEFAULT = 5000
+OFF_EXCEED_MARGIN = 200
+
 
 class Trigger(Enum):
     KEY_F1 = "KEY_F1"
@@ -310,9 +318,9 @@ def test_interrupts(sc: InterruptScenario) -> None:
     wait_count = None
     if sc.program is Program.WAIT:
         period = (
-            int(getattr(emu, "_timer_mti_period", 500))
+            int(getattr(emu, "_timer_mti_period", MTI_DEFAULT))
             if sc.trigger == Trigger.MTI
-            else int(getattr(emu, "_timer_sti_period", 5000))
+            else int(getattr(emu, "_timer_sti_period", STI_DEFAULT))
         )
         wait_count = max(0, period + int(sc.wait_delta or 0))
 
@@ -341,7 +349,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
         # Stable halt check only when timers are disabled
         if not timers_on:
             u_stable = emu.cpu.regs.get(RegisterName.U)
-            for _ in range(3):
+            for _ in range(HALT_STABLE_STEPS):
                 step_once()
                 assert emu.cpu.state.halted is True
                 assert emu.cpu.regs.get(RegisterName.U) == u_stable
@@ -362,13 +370,13 @@ def test_interrupts(sc: InterruptScenario) -> None:
         if sc.timers_enabled:
             # Let timers advance enough cycles to fire
             if sc.trigger is Trigger.MTI:
-                period = int(getattr(emu, "_timer_mti_period", 500))
+                period = int(getattr(emu, "_timer_mti_period", MTI_DEFAULT))
                 steps = period + 50
             elif sc.trigger is Trigger.STI:
-                period = int(getattr(emu, "_timer_sti_period", 5000))
+                period = int(getattr(emu, "_timer_sti_period", STI_DEFAULT))
                 steps = period + 200
             else:
-                steps = 24
+                steps = HALT_POLL_STEPS
             exec_min_target = int(steps)
             step_n(int(steps))
         else:
@@ -378,26 +386,26 @@ def test_interrupts(sc: InterruptScenario) -> None:
             if sc.program is Program.OFF:
                 if sc.expect_deliver:
                     # One step to cancel OFF and deliver, plus a few for handler
-                    exec_min_target = 1 + 5
+                    exec_min_target = 1 + HANDLER_STEPS
                     step_once()
-                    step_n(5)
+                    step_n(HANDLER_STEPS)
                 else:
                     # Exceed the longest timer period to be robust to off-by-one
-                    mti = int(getattr(emu, "_timer_mti_period", 500))
-                    sti = int(getattr(emu, "_timer_sti_period", 5000))
+                    mti = int(getattr(emu, "_timer_mti_period", MTI_DEFAULT))
+                    sti = int(getattr(emu, "_timer_sti_period", STI_DEFAULT))
                     longest = max(mti, sti)
-                    exec_min_target = int(longest + 200)
-                    step_n(int(longest + 200))
+                    exec_min_target = int(longest + OFF_EXCEED_MARGIN)
+                    step_n(int(longest + OFF_EXCEED_MARGIN))
             else:
-                exec_min_target = 24
-                step_n(24)
+                exec_min_target = HALT_POLL_STEPS
+                step_n(HALT_POLL_STEPS)
     else:
         # MV I; WAIT; attempt delivery
         exec_min_target = 3
         step_n(3)
         if sc.expect_deliver:
-            exec_min_target += 5  # Full handler
-            step_n(5)
+            exec_min_target += HANDLER_STEPS  # Full handler
+            step_n(HANDLER_STEPS)
         else:
             exec_min_target += 1  # NOP
             step_once()
