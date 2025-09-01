@@ -89,24 +89,113 @@ class InterruptScenario:
 
 SCENARIOS: list[InterruptScenario] = [
     # HALT + keyboard/ON
-    InterruptScenario("key_unmasked", Trigger.KEY_F1, 0x80 | 0x04, "HALT", expect_deliver=True, expect_halt_canceled=True),
-    InterruptScenario("key_masked", Trigger.KEY_F1, 0x80, "HALT", expect_deliver=False, expect_halt_canceled=True),
-    InterruptScenario("on_unmasked", Trigger.KEY_ON, 0x80 | 0x08, "HALT", expect_deliver=True, expect_halt_canceled=True),
-    InterruptScenario("on_masked", Trigger.KEY_ON, 0x80, "HALT", expect_deliver=False, expect_halt_canceled=True),
-    InterruptScenario("no_trigger_halts", Trigger.NONE, 0x80, "HALT", expect_deliver=False, expect_halt_canceled=False),
+    InterruptScenario(
+        "key_unmasked",
+        Trigger.KEY_F1,
+        0x80 | 0x04,
+        "HALT",
+        expect_deliver=True,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "key_masked",
+        Trigger.KEY_F1,
+        0x80,
+        "HALT",
+        expect_deliver=False,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "on_unmasked",
+        Trigger.KEY_ON,
+        0x80 | 0x08,
+        "HALT",
+        expect_deliver=True,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "on_masked",
+        Trigger.KEY_ON,
+        0x80,
+        "HALT",
+        expect_deliver=False,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "no_trigger_halts",
+        Trigger.NONE,
+        0x80,
+        "HALT",
+        expect_deliver=False,
+        expect_halt_canceled=False,
+    ),
     # WAIT + timers
-    InterruptScenario("mti_unmasked", Trigger.MTI, 0x80 | 0x01, "WAIT", wait_delta=50, expect_deliver=True, isolate_timers=True),
-    InterruptScenario("mti_masked", Trigger.MTI, 0x80, "WAIT", wait_delta=50, expect_deliver=False, isolate_timers=True),
-    InterruptScenario("mti_unmasked_not_enough", Trigger.MTI, 0x80 | 0x01, "WAIT", wait_delta=-20, expect_deliver=False, isolate_timers=True),
-    InterruptScenario("sti_unmasked", Trigger.STI, 0x80 | 0x02, "WAIT", wait_delta=200, expect_deliver=True, isolate_timers=True),
-    InterruptScenario("sti_masked", Trigger.STI, 0x80, "WAIT", wait_delta=200, expect_deliver=False, isolate_timers=True),
-    InterruptScenario("sti_unmasked_not_enough", Trigger.STI, 0x80 | 0x02, "WAIT", wait_delta=-50, expect_deliver=False, isolate_timers=True),
+    InterruptScenario(
+        "mti_unmasked",
+        Trigger.MTI,
+        0x80 | 0x01,
+        "WAIT",
+        wait_delta=50,
+        expect_deliver=True,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "mti_masked",
+        Trigger.MTI,
+        0x80,
+        "WAIT",
+        wait_delta=50,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "mti_unmasked_not_enough",
+        Trigger.MTI,
+        0x80 | 0x01,
+        "WAIT",
+        wait_delta=-20,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "sti_unmasked",
+        Trigger.STI,
+        0x80 | 0x02,
+        "WAIT",
+        wait_delta=200,
+        expect_deliver=True,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "sti_masked",
+        Trigger.STI,
+        0x80,
+        "WAIT",
+        wait_delta=200,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "sti_unmasked_not_enough",
+        Trigger.STI,
+        0x80 | 0x02,
+        "WAIT",
+        wait_delta=-50,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
 ]
 
 
-def _assemble_program(emu: PCE500Emulator, program: str, wait_count: int | None) -> None:
+def _assemble_program(
+    emu: PCE500Emulator, program: str, wait_count: int | None
+) -> None:
     asm = Assembler()
-    entry = ENTRY_HALT.format(entry=PROGRAM.entry) if program == "HALT" else ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
+    entry = (
+        ENTRY_HALT.format(entry=PROGRAM.entry)
+        if program == "HALT"
+        else ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
+    )
     handler = HANDLER_TEMPLATE.format(handler=PROGRAM.handler, marker=PROGRAM.marker)
     source = dedent(entry + handler)
     binfile = asm.assemble(source)
@@ -141,7 +230,11 @@ def test_interrupts(sc: InterruptScenario) -> None:
     # WAIT: compute wait_count = period + delta
     wait_count = None
     if sc.program == "WAIT":
-        period = int(getattr(emu, "_timer_mti_period", 500)) if sc.trigger == Trigger.MTI else int(getattr(emu, "_timer_sti_period", 5000))
+        period = (
+            int(getattr(emu, "_timer_mti_period", 500))
+            if sc.trigger == Trigger.MTI
+            else int(getattr(emu, "_timer_sti_period", 5000))
+        )
         wait_count = max(0, period + int(sc.wait_delta or 0))
 
     _assemble_program(emu, sc.program, wait_count)
@@ -199,4 +292,3 @@ def test_interrupts(sc: InterruptScenario) -> None:
         assert emu.last_irq.get("src") is not None
     else:
         assert emu.last_irq.get("src") in (None, "")
-
