@@ -20,7 +20,6 @@ from sc62015.pysc62015.instr.instructions import (
 )
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
-from sc62015.pysc62015.constants import IMRFlag
 
 from .memory import PCE500Memory, MemoryOverlay
 from .display import HD61202Controller
