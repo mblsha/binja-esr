@@ -393,4 +393,6 @@ def test_interrupts(sc: InterruptScenario) -> None:
         # In OFF, ensure PC did not advance beyond OFF if no delivery
         if sc.program is Program.OFF:
             pc_now = emu.cpu.regs.get(RegisterName.PC)
-            assert pc_now == (off_pc_after_off if off_pc_after_off is not None else PROGRAM.entry)
+            assert pc_now == (
+                off_pc_after_off if off_pc_after_off is not None else PROGRAM.entry
+            )
