@@ -1,10 +1,7 @@
-"""Generic interrupt handling tests using HALT and ISR semantics.
+"""Dataclass-driven interrupt tests for HALT, WAIT, keyboard, ON-key, and timers.
 
-This file verifies:
-- HALT prevents instruction execution until an interrupt.
-- Any bit set in ISR cancels the HALT state (CPU wakes).
-- Interrupt delivery obeys IMR masks after HALT cancellation.
-- ON key asserts ISR.ONKI and can wake/interrupt when unmasked.
+All cases flow through a single parameterized test with concise, declarative
+scenarios. Program assembly uses reusable entry/handler templates.
 """
 
 from dataclasses import dataclass
@@ -27,7 +24,7 @@ class Trigger(Enum):
     KEY_ON = "KEY_ON"
     MTI = "MTI"  # Main timer
     STI = "STI"  # Sub timer
-    NONE = "NONE"  # No trigger; CPU should remain halted
+    NONE = "NONE"  # No trigger
 
 
 @dataclass(frozen=True)
@@ -40,167 +37,274 @@ class ProgramConfig:
 PROGRAM = ProgramConfig(entry=0xB8000, handler=0xB9000)
 
 
-def assemble_and_load(emu: PCE500Emulator, cfg: ProgramConfig) -> None:
-    """Assemble minimal entry (with HALT) and interrupt handler (pushes ISR)."""
-    asm = Assembler()
-    source = dedent(
-        f"""
-        .ORG 0x{cfg.entry:05X}
-        entry:
-            HALT            ; stop until interrupt
-            NOP             ; should not execute before interrupt
+# Assembly templates
+ENTRY_HALT = """
+.ORG 0x{entry:05X}
+entry:
+    HALT
+    NOP
+"""
 
-        .ORG 0x{cfg.handler:05X}
-        handler:
-            MV A, 0x{cfg.marker:02X}
-            PUSHU A
-            MV A, (ISR)
-            PUSHU A
-            RETI
-        """
-    )
-    binfile = asm.assemble(source)
+ENTRY_WAIT = """
+.ORG 0x{entry:05X}
+entry:
+    MV I, 0x{wait_count:04X}
+    WAIT
+    NOP
+"""
 
-    # Write segments into emulator memory
-    for seg in binfile.segments:
-        base = seg.address
-        for i, b in enumerate(seg.data):
-            emu.memory.write_byte(base + i, b)
-
-    # Minimal ROM overlay with interrupt vector at 0xFFFFA → handler
-    rom_size = 0x40000
-    rom = bytearray(b"\xff" * rom_size)
-    vec_off = 0x3FFFA  # 0xFFFFA - 0xC0000
-    vec = cfg.handler & 0xFFFFF
-    rom[vec_off : vec_off + 3] = bytes(
-        [vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF]
-    )
-    emu.load_rom(bytes(rom))
+HANDLER_TEMPLATE = """
+.ORG 0x{handler:05X}
+handler:
+    MV A, 0x{marker:02X}
+    PUSHU A
+    MV A, (ISR)
+    PUSHU A
+    RETI
+"""
 
 
 @dataclass(frozen=True)
-class Scenario:
+class InterruptScenario:
     name: str
+    trigger: Trigger
     imr: int
-    trigger: Trigger  # which source to trigger (or NONE)
-    expect_u_delta: int
-    expect_isr_mask: int | None  # pushed ISR value when interrupt delivered
-    expect_halt_canceled: bool = True  # whether HALT should cancel after trigger
+    mode: str  # "HALT" or "WAIT"
+    # WAIT-only configuration: relative offset from period
+    wait_extra: int | None = None
+    # Expectations
+    expect_u_delta: int = 0
+    expect_isr_mask: int | None = None
+    expect_halt_canceled: bool | None = None  # Only relevant for HALT
+    # Test harness knobs
+    isolate_timers: bool = False
 
 
-SCENARIOS: list[Scenario] = [
-    Scenario(
+SCENARIOS: list[InterruptScenario] = [
+    # HALT + keyboard/ON
+    InterruptScenario(
         name="key_unmasked",
+        trigger=Trigger.KEY_F1,
         imr=0x80 | 0x04,  # IRM=1, KEYM=1
-        trigger=Trigger.KEY_F1,
+        mode="HALT",
         expect_u_delta=-2,
-        expect_isr_mask=0x04,  # ISR[2]
+        expect_isr_mask=0x04,
+        expect_halt_canceled=True,
     ),
-    Scenario(
+    InterruptScenario(
         name="key_masked",
-        imr=0x80,  # IRM=1, KEYM=0 → HALT cancels but no interrupt delivery
         trigger=Trigger.KEY_F1,
+        imr=0x80,  # IRM=1, KEYM=0 → HALT cancels but no delivery
+        mode="HALT",
         expect_u_delta=0,
         expect_isr_mask=None,
         expect_halt_canceled=True,
     ),
-    Scenario(
+    InterruptScenario(
         name="on_unmasked",
+        trigger=Trigger.KEY_ON,
         imr=0x80 | 0x08,  # IRM=1, ONKM=1
-        trigger=Trigger.KEY_ON,
+        mode="HALT",
         expect_u_delta=-2,
-        expect_isr_mask=0x08,  # ISR[3]
+        expect_isr_mask=0x08,
+        expect_halt_canceled=True,
     ),
-    Scenario(
+    InterruptScenario(
         name="on_masked",
-        imr=0x80,  # IRM=1, ONKM=0 → HALT cancels but no interrupt delivery
         trigger=Trigger.KEY_ON,
+        imr=0x80,  # IRM=1, ONKM=0 → HALT cancels but no delivery
+        mode="HALT",
         expect_u_delta=0,
         expect_isr_mask=None,
         expect_halt_canceled=True,
     ),
-    Scenario(
+    InterruptScenario(
         name="no_trigger_halts",
-        imr=0x80,  # IRM on (mask values irrelevant since no source)
         trigger=Trigger.NONE,
+        imr=0x80,
+        mode="HALT",
         expect_u_delta=0,
         expect_isr_mask=None,
         expect_halt_canceled=False,
     ),
+    # WAIT + timers (unmasked, masked, and not-enough)
+    InterruptScenario(
+        name="mti_unmasked",
+        trigger=Trigger.MTI,
+        imr=0x80 | 0x01,  # IRM=1, MTM=1
+        mode="WAIT",
+        wait_extra=50,
+        expect_u_delta=-2,
+        expect_isr_mask=0x01,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        name="mti_masked",
+        trigger=Trigger.MTI,
+        imr=0x80,  # IRM=1, MTM=0
+        mode="WAIT",
+        wait_extra=50,
+        expect_u_delta=0,
+        expect_isr_mask=None,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        name="mti_unmasked_not_enough",
+        trigger=Trigger.MTI,
+        imr=0x80 | 0x01,
+        mode="WAIT",
+        wait_extra=-20,
+        expect_u_delta=0,
+        expect_isr_mask=None,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        name="sti_unmasked",
+        trigger=Trigger.STI,
+        imr=0x80 | 0x02,  # IRM=1, STM=1
+        mode="WAIT",
+        wait_extra=200,
+        expect_u_delta=-2,
+        expect_isr_mask=0x02,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        name="sti_masked",
+        trigger=Trigger.STI,
+        imr=0x80,  # IRM=1, STM=0
+        mode="WAIT",
+        wait_extra=200,
+        expect_u_delta=0,
+        expect_isr_mask=None,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        name="sti_unmasked_not_enough",
+        trigger=Trigger.STI,
+        imr=0x80 | 0x02,
+        mode="WAIT",
+        wait_extra=-50,
+        expect_u_delta=0,
+        expect_isr_mask=None,
+        isolate_timers=True,
+    ),
 ]
 
 
+def _assemble_program(emu: PCE500Emulator, mode: str, wait_count: int | None) -> None:
+    asm = Assembler()
+    entry = (
+        ENTRY_HALT.format(entry=PROGRAM.entry)
+        if mode == "HALT"
+        else ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
+    )
+    handler = HANDLER_TEMPLATE.format(handler=PROGRAM.handler, marker=PROGRAM.marker)
+    source = dedent(entry + handler)
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    # Interrupt vector -> handler
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+
+
+def _isolate_other_timer(emu: PCE500Emulator, trig: Trigger) -> None:
+    if trig == Trigger.MTI:
+        emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
+        emu._timer_next_sti = emu.cycle_count + emu._timer_sti_period  # type: ignore[attr-defined]
+    elif trig == Trigger.STI:
+        emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
+        emu._timer_next_mti = emu.cycle_count + emu._timer_mti_period  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize("sc", SCENARIOS, ids=[s.name for s in SCENARIOS])
-def test_interrupt_delivery_with_halt(sc: Scenario) -> None:
+def test_interrupts(sc: InterruptScenario) -> None:
+    # Build emulator; enable WAIT timing by default
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
-    # Disable periodic timers to avoid interference
-    emu._timer_enabled = False  # type: ignore[attr-defined]
-    emu.reset()
 
-    assemble_and_load(emu, PROGRAM)
+    # Optional timer isolation for WAIT scenarios
+    if sc.isolate_timers:
+        emu._timer_enabled = True  # type: ignore[attr-defined]
+        _isolate_other_timer(emu, sc.trigger)
 
-    # Initialize PC and stacks
+    # Compute wait_count from period+extra when needed
+    wait_count = None
+    if sc.mode == "WAIT":
+        period = (
+            int(getattr(emu, "_timer_mti_period", 500))
+            if sc.trigger == Trigger.MTI
+            else int(getattr(emu, "_timer_sti_period", 5000))
+        )
+        wait_count = max(0, period + int(sc.wait_extra or 0))
+
+    _assemble_program(emu, sc.mode, wait_count)
+
+    # Init CPU state
     emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
     emu.cpu.regs.set(RegisterName.S, 0xBFF00)
     emu.cpu.regs.set(RegisterName.U, 0xBFE00)
-
-    # Configure IMR and clear ISR
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, sc.imr)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, sc.imr)
 
-    # Execute HALT (CPU becomes halted)
-    emu.step()
-    assert emu.cpu.state.halted is True
-
-    # While halted and with no ISR bits, additional steps do not execute instructions
-    u_before = emu.cpu.regs.get(RegisterName.U)
-    for _ in range(5):
-        emu.step()
+    # HALT-specific prelude
+    if sc.mode == "HALT":
+        # To focus on keyboard/ON behavior, disable periodic timers
+        emu._timer_enabled = False  # type: ignore[attr-defined]
+        emu.step()  # Execute HALT
         assert emu.cpu.state.halted is True
-        # Stack unchanged while halted
-        assert emu.cpu.regs.get(RegisterName.U) == u_before
-
-    if sc.trigger is Trigger.NONE:
-        # With no trigger, CPU must remain halted and U unchanged
-        for _ in range(20):
+        # Confirm stable halt
+        u_stable = emu.cpu.regs.get(RegisterName.U)
+        for _ in range(3):
             emu.step()
             assert emu.cpu.state.halted is True
-            assert emu.cpu.regs.get(RegisterName.U) == u_before
-        return
-    elif sc.trigger in (Trigger.KEY_F1, Trigger.KEY_ON):
-        # Trigger specific source
-        key_code = sc.trigger.value
-        assert emu.press_key(key_code) is True
+            assert emu.cpu.regs.get(RegisterName.U) == u_stable
 
-        # Step enough times to allow delivery (pending + entry)
-        for _ in range(20):
+    u_before = emu.cpu.regs.get(RegisterName.U)
+
+    # Trigger
+    if sc.trigger == Trigger.KEY_F1 or sc.trigger == Trigger.KEY_ON:
+        assert emu.press_key(sc.trigger.value) is True
+    elif sc.trigger == Trigger.MTI or sc.trigger == Trigger.STI:
+        # Nothing to do; WAIT controls timing
+        pass
+    elif sc.trigger == Trigger.NONE:
+        # No source
+        pass
+
+    # Execute
+    if sc.mode == "HALT":
+        # Allow pending IRQ path and handler to run if applicable
+        for _ in range(24):
             emu.step()
     else:
-        pytest.skip("Timer triggers are validated in WAIT-based tests below")
+        # WAIT path: MV I; WAIT; then either deliver+handler or execute NOP
+        emu.step()  # MV I
+        emu.step()  # WAIT
+        emu.step()  # Delivery attempt
+        if sc.expect_isr_mask is not None:
+            for _ in range(5):
+                emu.step()
+        else:
+            emu.step()  # NOP
 
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after - u_before == sc.expect_u_delta
 
-    # Validate HALT cancellation semantics
-    assert (
-        emu.cpu.state.halted is (not sc.expect_halt_canceled)
-        if False
-        else emu.cpu.state.halted == (not sc.expect_halt_canceled)
-    )
+    if sc.mode == "HALT" and sc.expect_halt_canceled is not None:
+        assert emu.cpu.state.halted == (not sc.expect_halt_canceled)
 
-    # Delivery vs masking: last_irq should be set only when delivered
-    delivered = sc.expect_isr_mask is not None and sc.trigger is not Trigger.NONE
-
-    if delivered:
+    if sc.expect_isr_mask is not None:
         # Top of U is ISR value; next is marker
-        assert emu.memory.read_byte(u_after) & sc.expect_isr_mask == sc.expect_isr_mask
+        assert (
+            emu.memory.read_byte(u_after) & sc.expect_isr_mask
+        ) == sc.expect_isr_mask
         assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
-        # Interrupt delivery recorded
         assert emu.last_irq.get("src") is not None
     else:
-        # Interrupt masked: handler not executed; HALT cancelled by ISR but no pushes
-        assert u_after == u_before
-        # Interrupt not recorded
         assert emu.last_irq.get("src") in (None, "")
 
 
