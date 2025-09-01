@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from textwrap import dedent
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Set
 
 import pytest
 
@@ -40,6 +40,23 @@ TRIGGER_MASK: Dict[Trigger, int] = {
     Trigger.KEY_F1: 0x04,
     Trigger.KEY_ON: 0x08,
 }
+
+
+class IMRFlag(Enum):
+    """Interrupt Mask Register bits (IMR, 0xFB).
+
+    Values are the bit masks to OR into IMR:
+    - IRM: master interrupt enable (bit 7)
+    - MTI/STI: timer sources (bits 0/1)
+    - KEY: keyboard matrix interrupt (bit 2)
+    - ONK: ON-key wake/interrupt (bit 3)
+    """
+
+    IRM = 0x80
+    MTI = 0x01
+    STI = 0x02
+    KEY = 0x04
+    ONK = 0x08
 
 
 @dataclass(frozen=True)
@@ -96,7 +113,7 @@ class Given:
     name: str
     trigger: Trigger
     program: Program
-    imr: int
+    imr: Set[IMRFlag]
     wait_delta: Optional[int] = None  # WAIT-only: delta vs period (cycles)
     isolate_timers: bool = False  # disable the other timer
     timers_enabled: Optional[bool] = None  # HALT-only: None→off by default
@@ -194,7 +211,10 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
     emu.cpu.regs.set(RegisterName.S, 0xBFF00)
     emu.cpu.regs.set(RegisterName.U, 0xBFE00)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
-    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, g.imr)
+    imr_val = 0
+    for flag in g.imr:
+        imr_val |= int(flag.value)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, imr_val)
 
     # Prelude for HALT/OFF
     if g.program in (Program.HALT, Program.OFF):
@@ -338,7 +358,7 @@ def _assert_observed_equals(expected: Observed, actual: Observed, name: str) -> 
 SPECS: tuple[InterruptSpec, ...] = (
     # HALT + keyboard/ON
     InterruptSpec(
-        Given("key_unmasked", Trigger.KEY_F1, Program.HALT, 0x80 | 0x04),
+        Given("key_unmasked", Trigger.KEY_F1, Program.HALT, {IMRFlag.IRM, IMRFlag.KEY}),
         Expect(deliver=True, halt_canceled=True),
         Observed(
             halted_after=False,
@@ -352,7 +372,7 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
     InterruptSpec(
-        Given("key_masked", Trigger.KEY_F1, Program.HALT, 0x80),
+        Given("key_masked", Trigger.KEY_F1, Program.HALT, {IMRFlag.IRM}),
         Expect(deliver=False, halt_canceled=True),
         Observed(
             halted_after=False,
@@ -366,7 +386,7 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
     InterruptSpec(
-        Given("on_unmasked", Trigger.KEY_ON, Program.HALT, 0x80 | 0x08),
+        Given("on_unmasked", Trigger.KEY_ON, Program.HALT, {IMRFlag.IRM, IMRFlag.ONK}),
         Expect(deliver=True, halt_canceled=True),
         Observed(
             halted_after=False,
@@ -380,7 +400,7 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
     InterruptSpec(
-        Given("on_masked", Trigger.KEY_ON, Program.HALT, 0x80),
+        Given("on_masked", Trigger.KEY_ON, Program.HALT, {IMRFlag.IRM}),
         Expect(deliver=False, halt_canceled=True),
         Observed(
             halted_after=False,
@@ -394,7 +414,7 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
     InterruptSpec(
-        Given("no_trigger_halts", Trigger.NONE, Program.HALT, 0x80),
+        Given("no_trigger_halts", Trigger.NONE, Program.HALT, {IMRFlag.IRM}),
         Expect(deliver=False, halt_canceled=False),
         Observed(
             halted_after=True,
@@ -413,7 +433,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "mti_unmasked",
             Trigger.MTI,
             Program.WAIT,
-            0x80 | 0x01,
+            {IMRFlag.IRM, IMRFlag.MTI},
             wait_delta=50,
             isolate_timers=True,
         ),
@@ -434,7 +454,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "mti_masked",
             Trigger.MTI,
             Program.WAIT,
-            0x80,
+            {IMRFlag.IRM},
             wait_delta=50,
             isolate_timers=True,
         ),
@@ -455,7 +475,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "mti_unmasked_not_enough",
             Trigger.MTI,
             Program.WAIT,
-            0x80 | 0x01,
+            {IMRFlag.IRM, IMRFlag.MTI},
             wait_delta=-20,
             isolate_timers=True,
         ),
@@ -476,7 +496,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "sti_unmasked",
             Trigger.STI,
             Program.WAIT,
-            0x80 | 0x02,
+            {IMRFlag.IRM, IMRFlag.STI},
             wait_delta=200,
             isolate_timers=True,
         ),
@@ -497,7 +517,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "sti_masked",
             Trigger.STI,
             Program.WAIT,
-            0x80,
+            {IMRFlag.IRM},
             wait_delta=200,
             isolate_timers=True,
         ),
@@ -518,7 +538,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "sti_unmasked_not_enough",
             Trigger.STI,
             Program.WAIT,
-            0x80 | 0x02,
+            {IMRFlag.IRM, IMRFlag.STI},
             wait_delta=-50,
             isolate_timers=True,
         ),
@@ -540,7 +560,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "halt_mti_unmasked",
             Trigger.MTI,
             Program.HALT,
-            0x80 | 0x01,
+            {IMRFlag.IRM, IMRFlag.MTI},
             isolate_timers=True,
             timers_enabled=True,
         ),
@@ -561,7 +581,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "halt_sti_unmasked",
             Trigger.STI,
             Program.HALT,
-            0x80 | 0x02,
+            {IMRFlag.IRM, IMRFlag.STI},
             isolate_timers=True,
             timers_enabled=True,
         ),
@@ -579,7 +599,7 @@ SPECS: tuple[InterruptSpec, ...] = (
     ),
     # OFF-state behavior
     InterruptSpec(
-        Given("off_no_exec_on_longest_timer", Trigger.NONE, Program.OFF, 0x80),
+        Given("off_no_exec_on_longest_timer", Trigger.NONE, Program.OFF, {IMRFlag.IRM}),
         Expect(deliver=False, halt_canceled=False),
         Observed(
             halted_after=True,
@@ -597,7 +617,7 @@ SPECS: tuple[InterruptSpec, ...] = (
             "off_on_unmasked_wakes_and_delivers",
             Trigger.KEY_ON,
             Program.OFF,
-            0x80 | 0x08,
+            {IMRFlag.IRM, IMRFlag.ONK},
         ),
         Expect(deliver=True, halt_canceled=True),
         Observed(
@@ -612,7 +632,7 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
     InterruptSpec(
-        Given("off_press_off_key_no_wake", Trigger.KEY_OFF, Program.OFF, 0x80),
+        Given("off_press_off_key_no_wake", Trigger.KEY_OFF, Program.OFF, {IMRFlag.IRM}),
         Expect(deliver=False, halt_canceled=False),
         Observed(
             halted_after=True,
