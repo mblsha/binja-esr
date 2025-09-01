@@ -15,6 +15,7 @@ from typing import Any
 import app as webapp
 from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from sc62015.pysc62015.constants import IMRFlag
 
 
 def _get_json(client, path: str) -> dict[str, Any]:
@@ -92,7 +93,10 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
         emu = webapp.emulator
         assert emu is not None
         INTERNAL_MEMORY_START = 0x100000
-        emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x04)
+        emu.memory.write_byte(
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR,
+            int(IMRFlag.IRM | IMRFlag.KEYM),
+        )
 
     # Wait up to 5s for KEY IRQ count to increase (bounded by total deadline)
     end = min(time.time() + 5.0, deadline)
