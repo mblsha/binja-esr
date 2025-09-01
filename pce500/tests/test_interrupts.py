@@ -100,6 +100,8 @@ class InterruptScenario:
     # Harness knobs
     isolate_timers: bool = False
     timers_enabled: bool | None = None  # HALT: override default (None→disable timers)
+    # Validation: expected minimum steps in the execution phase (post-setup)
+    expected_min_exec_steps: int | None = None
 
 
 SCENARIOS: list[InterruptScenario] = [
@@ -228,6 +230,7 @@ SCENARIOS: list[InterruptScenario] = [
         Program.OFF,
         expect_deliver=False,
         expect_halt_canceled=False,
+        expected_min_exec_steps=5200,
     ),
     InterruptScenario(
         "off_on_unmasked_wakes_and_delivers",
@@ -236,6 +239,7 @@ SCENARIOS: list[InterruptScenario] = [
         Program.OFF,
         expect_deliver=True,
         expect_halt_canceled=True,
+        expected_min_exec_steps=6,
     ),
     InterruptScenario(
         "off_press_off_key_no_wake",
@@ -244,6 +248,7 @@ SCENARIOS: list[InterruptScenario] = [
         Program.OFF,
         expect_deliver=False,
         expect_halt_canceled=False,
+        expected_min_exec_steps=5200,
     ),
 ]
 
@@ -400,6 +405,11 @@ def test_interrupts(sc: InterruptScenario) -> None:
     # Ensure we executed at least the intended number of steps in the exec phase
     steps_after_exec = steps_taken - steps_before_exec
     assert steps_after_exec >= exec_min_target
+    # OFF-specific: also validate per-scenario expected steps if provided
+    if sc.program is Program.OFF and sc.expected_min_exec_steps is not None:
+        assert steps_after_exec >= sc.expected_min_exec_steps, (
+            f"Executed {steps_after_exec} steps, expected at least {sc.expected_min_exec_steps}"
+        )
 
     u_after = emu.cpu.regs.get(RegisterName.U)
     expected_u_delta = -2 if sc.expect_deliver else 0
