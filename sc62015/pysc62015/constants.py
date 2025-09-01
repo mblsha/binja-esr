@@ -51,3 +51,22 @@ class IMRFlag(IntFlag):
     STI = STM
     KEY = KEYM
     ONK = ONKM
+
+
+class ISRFlag(IntFlag):
+    """Interrupt Status Register (ISR, 0xFC) bit masks.
+
+    Bit layout (see README.md):
+        7    6     5     4      3      2     1     0
+      +----+-----+-----+------+------+-----+-----+-----+
+      |    | EXI | RXRI| TXRI | ONKI | KEYI| STI | MTI |
+      +----+-----+-----+------+------+-----+-----+-----+
+    """
+
+    MTI = 0x01  # Main timer pending
+    STI = 0x02  # Sub timer pending
+    KEYI = 0x04  # Keyboard matrix pending
+    ONKI = 0x08  # ON-key pending
+    TXRI = 0x10  # UART TX ready pending
+    RXRI = 0x20  # UART RX ready pending
+    EXI = 0x40  # External interrupt pending

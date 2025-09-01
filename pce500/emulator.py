@@ -769,7 +769,7 @@ class PCE500Emulator:
         # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ
         if key_code == "KEY_ON":
             try:
-                self._set_isr_bits(1 << IRQSource.ONK.value)
+                self._set_isr_bits(int(IMRFlag.ONK))
                 setattr(self, "_irq_pending", True)
                 self._irq_source = IRQSource.ONK
             except Exception:
@@ -789,8 +789,8 @@ class PCE500Emulator:
                 try:
                     isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                     isr_val = self.memory.read_byte(isr_addr) & 0xFF
-                    if (isr_val & (1 << IRQSource.KEY.value)) == 0:
-                        self._set_isr_bits(1 << IRQSource.KEY.value)
+                    if (isr_val & int(IMRFlag.KEY)) == 0:
+                        self._set_isr_bitsint(IMRFlag.KEY)
                 except Exception:
                     pass
         except Exception:
@@ -827,14 +827,14 @@ class PCE500Emulator:
         fired = False
         # Main timer (MTI, bit 0)
         if ic >= self._timer_next_mti:
-            self._set_isr_bits(1 << IRQSource.MTI.value)
+            self._set_isr_bits(int(IMRFlag.MTI))
             self._timer_next_mti = ic + self._timer_mti_period
             self._irq_pending = True
             self._irq_source = IRQSource.MTI
             fired = True
         # Sub timer (STI, bit 1) – less frequent
         if ic >= self._timer_next_sti:
-            self._set_isr_bits(1 << IRQSource.STI.value)
+            self._set_isr_bits(int(IMRFlag.STI))
             self._timer_next_sti = ic + self._timer_sti_period
             self._irq_pending = True
             self._irq_source = IRQSource.STI
@@ -1040,7 +1040,7 @@ class PCE500Emulator:
                         loc = getattr(self.keyboard, "key_locations", {}).get(kc)
                         if loc and loc.column in active_cols:
                             # Arm pending interrupt (delivered at next step)
-                            self._set_isr_bits(1 << IRQSource.KEY.value)
+                            self._set_isr_bitsint(IMRFlag.KEY)
                             setattr(self, "_irq_pending", True)
                             self._irq_source = IRQSource.KEY
                             break

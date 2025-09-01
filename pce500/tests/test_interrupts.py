@@ -12,7 +12,7 @@ from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from pce500 import PCE500Emulator
-from sc62015.pysc62015.constants import IMRFlag
+from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 
 
 # ----------------------------- Types & constants -----------------------------
@@ -36,10 +36,10 @@ class Program(Enum):
 
 
 TRIGGER_MASK: Dict[Trigger, int] = {
-    Trigger.MTI: 0x01,
-    Trigger.STI: 0x02,
-    Trigger.KEY_F1: 0x04,
-    Trigger.KEY_ON: 0x08,
+    Trigger.MTI: int(ISRFlag.MTI),
+    Trigger.STI: int(ISRFlag.STI),
+    Trigger.KEY_F1: int(ISRFlag.KEYI),
+    Trigger.KEY_ON: int(ISRFlag.ONKI),
 }
 
 
