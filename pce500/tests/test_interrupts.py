@@ -283,10 +283,10 @@ def _isolate_other_timer(emu: PCE500Emulator, trigger: Trigger) -> None:
     # Push the non-target timer far into the future to avoid cross-triggering
     if trigger == Trigger.MTI:
         emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
-        emu._timer_next_sti = emu.instruction_count + emu._timer_sti_period  # type: ignore[attr-defined]
+        emu._timer_next_sti = emu.cycle_count + emu._timer_sti_period  # type: ignore[attr-defined]
     elif trigger == Trigger.STI:
         emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
-        emu._timer_next_mti = emu.instruction_count + emu._timer_mti_period  # type: ignore[attr-defined]
+        emu._timer_next_mti = emu.cycle_count + emu._timer_mti_period  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("ts", TIMER_SCENARIOS, ids=[t.name for t in TIMER_SCENARIOS])
@@ -470,6 +470,61 @@ def test_timer_mti_masked_wakes_but_no_delivery() -> None:
 
 
 @pytest.mark.timeout(10)
+def test_timer_mti_unmasked_not_enough_does_not_trigger() -> None:
+    """MTI unmasked but WAIT < period: should not trigger delivery."""
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
+    emu._timer_next_sti = emu.cycle_count + emu._timer_sti_period  # type: ignore[attr-defined]
+
+    asm = Assembler()
+    mti_period = int(getattr(emu, "_timer_mti_period", 500))
+    wait_count = max(1, mti_period - 3)
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    # Unmask MTI
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x01)
+
+    u_before = emu.cpu.regs.get(RegisterName.U)
+    emu.step()  # MV I
+    emu.step()  # WAIT (sets less than period)
+    emu.step()  # Next executes NOP; no delivery
+    u_after = emu.cpu.regs.get(RegisterName.U)
+    assert u_after == u_before
+    assert emu.last_irq.get("src") in (None, "")
+
+
+@pytest.mark.timeout(10)
 def test_timer_sti_unmasked_wakes_and_delivers() -> None:
     """STI (bit 1) fires after WAIT-ing enough instructions and delivers when unmasked."""
     emu = PCE500Emulator(
@@ -579,6 +634,61 @@ def test_timer_sti_masked_wakes_but_no_delivery() -> None:
     emu.step()  # MV I+1
     emu.step()  # WAIT
     emu.step()  # Execute NOP (no delivery)
+    u_after = emu.cpu.regs.get(RegisterName.U)
+    assert u_after == u_before
+    assert emu.last_irq.get("src") in (None, "")
+
+
+@pytest.mark.timeout(10)
+def test_timer_sti_unmasked_not_enough_does_not_trigger() -> None:
+    """STI unmasked but WAIT < period: should not trigger delivery."""
+    emu = PCE500Emulator(
+        perfetto_trace=False, save_lcd_on_exit=False, enable_new_tracing=True
+    )
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu._timer_mti_period = 10**9  # type: ignore[attr-defined]
+    emu._timer_next_mti = emu.cycle_count + emu._timer_mti_period  # type: ignore[attr-defined]
+
+    asm = Assembler()
+    sti_period = int(getattr(emu, "_timer_sti_period", 5000))
+    wait_count = max(1, sti_period - 3)
+    source = dedent(
+        f"""
+        .ORG 0x{PROGRAM.entry:05X}
+        entry:
+            MV I, 0x{wait_count:04X}
+            WAIT
+            NOP
+
+        .ORG 0x{PROGRAM.handler:05X}
+        handler:
+            MV A, 0x{PROGRAM.marker:02X}
+            PUSHU A
+            MV A, (ISR)
+            PUSHU A
+            RETI
+        """
+    )
+    binfile = asm.assemble(source)
+    for seg in binfile.segments:
+        for i, b in enumerate(seg.data):
+            emu.memory.write_byte(seg.address + i, b)
+    rom = bytearray(b"\xff" * 0x40000)
+    off = 0x3FFFA
+    vec = PROGRAM.handler & 0xFFFFF
+    rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
+    emu.load_rom(bytes(rom))
+    emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
+    emu.cpu.regs.set(RegisterName.S, 0xBFF00)
+    emu.cpu.regs.set(RegisterName.U, 0xBFE00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    # Unmask STI
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x80 | 0x02)
+
+    u_before = emu.cpu.regs.get(RegisterName.U)
+    emu.step()  # MV I
+    emu.step()  # WAIT (less than period)
+    emu.step()  # Next executes NOP; no delivery
     u_after = emu.cpu.regs.get(RegisterName.U)
     assert u_after == u_before
     assert emu.last_irq.get("src") in (None, "")
