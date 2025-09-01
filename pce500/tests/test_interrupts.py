@@ -353,13 +353,21 @@ def test_interrupts(sc: InterruptScenario) -> None:
             for _ in range(int(steps)):
                 emu.step()
         else:
-            # For OFF, explicitly run enough steps to exceed the longest timer period
+            # For OFF without timers: if expecting delivery (e.g., ON key),
+            # run just enough steps to deliver and complete handler once.
+            # Otherwise, step well beyond the longest timer period to ensure no wake.
             if sc.program is Program.OFF:
-                mti = int(getattr(emu, "_timer_mti_period", 500))
-                sti = int(getattr(emu, "_timer_sti_period", 5000))
-                longest = max(mti, sti)
-                for _ in range(int(longest)):
+                if sc.expect_deliver:
+                    # One step to cancel OFF and deliver, plus a few for handler
                     emu.step()
+                    for _ in range(5):
+                        emu.step()
+                else:
+                    mti = int(getattr(emu, "_timer_mti_period", 500))
+                    sti = int(getattr(emu, "_timer_sti_period", 5000))
+                    longest = max(mti, sti)
+                    for _ in range(int(longest)):
+                        emu.step()
             else:
                 for _ in range(24):
                     emu.step()
