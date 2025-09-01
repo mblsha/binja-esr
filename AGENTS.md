@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+> Tooling: This project standardizes on `uv` for Python package management and running commands. Use `uv sync` to install dependencies and `uv run` to execute all tools and scripts. Prefer `uv` over calling `python -m ...` or tool entry points directly.
+
 ## Project Structure & Module Organization
 - `sc62015/`: Binary Ninja integration (`arch.py`, `view.py`).
 - `sc62015/pysc62015/`: SC62015 assembler/emulator core and unit tests (`test_*.py`).
@@ -13,7 +15,7 @@
 - Install all deps at once: `uv sync --extra dev --extra pce500 --extra web`  # recommended
 - Alternative: `python -m pip install -e .[dev]` (extras: `.[pce500]`, `.[web]`)
 - Lint: `uv run ruff check .` (format: `uv run ruff format .`)
-- Type check: `uv run pyright sc62015/pysc62015` or `python scripts/run_pyright.py`
+- Type check: `uv run pyright sc62015/pysc62015` or `uv run python scripts/run_pyright.py`
 - Core tests: `FORCE_BINJA_MOCK=1 uv run pytest --cov=sc62015/pysc62015 --cov-report=term-missing`
 - PCE‑500 tests: `uv run pytest pce500/tests --cov=pce500 --cov-report=term-missing`
 - Web tests: `uv run pytest web/tests --cov=web --cov-report=term-missing`
