@@ -22,6 +22,7 @@ INTERNAL_MEMORY_START = 0x100000
 class Trigger(Enum):
     KEY_F1 = "KEY_F1"
     KEY_ON = "KEY_ON"
+    KEY_OFF = "KEY_OFF"
     MTI = "MTI"  # Main timer
     STI = "STI"  # Sub timer
     NONE = "NONE"  # No source
@@ -219,6 +220,31 @@ SCENARIOS: list[InterruptScenario] = [
         isolate_timers=True,
         timers_enabled=True,
     ),
+    # OFF-state behavior
+    InterruptScenario(
+        "off_no_exec_on_longest_timer",
+        Trigger.NONE,
+        0x80,
+        Program.OFF,
+        expect_deliver=False,
+        expect_halt_canceled=False,
+    ),
+    InterruptScenario(
+        "off_on_unmasked_wakes_and_delivers",
+        Trigger.KEY_ON,
+        0x80 | 0x08,
+        Program.OFF,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "off_press_off_key_no_wake",
+        Trigger.KEY_OFF,
+        0x80,
+        Program.OFF,
+        expect_deliver=False,
+        expect_halt_canceled=False,
+    ),
 ]
 
 
@@ -283,6 +309,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, sc.imr)
 
     # HALT/OFF prelude
+    off_pc_after_off: int | None = None
     if sc.program in (Program.HALT, Program.OFF):
         # For OFF: timers never work; for HALT: allow override
         if sc.program is Program.OFF:
@@ -292,6 +319,8 @@ def test_interrupts(sc: InterruptScenario) -> None:
         emu._timer_enabled = timers_on  # type: ignore[attr-defined]
         emu.step()  # HALT/OFF
         assert emu.cpu.state.halted is True
+        if sc.program is Program.OFF:
+            off_pc_after_off = emu.cpu.regs.get(RegisterName.PC)
         # Stable halt check only when timers are disabled
         if not timers_on:
             u_stable = emu.cpu.regs.get(RegisterName.U)
@@ -305,6 +334,9 @@ def test_interrupts(sc: InterruptScenario) -> None:
     # Trigger
     if sc.trigger in (Trigger.KEY_F1, Trigger.KEY_ON):
         assert emu.press_key(sc.trigger.value) is True
+    elif sc.trigger is Trigger.KEY_OFF:
+        # OFF key may not be part of matrix; just attempt without asserting
+        emu.press_key(sc.trigger.value)
 
     # Execute program to the point of delivery
     if sc.program in (Program.HALT, Program.OFF):
@@ -321,8 +353,16 @@ def test_interrupts(sc: InterruptScenario) -> None:
             for _ in range(int(steps)):
                 emu.step()
         else:
-            for _ in range(24):
-                emu.step()
+            # For OFF, explicitly run enough steps to exceed the longest timer period
+            if sc.program is Program.OFF:
+                mti = int(getattr(emu, "_timer_mti_period", 500))
+                sti = int(getattr(emu, "_timer_sti_period", 5000))
+                longest = max(mti, sti)
+                for _ in range(int(longest)):
+                    emu.step()
+            else:
+                for _ in range(24):
+                    emu.step()
     else:
         emu.step()  # MV I
         emu.step()  # WAIT
@@ -350,3 +390,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
         assert emu.last_irq.get("src") is not None
     else:
         assert emu.last_irq.get("src") in (None, "")
+        # In OFF, ensure PC did not advance beyond OFF if no delivery
+        if sc.program is Program.OFF:
+            pc_now = emu.cpu.regs.get(RegisterName.PC)
+            assert pc_now == (off_pc_after_off if off_pc_after_off is not None else PROGRAM.entry)
