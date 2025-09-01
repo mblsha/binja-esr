@@ -285,6 +285,18 @@ def _isolate_other_timer(emu: PCE500Emulator, trig: Trigger) -> None:
 def test_interrupts(sc: InterruptScenario) -> None:
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
 
+    # Track how many steps we actually executed to detect early exits
+    steps_taken = 0
+
+    def step_once() -> None:
+        nonlocal steps_taken
+        steps_taken += 1
+        emu.step()
+
+    def step_n(n: int) -> None:
+        for _ in range(int(n)):
+            step_once()
+
     if sc.isolate_timers:
         emu._timer_enabled = True  # type: ignore[attr-defined]
         _isolate_other_timer(emu, sc.trigger)
@@ -317,7 +329,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
         else:
             timers_on = False if sc.timers_enabled is None else bool(sc.timers_enabled)
         emu._timer_enabled = timers_on  # type: ignore[attr-defined]
-        emu.step()  # HALT/OFF
+        step_once()  # HALT/OFF
         assert emu.cpu.state.halted is True
         if sc.program is Program.OFF:
             off_pc_after_off = emu.cpu.regs.get(RegisterName.PC)
@@ -325,7 +337,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
         if not timers_on:
             u_stable = emu.cpu.regs.get(RegisterName.U)
             for _ in range(3):
-                emu.step()
+                step_once()
                 assert emu.cpu.state.halted is True
                 assert emu.cpu.regs.get(RegisterName.U) == u_stable
 
@@ -339,6 +351,8 @@ def test_interrupts(sc: InterruptScenario) -> None:
         emu.press_key(sc.trigger.value)
 
     # Execute program to the point of delivery
+    steps_before_exec = steps_taken
+    exec_min_target = 0
     if sc.program in (Program.HALT, Program.OFF):
         if sc.timers_enabled:
             # Let timers advance enough cycles to fire
@@ -350,8 +364,8 @@ def test_interrupts(sc: InterruptScenario) -> None:
                 steps = period + 200
             else:
                 steps = 24
-            for _ in range(int(steps)):
-                emu.step()
+            exec_min_target = int(steps)
+            step_n(int(steps))
         else:
             # For OFF without timers: if expecting delivery (e.g., ON key),
             # run just enough steps to deliver and complete handler once.
@@ -359,28 +373,33 @@ def test_interrupts(sc: InterruptScenario) -> None:
             if sc.program is Program.OFF:
                 if sc.expect_deliver:
                     # One step to cancel OFF and deliver, plus a few for handler
-                    emu.step()
-                    for _ in range(5):
-                        emu.step()
+                    exec_min_target = 1 + 5
+                    step_once()
+                    step_n(5)
                 else:
                     # Exceed the longest timer period to be robust to off-by-one
                     mti = int(getattr(emu, "_timer_mti_period", 500))
                     sti = int(getattr(emu, "_timer_sti_period", 5000))
                     longest = max(mti, sti)
-                    for _ in range(int(longest + 200)):
-                        emu.step()
+                    exec_min_target = int(longest + 200)
+                    step_n(int(longest + 200))
             else:
-                for _ in range(24):
-                    emu.step()
+                exec_min_target = 24
+                step_n(24)
     else:
-        emu.step()  # MV I
-        emu.step()  # WAIT
-        emu.step()  # Attempt delivery
+        # MV I; WAIT; attempt delivery
+        exec_min_target = 3
+        step_n(3)
         if sc.expect_deliver:
-            for _ in range(5):  # Full handler
-                emu.step()
+            exec_min_target += 5  # Full handler
+            step_n(5)
         else:
-            emu.step()  # NOP
+            exec_min_target += 1  # NOP
+            step_once()
+
+    # Ensure we executed at least the intended number of steps in the exec phase
+    steps_after_exec = steps_taken - steps_before_exec
+    assert steps_after_exec >= exec_min_target
 
     u_after = emu.cpu.regs.get(RegisterName.U)
     expected_u_delta = -2 if sc.expect_deliver else 0
