@@ -30,6 +30,7 @@ class Trigger(Enum):
 class Program(Enum):
     HALT = auto()
     WAIT = auto()
+    OFF = auto()
 
 
 TRIGGER_MASK = {
@@ -63,6 +64,13 @@ ENTRY_WAIT = """
 entry:
     MV I, 0x{wait_count:04X}
     WAIT
+    NOP
+"""
+
+ENTRY_OFF = """
+.ORG 0x{entry:05X}
+entry:
+    OFF
     NOP
 """
 
@@ -218,11 +226,12 @@ def _assemble_program(
     emu: PCE500Emulator, program: Program, wait_count: int | None
 ) -> None:
     asm = Assembler()
-    entry = (
-        ENTRY_HALT.format(entry=PROGRAM.entry)
-        if program is Program.HALT
-        else ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
-    )
+    if program is Program.HALT:
+        entry = ENTRY_HALT.format(entry=PROGRAM.entry)
+    elif program is Program.WAIT:
+        entry = ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
+    else:
+        entry = ENTRY_OFF.format(entry=PROGRAM.entry)
     handler = HANDLER_TEMPLATE.format(handler=PROGRAM.handler, marker=PROGRAM.marker)
     source = dedent(entry + handler)
     binfile = asm.assemble(source)
@@ -273,12 +282,15 @@ def test_interrupts(sc: InterruptScenario) -> None:
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, sc.imr)
 
-    # HALT prelude
-    if sc.program is Program.HALT:
-        # Default timers disabled unless explicitly enabled in scenario
-        timers_on = False if sc.timers_enabled is None else bool(sc.timers_enabled)
+    # HALT/OFF prelude
+    if sc.program in (Program.HALT, Program.OFF):
+        # For OFF: timers never work; for HALT: allow override
+        if sc.program is Program.OFF:
+            timers_on = False
+        else:
+            timers_on = False if sc.timers_enabled is None else bool(sc.timers_enabled)
         emu._timer_enabled = timers_on  # type: ignore[attr-defined]
-        emu.step()  # HALT
+        emu.step()  # HALT/OFF
         assert emu.cpu.state.halted is True
         # Stable halt check only when timers are disabled
         if not timers_on:
@@ -295,7 +307,7 @@ def test_interrupts(sc: InterruptScenario) -> None:
         assert emu.press_key(sc.trigger.value) is True
 
     # Execute program to the point of delivery
-    if sc.program is Program.HALT:
+    if sc.program in (Program.HALT, Program.OFF):
         if sc.timers_enabled:
             # Let timers advance enough cycles to fire
             if sc.trigger is Trigger.MTI:
@@ -325,7 +337,10 @@ def test_interrupts(sc: InterruptScenario) -> None:
     expected_u_delta = -2 if sc.expect_deliver else 0
     assert u_after - u_before == expected_u_delta
 
-    if sc.program is Program.HALT and sc.expect_halt_canceled is not None:
+    if (
+        sc.program in (Program.HALT, Program.OFF)
+        and sc.expect_halt_canceled is not None
+    ):
         assert emu.cpu.state.halted == (not sc.expect_halt_canceled)
 
     if sc.expect_deliver:
