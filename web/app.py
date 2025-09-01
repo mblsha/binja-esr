@@ -18,6 +18,7 @@ from flask import (
 )
 from flask_cors import CORS
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from sc62015.pysc62015.constants import IMRFlag
 from PIL import Image, ImageOps
 
 # Add parent directory to path for imports
@@ -195,9 +196,9 @@ def update_emulator_state():
         isr_val = (
             emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
         )
-        irm = 1 if (imr_val & 0x80) else 0
-        keym = 1 if (imr_val & 0x04) else 0
-        isr_key = 1 if (isr_val & 0x04) else 0
+        irm = 1 if (imr_val & int(IMRFlag.IRM)) else 0
+        keym = 1 if (imr_val & int(IMRFlag.KEYM)) else 0
+        isr_key = 1 if (isr_val & int(IMRFlag.KEYM)) else 0
         pending = bool(getattr(emulator, "_irq_pending", False))
         ints.update(
             {
