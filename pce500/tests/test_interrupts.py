@@ -12,6 +12,7 @@ from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from pce500 import PCE500Emulator
+from sc62015.pysc62015.constants import IMRFlag
 
 
 # ----------------------------- Types & constants -----------------------------
@@ -40,23 +41,6 @@ TRIGGER_MASK: Dict[Trigger, int] = {
     Trigger.KEY_F1: 0x04,
     Trigger.KEY_ON: 0x08,
 }
-
-
-class IMRFlag(Enum):
-    """Interrupt Mask Register bits (IMR, 0xFB).
-
-    Values are the bit masks to OR into IMR:
-    - IRM: master interrupt enable (bit 7)
-    - MTI/STI: timer sources (bits 0/1)
-    - KEY: keyboard matrix interrupt (bit 2)
-    - ONK: ON-key wake/interrupt (bit 3)
-    """
-
-    IRM = 0x80
-    MTI = 0x01
-    STI = 0x02
-    KEY = 0x04
-    ONK = 0x08
 
 
 @dataclass(frozen=True)
