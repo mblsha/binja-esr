@@ -209,7 +209,7 @@ SCENARIOS: list[InterruptScenario] = [
         expect_deliver=False,
         isolate_timers=True,
     ),
-    # HALT + timers (verify timers wake and deliver when masked in IMR)
+    # HALT + timers (verify timers wake CPU and deliver only when unmasked)
     InterruptScenario(
         "halt_mti_unmasked",
         Trigger.MTI,
@@ -221,11 +221,31 @@ SCENARIOS: list[InterruptScenario] = [
         timers_enabled=True,
     ),
     InterruptScenario(
+        "halt_mti_masked",
+        Trigger.MTI,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    InterruptScenario(
         "halt_sti_unmasked",
         Trigger.STI,
         0x80 | 0x02,
         Program.HALT,
         expect_deliver=True,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    InterruptScenario(
+        "halt_sti_masked",
+        Trigger.STI,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
         expect_halt_canceled=True,
         isolate_timers=True,
         timers_enabled=True,
