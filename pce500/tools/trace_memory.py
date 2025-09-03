@@ -11,9 +11,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
-# Keep track of all memory reads
-memory_reads = []
-
 
 class MemoryTracer:
     def __init__(self, original_read):
