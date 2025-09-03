@@ -85,7 +85,7 @@ class PerfettoTraceComparator:
                 break
 
         # If not found by name, try to find by event content
-        if not execution_uuid:
+        if execution_uuid is None:
             # Sample events from each track to find Exec@ events
             track_samples = {}
             for packet in trace.packet:
@@ -107,7 +107,7 @@ class PerfettoTraceComparator:
                     )
                     break
 
-        if not execution_uuid:
+        if execution_uuid is None:
             raise ValueError("No 'Execution' thread or Exec@ events found in trace")
 
         # Extract events from the Execution thread
