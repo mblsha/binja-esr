@@ -49,6 +49,13 @@ TRIGGER_MASK = {
     Trigger.KEY_ON: 0x08,
 }
 
+EXPECTED_IRQ_SRC = {
+    Trigger.MTI: "MTI",
+    Trigger.STI: "STI",
+    Trigger.KEY_F1: "KEY",
+    Trigger.KEY_ON: "ONK",
+}
+
 
 @dataclass(frozen=True)
 class ProgramConfig:
@@ -142,6 +149,14 @@ SCENARIOS: list[InterruptScenario] = [
         "on_masked",
         Trigger.KEY_ON,
         0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "key_global_mask_off",
+        Trigger.KEY_F1,
+        0x04,  # KEYM set, global mask cleared
         Program.HALT,
         expect_deliver=False,
         expect_halt_canceled=True,
@@ -453,7 +468,8 @@ def test_interrupts(sc: InterruptScenario) -> None:
         mask = TRIGGER_MASK.get(sc.trigger, 0)
         assert (emu.memory.read_byte(u_after) & mask) == mask
         assert emu.memory.read_byte(u_after + 1) == PROGRAM.marker
-        assert emu.last_irq.get("src") is not None
+        expected_src = EXPECTED_IRQ_SRC.get(sc.trigger)
+        assert emu.last_irq.get("src") == expected_src
     else:
         assert emu.last_irq.get("src") in (None, "")
         # In OFF, ensure PC did not advance beyond OFF if no delivery
@@ -462,3 +478,12 @@ def test_interrupts(sc: InterruptScenario) -> None:
             assert pc_now == (
                 off_pc_after_off if off_pc_after_off is not None else PROGRAM.entry
             )
+
+    # Verify ISR state after execution
+    isr_final = emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
+    expected_isr = 0
+    if sc.trigger in TRIGGER_MASK and not (
+        sc.program is Program.WAIT and (sc.wait_delta or 0) < 0
+    ):
+        expected_isr = TRIGGER_MASK[sc.trigger]
+    assert isr_final == expected_isr
