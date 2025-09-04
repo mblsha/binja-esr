@@ -103,6 +103,7 @@ class Given:
     timers_enabled: Optional[bool] = None  # HALT-only: None→off by default
 
 
+<<<<<<< HEAD
 @dataclass(frozen=True)
 class Expect:
     """What the test intends to check (contract)."""
@@ -135,6 +136,200 @@ class InterruptSpec:
 
 
 # ----------------------------- Helpers (unchanged core) -----------------------------
+=======
+SCENARIOS: list[InterruptScenario] = [
+    # HALT + keyboard/ON
+    InterruptScenario(
+        "key_unmasked",
+        Trigger.KEY_F1,
+        0x80 | 0x04,
+        Program.HALT,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "key_masked",
+        Trigger.KEY_F1,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "on_unmasked",
+        Trigger.KEY_ON,
+        0x80 | 0x08,
+        Program.HALT,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "on_masked",
+        Trigger.KEY_ON,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "key_global_mask_off",
+        Trigger.KEY_F1,
+        0x04,  # KEYM set, global mask cleared
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+    ),
+    InterruptScenario(
+        "no_trigger_halts",
+        Trigger.NONE,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=False,
+    ),
+    # WAIT + timers
+    InterruptScenario(
+        "mti_unmasked",
+        Trigger.MTI,
+        0x80 | 0x01,
+        Program.WAIT,
+        wait_delta=50,
+        expect_deliver=True,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "mti_masked",
+        Trigger.MTI,
+        0x80,
+        Program.WAIT,
+        wait_delta=50,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "mti_unmasked_not_enough",
+        Trigger.MTI,
+        0x80 | 0x01,
+        Program.WAIT,
+        wait_delta=-20,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "sti_unmasked",
+        Trigger.STI,
+        0x80 | 0x02,
+        Program.WAIT,
+        wait_delta=200,
+        expect_deliver=True,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "sti_masked",
+        Trigger.STI,
+        0x80,
+        Program.WAIT,
+        wait_delta=200,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "sti_unmasked_not_enough",
+        Trigger.STI,
+        0x80 | 0x02,
+        Program.WAIT,
+        wait_delta=-50,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    # WAIT + keyboard
+    InterruptScenario(
+        "wait_key_unmasked",
+        Trigger.KEY_F1,
+        0x80 | 0x04,
+        Program.WAIT,
+        expect_deliver=True,
+        isolate_timers=True,
+    ),
+    InterruptScenario(
+        "wait_key_masked",
+        Trigger.KEY_F1,
+        0x80,
+        Program.WAIT,
+        expect_deliver=False,
+        isolate_timers=True,
+    ),
+    # HALT + timers (verify timers wake CPU and deliver only when unmasked)
+    InterruptScenario(
+        "halt_mti_unmasked",
+        Trigger.MTI,
+        0x80 | 0x01,
+        Program.HALT,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    InterruptScenario(
+        "halt_mti_masked",
+        Trigger.MTI,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    InterruptScenario(
+        "halt_sti_unmasked",
+        Trigger.STI,
+        0x80 | 0x02,
+        Program.HALT,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    InterruptScenario(
+        "halt_sti_masked",
+        Trigger.STI,
+        0x80,
+        Program.HALT,
+        expect_deliver=False,
+        expect_halt_canceled=True,
+        isolate_timers=True,
+        timers_enabled=True,
+    ),
+    # OFF-state behavior
+    InterruptScenario(
+        "off_no_exec_on_longest_timer",
+        Trigger.NONE,
+        0x80,
+        Program.OFF,
+        expect_deliver=False,
+        expect_halt_canceled=False,
+        expected_min_exec_steps=5200,
+    ),
+    InterruptScenario(
+        "off_on_unmasked_wakes_and_delivers",
+        Trigger.KEY_ON,
+        0x80 | 0x08,
+        Program.OFF,
+        expect_deliver=True,
+        expect_halt_canceled=True,
+        expected_min_exec_steps=6,
+    ),
+    InterruptScenario(
+        "off_press_off_key_no_wake",
+        Trigger.KEY_OFF,
+        0x80,
+        Program.OFF,
+        expect_deliver=False,
+        expect_halt_canceled=False,
+        expected_min_exec_steps=5200,
+    ),
+]
+>>>>>>> a0a152f (tests: stabilize WAIT+keyboard by isolating timers)
 
 
 def _assemble_program(
@@ -164,6 +359,10 @@ def _assemble_program(
 
 
 def _isolate_other_timer(emu: PCE500Emulator, trig: Trigger) -> None:
+    # For non-timer triggers, disable timers entirely to avoid spurious IRQs
+    if trig not in (Trigger.MTI, Trigger.STI):
+        emu._timer_enabled = False  # type: ignore[attr-defined]
+        return
     if trig == Trigger.MTI:
         emu._timer_sti_period = 10**9  # type: ignore[attr-defined]
         emu._timer_next_sti = emu.cycle_count + emu._timer_sti_period  # type: ignore[attr-defined]
@@ -524,6 +723,47 @@ SPECS: tuple[InterruptSpec, ...] = (
             Program.WAIT,
             {IMRFlag.IRM, IMRFlag.STI},
             wait_delta=-50,
+            isolate_timers=True,
+        ),
+        Expect(deliver=False),
+        Observed(
+            halted_after=False,
+            u_before=0xBFE00,
+            u_after=0xBFE00,
+            u_delta=0,
+            delivered=False,
+            isr_stack=None,
+            marker_stack=None,
+            last_irq_src_present=False,
+        ),
+    ),
+    # WAIT + keyboard
+    InterruptSpec(
+        Given(
+            "wait_key_unmasked",
+            Trigger.KEY_F1,
+            Program.WAIT,
+            {IMRFlag.IRM, IMRFlag.KEY},
+            isolate_timers=True,
+        ),
+        Expect(deliver=True),
+        Observed(
+            halted_after=False,
+            u_before=0xBFE00,
+            u_after=0xBFDFE,
+            u_delta=-2,
+            delivered=True,
+            isr_stack=0x04,
+            marker_stack=0x42,
+            last_irq_src_present=True,
+        ),
+    ),
+    InterruptSpec(
+        Given(
+            "wait_key_masked",
+            Trigger.KEY_F1,
+            Program.WAIT,
+            {IMRFlag.IRM},
             isolate_timers=True,
         ),
         Expect(deliver=False),
