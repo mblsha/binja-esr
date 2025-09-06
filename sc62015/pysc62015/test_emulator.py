@@ -95,7 +95,7 @@ def _make_cpu_and_mem(
     def read_mem(addr: int) -> int:
         reads.append(addr)
         if addr >= INTERNAL_MEMORY_START:
-            addr = INTERNAL_MEMORY_START + ((addr - INTERNAL_MEMORY_START) & 0xFF)
+            addr = imem((addr - INTERNAL_MEMORY_START) & 0xFF)
         if addr < 0 or addr >= len(raw):
             raise IndexError(f"Read address {addr:04x} out of bounds")
         return raw[addr]
@@ -104,13 +104,18 @@ def _make_cpu_and_mem(
         writes.append((addr, value))
         # print(f"Writing {value:02x} to address {addr:04x}") # Uncomment for debugging
         if addr >= INTERNAL_MEMORY_START:
-            addr = INTERNAL_MEMORY_START + ((addr - INTERNAL_MEMORY_START) & 0xFF)
+            addr = imem((addr - INTERNAL_MEMORY_START) & 0xFF)
         if addr < 0 or addr >= len(raw):
             raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
 
     cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
     return cpu, raw, reads, writes
+
+
+def imem(offset: int) -> int:
+    """Return absolute address for an internal memory offset."""
+    return INTERNAL_MEMORY_START + offset
 
 
 def debug_instruction(cpu: Emulator, address: int) -> None:
@@ -427,13 +432,13 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("CB50A0"),  # MVL (50), (A0)
         init_regs={RegisterName.I: 0},
         init_mem={
-            INTERNAL_MEMORY_START + 0xA0: 0xDE,  # Source
-            INTERNAL_MEMORY_START + 0x50: 0xAD,  # Destination
+            imem(0xA0): 0xDE,  # Source
+            imem(0x50): 0xAD,  # Destination
         },
         expected_regs={RegisterName.I: 0},
         expected_mem_state={
-            INTERNAL_MEMORY_START + 0xA0: 0xDE,
-            INTERNAL_MEMORY_START + 0x50: 0xAD,  # Should remain unchanged
+            imem(0xA0): 0xDE,
+            imem(0x50): 0xAD,  # Should remain unchanged
         },
         expected_asm_str="MVL   (BP+50), (BP+A0)",
     ),
@@ -442,18 +447,18 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("CB5150"),  # MVL (51), (50)
         init_regs={RegisterName.I: 3},
         init_mem={
-            INTERNAL_MEMORY_START + 0x50: 0xAA,
-            INTERNAL_MEMORY_START + 0x51: 0xBB,
-            INTERNAL_MEMORY_START + 0x52: 0xCC,
+            imem(0x50): 0xAA,
+            imem(0x51): 0xBB,
+            imem(0x52): 0xCC,
         },
         # A naive forward copy clobbers the source.
         # Expected: mem[51]=mem[50]=AA; mem[52]=mem[51]=AA; mem[53]=mem[52]=AA
         expected_regs={RegisterName.I: 0},
         expected_mem_state={
-            INTERNAL_MEMORY_START + 0x50: 0xAA,
-            INTERNAL_MEMORY_START + 0x51: 0xAA,
-            INTERNAL_MEMORY_START + 0x52: 0xAA,
-            INTERNAL_MEMORY_START + 0x53: 0xAA,
+            imem(0x50): 0xAA,
+            imem(0x51): 0xAA,
+            imem(0x52): 0xAA,
+            imem(0x53): 0xAA,
         },
         expected_asm_str="MVL   (BP+51), (BP+50)",
     ),
@@ -464,16 +469,16 @@ instruction_test_cases: List[InstructionTestCase] = [
         # Dst ends at 0x51, Src ends at 0x50.
         # Copies from {50, 4F, 4E} to {51, 50, 4F}.
         init_mem={
-            INTERNAL_MEMORY_START + 0x50: 0xAA,
-            INTERNAL_MEMORY_START + 0x4F: 0xBB,
-            INTERNAL_MEMORY_START + 0x4E: 0xCC,
+            imem(0x50): 0xAA,
+            imem(0x4F): 0xBB,
+            imem(0x4E): 0xCC,
         },
         # A backward copy handles this overlap correctly.
         expected_regs={RegisterName.I: 0},
         expected_mem_state={
-            INTERNAL_MEMORY_START + 0x51: 0xAA,
-            INTERNAL_MEMORY_START + 0x50: 0xBB,
-            INTERNAL_MEMORY_START + 0x4F: 0xCC,
+            imem(0x51): 0xAA,
+            imem(0x50): 0xBB,
+            imem(0x4F): 0xCC,
         },
         expected_asm_str="MVLD  (BP+51), (BP+50)",
     ),
@@ -482,17 +487,17 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("CBFEF0"),  # MVL (FE), (F0)
         init_regs={RegisterName.I: 4},
         init_mem={
-            INTERNAL_MEMORY_START + 0xF0: 0x11,
-            INTERNAL_MEMORY_START + 0xF1: 0x22,
-            INTERNAL_MEMORY_START + 0xF2: 0x33,
-            INTERNAL_MEMORY_START + 0xF3: 0x44,
+            imem(0xF0): 0x11,
+            imem(0xF1): 0x22,
+            imem(0xF2): 0x33,
+            imem(0xF3): 0x44,
         },
         expected_regs={RegisterName.I: 0},
         expected_mem_state={
-            INTERNAL_MEMORY_START + 0xFE: 0x11,
-            INTERNAL_MEMORY_START + 0xFF: 0x22,
-            INTERNAL_MEMORY_START + 0x00: 0x33,
-            INTERNAL_MEMORY_START + 0x01: 0x44,
+            imem(0xFE): 0x11,
+            imem(0xFF): 0x22,
+            imem(0x00): 0x33,
+            imem(0x01): 0x44,
         },
         expected_asm_str="MVL   (BP+FE), (BP+F0)",
     ),
@@ -512,8 +517,8 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.X: 0x2000,
         },
         expected_mem_state={
-            INTERNAL_MEMORY_START + 0x52: 0xEF,
-            INTERNAL_MEMORY_START + 0x51: 0xBE,
+            imem(0x52): 0xEF,
+            imem(0x51): 0xBE,
         },
         expected_asm_str="MVL   (BP+52), [--X]",
     ),
@@ -539,13 +544,11 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_state={
             # MVL with pre-decrement source causes destination to decrement too
             # Writes go to: 0x02, 0x01, 0x00, 0xFF, 0xFE (wrapped)
-            INTERNAL_MEMORY_START + 0x02: 0x44,  # First byte from 0x1FFF
-            INTERNAL_MEMORY_START + 0x01: 0x33,  # Second byte from 0x1FFE
-            INTERNAL_MEMORY_START + 0x00: 0x22,  # Third byte from 0x1FFD
-            INTERNAL_MEMORY_START
-            + 0xFF: 0x11,  # Fourth byte from 0x1FFC (wrapped from -1)
-            INTERNAL_MEMORY_START
-            + 0xFE: 0x55,  # Fifth byte from 0x1FFB (wrapped from -2)
+            imem(0x02): 0x44,  # First byte from 0x1FFF
+            imem(0x01): 0x33,  # Second byte from 0x1FFE
+            imem(0x00): 0x22,  # Third byte from 0x1FFD
+            imem(0xFF): 0x11,  # Fourth byte from 0x1FFC (wrapped from -1)
+            imem(0xFE): 0x55,  # Fifth byte from 0x1FFB (wrapped from -2)
         },
         expected_asm_str="MVL   (BP+02), [--X]",
     ),
@@ -559,11 +562,11 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         init_mem={
             # Source data at internal memory starting at BP+50
-            INTERNAL_MEMORY_START + 0x50: 0xAA,
-            INTERNAL_MEMORY_START + 0x51: 0xBB,
-            INTERNAL_MEMORY_START + 0x52: 0xCC,
-            INTERNAL_MEMORY_START + 0x53: 0xDD,
-            INTERNAL_MEMORY_START + 0x54: 0xEE,
+            imem(0x50): 0xAA,
+            imem(0x51): 0xBB,
+            imem(0x52): 0xCC,
+            imem(0x53): 0xDD,
+            imem(0x54): 0xEE,
         },
         expected_regs={
             RegisterName.I: 0,
@@ -571,17 +574,17 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_state={
             # MVL copies from (BP+50) to (BP+FE) with incrementing addresses
             # Destination addresses: 0xFE, 0xFF, 0x00 (wrapped), 0x01, 0x02
-            INTERNAL_MEMORY_START + 0xFE: 0xAA,  # From BP+50
-            INTERNAL_MEMORY_START + 0xFF: 0xBB,  # From BP+51
-            INTERNAL_MEMORY_START + 0x00: 0xCC,  # From BP+52 (wrapped from 0x100)
-            INTERNAL_MEMORY_START + 0x01: 0xDD,  # From BP+53 (wrapped from 0x101)
-            INTERNAL_MEMORY_START + 0x02: 0xEE,  # From BP+54 (wrapped from 0x102)
+            imem(0xFE): 0xAA,  # From BP+50
+            imem(0xFF): 0xBB,  # From BP+51
+            imem(0x00): 0xCC,  # From BP+52 (wrapped from 0x100)
+            imem(0x01): 0xDD,  # From BP+53 (wrapped from 0x101)
+            imem(0x02): 0xEE,  # From BP+54 (wrapped from 0x102)
             # Source data remains unchanged
-            INTERNAL_MEMORY_START + 0x50: 0xAA,
-            INTERNAL_MEMORY_START + 0x51: 0xBB,
-            INTERNAL_MEMORY_START + 0x52: 0xCC,
-            INTERNAL_MEMORY_START + 0x53: 0xDD,
-            INTERNAL_MEMORY_START + 0x54: 0xEE,
+            imem(0x50): 0xAA,
+            imem(0x51): 0xBB,
+            imem(0x52): 0xCC,
+            imem(0x53): 0xDD,
+            imem(0x54): 0xEE,
         },
         expected_asm_str="MVL   (BP+FE), (BP+50)",
     ),
@@ -610,13 +613,13 @@ instruction_test_cases: List[InstructionTestCase] = [
             # BP=2, so (BP+00) = address 0x02
             # MVL with pre-decrement source causes destination to decrement too
             # Writes go to: 0x02, 0x01, 0x00, 0xFF (wrapped), 0xFE (wrapped)
-            INTERNAL_MEMORY_START + 0x02: 0x11,  # From 0x1FFF
-            INTERNAL_MEMORY_START + 0x01: 0x22,  # From 0x1FFE
-            INTERNAL_MEMORY_START + 0x00: 0x33,  # From 0x1FFD
-            INTERNAL_MEMORY_START + 0xFF: 0x44,  # From 0x1FFC (wrapped from -1)
-            INTERNAL_MEMORY_START + 0xFE: 0x55,  # From 0x1FFB (wrapped from -2)
+            imem(0x02): 0x11,  # From 0x1FFF
+            imem(0x01): 0x22,  # From 0x1FFE
+            imem(0x00): 0x33,  # From 0x1FFD
+            imem(0xFF): 0x44,  # From 0x1FFC (wrapped from -1)
+            imem(0xFE): 0x55,  # From 0x1FFB (wrapped from -2)
             # BP remains unchanged
-            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0x02,
+            imem(IMEMRegisters.BP): 0x02,
         },
         expected_asm_str="MVL   (BP+00), [--X]",
     ),
@@ -628,12 +631,12 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         init_mem={
             # BP register at internal memory
-            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xFE,  # BP = 0xFE
+            imem(IMEMRegisters.BP): 0xFE,  # BP = 0xFE
             # Source data at internal memory (BP+50)
             # With BP=0xFE, (BP+50) = 0xFE + 0x50 = 0x14E, wrapped to 0x4E
-            INTERNAL_MEMORY_START + 0x4E: 0xAA,
-            INTERNAL_MEMORY_START + 0x4F: 0xBB,
-            INTERNAL_MEMORY_START + 0x50: 0xCC,
+            imem(0x4E): 0xAA,
+            imem(0x4F): 0xBB,
+            imem(0x50): 0xCC,
         },
         expected_regs={
             RegisterName.I: 0,
@@ -643,14 +646,14 @@ instruction_test_cases: List[InstructionTestCase] = [
             # MVL copies from (BP+50) to (BP+00) with incrementing addresses
             # Source: 0x4E, 0x4F, 0x50
             # Destination: 0xFE, 0xFF, 0x00 (wrapped)
-            INTERNAL_MEMORY_START + 0xFE: 0xAA,  # From BP+50 (0x4E)
-            INTERNAL_MEMORY_START + 0xFF: 0xBB,  # From BP+51 (0x4F)
-            INTERNAL_MEMORY_START + 0x00: 0xCC,  # From BP+52 (0x50), wrapped from 0x100
+            imem(0xFE): 0xAA,  # From BP+50 (0x4E)
+            imem(0xFF): 0xBB,  # From BP+51 (0x4F)
+            imem(0x00): 0xCC,  # From BP+52 (0x50), wrapped from 0x100
             # Source and BP remain unchanged
-            INTERNAL_MEMORY_START + 0x4E: 0xAA,
-            INTERNAL_MEMORY_START + 0x4F: 0xBB,
-            INTERNAL_MEMORY_START + 0x50: 0xCC,
-            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xFE,
+            imem(0x4E): 0xAA,
+            imem(0x4F): 0xBB,
+            imem(0x50): 0xCC,
+            imem(IMEMRegisters.BP): 0xFE,
         },
         expected_asm_str="MVL   (BP+00), (BP+50)",
     ),
@@ -703,20 +706,20 @@ instruction_test_cases: List[InstructionTestCase] = [
     InstructionTestCase(
         test_id="SHL_mem_simple",
         instr_bytes=bytes.fromhex("F710"),
-        init_mem={INTERNAL_MEMORY_START + 0x10: 0x55},
+        init_mem={imem(0x10): 0x55},
         init_regs={RegisterName.FC: 0},
-        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0xAA)],
-        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0xAA},
+        expected_mem_writes=[(imem(0x10), 0xAA)],
+        expected_mem_state={imem(0x10): 0xAA},
         expected_regs={RegisterName.FC: 0, RegisterName.FZ: 0},
         expected_asm_str="SHL   (BP+10)",
     ),
     InstructionTestCase(
         test_id="SHL_mem_carry_out_and_zero",
         instr_bytes=bytes.fromhex("F710"),
-        init_mem={INTERNAL_MEMORY_START + 0x10: 0x80},
+        init_mem={imem(0x10): 0x80},
         init_regs={RegisterName.FC: 0},
-        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
-        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_mem_writes=[(imem(0x10), 0x00)],
+        expected_mem_state={imem(0x10): 0x00},
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
         expected_asm_str="SHL   (BP+10)",
     ),
@@ -724,20 +727,20 @@ instruction_test_cases: List[InstructionTestCase] = [
     InstructionTestCase(
         test_id="SHR_mem_simple",
         instr_bytes=bytes.fromhex("F510"),
-        init_mem={INTERNAL_MEMORY_START + 0x10: 0x55},
+        init_mem={imem(0x10): 0x55},
         init_regs={RegisterName.FC: 0},
-        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x2A)],
-        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x2A},
+        expected_mem_writes=[(imem(0x10), 0x2A)],
+        expected_mem_state={imem(0x10): 0x2A},
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 0},
         expected_asm_str="SHR   (BP+10)",
     ),
     InstructionTestCase(
         test_id="SHR_mem_carry_out_and_zero",
         instr_bytes=bytes.fromhex("F510"),
-        init_mem={INTERNAL_MEMORY_START + 0x10: 0x01},
+        init_mem={imem(0x10): 0x01},
         init_regs={RegisterName.FC: 0},
-        expected_mem_writes=[(INTERNAL_MEMORY_START + 0x10, 0x00)],
-        expected_mem_state={INTERNAL_MEMORY_START + 0x10: 0x00},
+        expected_mem_writes=[(imem(0x10), 0x00)],
+        expected_mem_state={imem(0x10): 0x00},
         expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
         expected_asm_str="SHR   (BP+10)",
     ),
