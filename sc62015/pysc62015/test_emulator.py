@@ -128,7 +128,13 @@ def debug_instruction(cpu: Emulator, address: int) -> None:
 
 @dataclass
 class InstructionTestCase:
-    """A structured container for a single instruction test case."""
+    """A structured container for a single instruction test case.
+
+    Unless a test explicitly specifies an expected program counter in
+    ``expected_regs``, the runner will verify that the PC advances by the
+    length of the instruction bytes. This helps catch cases where the emulator
+    fails to move to the next instruction.
+    """
 
     test_id: str
     instr_bytes: bytes
@@ -340,6 +346,14 @@ instruction_test_cases: List[InstructionTestCase] = [
         instr_bytes=bytes.fromhex("4001"),
         init_regs={RegisterName.A: 0xFF},
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},
+        expected_asm_str="ADD   A, 01",
+    ),
+    InstructionTestCase(
+        test_id="ADD_A_imm_advances_pc",
+        instr_bytes=bytes.fromhex("4001"),
+        init_regs={RegisterName.A: 0x00},
+        expected_regs={RegisterName.A: 0x01, RegisterName.FZ: 0, RegisterName.FC: 0},
+        initial_pc=0x1000,
         expected_asm_str="ADD   A, 01",
     ),
     # --- SUB Instructions ---
@@ -1296,6 +1310,15 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
         assert actual_val == expected_val, (
             f"[{case.test_id}] Memory state at 0x{addr:X} mismatch: "
             f"Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
+        )
+
+    # Ensure the program counter advances if not explicitly verified above
+    if RegisterName.PC not in case.expected_regs:
+        expected_pc = case.initial_pc + len(case.instr_bytes)
+        actual_pc = cpu.regs.get(RegisterName.PC)
+        assert actual_pc == expected_pc, (
+            f"[{case.test_id}] Program counter mismatch: "
+            f"Expected 0x{expected_pc:X}, Got 0x{actual_pc:X}"
         )
 
 
