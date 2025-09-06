@@ -12,6 +12,7 @@ from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
 from binja_test_mocks.tokens import asm_str
 from dataclasses import dataclass, field
+from .sc_asm import Assembler
 import pytest
 
 # Preallocate a single memory buffer for unit tests to reuse. This avoids
@@ -142,7 +143,8 @@ class InstructionTestCase:
     """
 
     test_id: str
-    instr_bytes: bytes
+    instr_bytes: Optional[bytes] = None
+    instr_asm: Optional[str] = None
     init_regs: Dict[RegisterName, int] = field(default_factory=dict)
     init_mem: Dict[int, int] = field(default_factory=dict)
     expected_regs: Dict[RegisterName, int] = field(default_factory=dict)
@@ -156,28 +158,28 @@ instruction_test_cases: List[InstructionTestCase] = [
     # --- MV (Load/Store) Instructions ---
     InstructionTestCase(
         test_id="MV_A_from_ext_mem",
-        instr_bytes=bytes.fromhex("88100000"),
+        instr_asm="MV A, [0x10]",
         init_mem={0x10: 0xAB},
         expected_regs={RegisterName.A: 0xAB},
         expected_asm_str="MV    A, [00010]",
     ),
     InstructionTestCase(
         test_id="MV_BA_from_ext_mem",
-        instr_bytes=bytes.fromhex("8A200000"),
+        instr_asm="MV BA, [0x20]",
         init_mem={0x20: 0x12, 0x21: 0x34},
         expected_regs={RegisterName.BA: 0x3412},
         expected_asm_str="MV    BA, [00020]",
     ),
     InstructionTestCase(
         test_id="MV_X_from_ext_mem",
-        instr_bytes=bytes.fromhex("8C300000"),
+        instr_asm="MV X, [0x30]",
         init_mem={0x30: 0x01, 0x31: 0x02, 0x32: 0x03},
         expected_regs={RegisterName.X: 0x030201},
         expected_asm_str="MV    X, [00030]",
     ),
     InstructionTestCase(
         test_id="MV_A_to_ext_mem",
-        instr_bytes=bytes.fromhex("A8200000"),
+        instr_asm="MV [0x20], A",
         init_regs={RegisterName.A: 0xCD},
         expected_mem_writes=[(0x20, 0xCD)],
         expected_mem_state={0x20: 0xCD},
@@ -185,7 +187,7 @@ instruction_test_cases: List[InstructionTestCase] = [
     ),
     InstructionTestCase(
         test_id="MV_BA_to_ext_mem",
-        instr_bytes=bytes.fromhex("AA200000"),
+        instr_asm="MV [0x20], BA",
         init_regs={RegisterName.BA: 0x1234},
         expected_mem_writes=[(0x20, 0x34), (0x21, 0x12)],
         expected_mem_state={0x20: 0x34, 0x21: 0x12},
@@ -193,7 +195,7 @@ instruction_test_cases: List[InstructionTestCase] = [
     ),
     InstructionTestCase(
         test_id="MV_X_to_ext_mem",
-        instr_bytes=bytes.fromhex("AC200000"),
+        instr_asm="MV [0x20], X",
         init_regs={RegisterName.X: 0x010203},
         expected_mem_writes=[(0x20, 0x03), (0x21, 0x02), (0x22, 0x01)],
         expected_mem_state={0x20: 0x03, 0x21: 0x02, 0x22: 0x01},
@@ -1271,8 +1273,14 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
     A generic, parameterized test function that runs a single instruction case.
     """
     # 1. Setup Phase
+    instr_bytes = case.instr_bytes
+    if case.instr_asm is not None:
+        assembler = Assembler()
+        instr_bytes = bytes(assembler.assemble(case.instr_asm).as_binary())
+    assert instr_bytes is not None, f"{case.test_id}: no instruction bytes provided"
+
     cpu, raw, _reads, writes = _make_cpu_and_mem(
-        ADDRESS_SPACE_SIZE, case.init_mem, case.instr_bytes, case.initial_pc
+        ADDRESS_SPACE_SIZE, case.init_mem, instr_bytes, case.initial_pc
     )
 
     for reg, val in case.init_regs.items():
