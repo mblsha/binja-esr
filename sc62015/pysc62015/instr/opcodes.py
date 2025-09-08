@@ -644,9 +644,9 @@ class Opts:
     ops: Optional[List[Operand]] = None
 
 
-def iter_encode(iter: List["Instruction"], addr: int) -> bytearray:
+def iter_encode(instrs: List["Instruction"], addr: int) -> bytearray:
     encoder = Encoder()
-    for instr in iter:
+    for instr in instrs:
         instr.encode(encoder, addr)
         addr += instr.length()
     return encoder.buf
@@ -707,15 +707,15 @@ def iter_decode(
 
 
 def fusion(
-    iter: Iterator[Tuple["Instruction", int]],
+    instr_iter: Iterator[Tuple["Instruction", int]],
 ) -> Iterator[Tuple["Instruction", int]]:
     try:
-        instr1, addr1 = next(iter)
+        instr1, addr1 = next(instr_iter)
     except StopIteration:
         return
     while True:
         try:
-            instr2, addr2 = next(iter)
+            instr2, addr2 = next(instr_iter)
         except (StopIteration, NotImplementedError):
             yield instr1, addr1
             break
@@ -723,7 +723,7 @@ def fusion(
         if instr12 := instr1.fuse(instr2):
             yield instr12, addr1
             try:
-                instr1, addr1 = next(iter)
+                instr1, addr1 = next(instr_iter)
             except (StopIteration, NotImplementedError):
                 break
         else:
