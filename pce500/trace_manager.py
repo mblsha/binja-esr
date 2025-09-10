@@ -251,8 +251,7 @@ class TraceManager:
                 return
 
             # Try to find matching frame
-            for i in range(len(stack) - 1, -1, -1):
-                frame = stack[i]
+            for i, frame in reversed(list(enumerate(stack))):
                 if frame.pc == pc and frame.event_sent:
                     # Remove this frame and all frames above it
                     while len(stack) > i:
