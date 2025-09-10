@@ -417,14 +417,7 @@ class PCE500Emulator:
                 self.instruction_count += 1
                 # If this was WAIT, simulate the skipped loop to keep timers aligned
                 if wait_sim_count:
-                    for _ in range(int(wait_sim_count)):
-                        # Advance instruction counter and tick timers
-                        self.cycle_count += 1
-                        if self._timer_enabled:
-                            try:
-                                self._tick_timers()
-                            except Exception:
-                                pass
+                    self._simulate_wait(wait_sim_count)
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
@@ -488,14 +481,7 @@ class PCE500Emulator:
                 self.instruction_count += 1
                 # If this was WAIT, simulate the skipped loop to keep timers aligned
                 if wait_sim_count:
-                    for _ in range(int(wait_sim_count)):
-                        # Advance instruction counter and tick timers
-                        self.cycle_count += 1
-                        if self._timer_enabled:
-                            try:
-                                self._tick_timers()
-                            except Exception:
-                                pass
+                    self._simulate_wait(wait_sim_count)
 
                 # Only compute disassembly when tracing is enabled to avoid overhead
                 if self.trace is not None:
@@ -653,6 +639,16 @@ class PCE500Emulator:
             self.save_lcd_displays(save_individual=True)
         self.stop_tracing()
         return False
+
+    def _simulate_wait(self, cycles: int) -> None:
+        """Advance cycle count and timers for simulated WAIT loops."""
+        for _ in range(int(cycles)):
+            self.cycle_count += 1
+            if self._timer_enabled:
+                try:
+                    self._tick_timers()
+                except Exception:
+                    pass
 
     def _add_register_annotations(self, event: Any):
         if not event:
