@@ -128,27 +128,23 @@ class HD61202Controller:
         # Create 32x240 buffer
         buffer = np.zeros((32, 240), dtype=np.uint8)
 
-        # The PC-E500 uses only 4 pages (32 pixels) of each chip
-        # and arranges them in a specific layout
+        # The PC-E500 uses only 4 pages (32 pixels) of each chip and arranges
+        # them in a specific layout. Each chip contributes to a different
+        # portion of the display, starting at column 0 for the left chip and
+        # column 120 for the right chip.
 
-        # Left chip contributes to left side of display
-        if self.chips[0].state.on:
-            for page in range(4):  # Only 4 pages used
+        def blit_chip(chip: HD61202, x_offset: int) -> None:
+            for page in range(4):
                 for col in range(64):
-                    byte = self.chips[0].vram[page][col]
+                    byte = chip.vram[page][col]
                     for bit in range(8):
                         if not ((byte >> bit) & 1):
-                            buffer[page * 8 + bit, col] = 1
+                            buffer[page * 8 + bit, x_offset + col] = 1
 
-        # Right chip contributes to right side
-        if self.chips[1].state.on:
-            for page in range(4):  # Only 4 pages used
-                for col in range(64):
-                    byte = self.chips[1].vram[page][col]
-                    for bit in range(8):
-                        if not ((byte >> bit) & 1):
-                            # Right chip starts at column 120
-                            buffer[page * 8 + bit, 120 + col] = 1
+        for idx, offset in enumerate((0, 120)):
+            chip = self.chips[idx]
+            if chip.state.on:
+                blit_chip(chip, offset)
 
         return buffer
 
