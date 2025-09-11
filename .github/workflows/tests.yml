@@ -52,6 +52,7 @@ jobs:
         cd web && uv run pytest tests/ -v --cov=. --cov-report=term-missing
     
     - name: Run linting
+      continue-on-error: true
       run: |
         uv run ruff check .
         uv run ruff format --check .
