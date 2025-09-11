@@ -250,7 +250,10 @@ def perf_trace(
                     trace_args = extract_args(*args, **kwargs)
                 except Exception as exc:  # pragma: no cover - log and continue
                     logger.debug(
-                        "extract_args for %s failed: %s", func.__name__, exc, exc_info=True
+                        "extract_args for %s failed: %s",
+                        func.__name__,
+                        exc,
+                        exc_info=True,
                     )
 
             # Add operation number if requested (for step function)
