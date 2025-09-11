@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pce500.tracing.perfetto_tracing import PerfettoTracer, tracer
+from pce500.tracing.perfetto_tracing import PerfettoTracer, perf_trace, tracer
 
 
 class TestPerfettoTracer(unittest.TestCase):
@@ -157,6 +157,30 @@ class TestPerfettoTracer(unittest.TestCase):
         # Verify file was created with reasonable size
         self.assertTrue(os.path.exists(self.trace_path))
         self.assertGreater(os.path.getsize(self.trace_path), 500)
+
+    def test_perf_trace_logs_extract_error(self):
+        """perf_trace should log extract_args failures."""
+
+        def bad_extract(*args, **kwargs):
+            raise ValueError("boom")
+
+        @perf_trace("Test", extract_args=bad_extract)
+        def target():
+            return 42
+
+        tracer.start(self.trace_path)
+        try:
+            with self.assertLogs(
+                "pce500.tracing.perfetto_tracing", level="DEBUG"
+            ) as cm:
+                self.assertEqual(target(), 42)
+        finally:
+            tracer.stop()
+
+        self.assertTrue(
+            any("extract_args for target failed" in msg for msg in cm.output),
+            cm.output,
+        )
 
 
 if __name__ == "__main__":
