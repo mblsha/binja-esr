@@ -5,6 +5,7 @@ from binaryninja.binaryview import BinaryView
 from binaryninja.architecture import Architecture
 from binaryninja.enums import SegmentFlag, SectionSemantics, SymbolType, Endianness
 from binaryninja.types import Symbol
+from binaryninja.log import log_warn
 
 # Import architecture-specific constants
 from .pysc62015.constants import (
@@ -134,7 +135,7 @@ class SC62015BaseView(BinaryView):
                     self.define_user_type(name, type_obj)
         except Exception as e:
             # Log error but don't fail initialization
-            print(f"Warning: Failed to define types: {e}")
+            log_warn(f"Failed to define types: {e}")
 
     def perform_get_address_size(self) -> int:
         return 3
