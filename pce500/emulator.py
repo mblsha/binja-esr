@@ -225,6 +225,18 @@ class PCE500Emulator:
             self.trace.clear()
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
+        # Reset timer schedule and pending interrupt bookkeeping
+        try:
+            self._timer_next_mti = int(self._timer_mti_period)
+            self._timer_next_sti = int(self._timer_sti_period)
+        except AttributeError:
+            pass
+        try:
+            self._irq_pending = False
+            self._irq_source = None
+            self._in_interrupt = False
+        except AttributeError:
+            pass
         # Reset interrupt accounting
         try:
             self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
