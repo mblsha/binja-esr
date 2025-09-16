@@ -12,6 +12,7 @@ from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from pce500 import PCE500Emulator
+from pce500.emulator import IRQSource
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 
 
@@ -675,6 +676,32 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
 )
+
+
+# Focused regression: ensure reset fully reinitializes timers and IRQ state
+def test_reset_reinitializes_timers_and_interrupt_state() -> None:
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+
+    # Simulate in-flight timer and interrupt state before reset
+    emu._timer_next_mti = 12345  # type: ignore[attr-defined]
+    emu._timer_next_sti = 67890  # type: ignore[attr-defined]
+    emu._irq_pending = True  # type: ignore[attr-defined]
+    emu._irq_source = IRQSource.KEY  # type: ignore[attr-defined]
+    emu._in_interrupt = True  # type: ignore[attr-defined]
+    emu._interrupt_stack.append(99)  # type: ignore[attr-defined]
+    emu._next_interrupt_id = 42  # type: ignore[attr-defined]
+    emu._kb_irq_count = 5  # type: ignore[attr-defined]
+
+    emu.reset()
+
+    assert emu._timer_next_mti == emu._timer_mti_period  # type: ignore[attr-defined]
+    assert emu._timer_next_sti == emu._timer_sti_period  # type: ignore[attr-defined]
+    assert emu._irq_pending is False  # type: ignore[attr-defined]
+    assert emu._irq_source is None  # type: ignore[attr-defined]
+    assert emu._in_interrupt is False  # type: ignore[attr-defined]
+    assert emu._interrupt_stack == []  # type: ignore[attr-defined]
+    assert emu._next_interrupt_id == 1  # type: ignore[attr-defined]
+    assert emu._kb_irq_count == 0  # type: ignore[attr-defined]
 
 
 # ----------------------------- The test -----------------------------
