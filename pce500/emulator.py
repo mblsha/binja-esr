@@ -225,6 +225,15 @@ class PCE500Emulator:
             self.trace.clear()
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
+        # Reset pending interrupt and timer state to match power-on behaviour
+        self._irq_pending = False
+        self._in_interrupt = False
+        self._irq_source = None
+        self._interrupt_stack.clear()
+        self._next_interrupt_id = 1
+        self._timer_next_mti = self._timer_mti_period
+        self._timer_next_sti = self._timer_sti_period
+        self._kb_irq_count = 0
         # Reset interrupt accounting
         try:
             self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
