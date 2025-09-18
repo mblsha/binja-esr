@@ -5,7 +5,7 @@ including memory overlays for ROM, RAM expansions, and memory-mapped I/O.
 """
 
 from dataclasses import dataclass
-from typing import Optional, List, Callable, Dict, Tuple
+from typing import Optional, List, Callable, Dict, Tuple, Literal
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -15,6 +15,10 @@ from .tracing.perfetto_tracing import perf_trace
 # Import constants for accessing internal memory registers
 # Define locally to avoid circular imports
 INTERNAL_MEMORY_START = 0x100000
+IMEM_ACCESS_HISTORY_LIMIT = 10
+IMEM_REGISTER_NAMES_BY_OFFSET = {
+    reg.value: name for name, reg in IMEMRegisters.__members__.items()
+}
 
 
 @dataclass
@@ -83,6 +87,62 @@ class PCE500Memory:
         """
         self._imem_access_callback = callback
 
+    def _record_imem_access(
+        self,
+        *,
+        offset: int,
+        access_type: Literal["read", "write"],
+        value: int,
+        cpu_pc: Optional[int],
+        prev_value: Optional[int] = None,
+    ) -> None:
+        """Record an IMEM register access and notify interested components."""
+
+        effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+        if effective_pc is None:
+            return
+
+        reg_name = IMEM_REGISTER_NAMES_BY_OFFSET.get(offset)
+        if reg_name is None:
+            return
+
+        tracking = self.imem_access_tracking.setdefault(
+            reg_name, {"reads": [], "writes": []}
+        )
+        history_key = "reads" if access_type == "read" else "writes"
+        history = tracking[history_key]
+        if history and history[-1][0] == effective_pc:
+            history[-1] = (effective_pc, history[-1][1] + 1)
+        else:
+            history.append((effective_pc, 1))
+            if len(history) > IMEM_ACCESS_HISTORY_LIMIT:
+                history.pop(0)
+
+        if (
+            access_type == "write"
+            and prev_value is not None
+            and reg_name in {"IMR", "ISR"}
+            and self._emulator
+            and hasattr(self._emulator, "_record_irq_bit_watch")
+        ):
+            try:
+                self._emulator._record_irq_bit_watch(
+                    reg_name,
+                    prev_value & 0xFF,
+                    value & 0xFF,
+                    int(effective_pc),
+                )
+            except Exception:
+                pass
+
+        if self._imem_access_callback:
+            self._imem_access_callback(
+                effective_pc,
+                reg_name,
+                access_type,
+                value & 0xFF,
+            )
+
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -120,70 +180,24 @@ class PCE500Memory:
                     else:
                         value = 0x00
 
-                    # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
-                    effective_pc = (
-                        cpu_pc if cpu_pc is not None else self._get_current_pc()
+                    self._record_imem_access(
+                        offset=offset,
+                        access_type="read",
+                        value=value,
+                        cpu_pc=cpu_pc,
                     )
-                    if effective_pc is not None:
-                        for reg_name in IMEMRegisters.__members__:
-                            if IMEMRegisters[reg_name].value == offset:
-                                if reg_name not in self.imem_access_tracking:
-                                    self.imem_access_tracking[reg_name] = {
-                                        "reads": [],
-                                        "writes": [],
-                                    }
-                                reads_list = self.imem_access_tracking[reg_name][
-                                    "reads"
-                                ]
-                                if reads_list and reads_list[-1][0] == effective_pc:
-                                    reads_list[-1] = (
-                                        effective_pc,
-                                        reads_list[-1][1] + 1,
-                                    )
-                                else:
-                                    reads_list.append((effective_pc, 1))
-                                    if len(reads_list) > 10:
-                                        reads_list.pop(0)
-                                # Notify callback if set (for disasm trace)
-                                if self._imem_access_callback:
-                                    self._imem_access_callback(
-                                        effective_pc, reg_name, "read", value
-                                    )
-                                break
                     return value
 
                 # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
                 value = self.external_memory[internal_offset]
 
-                # Track IMEMRegisters reads
-                # Get PC from CPU if not provided
-                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
-                if effective_pc is not None:
-                    for reg_name in IMEMRegisters.__members__:
-                        if IMEMRegisters[reg_name].value == offset:
-                            if reg_name not in self.imem_access_tracking:
-                                self.imem_access_tracking[reg_name] = {
-                                    "reads": [],
-                                    "writes": [],
-                                }
-                            # Keep only last 10 accesses with counts
-                            reads_list = self.imem_access_tracking[reg_name]["reads"]
-                            if reads_list and reads_list[-1][0] == effective_pc:
-                                # Increment count for same PC
-                                reads_list[-1] = (effective_pc, reads_list[-1][1] + 1)
-                            else:
-                                # Add new PC with count 1
-                                reads_list.append((effective_pc, 1))
-                                if len(reads_list) > 10:
-                                    reads_list.pop(0)
-
-                            # Notify callback if set (for disasm trace)
-                            if self._imem_access_callback:
-                                self._imem_access_callback(
-                                    effective_pc, reg_name, "read", value
-                                )
-                            break
+                self._record_imem_access(
+                    offset=offset,
+                    access_type="read",
+                    value=int(value),
+                    cpu_pc=cpu_pc,
+                )
 
                 return value
             raise ValueError(
@@ -233,42 +247,12 @@ class PCE500Memory:
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
                     if self._keyboard_overlay.write_handler:
                         self._keyboard_overlay.write_handler(address, value, cpu_pc)
-                        # Track IMEMRegisters writes (ensure disasm trace sees KOL/KOH/KIL)
-                        effective_pc = (
-                            cpu_pc if cpu_pc is not None else self._get_current_pc()
+                        self._record_imem_access(
+                            offset=offset,
+                            access_type="write",
+                            value=value,
+                            cpu_pc=cpu_pc,
                         )
-                        if effective_pc is not None:
-                            for reg_name in IMEMRegisters.__members__:
-                                if IMEMRegisters[reg_name].value == offset:
-                                    if reg_name not in self.imem_access_tracking:
-                                        self.imem_access_tracking[reg_name] = {
-                                            "reads": [],
-                                            "writes": [],
-                                        }
-                                    writes_list = self.imem_access_tracking[reg_name][
-                                        "writes"
-                                    ]
-                                    if (
-                                        writes_list
-                                        and writes_list[-1][0] == effective_pc
-                                    ):
-                                        writes_list[-1] = (
-                                            effective_pc,
-                                            writes_list[-1][1] + 1,
-                                        )
-                                    else:
-                                        writes_list.append((effective_pc, 1))
-                                        if len(writes_list) > 10:
-                                            writes_list.pop(0)
-                                    # Notify callback if set (for disasm trace)
-                                    if self._imem_access_callback:
-                                        self._imem_access_callback(
-                                            effective_pc,
-                                            reg_name,
-                                            "write",
-                                            value & 0xFF,
-                                        )
-                                    break
                         # Add tracing for write_handler overlays
                         if self.perfetto_enabled:
                             trace_data = {
@@ -300,53 +284,13 @@ class PCE500Memory:
                 prev_val = int(self.external_memory[internal_offset])
                 self.external_memory[internal_offset] = value
 
-                # Track IMEMRegisters writes
-                # Get PC from CPU if not provided
-                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
-                if effective_pc is not None:
-                    for reg_name in IMEMRegisters.__members__:
-                        if IMEMRegisters[reg_name].value == offset:
-                            if reg_name not in self.imem_access_tracking:
-                                self.imem_access_tracking[reg_name] = {
-                                    "reads": [],
-                                    "writes": [],
-                                }
-                            # Keep only last 10 accesses with counts
-                            writes_list = self.imem_access_tracking[reg_name]["writes"]
-                            if writes_list and writes_list[-1][0] == effective_pc:
-                                # Increment count for same PC
-                                writes_list[-1] = (effective_pc, writes_list[-1][1] + 1)
-                            else:
-                                # Add new PC with count 1
-                                writes_list.append((effective_pc, 1))
-                                if len(writes_list) > 10:
-                                    writes_list.pop(0)
-
-                            # Interrupt bit watch for IMR/ISR
-                            if reg_name in ("IMR", "ISR"):
-                                try:
-                                    if (
-                                        self._emulator
-                                        and hasattr(
-                                            self._emulator, "_record_irq_bit_watch"
-                                        )
-                                        and effective_pc is not None
-                                    ):
-                                        self._emulator._record_irq_bit_watch(
-                                            reg_name,
-                                            prev_val & 0xFF,
-                                            value & 0xFF,
-                                            int(effective_pc),
-                                        )
-                                except Exception:
-                                    pass
-
-                            # Notify callback if set (for disasm trace)
-                            if self._imem_access_callback:
-                                self._imem_access_callback(
-                                    effective_pc, reg_name, "write", value
-                                )
-                            break
+                self._record_imem_access(
+                    offset=offset,
+                    access_type="write",
+                    value=value,
+                    cpu_pc=cpu_pc,
+                    prev_value=prev_val,
+                )
 
                 if self.perfetto_enabled:
                     # Get current BP value from internal memory if CPU is available
@@ -359,11 +303,7 @@ class PCE500Memory:
                             bp_value = "N/A"
 
                     # Check if this offset corresponds to a known internal memory register
-                    imem_name = "N/A"
-                    for reg_name in IMEMRegisters.__members__:
-                        if IMEMRegisters[reg_name].value == offset:
-                            imem_name = reg_name
-                            break
+                    imem_name = IMEM_REGISTER_NAMES_BY_OFFSET.get(offset, "N/A")
 
                     g_tracer.trace_instant(
                         "Memory_Internal",
