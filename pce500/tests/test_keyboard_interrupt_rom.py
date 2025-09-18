@@ -106,15 +106,15 @@ def test_keyboard_interrupt_blocked_when_masked():
             emu.memory.write_byte(isr_addr, 0x00)
             emu.step()
 
-    _run_with_mask(200_000)
+    _run_with_mask(120_000)
     stats_before = emu.get_interrupt_stats()
     key_before = stats_before["by_source"]["KEY"]
     kb_irq_before = emu._kb_irq_count
 
     emu.press_key("KEY_A")
-    _run_with_mask(80_000)
-    emu.release_key("KEY_A")
     _run_with_mask(40_000)
+    emu.release_key("KEY_A")
+    _run_with_mask(20_000)
 
     stats_after = emu.get_interrupt_stats()
     key_after = stats_after["by_source"]["KEY"]

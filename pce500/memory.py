@@ -17,7 +17,7 @@ from .tracing.perfetto_tracing import perf_trace
 # Define locally to avoid circular imports
 INTERNAL_MEMORY_START = 0x100000
 IMEM_ACCESS_HISTORY_LIMIT = 10
-IMEM_REGISTER_NAMES_BY_OFFSET = {
+IMEM_OFFSET_TO_NAME: Dict[int, str] = {
     reg.value: name for name, reg in IMEMRegisters.__members__.items()
 }
 
@@ -89,24 +89,21 @@ class PCE500Memory:
         """
         self._imem_access_callback = callback
 
-    def _record_imem_access(
+    def _track_imem_access(
         self,
-        *,
         offset: int,
         access_type: Literal["read", "write"],
         value: int,
-        cpu_pc: Optional[int],
-        prev_value: Optional[int] = None,
-    ) -> None:
-        """Record an IMEM register access and notify interested components."""
+        effective_pc: Optional[int],
+    ) -> Optional[str]:
+        """Record IMEM register access counts and notify listeners."""
 
-        effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
         if effective_pc is None:
-            return
+            return None
 
-        reg_name = IMEM_REGISTER_NAMES_BY_OFFSET.get(offset)
+        reg_name = IMEM_OFFSET_TO_NAME.get(offset)
         if reg_name is None:
-            return
+            return None
 
         tracking = self.imem_access_tracking.setdefault(
             reg_name,
@@ -115,29 +112,12 @@ class PCE500Memory:
                 "writes": deque(maxlen=IMEM_ACCESS_HISTORY_LIMIT),
             },
         )
-        history_key = "reads" if access_type == "read" else "writes"
-        history: Deque[Tuple[int, int]] = tracking[history_key]
+        history = tracking["reads" if access_type == "read" else "writes"]
+
         if history and history[-1][0] == effective_pc:
             history[-1] = (effective_pc, history[-1][1] + 1)
         else:
             history.append((effective_pc, 1))
-
-        if (
-            access_type == "write"
-            and prev_value is not None
-            and reg_name in {"IMR", "ISR"}
-            and self._emulator
-            and hasattr(self._emulator, "_record_irq_bit_watch")
-        ):
-            try:
-                self._emulator._record_irq_bit_watch(
-                    reg_name,
-                    prev_value & 0xFF,
-                    value & 0xFF,
-                    int(effective_pc),
-                )
-            except Exception:
-                pass
 
         if self._imem_access_callback:
             self._imem_access_callback(
@@ -147,87 +127,7 @@ class PCE500Memory:
                 value & 0xFF,
             )
 
-    def _trace_write_event(
-        self,
-        thread: str,
-        address: int,
-        value: int,
-        cpu_pc: Optional[int],
-        overlay_name: Optional[str] = None,
-    ) -> None:
-        """Emit a Perfetto instant event for a memory write."""
-
-        if not self.perfetto_enabled:
-            return
-
-        trace_data: dict[str, str] = {
-            "addr": f"0x{address:06X}",
-            "value": f"0x{value:02X}",
-        }
-        if cpu_pc is not None:
-            trace_data["pc"] = f"0x{cpu_pc:06X}"
-        if overlay_name is not None:
-            trace_data["overlay"] = overlay_name
-
-        g_tracer.trace_instant(thread, "", trace_data)
-
-    def _read_overlay_value(
-        self,
-        overlay: MemoryOverlay,
-        address: int,
-        cpu_pc: Optional[int],
-    ) -> Optional[int]:
-        """Resolve an overlay read via handler or backing data."""
-
-        if overlay.read_handler:
-            return int(overlay.read_handler(address, cpu_pc)) & 0xFF
-
-        if overlay.data:
-            offset = address - overlay.start
-            if 0 <= offset < len(overlay.data):
-                return int(overlay.data[offset]) & 0xFF
-
-        return None
-
-    def _write_overlay_value(
-        self,
-        overlay: MemoryOverlay,
-        address: int,
-        value: int,
-        cpu_pc: Optional[int],
-    ) -> bool:
-        """Dispatch a write to an overlay and emit tracing if needed."""
-
-        if overlay.write_handler:
-            overlay.write_handler(address, value, cpu_pc)
-            self._trace_write_event(
-                overlay.perfetto_thread,
-                address,
-                value,
-                cpu_pc,
-                overlay.name,
-            )
-            return True
-
-        if overlay.read_only:
-            # Writes to read-only overlays are ignored but considered handled so
-            # callers stop searching for other overlays.
-            return True
-
-        if overlay.data and isinstance(overlay.data, bytearray):
-            offset = address - overlay.start
-            if 0 <= offset < len(overlay.data):
-                overlay.data[offset] = value
-                self._trace_write_event(
-                    overlay.perfetto_thread,
-                    address,
-                    value,
-                    cpu_pc,
-                    overlay.name,
-                )
-                return True
-
-        return False
+        return reg_name
 
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
@@ -244,37 +144,43 @@ class PCE500Memory:
         address &= 0xFFFFFF  # 24-bit address space
 
         # Check for SC62015 internal memory (0x100000-0x1000FF)
-        if address >= INTERNAL_MEMORY_START:
-            offset = address - INTERNAL_MEMORY_START
+        if address >= 0x100000:
+            offset = address - 0x100000
             if offset < 0x100:
                 # Fast path for keyboard overlay
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    value = self._read_overlay_value(
-                        self._keyboard_overlay,
-                        address,
-                        cpu_pc,
-                    )
-                    if value is None:
+                    value: int
+                    if self._keyboard_overlay.read_handler:
+                        value = (
+                            int(self._keyboard_overlay.read_handler(address, cpu_pc))
+                            & 0xFF
+                        )
+                    elif self._keyboard_overlay.data:
+                        overlay_offset = address - self._keyboard_overlay.start
+                        if overlay_offset < len(self._keyboard_overlay.data):
+                            value = (
+                                int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
+                            )
+                        else:
+                            value = 0x00
+                    else:
                         value = 0x00
 
-                    self._record_imem_access(
-                        offset=offset,
-                        access_type="read",
-                        value=value,
-                        cpu_pc=cpu_pc,
+                    # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
+                    effective_pc = (
+                        cpu_pc if cpu_pc is not None else self._get_current_pc()
                     )
+                    self._track_imem_access(offset, "read", value, effective_pc)
                     return value
 
                 # Normal internal memory access (most common case)
                 internal_offset = len(self.external_memory) - 256 + offset
                 value = self.external_memory[internal_offset]
 
-                self._record_imem_access(
-                    offset=offset,
-                    access_type="read",
-                    value=int(value),
-                    cpu_pc=cpu_pc,
-                )
+                # Track IMEMRegisters reads
+                # Get PC from CPU if not provided
+                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                self._track_imem_access(offset, "read", value, effective_pc)
 
                 return value
             raise ValueError(
@@ -287,8 +193,13 @@ class PCE500Memory:
         # Check overlays in order
         for overlay in self.overlays:
             if overlay.start <= address <= overlay.end:
-                value = self._read_overlay_value(overlay, address, cpu_pc)
-                return value if value is not None else 0x00
+                if overlay.read_handler:
+                    return overlay.read_handler(address, cpu_pc)
+                elif overlay.data:
+                    offset = address - overlay.start
+                    if offset < len(overlay.data):
+                        return overlay.data[offset]
+                return 0x00
 
         # Default to external memory
         return self.external_memory[address]
@@ -312,25 +223,42 @@ class PCE500Memory:
         value &= 0xFF
 
         # Check for SC62015 internal memory (0x100000-0x1000FF)
-        if address >= INTERNAL_MEMORY_START:
-            offset = address - INTERNAL_MEMORY_START
+        if address >= 0x100000:
+            offset = address - 0x100000
             if offset < 0x100:
                 # Fast path for keyboard overlay
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    if self._write_overlay_value(
-                        self._keyboard_overlay,
-                        address,
-                        value,
-                        cpu_pc,
-                    ):
-                        if self._keyboard_overlay.write_handler:
-                            self._record_imem_access(
-                                offset=offset,
-                                access_type="write",
-                                value=value,
-                                cpu_pc=cpu_pc,
+                    if self._keyboard_overlay.write_handler:
+                        self._keyboard_overlay.write_handler(address, value, cpu_pc)
+                        # Track IMEMRegisters writes (ensure disasm trace sees KOL/KOH/KIL)
+                        effective_pc = (
+                            cpu_pc if cpu_pc is not None else self._get_current_pc()
+                        )
+                        self._track_imem_access(offset, "write", value, effective_pc)
+                        # Add tracing for write_handler overlays
+                        if self.perfetto_enabled:
+                            trace_data = {
+                                "addr": f"0x{address:06X}",
+                                "value": f"0x{value:02X}",
+                            }
+                            if cpu_pc is not None:
+                                trace_data["pc"] = f"0x{cpu_pc:06X}"
+                            trace_data["overlay"] = self._keyboard_overlay.name
+                            g_tracer.trace_instant(
+                                self._keyboard_overlay.perfetto_thread, "", trace_data
                             )
                         return
+                    elif self._keyboard_overlay.read_only:
+                        # Silently ignore writes to read-only overlays
+                        return
+                    elif self._keyboard_overlay.data and isinstance(
+                        self._keyboard_overlay.data, bytearray
+                    ):
+                        # Write to writable overlay data
+                        overlay_offset = address - self._keyboard_overlay.start
+                        if overlay_offset < len(self._keyboard_overlay.data):
+                            self._keyboard_overlay.data[overlay_offset] = value
+                            return
 
                 # Normal internal memory write (most common case)
                 # Internal memory stored at end of external_memory for compatibility
@@ -338,13 +266,27 @@ class PCE500Memory:
                 prev_val = int(self.external_memory[internal_offset])
                 self.external_memory[internal_offset] = value
 
-                self._record_imem_access(
-                    offset=offset,
-                    access_type="write",
-                    value=value,
-                    cpu_pc=cpu_pc,
-                    prev_value=prev_val,
-                )
+                # Track IMEMRegisters writes
+                # Get PC from CPU if not provided
+                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                reg_name = self._track_imem_access(offset, "write", value, effective_pc)
+
+                # Interrupt bit watch for IMR/ISR
+                if reg_name in ("IMR", "ISR"):
+                    try:
+                        if (
+                            self._emulator
+                            and hasattr(self._emulator, "_record_irq_bit_watch")
+                            and effective_pc is not None
+                        ):
+                            self._emulator._record_irq_bit_watch(
+                                reg_name,
+                                prev_val & 0xFF,
+                                value & 0xFF,
+                                int(effective_pc),
+                            )
+                    except Exception:
+                        pass
 
                 if self.perfetto_enabled:
                     # Get current BP value from internal memory if CPU is available
@@ -357,7 +299,7 @@ class PCE500Memory:
                             bp_value = "N/A"
 
                     # Check if this offset corresponds to a known internal memory register
-                    imem_name = IMEM_REGISTER_NAMES_BY_OFFSET.get(offset, "N/A")
+                    imem_name = IMEM_OFFSET_TO_NAME.get(offset, "N/A")
 
                     g_tracer.trace_instant(
                         "Memory_Internal",
@@ -383,14 +325,50 @@ class PCE500Memory:
         # Check overlays for write handlers, read-only, or writable data
         for overlay in self.overlays:
             if overlay.start <= address <= overlay.end:
-                if self._write_overlay_value(overlay, address, value, cpu_pc):
+                if overlay.write_handler:
+                    overlay.write_handler(address, value, cpu_pc)
+                    # Add tracing for write_handler overlays
+                    if self.perfetto_enabled:
+                        trace_data = {
+                            "addr": f"0x{address:06X}",
+                            "value": f"0x{value:02X}",
+                        }
+                        if cpu_pc is not None:
+                            trace_data["pc"] = f"0x{cpu_pc:06X}"
+                        trace_data["overlay"] = overlay.name
+                        g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
+                    return
+                elif overlay.read_only:
+                    # Silently ignore writes to read-only overlays
+                    return
+                elif overlay.data and isinstance(overlay.data, bytearray):
+                    # Write to writable overlay data
+                    offset = address - overlay.start
+                    if offset < len(overlay.data):
+                        overlay.data[offset] = value
+                        # Add tracing for writable overlay writes
+                        if self.perfetto_enabled:
+                            trace_data = {
+                                "addr": f"0x{address:06X}",
+                                "value": f"0x{value:02X}",
+                            }
+                            if cpu_pc is not None:
+                                trace_data["pc"] = f"0x{cpu_pc:06X}"
+                            trace_data["overlay"] = overlay.name
+                            g_tracer.trace_instant(
+                                overlay.perfetto_thread, "", trace_data
+                            )
                     return
 
         # Default to external memory
         self.external_memory[address] = value
 
         # Perfetto tracing for all writes
-        self._trace_write_event("Memory_External", address, value, cpu_pc)
+        if self.perfetto_enabled:
+            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
+            if cpu_pc is not None:
+                trace_data["pc"] = f"0x{cpu_pc:06X}"
+            g_tracer.trace_instant("Memory_External", "", trace_data)
 
     @perf_trace("Memory", sample_rate=100)
     def read_word(self, address: int) -> int:
