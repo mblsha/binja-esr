@@ -143,6 +143,30 @@ class PCE500Memory:
                 value & 0xFF,
             )
 
+    def _trace_write_event(
+        self,
+        thread: str,
+        address: int,
+        value: int,
+        cpu_pc: Optional[int],
+        overlay_name: Optional[str] = None,
+    ) -> None:
+        """Emit a Perfetto instant event for a memory write."""
+
+        if not self.perfetto_enabled:
+            return
+
+        trace_data: dict[str, str] = {
+            "addr": f"0x{address:06X}",
+            "value": f"0x{value:02X}",
+        }
+        if cpu_pc is not None:
+            trace_data["pc"] = f"0x{cpu_pc:06X}"
+        if overlay_name is not None:
+            trace_data["overlay"] = overlay_name
+
+        g_tracer.trace_instant(thread, "", trace_data)
+
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -253,18 +277,13 @@ class PCE500Memory:
                             value=value,
                             cpu_pc=cpu_pc,
                         )
-                        # Add tracing for write_handler overlays
-                        if self.perfetto_enabled:
-                            trace_data = {
-                                "addr": f"0x{address:06X}",
-                                "value": f"0x{value:02X}",
-                            }
-                            if cpu_pc is not None:
-                                trace_data["pc"] = f"0x{cpu_pc:06X}"
-                            trace_data["overlay"] = self._keyboard_overlay.name
-                            g_tracer.trace_instant(
-                                self._keyboard_overlay.perfetto_thread, "", trace_data
-                            )
+                        self._trace_write_event(
+                            self._keyboard_overlay.perfetto_thread,
+                            address,
+                            value,
+                            cpu_pc,
+                            self._keyboard_overlay.name,
+                        )
                         return
                     elif self._keyboard_overlay.read_only:
                         # Silently ignore writes to read-only overlays
@@ -331,16 +350,13 @@ class PCE500Memory:
             if overlay.start <= address <= overlay.end:
                 if overlay.write_handler:
                     overlay.write_handler(address, value, cpu_pc)
-                    # Add tracing for write_handler overlays
-                    if self.perfetto_enabled:
-                        trace_data = {
-                            "addr": f"0x{address:06X}",
-                            "value": f"0x{value:02X}",
-                        }
-                        if cpu_pc is not None:
-                            trace_data["pc"] = f"0x{cpu_pc:06X}"
-                        trace_data["overlay"] = overlay.name
-                        g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
+                    self._trace_write_event(
+                        overlay.perfetto_thread,
+                        address,
+                        value,
+                        cpu_pc,
+                        overlay.name,
+                    )
                     return
                 elif overlay.read_only:
                     # Silently ignore writes to read-only overlays
@@ -350,29 +366,20 @@ class PCE500Memory:
                     offset = address - overlay.start
                     if offset < len(overlay.data):
                         overlay.data[offset] = value
-                        # Add tracing for writable overlay writes
-                        if self.perfetto_enabled:
-                            trace_data = {
-                                "addr": f"0x{address:06X}",
-                                "value": f"0x{value:02X}",
-                            }
-                            if cpu_pc is not None:
-                                trace_data["pc"] = f"0x{cpu_pc:06X}"
-                            trace_data["overlay"] = overlay.name
-                            g_tracer.trace_instant(
-                                overlay.perfetto_thread, "", trace_data
-                            )
+                        self._trace_write_event(
+                            overlay.perfetto_thread,
+                            address,
+                            value,
+                            cpu_pc,
+                            overlay.name,
+                        )
                     return
 
         # Default to external memory
         self.external_memory[address] = value
 
         # Perfetto tracing for all writes
-        if self.perfetto_enabled:
-            trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-            if cpu_pc is not None:
-                trace_data["pc"] = f"0x{cpu_pc:06X}"
-            g_tracer.trace_instant("Memory_External", "", trace_data)
+        self._trace_write_event("Memory_External", address, value, cpu_pc)
 
     @perf_trace("Memory", sample_rate=100)
     def read_word(self, address: int) -> int:
