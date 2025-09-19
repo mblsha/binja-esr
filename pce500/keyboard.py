@@ -61,5 +61,16 @@ class PCE500KeyboardHandler(_CompatHandler):
 
         return result & 0xFF
 
+    def peek_keyboard_input(self) -> int:  # type: ignore[override]
+        """Preview KIL without affecting debounce/queue state."""
+
+        result = 0x00
+
+        for queued_key in self.key_queue:
+            if queued_key.matches_output(self._last_kol, self._last_koh):
+                result |= (1 << queued_key.row) & 0xFF
+
+        return result & 0xFF
+
 
 __all__ = ["PCE500KeyboardHandler", "DEFAULT_DEBOUNCE_READS"]
