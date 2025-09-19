@@ -18,6 +18,23 @@ from .instr.opcodes import IMEMRegisters
 from .constants import INTERNAL_MEMORY_START
 
 
+def _enter_low_power_state(memory: Memory, state: State) -> None:
+    """Apply shared register updates for HALT/OFF low power modes."""
+
+    usr_addr = INTERNAL_MEMORY_START + IMEMRegisters.USR
+    usr = memory.read_byte(usr_addr)
+    usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
+    usr |= 0x18  # Set bits 3 and 4 to 1
+    memory.write_byte(usr_addr, usr)
+
+    ssr_addr = INTERNAL_MEMORY_START + IMEMRegisters.SSR
+    ssr = memory.read_byte(ssr_addr)
+    ssr |= 0x04  # Set bit 2 to 1
+    memory.write_byte(ssr_addr, ssr)
+
+    state.halted = True
+
+
 def eval_intrinsic_tcl(
     llil: MockLLIL,
     size: Optional[int],
@@ -50,18 +67,7 @@ def eval_intrinsic_halt(
     - SSR (FFH) bit 2 is set to 1
     - USR (F8H) bits 3 and 4 are set to 1
     """
-    # Modify USR register
-    usr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR)
-    usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
-    usr |= 0x18  # Set bits 3 and 4 to 1
-    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR, usr)
-
-    # Modify SSR register
-    ssr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR)
-    ssr |= 0x04  # Set bit 2 to 1
-    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR, ssr)
-
-    state.halted = True
+    _enter_low_power_state(memory, state)
     return None, None
 
 
@@ -82,18 +88,7 @@ def eval_intrinsic_off(
     - USR (F8H) bits 3 and 4 are set to 1
     Same as HALT but represents a different power state (main/sub clock stop).
     """
-    # Modify USR register
-    usr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR)
-    usr &= ~0x3F  # Clear bits 0-5 (reset to 0)
-    usr |= 0x18  # Set bits 3 and 4 to 1
-    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.USR, usr)
-
-    # Modify SSR register
-    ssr = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR)
-    ssr |= 0x04  # Set bit 2 to 1
-    memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR, ssr)
-
-    state.halted = True
+    _enter_low_power_state(memory, state)
     return None, None
 
 
