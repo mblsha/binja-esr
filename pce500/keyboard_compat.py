@@ -375,6 +375,24 @@ class PCE500KeyboardHandler:
             self.key_queue.remove(completed_key)
             self.pressed_keys.discard(completed_key.key_code)
 
+        self._last_kil_value = result & 0xFF
+        return self._last_kil_value
+
+    def peek_keyboard_input(self) -> int:
+        """Preview current KIL value without mutating debounce state."""
+
+        result = 0x00
+
+        for queued_key in self.key_queue:
+            if not queued_key.matches_output(self._last_kol, self._last_koh):
+                continue
+
+            if queued_key.active or (
+                not queued_key.active
+                and queued_key.read_count + 1 >= queued_key.target_reads
+            ):
+                result |= (1 << queued_key.row) & 0xFF
+
         return result & 0xFF
 
     def _update_keyboard_state(self) -> None:
@@ -422,7 +440,7 @@ class PCE500KeyboardHandler:
             "pressed_keys": list(self.pressed_keys),
             "kol": f"0x{self._last_kol:02X}",
             "koh": f"0x{self._last_koh:02X}",
-            "kil": f"0x{self._read_keyboard_input():02X}",
+            "kil": f"0x{self.peek_keyboard_input():02X}",
             "selected_columns": self._get_selected_columns(),
             "key_queue": self.get_queue_info(),
         }

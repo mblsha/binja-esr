@@ -447,7 +447,7 @@ def get_key_queue():
         keyboard_state = {
             "kol": f"0x{emulator.keyboard._last_kol:02X}",
             "koh": f"0x{emulator.keyboard._last_koh:02X}",
-            "kil": f"0x{emulator.keyboard._read_keyboard_input():02X}",
+            "kil": f"0x{emulator.keyboard.peek_keyboard_input():02X}",
         }
 
         return jsonify({"queue": queue_info, "registers": keyboard_state})
