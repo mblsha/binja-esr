@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import copy
-from typing import Dict, List, Any, Optional, cast, Tuple
+from typing import Dict, List, Any, Optional, cast, Tuple, Iterable
 
 import bincopy  # type: ignore[import-untyped]
 from plumbum import cli  # type: ignore[import-untyped]
@@ -131,6 +131,28 @@ class Assembler:
 
         return current_section, consumed
 
+    def _ensure_named_imem_operands(self, operands: Iterable[Any]) -> None:
+        """Require direct IMEM operands to use symbolic register names."""
+
+        for operand in operands:
+            if not isinstance(operand, IMemOperand):
+                continue
+
+            mode = getattr(operand, "mode", None)
+            if mode != AddressingMode.N:
+                continue
+
+            from_numeric = bool(getattr(operand, "imem_numeric_literal", False))
+            if not from_numeric:
+                continue
+
+            reg_name = getattr(operand, "imem_register_name", None)
+            n_val = getattr(operand, "n_val", None)
+            if reg_name is not None and isinstance(n_val, int):
+                raise AssemblerError(
+                    f"Use IMEM register name {reg_name} instead of 0x{n_val:02X}"
+                )
+
     def _build_instruction(self, parsed_instr: ParsedInstruction) -> Instruction:
         """Builds an Instruction object from a parsed instruction node from the AST."""
         instr_class = parsed_instr["instr_class"]
@@ -142,6 +164,8 @@ class Assembler:
 
         if mnemonic not in self._reverse_opcodes:
             raise AssemblerError(f"Unknown mnemonic: {mnemonic}")
+
+        self._ensure_named_imem_operands(provided_ops)
 
         # For the unambiguous grammar, we can match on class and operand representation
         for template in self._reverse_opcodes[mnemonic]:
@@ -228,26 +252,6 @@ class Assembler:
                         ops_reversed=template["opts"].ops_reversed,
                     )
                     instr.opcode = template["opcode"]
-
-                    # Enforce using IMEM register names (e.g., KIL) instead of raw
-                    # numeric literals for direct internal memory operands.
-                    for p_op in provided_ops:
-                        from_numeric = bool(
-                            getattr(p_op, "imem_numeric_literal", False)
-                        )
-                        reg_name = getattr(p_op, "imem_register_name", None)
-                        mode = getattr(p_op, "mode", None)
-                        n_val = getattr(p_op, "n_val", None)
-                        if (
-                            isinstance(p_op, IMemOperand)
-                            and mode == AddressingMode.N
-                            and from_numeric
-                            and reg_name is not None
-                            and isinstance(n_val, int)
-                        ):
-                            raise AssemblerError(
-                                f"Use IMEM register name {reg_name} instead of 0x{n_val:02X}"
-                            )
 
                     # Determine if a PRE prefix byte is required based on
                     # internal memory operands.
@@ -344,21 +348,7 @@ class Assembler:
             # Early validation: disallow numeric literals for IMEM registers where a
             # symbolic name exists, for direct addressing mode.
             ops = parsed["instr_opts"].ops or []
-            for p_op in ops:
-                from_numeric = bool(getattr(p_op, "imem_numeric_literal", False))
-                reg_name = getattr(p_op, "imem_register_name", None)
-                mode = getattr(p_op, "mode", None)
-                n_val = getattr(p_op, "n_val", None)
-                if (
-                    isinstance(p_op, IMemOperand)
-                    and mode == AddressingMode.N
-                    and from_numeric
-                    and reg_name is not None
-                    and isinstance(n_val, int)
-                ):
-                    raise AssemblerError(
-                        f"Use IMEM register name {reg_name} instead of 0x{n_val:02X}"
-                    )
+            self._ensure_named_imem_operands(ops)
 
             instr = self._build_instruction(parsed)
             self.instructions_cache[line_num] = instr  # Cache for second pass
