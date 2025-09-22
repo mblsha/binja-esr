@@ -18,7 +18,7 @@ from flask import (
 )
 from flask_cors import CORS
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
-from sc62015.pysc62015.constants import IMRFlag
+from sc62015.pysc62015.constants import IMRFlag, INTERNAL_MEMORY_START
 from PIL import Image, ImageOps
 
 # Add parent directory to path for imports
@@ -189,7 +189,6 @@ def update_emulator_state():
     # Enrich interrupts with IMR/ISR flag info
     try:
         ints = emulator_state.get("interrupts") or {}
-        INTERNAL_MEMORY_START = 0x100000
         imr_val = (
             emulator.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF
         )

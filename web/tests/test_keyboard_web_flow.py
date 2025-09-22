@@ -15,7 +15,7 @@ from typing import Any
 import app as webapp
 from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
-from sc62015.pysc62015.constants import IMRFlag
+from sc62015.pysc62015.constants import IMRFlag, INTERNAL_MEMORY_START
 
 
 def _get_json(client, path: str) -> dict[str, Any]:
@@ -48,7 +48,6 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
     with webapp.emulator_lock:
         emu = webapp.emulator
         assert emu is not None
-        INTERNAL_MEMORY_START = 0x100000
         # Disable timers to avoid background IRQs in this test
         try:
             setattr(emu, "_timer_enabled", False)
@@ -92,7 +91,6 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
     with webapp.emulator_lock:
         emu = webapp.emulator
         assert emu is not None
-        INTERNAL_MEMORY_START = 0x100000
         emu.memory.write_byte(
             INTERNAL_MEMORY_START + IMEMRegisters.IMR,
             int(IMRFlag.IRM | IMRFlag.KEYM),
