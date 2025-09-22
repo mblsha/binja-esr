@@ -4,7 +4,7 @@ import threading
 import time
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, cast
 
 from retrobus_perfetto import PerfettoTraceBuilder
 
@@ -62,6 +62,19 @@ class PerfettoTracer:
             uuid = self._builder.add_counter_track(name, unit)
             self._counter_tracks[name] = uuid
             return uuid
+
+    def _is_active(self) -> bool:
+        """Return ``True`` when tracing is enabled and a builder is available."""
+
+        return self._enabled and self._builder is not None
+
+    def _get_builder(self) -> Optional[PerfettoTraceBuilder]:
+        """Return the active trace builder if tracing is currently enabled."""
+
+        if not self._is_active():
+            return None
+
+        return cast(PerfettoTraceBuilder, self._builder)
 
     def start(self, path: str = "pc-e500.perfetto-trace") -> None:
         """Start tracing to the specified file."""
@@ -131,11 +144,12 @@ class PerfettoTracer:
         self, track: str, name: str, args: Optional[Dict[str, Any]] = None
     ) -> None:
         """Add an instant event to the trace."""
-        if not self._enabled or not self._builder:
+        builder = self._get_builder()
+        if not builder:
             return
 
         track_uuid = self._ensure_track(track)
-        event = self._builder.add_instant_event(track_uuid, name, self._now_ns())
+        event = builder.add_instant_event(track_uuid, name, self._now_ns())
 
         if args:
             event.add_annotations(args)
@@ -148,20 +162,22 @@ class PerfettoTracer:
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add a counter value to the trace."""
-        if not self._enabled or not self._builder:
+        builder = self._get_builder()
+        if not builder:
             return
 
         # For counters, we use the counter track
         track_uuid = self._ensure_counter_track(name)
 
         # retrobus-perfetto uses update_counter
-        self._builder.update_counter(track_uuid, value, self._now_ns())
+        builder.update_counter(track_uuid, value, self._now_ns())
 
     def begin_slice(
         self, track: str, name: str, args: Optional[Dict[str, Any]] = None
     ) -> None:
         """Begin a duration slice."""
-        if not self._enabled or not self._builder:
+        builder = self._get_builder()
+        if not builder:
             return
 
         track_uuid = self._ensure_track(track)
@@ -171,14 +187,15 @@ class PerfettoTracer:
             self._slice_stacks[track] = []
         self._slice_stacks[track].append(name)
 
-        event = self._builder.begin_slice(track_uuid, name, self._now_ns())
+        event = builder.begin_slice(track_uuid, name, self._now_ns())
 
         if args:
             event.add_annotations(args)
 
     def end_slice(self, track: str) -> None:
         """End a duration slice."""
-        if not self._enabled or not self._builder:
+        builder = self._get_builder()
+        if not builder:
             return
 
         track_uuid = self._ensure_track(track)
@@ -187,7 +204,7 @@ class PerfettoTracer:
         if track in self._slice_stacks and self._slice_stacks[track]:
             self._slice_stacks[track].pop()
 
-        self._builder.end_slice(track_uuid, self._now_ns())
+        builder.end_slice(track_uuid, self._now_ns())
 
     @contextmanager
     def slice(self, track: str, name: str, args: Optional[Dict[str, Any]] = None):
@@ -196,7 +213,7 @@ class PerfettoTracer:
         Always runs but checks internally if tracing is enabled.
         When disabled, this is a no-op with minimal overhead.
         """
-        if not self._enabled or not self._builder:
+        if not self._is_active():
             yield
             return
 
