@@ -5,6 +5,7 @@ for CPU execution, peripherals, and memory operations with Perfetto format outpu
 """
 
 import collections
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, Optional, TypeVar, Union
 
 from retrobus_perfetto import PerfettoTraceBuilder
+
+
+logger = logging.getLogger(__name__)
 
 
 class TraceEventType(Enum):
@@ -91,11 +95,11 @@ class TraceManager:
 
     def start_tracing(self, output_path: Union[str, Path]) -> bool:
         """Start tracing to a file."""
-        print(f"DEBUG: start_tracing called with output_path={output_path}")
+        logger.debug("start_tracing called with output_path=%s", output_path)
 
         with self._rlock:
             if self._tracing_enabled:
-                print("DEBUG: Tracing already enabled")
+                logger.debug("Tracing already enabled")
                 return False
 
             try:
@@ -140,22 +144,25 @@ class TraceManager:
                 self._tracing_enabled = True
                 self._start_time = time.perf_counter()
 
-                print(
-                    f"DEBUG: Tracing started successfully, file will be saved to: {self._trace_file}"
+                logger.debug(
+                    "Tracing started successfully; file will be saved to %s",
+                    self._trace_file,
                 )
                 return True
 
             except Exception as e:
-                print(f"DEBUG: Exception in start_tracing: {e}")
+                logger.exception("Exception in start_tracing")
                 raise RuntimeError(f"Failed to start tracing: {e}") from e
 
     def stop_tracing(self) -> bool:
         """Stop tracing and save the file."""
-        print(
-            f"DEBUG: stop_tracing called, _tracing_enabled={self._tracing_enabled}, _trace_builder={self._trace_builder is not None}"
+        logger.debug(
+            "stop_tracing called; _tracing_enabled=%s, _trace_builder=%s",
+            self._tracing_enabled,
+            self._trace_builder is not None,
         )
         if not self._tracing_enabled or not self._trace_builder:
-            print("DEBUG: Tracing not enabled or no trace builder")
+            logger.debug("Tracing not enabled or no trace builder")
             return False
 
         with self._rlock:
@@ -171,11 +178,11 @@ class TraceManager:
 
                 # Save the trace
                 if self._trace_file:
-                    print(f"DEBUG: Saving trace to {self._trace_file}")
+                    logger.debug("Saving trace to %s", self._trace_file)
                     self._trace_builder.save(str(self._trace_file))
-                    print("DEBUG: Trace saved successfully")
+                    logger.debug("Trace saved successfully")
                 else:
-                    print("DEBUG: No trace file path set!")
+                    logger.debug("No trace file path set")
 
                 # Reset state
                 self._tracing_enabled = False
