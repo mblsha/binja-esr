@@ -228,7 +228,7 @@ class TraceManager:
                 return None
 
             # Clean up old frames
-            self._cleanup_stale_frames(thread)
+            self._cleanup_stale_frames(thread, track_uuid)
 
             # Create new frame
             frame = CallStackFrame(
@@ -382,7 +382,7 @@ class TraceManager:
         """Trace interrupt-related events."""
         self.trace_instant("Interrupt", name, kwargs)
 
-    def _cleanup_stale_frames(self, thread: str) -> None:
+    def _cleanup_stale_frames(self, thread: str, track_id: int) -> None:
         """Remove stale frames from call stack."""
         stack = self._call_stacks.get(thread)
         if not stack:
