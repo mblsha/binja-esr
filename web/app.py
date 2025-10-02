@@ -56,6 +56,31 @@ UPDATE_INSTRUCTION_THRESHOLD = 100000  # 100k instructions
 TRACE_PATH = "pc-e500.perfetto-trace"
 
 
+def _calculate_emulation_speed(
+    previous_time: Optional[float],
+    previous_instructions: Optional[int],
+    current_time: float,
+    current_instructions: int,
+) -> tuple[float, float]:
+    """Compute emulator speed metrics.
+
+    This isolates the instruction-per-second calculation that was previously
+    embedded directly inside :func:`update_emulator_state`.  Having the logic in
+    a helper keeps the update function focused on assembling state data instead
+    of juggling nested conditionals and repeated ``speed = 0`` assignments.
+    """
+
+    if previous_time is None or previous_instructions is None:
+        return 0.0, 0.0
+
+    time_delta = current_time - previous_time
+    if time_delta <= 0:
+        return 0.0, 0.0
+
+    speed = (current_instructions - previous_instructions) / time_delta
+    return speed, speed / 2_000_000
+
+
 def initialize_emulator():
     """Initialize the PC-E500 emulator with ROM."""
     global emulator
@@ -127,26 +152,16 @@ def update_emulator_state():
     current_time = time.time()
     current_instructions = emulator.instruction_count
 
+    prev_time = emulator_state.get("speed_calc_time")
+    prev_instructions = emulator_state.get("speed_calc_instructions")
+
     if emulator_state["is_running"]:
-        # Calculate speed only when running
-        prev_time = emulator_state.get("speed_calc_time")
-        prev_instructions = emulator_state.get("speed_calc_instructions")
-
-        if prev_time is not None and prev_instructions is not None:
-            time_delta = current_time - prev_time
-            instruction_delta = current_instructions - prev_instructions
-
-            if time_delta > 0:
-                speed = instruction_delta / time_delta
-                speed_ratio = speed / 2_000_000  # 2MHz CPU
-            else:
-                speed = 0
-                speed_ratio = 0
-        else:
-            # First update while running
-            speed = 0
-            speed_ratio = 0
-
+        speed, speed_ratio = _calculate_emulation_speed(
+            prev_time,
+            prev_instructions,
+            current_time,
+            current_instructions,
+        )
         emulator_state["emulation_speed"] = speed
         emulator_state["speed_ratio"] = speed_ratio
     else:
