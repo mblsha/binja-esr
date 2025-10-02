@@ -38,6 +38,16 @@ from .intrinsics import register_sc62015_intrinsics
 NUM_TEMP_REGISTERS = 14
 
 
+CALL_STACK_EFFECTS = {
+    0x04: 1,  # CALL mn
+    0x05: 1,  # CALLF lmn
+    0xFE: 1,  # IR - Interrupt entry
+    0x06: -1,  # RET
+    0x07: -1,  # RETF
+    0x01: -1,  # RETI - Return from interrupt
+}
+
+
 @dataclass
 class InstructionEvalInfo:
     instruction_info: InstructionInfo
@@ -234,18 +244,10 @@ class Emulator:
         opcode = self.memory.read_byte(address)
 
         # Monitor specific opcodes for call stack tracking
-        if opcode == 0x04:  # CALL mn
-            self.regs.call_sub_level += 1
-        elif opcode == 0x05:  # CALLF lmn
-            self.regs.call_sub_level += 1
-        elif opcode == 0xFE:  # IR - Interrupt entry
-            self.regs.call_sub_level += 1
-        elif opcode == 0x06:  # RET
-            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
-        elif opcode == 0x07:  # RETF
-            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
-        elif opcode == 0x01:  # RETI - Return from interrupt
-            self.regs.call_sub_level = max(0, self.regs.call_sub_level - 1)
+        call_stack_delta = CALL_STACK_EFFECTS.get(opcode)
+        if call_stack_delta is not None:
+            new_level = self.regs.call_sub_level + call_stack_delta
+            self.regs.call_sub_level = max(0, new_level)
 
         # Fast-path: optimize WAIT (opcode 0xEF) to avoid long LLIL loops
         # Semantics: WAIT performs an idle loop, decrementing I until zero.
