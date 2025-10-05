@@ -21,7 +21,11 @@ from sc62015.pysc62015.instr.instructions import (
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 
-from .memory import PCE500Memory, MemoryOverlay
+from .memory import (
+    PCE500Memory,
+    MemoryOverlay,
+    IMEM_ACCESS_HISTORY_LIMIT,
+)
 from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .trace_manager import g_tracer
@@ -936,15 +940,17 @@ class PCE500Emulator:
         reg_name = {0xF0: "KOL", 0xF1: "KOH", 0xF2: "KIL"}.get(offset)
         if reg_name:
             tracking = self.memory.imem_access_tracking.setdefault(
-                reg_name, {"reads": [], "writes": []}
+                reg_name,
+                {
+                    "reads": deque(maxlen=IMEM_ACCESS_HISTORY_LIMIT),
+                    "writes": deque(maxlen=IMEM_ACCESS_HISTORY_LIMIT),
+                },
             )
             access_list = tracking[access_type]
             if access_list and access_list[-1][0] == cpu_pc:
                 access_list[-1] = (cpu_pc, access_list[-1][1] + 1)
             else:
                 access_list.append((cpu_pc, 1))
-                if len(access_list) > 10:
-                    access_list.pop(0)
 
     def _keyboard_read_handler(self, address: int, cpu_pc: Optional[int] = None) -> int:
         offset = address - INTERNAL_MEMORY_START
