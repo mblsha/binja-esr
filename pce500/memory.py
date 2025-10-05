@@ -4,8 +4,9 @@ This module implements the memory system for the PC-E500 emulator,
 including memory overlays for ROM, RAM expansions, and memory-mapped I/O.
 """
 
+from collections import deque
 from dataclasses import dataclass
-from typing import Optional, List, Callable, Dict, Tuple, Literal
+from typing import Optional, List, Callable, Dict, Tuple, Literal, Deque
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -62,9 +63,10 @@ class PCE500Memory:
         # Reference to CPU emulator for accessing internal memory registers
         self.cpu = None
 
-        # Track IMEMRegisters access for debugging
-        # Each entry is a list of (PC, count) tuples
-        self.imem_access_tracking: Dict[str, Dict[str, List[Tuple[int, int]]]] = {}
+        # Track IMEMRegisters access for debugging.
+        # Each entry keeps a bounded deque of ``(PC, count)`` tuples to avoid
+        # repeated list reallocations when maintaining a fixed-size history.
+        self.imem_access_tracking: Dict[str, Dict[str, Deque[Tuple[int, int]]]] = {}
 
         # Reference to emulator for tracking counters
         self._emulator = None
@@ -107,16 +109,18 @@ class PCE500Memory:
             return
 
         tracking = self.imem_access_tracking.setdefault(
-            reg_name, {"reads": [], "writes": []}
+            reg_name,
+            {
+                "reads": deque(maxlen=IMEM_ACCESS_HISTORY_LIMIT),
+                "writes": deque(maxlen=IMEM_ACCESS_HISTORY_LIMIT),
+            },
         )
         history_key = "reads" if access_type == "read" else "writes"
-        history = tracking[history_key]
+        history: Deque[Tuple[int, int]] = tracking[history_key]
         if history and history[-1][0] == effective_pc:
             history[-1] = (effective_pc, history[-1][1] + 1)
         else:
             history.append((effective_pc, 1))
-            if len(history) > IMEM_ACCESS_HISTORY_LIMIT:
-                history.pop(0)
 
         if (
             access_type == "write"
@@ -583,8 +587,13 @@ class PCE500Memory:
         Returns:
             Dictionary with register names as keys and read/write lists as values
         """
-        # Return a copy of the tracking data
-        return dict(self.imem_access_tracking)
+        # Return a copy of the tracking data as plain lists for serialization
+        return {
+            reg_name: {
+                access_type: list(entries) for access_type, entries in accesses.items()
+            }
+            for reg_name, accesses in self.imem_access_tracking.items()
+        }
 
     def clear_imem_access_tracking(self) -> None:
         """Clear all IMEM register access tracking data."""
