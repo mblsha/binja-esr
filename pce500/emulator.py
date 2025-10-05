@@ -190,6 +190,22 @@ class PCE500Emulator:
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
 
+    def _reset_instruction_access_log(self) -> None:
+        """Clear the per-instruction register access accumulator when tracing."""
+
+        if self.disasm_trace_enabled:
+            self.current_instruction_accesses = []
+
+    def _flush_instruction_access_log(self, pc: int) -> None:
+        """Persist register accesses captured while executing the current opcode."""
+
+        if not self.disasm_trace_enabled or not self.current_instruction_accesses:
+            return
+
+        self.register_accesses.setdefault(pc, []).extend(
+            self.current_instruction_accesses
+        )
+
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
         if start_address is None:
@@ -409,18 +425,12 @@ class PCE500Emulator:
                 pc_before = pc
 
                 # Clear current instruction accesses before execution
-                if self.disasm_trace_enabled:
-                    self.current_instruction_accesses = []
+                self._reset_instruction_access_log()
 
                 eval_info = self.cpu.execute_instruction(pc)
 
                 # Associate accumulated register accesses with this instruction
-                if self.disasm_trace_enabled and self.current_instruction_accesses:
-                    if pc_before not in self.register_accesses:
-                        self.register_accesses[pc_before] = []
-                    self.register_accesses[pc_before].extend(
-                        self.current_instruction_accesses
-                    )
+                self._flush_instruction_access_log(pc_before)
 
                 self.cycle_count += 1
                 self.instruction_count += 1
@@ -464,8 +474,7 @@ class PCE500Emulator:
                 pc_before = pc
 
                 # Clear current instruction accesses before execution
-                if self.disasm_trace_enabled:
-                    self.current_instruction_accesses = []
+                self._reset_instruction_access_log()
 
                 with new_tracer.slice(
                     "Opcodes",
@@ -479,12 +488,7 @@ class PCE500Emulator:
                     eval_info = self.cpu.execute_instruction(pc)
 
                 # Associate accumulated register accesses with this instruction
-                if self.disasm_trace_enabled and self.current_instruction_accesses:
-                    if pc_before not in self.register_accesses:
-                        self.register_accesses[pc_before] = []
-                    self.register_accesses[pc_before].extend(
-                        self.current_instruction_accesses
-                    )
+                self._flush_instruction_access_log(pc_before)
 
                 self.cycle_count += 1
                 self.instruction_count += 1
