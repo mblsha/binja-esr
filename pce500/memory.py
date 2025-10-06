@@ -171,6 +171,64 @@ class PCE500Memory:
 
         g_tracer.trace_instant(thread, "", trace_data)
 
+    def _read_overlay_value(
+        self,
+        overlay: MemoryOverlay,
+        address: int,
+        cpu_pc: Optional[int],
+    ) -> Optional[int]:
+        """Resolve an overlay read via handler or backing data."""
+
+        if overlay.read_handler:
+            return int(overlay.read_handler(address, cpu_pc)) & 0xFF
+
+        if overlay.data:
+            offset = address - overlay.start
+            if 0 <= offset < len(overlay.data):
+                return int(overlay.data[offset]) & 0xFF
+
+        return None
+
+    def _write_overlay_value(
+        self,
+        overlay: MemoryOverlay,
+        address: int,
+        value: int,
+        cpu_pc: Optional[int],
+    ) -> bool:
+        """Dispatch a write to an overlay and emit tracing if needed."""
+
+        if overlay.write_handler:
+            overlay.write_handler(address, value, cpu_pc)
+            self._trace_write_event(
+                overlay.perfetto_thread,
+                address,
+                value,
+                cpu_pc,
+                overlay.name,
+            )
+            return True
+
+        if overlay.read_only:
+            # Writes to read-only overlays are ignored but considered handled so
+            # callers stop searching for other overlays.
+            return True
+
+        if overlay.data and isinstance(overlay.data, bytearray):
+            offset = address - overlay.start
+            if 0 <= offset < len(overlay.data):
+                overlay.data[offset] = value
+                self._trace_write_event(
+                    overlay.perfetto_thread,
+                    address,
+                    value,
+                    cpu_pc,
+                    overlay.name,
+                )
+                return True
+
+        return False
+
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read a byte from memory.
@@ -186,26 +244,17 @@ class PCE500Memory:
         address &= 0xFFFFFF  # 24-bit address space
 
         # Check for SC62015 internal memory (0x100000-0x1000FF)
-        if address >= 0x100000:
-            offset = address - 0x100000
+        if address >= INTERNAL_MEMORY_START:
+            offset = address - INTERNAL_MEMORY_START
             if offset < 0x100:
                 # Fast path for keyboard overlay
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    value: int
-                    if self._keyboard_overlay.read_handler:
-                        value = (
-                            int(self._keyboard_overlay.read_handler(address, cpu_pc))
-                            & 0xFF
-                        )
-                    elif self._keyboard_overlay.data:
-                        overlay_offset = address - self._keyboard_overlay.start
-                        if overlay_offset < len(self._keyboard_overlay.data):
-                            value = (
-                                int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
-                            )
-                        else:
-                            value = 0x00
-                    else:
+                    value = self._read_overlay_value(
+                        self._keyboard_overlay,
+                        address,
+                        cpu_pc,
+                    )
+                    if value is None:
                         value = 0x00
 
                     self._record_imem_access(
@@ -238,13 +287,8 @@ class PCE500Memory:
         # Check overlays in order
         for overlay in self.overlays:
             if overlay.start <= address <= overlay.end:
-                if overlay.read_handler:
-                    return overlay.read_handler(address, cpu_pc)
-                elif overlay.data:
-                    offset = address - overlay.start
-                    if offset < len(overlay.data):
-                        return overlay.data[offset]
-                return 0x00
+                value = self._read_overlay_value(overlay, address, cpu_pc)
+                return value if value is not None else 0x00
 
         # Default to external memory
         return self.external_memory[address]
@@ -268,38 +312,25 @@ class PCE500Memory:
         value &= 0xFF
 
         # Check for SC62015 internal memory (0x100000-0x1000FF)
-        if address >= 0x100000:
-            offset = address - 0x100000
+        if address >= INTERNAL_MEMORY_START:
+            offset = address - INTERNAL_MEMORY_START
             if offset < 0x100:
                 # Fast path for keyboard overlay
                 if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    if self._keyboard_overlay.write_handler:
-                        self._keyboard_overlay.write_handler(address, value, cpu_pc)
-                        self._record_imem_access(
-                            offset=offset,
-                            access_type="write",
-                            value=value,
-                            cpu_pc=cpu_pc,
-                        )
-                        self._trace_write_event(
-                            self._keyboard_overlay.perfetto_thread,
-                            address,
-                            value,
-                            cpu_pc,
-                            self._keyboard_overlay.name,
-                        )
-                        return
-                    elif self._keyboard_overlay.read_only:
-                        # Silently ignore writes to read-only overlays
-                        return
-                    elif self._keyboard_overlay.data and isinstance(
-                        self._keyboard_overlay.data, bytearray
+                    if self._write_overlay_value(
+                        self._keyboard_overlay,
+                        address,
+                        value,
+                        cpu_pc,
                     ):
-                        # Write to writable overlay data
-                        overlay_offset = address - self._keyboard_overlay.start
-                        if overlay_offset < len(self._keyboard_overlay.data):
-                            self._keyboard_overlay.data[overlay_offset] = value
-                            return
+                        if self._keyboard_overlay.write_handler:
+                            self._record_imem_access(
+                                offset=offset,
+                                access_type="write",
+                                value=value,
+                                cpu_pc=cpu_pc,
+                            )
+                        return
 
                 # Normal internal memory write (most common case)
                 # Internal memory stored at end of external_memory for compatibility
@@ -352,31 +383,7 @@ class PCE500Memory:
         # Check overlays for write handlers, read-only, or writable data
         for overlay in self.overlays:
             if overlay.start <= address <= overlay.end:
-                if overlay.write_handler:
-                    overlay.write_handler(address, value, cpu_pc)
-                    self._trace_write_event(
-                        overlay.perfetto_thread,
-                        address,
-                        value,
-                        cpu_pc,
-                        overlay.name,
-                    )
-                    return
-                elif overlay.read_only:
-                    # Silently ignore writes to read-only overlays
-                    return
-                elif overlay.data and isinstance(overlay.data, bytearray):
-                    # Write to writable overlay data
-                    offset = address - overlay.start
-                    if offset < len(overlay.data):
-                        overlay.data[offset] = value
-                        self._trace_write_event(
-                            overlay.perfetto_thread,
-                            address,
-                            value,
-                            cpu_pc,
-                            overlay.name,
-                        )
+                if self._write_overlay_value(overlay, address, value, cpu_pc):
                     return
 
         # Default to external memory
