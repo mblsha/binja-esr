@@ -9,8 +9,9 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
+from functools import wraps
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional, Union
+from typing import Any, Callable, Deque, Dict, Optional, TypeVar, Union
 
 from retrobus_perfetto import PerfettoTraceBuilder
 
@@ -391,11 +392,15 @@ g_tracer = TraceManager()
 
 
 # Decorator for tracing functions
-def trace_function(thread: str):
+T = TypeVar("T")
+
+
+def trace_function(thread: str) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator to automatically trace function execution."""
 
-    def decorator(func):
-        def wrapper(*args, **kwargs):
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> T:
             # Extract PC if available from self
             pc = 0
             caller_pc = 0
