@@ -5,6 +5,7 @@ for CPU execution, peripherals, and memory operations with Perfetto format outpu
 """
 
 import collections
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, Optional, TypeVar, Union
 
 from retrobus_perfetto import PerfettoTraceBuilder
+
+
+logger = logging.getLogger(__name__)
 
 
 class TraceEventType(Enum):
@@ -77,11 +81,11 @@ class TraceManager:
 
     def start_tracing(self, output_path: Union[str, Path]) -> bool:
         """Start tracing to a file."""
-        print(f"DEBUG: start_tracing called with output_path={output_path}")
+        logger.debug("start_tracing called with output_path=%s", output_path)
 
         with self._rlock:
             if self._tracing_enabled:
-                print("DEBUG: Tracing already enabled")
+                logger.debug("Tracing already enabled")
                 return False
 
             try:
@@ -126,22 +130,25 @@ class TraceManager:
                 self._tracing_enabled = True
                 self._start_time = time.perf_counter()
 
-                print(
-                    f"DEBUG: Tracing started successfully, file will be saved to: {self._trace_file}"
+                logger.debug(
+                    "Tracing started successfully; file will be saved to %s",
+                    self._trace_file,
                 )
                 return True
 
             except Exception as e:
-                print(f"DEBUG: Exception in start_tracing: {e}")
+                logger.exception("Exception in start_tracing")
                 raise RuntimeError(f"Failed to start tracing: {e}") from e
 
     def stop_tracing(self) -> bool:
         """Stop tracing and save the file."""
-        print(
-            f"DEBUG: stop_tracing called, _tracing_enabled={self._tracing_enabled}, _trace_builder={self._trace_builder is not None}"
+        logger.debug(
+            "stop_tracing called; _tracing_enabled=%s, _trace_builder=%s",
+            self._tracing_enabled,
+            self._trace_builder is not None,
         )
         if not self._tracing_enabled or not self._trace_builder:
-            print("DEBUG: Tracing not enabled or no trace builder")
+            logger.debug("Tracing not enabled or no trace builder")
             return False
 
         with self._rlock:
@@ -157,11 +164,11 @@ class TraceManager:
 
                 # Save the trace
                 if self._trace_file:
-                    print(f"DEBUG: Saving trace to {self._trace_file}")
+                    logger.debug("Saving trace to %s", self._trace_file)
                     self._trace_builder.save(str(self._trace_file))
-                    print("DEBUG: Trace saved successfully")
+                    logger.debug("Trace saved successfully")
                 else:
-                    print("DEBUG: No trace file path set!")
+                    logger.debug("No trace file path set")
 
                 # Reset state
                 self._tracing_enabled = False
@@ -208,12 +215,13 @@ class TraceManager:
         Returns:
             The event object if tracing is enabled, None otherwise.
         """
-        if not self.is_tracing() or thread not in self._track_uuids:
+        track_id = self._get_thread_track(thread)
+        if track_id is None:
             return None
 
         with self._rlock:
             # Clean up old frames
-            self._cleanup_stale_frames(thread)
+            self._cleanup_stale_frames(thread, track_id)
 
             # Create new frame
             frame = CallStackFrame(
@@ -233,7 +241,7 @@ class TraceManager:
 
             # Send trace event
             event = self._trace_builder.begin_slice(
-                self._track_uuids[thread], frame.name, frame.timestamp
+                track_id, frame.name, frame.timestamp
             )
 
             # Add annotations
@@ -243,7 +251,8 @@ class TraceManager:
 
     def end_function(self, thread: str, pc: int) -> None:
         """End a function duration event."""
-        if not self.is_tracing() or thread not in self._track_uuids:
+        track_id = self._get_thread_track(thread)
+        if track_id is None:
             return
 
         with self._rlock:
@@ -259,16 +268,14 @@ class TraceManager:
                         popped = stack.pop()
                         if popped.event_sent:
                             self._trace_builder.end_slice(
-                                self._track_uuids[thread], self._get_timestamp()
+                                track_id, self._get_timestamp()
                             )
                     return
 
             # If no matching frame found, just pop the top
             if stack and stack[-1].event_sent:
                 stack.pop()
-                self._trace_builder.end_slice(
-                    self._track_uuids[thread], self._get_timestamp()
-                )
+                self._trace_builder.end_slice(track_id, self._get_timestamp())
 
     def trace_instant(
         self, thread: str, name: str, args: Optional[Dict[str, Any]] = None
@@ -278,12 +285,13 @@ class TraceManager:
         Returns:
             The event object if tracing is enabled, None otherwise.
         """
-        if not self.is_tracing() or thread not in self._track_uuids:
+        track_id = self._get_thread_track(thread)
+        if track_id is None:
             return None
 
         with self._rlock:
             event = self._trace_builder.add_instant_event(
-                self._track_uuids[thread], name, self._get_timestamp()
+                track_id, name, self._get_timestamp()
             )
 
             if args:
@@ -299,22 +307,24 @@ class TraceManager:
             name: Counter name (must match a created counter track)
             value: Counter value
         """
-        if not self.is_tracing() or name not in self._counter_tracks:
+        track_id = self._get_counter_track(name)
+        if track_id is None:
             return
 
         with self._rlock:
             self._trace_builder.update_counter(
-                self._counter_tracks[name], value, self._get_timestamp()
+                track_id, value, self._get_timestamp()
             )
 
     def begin_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
         """Begin a flow to connect events across threads."""
-        if not self.is_tracing() or thread not in self._track_uuids:
+        track_id = self._get_thread_track(thread)
+        if track_id is None:
             return
 
         with self._rlock:
             self._trace_builder.add_flow(
-                self._track_uuids[thread],
+                track_id,
                 name,
                 self._get_timestamp(),
                 flow_id,
@@ -323,12 +333,13 @@ class TraceManager:
 
     def end_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
         """End a flow."""
-        if not self.is_tracing() or thread not in self._track_uuids:
+        track_id = self._get_thread_track(thread)
+        if track_id is None:
             return
 
         with self._rlock:
             self._trace_builder.add_flow(
-                self._track_uuids[thread],
+                track_id,
                 name,
                 self._get_timestamp(),
                 flow_id,
@@ -344,7 +355,7 @@ class TraceManager:
         value: Optional[int] = None,
     ) -> None:
         """Trace memory access operations."""
-        if not self.is_tracing() or thread not in self._track_uuids:
+        if self._get_thread_track(thread) is None:
             return
 
         name = "Write" if is_write else "Read"
@@ -367,7 +378,7 @@ class TraceManager:
         """Trace interrupt-related events."""
         self.trace_instant("Interrupt", name, kwargs)
 
-    def _cleanup_stale_frames(self, thread: str) -> None:
+    def _cleanup_stale_frames(self, thread: str, track_id: int) -> None:
         """Remove stale frames from call stack."""
         stack = self._call_stacks.get(thread)
         if not stack:
@@ -380,11 +391,21 @@ class TraceManager:
             if current_time - stack[0].timestamp > self.STALE_FRAME_TIMEOUT:
                 frame = stack.popleft()
                 if frame.event_sent:
-                    self._trace_builder.end_slice(
-                        self._track_uuids[thread], current_time
-                    )
+                    self._trace_builder.end_slice(track_id, current_time)
             else:
                 break
+
+    def _get_thread_track(self, thread: str) -> Optional[int]:
+        """Return the track id for a thread if tracing is active."""
+        if not self._tracing_enabled or self._trace_builder is None:
+            return None
+        return self._track_uuids.get(thread)
+
+    def _get_counter_track(self, name: str) -> Optional[int]:
+        """Return the counter track id if tracing is active."""
+        if not self._tracing_enabled or self._trace_builder is None:
+            return None
+        return self._counter_tracks.get(name)
 
 
 # Global singleton instance
