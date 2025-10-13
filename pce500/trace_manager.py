@@ -75,6 +75,20 @@ class TraceManager:
         # For thread safety
         self._rlock = threading.RLock()
 
+    def _require_active_track(self, thread: str) -> Optional[int]:
+        """Return the active track UUID for ``thread`` if tracing is enabled."""
+
+        if not self._tracing_enabled or not self._trace_builder:
+            return None
+        return self._track_uuids.get(thread)
+
+    def _require_counter_track(self, name: str) -> Optional[int]:
+        """Return the counter track UUID when tracing is active."""
+
+        if not self._tracing_enabled or not self._trace_builder:
+            return None
+        return self._counter_tracks.get(name)
+
     def start_tracing(self, output_path: Union[str, Path]) -> bool:
         """Start tracing to a file."""
         print(f"DEBUG: start_tracing called with output_path={output_path}")
@@ -208,10 +222,11 @@ class TraceManager:
         Returns:
             The event object if tracing is enabled, None otherwise.
         """
-        if not self.is_tracing() or thread not in self._track_uuids:
-            return None
-
         with self._rlock:
+            track_uuid = self._require_active_track(thread)
+            if track_uuid is None:
+                return None
+
             # Clean up old frames
             self._cleanup_stale_frames(thread)
 
@@ -233,7 +248,7 @@ class TraceManager:
 
             # Send trace event
             event = self._trace_builder.begin_slice(
-                self._track_uuids[thread], frame.name, frame.timestamp
+                track_uuid, frame.name, frame.timestamp
             )
 
             # Add annotations
@@ -243,10 +258,11 @@ class TraceManager:
 
     def end_function(self, thread: str, pc: int) -> None:
         """End a function duration event."""
-        if not self.is_tracing() or thread not in self._track_uuids:
-            return
-
         with self._rlock:
+            track_uuid = self._require_active_track(thread)
+            if track_uuid is None:
+                return
+
             stack = self._call_stacks.get(thread)
             if not stack:
                 return
@@ -259,7 +275,7 @@ class TraceManager:
                         popped = stack.pop()
                         if popped.event_sent:
                             self._trace_builder.end_slice(
-                                self._track_uuids[thread], self._get_timestamp()
+                                track_uuid, self._get_timestamp()
                             )
                     return
 
@@ -267,7 +283,7 @@ class TraceManager:
             if stack and stack[-1].event_sent:
                 stack.pop()
                 self._trace_builder.end_slice(
-                    self._track_uuids[thread], self._get_timestamp()
+                    track_uuid, self._get_timestamp()
                 )
 
     def trace_instant(
@@ -278,12 +294,13 @@ class TraceManager:
         Returns:
             The event object if tracing is enabled, None otherwise.
         """
-        if not self.is_tracing() or thread not in self._track_uuids:
-            return None
-
         with self._rlock:
+            track_uuid = self._require_active_track(thread)
+            if track_uuid is None:
+                return None
+
             event = self._trace_builder.add_instant_event(
-                self._track_uuids[thread], name, self._get_timestamp()
+                track_uuid, name, self._get_timestamp()
             )
 
             if args:
@@ -299,22 +316,24 @@ class TraceManager:
             name: Counter name (must match a created counter track)
             value: Counter value
         """
-        if not self.is_tracing() or name not in self._counter_tracks:
-            return
-
         with self._rlock:
+            counter_track = self._require_counter_track(name)
+            if counter_track is None:
+                return
+
             self._trace_builder.update_counter(
-                self._counter_tracks[name], value, self._get_timestamp()
+                counter_track, value, self._get_timestamp()
             )
 
     def begin_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
         """Begin a flow to connect events across threads."""
-        if not self.is_tracing() or thread not in self._track_uuids:
-            return
-
         with self._rlock:
+            track_uuid = self._require_active_track(thread)
+            if track_uuid is None:
+                return
+
             self._trace_builder.add_flow(
-                self._track_uuids[thread],
+                track_uuid,
                 name,
                 self._get_timestamp(),
                 flow_id,
@@ -323,12 +342,13 @@ class TraceManager:
 
     def end_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
         """End a flow."""
-        if not self.is_tracing() or thread not in self._track_uuids:
-            return
-
         with self._rlock:
+            track_uuid = self._require_active_track(thread)
+            if track_uuid is None:
+                return
+
             self._trace_builder.add_flow(
-                self._track_uuids[thread],
+                track_uuid,
                 name,
                 self._get_timestamp(),
                 flow_id,
@@ -344,9 +364,6 @@ class TraceManager:
         value: Optional[int] = None,
     ) -> None:
         """Trace memory access operations."""
-        if not self.is_tracing() or thread not in self._track_uuids:
-            return
-
         name = "Write" if is_write else "Read"
         args = {"address": f"0x{address:06X}", "size": size}
 
@@ -373,6 +390,11 @@ class TraceManager:
         if not stack:
             return
 
+        track_uuid = self._require_active_track(thread)
+        if track_uuid is None:
+            stack.clear()
+            return
+
         current_time = self._get_timestamp()
 
         # Remove frames older than timeout
@@ -380,9 +402,7 @@ class TraceManager:
             if current_time - stack[0].timestamp > self.STALE_FRAME_TIMEOUT:
                 frame = stack.popleft()
                 if frame.event_sent:
-                    self._trace_builder.end_slice(
-                        self._track_uuids[thread], current_time
-                    )
+                    self._trace_builder.end_slice(track_uuid, current_time)
             else:
                 break
 
