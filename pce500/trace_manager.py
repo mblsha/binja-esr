@@ -282,9 +282,7 @@ class TraceManager:
             # If no matching frame found, just pop the top
             if stack and stack[-1].event_sent:
                 stack.pop()
-                self._trace_builder.end_slice(
-                    track_uuid, self._get_timestamp()
-                )
+                self._trace_builder.end_slice(track_uuid, self._get_timestamp())
 
     def trace_instant(
         self, thread: str, name: str, args: Optional[Dict[str, Any]] = None
