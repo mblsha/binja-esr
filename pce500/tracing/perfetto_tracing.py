@@ -1,5 +1,6 @@
 # pce500/tracing/perfetto_tracing.py
 import atexit
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -7,6 +8,8 @@ from functools import wraps
 from typing import Any, Callable, Dict, Optional, cast
 
 from retrobus_perfetto import PerfettoTraceBuilder
+
+logger = logging.getLogger(__name__)
 
 
 class PerfettoTracer:
@@ -262,8 +265,10 @@ def perf_trace(
             if extract_args:
                 try:
                     trace_args = extract_args(*args, **kwargs)
-                except Exception:
-                    pass  # Ignore extraction errors
+                except Exception as exc:  # pragma: no cover - log and continue
+                    logger.debug(
+                        "extract_args for %s failed: %s", func.__name__, exc, exc_info=True
+                    )
 
             # Add operation number if requested (for step function)
             if include_op_num and args and hasattr(args[0], "instruction_count"):
