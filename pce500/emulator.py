@@ -1,6 +1,5 @@
 """Simplified PC-E500 emulator combining machine and emulator functionality."""
 
-import sys
 import time
 import os
 from pathlib import Path
@@ -10,7 +9,6 @@ from collections import deque
 from datetime import datetime
 
 # Import the SC62015 emulator
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL,
