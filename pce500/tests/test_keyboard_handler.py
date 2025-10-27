@@ -4,11 +4,24 @@ import unittest
 import sys
 from pathlib import Path
 
-# Add parent directories to path
+# Add parent directories to path so the pce500 package can be imported.
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pce500.keyboard import PCE500KeyboardHandler
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from pce500.keyboard import (
+    PCE500KeyboardHandler,
+    DEFAULT_DEBOUNCE_READS,
+)
+
+
+from pce500 import keyboard_compat as _keyboard_compat
+
+
+class IMEMRegisters:
+    """Lightweight stand-in providing the register constants used in tests."""
+
+    KOL = _keyboard_compat.KOL
+    KOH = _keyboard_compat.KOH
+    KIL = _keyboard_compat.KIL
 
 
 class TestPCE500KeyboardHandler(unittest.TestCase):
@@ -114,6 +127,21 @@ class TestPCE500KeyboardHandler(unittest.TestCase):
         # Read KIL - should have bit 0 set
         kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
         self.assertEqual(kil_value, 0x01)  # 00000001
+
+    def test_active_low_column_scanning(self):
+        """Ensure handler can operate with active-low column strobes."""
+        handler = PCE500KeyboardHandler(columns_active_high=False)
+        handler.press_key("KEY_Q")  # Column 0, row 1
+
+        # In active-low mode the ROM clears the bit for the selected column.
+        handler.handle_register_write(IMEMRegisters.KOL, 0xFE)  # bit 0 cleared
+        kil_value = handler.handle_register_read(IMEMRegisters.KIL)
+        self.assertEqual(kil_value, 0x02)
+
+        # Switching to a different column should hide the key.
+        handler.handle_register_write(IMEMRegisters.KOL, 0xFD)  # bit 1 cleared
+        kil_value = handler.handle_register_read(IMEMRegisters.KIL)
+        self.assertEqual(kil_value, 0x00)
 
     def test_register_read_write(self):
         """Test register read/write operations."""

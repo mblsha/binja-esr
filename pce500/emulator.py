@@ -76,7 +76,7 @@ class PCE500Emulator:
         trace_enabled: bool = False,
         perfetto_trace: bool = False,
         save_lcd_on_exit: bool = True,
-        # Single keyboard implementation (compat); parameter removed
+        keyboard_columns_active_high: bool = True,
         enable_new_tracing: bool = False,
         trace_path: str = "pc-e500.perfetto-trace",
         disasm_trace: bool = False,
@@ -110,9 +110,13 @@ class PCE500Emulator:
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
 
-        # Keyboard implementation: compat only (hardware impl removed)
+        self._keyboard_columns_active_high = keyboard_columns_active_high
+
+        # Keyboard implementation: compat handler parameterised for column polarity
         # Pass memory accessor so compat can honor KSD (LCC bit)
-        self.keyboard = KeyboardCompat(self.memory.read_byte)
+        self.keyboard = KeyboardCompat(
+            self.memory.read_byte, columns_active_high=keyboard_columns_active_high
+        )
         self.memory.add_overlay(
             MemoryOverlay(
                 start=INTERNAL_MEMORY_START + KOL,
