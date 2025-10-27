@@ -43,6 +43,7 @@ class QueuedKey:
     release_target_reads: int = DEFAULT_RELEASE_READS  # Reads to accept release
     queued_time: float = field(default_factory=time.time)  # When key was queued
     released: bool = False  # Whether the key has been physically released
+    columns_active_high: bool = True  # Whether KO lines are active-high
 
     def matches_output(self, kol: int, koh: int) -> bool:
         """Check if current KOL/KOH values match this key's column (compat, active-high).
@@ -51,9 +52,14 @@ class QueuedKey:
         - KO8..KO11 are active when the corresponding KOH bit (0..3) is 1
         """
         if self.column < 8:
-            return (kol & (1 << self.column)) != 0
-        else:
-            return (koh & (1 << (self.column - 8))) != 0
+            mask = 1 << self.column
+            if self.columns_active_high:
+                return (kol & mask) != 0
+            return (kol & mask) == 0
+        mask = 1 << (self.column - 8)
+        if self.columns_active_high:
+            return (koh & mask) != 0
+        return (koh & mask) == 0
 
     def is_complete(self) -> bool:
         """Check if this key has completed its full press-release debounce."""
@@ -193,7 +199,9 @@ class PCE500KeyboardHandler:
         "▼": "KEY_DOWN_TRIANGLE",  # Added missing key
     }
 
-    def __init__(self, memory_accessor=None):
+    def __init__(
+        self, memory_accessor=None, columns_active_high: bool = True
+    ):
         """Initialize keyboard handler."""
         self._memory = memory_accessor
         self.pressed_keys: Set[str] = set()  # Keep for compatibility
@@ -202,6 +210,7 @@ class PCE500KeyboardHandler:
         self._last_koh = 0
         # Track last computed KIL for optional smoothing
         self._last_kil_value = 0x00
+        self._columns_active_high = columns_active_high
 
         # Build the keyboard matrix from the layout
         self.KEYBOARD_MATRIX: Dict[str, Tuple[int, int]] = {}
@@ -242,9 +251,16 @@ class PCE500KeyboardHandler:
         required_kol = 0
         required_koh = 0
         if column < 8:
-            required_kol = 1 << column
+            if self._columns_active_high:
+                required_kol = 1 << column
+            else:
+                required_kol = (~(1 << column)) & 0xFF
         else:
-            required_koh = 1 << (column - 8)
+            bit = 1 << (column - 8)
+            if self._columns_active_high:
+                required_koh = bit
+            else:
+                required_koh = (~bit) & 0x0F
 
         # Calculate target KIL value (set the row bit - active high logic)
         target_kil = 1 << row
@@ -258,6 +274,7 @@ class PCE500KeyboardHandler:
             required_koh=required_koh,
             target_kil=target_kil,
             target_reads=target_reads,
+            columns_active_high=self._columns_active_high,
         )
 
         self.key_queue.append(queued_key)
@@ -413,20 +430,33 @@ class PCE500KeyboardHandler:
     def get_active_columns(self) -> List[int]:
         """Return list of currently active (strobed) columns in compat mode.
 
-        In compat (active-high) mapping:
+        When columns are active-high (compat mode):
         - KO0..KO7 active when KOL bit 0..7 is 1
         - KO8..KO11 active when KOH bit 0..3 is 1
+        For active-low strobes (hardware mode) the bits are inverted.
         """
         active: List[int] = []
         kol = self._last_kol & 0xFF
         koh = self._last_koh & 0xFF
         # KO0..KO7 from KOL bits 0..7
         for col in range(8):
-            if kol & (1 << col):
+            mask = 1 << col
+            bit_set = kol & mask
+            if self._columns_active_high:
+                active_flag = bit_set
+            else:
+                active_flag = not bit_set
+            if active_flag:
                 active.append(col)
         # KO8..KO11 from KOH bits 0..3
         for col in range(4):
-            if koh & (1 << col):
+            mask = 1 << col
+            bit_set = koh & mask
+            if self._columns_active_high:
+                active_flag = bit_set
+            else:
+                active_flag = not bit_set
+            if active_flag:
                 active.append(col + 8)
         return active
 
