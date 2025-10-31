@@ -1003,7 +1003,11 @@ class PCE500Emulator:
                 candidate = base_dir / "rom-analysis" / "bnida.json"
             if candidate.exists():
                 data = json.loads(candidate.read_text())
-                addresses = sorted(int(addr) for addr in data.get("functions", []) if isinstance(addr, int))
+                addresses = sorted(
+                    int(addr)
+                    for addr in data.get("functions", [])
+                    if isinstance(addr, int)
+                )
         except Exception:
             addresses = []
         PCE500Emulator._function_cache = addresses

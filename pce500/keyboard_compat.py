@@ -199,9 +199,7 @@ class PCE500KeyboardHandler:
         "▼": "KEY_DOWN_TRIANGLE",  # Added missing key
     }
 
-    def __init__(
-        self, memory_accessor=None, columns_active_high: bool = True
-    ):
+    def __init__(self, memory_accessor=None, columns_active_high: bool = True):
         """Initialize keyboard handler."""
         self._memory = memory_accessor
         self.pressed_keys: Set[str] = set()  # Keep for compatibility

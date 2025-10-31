@@ -5,8 +5,6 @@ from pathlib import Path
 import pytest
 
 from pce500 import PCE500Emulator
-from sc62015.pysc62015.constants import IMRFlag
-from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 
@@ -16,9 +14,7 @@ def _rom_image() -> bytes:
         pytest.skip(f"ROM file {rom_path} not found")
     data = rom_path.read_bytes()
     if len(data) != 0x100000:
-        pytest.skip(
-            f"Expected 1MB ROM image at {rom_path} (got {len(data)} bytes)"
-        )
+        pytest.skip(f"Expected 1MB ROM image at {rom_path} (got {len(data)} bytes)")
     return data
 
 
@@ -83,7 +79,9 @@ def test_keyboard_interrupt_delivery_from_rom():
     assert key_after > key_before, "Keyboard interrupt counter did not increment"
     assert kb_irq_after > kb_irq_before, "Emulator-level IRQ accounting did not advance"
     assert emu._kb_strobe_count > 0, "ROM never toggled keyboard columns"
-    assert emu.memory.read_byte(0xBFD34) & 0x80, "Keyboard scanner gate should stay enabled"
+    assert emu.memory.read_byte(0xBFD34) & 0x80, (
+        "Keyboard scanner gate should stay enabled"
+    )
 
 
 def test_keyboard_interrupt_blocked_when_masked():

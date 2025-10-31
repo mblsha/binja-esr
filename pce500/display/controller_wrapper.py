@@ -106,7 +106,9 @@ class HD61202Controller:
                                 "data": cmd.data,
                                 "page": chip.state.page,
                                 "column": column_snapshot,
-                                "pc": cpu_pc if cpu_pc is not None else self._get_current_pc(),
+                                "pc": cpu_pc
+                                if cpu_pc is not None
+                                else self._get_current_pc(),
                             }
                         )
                 else:
@@ -139,7 +141,9 @@ class HD61202Controller:
                                 "column_raw": column_raw,
                                 "column_next": next_column,
                                 "data": cmd.data,
-                                "pc": cpu_pc if cpu_pc is not None else self._get_current_pc(),
+                                "pc": cpu_pc
+                                if cpu_pc is not None
+                                else self._get_current_pc(),
                             }
                         )
 
