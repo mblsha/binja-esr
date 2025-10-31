@@ -1042,6 +1042,15 @@ class PCE500Emulator:
         payload.setdefault("pc", self.cpu.regs.get(RegisterName.PC))
         payload["instruction_count"] = self.instruction_count
         payload["cycle_count"] = self.cycle_count
+        try:
+            payload["registers"] = {
+                "X": self.cpu.regs.get(RegisterName.X),
+                "Y": self.cpu.regs.get(RegisterName.Y),
+                "BA": self.cpu.regs.get(RegisterName.BA),
+                "S": self.cpu.regs.get(RegisterName.S),
+            }
+        except Exception:
+            payload["registers"] = {}
         func_addr, func_name = self._lookup_function(payload.get("pc"))
         payload["function_addr"] = func_addr
         payload["function_name"] = func_name
