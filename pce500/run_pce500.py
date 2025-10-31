@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Example script to run PC-E500 emulator."""
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,8 @@ def run_emulator(
     boot_skip_steps: int = 0,
     disasm_trace: bool = False,
     press_when_col: int | None = None,
+    display_trace: bool = False,
+    display_trace_log: str | None = None,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -65,6 +68,7 @@ def run_emulator(
         enable_new_tracing=new_perfetto,
         trace_path=trace_file,
         disasm_trace=disasm_trace,
+        enable_display_trace=display_trace,
     )
     # Enable debug draw-on-key if requested
     try:
@@ -435,6 +439,29 @@ def run_emulator(
         except Exception:
             pass
 
+    if display_trace:
+        trace_payload = emu.get_display_trace_log()
+        spans = trace_payload.get("spans", [])
+        events = trace_payload.get("events", [])
+        if print_stats:
+            print(
+                f"Display trace captured {len(spans)} span(s) and {len(events)} event(s)"
+            )
+            for span in spans[-5:]:
+                name = span.get("name")
+                writes = len(span.get("writes", []))
+                duration = span.get("duration_instr")
+                print(
+                    f"  - {name} wrote {writes} event(s) over {duration} instruction(s)"
+                )
+        if display_trace_log:
+            try:
+                Path(display_trace_log).write_text(json.dumps(trace_payload, indent=2))
+                if print_stats:
+                    print(f"Display trace written to {display_trace_log}")
+            except Exception as exc:
+                print(f"WARNING: could not write display trace log: {exc}")
+
     # Save disassembly trace if enabled
     if disasm_trace:
         emu.save_disasm_trace()
@@ -471,6 +498,8 @@ def main(
     auto2_press_key: str | None = None,
     auto2_press_after_steps: int | None = None,
     auto2_hold_instr: int | None = None,
+    display_trace: bool = False,
+    display_trace_log: str | None = None,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -504,6 +533,8 @@ def main(
         boot_skip_steps=boot_skip,
         disasm_trace=disasm_trace,
         press_when_col=press_when_col,
+        display_trace=display_trace,
+        display_trace_log=display_trace_log,
     ) as emu:
         # Pass-through secondary scheduling parameters via emulator attributes
         if auto2_press_key and auto2_press_after_steps is not None:
@@ -686,6 +717,15 @@ if __name__ == "__main__":
         type=int,
         help="Press the auto key when this KO column becomes active (compat mapping)",
     )
+    parser.add_argument(
+        "--display-trace",
+        action="store_true",
+        help="Enable display controller tracing (aggregates ROM draw calls)",
+    )
+    parser.add_argument(
+        "--display-trace-log",
+        help="Write display trace JSON payload to this path",
+    )
     # Secondary auto-key scheduling for experiments (step-based)
     parser.add_argument(
         "--auto2-press-key",
@@ -730,4 +770,6 @@ if __name__ == "__main__":
         auto2_press_key=args.auto2_press_key,
         auto2_press_after_steps=args.auto2_press_after_steps,
         auto2_hold_instr=args.auto2_hold_instr,
+        display_trace=args.display_trace,
+        display_trace_log=args.display_trace_log,
     )

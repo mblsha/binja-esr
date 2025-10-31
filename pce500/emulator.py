@@ -70,6 +70,8 @@ class PCE500Emulator:
     INTERNAL_RAM_SIZE = 0x8000
     MEMORY_DUMP_PC = 0x0F119C
     MEMORY_DUMP_DIR = "."
+    _symbol_cache: Optional[Dict[int, str]] = None
+    _function_cache: Optional[List[int]] = None
 
     def __init__(
         self,
@@ -80,6 +82,9 @@ class PCE500Emulator:
         enable_new_tracing: bool = False,
         trace_path: str = "pc-e500.perfetto-trace",
         disasm_trace: bool = False,
+        enable_display_trace: bool = False,
+        display_trace_functions: Optional[Dict[int, str]] = None,
+        display_trace_event_limit: int = 2048,
     ):
         self.instruction_count = 0
         self.memory_read_count = 0
@@ -109,6 +114,28 @@ class PCE500Emulator:
             self.memory.set_imem_access_callback(self._on_imem_register_access)
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
+
+        # Display tracing hooks (optional)
+        self.display_trace_enabled = bool(enable_display_trace)
+        self._display_trace_watch: Dict[int, str] = (
+            dict(display_trace_functions)
+            if display_trace_functions is not None
+            else self._default_display_trace_functions()
+        )
+        self._display_trace_symbols: Dict[int, str] = {}
+        self._display_trace_stack: list[Dict[str, Any]] = []
+        self.display_trace_log: list[Dict[str, Any]] = []
+        self._display_trace_events: list[Dict[str, Any]] = []
+        self._display_trace_event_limit = max(1, int(display_trace_event_limit))
+        self._display_trace_function_index: List[int] = []
+        self._display_trace_summary: Dict[int, Dict[str, Any]] = {}
+        if self.display_trace_enabled:
+            self._display_trace_symbols = self._load_symbol_map()
+            for addr, name in self._display_trace_symbols.items():
+                if addr in self._display_trace_watch:
+                    self._display_trace_watch[addr] = name
+            self._display_trace_function_index = self._load_function_addresses()
+            self.lcd.set_write_trace_callback(self._on_lcd_trace_event)
 
         self._keyboard_columns_active_high = keyboard_columns_active_high
 
@@ -729,8 +756,11 @@ class PCE500Emulator:
                     "depth": self.call_depth,
                 },
             )
+            if isinstance(dest_addr, int):
+                self._push_display_trace(dest_addr, pc_before)
 
         elif isinstance(instr, RetInstruction):
+            ret_depth = self.call_depth
             g_tracer.end_function("CPU", pc_before)
             self.call_depth = max(0, self.call_depth - 1)
             instr_name = type(instr).__name__
@@ -747,6 +777,7 @@ class PCE500Emulator:
                 },
             )
             self._add_register_annotations(event)
+            self._pop_display_trace(ret_depth)
 
         elif isinstance(instr, IR):
             vector_addr = self.memory.read_long(0xFFFFA)
@@ -912,6 +943,180 @@ class PCE500Emulator:
                 "by_source": {"KEY": 0, "MTI": 0, "STI": 0},
                 "last": {"src": None, "pc": None, "vector": None},
             }
+
+    @staticmethod
+    def _default_display_trace_functions() -> Dict[int, str]:
+        return {
+            0xE5A78: "sub_e5a78_slow_timer",
+            0xE5B38: "sub_e5b38_draw_text",
+            0xE51C3: "sub_e51c3_display_write",
+            0xE0D0C: "sub_e0d0c_draw_string",
+            0xAC60: "sub_ac60_keyboard_decode",
+            0xF2E24: "sub_f2e24_screen_write",
+            0xF2E50: "sub_f2e50_screen_blit",
+            0xF2E9E: "sub_f2e9e_screen_fill",
+            0xF2DA5: "sub_f2da5_buffer_copy",
+            0xF29B8: "sub_f29b8_draw_menu",
+            0x02E24: "sub_f2e24_screen_write",
+            0x02E50: "sub_f2e50_screen_blit",
+            0x02E9E: "sub_f2e9e_screen_fill",
+            0x02DA5: "sub_f2da5_buffer_copy",
+            0x029B8: "sub_f29b8_draw_menu",
+        }
+
+    def _load_symbol_map(self) -> Dict[int, str]:
+        if PCE500Emulator._symbol_cache is not None:
+            return PCE500Emulator._symbol_cache
+        import json
+        from pathlib import Path
+
+        symbol_map: Dict[int, str] = {}
+        try:
+            base_dir = Path(__file__).resolve().parent.parent
+            candidate = base_dir.parent / "rom-analysis" / "bnida.json"
+            if not candidate.exists():
+                candidate = base_dir / "rom-analysis" / "bnida.json"
+            if candidate.exists():
+                data = json.loads(candidate.read_text())
+                for key, name in data.get("names", {}).items():
+                    try:
+                        addr = int(key)
+                    except ValueError:
+                        continue
+                    symbol_map[addr] = name
+        except Exception:
+            symbol_map = {}
+        PCE500Emulator._symbol_cache = symbol_map
+        return symbol_map
+
+    def _load_function_addresses(self) -> List[int]:
+        if PCE500Emulator._function_cache is not None:
+            return PCE500Emulator._function_cache
+        import json
+        from pathlib import Path
+
+        addresses: List[int] = []
+        try:
+            base_dir = Path(__file__).resolve().parent.parent
+            candidate = base_dir.parent / "rom-analysis" / "bnida.json"
+            if not candidate.exists():
+                candidate = base_dir / "rom-analysis" / "bnida.json"
+            if candidate.exists():
+                data = json.loads(candidate.read_text())
+                addresses = sorted(int(addr) for addr in data.get("functions", []) if isinstance(addr, int))
+        except Exception:
+            addresses = []
+        PCE500Emulator._function_cache = addresses
+        return addresses
+
+    def _resolve_symbol_name(self, address: int) -> str:
+        if address in self._display_trace_watch:
+            return self._display_trace_watch[address]
+        if address in self._display_trace_symbols:
+            return self._display_trace_symbols[address]
+        return f"sub_{address:05X}"
+
+    def _lookup_function(self, pc: Optional[int]) -> tuple[int, str]:
+        if pc is None:
+            return (0, "unknown")
+        if not self._display_trace_function_index:
+            return (pc, self._resolve_symbol_name(pc))
+        # Binary search for greatest address <= pc
+        funcs = self._display_trace_function_index
+        lo, hi = 0, len(funcs) - 1
+        best = funcs[0]
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            addr = funcs[mid]
+            if addr <= pc:
+                best = addr
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return (best, self._resolve_symbol_name(best))
+
+    def _on_lcd_trace_event(self, event: Dict[str, Any]) -> None:
+        if not self.display_trace_enabled:
+            return
+        payload = dict(event)
+        payload.setdefault("pc", self.cpu.regs.get(RegisterName.PC))
+        payload["instruction_count"] = self.instruction_count
+        payload["cycle_count"] = self.cycle_count
+        func_addr, func_name = self._lookup_function(payload.get("pc"))
+        payload["function_addr"] = func_addr
+        payload["function_name"] = func_name
+        self._display_trace_events.append(payload)
+        if len(self._display_trace_events) > self._display_trace_event_limit:
+            self._display_trace_events.pop(0)
+        if self._display_trace_stack:
+            self._display_trace_stack[-1]["writes"].append(payload)
+        summary = self._display_trace_summary.setdefault(
+            func_addr,
+            {
+                "name": func_name,
+                "address": func_addr,
+                "writes": 0,
+                "data_writes": 0,
+                "instruction_writes": 0,
+                "samples": [],
+            },
+        )
+        summary["writes"] += 1
+        if payload.get("type") == "data":
+            summary["data_writes"] += 1
+        else:
+            summary["instruction_writes"] += 1
+        if len(summary["samples"]) < 5:
+            summary["samples"].append(payload)
+
+    def _push_display_trace(self, dest_addr: int, caller_pc: int) -> None:
+        if not self.display_trace_enabled:
+            return
+        if dest_addr not in self._display_trace_watch:
+            return
+        entry = {
+            "name": self._resolve_symbol_name(dest_addr),
+            "address": dest_addr,
+            "caller": caller_pc,
+            "start_instr": self.instruction_count,
+            "start_cycle": self.cycle_count,
+            "frame_depth": self.call_depth,
+            "writes": [],
+        }
+        self._display_trace_stack.append(entry)
+
+    def _pop_display_trace(self, ret_depth: int) -> None:
+        if not self.display_trace_enabled or not self._display_trace_stack:
+            return
+        if self._display_trace_stack[-1]["frame_depth"] != ret_depth:
+            return
+        entry = self._display_trace_stack.pop()
+        entry["end_instr"] = self.instruction_count
+        entry["end_cycle"] = self.cycle_count
+        entry["duration_instr"] = entry["end_instr"] - entry["start_instr"]
+        entry["duration_cycle"] = entry["end_cycle"] - entry["start_cycle"]
+        self.display_trace_log.append(entry)
+        if len(self.display_trace_log) > self._display_trace_event_limit:
+            self.display_trace_log.pop(0)
+
+    def get_display_trace_log(self) -> Dict[str, Any]:
+        return {
+            "spans": [dict(entry) for entry in self.display_trace_log],
+            "events": [dict(ev) for ev in self._display_trace_events],
+            "summary": [
+                {
+                    **{
+                        "name": meta["name"],
+                        "address": addr,
+                        "writes": meta["writes"],
+                        "data_writes": meta["data_writes"],
+                        "instruction_writes": meta["instruction_writes"],
+                    },
+                    "samples": list(meta["samples"]),
+                }
+                for addr, meta in sorted(self._display_trace_summary.items())
+            ],
+        }
 
     def bootstrap_from_rom_image(
         self,

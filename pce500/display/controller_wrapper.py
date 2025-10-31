@@ -20,6 +20,7 @@ class HD61202Controller:
         self.chips = [HD61202(), HD61202()]
         self.perfetto_enabled = False
         self._cpu = None  # Reference to CPU for getting current PC
+        self._write_trace_callback = None
 
         # Debug counters
         self.cs_both_count = 0
@@ -29,6 +30,15 @@ class HD61202Controller:
     def set_cpu(self, cpu) -> None:
         """Set reference to CPU emulator for getting current PC."""
         self._cpu = cpu
+
+    def set_write_trace_callback(self, callback) -> None:
+        """Register callback invoked for every LCD controller write.
+
+        Args:
+            callback: Callable receiving a dict describing the write.
+        """
+
+        self._write_trace_callback = callback
 
     def _get_current_pc(self) -> Optional[int]:
         """Get current PC from CPU if available."""
@@ -69,13 +79,11 @@ class HD61202Controller:
             for chip_idx in chips_to_write:
                 chip = self.chips[chip_idx]
                 if cmd.instr is not None:
+                    instr_name = cmd.instr.__class__.__name__ if cmd.instr else "Unknown"
                     chip.write_instruction(cmd.instr, cmd.data)
 
                     # Log display instruction to Perfetto
                     if new_tracer.enabled:
-                        instr_name = (
-                            cmd.instr.__class__.__name__ if cmd.instr else "Unknown"
-                        )
                         new_tracer.instant(
                             "Display",
                             f"LCD_{instr_name}",
@@ -85,9 +93,22 @@ class HD61202Controller:
                                 "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}",
                             },
                         )
+                    if self._write_trace_callback:
+                        self._write_trace_callback(
+                            {
+                                "type": "instruction",
+                                "chip": chip_idx,
+                                "instruction": instr_name,
+                                "data": cmd.data,
+                                "page": chip.state.page,
+                                "column": chip.state.y_address,
+                                "pc": cpu_pc if cpu_pc is not None else self._get_current_pc(),
+                            }
+                        )
                 else:
                     # Data write - log to Perfetto Display thread
                     chip.write_data(cmd.data, pc_source=cpu_pc)
+                    column = (chip.state.y_address - 1) & 0xFF
 
                     # Log display write to Perfetto
                     if new_tracer.enabled:
@@ -97,11 +118,21 @@ class HD61202Controller:
                             {
                                 "chip": chip_idx,
                                 "page": chip.state.page,
-                                "col": chip.state.y_address
-                                - 1,  # -1 because write_data increments it
+                                "col": column,
                                 "data": f"0x{cmd.data:02X}",
                                 "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}",
                             },
+                        )
+                    if self._write_trace_callback:
+                        self._write_trace_callback(
+                            {
+                                "type": "data",
+                                "chip": chip_idx,
+                                "page": chip.state.page,
+                                "column": column,
+                                "data": cmd.data,
+                                "pc": cpu_pc if cpu_pc is not None else self._get_current_pc(),
+                            }
                         )
 
         except ValueError:
