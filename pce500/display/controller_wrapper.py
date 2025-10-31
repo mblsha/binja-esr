@@ -79,7 +79,8 @@ class HD61202Controller:
             for chip_idx in chips_to_write:
                 chip = self.chips[chip_idx]
                 if cmd.instr is not None:
-                    instr_name = cmd.instr.__class__.__name__ if cmd.instr else "Unknown"
+                    instr_name = cmd.instr.name if cmd.instr else "UNKNOWN"
+                    instr_label = instr_name.lower()
                     chip.write_instruction(cmd.instr, cmd.data)
 
                     # Log display instruction to Perfetto
@@ -94,21 +95,26 @@ class HD61202Controller:
                             },
                         )
                     if self._write_trace_callback:
+                        column_snapshot = chip.state.y_address
                         self._write_trace_callback(
                             {
                                 "type": "instruction",
                                 "chip": chip_idx,
                                 "instruction": instr_name,
+                                "instruction_name": instr_label,
+                                "instruction_code": cmd.instr.value,
                                 "data": cmd.data,
                                 "page": chip.state.page,
-                                "column": chip.state.y_address,
+                                "column": column_snapshot,
                                 "pc": cpu_pc if cpu_pc is not None else self._get_current_pc(),
                             }
                         )
                 else:
                     # Data write - log to Perfetto Display thread
                     chip.write_data(cmd.data, pc_source=cpu_pc)
-                    column = (chip.state.y_address - 1) & 0xFF
+                    column_raw = (chip.state.y_address - 1) & 0xFF
+                    column_written = (chip.state.y_address - 1) % chip.LCD_WIDTH_PIXELS
+                    next_column = chip.state.y_address & 0xFF
 
                     # Log display write to Perfetto
                     if new_tracer.enabled:
@@ -118,7 +124,7 @@ class HD61202Controller:
                             {
                                 "chip": chip_idx,
                                 "page": chip.state.page,
-                                "col": column,
+                                "col": column_written,
                                 "data": f"0x{cmd.data:02X}",
                                 "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}",
                             },
@@ -129,7 +135,9 @@ class HD61202Controller:
                                 "type": "data",
                                 "chip": chip_idx,
                                 "page": chip.state.page,
-                                "column": column,
+                                "column": column_written,
+                                "column_raw": column_raw,
+                                "column_next": next_column,
                                 "data": cmd.data,
                                 "pc": cpu_pc if cpu_pc is not None else self._get_current_pc(),
                             }
