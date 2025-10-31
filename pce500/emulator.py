@@ -913,6 +913,73 @@ class PCE500Emulator:
                 "last": {"src": None, "pc": None, "vector": None},
             }
 
+    def bootstrap_from_rom_image(
+        self,
+        rom_image: bytes,
+        *,
+        reset: bool = True,
+        restore_internal_ram: bool = True,
+        configure_interrupt_mask: bool = True,
+        imr_value: int = 0x43,
+        isr_value: int = 0x00,
+    ) -> None:
+        """Reapply ROM-provided runtime state after a test reset.
+
+        The PC-E500 firmware expects the internal RAM window (0xB8000-0xBFFFF)
+        and certain IMEM registers to be initialised before the fast-timer ISR
+        can service keyboard interrupts (see ``docs/interrupt_rom_analysis.md``).
+        The emulator's :meth:`reset` method clears RAM/IMEM for determinism, so
+        tests that rely on ROM behaviour need to restore those bytes manually.
+
+        Args:
+            rom_image: Full 1MB dump matching ``data/pc-e500.bin``.
+            reset: When true (default) perform a fresh :meth:`reset` before
+                restoring the RAM snapshot so CPU state matches power-on.
+            restore_internal_ram: Copy the 0x8000-byte RAM block from the ROM
+                image back into ``external_memory`` (default True).
+            configure_interrupt_mask: Seed IMR/ISR with the ROM defaults
+                (IMR=0x43, ISR=0x00 by default) so timer/keyboard IRQs deliver.
+            imr_value: Value written to IMR when ``configure_interrupt_mask`` is
+                enabled.
+            isr_value: Value written to ISR when ``configure_interrupt_mask`` is
+                enabled.
+
+        Raises:
+            ValueError: if ``rom_image`` is not exactly 1MB.
+        """
+
+        expected_size = 0x100000
+        if len(rom_image) != expected_size:
+            raise ValueError(
+                f"Expected 0x{expected_size:05X} bytes in ROM image, "
+                f"got {len(rom_image)}"
+            )
+
+        if reset:
+            self.reset()
+
+        if restore_internal_ram:
+            ram_start = self.INTERNAL_RAM_START
+            ram_end = ram_start + self.INTERNAL_RAM_SIZE
+            # Copy RAM window directly into the mutable backing store.
+            self.memory.external_memory[ram_start:ram_end] = rom_image[
+                ram_start:ram_end
+            ]
+
+        if configure_interrupt_mask:
+            imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+            isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+            self.memory.write_byte(imr_addr, imr_value & 0xFF)
+            self.memory.write_byte(isr_addr, isr_value & 0xFF)
+
+        # Ensure PC points to the ROM entry vector in case callers expect to
+        # execute instructions immediately after bootstrapping.
+        try:
+            entry_vector = self.memory.read_long(0xFFFFD)
+            self.cpu.regs.set(RegisterName.PC, entry_vector)
+        except Exception:
+            pass
+
     def _record_irq_bit_watch(
         self, reg_name: str, prev_val: int, new_val: int, pc: int
     ) -> None:
