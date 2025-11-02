@@ -18,6 +18,7 @@ from .controller_wrapper import HD61202Controller
 
 # Import visualization functionality
 from .lcd_visualization import generate_lcd_image_from_trace
+from .text_decoder import decode_display_text
 
 __all__ = [
     # Controller for emulator
@@ -38,4 +39,6 @@ __all__ = [
     "render_combined_image",
     # Visualization
     "generate_lcd_image_from_trace",
+    # Text decoding
+    "decode_display_text",
 ]

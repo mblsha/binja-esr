@@ -326,19 +326,25 @@ class TestHD61202Controller:
         controller.chips[0].state.on = True
         controller.chips[1].state.on = True
 
-        # Write test patterns
-        controller.chips[0].vram[0][0] = 0xFF  # All bits set
-        controller.chips[1].vram[0][0] = 0xFF  # All bits set
+        # Write test patterns covering each display segment.
+        controller.chips[1].vram[0][0] = 0xFF  # Right chip, top half
+        controller.chips[0].vram[0][0] = 0xFF  # Left chip, top half
+        controller.chips[0].vram[4][55] = (
+            0xFF  # Left chip, bottom half (mirrored column 120)
+        )
+        controller.chips[1].vram[4][63] = (
+            0xFF  # Right chip, bottom half (mirrored column 176)
+        )
 
         buffer = controller.get_display_buffer()
 
         assert buffer.shape == (32, 240)
         # Check pixels from both chips (inverted display - all bits set means black)
         for y in range(8):
-            assert buffer[y, 0] == 0  # Left chip at column 0 (black due to inversion)
-            assert (
-                buffer[y, 120] == 0
-            )  # Right chip at column 120 (black due to inversion)
+            assert buffer[y, 0] == 0  # Right chip top-half segment (inverted)
+            assert buffer[y, 64] == 0  # Left chip top-half segment
+            assert buffer[y, 120] == 0  # Left chip bottom-half segment (mirrored)
+            assert buffer[y, 176] == 0  # Right chip bottom-half segment (mirrored)
 
     def test_reset(self):
         """Test controller reset."""

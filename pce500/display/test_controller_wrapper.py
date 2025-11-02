@@ -71,14 +71,19 @@ class TestHD61202Controller:
         controller.chips[0].state.on = True
         controller.chips[1].state.on = True
 
-        # Write test pattern
-        controller.chips[0].vram[0][0] = 0x01  # First pixel (bit 0 set)
-        controller.chips[1].vram[0][0] = 0x01  # First pixel of right chip (bit 0 set)
+        # Write test pattern touching each display segment.
+        controller.chips[1].vram[0][0] = 0x01  # Right chip, top half -> column 0
+        controller.chips[0].vram[0][0] = 0x01  # Left chip, top half -> column 64
+        controller.chips[0].vram[4][55] = 0x01  # Left chip, bottom half -> column 120
+        controller.chips[1].vram[4][0] = 0x01  # Right chip, bottom half -> column 239
 
         buffer = controller.get_display_buffer()
         assert buffer.shape == (32, 240)
-        assert buffer[0, 0] == 0  # Left chip pixel (inverted - bit set means black)
-        assert buffer[0, 120] == 0  # Right chip pixel (inverted - bit set means black)
+        # Bit set in VRAM corresponds to a dark pixel (value 0) in the buffer.
+        assert buffer[0, 0] == 0
+        assert buffer[0, 64] == 0
+        assert buffer[0, 120] == 0
+        assert buffer[0, 239] == 0
 
     def test_get_combined_display(self):
         """Test combined display image generation."""
