@@ -159,6 +159,7 @@ class TestSimplifiedEmulator:
         # Updated format from new memory implementation
         assert "internal_rom: 0xC0000-0xFFFFF (262144 bytes, R/O)" in info
         assert "Base: 1MB external memory (0x00000-0xFFFFF)" in info
+        assert "lcd_controller_low: 0x02000-0x0200F (16 bytes, R/W)" in info
         assert "lcd_controller: 0x0A000-0x0AFFF (4096 bytes, R/W)" in info
 
     def test_performance_stats(self):
