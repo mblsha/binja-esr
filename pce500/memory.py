@@ -1,7 +1,7 @@
 """PC-E500 memory system implementation with overlay bus integration."""
 
 from collections import deque
-from typing import Optional, Callable, Dict, Tuple, Literal, Deque
+from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -34,6 +34,7 @@ class PCE500Memory:
 
         # Track keyboard overlay for optimization
         self._keyboard_overlay: Optional[MemoryOverlay] = None
+        self._emulator: Optional[Any] = None
 
         # Perfetto tracing
         self.perfetto_enabled = False

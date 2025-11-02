@@ -28,6 +28,7 @@ from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
+from .scheduler import TimerScheduler, TimerSource
 
 # Default timer periods in cycles (rough emulation)
 MTI_PERIOD_CYCLES_DEFAULT = 500
@@ -212,13 +213,10 @@ class PCE500Emulator:
         self._irq_pending = False
         self._in_interrupt = False
         self._kb_irq_count = 0
-        # Simple periodic timers (rough emulation)
-        self._timer_enabled = True
-        # Periods in cycles (tunable): main ~ msec, sub ~ 10x slower here
-        self._timer_mti_period = MTI_PERIOD_CYCLES_DEFAULT  # MTI (bit 0)
-        self._timer_sti_period = STI_PERIOD_CYCLES_DEFAULT  # STI (bit 1)
-        self._timer_next_mti = self._timer_mti_period
-        self._timer_next_sti = self._timer_sti_period
+        self._scheduler = TimerScheduler(
+            mti_period=MTI_PERIOD_CYCLES_DEFAULT,
+            sti_period=STI_PERIOD_CYCLES_DEFAULT,
+        )
         self._irq_source: Optional["IRQSource"] = None
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
@@ -280,8 +278,7 @@ class PCE500Emulator:
         self._irq_source = None
         self._interrupt_stack.clear()
         self._next_interrupt_id = 1
-        self._timer_next_mti = self._timer_mti_period
-        self._timer_next_sti = self._timer_sti_period
+        self._scheduler.reset()
         self._kb_irq_count = 0
         # Reset interrupt accounting
         try:
@@ -869,28 +866,25 @@ class PCE500Emulator:
 
     def _tick_timers(self) -> None:
         """Rough timer emulation: set ISR bits periodically and arm IRQ."""
-        ic = self.cycle_count
-        fired = False
-        # Main timer (MTI, bit 0)
-        if ic >= self._timer_next_mti:
-            self._set_isr_bits(int(ISRFlag.MTI))
-            self._timer_next_mti = ic + self._timer_mti_period
-            self._irq_pending = True
-            self._irq_source = IRQSource.MTI
-            fired = True
-        # Sub timer (STI, bit 1) – less frequent
-        if ic >= self._timer_next_sti:
-            self._set_isr_bits(int(ISRFlag.STI))
-            self._timer_next_sti = ic + self._timer_sti_period
-            self._irq_pending = True
-            self._irq_source = IRQSource.STI
-            fired = True
-        if fired and new_tracer.enabled:
-            assert isinstance(self._irq_source, IRQSource)
+        fired_sources = tuple(self._scheduler.advance(self.cycle_count))
+        if not fired_sources:
+            return
+
+        for source in fired_sources:
+            if source is TimerSource.MTI:
+                self._set_isr_bits(int(ISRFlag.MTI))
+                self._irq_pending = True
+                self._irq_source = IRQSource.MTI
+            elif source is TimerSource.STI:
+                self._set_isr_bits(int(ISRFlag.STI))
+                self._irq_pending = True
+                self._irq_source = IRQSource.STI
+
+        if new_tracer.enabled and self._irq_source is not None:
             new_tracer.instant(
                 "CPU",
                 "TimerIRQ",
-                {"ic": ic, "src": self._irq_source.name},
+                {"ic": self.cycle_count, "src": self._irq_source.name},
             )
 
     def get_interrupt_stats(self) -> Dict[str, Any]:
@@ -941,6 +935,46 @@ class PCE500Emulator:
                 "by_source": {"KEY": 0, "MTI": 0, "STI": 0},
                 "last": {"src": None, "pc": None, "vector": None},
             }
+
+    @property
+    def _timer_enabled(self) -> bool:
+        return self._scheduler.enabled
+
+    @_timer_enabled.setter
+    def _timer_enabled(self, value: bool) -> None:
+        self._scheduler.enabled = bool(value)
+
+    @property
+    def _timer_mti_period(self) -> int:
+        return self._scheduler.mti_period
+
+    @_timer_mti_period.setter
+    def _timer_mti_period(self, value: int) -> None:
+        self._scheduler.mti_period = int(value)
+
+    @property
+    def _timer_sti_period(self) -> int:
+        return self._scheduler.sti_period
+
+    @_timer_sti_period.setter
+    def _timer_sti_period(self, value: int) -> None:
+        self._scheduler.sti_period = int(value)
+
+    @property
+    def _timer_next_mti(self) -> int:
+        return self._scheduler.next_mti
+
+    @_timer_next_mti.setter
+    def _timer_next_mti(self, value: int) -> None:
+        self._scheduler.next_mti = int(value)
+
+    @property
+    def _timer_next_sti(self) -> int:
+        return self._scheduler.next_sti
+
+    @_timer_next_sti.setter
+    def _timer_next_sti(self, value: int) -> None:
+        self._scheduler.next_sti = int(value)
 
     @staticmethod
     def _default_display_trace_functions() -> Dict[int, str]:
