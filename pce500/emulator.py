@@ -966,7 +966,6 @@ class PCE500Emulator:
         if PCE500Emulator._symbol_cache is not None:
             return PCE500Emulator._symbol_cache
         import json
-        from pathlib import Path
 
         symbol_map: Dict[int, str] = {}
         try:
@@ -991,7 +990,6 @@ class PCE500Emulator:
         if PCE500Emulator._function_cache is not None:
             return PCE500Emulator._function_cache
         import json
-        from pathlib import Path
 
         addresses: List[int] = []
         try:
