@@ -164,30 +164,83 @@ class HD61202Controller:
 
     @perf_trace("Display")
     def get_display_buffer(self) -> np.ndarray:
-        """Get combined display buffer as numpy array (240x32).
+        """Return a 32×240 boolean buffer representing the LCD contents.
 
-        Returns display buffer compatible with the emulator's expectations.
+        The HD61202 controllers drive the panel in a non-linear arrangement:
+
+        * Leftmost 64 columns:  top half of the **right** controller (pages 0-3).
+        * Next 56 columns:      top half of the **left** controller (pages 0-3).
+        * Next 56 columns:      bottom half of the left controller (pages 4-7),
+                                mirrored horizontally.
+        * Rightmost 64 columns: bottom half of the right controller (pages 4-7),
+                                mirrored horizontally.
+
+        The ROM treats a cleared bit as a lit pixel, so we invert the VRAM bits
+        when populating the buffer.
         """
-        # Create 32x240 buffer
+
+        def pixel_on(byte: int, bit: int) -> int:
+            """Return 1 when the given bit represents an illuminated pixel."""
+            return 1 if not ((byte >> bit) & 1) else 0
+
         buffer = np.zeros((32, 240), dtype=np.uint8)
+        left_chip, right_chip = self.chips[0], self.chips[1]
 
-        # The PC-E500 uses only 4 pages (32 pixels) of each chip and arranges
-        # them in a specific layout. Each chip contributes to a different
-        # portion of the display, starting at column 0 for the left chip and
-        # column 120 for the right chip.
+        # Helper to copy a slice of chip VRAM into the final buffer.
+        def copy_region(
+            chip: HD61202,
+            start_page: int,
+            column_range: range,
+            dest_start_col: int,
+            mirror: bool = False,
+        ) -> None:
+            for row in range(32):
+                page = start_page + row // 8
+                bit = row % 8
+                if mirror:
+                    # Mirror by walking destination forward while sampling
+                    # source columns from right-to-left within the slice.
+                    for dest_offset, src_col in enumerate(reversed(column_range)):
+                        byte = chip.vram[page][src_col]
+                        buffer[row, dest_start_col + dest_offset] = pixel_on(byte, bit)
+                else:
+                    for dest_offset, src_col in enumerate(column_range):
+                        byte = chip.vram[page][src_col]
+                        buffer[row, dest_start_col + dest_offset] = pixel_on(byte, bit)
 
-        def blit_chip(chip: HD61202, x_offset: int) -> None:
-            for page in range(4):
-                for col in range(64):
-                    byte = chip.vram[page][col]
-                    for bit in range(8):
-                        if not ((byte >> bit) & 1):
-                            buffer[page * 8 + bit, x_offset + col] = 1
-
-        for idx, offset in enumerate((0, 120)):
-            chip = self.chips[idx]
-            if chip.state.on:
-                blit_chip(chip, offset)
+        # Segment 1: right chip, top half (pages 0-3), 64 columns.
+        if right_chip.state.on:
+            copy_region(
+                chip=right_chip,
+                start_page=0,
+                column_range=range(64),
+                dest_start_col=0,
+            )
+        # Segment 2: left chip, top half (pages 0-3), first 56 columns.
+        if left_chip.state.on:
+            copy_region(
+                chip=left_chip,
+                start_page=0,
+                column_range=range(56),
+                dest_start_col=64,
+            )
+            # Segment 3: left chip, bottom half (pages 4-7), first 56 columns mirrored.
+            copy_region(
+                chip=left_chip,
+                start_page=4,
+                column_range=range(56),
+                dest_start_col=120,
+                mirror=True,
+            )
+        # Segment 4: right chip, bottom half (pages 4-7), 64 columns mirrored.
+        if right_chip.state.on:
+            copy_region(
+                chip=right_chip,
+                start_page=4,
+                column_range=range(64),
+                dest_start_col=176,
+                mirror=True,
+            )
 
         return buffer
 
