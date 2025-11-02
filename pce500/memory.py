@@ -1,17 +1,13 @@
-"""PC-E500 memory system implementation with fixed performance.
-
-This module implements the memory system for the PC-E500 emulator,
-including memory overlays for ROM, RAM expansions, and memory-mapped I/O.
-"""
+"""PC-E500 memory system implementation with overlay bus integration."""
 
 from collections import deque
-from dataclasses import dataclass
-from typing import Optional, List, Callable, Dict, Tuple, Literal, Deque
+from typing import Optional, Callable, Dict, Tuple, Literal, Deque
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import perf_trace
+from .memory_bus import MemoryBus, MemoryOverlay
 
 # Import constants for accessing internal memory registers
 # Define locally to avoid circular imports
@@ -20,24 +16,6 @@ IMEM_ACCESS_HISTORY_LIMIT = 10
 IMEM_OFFSET_TO_NAME: Dict[int, str] = {
     reg.value: name for name, reg in IMEMRegisters.__members__.items()
 }
-
-
-@dataclass
-class MemoryOverlay:
-    """Memory overlay for ROM, RAM, or I/O regions."""
-
-    start: int  # Start address (inclusive)
-    end: int  # End address (inclusive)
-    name: str  # Overlay name for debugging
-    data: Optional[bytearray] = None  # Data storage (for ROM/RAM overlays)
-    read_only: bool = True  # Whether writes are allowed
-    read_handler: Optional[Callable[[int, Optional[int]], int]] = (
-        None  # Custom read handler
-    )
-    write_handler: Optional[Callable[[int, int, Optional[int]], None]] = (
-        None  # Custom write handler
-    )
-    perfetto_thread: str = "Memory"  # Thread name for Perfetto tracing
 
 
 class PCE500Memory:
@@ -51,8 +29,8 @@ class PCE500Memory:
         # Base 1MB external memory (0x00000-0xFFFFF)
         self.external_memory = bytearray(1024 * 1024)
 
-        # Overlays list (checked in order)
-        self.overlays: List[MemoryOverlay] = []
+        # Overlay manager
+        self._bus = MemoryBus()
 
         # Track keyboard overlay for optimization
         self._keyboard_overlay: Optional[MemoryOverlay] = None
@@ -190,16 +168,9 @@ class PCE500Memory:
         # External memory space (0x00000-0xFFFFF)
         address &= 0xFFFFF
 
-        # Check overlays in order
-        for overlay in self.overlays:
-            if overlay.start <= address <= overlay.end:
-                if overlay.read_handler:
-                    return overlay.read_handler(address, cpu_pc)
-                elif overlay.data:
-                    offset = address - overlay.start
-                    if offset < len(overlay.data):
-                        return overlay.data[offset]
-                return 0x00
+        result = self._bus.read(address, cpu_pc)
+        if result is not None:
+            return result.value
 
         # Default to external memory
         return self.external_memory[address]
@@ -322,43 +293,17 @@ class PCE500Memory:
         # External memory space (0x00000-0xFFFFF)
         address &= 0xFFFFF
 
-        # Check overlays for write handlers, read-only, or writable data
-        for overlay in self.overlays:
-            if overlay.start <= address <= overlay.end:
-                if overlay.write_handler:
-                    overlay.write_handler(address, value, cpu_pc)
-                    # Add tracing for write_handler overlays
-                    if self.perfetto_enabled:
-                        trace_data = {
-                            "addr": f"0x{address:06X}",
-                            "value": f"0x{value:02X}",
-                        }
-                        if cpu_pc is not None:
-                            trace_data["pc"] = f"0x{cpu_pc:06X}"
-                        trace_data["overlay"] = overlay.name
-                        g_tracer.trace_instant(overlay.perfetto_thread, "", trace_data)
-                    return
-                elif overlay.read_only:
-                    # Silently ignore writes to read-only overlays
-                    return
-                elif overlay.data and isinstance(overlay.data, bytearray):
-                    # Write to writable overlay data
-                    offset = address - overlay.start
-                    if offset < len(overlay.data):
-                        overlay.data[offset] = value
-                        # Add tracing for writable overlay writes
-                        if self.perfetto_enabled:
-                            trace_data = {
-                                "addr": f"0x{address:06X}",
-                                "value": f"0x{value:02X}",
-                            }
-                            if cpu_pc is not None:
-                                trace_data["pc"] = f"0x{cpu_pc:06X}"
-                            trace_data["overlay"] = overlay.name
-                            g_tracer.trace_instant(
-                                overlay.perfetto_thread, "", trace_data
-                            )
-                    return
+        write_result = self._bus.write(address, value, cpu_pc)
+        if write_result is not None:
+            if self.perfetto_enabled:
+                self._trace_write_event(
+                    write_result.overlay.perfetto_thread,
+                    address,
+                    value,
+                    cpu_pc,
+                    write_result.overlay.name,
+                )
+            return
 
         # Default to external memory
         self.external_memory[address] = value
@@ -402,9 +347,7 @@ class PCE500Memory:
 
     def add_overlay(self, overlay: MemoryOverlay) -> None:
         """Add a memory overlay."""
-        self.overlays.append(overlay)
-        # Optionally sort by start address for efficiency
-        self.overlays.sort(key=lambda o: o.start)
+        self._bus.add_overlay(overlay)
 
         # Track keyboard overlay for fast access
         if overlay.start >= 0x1000F0 and overlay.end <= 0x1000F2:
@@ -412,11 +355,15 @@ class PCE500Memory:
 
     def remove_overlay(self, name: str) -> None:
         """Remove overlay by name."""
-        # Check if we're removing the keyboard overlay
         if self._keyboard_overlay and self._keyboard_overlay.name == name:
             self._keyboard_overlay = None
 
-        self.overlays = [o for o in self.overlays if o.name != name]
+        self._bus.remove_overlay(name)
+
+    @property
+    def overlays(self) -> Tuple[MemoryOverlay, ...]:
+        """Compatibility view of overlays for legacy code paths."""
+        return tuple(self._bus.iter_overlays())
 
     def load_rom(self, rom_data: bytes) -> None:
         """Load ROM as an overlay at 0xC0000."""
@@ -529,7 +476,7 @@ class PCE500Memory:
         self.external_memory[:] = bytes(len(self.external_memory))
 
         # Reset any writable overlays
-        for overlay in self.overlays:
+        for overlay in self._bus.iter_overlays():
             if not overlay.read_only and overlay.data:
                 overlay.data[:] = bytes(len(overlay.data))
 
@@ -539,9 +486,10 @@ class PCE500Memory:
         lines.append("  Base: 1MB external memory (0x00000-0xFFFFF)")
         lines.append("  Internal: 256B internal memory (0x100000-0x1000FF)")
 
-        if self.overlays:
-            lines.append(f"\nOverlays ({len(self.overlays)}):")
-            for overlay in sorted(self.overlays, key=lambda o: o.start):
+        overlays = tuple(self._bus.iter_overlays())
+        if overlays:
+            lines.append(f"\nOverlays ({len(overlays)}):")
+            for overlay in sorted(overlays, key=lambda o: o.start):
                 size = overlay.end - overlay.start + 1
                 lines.append(
                     f"  {overlay.name}: 0x{overlay.start:05X}-0x{overlay.end:05X} ({size} bytes, {'R/O' if overlay.read_only else 'R/W'})"
@@ -577,7 +525,7 @@ class PCE500Memory:
                 pass
         return None
 
-    def get_imem_access_tracking(self) -> Dict[str, Dict[str, List[Tuple[int, int]]]]:
+    def get_imem_access_tracking(self) -> Dict[str, Dict[str, list[Tuple[int, int]]]]:
         """Get the IMEM register access tracking data.
 
         Returns:
