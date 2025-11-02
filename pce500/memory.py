@@ -521,7 +521,18 @@ class PCE500Memory:
         # Pass CPU reference to LCD controller if available
         if self.cpu and hasattr(lcd_controller, "set_cpu"):
             lcd_controller.set_cpu(self.cpu)
-        # LCD controllers at 0xA000-0xAFFF
+        # LCD controllers at 0x2000 and 0xA000
+        self.add_overlay(
+            MemoryOverlay(
+                start=0x2000,
+                end=0x200F,
+                name="lcd_controller_low",
+                read_only=False,
+                read_handler=lambda addr, pc: lcd_controller.read(addr, pc),
+                write_handler=lambda addr, val, pc: lcd_controller.write(addr, val, pc),
+                perfetto_thread="Display",
+            )
+        )
         self.add_overlay(
             MemoryOverlay(
                 start=0xA000,
