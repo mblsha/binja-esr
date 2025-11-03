@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pce500 import PCE500Emulator
 from pce500.display.text_decoder import decode_display_text
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
+from pce500.emulator import IRQSource
+from sc62015.pysc62015.constants import ISRFlag
 from sc62015.pysc62015.emulator import RegisterName
 
 
@@ -83,6 +85,28 @@ def run_emulator(
         setattr(emu, "fast_mode", bool(fast_mode))
     except Exception:
         pass
+
+    def _inject_keyboard_event(key_code: str, *, release: bool = False) -> None:
+        """Inject a deterministic keyboard FIFO event for scripted tests."""
+
+        try:
+            matrix = getattr(emu.keyboard, "_matrix", None)
+            inject = getattr(matrix, "inject_event", None) if matrix else None
+            if not callable(inject):
+                return
+            if not inject(key_code, release=release):
+                return
+            emu._set_isr_bits(int(ISRFlag.KEYI))
+            emu._irq_pending = True
+            emu._irq_source = IRQSource.KEY
+        except Exception:
+            pass
+
+    def _inject_keyboard_press(key_code: str) -> None:
+        _inject_keyboard_event(key_code, release=False)
+
+    def _inject_keyboard_release(key_code: str) -> None:
+        _inject_keyboard_event(key_code, release=True)
 
     if print_stats:
         trace_msgs = []
@@ -170,6 +194,7 @@ def run_emulator(
     auto2_pressed = False
     auto2_release = None
     latched_kil_seen = False
+    auto_press_consumed = False
     strobe_target = None
     hold_until_instr = None
     current_sweep_row = 0
@@ -180,13 +205,26 @@ def run_emulator(
         pc_before = emu.cpu.regs.get(RegisterName.PC)
 
         # Auto-press once when we first reach thresholds (PC or instruction count)
-        if not pressed and auto_press_key:
+        if not auto_press_consumed and not pressed and auto_press_key:
             # PC-based trigger
             if auto_press_after_pc is not None and pc_before >= int(
                 auto_press_after_pc
             ):
                 emu.press_key(auto_press_key)
                 pressed = True
+                auto_press_consumed = True
+                _inject_keyboard_press(auto_press_key)
+                latched_kil_seen = True
+                # Prime the keyboard matrix so the ROM sees the key without
+                # waiting for the timer scheduler to advance a full debounce cycle.
+                try:
+                    warm_ticks = 1
+                    matrix = getattr(emu.keyboard, "_matrix", None)
+                    warm_ticks = max(1, int(getattr(matrix, "press_threshold", 1)))
+                    for _ in range(warm_ticks):
+                        emu.keyboard.scan_tick()
+                except Exception:
+                    pass
                 if auto_release_after_instr and auto_release_after_instr > 0:
                     release_countdown = int(auto_release_after_instr)
                 # Set strobe target if requested
@@ -206,6 +244,11 @@ def run_emulator(
             ):
                 emu.press_key(auto_press_key)
                 pressed = True
+                auto_press_consumed = True
+                _inject_keyboard_press(auto_press_key)
+                latched_kil_seen = True
+                if auto_release_after_instr and auto_release_after_instr > 0:
+                    release_countdown = int(auto_release_after_instr)
                 if auto_hold_instr and int(auto_hold_instr) > 0:
                     release_countdown = int(auto_hold_instr)
                     # Consider latched so countdown can proceed without requiring a KIL read
@@ -224,6 +267,11 @@ def run_emulator(
                 if int(press_when_col) in active_cols:
                     emu.press_key(auto_press_key)
                     pressed = True
+                    auto_press_consumed = True
+                    _inject_keyboard_press(auto_press_key)
+                    latched_kil_seen = True
+                    if auto_release_after_instr and auto_release_after_instr > 0:
+                        release_countdown = int(auto_release_after_instr)
                     if auto_hold_instr and int(auto_hold_instr) > 0:
                         release_countdown = int(auto_hold_instr)
                         latched_kil_seen = True
@@ -336,13 +384,14 @@ def run_emulator(
         if (
             pressed
             and release_countdown is not None
-            and latched_kil_seen
             and ready_by_strobes
             and ready_by_min_hold
         ):
             release_countdown -= 1
             if release_countdown <= 0:
                 emu.release_key(auto_press_key)
+                _inject_keyboard_release(auto_press_key)
+                pressed = False
                 release_countdown = None
         # Secondary release countdown (does not require latch)
         if auto2_pressed and auto2_release is not None:

@@ -338,6 +338,34 @@ class KeyboardMatrix:
             idx = (idx + 1) % FIFO_SIZE
         return snapshot
 
+    def inject_event(self, key_code: str, *, release: bool = False) -> bool:
+        """Inject a debounced keyboard event into the FIFO (for scripted tests)."""
+
+        state = self._key_states.get(key_code)
+        if state is None:
+            return False
+
+        if release:
+            state.pressed = False
+            state.debounced = False
+            state.press_ticks = 0
+            state.release_ticks = 0
+            state.repeat_ticks = 0
+            self._pressed_keys.discard(key_code)
+        else:
+            state.pressed = True
+            state.debounced = True
+            state.press_ticks = self.press_threshold
+            state.release_ticks = 0
+            state.repeat_ticks = self.repeat_delay
+            self._pressed_keys.add(key_code)
+
+        event = MatrixEvent(code=state.matrix_code, release=release, repeat=False)
+        self._enqueue_event(event)
+        self.irq_count += 1
+        self._kil_latch = self._compute_kil(allow_pending=True)
+        return True
+
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
@@ -478,4 +506,5 @@ __all__ = [
     "FIFO_HEAD_ADDR",
     "FIFO_TAIL_ADDR",
     "FIFO_SIZE",
+    "MatrixEvent",
 ]
