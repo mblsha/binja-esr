@@ -57,6 +57,10 @@ class TraceDispatcher:
     def observers(self) -> Iterable[TraceObserver]:
         return tuple(self._observers)
 
+    def has_observers(self) -> bool:
+        """Return True when any observers are registered."""
+        return bool(self._observers)
+
     # ------------------------------------------------------------------ #
     # Convenience emission helpers
     # ------------------------------------------------------------------ #
