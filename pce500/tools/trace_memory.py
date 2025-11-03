@@ -22,7 +22,7 @@ class MemoryTracer:
         return self.original_read(address, cpu_pc)
 
 
-# Create emulator (single compat keyboard implementation)
+# Create emulator (default keyboard handler)
 print("Creating emulator...")
 emu = PCE500Emulator(
     trace_enabled=False,

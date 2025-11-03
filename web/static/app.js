@@ -992,7 +992,7 @@ const REGISTER_DESCRIPTIONS = {
     'PY': 'RAM PY Pointer - Y pointer for indexed addressing',
     'AMC': 'Address Modify Control - Virtually joins CE0/CE1 RAM regions',
     
-    // Keyboard I/O (compat keyboard semantics)
+    // Keyboard I/O (emulator keyboard handler semantics)
     'KOL': 'Key Output Low (KO0–KO7) - Selects columns (active-high)',
     'KOH': 'Key Output High (KO8–KO10 via bits 0–2) - Selects columns (active-high)',
     'KIL': 'Key Input (KI0–KI7) - Reads keyboard matrix rows',

@@ -25,7 +25,7 @@ from .memory import (
     IMEM_ACCESS_HISTORY_LIMIT,
 )
 from .display import HD61202Controller
-from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
+from .keyboard_handler import PCE500KeyboardHandler as KeyboardHandler
 from .keyboard_matrix import MatrixEvent
 from .tracing import trace_dispatcher
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
@@ -137,8 +137,8 @@ class PCE500Emulator:
 
         self._keyboard_columns_active_high = keyboard_columns_active_high
 
-        # Keyboard implementation: compat handler parameterised for column polarity
-        self.keyboard = KeyboardCompat(
+        # Keyboard implementation parameterised for column polarity
+        self.keyboard = KeyboardHandler(
             self.memory, columns_active_high=keyboard_columns_active_high
         )
         self.memory.add_overlay(
@@ -153,7 +153,7 @@ class PCE500Emulator:
             )
         )
 
-        # Note: LCC overlay not needed for compat keyboard
+        # Note: LCC overlay not needed for the keyboard handler
 
         self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
@@ -206,7 +206,7 @@ class PCE500Emulator:
         # Keyboard strobe monitoring (KOL/KOH writes)
         self._kb_strobe_count = 0
         self._kb_col_hist = [0 for _ in range(11)]
-        # Synthetic keyboard interrupt wiring (enable for both compat and hardware)
+        # Synthetic keyboard interrupt wiring (enable for both handler and hardware modes)
         self._kb_irq_enabled = True
         self._irq_pending = False
         self._in_interrupt = False
@@ -1318,7 +1318,7 @@ class PCE500Emulator:
                     return result
             except Exception:
                 pass
-        # Single keyboard implementation: use compat handler
+        # Single keyboard implementation: use keyboard handler
         result = self.keyboard.handle_register_read(offset)
 
         # Trace keyboard matrix I/O
@@ -1372,7 +1372,7 @@ class PCE500Emulator:
                 "I/O", "KB_ColumnStrobe", {"addr": offset, "value": value & 0xFF}
             )
 
-        # Update keyboard state via compat handler
+        # Update keyboard state via keyboard handler
         self.keyboard.handle_register_write(offset, value)
 
         # Cache register values and metrics for diagnostics
@@ -1391,7 +1391,7 @@ class PCE500Emulator:
         except Exception:
             pass
 
-    # Note: LCC write handler not required with single compat keyboard
+    # Note: LCC write handler not required with the keyboard handler
 
     def _dump_internal_memory(self, pc: int):
         internal_mem = self.memory.get_internal_memory_bytes()

@@ -23,8 +23,8 @@ class Divergence:
     """Represents a divergence between two traces."""
 
     op_num: int
-    compat_event: OpEvent
-    hardware_event: Optional[OpEvent]
+    baseline_event: OpEvent
+    comparison_event: Optional[OpEvent]
     time_delta_ms: float
     pc_diverged: bool
 
@@ -89,21 +89,21 @@ def analyze_with_simplified_approach():
     print("-" * 80)
 
     # From the execution output we know:
-    compat_stats = {
+    baseline_stats = {
         "instructions": 20000,  # Expected
         "time": "< 10s",
-        "implementation": "compat",
+        "implementation": "baseline",
     }
 
     # Historical hardware keyboard stats removed; project now uses a single keyboard
 
-    print("Keyboard (compat):")
-    print(f"  - Instructions executed: ~{compat_stats['instructions']}")
-    print(f"  - Time taken: {compat_stats['time']}")
+    print("Keyboard baseline:")
+    print(f"  - Instructions executed: ~{baseline_stats['instructions']}")
+    print(f"  - Time taken: {baseline_stats['time']}")
     print("  - Performance: ~2000+ instructions/second")
 
-    print("\nNote: Project now uses a single keyboard implementation (compat).")
-    print("Previous hardware-vs-compat divergence references are historical.")
+    print("\nNote: the project now uses a single keyboard handler implementation.")
+    print("Previous hardware-versus-baseline divergence references are historical.")
 
     print("\n" + "=" * 80)
     print("ANALYSIS:")
@@ -111,8 +111,8 @@ def analyze_with_simplified_approach():
 
     print("""
 Historic notes referenced a hardware keyboard variant being slower primarily
-due to CPU emulator instruction pipeline inefficiencies. The single compat
-keyboard remains, and optimization focus should be on the SC62015 pipeline.
+due to CPU emulator instruction pipeline inefficiencies. The single keyboard
+handler remains, and optimization focus should be on the SC62015 pipeline.
 """)
 
     print("\nTo see detailed trace analysis, open the traces in Perfetto UI:")
@@ -130,9 +130,9 @@ def main():
         description="Analyze keyboard performance divergence"
     )
     parser.add_argument(
-        "--compat",
-        default="emulator-profile-fast.perfetto-trace",
-        help="Path to compat keyboard trace (baseline)",
+        "--baseline",
+        default="emulator-profile-baseline.perfetto-trace",
+        help="Path to the baseline keyboard trace",
     )
     parser.add_argument(
         "--hardware",
@@ -149,12 +149,12 @@ def main():
     args = parser.parse_args()
 
     # Check files exist
-    compat_path = Path(args.compat)
+    baseline_path = Path(args.baseline)
     hardware_path = Path(args.hardware)
 
-    if not compat_path.exists():
-        print(f"Error: Compat trace not found: {compat_path}")
-        print("Please ensure you have the baseline trace from compat keyboard")
+    if not baseline_path.exists():
+        print(f"Error: Baseline trace not found: {baseline_path}")
+        print("Please ensure you have captured a reference keyboard trace")
         sys.exit(1)
 
     if not hardware_path.exists():
@@ -170,8 +170,8 @@ def main():
         print("\n" + "=" * 80)
         print("TRACE FILE INFO:")
         print("-" * 80)
-        print(f"Compat trace: {compat_path}")
-        parse_perfetto_trace(str(compat_path))
+        print(f"Baseline trace: {baseline_path}")
+        parse_perfetto_trace(str(baseline_path))
 
         print(f"Hardware trace: {hardware_path}")
         parse_perfetto_trace(str(hardware_path))
