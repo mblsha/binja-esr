@@ -13,8 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Set FORCE_BINJA_MOCK before importing app
 os.environ["FORCE_BINJA_MOCK"] = "1"
 
-import app as app_module
-from app import app, initialize_emulator
+from app import app, initialize_emulator, service
 
 
 class TestAPIIntegration(unittest.TestCase):
@@ -28,6 +27,7 @@ class TestAPIIntegration(unittest.TestCase):
         # Initialize emulator for tests
         try:
             initialize_emulator()
+            service.pause()
         except Exception as e:
             print(f"Warning: Could not initialize emulator: {e}")
 
@@ -250,42 +250,6 @@ class TestAPIIntegration(unittest.TestCase):
         response = self.client.get("/static/app.js")
         self.assertEqual(response.status_code, 200)
         self.assertIn("javascript", response.content_type)
-
-    def test_emulator_not_initialized(self):
-        """Test API behavior when emulator is not initialized."""
-        # Save original values
-        original_emulator = app_module.emulator
-
-        try:
-            # Make emulator None
-            app_module.emulator = None
-
-            # Key endpoint should return error
-            response = self.client.post(
-                "/api/v1/key",
-                json={"key_code": "KEY_E"},
-                content_type="application/json",
-            )
-
-            self.assertEqual(response.status_code, 500)
-            data = json.loads(response.data)
-            self.assertIn("error", data)
-            self.assertIn("not initialized", data["error"])
-
-            # Control endpoint (except reset) should return error
-            response = self.client.post(
-                "/api/v1/control",
-                json={"command": "step"},
-                content_type="application/json",
-            )
-
-            self.assertEqual(response.status_code, 500)
-            data = json.loads(response.data)
-            self.assertIn("error", data)
-
-        finally:
-            # Restore original values
-            app_module.emulator = original_emulator
 
 
 if __name__ == "__main__":

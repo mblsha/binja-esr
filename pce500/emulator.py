@@ -680,6 +680,30 @@ class PCE500Emulator:
         if self._new_trace_enabled and new_tracer.enabled:
             print(f"Stopping new tracing, saved to {self._trace_path}")
             new_tracer.stop()
+        self._new_trace_enabled = False
+
+    def start_tracing(self, path: Optional[str] = None) -> None:
+        """Enable instruction tracing to the provided path."""
+        if path:
+            self._trace_path = path
+        self._new_trace_enabled = True
+        if not new_tracer.enabled:
+            new_tracer.start(self._trace_path)
+
+    @property
+    def tracing_enabled(self) -> bool:
+        """Return ``True`` when instruction tracing is active."""
+        return self._new_trace_enabled and new_tracer.enabled
+
+    def get_keyboard_register_state(self) -> Dict[str, int]:
+        """Expose current keyboard matrix register values."""
+        if not hasattr(self, "keyboard"):
+            return {"kol": 0, "koh": 0, "kil": 0}
+        keyboard = self.keyboard
+        kol = keyboard.kol_value if hasattr(keyboard, "kol_value") else 0
+        koh = keyboard.koh_value if hasattr(keyboard, "koh_value") else 0
+        kil = keyboard.peek_keyboard_input()
+        return {"kol": kol & 0xFF, "koh": koh & 0xFF, "kil": kil & 0xFF}
 
     def __enter__(self):
         return self
