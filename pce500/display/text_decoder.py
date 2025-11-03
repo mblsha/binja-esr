@@ -20,7 +20,11 @@ def _read_glyph_columns(memory) -> Dict[Tuple[int, ...], str]:
         code = 0x20 + index
         offset = FONT_BASE + index * GLYPH_STRIDE
         columns = [memory.read_byte(offset + i) & 0x7F for i in range(GLYPH_WIDTH)]
-        lookup[tuple(columns)] = chr(code)
+        glyph = tuple(columns)
+        char = chr(code)
+        lookup[glyph] = char
+        inverted = tuple((~column) & 0x7F for column in glyph)
+        lookup.setdefault(inverted, char)
     return lookup
 
 
