@@ -16,7 +16,7 @@ A web-based emulator for the Sharp PC-E500 pocket computer, built with Flask and
 The web UI talks to a single emulator implementation:
 
 - **Flask Backend** (`app.py` + `emulator_service.py`): Provides the REST API and manages a shared emulator instance, including lifecycle, tracing and paced execution.
-- **JavaScript Frontend** (`static/app.js`): Interactive UI with state polling.
+- **JavaScript Frontend** (`static/app.js`): Generated bundle built from modular sources in `static/js/`.
 - **Keyboard**: Handled by the emulator’s keyboard handler implementation (`pce500/keyboard_handler.py`). The web UI only calls API endpoints to press/release keys and to fetch debug/queue information.
 
 ## Quick Start
@@ -96,6 +96,11 @@ debouncing, edit `pce500/keyboard_handler.py` (`KEYBOARD_LAYOUT`, `DEFAULT_*_REA
 
 ## Development
 
+- Frontend source lives under `static/js/`. After making changes run:
+  ```bash
+  uv run python scripts/build_frontend.py
+  ```
+  This regenerates the shipped bundle at `static/app.js`.
 - To modify the keyboard layout, edit `KEYBOARD_LAYOUT` in `pce500/keyboard_handler.py`.
 - To adjust update rates, modify `UPDATE_TIME_THRESHOLD` and `UPDATE_INSTRUCTION_THRESHOLD` in `web/emulator_service.py`.
 
