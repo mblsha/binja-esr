@@ -543,8 +543,13 @@ class PCE500Emulator:
                 if self.disasm_trace_enabled:
                     self._capture_disasm_trace(pc_before, eval_info.instruction, instr)
 
-                if self.perfetto_enabled:
+                should_emit_trace = (
+                    self.perfetto_enabled or trace_dispatcher.has_observers()
+                )
+                if should_emit_trace:
                     self._trace_execution(pc, opcode)
+
+                if self.perfetto_enabled:
                     self._trace_control_flow(pc_before, eval_info)
                     self._update_perfetto_counters()
 
