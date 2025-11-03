@@ -85,3 +85,16 @@ The SC62015 processor uses specific memory locations for system initialization:
 - **Entry Point**: Located at 0xFFFFD (3 bytes, little-endian)
 
 On reset, the CPU reads the entry point address from 0xFFFFD and begins execution there. The interrupt vector at 0xFFFFA is called when interrupts occur.
+
+## Snapshot Orchestrator
+
+The module `pce500.orchestrator` provides a high-level harness around `PCE500Emulator`
+that captures deterministic snapshots of the CPU, memory, peripherals, timers, and
+display state. It exposes:
+
+- `SnapshotOrchestrator.step()` for single-step scenarios with optional inputs.
+- `SnapshotOrchestrator.run_scenario()` for multi-step snapshot fixtures.
+- Structured dataclasses (`OrchestratorSnapshot`, `CPUSnapshot`, etc.) that tests can diff.
+
+See `pce500/tests/test_orchestrator.py` for example usage covering keyboard input,
+metadata propagation, and trace observer integration.
