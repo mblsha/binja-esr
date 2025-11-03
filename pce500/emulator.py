@@ -27,7 +27,7 @@ from .memory import (
 from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
 from .keyboard_matrix import MatrixEvent
-from .trace_manager import g_tracer
+from .tracing import trace_dispatcher
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 from .scheduler import TimerScheduler, TimerSource
 from .peripherals import PeripheralManager
@@ -181,7 +181,7 @@ class PCE500Emulator:
         }
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
-            g_tracer.start_tracing("pc-e500.trace")
+            trace_dispatcher.start_trace("pc-e500.trace")
             self.lcd.set_perfetto_enabled(True)
             self.memory.set_perfetto_enabled(True)
 
@@ -591,7 +591,7 @@ class PCE500Emulator:
             if self.trace is not None:
                 self.trace.append(("error", pc, str(e)))
             if self.perfetto_enabled:
-                g_tracer.trace_instant(
+                trace_dispatcher.record_instant(
                     "CPU", "Error", {"error": str(e), "pc": f"0x{pc:06X}"}
                 )
             raise
@@ -671,7 +671,7 @@ class PCE500Emulator:
     def stop_tracing(self) -> None:
         if self.perfetto_enabled:
             print("Stopping Perfetto tracing...")
-            g_tracer.stop_tracing()
+            trace_dispatcher.stop_trace()
         if self._new_trace_enabled and new_tracer.enabled:
             print(f"Stopping new tracing, saved to {self._trace_path}")
             new_tracer.stop()
@@ -695,43 +695,42 @@ class PCE500Emulator:
                 except Exception:
                     pass
 
-    def _add_register_annotations(self, event: Any):
-        if not event:
-            return
+    def _build_register_annotations(self) -> Dict[str, Any]:
         state = self.get_cpu_state()
-        event.add_annotations(
-            {
-                "reg_A": f"0x{state['a']:02X}",
-                "reg_B": f"0x{state['b']:02X}",
-                "reg_BA": f"0x{state['ba']:04X}",
-                "reg_I": f"0x{state['i']:04X}",
-                "reg_X": f"0x{state['x']:06X}",
-                "reg_Y": f"0x{state['y']:06X}",
-                "reg_U": f"0x{state['u']:06X}",
-                "reg_S": f"0x{state['s']:06X}",
-                "reg_PC": f"0x{state['pc']:06X}",
-                "flag_C": state["flags"]["c"],
-                "flag_Z": state["flags"]["z"],
-            }
-        )
+        return {
+            "reg_A": f"0x{state['a']:02X}",
+            "reg_B": f"0x{state['b']:02X}",
+            "reg_BA": f"0x{state['ba']:04X}",
+            "reg_I": f"0x{state['i']:04X}",
+            "reg_X": f"0x{state['x']:06X}",
+            "reg_Y": f"0x{state['y']:06X}",
+            "reg_U": f"0x{state['u']:06X}",
+            "reg_S": f"0x{state['s']:06X}",
+            "reg_PC": f"0x{state['pc']:06X}",
+            "flag_C": state["flags"]["c"],
+            "flag_Z": state["flags"]["z"],
+        }
 
     def _trace_execution(self, pc: int, opcode: Optional[int]):
-        event = g_tracer.trace_instant(
-            "Execution",
-            f"Exec@0x{pc:06X}",
-            {"pc": f"0x{pc:06X}", "opcode": f"0x{opcode:02X}"},
-        )
-        self._add_register_annotations(event)
+        payload: Dict[str, Any] = {"pc": f"0x{pc:06X}"}
+        if opcode is not None:
+            payload["opcode"] = f"0x{opcode:02X}"
+        payload.update(self._build_register_annotations())
+        trace_dispatcher.record_instant("Execution", f"Exec@0x{pc:06X}", payload)
 
     def _update_perfetto_counters(self):
-        g_tracer.trace_counter("CPU", "cycles", self.cycle_count)
-        g_tracer.trace_counter("CPU", "call_depth", self.call_depth)
-        g_tracer.trace_counter("CPU", "instructions", self.instruction_count)
-        g_tracer.trace_counter(
-            "CPU", "stack_pointer", self.cpu.regs.get(RegisterName.S)
+        trace_dispatcher.record_counter("cycles", self.cycle_count)
+        trace_dispatcher.record_counter("call_depth", self.call_depth)
+        trace_dispatcher.record_counter("instructions", self.instruction_count)
+        trace_dispatcher.record_counter(
+            "stack_pointer", self.cpu.regs.get(RegisterName.S)
         )
-        g_tracer.trace_counter("Memory", "read_ops", self.memory_read_count)
-        g_tracer.trace_counter("Memory", "write_ops", self.memory_write_count)
+        trace_dispatcher.record_counter(
+            "read_ops", self.memory_read_count, thread="Memory"
+        )
+        trace_dispatcher.record_counter(
+            "write_ops", self.memory_write_count, thread="Memory"
+        )
 
     def _trace_control_flow(self, pc_before: int, eval_info):
         instr = eval_info.instruction
@@ -739,12 +738,16 @@ class PCE500Emulator:
 
         if isinstance(instr, CALL):
             dest_addr = instr.dest_addr(pc_before)
-            event = g_tracer.begin_function(
-                "CPU", dest_addr, pc_before, f"func_0x{dest_addr:05X}"
+            annotations = self._build_register_annotations()
+            trace_dispatcher.begin_function(
+                "CPU",
+                dest_addr,
+                pc_before,
+                f"func_0x{dest_addr:05X}",
+                annotations=annotations,
             )
             self.call_depth += 1
-            self._add_register_annotations(event)
-            g_tracer.trace_instant(
+            trace_dispatcher.record_instant(
                 "CPU",
                 "call",
                 {
@@ -758,22 +761,19 @@ class PCE500Emulator:
 
         elif isinstance(instr, RetInstruction):
             ret_depth = self.call_depth
-            g_tracer.end_function("CPU", pc_before)
+            trace_dispatcher.end_function("CPU", pc_before)
             self.call_depth = max(0, self.call_depth - 1)
             instr_name = type(instr).__name__
             if instr_name == "RETI" and self._interrupt_stack:
                 flow_id = self._interrupt_stack.pop()
-                g_tracer.end_flow("CPU", flow_id, f"RETI@0x{pc_before:06X}")
-            event = g_tracer.trace_instant(
-                "CPU",
-                "return",
-                {
-                    "at": f"0x{pc_before:06X}",
-                    "type": instr_name.lower(),
-                    "depth": self.call_depth,
-                },
-            )
-            self._add_register_annotations(event)
+                trace_dispatcher.end_flow("CPU", flow_id, f"RETI@0x{pc_before:06X}")
+            payload = {
+                "at": f"0x{pc_before:06X}",
+                "type": instr_name.lower(),
+                "depth": self.call_depth,
+            }
+            payload.update(self._build_register_annotations())
+            trace_dispatcher.record_instant("CPU", "return", payload)
             self._pop_display_trace(ret_depth)
 
         elif isinstance(instr, IR):
@@ -781,13 +781,17 @@ class PCE500Emulator:
             interrupt_id = self._next_interrupt_id
             self._next_interrupt_id += 1
             self._interrupt_stack.append(interrupt_id)
-            g_tracer.begin_flow("CPU", interrupt_id, f"IR@0x{pc_before:06X}")
-            event = g_tracer.begin_function(
-                "CPU", vector_addr, pc_before, f"int_0x{vector_addr:05X}"
+            trace_dispatcher.begin_flow("CPU", interrupt_id, f"IR@0x{pc_before:06X}")
+            annotations = self._build_register_annotations()
+            trace_dispatcher.begin_function(
+                "CPU",
+                vector_addr,
+                pc_before,
+                f"int_0x{vector_addr:05X}",
+                annotations=annotations,
             )
             self.call_depth += 1
-            self._add_register_annotations(event)
-            g_tracer.trace_instant(
+            trace_dispatcher.record_instant(
                 "CPU",
                 "interrupt",
                 {
@@ -808,7 +812,7 @@ class PCE500Emulator:
                 }
                 if condition:
                     trace_data["condition"] = condition
-                g_tracer.trace_instant("CPU", "jump", trace_data)
+                trace_dispatcher.record_instant("CPU", "jump", trace_data)
 
     def press_key(self, key_code: str) -> bool:
         # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ
@@ -1392,7 +1396,7 @@ class PCE500Emulator:
         with open(path, "wb") as f:
             f.write(internal_mem)
         print(f"\nInternal memory dumped to: {path}")
-        g_tracer.trace_instant(
+        trace_dispatcher.record_instant(
             "Debug",
             "InternalMemoryDump",
             {

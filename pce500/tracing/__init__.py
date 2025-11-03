@@ -1,6 +1,17 @@
-# pce500/tracing/__init__.py
-"""Tracing infrastructure for PC-E500 emulator performance analysis."""
+"""Tracing utilities for the PC-E500 emulator."""
 
-from .perfetto_tracing import PerfettoTracer, tracer
+from .dispatcher import (
+    TraceDispatcher,
+    TraceEvent,
+    TraceEventType,
+    TraceObserver,
+    trace_dispatcher,
+)
 
-__all__ = ["PerfettoTracer", "tracer"]
+__all__ = [
+    "TraceDispatcher",
+    "TraceEvent",
+    "TraceEventType",
+    "TraceObserver",
+    "trace_dispatcher",
+]

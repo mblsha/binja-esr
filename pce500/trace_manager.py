@@ -1,7 +1,8 @@
-"""Perfetto trace manager for PC-E500 emulator using retrobus-perfetto.
+"""Perfetto trace observer for the PC-E500 emulator.
 
-This module provides a singleton TraceManager class that handles trace collection
-for CPU execution, peripherals, and memory operations with Perfetto format output.
+The observer implements the generic tracing observer interface defined in
+``pce500.tracing.dispatcher`` and translates emitted events into Perfetto trace
+records using ``retrobus-perfetto``.
 """
 
 import collections
@@ -9,24 +10,20 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from enum import Enum
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Optional, TypeVar, Union
+from typing import Any, Callable, Deque, Dict, Optional, TypeVar
 
 from retrobus_perfetto import PerfettoTraceBuilder
 
+from .tracing.dispatcher import (
+    TraceEvent,
+    TraceEventType,
+    TraceObserver,
+    trace_dispatcher,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class TraceEventType(Enum):
-    """Types of trace events."""
-
-    SLICE_BEGIN = "B"
-    SLICE_END = "E"
-    INSTANT = "I"
-    COUNTER = "C"
 
 
 @dataclass
@@ -40,28 +37,14 @@ class CallStackFrame:
     event_sent: bool = False
 
 
-class TraceManager:
-    """Singleton manager for Perfetto tracing using retrobus-perfetto."""
-
-    _instance: Optional["TraceManager"] = None
-    _lock = threading.Lock()
+class PerfettoObserver(TraceObserver):
+    """Observer that records tracing events to Perfetto traces."""
 
     # Configuration
     MAX_CALL_DEPTH = 50  # Maximum call stack depth to track
     STALE_FRAME_TIMEOUT = 1_000_000_000  # 1 second in nanoseconds
 
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-            return cls._instance
-
-    def __init__(self):
-        # Only initialize once
-        if hasattr(self, "_initialized"):
-            return
-
-        self._initialized = True
+    def __init__(self) -> None:
         self._trace_builder: Optional[PerfettoTraceBuilder] = None
         self._trace_file: Optional[Path] = None
         self._start_time = time.perf_counter()
@@ -93,7 +76,7 @@ class TraceManager:
             return None
         return self._counter_tracks.get(name)
 
-    def start_tracing(self, output_path: Union[str, Path]) -> bool:
+    def _start_tracing(self, output_path: Path) -> bool:
         """Start tracing to a file."""
         logger.debug("start_tracing called with output_path=%s", output_path)
 
@@ -103,8 +86,6 @@ class TraceManager:
                 return False
 
             try:
-                output_path = Path(output_path)
-
                 # Create trace builder
                 self._trace_builder = PerfettoTraceBuilder("PC-E500 Emulator")
 
@@ -154,7 +135,7 @@ class TraceManager:
                 logger.exception("Exception in start_tracing")
                 raise RuntimeError(f"Failed to start tracing: {e}") from e
 
-    def stop_tracing(self) -> bool:
+    def _stop_tracing(self) -> bool:
         """Stop tracing and save the file."""
         logger.debug(
             "stop_tracing called; _tracing_enabled=%s, _trace_builder=%s",
@@ -221,8 +202,13 @@ class TraceManager:
             return 0
         return int((time.perf_counter() - self._start_time) * 1_000_000_000)
 
-    def begin_function(
-        self, thread: str, pc: int, caller_pc: int, name: Optional[str] = None
+    def _begin_function(
+        self,
+        thread: str,
+        pc: int,
+        caller_pc: int,
+        name: Optional[str] = None,
+        annotations: Optional[Dict[str, Any]] = None,
     ) -> Optional[Any]:
         """Begin a function duration event.
 
@@ -260,10 +246,12 @@ class TraceManager:
 
             # Add annotations
             event.add_annotations({"pc": f"0x{pc:06X}", "caller": f"0x{caller_pc:06X}"})
+            if annotations:
+                event.add_annotations(annotations)
 
             return event
 
-    def end_function(self, thread: str, pc: int) -> None:
+    def _end_function(self, thread: str, pc: int) -> None:
         """End a function duration event."""
         with self._rlock:
             track_uuid = self._require_active_track(thread)
@@ -291,7 +279,7 @@ class TraceManager:
                 stack.pop()
                 self._trace_builder.end_slice(track_uuid, self._get_timestamp())
 
-    def trace_instant(
+    def _trace_instant(
         self, thread: str, name: str, args: Optional[Dict[str, Any]] = None
     ) -> Optional[Any]:
         """Add an instant event.
@@ -313,7 +301,7 @@ class TraceManager:
 
             return event
 
-    def trace_counter(self, thread: str, name: str, value: float) -> None:
+    def _trace_counter(self, thread: str, name: str, value: float) -> None:
         """Add a counter event.
 
         Args:
@@ -330,7 +318,7 @@ class TraceManager:
                 counter_track, value, self._get_timestamp()
             )
 
-    def begin_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
+    def _begin_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
         """Begin a flow to connect events across threads."""
         with self._rlock:
             track_uuid = self._require_active_track(thread)
@@ -345,7 +333,7 @@ class TraceManager:
                 terminating=False,
             )
 
-    def end_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
+    def _end_flow(self, thread: str, flow_id: int, name: str = "Flow") -> None:
         """End a flow."""
         with self._rlock:
             track_uuid = self._require_active_track(thread)
@@ -360,7 +348,7 @@ class TraceManager:
                 terminating=True,
             )
 
-    def trace_memory_access(
+    def _trace_memory_access(
         self,
         thread: str,
         address: int,
@@ -375,19 +363,19 @@ class TraceManager:
         if value is not None:
             args["value"] = f"0x{value:02X}" if size == 1 else f"0x{value:04X}"
 
-        self.trace_instant(thread, f"Memory_{name}", args)
+        self._trace_instant(thread, f"Memory_{name}", args)
 
-    def trace_jump(self, thread: str, from_pc: int, to_pc: int) -> None:
+    def _trace_jump(self, thread: str, from_pc: int, to_pc: int) -> None:
         """Trace a jump instruction."""
-        self.trace_instant(
+        self._trace_instant(
             thread,
             f"Jump_0x{from_pc:06X}_to_0x{to_pc:06X}",
             {"from": f"0x{from_pc:06X}", "to": f"0x{to_pc:06X}"},
         )
 
-    def trace_interrupt(self, name: str, **kwargs) -> None:
+    def _trace_interrupt(self, name: str, **kwargs) -> None:
         """Trace interrupt-related events."""
-        self.trace_instant("Interrupt", name, kwargs)
+        self._trace_instant("Interrupt", name, kwargs)
 
     def _cleanup_stale_frames(self, thread: str, track_id: int) -> None:
         """Remove stale frames from call stack."""
@@ -411,9 +399,70 @@ class TraceManager:
             else:
                 break
 
+    # ------------------------------------------------------------------ #
+    # TraceObserver interface
+    # ------------------------------------------------------------------ #
+    def handle_event(self, event: TraceEvent) -> None:
+        """Dispatch a tracing event emitted by the emulator."""
 
-# Global singleton instance
-g_tracer = TraceManager()
+        if event.type is TraceEventType.START:
+            output_path = event.payload.get("output_path")
+            if output_path is None:
+                return
+            self._start_tracing(Path(output_path))
+            return
+
+        if event.type is TraceEventType.STOP:
+            self._stop_tracing()
+            return
+
+        if not self._tracing_enabled:
+            return
+
+        if event.type is TraceEventType.INSTANT:
+            if event.thread and event.name:
+                self._trace_instant(event.thread, event.name, event.payload)
+            return
+
+        if event.type is TraceEventType.COUNTER:
+            name = event.name
+            if name is not None:
+                value = event.payload.get("value")
+                if value is not None:
+                    self._trace_counter(event.thread or "CPU", name, value)
+            return
+
+        if event.type is TraceEventType.FUNCTION_BEGIN:
+            if event.thread:
+                pc = int(event.payload.get("pc", 0))
+                caller_pc = int(event.payload.get("caller_pc", 0))
+                annotations = event.payload.get("annotations") or {}
+                self._begin_function(
+                    event.thread,
+                    pc,
+                    caller_pc,
+                    event.name,
+                    annotations,
+                )
+            return
+
+        if event.type is TraceEventType.FUNCTION_END:
+            if event.thread:
+                pc = int(event.payload.get("pc", 0))
+                self._end_function(event.thread, pc)
+            return
+
+        if event.type is TraceEventType.FLOW_BEGIN:
+            if event.thread:
+                flow_id = int(event.payload.get("flow_id", 0))
+                self._begin_flow(event.thread, flow_id, event.name or "Flow")
+            return
+
+        if event.type is TraceEventType.FLOW_END:
+            if event.thread:
+                flow_id = int(event.payload.get("flow_id", 0))
+                self._end_flow(event.thread, flow_id, event.name or "Flow")
+            return
 
 
 # Decorator for tracing functions
@@ -433,13 +482,20 @@ def trace_function(thread: str) -> Callable[[Callable[..., T]], Callable[..., T]
                 pc = args[0]._current_pc
                 caller_pc = getattr(args[0], "_last_pc", 0)
 
-            g_tracer.begin_function(thread, pc, caller_pc, func.__name__)
+            trace_dispatcher.begin_function(thread, pc, caller_pc, func.__name__)
             try:
                 result = func(*args, **kwargs)
                 return result
             finally:
-                g_tracer.end_function(thread, pc)
+                trace_dispatcher.end_function(thread, pc)
 
         return wrapper
 
     return decorator
+
+
+# Default Perfetto observer registered with the dispatcher.
+perfetto_observer = PerfettoObserver()
+trace_dispatcher.register(perfetto_observer)
+
+__all__ = ["PerfettoObserver", "perfetto_observer", "trace_function"]
