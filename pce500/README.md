@@ -94,7 +94,12 @@ display state. It exposes:
 
 - `SnapshotOrchestrator.step()` for single-step scenarios with optional inputs.
 - `SnapshotOrchestrator.run_scenario()` for multi-step snapshot fixtures.
-- Structured dataclasses (`OrchestratorSnapshot`, `CPUSnapshot`, etc.) that tests can diff.
+- Structured dataclasses (`OrchestratorSnapshot`, `EmulatorState`, `StateDiff`) that tests can diff.
 
 See `pce500/tests/test_orchestrator.py` for example usage covering keyboard input,
 metadata propagation, and trace observer integration.
+
+The canonical snapshot schema lives in `pce500.state_model`. The helper functions
+`capture_state()` and `diff_states()` convert emulator instances into immutable
+`EmulatorState` objects and compute structured deltas (`StateDiff`). These utilities
+power the orchestrator and can be used directly in lower-level subsystem tests.

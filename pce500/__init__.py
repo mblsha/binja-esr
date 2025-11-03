@@ -3,24 +3,38 @@
 # Import from the main implementation
 from .emulator import PCE500Emulator
 from .orchestrator import (
-    CPUSnapshot,
-    KeyboardSnapshot,
-    MemorySnapshot,
     OrchestratorInputs,
     OrchestratorSnapshot,
-    PeripheralSnapshots,
     SnapshotOrchestrator,
-    TimerSnapshot,
+)
+from .state_model import (
+    CPUState,
+    EmulatorState,
+    FieldDiff,
+    KeyboardState,
+    MemoryState,
+    PeripheralState,
+    StateDiff,
+    TimerState,
+    capture_state,
+    diff_states,
+    empty_state_diff,
 )
 
 __all__ = [
     "PCE500Emulator",
-    "SnapshotOrchestrator",
     "OrchestratorInputs",
     "OrchestratorSnapshot",
-    "CPUSnapshot",
-    "MemorySnapshot",
-    "KeyboardSnapshot",
-    "TimerSnapshot",
-    "PeripheralSnapshots",
+    "SnapshotOrchestrator",
+    "CPUState",
+    "MemoryState",
+    "KeyboardState",
+    "TimerState",
+    "PeripheralState",
+    "EmulatorState",
+    "FieldDiff",
+    "StateDiff",
+    "capture_state",
+    "diff_states",
+    "empty_state_diff",
 ]

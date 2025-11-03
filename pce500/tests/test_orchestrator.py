@@ -67,18 +67,19 @@ def test_step_advances_cpu_registers() -> None:
         _disable_interrupt_sources(orchestrator)
         orchestrator.emulator.cpu.regs.set(RegisterName.PC, 0xC0000)
 
-        initial = orchestrator.capture_snapshot()
-        assert initial.cpu.registers["pc"] == 0xC0000
+    initial = orchestrator.capture_snapshot()
+    assert initial.state.cpu.registers["pc"] == 0xC0000
 
-        first = orchestrator.step(
-            OrchestratorInputs(max_instructions=0, metadata={"tag": "noop"})
-        )
-        assert first.executed_instructions == 0
-        assert first.cycle_count == initial.cycle_count
-        assert first.metadata["tag"] == "noop"
+    first = orchestrator.step(
+        OrchestratorInputs(max_instructions=0, metadata={"tag": "noop"})
+    )
+    assert first.executed_instructions == 0
+    assert first.cycle_count == initial.cycle_count
+    assert first.metadata["tag"] == "noop"
+    assert first.diff.is_empty()
 
-        second = orchestrator.step(OrchestratorInputs(max_instructions=0))
-        assert second.cycle_count == first.cycle_count
+    second = orchestrator.step(OrchestratorInputs(max_instructions=0))
+    assert second.cycle_count == first.cycle_count
 
 
 def test_run_scenario_returns_snapshots_with_metadata() -> None:
@@ -98,12 +99,12 @@ def test_run_scenario_returns_snapshots_with_metadata() -> None:
         _disable_interrupt_sources(orchestrator)
         orchestrator.emulator.cpu.regs.set(RegisterName.PC, 0xC0000)
 
-        snapshots = orchestrator.run_scenario(steps, include_initial_snapshot=True)
-        assert len(snapshots) == 3
-        assert snapshots[0].executed_instructions == 0
-        assert "KEY_F1" in snapshots[1].keyboard.pressed_keys
-        assert snapshots[1].metadata["label"] == "press_pf1"
-        assert snapshots[2].executed_instructions == 1
+    snapshots = orchestrator.run_scenario(steps, include_initial_snapshot=True)
+    assert len(snapshots) == 3
+    assert snapshots[0].executed_instructions == 0
+    assert "KEY_F1" in snapshots[1].state.keyboard.pressed_keys
+    assert snapshots[1].metadata["label"] == "press_pf1"
+    assert snapshots[2].executed_instructions == 1
 
 
 def test_register_observer_receives_execution_events() -> None:
