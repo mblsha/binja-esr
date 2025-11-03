@@ -53,10 +53,10 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
    - Complex address decoding: CPU address bits determine chip selection and command/data routing
    - Each chip has 64x64 pixels; PC-E500 uses all 8 pages but arranges them uniquely
 
-4. **TraceManager** (`trace_manager.py`): Sophisticated tracing infrastructure
-   - Singleton pattern for global trace management using retrobus-perfetto
-   - Tracks function durations, instant events, and counters
-   - Automatic call stack tracking with proper cleanup
+4. **State Model** (`state_model.py`): Canonical emulator snapshot/diff helpers
+   - Captures immutable `EmulatorState` objects for CPU, memory, peripherals, display
+   - Provides structured `StateDiff` comparisons for deterministic testing
+   - Used by the orchestrator and higher level scenario tests
 
 ### Memory Map
 
@@ -187,7 +187,8 @@ Jump instructions are traced with special handling:
 #### Implementation Details
 
 Key files for tracing:
-- `trace_manager.py`: Core Perfetto integration using retrobus-perfetto
+- `tracing/dispatcher.py`: Event dispatcher and observer interfaces
+- `tracing/perfetto_tracing.py`: Perfetto writer utilities
 - `emulator.py`: Instruction and control flow tracing
 - `memory.py`: Memory access tracing
 
