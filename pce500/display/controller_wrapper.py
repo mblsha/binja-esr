@@ -1,23 +1,26 @@
 """HD61202Controller wrapper to provide compatibility with the emulator."""
 
-from typing import List, Optional, Dict
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
 import numpy as np
 from PIL import Image
 
 from .hd61202 import HD61202, parse_command, render_combined_image
+from .pipeline import LCDOperation, LCDPipeline, LCDSnapshot
 from ..tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
 
 class HD61202Controller:
     """Wrapper class that provides the interface expected by the PC-E500 emulator.
 
-    This wraps two HD61202 chips to create the 240x32 display used by PC-E500.
+    Two HD61202 chips are stitched together to emulate the calculator's 240×32 LCD.
     """
 
     def __init__(self):
-        """Initialize with two HD61202 chips."""
-        # PC-E500 uses two standard 64x64 chips, but only uses 4 pages each
-        self.chips = [HD61202(), HD61202()]
+        self.pipeline = LCDPipeline()
+        self.chips = self.pipeline.chips
         self.perfetto_enabled = False
         self._cpu = None  # Reference to CPU for getting current PC
         self._write_trace_callback = None
@@ -27,17 +30,14 @@ class HD61202Controller:
         self.cs_left_count = 0
         self.cs_right_count = 0
 
+        self.pipeline.subscribe(self._handle_pipeline_event)
+
     def set_cpu(self, cpu) -> None:
         """Set reference to CPU emulator for getting current PC."""
         self._cpu = cpu
 
     def set_write_trace_callback(self, callback) -> None:
-        """Register callback invoked for every LCD controller write.
-
-        Args:
-            callback: Callable receiving a dict describing the write.
-        """
-
+        """Register callback invoked for every LCD controller write."""
         self._write_trace_callback = callback
 
     def _get_current_pc(self) -> Optional[int]:
@@ -53,140 +53,84 @@ class HD61202Controller:
 
     def read(self, address: int, cpu_pc: Optional[int] = None) -> int:
         """Read from LCD controller at given address."""
-        # The new parse_command expects addresses in 0x2xxx or 0xAxxx range
-        # Just return 0xFF for reads (not implemented in new version)
+        # Reads are not currently emulated.
         return 0xFF
 
     @perf_trace("Display")
     def write(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:
         """Write to LCD controller at given address."""
         try:
-            cmd = parse_command(address, value)
-
-            # Map chip select to chips
-            chips_to_write = []
-            if cmd.cs.value == 0b00:  # BOTH
-                chips_to_write = [0, 1]
-                self.cs_both_count += 1
-            elif cmd.cs.value == 0b01:  # RIGHT
-                chips_to_write = [1]
-                self.cs_right_count += 1
-            elif cmd.cs.value == 0b10:  # LEFT
-                chips_to_write = [0]
-                self.cs_left_count += 1
-
-            # Write to selected chips
-            for chip_idx in chips_to_write:
-                chip = self.chips[chip_idx]
-                if cmd.instr is not None:
-                    instr_name = cmd.instr.name if cmd.instr else "UNKNOWN"
-                    instr_label = instr_name.lower()
-                    chip.write_instruction(cmd.instr, cmd.data)
-
-                    # Log display instruction to Perfetto
-                    if new_tracer.enabled:
-                        new_tracer.instant(
-                            "Display",
-                            f"LCD_{instr_name}",
-                            {
-                                "chip": chip_idx,
-                                "data": f"0x{cmd.data:02X}",
-                                "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}",
-                            },
-                        )
-                    if self._write_trace_callback:
-                        column_snapshot = chip.state.y_address
-                        self._write_trace_callback(
-                            {
-                                "type": "instruction",
-                                "chip": chip_idx,
-                                "instruction": instr_name,
-                                "instruction_name": instr_label,
-                                "instruction_code": cmd.instr.value,
-                                "data": cmd.data,
-                                "page": chip.state.page,
-                                "column": column_snapshot,
-                                "pc": cpu_pc
-                                if cpu_pc is not None
-                                else self._get_current_pc(),
-                            }
-                        )
-                else:
-                    # Data write - log to Perfetto Display thread
-                    chip.write_data(cmd.data, pc_source=cpu_pc)
-                    column_raw = (chip.state.y_address - 1) & 0xFF
-                    column_written = (chip.state.y_address - 1) % chip.LCD_WIDTH_PIXELS
-                    next_column = chip.state.y_address & 0xFF
-
-                    # Log display write to Perfetto
-                    if new_tracer.enabled:
-                        new_tracer.instant(
-                            "Display",
-                            "VRAM_Write",
-                            {
-                                "chip": chip_idx,
-                                "page": chip.state.page,
-                                "col": column_written,
-                                "data": f"0x{cmd.data:02X}",
-                                "pc": f"0x{(cpu_pc if cpu_pc else self._get_current_pc() or 0):06X}",
-                            },
-                        )
-                    if self._write_trace_callback:
-                        self._write_trace_callback(
-                            {
-                                "type": "data",
-                                "chip": chip_idx,
-                                "page": chip.state.page,
-                                "column": column_written,
-                                "column_raw": column_raw,
-                                "column_next": next_column,
-                                "data": cmd.data,
-                                "pc": cpu_pc
-                                if cpu_pc is not None
-                                else self._get_current_pc(),
-                            }
-                        )
-
+            command = parse_command(address, value)
         except ValueError:
-            # Invalid command, ignore
-            pass
+            return
+
+        if command.cs.value == 0b00:
+            self.cs_both_count += 1
+        elif command.cs.value == 0b01:
+            self.cs_right_count += 1
+        elif command.cs.value == 0b10:
+            self.cs_left_count += 1
+
+        operation_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+        self.pipeline.apply(LCDOperation(command=command, pc=operation_pc))
+
+    def _handle_pipeline_event(
+        self, event: Dict[str, object], snapshot: LCDSnapshot
+    ) -> None:
+        pc_value = event.get("pc")
+        if pc_value is None:
+            pc_value = self._get_current_pc()
+            event["pc"] = pc_value
+
+        if new_tracer.enabled:
+            if event["type"] == "instruction":
+                new_tracer.instant(
+                    "Display",
+                    f"LCD_{event['instruction']}",
+                    {
+                        "chip": event["chip"],
+                        "data": f"0x{int(event['data']):02X}",
+                        "pc": f"0x{int(pc_value or 0):06X}",
+                    },
+                )
+            else:
+                new_tracer.instant(
+                    "Display",
+                    "VRAM_Write",
+                    {
+                        "chip": event["chip"],
+                        "page": event["page"],
+                        "col": event["column"],
+                        "data": f"0x{int(event['data']):02X}",
+                        "pc": f"0x{int(pc_value or 0):06X}",
+                    },
+                )
+
+        if self._write_trace_callback:
+            self._write_trace_callback(event)
 
     def reset(self) -> None:
         """Reset both chips and all statistics."""
-        # Reset each chip (this now includes statistics counters)
         for chip in self.chips:
             chip.reset()
-
-        # Reset chip select counters
         self.cs_both_count = 0
         self.cs_left_count = 0
         self.cs_right_count = 0
 
+    def get_snapshot(self) -> LCDSnapshot:
+        """Return the current LCD snapshot (for diagnostics/tests)."""
+        return self.pipeline.snapshot
+
     @perf_trace("Display")
     def get_display_buffer(self) -> np.ndarray:
-        """Return a 32×240 boolean buffer representing the LCD contents.
-
-        The HD61202 controllers drive the panel in a non-linear arrangement:
-
-        * Leftmost 64 columns:  top half of the **right** controller (pages 0-3).
-        * Next 56 columns:      top half of the **left** controller (pages 0-3).
-        * Next 56 columns:      bottom half of the left controller (pages 4-7),
-                                mirrored horizontally.
-        * Rightmost 64 columns: bottom half of the right controller (pages 4-7),
-                                mirrored horizontally.
-
-        The ROM treats a cleared bit as a lit pixel, so we invert the VRAM bits
-        when populating the buffer.
-        """
+        """Return a 32×240 boolean buffer representing the LCD contents."""
 
         def pixel_on(byte: int, bit: int) -> int:
-            """Return 1 when the given bit represents an illuminated pixel."""
             return 1 if not ((byte >> bit) & 1) else 0
 
         buffer = np.zeros((32, 240), dtype=np.uint8)
         left_chip, right_chip = self.chips[0], self.chips[1]
 
-        # Helper to copy a slice of chip VRAM into the final buffer.
         def copy_region(
             chip: HD61202,
             start_page: int,
@@ -198,8 +142,6 @@ class HD61202Controller:
                 page = start_page + row // 8
                 bit = row % 8
                 if mirror:
-                    # Mirror by walking destination forward while sampling
-                    # source columns from right-to-left within the slice.
                     for dest_offset, src_col in enumerate(reversed(column_range)):
                         byte = chip.vram[page][src_col]
                         buffer[row, dest_start_col + dest_offset] = pixel_on(byte, bit)
@@ -208,7 +150,6 @@ class HD61202Controller:
                         byte = chip.vram[page][src_col]
                         buffer[row, dest_start_col + dest_offset] = pixel_on(byte, bit)
 
-        # Segment 1: right chip, top half (pages 0-3), 64 columns.
         if right_chip.state.on:
             copy_region(
                 chip=right_chip,
@@ -216,7 +157,6 @@ class HD61202Controller:
                 column_range=range(64),
                 dest_start_col=0,
             )
-        # Segment 2: left chip, top half (pages 0-3), first 56 columns.
         if left_chip.state.on:
             copy_region(
                 chip=left_chip,
@@ -224,7 +164,6 @@ class HD61202Controller:
                 column_range=range(56),
                 dest_start_col=64,
             )
-            # Segment 3: left chip, bottom half (pages 4-7), first 56 columns mirrored.
             copy_region(
                 chip=left_chip,
                 start_page=4,
@@ -232,7 +171,6 @@ class HD61202Controller:
                 dest_start_col=120,
                 mirror=True,
             )
-        # Segment 4: right chip, bottom half (pages 4-7), 64 columns mirrored.
         if right_chip.state.on:
             copy_region(
                 chip=right_chip,
@@ -251,36 +189,28 @@ class HD61202Controller:
     def save_displays_to_png(
         self, left_filename: str = "lcd_left.png", right_filename: str = "lcd_right.png"
     ) -> None:
-        """Save both LCD displays as PNG files."""
-        # Get images from chips
         left_img = self.chips[0].render_vram_image(zoom=1)
         right_img = self.chips[1].render_vram_image(zoom=1)
 
-        # Convert to grayscale
         left_img = left_img.convert("L")
         right_img = right_img.convert("L")
 
-        # Save
         left_img.save(left_filename)
         right_img.save(right_filename)
 
     def set_perfetto_enabled(self, enabled: bool) -> None:
-        """Enable/disable Perfetto tracing (no-op in new implementation)."""
         self.perfetto_enabled = enabled
 
     @property
     def display_on(self) -> List[bool]:
-        """Get display on status for both chips."""
         return [chip.state.on for chip in self.chips]
 
     @property
     def page(self) -> List[int]:
-        """Get current page for both chips."""
         return [chip.state.page for chip in self.chips]
 
     @property
     def column(self) -> List[int]:
-        """Get current column (y_address) for both chips."""
         return [chip.state.y_address for chip in self.chips]
 
     @property
@@ -292,7 +222,6 @@ class HD61202Controller:
         return 32
 
     def get_chip_statistics(self) -> List[Dict[str, int]]:
-        """Get statistics for each chip."""
         stats = []
         for i, chip in enumerate(self.chips):
             stats.append(
@@ -308,42 +237,3 @@ class HD61202Controller:
                 }
             )
         return stats
-
-    def get_pixel_pc_source(self, x: int, y: int) -> Optional[int]:
-        """Get the PC source for a specific pixel on the 240x32 display.
-
-        Args:
-            x: X coordinate (0-239)
-            y: Y coordinate (0-31)
-
-        Returns:
-            PC address that last wrote to this pixel, or None
-        """
-        # Convert y to page
-        page = y // 8
-
-        # Determine which chip and column based on PC-E500 layout
-        # Left half: right chip (64px) + left chip (56px)
-        # Right half: left chip (56px flipped) + right chip (64px flipped)
-
-        if x < 64:
-            # Left portion: right chip[0-63]
-            chip_idx = 1
-            col = x
-        elif x < 120:
-            # Center-left portion: left chip[0-55]
-            chip_idx = 0
-            col = x - 64
-        elif x < 176:
-            # Center-right portion: left chip[0-55] (flipped)
-            chip_idx = 0
-            col = 55 - (x - 120)  # Flip horizontally
-        else:
-            # Right portion: right chip[0-63] (flipped)
-            chip_idx = 1
-            col = 63 - (x - 176)  # Flip horizontally
-
-        # Get the PC source from the appropriate chip
-        if 0 <= chip_idx < len(self.chips):
-            return self.chips[chip_idx].get_pc_source(page, col)
-        return None
