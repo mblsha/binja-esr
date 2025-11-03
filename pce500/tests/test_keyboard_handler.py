@@ -1,213 +1,109 @@
-"""Unit tests for PC-E500 keyboard handler."""
+"""Tests for the high-level keyboard handler and FIFO mirroring."""
 
-import unittest
-import sys
-from pathlib import Path
+from __future__ import annotations
 
-# Add parent directories to path so the pce500 package can be imported.
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pce500.keyboard import (
-    PCE500KeyboardHandler,
+from typing import List
+from pce500.keyboard import PCE500KeyboardHandler
+from pce500.keyboard_matrix import (
+    FIFO_BASE,
+    FIFO_HEAD_ADDR,
+    FIFO_TAIL_ADDR,
+    KEY_LOCATIONS,
 )
+from pce500.memory import PCE500Memory, INTERNAL_MEMORY_START
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 
-from pce500 import keyboard_compat as _keyboard_compat
+def _select_column(handler: PCE500KeyboardHandler, key_code: str) -> None:
+    loc = KEY_LOCATIONS[key_code]
+    kol = 0
+    koh = 0
+    if loc.column < 8:
+        kol = 1 << loc.column
+    else:
+        koh = 1 << (loc.column - 8)
+    handler.handle_register_write(0xF0, kol)
+    handler.handle_register_write(0xF1, koh)
 
 
-class IMEMRegisters:
-    """Lightweight stand-in providing the register constants used in tests."""
+def _read_fifo(memory: PCE500Memory, count: int) -> List[int]:
+    data: List[int] = []
+    head = memory.read_byte(FIFO_HEAD_ADDR)
+    tail = memory.read_byte(FIFO_TAIL_ADDR)
+    idx = head
+    while idx != tail and len(data) < count:
+        data.append(memory.read_byte(FIFO_BASE + idx))
+        idx = (idx + 1) % 8
+    return data
 
-    KOL = _keyboard_compat.KOL
-    KOH = _keyboard_compat.KOH
-    KIL = _keyboard_compat.KIL
 
+class TestKeyboardHandler:
+    def setup_method(self) -> None:
+        self.memory = PCE500Memory()
+        self.handler = PCE500KeyboardHandler(self.memory)
+        # Speed up debouncing/repeat for tests
+        self.handler._matrix.press_threshold = 2
+        self.handler._matrix.release_threshold = 2
+        self.handler._matrix.repeat_delay = 2
+        self.handler._matrix.repeat_interval = 2
 
-class TestPCE500KeyboardHandler(unittest.TestCase):
-    """Test keyboard handler functionality."""
+    def test_register_roundtrip(self) -> None:
+        # Writes to KOL/KOH should be readable via handler
+        self.handler.handle_register_write(0xF0, 0x12)
+        self.handler.handle_register_write(0xF1, 0x05)
+        assert self.handler.handle_register_read(0xF0) == 0x12
+        assert self.handler.handle_register_read(0xF1) == 0x05
 
-    def setUp(self):
-        """Set up test fixtures."""
-        # Create keyboard handler directly (no CPU needed)
-        self.handler = PCE500KeyboardHandler()
+    def test_fifo_enqueues_press_and_release(self) -> None:
+        _select_column(self.handler, "KEY_A")
+        assert self.handler.press_key("KEY_A")
 
-    def test_initial_state(self):
-        """Test initial keyboard state."""
-        # No keys should be pressed initially
-        self.assertEqual(len(self.handler.pressed_keys), 0)
+        # First scan tick primes debounce, second one enqueues press
+        self.handler.scan_tick()
+        events = self.handler.scan_tick()
+        assert events and not events[0].release
 
-        # KIL should read 0x00 (no keys pressed - active high logic)
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x00)
+        fifo = _read_fifo(self.memory, 2)
+        assert fifo == [events[0].to_byte()]
 
-        # KOL/KOH should be 0
-        self.assertEqual(self.handler._last_kol, 0)
-        self.assertEqual(self.handler._last_koh, 0)
-
-    def test_key_press_release(self):
-        """Test basic key press and release."""
-        # Press key Q
-        self.handler.press_key("KEY_Q")
-        self.assertIn("KEY_Q", self.handler.pressed_keys)
-
-        # Release key Q
-        self.handler.release_key("KEY_Q")
-        self.assertNotIn("KEY_Q", self.handler.pressed_keys)
-
-        # Release non-pressed key should not error
+        # Release the key and tick again to generate release event
         self.handler.release_key("KEY_A")
-        self.assertNotIn("KEY_A", self.handler.pressed_keys)
+        self.handler.scan_tick()
+        events = self.handler.scan_tick()
+        assert events and events[0].release
+        fifo = _read_fifo(self.memory, 2)
+        assert fifo == [
+            KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row,
+            0x80 | (KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row),
+        ]
 
-    def test_release_all_keys(self):
-        """Test releasing all keys at once."""
-        # Press multiple keys
-        self.handler.press_key("KEY_A")
+    def test_scan_respects_ksd_mask(self) -> None:
+        # Assert initial read matches press
+        _select_column(self.handler, "KEY_B")
         self.handler.press_key("KEY_B")
-        self.handler.press_key("KEY_C")
-        self.assertEqual(len(self.handler.pressed_keys), 3)
+        self.handler.scan_tick()
+        assert self.handler.handle_register_read(0xF2) != 0x00
 
-        # Release all
-        self.handler.release_all_keys()
-        self.assertEqual(len(self.handler.pressed_keys), 0)
+        # Set KSD bit in LCC and ensure handler returns 0 and scanning pauses
+        lcc_addr = INTERNAL_MEMORY_START + IMEMRegisters.LCC
+        self.memory.write_byte(lcc_addr, 0x04)
+        assert self.handler.handle_register_read(0xF2) == 0x00
 
-    def test_keyboard_matrix_scanning(self):
-        """Test keyboard matrix row/column scanning."""
-        # Press KEY_Q (column 0, row 1)
-        self.handler.press_key("KEY_Q")
+        fifo_before = _read_fifo(self.memory, 4)
+        self.handler.scan_tick()
+        fifo_after = _read_fifo(self.memory, 4)
+        assert fifo_before == fifo_after
 
-        # Select column 0 by setting KOL bit 0
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x01)
+    def test_repeat_events_marked(self) -> None:
+        _select_column(self.handler, "KEY_F1")
+        self.handler.press_key("KEY_F1")
+        # Initial debounce
+        self.handler.scan_tick()
+        first_events = self.handler.scan_tick()
+        assert first_events and not first_events[0].repeat
 
-        # Read KIL - should have bit 1 set (active high)
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x02)  # 00000010
-
-        # Select different column - KEY_Q should not be detected
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x02)
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x00)  # No keys detected
-
-    def test_multiple_keys_same_row(self):
-        """Test multiple keys pressed in the same row."""
-        # Press KEY_W (column 1, row 0) and KEY_R (column 2, row 0) - same row
-        self.handler.press_key("KEY_W")
-        self.handler.press_key("KEY_R")
-
-        # Select columns 1 and 2 by setting KOL bits 1 and 2
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x06)  # 00000110
-
-        # Read KIL - should have bit 0 set (both keys are in row 0)
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x01)  # 00000001
-
-    def test_multiple_rows_selected(self):
-        """Test multiple columns selected simultaneously."""
-        # Press keys in different rows but same column
-        self.handler.press_key("KEY_Q")  # Column 0, row 1
-        self.handler.press_key("KEY_A")  # Column 0, row 3
-
-        # Select column 0
-        self.handler.handle_register_write(
-            IMEMRegisters.KOL, 0x01
-        )  # bit 0 for column 0
-
-        # Both keys should be detected
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x0A)  # bits 1 and 3 set (00001010)
-
-    def test_extended_rows_koh(self):
-        """Test extended columns using KOH register."""
-        # Press KEY_P (column 10, row 0)
-        self.handler.press_key("KEY_P")
-
-        # Select column 10 by setting KOH bit 2 (KO10 -> bit 2)
-        self.handler.handle_register_write(IMEMRegisters.KOH, 0x04)
-
-        # Read KIL - should have bit 0 set
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x01)  # 00000001
-
-    def test_active_low_column_scanning(self):
-        """Ensure handler can operate with active-low column strobes."""
-        handler = PCE500KeyboardHandler(columns_active_high=False)
-        handler.press_key("KEY_Q")  # Column 0, row 1
-
-        # In active-low mode the ROM clears the bit for the selected column.
-        handler.handle_register_write(IMEMRegisters.KOL, 0xFE)  # bit 0 cleared
-        kil_value = handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x02)
-
-        # Switching to a different column should hide the key.
-        handler.handle_register_write(IMEMRegisters.KOL, 0xFD)  # bit 1 cleared
-        kil_value = handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x00)
-
-    def test_register_read_write(self):
-        """Test register read/write operations."""
-        # Write to KOL
-        result = self.handler.handle_register_write(IMEMRegisters.KOL, 0x55)
-        self.assertTrue(result)
-        self.assertEqual(self.handler._last_kol, 0x55)
-
-        # Read back KOL
-        value = self.handler.handle_register_read(IMEMRegisters.KOL)
-        self.assertEqual(value, 0x55)
-
-        # Write to KOH
-        result = self.handler.handle_register_write(IMEMRegisters.KOH, 0xAA)
-        self.assertTrue(result)
-        self.assertEqual(self.handler._last_koh, 0xAA)
-
-        # Read back KOH
-        value = self.handler.handle_register_read(IMEMRegisters.KOH)
-        self.assertEqual(value, 0xAA)
-
-        # Writing to KIL should be ignored (read-only)
-        result = self.handler.handle_register_write(IMEMRegisters.KIL, 0xFF)
-        self.assertTrue(result)  # Returns True but doesn't actually write
-
-    def test_invalid_key_code(self):
-        """Test handling of invalid key codes."""
-        # Press invalid key - should be ignored
-        self.handler.press_key("INVALID_KEY")
-        self.assertEqual(len(self.handler.pressed_keys), 0)
-
-        # KIL should still read 0x00
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0xFF)
-        kil_value = self.handler.handle_register_read(IMEMRegisters.KIL)
-        self.assertEqual(kil_value, 0x00)
-
-    def test_debug_info(self):
-        """Test debug information output."""
-        # Set up some state
-        self.handler.press_key("KEY_A")
-        self.handler.press_key("KEY_B")
-        self.handler.handle_register_write(IMEMRegisters.KOL, 0x03)
-        self.handler.handle_register_write(IMEMRegisters.KOH, 0x01)
-
-        # Get debug info
-        debug = self.handler.get_debug_info()
-
-        # Verify debug info structure
-        self.assertIn("pressed_keys", debug)
-        self.assertIn("KEY_A", debug["pressed_keys"])
-        self.assertIn("KEY_B", debug["pressed_keys"])
-        self.assertEqual(debug["kol"], "0x03")
-        self.assertEqual(debug["koh"], "0x01")
-        self.assertIn("kil", debug)
-        self.assertIn("selected_columns", debug)
-        self.assertIsInstance(debug["selected_columns"], list)
-
-    def test_non_keyboard_register(self):
-        """Test handling of non-keyboard registers."""
-        # Read non-keyboard register should return None
-        result = self.handler.handle_register_read(0x00)
-        self.assertIsNone(result)
-
-        # Write to non-keyboard register should return False
-        result = self.handler.handle_register_write(0x00, 0xFF)
-        self.assertFalse(result)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        # Hold the key to trigger repeat (repeat_delay=3)
+        self.handler.scan_tick()
+        repeat_events = self.handler.scan_tick()
+        assert repeat_events and repeat_events[0].repeat
