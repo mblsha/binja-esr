@@ -18,7 +18,10 @@ def decode_display_text(controller, memory) -> List[str]:
     reverse_lookup: Dict[Tuple[int, ...], str] = {}
     for code in range(0x20, 0x20 + 96):
         char = chr(code)
-        reverse_lookup[glyph_columns(memory, char)] = char
+        glyph = glyph_columns(memory, char)
+        reverse_lookup[glyph] = char
+        inverted = tuple((~column) & 0x7F for column in glyph)
+        reverse_lookup.setdefault(inverted, char)
 
     buffer = controller.get_display_buffer()
     if buffer is None:
