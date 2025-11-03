@@ -5,7 +5,7 @@ from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
-from .trace_manager import g_tracer
+from .tracing import trace_dispatcher
 from .tracing.perfetto_tracing import perf_trace
 from .memory_bus import MemoryBus, MemoryOverlay
 
@@ -216,8 +216,10 @@ class PCE500Memory:
                             if cpu_pc is not None:
                                 trace_data["pc"] = f"0x{cpu_pc:06X}"
                             trace_data["overlay"] = self._keyboard_overlay.name
-                            g_tracer.trace_instant(
-                                self._keyboard_overlay.perfetto_thread, "", trace_data
+                            trace_dispatcher.record_instant(
+                                self._keyboard_overlay.perfetto_thread,
+                                "KeyboardOverlayWrite",
+                                trace_data,
                             )
                         return
                     elif self._keyboard_overlay.read_only:
@@ -273,16 +275,16 @@ class PCE500Memory:
                     # Check if this offset corresponds to a known internal memory register
                     imem_name = IMEM_OFFSET_TO_NAME.get(offset, "N/A")
 
-                    g_tracer.trace_instant(
+                    trace_dispatcher.record_instant(
                         "Memory_Internal",
-                        "",
+                        "MemoryWrite",
                         {
                             "offset": f"0x{offset:02X}",
                             "value": f"0x{value:02X}",
                             "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A",
                             "bp": bp_value,
                             "imem_name": imem_name,
-                            "size": "1",  # Always 1 for byte writes
+                            "size": "1",
                         },
                     )
             else:
@@ -314,7 +316,11 @@ class PCE500Memory:
             trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
             if cpu_pc is not None:
                 trace_data["pc"] = f"0x{cpu_pc:06X}"
-            g_tracer.trace_instant("Memory_External", "", trace_data)
+            trace_dispatcher.record_instant(
+                "Memory_External",
+                "MemoryWrite",
+                trace_data,
+            )
 
     @perf_trace("Memory", sample_rate=100)
     def read_word(self, address: int) -> int:
