@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 from typing import List
-from pce500.keyboard import PCE500KeyboardHandler
+from pce500.keyboard_compat import PCE500KeyboardHandler
 from pce500.keyboard_matrix import (
     FIFO_BASE,
     FIFO_HEAD_ADDR,

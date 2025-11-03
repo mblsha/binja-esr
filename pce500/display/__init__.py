@@ -2,7 +2,6 @@
 
 from .hd61202 import (
     HD61202,
-    HD61202Interpreter,
     HD61202State,
     Instruction,
     ChipSelect,
@@ -33,7 +32,6 @@ __all__ = [
     "HD61202Controller",
     # Core HD61202 classes
     "HD61202",
-    "HD61202Interpreter",
     "HD61202State",
     # Enums
     "Instruction",

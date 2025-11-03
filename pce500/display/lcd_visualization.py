@@ -8,12 +8,7 @@ from typing import Optional, List, Dict
 from PIL import Image
 
 # Import the HD61202 components from the main module
-from .hd61202 import (
-    HD61202 as HD61202Interpreter,
-    ChipSelect,
-    parse_command,
-    render_combined_image,
-)
+from .hd61202 import HD61202, ChipSelect, parse_command, render_combined_image
 
 from retrobus_perfetto.proto import perfetto_pb2
 
@@ -118,7 +113,7 @@ def generate_lcd_image_from_trace(
                 # Silently ignore parse errors for robustness
                 pass
 
-    lcds = [HD61202Interpreter(), HD61202Interpreter()]
+    lcds = [HD61202(), HD61202()]
     lcd_cs_map = {
         ChipSelect.BOTH: [lcds[0], lcds[1]],
         ChipSelect.RIGHT: [lcds[0]],

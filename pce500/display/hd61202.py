@@ -168,9 +168,6 @@ class HD61202:
         self.on_off_count = 0
 
 
-# Compatibility alias for existing code
-HD61202Interpreter = HD61202
-
 # --- Helper Functions ---
 
 
