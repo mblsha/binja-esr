@@ -9,10 +9,13 @@ Simulates the Web UI flow using Flask's test client:
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
-import app as webapp
+os.environ["FORCE_BINJA_MOCK"] = "1"
+
+import app as webapp  # noqa: E402
 from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from sc62015.pysc62015.constants import IMRFlag, INTERNAL_MEMORY_START
@@ -45,9 +48,7 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
     assert not state.get("is_running"), "Expected emulator to be stopped"
 
     # Prepare IMR/ISR and stacks to allow IRQ delivery when enabled
-    with webapp.emulator_lock:
-        emu = webapp.emulator
-        assert emu is not None
+    with webapp.service.emulator_context() as emu:
         # Disable timers to avoid background IRQs in this test
         try:
             setattr(emu, "_timer_enabled", False)
@@ -88,9 +89,7 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
 
     # Press PF1, then enable IRM|KEYM to deliver the armed key IRQ
     _post_json(client, "/api/v1/key", {"key_code": "KEY_F1", "action": "press"})
-    with webapp.emulator_lock:
-        emu = webapp.emulator
-        assert emu is not None
+    with webapp.service.emulator_context() as emu:
         emu.memory.write_byte(
             INTERNAL_MEMORY_START + IMEMRegisters.IMR,
             int(IMRFlag.IRM | IMRFlag.KEYM),

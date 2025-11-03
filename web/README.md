@@ -15,7 +15,7 @@ A web-based emulator for the Sharp PC-E500 pocket computer, built with Flask and
 
 The web UI talks to a single emulator implementation:
 
-- **Flask Backend** (`app.py`): Manages the SC62015 + PC‑E500 emulator and provides REST API.
+- **Flask Backend** (`app.py` + `emulator_service.py`): Provides the REST API and manages a shared emulator instance, including lifecycle, tracing and paced execution.
 - **JavaScript Frontend** (`static/app.js`): Interactive UI with state polling.
 - **Keyboard**: Handled by the emulator’s keyboard handler implementation (`pce500/keyboard_handler.py`). The web UI only calls API endpoints to press/release keys and to fetch debug/queue information.
 
@@ -33,6 +33,10 @@ The web UI talks to a single emulator implementation:
    ```
 
 3. Open your browser to `http://localhost:8080`
+
+### Configuration
+
+- By default the API is same-origin only. To opt into cross-origin requests set `PCE500_WEB_ALLOWED_ORIGINS` (comma-separated) or configure `WEB_ALLOWED_ORIGINS` in Flask config before importing `app`.
 
 ## API Endpoints
 
@@ -73,11 +77,11 @@ The virtual keyboard mimics the PC-E500's physical layout. You can also use your
 
 ### Update Logic
 
-The emulator state updates when either condition is met:
+The emulator service emits state snapshots when either condition is met:
 - 100ms have elapsed (10 FPS target)
 - 100,000 instructions have executed
 
-This ensures responsive updates during both active computation and idle states.
+This ensures responsive updates during both active computation and idle states while avoiding CPU spin.
 
 ### Keyboard Matrix
 
@@ -93,7 +97,7 @@ debouncing, edit `pce500/keyboard_handler.py` (`KEYBOARD_LAYOUT`, `DEFAULT_*_REA
 ## Development
 
 - To modify the keyboard layout, edit `KEYBOARD_LAYOUT` in `pce500/keyboard_handler.py`.
-- To adjust update rates, modify `UPDATE_TIME_THRESHOLD` and `UPDATE_INSTRUCTION_THRESHOLD` in `web/app.py`.
+- To adjust update rates, modify `UPDATE_TIME_THRESHOLD` and `UPDATE_INSTRUCTION_THRESHOLD` in `web/emulator_service.py`.
 
 ## Known Limitations
 
