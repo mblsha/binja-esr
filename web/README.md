@@ -17,7 +17,7 @@ The web UI talks to a single emulator implementation:
 
 - **Flask Backend** (`app.py`): Manages the SC62015 + PC‑E500 emulator and provides REST API.
 - **JavaScript Frontend** (`static/app.js`): Interactive UI with state polling.
-- **Keyboard**: Handled by the emulator’s compat keyboard implementation (`pce500/keyboard_compat.py`). The web UI only calls API endpoints to press/release keys and to fetch debug/queue information.
+- **Keyboard**: Handled by the emulator’s keyboard handler implementation (`pce500/keyboard_handler.py`). The web UI only calls API endpoints to press/release keys and to fetch debug/queue information.
 
 ## Quick Start
 
@@ -82,17 +82,17 @@ This ensures responsive updates during both active computation and idle states.
 ### Keyboard Matrix
 
 The PC‑E500 uses a matrix scanning system with three registers:
-- `KOL` (0xF0): Key Output Low – selects columns KO0..KO7 (compat: active-high bits)
-- `KOH` (0xF1): Key Output High – selects columns KO8..KO10 via bits 0..2 (compat: active‑high bits)
+- `KOL` (0xF0): Key Output Low – selects columns KO0..KO7 (handler uses active-high bits)
+- `KOH` (0xF1): Key Output High – selects columns KO8..KO10 via bits 0..2 (handler uses active‑high bits)
 - `KIL` (0xF2): Key Input – reads rows KI0..KI7
 
-This project now uses a single “compat” keyboard implementation that simulates debounced
+This project now uses a single keyboard handler implementation that simulates debounced
 press/release behavior consistent with firmware scanning patterns. To adjust layout or
-debouncing, edit `pce500/keyboard_compat.py` (`KEYBOARD_LAYOUT`, `DEFAULT_*_READS`).
+debouncing, edit `pce500/keyboard_handler.py` (`KEYBOARD_LAYOUT`, `DEFAULT_*_READS`).
 
 ## Development
 
-- To modify the keyboard layout, edit `KEYBOARD_LAYOUT` in `pce500/keyboard_compat.py`.
+- To modify the keyboard layout, edit `KEYBOARD_LAYOUT` in `pce500/keyboard_handler.py`.
 - To adjust update rates, modify `UPDATE_TIME_THRESHOLD` and `UPDATE_INSTRUCTION_THRESHOLD` in `web/app.py`.
 
 ## Known Limitations

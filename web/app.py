@@ -112,7 +112,7 @@ def initialize_emulator():
 
     # Create emulator instance
     with emulator_lock:
-        # Use compat keyboard implementation
+        # Use the emulator's keyboard handler implementation
         # Enable lightweight opcode/disassembly tracing so Instruction History populates
         # (emulator maintains a bounded deque, so overhead remains reasonable)
         emulator = PCE500Emulator(

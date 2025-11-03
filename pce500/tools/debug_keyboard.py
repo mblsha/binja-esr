@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
 
-# Create emulator (single compat keyboard implementation)
+# Create emulator (keyboard handler built into the emulator)
 print("Creating emulator...")
 emu = PCE500Emulator(
     trace_enabled=False,

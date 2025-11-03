@@ -244,7 +244,7 @@ The web emulator (`web/`) provides a browser-based interface to the PC-E500 emul
 ### Architecture
 - **Backend**: Flask server (`app.py`) managing emulator state and providing REST API
 - **Frontend**: JavaScript SPA with virtual keyboard and real-time display updates
-- **Keyboard**: Single compat keyboard implementation (matrix via KOL/KOH/KIL)
+- **Keyboard**: Single keyboard handler implementation (matrix via KOL/KOH/KIL)
 
 ### Key Implementation Details
 
@@ -291,7 +291,7 @@ FORCE_BINJA_MOCK=1 python run_tests.py
 
 ## Keyboard Implementation Details
 
-The project uses a single compat keyboard implementation (`pce500/keyboard_compat.py`):
+The project uses a single keyboard handler implementation (`pce500/keyboard_handler.py`):
 - **Column Selection**: KOL (bits 0–7) and KOH (bits 0–2) control columns KO0–KO10 (active-high)
 - **Row Reading**: KIL returns row bits KI0–KI7 according to currently strobed columns
 - **Debouncing**: Queue-based press/release debouncing with configurable read thresholds

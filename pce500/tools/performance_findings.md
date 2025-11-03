@@ -3,7 +3,7 @@
 ## Executive Summary
 Current performance limitations are primarily in the SC62015 CPU emulator’s
 instruction decoding/execution pipeline (excessive memory reads and re‑decoding).
-The project now uses a single keyboard implementation (compat); previous hardware
+The project now uses a single keyboard handler implementation; previous hardware
 keyboard comparisons are historical and not relevant to current code paths.
 
 ## Key Findings
@@ -56,7 +56,7 @@ The issue is in the SC62015 emulator's `execute_instruction` pipeline:
 - Pass decoded instruction data through the pipeline instead of re-fetching
 
 ## Keyboard
-The emulator uses a single compat keyboard implementation with debounced press/release.
+The emulator uses a single keyboard handler implementation with debounced press/release.
 Keyboard code is not the performance bottleneck; focus should remain on CPU pipeline
 optimizations listed above.
 

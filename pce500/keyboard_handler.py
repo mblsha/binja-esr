@@ -1,4 +1,4 @@
-"""Compatibility wrapper around the deterministic keyboard matrix."""
+"""Keyboard handler wrapping the deterministic matrix implementation."""
 
 from __future__ import annotations
 

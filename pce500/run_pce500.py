@@ -254,7 +254,7 @@ def run_emulator(
                     # Consider latched so countdown can proceed without requiring a KIL read
                     latched_kil_seen = True
             elif press_when_col is not None:
-                # Column-based trigger using last observed KOL/KOH (compat mapping)
+                # Column-based trigger using last observed KOL/KOH (handler mapping)
                 kol = getattr(emu, "_last_kol", 0)
                 koh = getattr(emu, "_last_koh", 0)
                 active_cols = []
@@ -299,7 +299,7 @@ def run_emulator(
         if sweep_rows:
             koh = getattr(emu, "_last_koh", 0)
             kol = getattr(emu, "_last_kol", 0)
-            # Derive active columns for active-high mapping (compat):
+            # Derive active columns for active-high mapping (handler semantics):
             # KO0..KO7 from KOL bits 0..7, KO8..KO10 from KOH bits 0..2
             active_cols = []
             for col in range(8):
@@ -739,7 +739,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--press-when-col",
         type=int,
-        help="Press the auto key when this KO column becomes active (compat mapping)",
+        help="Press the auto key when this KO column becomes active (handler mapping)",
     )
     parser.add_argument(
         "--display-trace",
