@@ -15,6 +15,14 @@ from .hd61202 import (
 
 # Import the controller wrapper for emulator compatibility
 from .controller_wrapper import HD61202Controller
+from .font import glyph_bitmap, glyph_columns, text_columns
+from .pipeline import (
+    LCDChipSnapshot,
+    LCDOperation,
+    LCDPipeline,
+    LCDSnapshot,
+    replay_operations,
+)
 
 # Import visualization functionality
 from .lcd_visualization import generate_lcd_image_from_trace
@@ -37,6 +45,14 @@ __all__ = [
     # Helper functions
     "parse_command",
     "render_combined_image",
+    "glyph_columns",
+    "glyph_bitmap",
+    "text_columns",
+    "LCDPipeline",
+    "LCDSnapshot",
+    "LCDChipSnapshot",
+    "LCDOperation",
+    "replay_operations",
     # Visualization
     "generate_lcd_image_from_trace",
     # Text decoding
