@@ -30,6 +30,7 @@ from .keyboard_matrix import MatrixEvent
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 from .scheduler import TimerScheduler, TimerSource
+from .peripherals import PeripheralManager
 
 # Default timer periods in cycles (rough emulation)
 MTI_PERIOD_CYCLES_DEFAULT = 500
@@ -109,9 +110,6 @@ class PCE500Emulator:
         self.memory = PCE500Memory()
         self.memory._emulator = self  # Set reference for tracking counters
 
-        # Set callback for IMEM register access tracking
-        if self.disasm_trace_enabled:
-            self.memory.set_imem_access_callback(self._on_imem_register_access)
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
 
@@ -220,6 +218,10 @@ class PCE500Emulator:
         self._irq_source: Optional["IRQSource"] = None
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
+
+        # Peripheral adapters
+        self.peripherals = PeripheralManager(self.memory, self._scheduler)
+        self.memory.set_imem_access_callback(self._handle_imem_access)
 
     def _reset_instruction_access_log(self) -> None:
         """Clear the per-instruction register access accumulator when tracing."""
@@ -1458,6 +1460,17 @@ class PCE500Emulator:
         self.current_instruction_accesses.append(
             {"register": reg_name, "type": access_type, "value": value}
         )
+
+    def _handle_imem_access(
+        self, pc: int, reg_name: Optional[str], access_type: str, value: int
+    ) -> None:
+        """Dispatch IMEM access notifications to peripherals and tracing."""
+
+        if self.peripherals is not None:
+            self.peripherals.handle_imem_access(pc, reg_name, access_type, value)
+
+        if self.disasm_trace_enabled and reg_name:
+            self._on_imem_register_access(pc, reg_name, access_type, value)
 
     def save_disasm_trace(self, output_dir: str = "data") -> str:
         """Generate and save the disassembly trace to a file."""
