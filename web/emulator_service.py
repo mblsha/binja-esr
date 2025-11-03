@@ -398,8 +398,6 @@ class EmulatorService:
     def stop_trace(self) -> Dict[str, object]:
         emulator = self.ensure_emulator()
         emulator.stop_tracing()
-        if perfetto_tracer.enabled:
-            perfetto_tracer.stop()
         return {"ok": True, "enabled": False, "path": TRACE_PATH}
 
     def trace_status(self) -> Dict[str, object]:
