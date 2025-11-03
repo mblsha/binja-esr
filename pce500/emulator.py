@@ -26,6 +26,7 @@ from .memory import (
 )
 from .display import HD61202Controller
 from .keyboard_compat import PCE500KeyboardHandler as KeyboardCompat
+from .keyboard_matrix import MatrixEvent
 from .trace_manager import g_tracer
 from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 from .scheduler import TimerScheduler, TimerSource
@@ -139,9 +140,8 @@ class PCE500Emulator:
         self._keyboard_columns_active_high = keyboard_columns_active_high
 
         # Keyboard implementation: compat handler parameterised for column polarity
-        # Pass memory accessor so compat can honor KSD (LCC bit)
         self.keyboard = KeyboardCompat(
-            self.memory.read_byte, columns_active_high=keyboard_columns_active_high
+            self.memory, columns_active_high=keyboard_columns_active_high
         )
         self.memory.add_overlay(
             MemoryOverlay(
@@ -822,22 +822,26 @@ class PCE500Emulator:
             return True
 
         result = self.keyboard.press_key(key_code) if self.keyboard else False
-        # Arm an interrupt eagerly in hardware mode to ensure delivery
-        try:
-            if self._kb_irq_enabled and result:
-                # Arm pending and record source
-                setattr(self, "_irq_pending", True)
-                self._irq_source = IRQSource.KEY
-                # Ensure ISR.KEY asserts for delivery if not already set, but avoid duplicates
-                try:
-                    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                    isr_val = self.memory.read_byte(isr_addr) & 0xFF
-                    if (isr_val & int(IMRFlag.KEY)) == 0:
-                        self._set_isr_bits(int(ISRFlag.KEYI))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        if result and self._kb_irq_enabled:
+            events = self.keyboard.scan_tick()
+            if events:
+                self._kb_irq_count += len(events)
+            self._set_isr_bits(int(ISRFlag.KEYI))
+            self._irq_pending = True
+            self._irq_source = IRQSource.KEY
+            try:
+                self._last_kol = getattr(self.keyboard, "kol_value", self._last_kol)
+                self._last_koh = getattr(self.keyboard, "koh_value", self._last_koh)
+                self._kb_strobe_count = getattr(
+                    self.keyboard, "strobe_count", self._kb_strobe_count
+                )
+                hist = getattr(self.keyboard, "column_histogram", None)
+                if hist:
+                    for idx, val in enumerate(hist):
+                        if idx < len(self._kb_col_hist):
+                            self._kb_col_hist[idx] = val
+            except Exception:
+                pass
         # Optional debug: make a visible mark on LCD to confirm key handling
         try:
             if result and getattr(self, "debug_draw_on_key", False):
@@ -870,8 +874,10 @@ class PCE500Emulator:
         if not fired_sources:
             return
 
+        key_events: List[MatrixEvent] = []
         for source in fired_sources:
             if source is TimerSource.MTI:
+                key_events = self.keyboard.scan_tick()
                 self._set_isr_bits(int(ISRFlag.MTI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.MTI
@@ -879,6 +885,12 @@ class PCE500Emulator:
                 self._set_isr_bits(int(ISRFlag.STI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.STI
+
+        if key_events and self._kb_irq_enabled:
+            self._set_isr_bits(int(ISRFlag.KEYI))
+            self._irq_pending = True
+            self._irq_source = IRQSource.KEY
+            self._kb_irq_count += len(key_events)
 
         if new_tracer.enabled and self._irq_source is not None:
             new_tracer.instant(
@@ -1325,6 +1337,14 @@ class PCE500Emulator:
                     self._last_kol = int(self.keyboard.kol_value) & 0xFF
                 if hasattr(self.keyboard, "koh_value"):
                     self._last_koh = int(self.keyboard.koh_value) & 0xFF
+                self._kb_strobe_count = getattr(
+                    self.keyboard, "strobe_count", self._kb_strobe_count
+                )
+                hist = getattr(self.keyboard, "column_histogram", None)
+                if hist:
+                    for idx, val in enumerate(hist):
+                        if idx < len(self._kb_col_hist):
+                            self._kb_col_hist[idx] = val
             except Exception:
                 pass
 
@@ -1336,52 +1356,29 @@ class PCE500Emulator:
         offset = address - INTERNAL_MEMORY_START
         self._track_imem_access(offset, "writes", cpu_pc)
 
-        # Trace keyboard matrix I/O
         if new_tracer.enabled and offset in (KOL, KOH):
             new_tracer.instant(
                 "I/O", "KB_ColumnStrobe", {"addr": offset, "value": value & 0xFF}
             )
-        # Monitor strobe count on changes and track active columns
-        try:
-            if offset == KOL:
-                if getattr(self.keyboard, "kol_value", None) != (value & 0xFF):
-                    self._kb_strobe_count += 1
-                self._last_kol = value & 0xFF
-            elif offset == KOH:
-                if getattr(self.keyboard, "koh_value", None) != (value & 0xFF):
-                    self._kb_strobe_count += 1
-                self._last_koh = value & 0xFF
 
-            # Update histogram using keyboard's active column calculation
-            active_cols = []
-            if hasattr(self.keyboard, "get_active_columns"):
-                active_cols = list(self.keyboard.get_active_columns())
-            for col in active_cols:
-                if 0 <= col < len(self._kb_col_hist):
-                    self._kb_col_hist[col] += 1
-        except Exception:
-            pass
-        # If IRQ wiring enabled: set pending IRQ when a pressed key's column is active
-        try:
-            if self._kb_irq_enabled and hasattr(self.keyboard, "get_pressed_keys"):
-                pressed = set(self.keyboard.get_pressed_keys())
-                if pressed:
-                    active_cols = []
-                    if hasattr(self.keyboard, "get_active_columns"):
-                        active_cols = list(self.keyboard.get_active_columns())
-                    # Any pressed key in active columns?
-                    for kc in pressed:
-                        loc = getattr(self.keyboard, "key_locations", {}).get(kc)
-                        if loc and loc.column in active_cols:
-                            # Arm pending interrupt (delivered at next step)
-                            self._set_isr_bits(int(ISRFlag.KEYI))
-                            setattr(self, "_irq_pending", True)
-                            self._irq_source = IRQSource.KEY
-                            break
-        except Exception:
-            pass
-        # Single keyboard implementation: use compat handler
+        # Update keyboard state via compat handler
         self.keyboard.handle_register_write(offset, value)
+
+        # Cache register values and metrics for diagnostics
+        try:
+            self._last_kol = getattr(self.keyboard, "kol_value", self._last_kol)
+            self._last_koh = getattr(self.keyboard, "koh_value", self._last_koh)
+            self._kb_strobe_count = getattr(
+                self.keyboard, "strobe_count", self._kb_strobe_count
+            )
+            hist = getattr(self.keyboard, "column_histogram", None)
+            if hist:
+                for idx, val in enumerate(hist):
+                    if idx < len(self._kb_col_hist):
+                        self._kb_col_hist[idx] = val
+            self._last_kil_columns = list(self.keyboard.get_active_columns())
+        except Exception:
+            pass
 
     # Note: LCC write handler not required with single compat keyboard
 
