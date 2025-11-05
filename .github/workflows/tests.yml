@@ -60,3 +60,51 @@ jobs:
     - name: Run type checking
       run: |
         uv run pyright sc62015/pysc62015
+
+  rust-backend:
+    name: Optional Rust Backend
+    runs-on: ubuntu-latest
+    needs: test
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        cache-dependency-glob: "pyproject.toml"
+
+    - name: Install dependencies
+      run: |
+        uv sync --extra dev --extra pce500 --extra web
+
+    - name: Install maturin
+      run: |
+        uv tool install maturin
+
+    - name: Set up Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+
+    - name: Build optional Rust backend
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml
+
+    - name: Run backend parity smoke tests
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run pytest sc62015/pysc62015/test_cpu_backend_parity.py --cpu-backends python,rust -v

@@ -42,6 +42,16 @@ Use `sc62015/tools/compare_cpu_backends.py` to execute individual opcodes throug
 uv run python sc62015/tools/compare_cpu_backends.py --start 0x00 --end 0x1F
 ```
 
+### CI coverage
+
+GitHub Actions runs an optional "Optional Rust Backend" job (see `.github/workflows/tests.yml`) that:
+
+1. Installs the Rust toolchain alongside the existing Python environment.
+2. Builds the PyO3 extension via `uv run maturin develop`.
+3. Executes the backend parity smoke tests with `--cpu-backends python,rust` so the suite is ready to toggle to the native core once implemented.
+
+The job is marked `continue-on-error`, so failures provide signal without blocking merges while the backend is experimental.
+
 ## Next steps
 - Flesh out the Rust `CPU` implementation so that it mirrors the Python `Emulator` API.
 - Decide how to share register state, memory bus abstractions, and LLIL evaluation paths between Python and Rust.
