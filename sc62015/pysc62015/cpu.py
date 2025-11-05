@@ -10,6 +10,7 @@ interact with the returned object as if it were the original `Emulator`.
 from __future__ import annotations
 
 import os
+from importlib import import_module
 from typing import Callable, Iterable, Literal, Optional, Tuple
 
 from .emulator import Emulator
@@ -29,8 +30,8 @@ def _load_rust_backend() -> Optional[object]:
     traffic.
     """
     try:
-        from . import _sc62015_rustcore as rust_module  # type: ignore[attr-defined]
-    except ImportError:
+        rust_module = import_module("_sc62015_rustcore")
+    except ModuleNotFoundError:
         return None
 
     if not getattr(rust_module, "HAS_CPU_IMPLEMENTATION", False):
