@@ -1,11 +1,17 @@
-use pyo3::exceptions::PyNotImplementedError;
-use pyo3::prelude::*;
-
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/opcode_table.rs"));
 }
 
 pub use generated::{OpcodeMetadata, OPCODES};
+use pyo3::exceptions::PyNotImplementedError;
+use pyo3::prelude::*;
+
+pub mod constants;
+pub mod memory;
+pub mod state;
+
+pub use memory::MemoryBus;
+pub use state::{Flag, Register, RegisterError, Registers};
 
 #[pyclass(name = "CPU")]
 pub struct CpuStub {}

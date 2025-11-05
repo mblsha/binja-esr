@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.21", features = ["extension-module", "abi3-py311"] }
+thiserror = "1.0"
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

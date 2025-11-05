@@ -27,7 +27,9 @@ fn main() {
     println!("cargo:rerun-if-changed={}", script_path.display());
     println!(
         "cargo:rerun-if-changed={}",
-        manifest_dir.join("../pysc62015/instr/opcode_table.py").display()
+        manifest_dir
+            .join("../pysc62015/instr/opcode_table.py")
+            .display()
     );
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR missing"));
@@ -42,7 +44,8 @@ fn main() {
                 );
                 write_fallback(&dest_path).expect("failed to write fallback table");
             } else {
-                write_table(&dest_path, &envelope.instructions).expect("failed to write opcode table");
+                write_table(&dest_path, &envelope.instructions)
+                    .expect("failed to write opcode table");
             }
         }
         Err(err) => {
@@ -54,7 +57,10 @@ fn main() {
 
 fn run_generator(script_path: &Path) -> Result<MetadataEnvelope, String> {
     if !script_path.exists() {
-        return Err(format!("metadata generator not found at {}", script_path.display()));
+        return Err(format!(
+            "metadata generator not found at {}",
+            script_path.display()
+        ));
     }
 
     let python = find_python().ok_or_else(|| "python3/python not found in PATH".to_string())?;
@@ -72,7 +78,8 @@ fn run_generator(script_path: &Path) -> Result<MetadataEnvelope, String> {
         ));
     }
 
-    serde_json::from_slice(&output.stdout).map_err(|err| format!("failed to parse generator output: {err}"))
+    serde_json::from_slice(&output.stdout)
+        .map_err(|err| format!("failed to parse generator output: {err}"))
 }
 
 fn find_python() -> Option<&'static str> {
