@@ -34,7 +34,10 @@ This note captures the Python-side contract that the upcoming Rust core must mir
 - `sc62015.pysc62015.sc_asm`
   - `Assembler`: Lark-based assembler used by tests to emit machine code; exposes `.assemble(text)` returning binary segments.
 - `sc62015.pysc62015.__init__`
-  - Currently empty; no implicit re-exports.
+  - Re-exports the new `CPU` facade alongside the legacy `Emulator`, `RegisterName`, and `Registers` helpers for convenience.
+- `sc62015.pysc62015.cpu`
+  - `CPU`: facade that selects between the Python `Emulator` and the optional Rust backend (when available). Accepts the same constructor arguments as `Emulator` and forwards attribute access to the underlying implementation. The selection honours an explicit `backend` argument or the `SC62015_CPU_BACKEND` environment variable.
+  - Helper functions: `available_backends()` and `select_backend()` to inspect or override backend resolution.
 
 ### External Types the Rust Core Must Respect
 - `binja_test_mocks.eval_llil.Memory`: wraps provided `read_mem` / `write_mem` callables. Exposes `read_byte`, `write_byte`, `read_bytes`, `write_bytes`.
