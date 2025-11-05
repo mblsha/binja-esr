@@ -78,6 +78,7 @@ The following files are under `sc62015/pysc62015/tests` and define the behaviour
 | Instruction metadata + LLIL lifting | Instruction naming, operand rendering, LLIL jump targets, mode decoding | `test_instr.py` (covers `JP`, addressing modes, operand renderers, HALT/OFF/TCL intrinsics etc.) |
 | Assembler integration | Round-tripping assembly text to opcode bytes, internal register naming, full-program assembly | `test_asm.py`, `test_asm_e2e.py`, `test_asm_imem_register_names.py`, `test_opcode_assembly.py` |
 | Architecture hookup | Binary Ninja `Architecture` shim returns LLIL for simple instructions | `test_arch_failure.py` (skipped when real BN present) |
+| Backend facade smoke tests | Ensures the `CPU` façade can execute basic instructions across enabled backends | `test_cpu_backend_parity.py` (skips when the Rust core is unavailable) |
 
 **Downstream integration tests** (outside this package) rely on these APIs as well:
 - `pce500/emulator.py` and associated tests instantiate `Emulator` and `CPUStepper` for the handheld device model.
