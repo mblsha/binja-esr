@@ -75,7 +75,9 @@ def compare_opcode(opcode: int) -> Tuple[ExecutionResult, ExecutionResult, List[
             f"instruction mismatch: python={python_result.instruction}, rust={rust_result.instruction}"
         )
     if python_result.pc != rust_result.pc:
-        differences.append(f"pc mismatch: python=0x{python_result.pc:05X}, rust=0x{rust_result.pc:05X}")
+        differences.append(
+            f"pc mismatch: python=0x{python_result.pc:05X}, rust=0x{rust_result.pc:05X}"
+        )
     if python_result.registers != rust_result.registers:
         differences.append("register snapshot mismatch")
 

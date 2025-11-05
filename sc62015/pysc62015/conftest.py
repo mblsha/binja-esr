@@ -20,7 +20,9 @@ def _parse_backend_option(raw: str | None) -> List[str]:
         if not name:
             continue
         if name not in _VALID_BACKENDS:
-            raise pytest.UsageError(f"Unknown CPU backend '{name}' (expected one of: {sorted(_VALID_BACKENDS)})")
+            raise pytest.UsageError(
+                f"Unknown CPU backend '{name}' (expected one of: {sorted(_VALID_BACKENDS)})"
+            )
         names.append(name)
     return names or ["python"]
 
@@ -48,7 +50,9 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             params.append(
                 pytest.param(
                     backend,
-                    marks=pytest.mark.skip(reason=f"SC62015 backend '{backend}' unavailable in this environment"),
+                    marks=pytest.mark.skip(
+                        reason=f"SC62015 backend '{backend}' unavailable in this environment"
+                    ),
                 )
             )
         else:

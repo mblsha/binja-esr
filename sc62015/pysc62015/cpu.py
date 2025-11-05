@@ -40,7 +40,9 @@ def _load_rust_backend() -> Optional[object]:
     return rust_module
 
 
-def available_backends(rust_loader: Callable[[], Optional[object]] | None = None) -> Tuple[CPUBackendName, ...]:
+def available_backends(
+    rust_loader: Callable[[], Optional[object]] | None = None,
+) -> Tuple[CPUBackendName, ...]:
     """Return the list of CPU backends that can be used in the current runtime."""
 
     loader = rust_loader or _load_rust_backend
