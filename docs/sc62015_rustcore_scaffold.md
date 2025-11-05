@@ -9,7 +9,8 @@ This repository now includes the scaffolding needed to build an optional Rust im
   - `src/constants.rs`: architectural constants shared with the Python implementation (address space, PC mask, TEMP register count).
   - `src/state.rs`: register file implementation mirroring the Python semantics (composite registers, flag bits, TEMP slots, call stack tracking).
   - `src/memory.rs`: safe wrapper around the Python `Memory` helper, offering byte/word accessors and tracer discovery.
-  - `src/lib.rs`: exposes a minimal `CPU` class and helper functions. The constructor raises `NotImplementedError` for now, but compiling it allows Python to detect the module and decide whether it is ready for use. It also re-exports the generated opcode metadata and state/memory layers for future use.
+  - `src/decode.rs`: metadata-driven opcode lookup helpers that classify opcodes (instruction vs prefix) and expose rendered operands/LLIL snippets.
+  - `src/lib.rs`: exposes a minimal `CPU` class and helper functions. The constructor raises `NotImplementedError` for now, but compiling it allows Python to detect the module and decide whether it is ready for use. It also re-exports the generated opcode metadata and state/memory/decode layers for future use.
   - `tests/python_parity.rs`: skeleton proptest harness that will cross-check instruction execution once the Rust backend is feature-complete. It currently exits early when the Rust core reports `HAS_CPU_IMPLEMENTATION = False`.
 - Python shim:
   - `sc62015/pysc62015/cpu.py`: provides a `CPU` facade that selects between the existing Python `Emulator` and the optional Rust backend. Selection obeys the `SC62015_CPU_BACKEND` environment variable or an explicit `backend=` argument. When Rust is requested but not available, a descriptive error explains how to build the extension.

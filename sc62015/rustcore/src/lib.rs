@@ -7,9 +7,11 @@ use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 
 pub mod constants;
+pub mod decode;
 pub mod memory;
 pub mod state;
 
+pub use decode::{all_opcodes, decode_opcode, InstructionDescriptor, InstructionKind};
 pub use memory::MemoryBus;
 pub use state::{Flag, Register, RegisterError, Registers};
 
