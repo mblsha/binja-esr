@@ -5,8 +5,12 @@ This repository now includes the scaffolding needed to build an optional Rust im
 ## Layout
 - `sc62015/rustcore/`: Cargo crate that will host the Rust CPU implementation.
   - `Cargo.toml`: defines a `cdylib` target named `sc62015_rustcore` built with PyO3 (`abi3-py311`).
-  - `build.rs`: invokes `sc62015/tools/generate_opcode_metadata.py` to produce LLIL-driven opcode metadata and emits a Rust source file under `OUT_DIR/opcode_table.rs`. If Python or the generator is unavailable, a stub table is used instead.
-  - `src/lib.rs`: exposes a minimal `CPU` class and helper functions. The constructor raises `NotImplementedError` for now, but compiling it allows Python to detect the module and decide whether it is ready for use. It also re-exports the generated opcode metadata for future use.
+  - `build.rs`: invokes `sc62015/tools/generate_opcode_metadata.py` to produce opcode metadata plus a structured LLIL program for every opcode. It emits Rust source under `OUT_DIR/opcode_table.rs`, falling back to an empty table if generation fails.
+  - `src/constants.rs`: architectural constants mirrored from the Python implementation (address space, PC mask, TEMP register count).
+  - `src/state.rs`: register file implementation matching Python semantics, including composite registers, flag bits, TEMP slots, and call-stack tracking.
+  - `src/memory.rs`: PyO3 wrapper around the Python memory helper, exposing byte/word accessors and optional performance-tracer hooks.
+  - `src/decode.rs`: metadata lookup helpers that classify opcodes (instruction vs prefix) and surface the LLIL program for later code generation.
+  - `src/lib.rs`: exposes the stub `CPU` class, generated opcode metadata/LLIL programs, and re-exports the supporting modules.
   - `tests/python_parity.rs`: skeleton proptest harness that will cross-check instruction execution once the Rust backend is feature-complete. It currently exits early when the Rust core reports `HAS_CPU_IMPLEMENTATION = False`.
 - Python shim:
   - `sc62015/pysc62015/cpu.py`: provides a `CPU` facade that selects between the existing Python `Emulator` and the optional Rust backend. Selection obeys the `SC62015_CPU_BACKEND` environment variable or an explicit `backend=` argument. When Rust is requested but not available, a descriptive error explains how to build the extension.

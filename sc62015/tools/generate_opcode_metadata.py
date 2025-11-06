@@ -13,7 +13,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, asdict
-from typing import Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Sequence
 
 # Ensure Binary Ninja imports resolve to the test mocks when available.
 os.environ.setdefault("FORCE_BINJA_MOCK", "1")
@@ -40,6 +40,7 @@ class OpcodeMetadata:
     il: List[str]
     decoder_consumed: int
     errors: List[str]
+    llil: Dict[str, Any]
 
 
 @dataclass
@@ -74,6 +75,7 @@ def collect_opcode_metadata(opcode: int) -> OpcodeMetadata:
             il=[],
             decoder_consumed=0,
             errors=errors,
+            llil={"expressions": [], "nodes": [], "label_count": 0},
         )
 
     mnemonic = getattr(instruction, "name", lambda: "UNKNOWN")()
@@ -93,10 +95,12 @@ def collect_opcode_metadata(opcode: int) -> OpcodeMetadata:
         errors.append(f"analyze-error: {exc}")
 
     il_lines: List[str]
+    llil_payload: Dict[str, Any] = {"expressions": [], "nodes": [], "label_count": 0}
     il = MockLowLevelILFunction()
     try:
         instruction.lift(il, 0)
         il_lines = _render_il(il.ils)
+        llil_payload = serialize_llil(il)
     except Exception as exc:  # pragma: no cover
         errors.append(f"lift-error: {exc}")
         il_lines = []
@@ -109,12 +113,111 @@ def collect_opcode_metadata(opcode: int) -> OpcodeMetadata:
         il=il_lines,
         decoder_consumed=decoder.get_pos(),
         errors=errors,
+        llil=llil_payload,
     )
 
 
 def generate_metadata() -> MetadataEnvelope:
     instructions = [collect_opcode_metadata(opcode) for opcode in range(0x100)]
     return MetadataEnvelope(version=1, instructions=instructions)
+
+
+def serialize_llil(il: MockLowLevelILFunction) -> Dict[str, Any]:
+    label_ids: Dict[Any, int] = {}
+
+    def register_label(label: Any) -> int:
+        return label_ids.setdefault(label, len(label_ids))
+
+    for node in il.ils:
+        if isinstance(node, MockLabel):
+            register_label(node.label)
+        elif isinstance(node, MockGoto):
+            register_label(node.label)
+        elif isinstance(node, MockIfExpr):
+            register_label(node.t)
+            register_label(node.f)
+
+    expressions: List[Dict[str, Any]] = []
+    expr_cache: Dict[int, int] = {}
+
+    def serialize_operand(operand: Any) -> Dict[str, Any]:
+        if isinstance(operand, MockLLIL):
+            expr_index = get_expr_id(operand)
+            return {"kind": "expr", "expr": expr_index}
+        if isinstance(operand, MockReg):
+            return {"kind": "reg", "name": operand.name}
+        if isinstance(operand, MockFlag):
+            return {"kind": "flag", "name": operand.name}
+        if isinstance(operand, int):
+            return {"kind": "imm", "value": int(operand)}
+        if operand is None:
+            return {"kind": "none"}
+        raise TypeError(f"Unsupported LLIL operand type: {type(operand)}")
+
+    def get_expr_id(expr: MockLLIL) -> int:
+        key = id(expr)
+        cached = expr_cache.get(key)
+        if cached is not None:
+            return cached
+
+        index = len(expressions)
+        expr_cache[key] = index
+
+        operands = [serialize_operand(operand) for operand in expr.ops]
+
+        full_op = expr.op
+        base_op = full_op.split("{")[0]
+        suffix = None
+        if "." in base_op:
+            suffix = base_op.split(".", 1)[1]
+
+        record: Dict[str, Any] = {
+            "op": expr.bare_op(),
+            "full_op": full_op,
+            "suffix": suffix,
+            "width": expr.width(),
+            "flags": expr.flags(),
+            "operands": operands,
+        }
+
+        if isinstance(expr, MockIntrinsic):
+            record["intrinsic"] = {"name": expr.name}
+
+        expressions.append(record)
+        return index
+
+    nodes: List[Dict[str, Any]] = []
+
+    for node in il.ils:
+        if isinstance(node, MockLabel):
+            label_index = register_label(node.label)
+            nodes.append({"kind": "label", "label": label_index})
+        elif isinstance(node, MockGoto):
+            label_index = register_label(node.label)
+            nodes.append({"kind": "goto", "label": label_index})
+        elif isinstance(node, MockIfExpr):
+            cond_index = get_expr_id(node.cond)
+            true_label = register_label(node.t)
+            false_label = register_label(node.f)
+            nodes.append(
+                {
+                    "kind": "if",
+                    "cond": cond_index,
+                    "true": true_label,
+                    "false": false_label,
+                }
+            )
+        elif isinstance(node, MockLLIL):
+            expr_index = get_expr_id(node)
+            nodes.append({"kind": "expr", "expr": expr_index})
+        else:  # pragma: no cover - unexpected node types
+            raise TypeError(f"Unsupported LLIL node type: {type(node)}")
+
+    return {
+        "expressions": expressions,
+        "nodes": nodes,
+        "label_count": len(label_ids),
+    }
 
 
 def emit_json(envelope: MetadataEnvelope, pretty: bool) -> str:
