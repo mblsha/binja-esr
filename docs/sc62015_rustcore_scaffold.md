@@ -9,8 +9,9 @@ This repository now includes the scaffolding needed to build an optional Rust im
   - `src/constants.rs`: architectural constants mirrored from the Python implementation (address space, PC mask, TEMP register count).
   - `src/state.rs`: register file implementation matching Python semantics, including composite registers, flag bits, TEMP slots, and call-stack tracking.
   - `src/memory.rs`: PyO3 wrapper around the Python memory helper, exposing byte/word accessors and optional performance-tracer hooks.
-  - `src/decode.rs`: metadata lookup helpers that classify opcodes (instruction vs prefix) and surface the LLIL program for later code generation.
-  - `src/lib.rs`: exposes the stub `CPU` class, generated opcode metadata/LLIL programs, and re-exports the supporting modules.
+  - `src/decode.rs`: metadata lookup helpers that classify opcodes (instruction vs prefix) and surface the LLIL program for the Rust code generator.
+  - `src/executor.rs`: runtime scaffolding (`LlilRuntime`, error types) that executes generated opcode handlers; currently a stub until the LLIL lowering is implemented.
+  - `src/lib.rs`: exposes the stub `CPU` class, generated opcode metadata/LLIL programs, handler dispatch table, and re-exports the supporting modules.
   - `tests/python_parity.rs`: skeleton proptest harness that will cross-check instruction execution once the Rust backend is feature-complete. It currently exits early when the Rust core reports `HAS_CPU_IMPLEMENTATION = False`.
 - Python shim:
   - `sc62015/pysc62015/cpu.py`: provides a `CPU` facade that selects between the existing Python `Emulator` and the optional Rust backend. Selection obeys the `SC62015_CPU_BACKEND` environment variable or an explicit `backend=` argument. When Rust is requested but not available, a descriptive error explains how to build the extension.
