@@ -5,7 +5,9 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/opcode_table.rs"));
 }
 
-pub use generated::{OpcodeMetadata, OPCODES};
+pub mod decode;
+
+pub use generated::{LlilExpr, LlilNode, LlilOperand, LlilProgram, OpcodeMetadata, OPCODES};
 
 #[pyclass(name = "CPU")]
 pub struct CpuStub {}
