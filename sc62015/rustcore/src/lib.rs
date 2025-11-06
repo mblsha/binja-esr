@@ -5,9 +5,20 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/opcode_table.rs"));
 }
 
+mod generated_handlers {
+    include!(concat!(env!("OUT_DIR"), "/opcode_handlers.rs"));
+}
+
+pub mod constants;
 pub mod decode;
+pub mod executor;
+pub mod memory;
+pub mod state;
 
 pub use generated::{LlilExpr, LlilNode, LlilOperand, LlilProgram, OpcodeMetadata, OPCODES};
+pub use generated_handlers::{OpcodeHandler, OPCODE_HANDLERS};
+pub use memory::MemoryBus;
+pub use state::Registers;
 
 #[pyclass(name = "CPU")]
 pub struct CpuStub {}
