@@ -1,0 +1,14 @@
+[package]
+name = "sc62015-parity"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "sc62015_parity"
+crate-type = ["cdylib"]
+
+[features]
+rust-runtime-parity = []
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module", "auto-initialize"] }

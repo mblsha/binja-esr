@@ -20,7 +20,16 @@ os.environ.setdefault("FORCE_BINJA_MOCK", "1")
 
 from binja_test_mocks import binja_api  # noqa: F401  # pylint: disable=unused-import
 from binja_test_mocks.coding import Decoder
-from binja_test_mocks.mock_llil import MockLowLevelILFunction
+from binja_test_mocks.mock_llil import (
+    MockFlag,
+    MockGoto,
+    MockIntrinsic,
+    MockLabel,
+    MockLLIL,
+    MockLowLevelILFunction,
+    MockReg,
+    MockIfExpr,
+)
 from binja_test_mocks.tokens import asm_str
 from binaryninja import InstructionInfo  # type: ignore
 
@@ -162,6 +171,7 @@ def serialize_llil(il: MockLowLevelILFunction) -> Dict[str, Any]:
 
         index = len(expressions)
         expr_cache[key] = index
+        expressions.append(None)  # Reserve slot so children keep stable indices.
 
         operands = [serialize_operand(operand) for operand in expr.ops]
 
@@ -183,7 +193,7 @@ def serialize_llil(il: MockLowLevelILFunction) -> Dict[str, Any]:
         if isinstance(expr, MockIntrinsic):
             record["intrinsic"] = {"name": expr.name}
 
-        expressions.append(record)
+        expressions[index] = record
         return index
 
     nodes: List[Dict[str, Any]] = []
@@ -240,6 +250,11 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         action="store_true",
         help="Pretty-print the JSON output for human inspection.",
     )
+    parser.add_argument(
+        "--lowering-plan",
+        type=str,
+        help="Optional path to emit a lowering-plan JSON for Rust codegen.",
+    )
     return parser.parse_args(list(argv))
 
 
@@ -253,7 +268,64 @@ def main(argv: Iterable[str]) -> int:
             fh.write(payload)
     else:
         sys.stdout.write(payload)
+
+    if args.lowering_plan:
+        lowering_plan = build_lowering_plan(envelope)
+        with open(args.lowering_plan, "w", encoding="utf-8") as fh:
+            json.dump(lowering_plan, fh, indent=2, sort_keys=True)
     return 0
+
+
+SIDE_EFFECT_OPS = {
+    "SET_REG",
+    "SET_FLAG",
+    "STORE",
+    "LOAD",  # because it consults memory bus
+    "PUSH",
+    "POP",
+    "CALL",
+    "JUMP",
+    "RET",
+    "INTRINSIC",
+    "UNIMPL",
+}
+
+
+def build_lowering_plan(envelope: MetadataEnvelope) -> Dict[str, Any]:
+    plan: Dict[str, Any] = {"instructions": []}
+    for instr in envelope.instructions:
+        expr_plan: List[Dict[str, Any]] = []
+        for index, expr in enumerate(instr.llil["expressions"]):
+            deps = [
+                operand["expr"]
+                for operand in expr["operands"]
+                if operand.get("kind") == "expr"
+            ]
+            has_flags = bool(expr.get("flags"))
+            expr_plan.append(
+                {
+                    "index": index,
+                    "op": expr["op"],
+                    "full_op": expr["full_op"],
+                    "width": expr["width"],
+                    "flags": expr["flags"],
+                    "suffix": expr.get("suffix"),
+                    "deps": deps,
+                    "side_effect": expr["op"] in SIDE_EFFECT_OPS or has_flags,
+                    "intrinsic": expr.get("intrinsic", {}).get("name"),
+                    "operands": expr["operands"],
+                }
+            )
+        plan["instructions"].append(
+            {
+                "opcode": instr.opcode,
+                "mnemonic": instr.mnemonic,
+                "length": instr.length,
+                "expressions": expr_plan,
+                "nodes": instr.llil["nodes"],
+            }
+        )
+    return plan
 
 
 if __name__ == "__main__":
