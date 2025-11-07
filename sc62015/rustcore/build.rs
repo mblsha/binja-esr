@@ -600,8 +600,19 @@ fn try_emit_simple_logical(
         .to_string();
     let width = logic_expr.width.or(setter.width).unwrap_or(1);
     let width_literal = format_option_u8_literal(Some(width));
+    let flags_spec = logic_expr.flags.as_deref().unwrap_or_default();
+    let writes_carry = flags_spec.contains('C');
+    let writes_zero = flags_spec.contains('Z');
+    let mut flag_mask = String::new();
+    if !writes_carry {
+        flag_mask.push_str("    flags.carry = None;\n");
+    }
+    if !writes_zero {
+        flag_mask.push_str("    flags.zero = None;\n");
+    }
+    let mut_kw = if flag_mask.is_empty() { "" } else { "mut " };
     Some(format!(
-        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let lhs = {lhs};\n    let rhs = {rhs};\n    let (value, flags) = lowering::{helper}({width}, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, value, {width_literal})?;\n    Ok(())\n}}\n",
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let lhs = {lhs};\n    let rhs = {rhs};\n    let (value, {mut_kw}flags) = lowering::{helper}({width}, lhs, rhs);\n{flag_mask}    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, value, {width_literal})?;\n    Ok(())\n}}\n",
         target_reg,
     ))
 }
