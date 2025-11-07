@@ -50,7 +50,7 @@ impl MemoryBus {
         value: u32,
     ) -> PyResult<()> {
         self.inner
-            .call_method1(py, "write_bytes", (size, address, value))
+            .call_method1(py, "write_bytes", (address, size, value))
             .map(|_| ())
     }
 
@@ -96,6 +96,39 @@ def write(addr, value):
             assert_eq!(bus.read_byte(py, 0x10)?, 0);
             bus.write_byte(py, 0x10, 0xAB)?;
             assert_eq!(bus.read_byte(py, 0x10)?, 0xAB);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn memory_bus_multibyte_roundtrip() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| -> PyResult<()> {
+            let locals = PyDict::new(py);
+            py.run(
+                r#"
+data = {}
+def read(addr):
+    return data.get(addr, 0)
+def write(addr, value):
+    data[addr] = value & 0xFF
+"#,
+                None,
+                Some(locals),
+            )?;
+
+            let read_fn = locals.get_item("read").unwrap();
+            let write_fn = locals.get_item("write").unwrap();
+            let module = PyModule::import(py, "binja_test_mocks.eval_llil")?;
+            let memory_cls = module.getattr("Memory")?;
+            let memory_obj = memory_cls.call1((read_fn, write_fn))?;
+
+            let bus = MemoryBus::new(py, memory_obj.into())?;
+            bus.write_bytes(py, 0x20, 2, 0xABCD)?;
+            assert_eq!(bus.read_bytes(py, 0x20, 2)?, 0xABCD);
+            bus.write_bytes(py, 0x24, 3, 0x00FFEE)?;
+            assert_eq!(bus.read_bytes(py, 0x24, 3)?, 0x00FFEE);
             Ok(())
         })
         .unwrap();

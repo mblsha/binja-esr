@@ -161,22 +161,21 @@ fn main() {
                         .count();
                     println!("cargo:warning={} side-effect-free opcodes", count);
                 }
-                #[cfg(feature = "print_lowering_stats")]
-                {
-                    let count = lowering_map
-                        .values()
-                        .filter(|plan| plan.is_side_effect_free())
-                        .count();
-                    println!("cargo:warning={} side-effect-free opcodes", count);
-                }
                 println!(
                     "cargo:warning=lowering plan recorded at {}",
                     lowering_plan_path.display()
                 );
                 write_table(&table_path, &envelope.instructions)
                     .expect("failed to write opcode table");
-                write_handlers(&handlers_path, &envelope.instructions, Some(&lowering_map))
-                    .expect("failed to write opcode handlers");
+                let coverage =
+                    write_handlers(&handlers_path, &envelope.instructions, Some(&lowering_map))
+                        .expect("failed to write opcode handlers");
+                println!(
+                    "cargo:warning=opcode lowering coverage: {} specialized / {} total ({} LLIL fallbacks)",
+                    coverage.specialized_count(),
+                    envelope.instructions.len(),
+                    coverage.fallback_count()
+                );
             }
         }
         Err(err) => {
@@ -230,12 +229,20 @@ fn run_generator(
         ));
     }
 
-    let metadata_bytes = fs::read(metadata_json_path)
-        .map_err(|err| format!("failed to read metadata json {}: {err}", metadata_json_path.display()))?;
+    let metadata_bytes = fs::read(metadata_json_path).map_err(|err| {
+        format!(
+            "failed to read metadata json {}: {err}",
+            metadata_json_path.display()
+        )
+    })?;
     let metadata: MetadataEnvelope = serde_json::from_slice(&metadata_bytes)
         .map_err(|err| format!("failed to parse generator output: {err}"))?;
-    let lowering_plan_bytes = fs::read(lowering_plan_path)
-        .map_err(|err| format!("failed to read lowering plan {}: {err}", lowering_plan_path.display()))?;
+    let lowering_plan_bytes = fs::read(lowering_plan_path).map_err(|err| {
+        format!(
+            "failed to read lowering plan {}: {err}",
+            lowering_plan_path.display()
+        )
+    })?;
     let lowering_plan: LoweringPlanEnvelope = serde_json::from_slice(&lowering_plan_bytes)
         .map_err(|err| format!("failed to parse lowering plan: {err}"))?;
     Ok((metadata, lowering_plan))
@@ -261,6 +268,7 @@ fn write_table(path: &Path, instructions: &[InstructionRecord]) -> std::io::Resu
     sorted.sort_by_key(|record| record.opcode);
 
     let mut entries: Vec<String> = Vec::with_capacity(sorted.len());
+    let mut call_effects: Vec<i8> = Vec::with_capacity(sorted.len());
 
     for record in sorted {
         let opcode = (record.opcode & 0xFF) as u8;
@@ -285,6 +293,7 @@ fn write_table(path: &Path, instructions: &[InstructionRecord]) -> std::io::Resu
             "OpcodeMetadata {{ opcode: 0x{opcode:02X}, mnemonic: {mnemonic}, length: {length}, asm: {asm}, il: {il_literal}, llil: LlilProgram {{ expressions: {expr_array_name}, nodes: {node_array_name}, label_count: {label_count} }} }}"
         );
         entries.push(entry);
+        call_effects.push(call_stack_effect(record));
     }
 
     writeln!(file, "pub static OPCODES: &[OpcodeMetadata] = &[")?;
@@ -292,14 +301,68 @@ fn write_table(path: &Path, instructions: &[InstructionRecord]) -> std::io::Resu
         writeln!(file, "    {entry},")?;
     }
     writeln!(file, "];")?;
+    writeln!(
+        file,
+        "pub static CALL_STACK_EFFECTS: [i8; {}] = [",
+        call_effects.len()
+    )?;
+    for effect in call_effects {
+        writeln!(file, "    {effect},")?;
+    }
+    writeln!(file, "];")?;
     Ok(())
+}
+
+struct HandlerStats {
+    specialized: Vec<u8>,
+    fallback: Vec<u8>,
+}
+
+impl HandlerStats {
+    fn new() -> Self {
+        Self {
+            specialized: Vec::new(),
+            fallback: Vec::new(),
+        }
+    }
+
+    fn mark_specialized(&mut self, opcode: u8) {
+        self.specialized.push(opcode);
+    }
+
+    fn mark_fallback(&mut self, opcode: u8) {
+        self.fallback.push(opcode);
+    }
+
+    fn finalize(&mut self) {
+        self.specialized.sort_unstable();
+        self.fallback.sort_unstable();
+    }
+
+    fn specialized_count(&self) -> usize {
+        self.specialized.len()
+    }
+
+    fn fallback_count(&self) -> usize {
+        self.fallback.len()
+    }
+}
+
+fn emit_specialized(
+    file: &mut File,
+    stats: &mut HandlerStats,
+    opcode: u8,
+    handler: String,
+) -> std::io::Result<()> {
+    stats.mark_specialized(opcode);
+    writeln!(file, "{handler}")
 }
 
 fn write_handlers(
     path: &Path,
     instructions: &[InstructionRecord],
     lowering_map: Option<&HashMap<u8, LoweringInstructionRecord>>,
-) -> std::io::Result<()> {
+) -> std::io::Result<HandlerStats> {
     let mut file = File::create(path)?;
     writeln!(
         file,
@@ -308,82 +371,83 @@ fn write_handlers(
 
     let mut sorted: Vec<&InstructionRecord> = instructions.iter().collect();
     sorted.sort_by_key(|record| record.opcode);
-
+    let mut stats = HandlerStats::new();
+ 
     for (index, record) in sorted.iter().enumerate() {
         let opcode = (record.opcode & 0xFF) as u8;
         let length = record.length.min(0xFF) as u8;
         if let Some(plan_map) = lowering_map {
             if let Some(plan) = plan_map.get(&opcode) {
                 if let Some(handler) = try_emit_const_set_reg(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_reg_move(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_simple_add(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_simple_sub(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_simple_logical(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_load_from_reg(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_call(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_jumps(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_ret(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_store(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_rotate(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_rotate_through_carry(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_push_only(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_pop_flags(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_flag_only_binary(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_flag_assignments(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_intrinsic(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 if let Some(handler) = try_emit_unimpl(opcode, length, plan) {
-                    writeln!(file, "{handler}")?;
+                    emit_specialized(&mut file, &mut stats, opcode, handler)?;
                     continue;
                 }
                 writeln!(
@@ -393,9 +457,13 @@ fn write_handlers(
                     plan.nodes.len()
                 )?;
                 if plan.is_side_effect_free() {
-                    writeln!(
-                        file,
-                        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    Ok(())\n}}\n"
+                    emit_specialized(
+                        &mut file,
+                        &mut stats,
+                        opcode,
+                        format!(
+                            "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    Ok(())\n}}\n"
+                        ),
                     )?;
                     continue;
                 }
@@ -406,6 +474,7 @@ fn write_handlers(
                 )?;
             }
         }
+        stats.mark_fallback(opcode);
         writeln!(
             file,
             "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    ctx.execute_program(&crate::OPCODES[{index}].llil)\n}}\n"
@@ -428,7 +497,25 @@ fn write_handlers(
         writeln!(file, "    {name},")?;
     }
     writeln!(file, "];")?;
-    Ok(())
+
+    stats.finalize();
+    writeln!(
+        file,
+        "pub const OPCODE_LOWERING_SPECIALIZED: usize = {};",
+        stats.specialized.len()
+    )?;
+    writeln!(
+        file,
+        "pub const OPCODE_LOWERING_FALLBACK: usize = {};",
+        stats.fallback.len()
+    )?;
+    writeln!(
+        file,
+        "pub const OPCODE_LLIL_FALLBACKS: [u8; {}] = {:?};",
+        stats.fallback.len(),
+        stats.fallback
+    )?;
+    Ok(stats)
 }
 
 fn try_emit_const_set_reg(
@@ -455,10 +542,7 @@ fn try_emit_const_set_reg(
     if source.op != "CONST" && source.op != "CONST_PTR" {
         return None;
     }
-    let value = source
-        .operands
-        .get(0)
-        .and_then(|operand| operand.value)?;
+    let value = source.operands.get(0).and_then(|operand| operand.value)?;
     let width_expr = format_option_u8_literal(setter.width);
     Some(format!(
         "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = {value}_i64;\n    ctx.write_named_register({:?}, value, {width_expr})?;\n    Ok(())\n}}\n",
@@ -466,11 +550,7 @@ fn try_emit_const_set_reg(
     ))
 }
 
-fn try_emit_reg_move(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_reg_move(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
     if setter.deps.len() != 1 {
         return None;
@@ -500,11 +580,26 @@ fn try_emit_reg_move(
     ))
 }
 
-fn try_emit_simple_add(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn call_stack_effect(record: &InstructionRecord) -> i8 {
+    let mut saw_push = false;
+    let mut saw_jump = false;
+    for expr in &record.llil.expressions {
+        match expr.op.as_str() {
+            "RET" => return -1,
+            "CALL" => return 1,
+            "PUSH" => saw_push = true,
+            "JUMP" => saw_jump = true,
+            _ => {}
+        }
+    }
+    if saw_push && saw_jump {
+        1
+    } else {
+        0
+    }
+}
+
+fn try_emit_simple_add(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
     if setter.deps.len() != 1 {
         return None;
@@ -535,11 +630,7 @@ fn try_emit_simple_add(
     ))
 }
 
-fn try_emit_simple_sub(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_simple_sub(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
     if setter.deps.len() != 1 {
         return None;
@@ -666,10 +757,7 @@ fn value_snippet(plan: &LoweringInstructionRecord, index: u32) -> Option<String>
             Some(format!("ctx.read_flag({:?})?", name))
         }
         "CONST" | "CONST_PTR" => {
-            let value = expr
-                .operands
-                .get(0)
-                .and_then(|operand| operand.value)?;
+            let value = expr.operands.get(0).and_then(|operand| operand.value)?;
             Some(format!("{value}_i64"))
         }
         "ADD" => value_binary_lowering(plan, expr, "add"),
@@ -753,11 +841,7 @@ fn value_snippet(plan: &LoweringInstructionRecord, index: u32) -> Option<String>
     }
 }
 
-fn try_emit_store(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_store(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let store = plan.expressions.iter().find(|expr| expr.op == "STORE")?;
     if store.deps.len() != 2 {
         return None;
@@ -770,11 +854,7 @@ fn try_emit_store(
     ))
 }
 
-fn try_emit_call(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_call(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     if let Some(push) = plan.expressions.iter().find(|expr| expr.op == "PUSH") {
         let jump = plan.expressions.iter().find(|expr| expr.op == "JUMP")?;
         let width = clamp_width(push.width);
@@ -793,11 +873,7 @@ fn try_emit_call(
     ))
 }
 
-fn try_emit_ret(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_ret(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let ret = plan.expressions.iter().find(|expr| expr.op == "RET")?;
     if ret.deps.len() != 1 {
         return None;
@@ -808,11 +884,7 @@ fn try_emit_ret(
     ))
 }
 
-fn try_emit_jumps(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_jumps(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     if !plan.nodes.iter().any(|node| node.kind == "expr") {
         return None;
     }
@@ -834,11 +906,7 @@ fn try_emit_jumps(
     }
 }
 
-fn try_emit_rotate(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_rotate(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
     if setter.deps.len() != 1 {
         return None;
@@ -904,11 +972,7 @@ fn try_emit_rotate_through_carry(
     ))
 }
 
-fn try_emit_push_only(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_push_only(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let push = plan.expressions.iter().find(|expr| expr.op == "PUSH")?;
     if plan
         .expressions
@@ -925,16 +989,13 @@ fn try_emit_push_only(
     ))
 }
 
-fn try_emit_pop_flags(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_pop_flags(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     let pop = plan.expressions.iter().find(|expr| expr.op == "POP")?;
-    if plan.expressions.iter().any(|expr| {
-        expr.side_effect
-            && !matches!(expr.op.as_str(), "POP" | "SET_REG" | "SET_FLAG")
-    }) {
+    if plan
+        .expressions
+        .iter()
+        .any(|expr| expr.side_effect && !matches!(expr.op.as_str(), "POP" | "SET_REG" | "SET_FLAG"))
+    {
         return None;
     }
     let temp_assign = plan.expressions.iter().find(|expr| {
@@ -1007,7 +1068,11 @@ fn try_emit_flag_only_binary(
     }
     let flag_expr = plan.expressions.iter().find(|expr| {
         matches!(expr.op.as_str(), "ADD" | "SUB" | "AND" | "OR" | "XOR")
-            && expr.flags.as_deref().map(|f| !f.is_empty()).unwrap_or(false)
+            && expr
+                .flags
+                .as_deref()
+                .map(|f| !f.is_empty())
+                .unwrap_or(false)
     })?;
     if flag_expr.deps.len() != 2 {
         return None;
@@ -1077,11 +1142,7 @@ fn try_emit_flag_assignments(
     ))
 }
 
-fn try_emit_intrinsic(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
+fn try_emit_intrinsic(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
     if plan
         .expressions
         .iter()
@@ -1126,9 +1187,7 @@ fn shift_snippet(
     let count = value_snippet(plan, expr.deps[1])?;
     let width = clamp_width(expr.width);
     let helper = if left { "shift_left" } else { "shift_right" };
-    Some(format!(
-        "lowering::{helper}({width}, {value}, {count}).0"
-    ))
+    Some(format!("lowering::{helper}({width}, {value}, {count}).0"))
 }
 
 fn parse_temp_mask(
@@ -1164,21 +1223,11 @@ fn extract_const_value(expr: &LoweringExprRecord) -> Option<i64> {
     if expr.op != "CONST" && expr.op != "CONST_PTR" {
         return None;
     }
-    expr.operands
-        .get(0)
-        .and_then(|operand| operand.value)
+    expr.operands.get(0).and_then(|operand| operand.value)
 }
 
-fn try_emit_unimpl(
-    opcode: u8,
-    length: u8,
-    plan: &LoweringInstructionRecord,
-) -> Option<String> {
-    if plan
-        .expressions
-        .iter()
-        .any(|expr| expr.op != "UNIMPL")
-    {
+fn try_emit_unimpl(opcode: u8, length: u8, plan: &LoweringInstructionRecord) -> Option<String> {
+    if plan.expressions.iter().any(|expr| expr.op != "UNIMPL") {
         return None;
     }
     Some(format!(
@@ -1311,6 +1360,7 @@ fn write_fallback(path: &Path) -> std::io::Result<()> {
     let mut file = File::create(path)?;
     write_header(&mut file)?;
     writeln!(file, "pub static OPCODES: &[OpcodeMetadata] = &[];")?;
+    writeln!(file, "pub static CALL_STACK_EFFECTS: [i8; 256] = [0; 256];")?;
     Ok(())
 }
 

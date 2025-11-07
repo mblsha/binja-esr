@@ -43,8 +43,7 @@ impl EvalResult {
     }
 
     fn expect_value(self, context: &'static str) -> Result<i64, ExecutionError> {
-        self.value
-            .ok_or(ExecutionError::MissingValue(context))
+        self.value.ok_or(ExecutionError::MissingValue(context))
     }
 
     fn flag(&self, name: char) -> Option<u8> {
@@ -147,15 +146,24 @@ impl LlilRuntime {
         &mut self.state
     }
 
+    pub fn registers(&self) -> &Registers {
+        &self.registers
+    }
+
+    pub fn registers_mut(&mut self) -> &mut Registers {
+        &mut self.registers
+    }
+
     pub fn prepare_for_opcode(&mut self, opcode: u8, length: u8) {
         let current_pc = self.registers.get(Register::PC);
         let next_pc = current_pc.wrapping_add(length as u32) & PC_MASK;
         self.registers.set(Register::PC, next_pc);
 
-        match opcode {
-            0x04 | 0x05 | 0xFE => self.registers.increment_call_sub_level(),
-            0x06 | 0x07 | 0x01 => self.registers.decrement_call_sub_level(),
-            _ => {}
+        let effect = crate::CALL_STACK_EFFECTS[opcode as usize];
+        if effect > 0 {
+            self.registers.increment_call_sub_level();
+        } else if effect < 0 {
+            self.registers.decrement_call_sub_level();
         }
     }
 

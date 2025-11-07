@@ -19,3 +19,4 @@ serde_json = "1"
 
 [features]
 print_lowering_stats = []
+enable_rust_cpu = []
