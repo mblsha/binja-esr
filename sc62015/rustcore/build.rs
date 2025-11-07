@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::env;
-use std::fs::File;
+use std::ffi::OsString;
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,6 +12,43 @@ use serde::Deserialize;
 struct MetadataEnvelope {
     version: u32,
     instructions: Vec<InstructionRecord>,
+}
+
+#[derive(Clone, Deserialize)]
+#[allow(dead_code)]
+struct LoweringPlanEnvelope {
+    instructions: Vec<LoweringInstructionRecord>,
+}
+
+#[derive(Clone, Deserialize)]
+#[allow(dead_code)]
+struct LoweringInstructionRecord {
+    opcode: u32,
+    mnemonic: String,
+    length: u32,
+    expressions: Vec<LoweringExprRecord>,
+    nodes: Vec<LlilNodeRecord>,
+}
+
+impl LoweringInstructionRecord {
+    fn is_side_effect_free(&self) -> bool {
+        self.expressions.iter().all(|expr| !expr.side_effect)
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[allow(dead_code)]
+struct LoweringExprRecord {
+    index: u32,
+    op: String,
+    full_op: String,
+    width: Option<u32>,
+    flags: Option<String>,
+    suffix: Option<String>,
+    deps: Vec<u32>,
+    side_effect: bool,
+    intrinsic: Option<String>,
+    operands: Vec<LlilOperandRecord>,
 }
 
 #[derive(Deserialize)]
@@ -42,7 +81,7 @@ struct LlilExprRecord {
     intrinsic: Option<LlilIntrinsicRecord>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct LlilOperandRecord {
     kind: String,
     expr: Option<u32>,
@@ -55,7 +94,7 @@ struct LlilIntrinsicRecord {
     name: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct LlilNodeRecord {
     kind: String,
     expr: Option<u32>,
@@ -68,7 +107,17 @@ struct LlilNodeRecord {
 }
 
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-undefined");
+        println!("cargo:rustc-link-arg=dynamic_lookup");
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let project_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(&manifest_dir)
+        .to_path_buf();
     let script_path = manifest_dir.join("../tools/generate_opcode_metadata.py");
     println!("cargo:rerun-if-changed={}", script_path.display());
     println!(
@@ -81,9 +130,16 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR missing"));
     let table_path = out_dir.join("opcode_table.rs");
     let handlers_path = out_dir.join("opcode_handlers.rs");
+    let metadata_json_path = out_dir.join("opcode_metadata.json");
+    let lowering_plan_path = out_dir.join("lowering_plan.json");
 
-    match run_generator(&script_path) {
-        Ok(envelope) => {
+    match run_generator(
+        &script_path,
+        &metadata_json_path,
+        &lowering_plan_path,
+        &project_root,
+    ) {
+        Ok((envelope, lowering_plan)) => {
             if envelope.version != 1 {
                 eprintln!(
                     "Unexpected opcode metadata version {} (expected 1); using fallback table",
@@ -92,9 +148,34 @@ fn main() {
                 write_fallback(&table_path).expect("failed to write fallback table");
                 write_handler_fallback(&handlers_path).expect("failed to write fallback handlers");
             } else {
+                let lowering_map: HashMap<u8, LoweringInstructionRecord> = lowering_plan
+                    .instructions
+                    .into_iter()
+                    .map(|entry| (((entry.opcode & 0xFF) as u8), entry))
+                    .collect();
+                #[cfg(feature = "print_lowering_stats")]
+                {
+                    let count = lowering_map
+                        .values()
+                        .filter(|plan| plan.is_side_effect_free())
+                        .count();
+                    println!("cargo:warning={} side-effect-free opcodes", count);
+                }
+                #[cfg(feature = "print_lowering_stats")]
+                {
+                    let count = lowering_map
+                        .values()
+                        .filter(|plan| plan.is_side_effect_free())
+                        .count();
+                    println!("cargo:warning={} side-effect-free opcodes", count);
+                }
+                println!(
+                    "cargo:warning=lowering plan recorded at {}",
+                    lowering_plan_path.display()
+                );
                 write_table(&table_path, &envelope.instructions)
                     .expect("failed to write opcode table");
-                write_handlers(&handlers_path, &envelope.instructions)
+                write_handlers(&handlers_path, &envelope.instructions, Some(&lowering_map))
                     .expect("failed to write opcode handlers");
             }
         }
@@ -106,7 +187,12 @@ fn main() {
     }
 }
 
-fn run_generator(script_path: &Path) -> Result<MetadataEnvelope, String> {
+fn run_generator(
+    script_path: &Path,
+    metadata_json_path: &Path,
+    lowering_plan_path: &Path,
+    project_root: &Path,
+) -> Result<(MetadataEnvelope, LoweringPlanEnvelope), String> {
     if !script_path.exists() {
         return Err(format!(
             "metadata generator not found at {}",
@@ -115,9 +201,24 @@ fn run_generator(script_path: &Path) -> Result<MetadataEnvelope, String> {
     }
 
     let python = find_python().ok_or_else(|| "python3/python not found in PATH".to_string())?;
-    let output = Command::new(python)
+    let mut pythonpath = project_root.as_os_str().to_os_string();
+    let venv_site = project_root
+        .join(".venv")
+        .join("lib")
+        .join("python3.12")
+        .join("site-packages");
+    if venv_site.exists() {
+        pythonpath.push(OsString::from(":"));
+        pythonpath.push(venv_site.as_os_str());
+    }
+    let output = Command::new(&python)
         .arg(script_path)
+        .arg("--output")
+        .arg(metadata_json_path)
+        .arg("--lowering-plan")
+        .arg(lowering_plan_path)
         .env("FORCE_BINJA_MOCK", "1")
+        .env("PYTHONPATH", pythonpath)
         .output()
         .map_err(|err| format!("failed to spawn generator: {err}"))?;
 
@@ -129,14 +230,24 @@ fn run_generator(script_path: &Path) -> Result<MetadataEnvelope, String> {
         ));
     }
 
-    serde_json::from_slice(&output.stdout)
-        .map_err(|err| format!("failed to parse generator output: {err}"))
+    let metadata_bytes = fs::read(metadata_json_path)
+        .map_err(|err| format!("failed to read metadata json {}: {err}", metadata_json_path.display()))?;
+    let metadata: MetadataEnvelope = serde_json::from_slice(&metadata_bytes)
+        .map_err(|err| format!("failed to parse generator output: {err}"))?;
+    let lowering_plan_bytes = fs::read(lowering_plan_path)
+        .map_err(|err| format!("failed to read lowering plan {}: {err}", lowering_plan_path.display()))?;
+    let lowering_plan: LoweringPlanEnvelope = serde_json::from_slice(&lowering_plan_bytes)
+        .map_err(|err| format!("failed to parse lowering plan: {err}"))?;
+    Ok((metadata, lowering_plan))
 }
 
-fn find_python() -> Option<&'static str> {
-    for candidate in ["python3", "python"] {
+fn find_python() -> Option<String> {
+    if let Ok(explicit) = env::var("PYTHON_GENERATOR") {
+        return Some(explicit);
+    }
+    for candidate in ["python3.12", "python3.11", "python3", "python"] {
         if Command::new(candidate).arg("--version").output().is_ok() {
-            return Some(candidate);
+            return Some(candidate.to_string());
         }
     }
     None
@@ -184,11 +295,15 @@ fn write_table(path: &Path, instructions: &[InstructionRecord]) -> std::io::Resu
     Ok(())
 }
 
-fn write_handlers(path: &Path, instructions: &[InstructionRecord]) -> std::io::Result<()> {
+fn write_handlers(
+    path: &Path,
+    instructions: &[InstructionRecord],
+    lowering_map: Option<&HashMap<u8, LoweringInstructionRecord>>,
+) -> std::io::Result<()> {
     let mut file = File::create(path)?;
     writeln!(
         file,
-        "// @generated by build.rs — do not edit by hand\nuse crate::executor::{{ExecutionResult, LlilRuntime}};\npub type OpcodeHandler = fn(&mut LlilRuntime) -> ExecutionResult;\n"
+        "// @generated by build.rs — do not edit by hand\nuse crate::executor::{{ExecutionResult, LlilRuntime}};\nuse crate::lowering;\npub type OpcodeHandler = fn(&mut LlilRuntime) -> ExecutionResult;\n"
     )?;
 
     let mut sorted: Vec<&InstructionRecord> = instructions.iter().collect();
@@ -196,9 +311,104 @@ fn write_handlers(path: &Path, instructions: &[InstructionRecord]) -> std::io::R
 
     for (index, record) in sorted.iter().enumerate() {
         let opcode = (record.opcode & 0xFF) as u8;
+        let length = record.length.min(0xFF) as u8;
+        if let Some(plan_map) = lowering_map {
+            if let Some(plan) = plan_map.get(&opcode) {
+                if let Some(handler) = try_emit_const_set_reg(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_reg_move(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_simple_add(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_simple_sub(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_simple_logical(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_load_from_reg(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_call(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_jumps(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_ret(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_store(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_rotate(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_rotate_through_carry(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_push_only(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_pop_flags(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_flag_only_binary(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_flag_assignments(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_intrinsic(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                if let Some(handler) = try_emit_unimpl(opcode, length, plan) {
+                    writeln!(file, "{handler}")?;
+                    continue;
+                }
+                writeln!(
+                    file,
+                    "// lowering plan: {} expressions, {} CFG nodes",
+                    plan.expressions.len(),
+                    plan.nodes.len()
+                )?;
+                if plan.is_side_effect_free() {
+                    writeln!(
+                        file,
+                        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    Ok(())\n}}\n"
+                    )?;
+                    continue;
+                }
+            } else {
+                writeln!(
+                    file,
+                    "// lowering plan unavailable for opcode 0x{opcode:02X}"
+                )?;
+            }
+        }
         writeln!(
             file,
-            "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.execute_program(&crate::OPCODES[{index}].llil)\n}}\n"
+            "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    ctx.execute_program(&crate::OPCODES[{index}].llil)\n}}\n"
         )?;
     }
 
@@ -219,6 +429,763 @@ fn write_handlers(path: &Path, instructions: &[InstructionRecord]) -> std::io::R
     }
     writeln!(file, "];")?;
     Ok(())
+}
+
+fn try_emit_const_set_reg(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let source = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.index == setter.deps[0])?;
+    if setter.op != "SET_REG" {
+        return None;
+    }
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    if source.op != "CONST" && source.op != "CONST_PTR" {
+        return None;
+    }
+    let value = source
+        .operands
+        .get(0)
+        .and_then(|operand| operand.value)?;
+    let width_expr = format_option_u8_literal(setter.width);
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = {value}_i64;\n    ctx.write_named_register({:?}, value, {width_expr})?;\n    Ok(())\n}}\n",
+        target_reg
+    ))
+}
+
+fn try_emit_reg_move(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let source = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.index == setter.deps[0])?;
+    if source.op != "REG" {
+        return None;
+    }
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let src_reg = source
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width_expr = format_option_u8_literal(setter.width);
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = ctx.read_named_register({:?})?;\n    ctx.write_named_register({:?}, value, {width_expr})?;\n    Ok(())\n}}\n",
+        src_reg,
+        target_reg
+    ))
+}
+
+fn try_emit_simple_add(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let add_expr = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.index == setter.deps[0])?;
+    if add_expr.op != "ADD" {
+        return None;
+    }
+    if add_expr.deps.len() != 2 {
+        return None;
+    }
+    let lhs = value_snippet(plan, add_expr.deps[0])?;
+    let rhs = value_snippet(plan, add_expr.deps[1])?;
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width = add_expr.width.or(setter.width).unwrap_or(1);
+    let width_literal = format_option_u8_literal(Some(width));
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let lhs = {lhs};\n    let rhs = {rhs};\n    let (value, flags) = lowering::add({width}, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, value, {width_literal})?;\n    Ok(())\n}}\n",
+        target_reg,
+        width_literal = width_literal,
+    ))
+}
+
+fn try_emit_simple_sub(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let sub_expr = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.index == setter.deps[0])?;
+    if sub_expr.op != "SUB" {
+        return None;
+    }
+    if sub_expr.deps.len() != 2 {
+        return None;
+    }
+    let lhs = value_snippet(plan, sub_expr.deps[0])?;
+    let rhs = value_snippet(plan, sub_expr.deps[1])?;
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width = sub_expr.width.or(setter.width).unwrap_or(1);
+    let width_literal = format_option_u8_literal(Some(width));
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let lhs = {lhs};\n    let rhs = {rhs};\n    let (value, flags) = lowering::sub({width}, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, value, {width_literal})?;\n    Ok(())\n}}\n",
+        target_reg,
+    ))
+}
+
+fn try_emit_simple_logical(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let logic_expr = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.index == setter.deps[0])?;
+    let helper = match logic_expr.op.as_str() {
+        "AND" => "and",
+        "OR" => "or",
+        "XOR" => "xor",
+        _ => return None,
+    };
+    if logic_expr.deps.len() != 2 {
+        return None;
+    }
+    let lhs = value_snippet(plan, logic_expr.deps[0])?;
+    let rhs = value_snippet(plan, logic_expr.deps[1])?;
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width = logic_expr.width.or(setter.width).unwrap_or(1);
+    let width_literal = format_option_u8_literal(Some(width));
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let lhs = {lhs};\n    let rhs = {rhs};\n    let (value, flags) = lowering::{helper}({width}, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, value, {width_literal})?;\n    Ok(())\n}}\n",
+        target_reg,
+    ))
+}
+
+fn try_emit_load_from_reg(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let load_expr = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.index == setter.deps[0])?;
+    if load_expr.op != "LOAD" {
+        return None;
+    }
+    let address_expr_index = load_expr.deps.get(0)?;
+    let address_snippet = value_snippet(plan, *address_expr_index)?;
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width = load_expr.width.or(setter.width).unwrap_or(1);
+    let width_literal = format_option_u8_literal(Some(width));
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let addr = {address_snippet};\n    let value = ctx.read_memory_value(addr, {width})?;\n    ctx.write_named_register({:?}, value, {width_literal})?;\n    Ok(())\n}}\n",
+        target_reg
+    ))
+}
+
+fn value_snippet(plan: &LoweringInstructionRecord, index: u32) -> Option<String> {
+    let expr = find_expr(plan, index)?;
+    match expr.op.as_str() {
+        "REG" => {
+            let name = expr
+                .operands
+                .get(0)
+                .and_then(|operand| operand.name.as_deref())?;
+            Some(format!("ctx.read_named_register({:?})?", name))
+        }
+        "FLAG" => {
+            let name = expr
+                .operands
+                .get(0)
+                .and_then(|operand| operand.name.as_deref())?;
+            Some(format!("ctx.read_flag({:?})?", name))
+        }
+        "CONST" | "CONST_PTR" => {
+            let value = expr
+                .operands
+                .get(0)
+                .and_then(|operand| operand.value)?;
+            Some(format!("{value}_i64"))
+        }
+        "ADD" => value_binary_lowering(plan, expr, "add"),
+        "SUB" => value_binary_lowering(plan, expr, "sub"),
+        "AND" => value_binary_lowering(plan, expr, "and"),
+        "OR" => value_binary_lowering(plan, expr, "or"),
+        "XOR" => value_binary_lowering(plan, expr, "xor"),
+        "CMP_E" => {
+            if expr.deps.len() != 2 {
+                return None;
+            }
+            let lhs = value_snippet(plan, expr.deps[0])?;
+            let rhs = value_snippet(plan, expr.deps[1])?;
+            Some(format!("lowering::cmp_eq({lhs}, {rhs})"))
+        }
+        "CMP_SLT" => {
+            if expr.deps.len() != 2 {
+                return None;
+            }
+            let lhs = value_snippet(plan, expr.deps[0])?;
+            let rhs = value_snippet(plan, expr.deps[1])?;
+            let width = clamp_width(expr.width);
+            Some(format!("lowering::cmp_slt({width}, {lhs}, {rhs})"))
+        }
+        "CMP_UGT" => {
+            if expr.deps.len() != 2 {
+                return None;
+            }
+            let lhs = value_snippet(plan, expr.deps[0])?;
+            let rhs = value_snippet(plan, expr.deps[1])?;
+            let width = clamp_width(expr.width);
+            Some(format!("lowering::cmp_ugt({width}, {lhs}, {rhs})"))
+        }
+        "LOAD" => {
+            let address_expr = *expr.deps.get(0)?;
+            let address = value_snippet(plan, address_expr)?;
+            let width = clamp_width(expr.width);
+            Some(format!(
+                "{{ let addr = {address}; ctx.read_memory_value(addr, {width})? }}"
+            ))
+        }
+        "POP" => {
+            let width = clamp_width(expr.width);
+            Some(format!("ctx.pop_value({width})?"))
+        }
+        "ROL" | "ROR" => {
+            if expr.deps.len() != 2 {
+                return None;
+            }
+            let value = value_snippet(plan, expr.deps[0])?;
+            let count = value_snippet(plan, expr.deps[1])?;
+            let width = clamp_width(expr.width);
+            let left = if expr.op == "ROL" { "true" } else { "false" };
+            Some(format!(
+                "lowering::rotate({width}, {value}, {count}, {left}).0"
+            ))
+        }
+        "LSL" => shift_snippet(plan, expr, true),
+        "LSR" => shift_snippet(plan, expr, false),
+        "RLC" | "RRC" => {
+            if expr.deps.len() != 3 {
+                return None;
+            }
+            let value = value_snippet(plan, expr.deps[0])?;
+            let count_expr = find_expr(plan, expr.deps[1])?;
+            let count = count_expr
+                .operands
+                .get(0)
+                .and_then(|operand| operand.value)?;
+            if count != 1 {
+                return None;
+            }
+            let carry_in = value_snippet(plan, expr.deps[2])?;
+            let width = clamp_width(expr.width);
+            let left = if expr.op == "RLC" { "true" } else { "false" };
+            Some(format!(
+                "lowering::rotate_through_carry({width}, {value}, {carry_in}, {left}).0"
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn try_emit_store(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let store = plan.expressions.iter().find(|expr| expr.op == "STORE")?;
+    if store.deps.len() != 2 {
+        return None;
+    }
+    let address_snippet = value_snippet(plan, store.deps[0])?;
+    let value_snippet_str = value_snippet(plan, store.deps[1])?;
+    let width = clamp_width(store.width);
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let addr = {address_snippet};\n    let value = {value_snippet_str};\n    ctx.write_memory_value(addr, {width}, value)?;\n    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_call(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    if let Some(push) = plan.expressions.iter().find(|expr| expr.op == "PUSH") {
+        let jump = plan.expressions.iter().find(|expr| expr.op == "JUMP")?;
+        let width = clamp_width(push.width);
+        let target = value_snippet(plan, *jump.deps.get(0)?)?;
+        return Some(format!(
+            "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let target = {target};\n    ctx.call_absolute({width}, target)?;\n    Ok(())\n}}\n"
+        ));
+    }
+    let call = plan.expressions.iter().find(|expr| expr.op == "CALL")?;
+    if call.deps.len() != 1 {
+        return None;
+    }
+    let target = value_snippet(plan, call.deps[0])?;
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let target = {target};\n    ctx.call_absolute(3, target)?;\n    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_ret(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let ret = plan.expressions.iter().find(|expr| expr.op == "RET")?;
+    if ret.deps.len() != 1 {
+        return None;
+    }
+    let target = value_snippet(plan, ret.deps[0])?;
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let target = {target};\n    ctx.write_named_register(\"PC\", target, Some(3))?;\n    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_jumps(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    if !plan.nodes.iter().any(|node| node.kind == "expr") {
+        return None;
+    }
+    let jump_expr = plan.expressions.iter().find(|expr| expr.op == "JUMP")?;
+    let target = value_snippet(plan, *jump_expr.deps.get(0)?)?;
+    let condition = plan
+        .nodes
+        .iter()
+        .find(|node| node.kind == "if")
+        .and_then(|node| value_snippet(plan, node.cond?));
+    if let Some(cond) = condition {
+        Some(format!(
+            "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let cond = {cond};\n    if cond != 0 {{\n        let target = {target};\n        ctx.write_named_register(\"PC\", target, Some(3))?;\n    }}\n    Ok(())\n}}\n"
+        ))
+    } else {
+        Some(format!(
+            "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let target = {target};\n    ctx.write_named_register(\"PC\", target, Some(3))?;\n    Ok(())\n}}\n"
+        ))
+    }
+}
+
+fn try_emit_rotate(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let rotate_expr = find_expr(plan, setter.deps[0])?;
+    let (helper, left) = match rotate_expr.op.as_str() {
+        "ROR" => ("rotate", "false"),
+        "ROL" => ("rotate", "true"),
+        _ => return None,
+    };
+    if rotate_expr.deps.len() != 2 {
+        return None;
+    }
+    let value = value_snippet(plan, rotate_expr.deps[0])?;
+    let count = value_snippet(plan, rotate_expr.deps[1])?;
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width = rotate_expr.width.or(setter.width).unwrap_or(1);
+    let width_literal = format_option_u8_literal(Some(width));
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = {value};\n    let count = {count};\n    let (result, flags) = lowering::{helper}({width}, value, count, {left});\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, result, {width_literal})?;\n    Ok(())\n}}\n",
+        target_reg
+    ))
+}
+
+fn try_emit_rotate_through_carry(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let setter = plan.expressions.iter().find(|expr| expr.op == "SET_REG")?;
+    if setter.deps.len() != 1 {
+        return None;
+    }
+    let rotate_expr = find_expr(plan, setter.deps[0])?;
+    let left = match rotate_expr.op.as_str() {
+        "RRC" => "false",
+        "RLC" => "true",
+        _ => return None,
+    };
+    if rotate_expr.deps.len() != 3 {
+        return None;
+    }
+    let count_expr = find_expr(plan, rotate_expr.deps[1])?;
+    if extract_const_value(count_expr) != Some(1) {
+        return None;
+    }
+    let value = value_snippet(plan, rotate_expr.deps[0])?;
+    let carry = value_snippet(plan, rotate_expr.deps[2])?;
+    let target_reg = setter
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?
+        .to_string();
+    let width = rotate_expr.width.or(setter.width).unwrap_or(1);
+    let width_literal = format_option_u8_literal(Some(width));
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = {value};\n    let carry = {carry};\n    let (result, flags) = lowering::rotate_through_carry({width}, value, carry, {left});\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register({:?}, result, {width_literal})?;\n    Ok(())\n}}\n",
+        target_reg
+    ))
+}
+
+fn try_emit_push_only(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let push = plan.expressions.iter().find(|expr| expr.op == "PUSH")?;
+    if plan
+        .expressions
+        .iter()
+        .any(|expr| expr.side_effect && expr.index != push.index)
+    {
+        return None;
+    }
+    let value_index = *push.deps.get(0)?;
+    let value = value_snippet(plan, value_index)?;
+    let width = clamp_width(push.width);
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = {value};\n    ctx.push_value({width}, value)?;\n    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_pop_flags(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    let pop = plan.expressions.iter().find(|expr| expr.op == "POP")?;
+    if plan.expressions.iter().any(|expr| {
+        expr.side_effect
+            && !matches!(expr.op.as_str(), "POP" | "SET_REG" | "SET_FLAG")
+    }) {
+        return None;
+    }
+    let temp_assign = plan.expressions.iter().find(|expr| {
+        expr.op == "SET_REG"
+            && expr
+                .deps
+                .get(0)
+                .map(|dep| *dep == pop.index)
+                .unwrap_or(false)
+    })?;
+    let temp_name = temp_assign
+        .operands
+        .get(0)
+        .and_then(|operand| operand.name.as_deref())?;
+    if !temp_name.starts_with("TEMP") {
+        return None;
+    }
+    let mut flag_lines = String::new();
+    let mut found = 0;
+    for setter in plan.expressions.iter().filter(|expr| expr.op == "SET_FLAG") {
+        let flag_name = setter
+            .operands
+            .get(0)
+            .and_then(|operand| operand.name.as_deref())?;
+        let source_index = *setter.deps.get(0)?;
+        let source = find_expr(plan, source_index)?;
+        let mask = match source.op.as_str() {
+            "AND" => parse_temp_mask(plan, source, temp_name)?,
+            _ => return None,
+        };
+        let mask_literal = format!("{mask}_i64");
+        flag_lines.push_str(&format!(
+            "    ctx.write_flag({:?}, ((value & {mask_literal}) != 0) as i64)?;\n",
+            flag_name,
+        ));
+        found += 1;
+    }
+    if found == 0 {
+        return None;
+    }
+    let width = clamp_width(pop.width);
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let value = ctx.pop_value({width})?;\n{flag_lines}    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_flag_only_binary(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    const BLOCKING_OPS: &[&str] = &[
+        "SET_REG",
+        "SET_FLAG",
+        "STORE",
+        "PUSH",
+        "POP",
+        "CALL",
+        "RET",
+        "JUMP",
+        "INTRINSIC",
+        "UNIMPL",
+    ];
+    if plan
+        .expressions
+        .iter()
+        .any(|expr| BLOCKING_OPS.contains(&expr.op.as_str()))
+    {
+        return None;
+    }
+    let flag_expr = plan.expressions.iter().find(|expr| {
+        matches!(expr.op.as_str(), "ADD" | "SUB" | "AND" | "OR" | "XOR")
+            && expr.flags.as_deref().map(|f| !f.is_empty()).unwrap_or(false)
+    })?;
+    if flag_expr.deps.len() != 2 {
+        return None;
+    }
+    let helper = match flag_expr.op.as_str() {
+        "ADD" => "add",
+        "SUB" => "sub",
+        "AND" => "and",
+        "OR" => "or",
+        "XOR" => "xor",
+        _ => return None,
+    };
+    let lhs = value_snippet(plan, flag_expr.deps[0])?;
+    let rhs = value_snippet(plan, flag_expr.deps[1])?;
+    let width = clamp_width(flag_expr.width);
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let lhs = {lhs};\n    let rhs = {rhs};\n    let (_, flags) = lowering::{helper}({width}, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_flag_assignments(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    const BLOCKING_OPS: &[&str] = &[
+        "SET_REG",
+        "STORE",
+        "PUSH",
+        "POP",
+        "CALL",
+        "RET",
+        "JUMP",
+        "INTRINSIC",
+        "UNIMPL",
+    ];
+    if plan
+        .expressions
+        .iter()
+        .any(|expr| BLOCKING_OPS.contains(&expr.op.as_str()))
+    {
+        return None;
+    }
+    let setters: Vec<&LoweringExprRecord> = plan
+        .expressions
+        .iter()
+        .filter(|expr| expr.op == "SET_FLAG")
+        .collect();
+    if setters.is_empty() {
+        return None;
+    }
+    let mut body = String::new();
+    for setter in setters {
+        let source = *setter.deps.get(0)?;
+        let value = value_snippet(plan, source)?;
+        let flag_name = setter
+            .operands
+            .get(0)
+            .and_then(|operand| operand.name.as_deref())?;
+        body.push_str(&format!(
+            "    let value = {value};\n    ctx.write_flag({:?}, value)?;\n",
+            flag_name
+        ));
+    }
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n{body}    Ok(())\n}}\n"
+    ))
+}
+
+fn try_emit_intrinsic(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    if plan
+        .expressions
+        .iter()
+        .any(|expr| expr.side_effect && expr.op != "INTRINSIC")
+    {
+        return None;
+    }
+    let intrinsic = plan
+        .expressions
+        .iter()
+        .find(|expr| expr.op == "INTRINSIC")?;
+    let name = intrinsic.intrinsic.as_deref()?;
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    ctx.invoke_intrinsic({:?})?;\n    Ok(())\n}}\n",
+        name
+    ))
+}
+
+fn value_binary_lowering(
+    plan: &LoweringInstructionRecord,
+    expr: &LoweringExprRecord,
+    helper: &str,
+) -> Option<String> {
+    if expr.deps.len() != 2 {
+        return None;
+    }
+    let lhs = value_snippet(plan, expr.deps[0])?;
+    let rhs = value_snippet(plan, expr.deps[1])?;
+    let width = clamp_width(expr.width);
+    Some(format!("lowering::{helper}({width}, {lhs}, {rhs}).0"))
+}
+
+fn shift_snippet(
+    plan: &LoweringInstructionRecord,
+    expr: &LoweringExprRecord,
+    left: bool,
+) -> Option<String> {
+    if expr.deps.len() != 2 {
+        return None;
+    }
+    let value = value_snippet(plan, expr.deps[0])?;
+    let count = value_snippet(plan, expr.deps[1])?;
+    let width = clamp_width(expr.width);
+    let helper = if left { "shift_left" } else { "shift_right" };
+    Some(format!(
+        "lowering::{helper}({width}, {value}, {count}).0"
+    ))
+}
+
+fn parse_temp_mask(
+    plan: &LoweringInstructionRecord,
+    expr: &LoweringExprRecord,
+    temp_name: &str,
+) -> Option<i64> {
+    if expr.deps.len() != 2 {
+        return None;
+    }
+    let first = find_expr(plan, expr.deps[0])?;
+    let second = find_expr(plan, expr.deps[1])?;
+    if is_temp_reg(first, temp_name) {
+        return extract_const_value(second);
+    }
+    if is_temp_reg(second, temp_name) {
+        return extract_const_value(first);
+    }
+    None
+}
+
+fn is_temp_reg(expr: &LoweringExprRecord, temp_name: &str) -> bool {
+    expr.op == "REG"
+        && expr
+            .operands
+            .get(0)
+            .and_then(|operand| operand.name.as_deref())
+            .map(|name| name == temp_name)
+            .unwrap_or(false)
+}
+
+fn extract_const_value(expr: &LoweringExprRecord) -> Option<i64> {
+    if expr.op != "CONST" && expr.op != "CONST_PTR" {
+        return None;
+    }
+    expr.operands
+        .get(0)
+        .and_then(|operand| operand.value)
+}
+
+fn try_emit_unimpl(
+    opcode: u8,
+    length: u8,
+    plan: &LoweringInstructionRecord,
+) -> Option<String> {
+    if plan
+        .expressions
+        .iter()
+        .any(|expr| expr.op != "UNIMPL")
+    {
+        return None;
+    }
+    Some(format!(
+        "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    Err(crate::executor::ExecutionError::Unimplemented(\"opcode 0x{opcode:02X}\"))\n}}\n"
+    ))
+}
+
+fn find_expr<'a>(
+    plan: &'a LoweringInstructionRecord,
+    index: u32,
+) -> Option<&'a LoweringExprRecord> {
+    plan.expressions.iter().find(|expr| expr.index == index)
+}
+
+fn clamp_width(width: Option<u32>) -> u8 {
+    width
+        .map(|value| value.min(u32::from(u8::MAX)) as u8)
+        .unwrap_or(1)
 }
 
 fn write_llil_expressions(
@@ -406,4 +1373,9 @@ fn format_option_u8(opt: Option<u32>) -> String {
         format!("Some({clamped})")
     })
     .unwrap_or_else(|| "None".to_string())
+}
+
+fn format_option_u8_literal(opt: Option<u32>) -> String {
+    opt.map(|value| format!("Some({})", value.min(u32::from(u8::MAX)) as u8))
+        .unwrap_or_else(|| "None".to_string())
 }

@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
 
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/opcode_table.rs"));
@@ -12,6 +13,7 @@ mod generated_handlers {
 pub mod constants;
 pub mod decode;
 pub mod executor;
+pub mod lowering;
 pub mod memory;
 pub mod state;
 
@@ -48,7 +50,7 @@ fn is_ready() -> bool {
 }
 
 #[pymodule]
-fn _sc62015_rustcore(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn _sc62015_rustcore(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CpuStub>()?;
     m.add("__backend_name__", backend_name())?;
     m.add("HAS_CPU_IMPLEMENTATION", is_ready())?;
