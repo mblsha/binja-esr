@@ -12,3 +12,4 @@ rust-runtime-parity = []
 
 [dependencies]
 pyo3 = { version = "0.21", features = ["extension-module", "auto-initialize"] }
+rand = "0.8"

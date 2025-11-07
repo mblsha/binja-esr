@@ -11,9 +11,28 @@ from __future__ import annotations
 
 import os
 from importlib import import_module
-from typing import Callable, Iterable, Literal, Optional, Tuple
+from typing import Callable, Iterable, Literal, Optional, Tuple, cast
 
-from .emulator import Emulator
+from .constants import ADDRESS_SPACE_SIZE
+from .emulator import (
+    Emulator,
+    InstructionEvalInfo,
+    RegisterName,
+    USE_CACHED_DECODER,
+)
+from .instr import Instruction, decode
+from .instr.opcode_table import OPCODES
+
+try:
+    from binaryninja import InstructionInfo  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - Binary Ninja not installed
+    from binja_test_mocks.binja_api import InstructionInfo  # type: ignore
+
+try:
+    from .cached_decoder import CachedFetchDecoder  # type: ignore
+except ImportError:  # pragma: no cover - cached decoder optional
+    CachedFetchDecoder = None  # type: ignore
+from binja_test_mocks.coding import FetchDecoder
 
 CPUBackendName = Literal["python", "rust"]
 
@@ -113,11 +132,16 @@ class CPU:
 
         if backend_name == "python":
             self._impl = Emulator(memory, reset_on_init=reset_on_init)
+            self.regs = self._impl.regs
+            self.state = self._impl.state
         else:
             assert rust_module is not None
             rust_cpu_cls = getattr(rust_module, "CPU")
             self._impl = rust_cpu_cls(memory=memory, reset_on_init=reset_on_init)
+            self.regs = _RustRegisterProxy(self._impl)
+            self.state = _RustStateProxy(self._impl)
 
+        self.memory = memory
         self.backend: CPUBackendName = backend_name
 
     def __getattr__(self, name: str):
@@ -130,6 +154,107 @@ class CPU:
         """Expose the underlying backend instance (useful for testing)."""
 
         return self._impl
+
+    def decode_instruction(self, address: int) -> Instruction:
+        if self.backend == "python":
+            return self._impl.decode_instruction(address)
+        return _decode_instruction(self.memory, address)
+
+    def execute_instruction(self, address: int) -> InstructionEvalInfo:
+        if self.backend == "python":
+            return self._impl.execute_instruction(address)
+
+        instr = self.decode_instruction(address)
+        info = InstructionInfo()
+        instr.analyze(info, address)
+
+        opcode, length = cast(Tuple[int, int], self._impl.execute_instruction(address))
+        declared_length = int(info.length) if info.length is not None else None
+        if declared_length is not None and declared_length != length:
+            raise RuntimeError(
+                f"Decoded length ({declared_length}) disagrees with runtime ({length}) "
+                f"for opcode 0x{opcode:02X} at {address:#06X}"
+            )
+
+        return InstructionEvalInfo(instruction_info=info, instruction=instr)
+
+    def power_on_reset(self) -> None:
+        if self.backend == "python":
+            self._impl.power_on_reset()
+        else:
+            self._impl.power_on_reset()
+
+
+def _decode_instruction(memory, address: int) -> Instruction:
+    """Decode an instruction using the shared Python decoder."""
+
+    def _fetch(offset: int) -> int:
+        return memory.read_byte(address + offset)
+
+    if USE_CACHED_DECODER and CachedFetchDecoder is not None:
+        decoder = CachedFetchDecoder(_fetch, ADDRESS_SPACE_SIZE)  # type: ignore[arg-type]
+    else:
+        decoder = FetchDecoder(_fetch, ADDRESS_SPACE_SIZE)
+    return decode(decoder, address, OPCODES)  # type: ignore[arg-type]
+
+
+class _RustRegisterProxy:
+    """Adapter exposing the Emulator.Registers API for the Rust backend."""
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+
+    @staticmethod
+    def _reg_name(reg: object) -> str:
+        if isinstance(reg, RegisterName):
+            return reg.name
+        if isinstance(reg, str):
+            return reg
+        candidate = getattr(reg, "name", None)
+        if candidate is None:
+            raise TypeError(f"Unsupported register identifier: {reg!r}")
+        return str(candidate)
+
+    def get(self, reg) -> int:
+        return self._backend.read_register(self._reg_name(reg))
+
+    def set(self, reg, value: int) -> None:
+        self._backend.write_register(self._reg_name(reg), int(value))
+
+    def get_by_name(self, name: str) -> int:
+        return self._backend.read_register(name)
+
+    def set_by_name(self, name: str, value: int) -> None:
+        self._backend.write_register(name, int(value))
+
+    def get_flag(self, name: str) -> int:
+        return int(self._backend.read_flag(name))
+
+    def set_flag(self, name: str, value: int) -> None:
+        self._backend.write_flag(name, int(value))
+
+    @property
+    def call_sub_level(self) -> int:
+        return int(self._backend.call_sub_level)
+
+    @call_sub_level.setter
+    def call_sub_level(self, level: int) -> None:
+        self._backend.call_sub_level = int(level)
+
+
+class _RustStateProxy:
+    """Adapter exposing the Emulator.State API for the Rust backend."""
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+
+    @property
+    def halted(self) -> bool:
+        return bool(self._backend.halted)
+
+    @halted.setter
+    def halted(self, value: bool) -> None:
+        self._backend.halted = bool(value)
 
 
 __all__ = [

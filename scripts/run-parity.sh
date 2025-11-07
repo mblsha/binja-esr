@@ -18,9 +18,9 @@ mkdir -p "$EXT_DIR" "$PARITY_TARGET"
 
 pushd "$REPO_ROOT/sc62015/rustcore" >/dev/null
 if [[ "$BUILD_PROFILE" == "dev" ]]; then
-  cargo build
+  cargo build --features enable_rust_cpu
 else
-  cargo build --profile "$BUILD_PROFILE"
+  cargo build --profile "$BUILD_PROFILE" --features enable_rust_cpu
 fi
 popd >/dev/null
 

@@ -147,7 +147,10 @@ fn shift_impl(width: u8, value: i64, count: i64, left: bool) -> (i64, OpFlags) {
         ((value as i128) >> count) & mask
     };
     let result = result as i64;
-    (result, OpFlags::with(Some(carry), Some((result == 0) as u8)))
+    (
+        result,
+        OpFlags::with(Some(carry), Some((result == 0) as u8)),
+    )
 }
 
 pub fn rotate(width: u8, value: i64, count: i64, left: bool) -> (i64, OpFlags) {
@@ -181,15 +184,13 @@ pub fn rotate(width: u8, value: i64, count: i64, left: bool) -> (i64, OpFlags) {
         ((value >> (count - 1)) & 1) as u8
     };
     let result = result as i64;
-    (result, OpFlags::with(Some(carry), Some((result == 0) as u8)))
+    (
+        result,
+        OpFlags::with(Some(carry), Some((result == 0) as u8)),
+    )
 }
 
-pub fn rotate_through_carry(
-    width: u8,
-    value: i64,
-    carry_in: i64,
-    left: bool,
-) -> (i64, OpFlags) {
+pub fn rotate_through_carry(width: u8, value: i64, carry_in: i64, left: bool) -> (i64, OpFlags) {
     let width = normalize_width(width);
     let bits = (width as i64) * 8;
     if bits == 0 {
@@ -206,7 +207,10 @@ pub fn rotate_through_carry(
         let val = (((value as i128) >> 1) | ((carry_in as i128) << (bits - 1))) & mask;
         (val as i64, carry_out)
     };
-    (result, OpFlags::with(Some(new_carry), Some((result == 0) as u8)))
+    (
+        result,
+        OpFlags::with(Some(new_carry), Some((result == 0) as u8)),
+    )
 }
 
 #[cfg(test)]
