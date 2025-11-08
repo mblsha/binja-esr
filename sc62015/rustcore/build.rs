@@ -372,7 +372,7 @@ fn write_handlers(
     let mut sorted: Vec<&InstructionRecord> = instructions.iter().collect();
     sorted.sort_by_key(|record| record.opcode);
     let mut stats = HandlerStats::new();
- 
+
     for (index, record) in sorted.iter().enumerate() {
         let opcode = (record.opcode & 0xFF) as u8;
         let length = record.length.min(0xFF) as u8;

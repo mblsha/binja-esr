@@ -1,15 +1,16 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyAny, PyDict, PyModule};
 
 use crate::constants::NUM_TEMP_REGISTERS;
 use crate::decode::decode_opcode;
 use crate::executor::{ExecutionError, LlilRuntime};
 use crate::memory::MemoryBus;
-use crate::state::{Flag, RegisterError, Registers};
+use crate::state::{Flag, Register, RegisterError, Registers};
 use crate::OPCODE_HANDLERS;
 
 fn exec_error_to_py(err: ExecutionError) -> PyErr {
@@ -195,6 +196,66 @@ impl Cpu {
         Ok(dict.into())
     }
 
+    pub fn snapshot_cpu_registers(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot_cls = cpu_snapshot_class(py)?;
+        let snapshot_cls = snapshot_cls.bind(py);
+        let runtime = self.runtime.borrow();
+        let regs = runtime.registers();
+        let kwargs = PyDict::new_bound(py);
+        kwargs.set_item("pc", regs.get(Register::PC))?;
+        kwargs.set_item("ba", regs.get(Register::BA))?;
+        kwargs.set_item("i", regs.get(Register::I))?;
+        kwargs.set_item("x", regs.get(Register::X))?;
+        kwargs.set_item("y", regs.get(Register::Y))?;
+        kwargs.set_item("u", regs.get(Register::U))?;
+        kwargs.set_item("s", regs.get(Register::S))?;
+        kwargs.set_item("f", regs.get(Register::F))?;
+        let temps = PyDict::new_bound(py);
+        for index in 0..NUM_TEMP_REGISTERS {
+            let value = regs.get(Register::Temp(index as u8));
+            if value != 0 {
+                temps.set_item(index, value)?;
+            }
+        }
+        if temps.len() > 0 {
+            kwargs.set_item("temps", temps.as_ref())?;
+        }
+        kwargs.set_item("call_sub_level", regs.call_sub_level())?;
+        let snapshot = snapshot_cls.call((), Some(&kwargs))?;
+        Ok(snapshot.into())
+    }
+
+    pub fn load_cpu_snapshot(&self, snapshot: &PyAny) -> PyResult<()> {
+        let pc: u32 = snapshot.getattr("pc")?.extract()?;
+        let ba: u32 = snapshot.getattr("ba")?.extract()?;
+        let i: u32 = snapshot.getattr("i")?.extract()?;
+        let x: u32 = snapshot.getattr("x")?.extract()?;
+        let y: u32 = snapshot.getattr("y")?.extract()?;
+        let u: u32 = snapshot.getattr("u")?.extract()?;
+        let s: u32 = snapshot.getattr("s")?.extract()?;
+        let f: u32 = snapshot.getattr("f")?.extract()?;
+        let temps: HashMap<i32, u32> = snapshot.getattr("temps")?.extract()?;
+        let call_depth: u32 = snapshot.getattr("call_sub_level")?.extract()?;
+
+        self.with_runtime(|runtime| {
+            let regs = runtime.registers_mut();
+            regs.set(Register::PC, pc);
+            regs.set(Register::BA, ba);
+            regs.set(Register::I, i);
+            regs.set(Register::X, x);
+            regs.set(Register::Y, y);
+            regs.set(Register::U, u);
+            regs.set(Register::S, s);
+            regs.set(Register::F, f);
+            for index in 0..NUM_TEMP_REGISTERS {
+                let value = temps.get(&(index as i32)).copied().unwrap_or_default();
+                regs.set(Register::Temp(index as u8), value);
+            }
+            regs.set_call_sub_level(call_depth);
+            Ok(())
+        })
+    }
+
     #[getter]
     pub fn call_sub_level(&self) -> PyResult<u32> {
         Ok(self.with_runtime_ro(|runtime| runtime.registers().call_sub_level()))
@@ -220,4 +281,17 @@ impl Cpu {
             Ok(())
         })
     }
+}
+
+fn cpu_snapshot_class(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    static SNAPSHOT: OnceLock<Py<PyAny>> = OnceLock::new();
+    if let Some(cls) = SNAPSHOT.get() {
+        return Ok(cls.clone_ref(py));
+    }
+    let module = PyModule::import(py, "sc62015.pysc62015.stepper")?;
+    let cls = module.getattr("CPURegistersSnapshot")?;
+    SNAPSHOT
+        .set(cls.into())
+        .map_err(|_| PyRuntimeError::new_err("CPU snapshot class already initialised"))?;
+    Ok(SNAPSHOT.get().expect("snapshot class set").clone_ref(py))
 }

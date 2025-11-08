@@ -4,6 +4,7 @@ import pytest
 from binja_test_mocks.eval_llil import Memory
 
 from sc62015.pysc62015 import CPU, RegisterName
+from sc62015.pysc62015.stepper import CPURegistersSnapshot
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
 
 
@@ -71,3 +72,29 @@ def test_cpu_executes_simple_program(cpu_backend: str) -> None:
     assert cpu.regs.get(RegisterName.FC) in (0, 1)
     # PC should advance past the HALT instruction
     assert cpu.regs.get(RegisterName.PC) == 5
+
+
+def test_cpu_snapshot_roundtrip(cpu_backend: str) -> None:
+    memory = _make_memory(0x00)
+
+    try:
+        cpu = CPU(memory, reset_on_init=False, backend=cpu_backend)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
+    snapshot = CPURegistersSnapshot(
+        pc=0x12345,
+        ba=0x201,
+        i=0x3456,
+        x=0xAAAAAA,
+        y=0xBBBBBB,
+        u=0xCCCCCC,
+        s=0xDDDDDD,
+        f=0x12,
+        temps={3: 0xABCD, 7: 0xEEFF},
+        call_sub_level=3,
+    )
+    cpu.apply_snapshot(snapshot)
+    round_trip = cpu.snapshot_registers()
+
+    assert round_trip.to_dict() == snapshot.to_dict()
