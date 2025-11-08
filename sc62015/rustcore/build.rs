@@ -201,14 +201,16 @@ fn run_generator(
 
     let python = find_python().ok_or_else(|| "python3/python not found in PATH".to_string())?;
     let mut pythonpath = project_root.as_os_str().to_os_string();
-    let venv_site = project_root
-        .join(".venv")
-        .join("lib")
-        .join("python3.12")
-        .join("site-packages");
-    if venv_site.exists() {
-        pythonpath.push(OsString::from(":"));
-        pythonpath.push(venv_site.as_os_str());
+    for version in ["python3.12", "python3.11", "python3.10"] {
+        let venv_site = project_root
+            .join(".venv")
+            .join("lib")
+            .join(version)
+            .join("site-packages");
+        if venv_site.exists() {
+            pythonpath.push(OsString::from(":"));
+            pythonpath.push(venv_site.as_os_str());
+        }
     }
     let output = Command::new(&python)
         .arg(script_path)
