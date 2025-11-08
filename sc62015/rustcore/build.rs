@@ -378,6 +378,18 @@ fn write_handlers(
     for (index, record) in sorted.iter().enumerate() {
         let opcode = (record.opcode & 0xFF) as u8;
         let length = record.length.min(0xFF) as u8;
+
+        if opcode == 0xEF {
+            emit_specialized(
+                &mut file,
+                &mut stats,
+                opcode,
+                format!(
+                    "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    ctx.write_named_register(\"I\", 0, Some(2))?;\n    Ok(())\n}}\n"
+                ),
+            )?;
+            continue;
+        }
         if let Some(plan_map) = lowering_map {
             if let Some(plan) = plan_map.get(&opcode) {
                 if let Some(handler) = try_emit_const_set_reg(opcode, length, plan) {
