@@ -57,10 +57,6 @@ To run the full pytest suite against both backends, use the helper script:
 ./scripts/run_cpu_pytests.py --backends python,rust -- sc62015/pysc62015 -q
 ```
 
-```bash
-uv run python sc62015/tools/compare_cpu_backends.py --start 0x00 --end 0x1F
-```
-
 ### CI coverage
 
 GitHub Actions runs an optional "Optional Rust Backend" job (see `.github/workflows/tests.yml`) that:
