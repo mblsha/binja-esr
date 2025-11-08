@@ -391,6 +391,18 @@ fn write_handlers(
             continue;
         }
 
+        if opcode == 0x40 {
+            emit_specialized(
+                &mut file,
+                &mut stats,
+                opcode,
+                format!(
+                    "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let next_pc = ctx.read_named_register(\"PC\")?;\n    let base = next_pc - ({length} as i64);\n    let lhs = ctx.read_named_register(\"A\")?;\n    let rhs = ctx.read_memory_value(base + 1, 1)?;\n    let (value, flags) = lowering::add(1, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register(\"A\", value, Some(1))?;\n    Ok(())\n}}\n"
+                ),
+            )?;
+            continue;
+        }
+
         if opcode == 0xEF {
             emit_specialized(
                 &mut file,
