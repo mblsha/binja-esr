@@ -23,10 +23,9 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         help="Pytest target path (default: sc62015/pysc62015)",
     )
     parser.add_argument(
-        "--",
-        dest="pytest_args",
+        "pytest_args",
         nargs=argparse.REMAINDER,
-        help="Additional arguments forwarded to pytest",
+        help="Additional arguments forwarded to pytest (prefix with --)",
     )
     return parser.parse_args(list(argv))
 
