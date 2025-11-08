@@ -77,7 +77,7 @@ where
     let mask = mask_for_width(width);
     let value = (op(lhs, rhs) as i128 & mask) as i64;
     let zero = (value == 0) as u8;
-    (value, OpFlags::with(Some(0), Some(zero)))
+    (value, OpFlags::with(None, Some(zero)))
 }
 
 pub fn and(width: u8, lhs: i64, rhs: i64) -> (i64, OpFlags) {
@@ -237,5 +237,12 @@ mod tests {
         let (value, flags) = rotate(1, 0b1000_0001, 1, true);
         assert_eq!(value & 0xFF, 0b0000_0011);
         assert_eq!(flags.carry, Some(1));
+    }
+
+    #[test]
+    fn logical_does_not_touch_carry_flag() {
+        let (_, flags) = and(1, 0xAA, 0x55);
+        assert_eq!(flags.carry, None);
+        assert_eq!(flags.zero, Some(1));
     }
 }

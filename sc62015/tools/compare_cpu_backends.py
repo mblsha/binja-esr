@@ -171,8 +171,12 @@ def compare_program(
     snapshot_len: int,
     capture_trace: bool,
 ) -> Tuple[ProgramExecutionResult, ProgramExecutionResult, List[str]]:
-    python_result = run_program("python", program, pc, max_steps, snapshot_len, capture_trace)
-    rust_result = run_program("rust", program, pc, max_steps, snapshot_len, capture_trace)
+    python_result = run_program(
+        "python", program, pc, max_steps, snapshot_len, capture_trace
+    )
+    rust_result = run_program(
+        "rust", program, pc, max_steps, snapshot_len, capture_trace
+    )
 
     differences: List[str] = []
     if python_result.registers != rust_result.registers:
@@ -249,8 +253,14 @@ def _dump_registers(result: ProgramExecutionResult, prefix: str) -> None:
     print(f"{prefix} registers:")
     for name in sorted(result.registers):
         value = result.registers[name]
-        print(f"  {name:>4}: 0x{value:06X}" if value is not None else f"  {name:>4}: <n/a>")
-    print(f"  halted: {result.halted}  steps: {result.steps} last={result.last_instruction}")
+        print(
+            f"  {name:>4}: 0x{value:06X}"
+            if value is not None
+            else f"  {name:>4}: <n/a>"
+        )
+    print(
+        f"  halted: {result.halted}  steps: {result.steps} last={result.last_instruction}"
+    )
 
 
 def _dump_memory(result: ProgramExecutionResult, prefix: str) -> None:
