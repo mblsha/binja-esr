@@ -8,7 +8,7 @@ from typing import Dict, Iterable, Optional, Set
 import pytest
 
 from sc62015.pysc62015.sc_asm import Assembler
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from pce500 import PCE500Emulator

@@ -10,8 +10,10 @@ except ImportError:  # pragma: no cover - serial may not be installed in tests
     serial = None  # type: ignore[assignment]
 from plumbum import cli  # type: ignore[import-untyped]
 
+from binja_test_mocks.eval_llil import Memory
+
 from sc62015.pysc62015.sc_asm import Assembler
-from sc62015.pysc62015.emulator import Emulator, Memory
+from sc62015.pysc62015 import CPU
 
 
 class HardwareInterface:
@@ -117,7 +119,7 @@ class TestRunner:
     DUMP_REGISTERS = [("F", 1), ("BA", 2), ("I", 2), ("X", 3), ("Y", 3), ("S", 3)]
 
     def __init__(
-        self, hw_interface: HardwareInterface, assembler: Assembler, emulator: Emulator
+        self, hw_interface: HardwareInterface, assembler: Assembler, emulator: CPU
     ) -> None:
         self.hw = hw_interface
         self.assembler = assembler
@@ -270,7 +272,7 @@ class OrchestratorApp(cli.Application):
         # --- Setup ---
         assembler = Assembler()
         dummy_mem = Memory(lambda _addr: 0, lambda _addr, _val: None)
-        emulator = Emulator(dummy_mem)
+        emulator = CPU(dummy_mem, reset_on_init=False)
 
         try:
             with HardwareInterface(port) as hw:
