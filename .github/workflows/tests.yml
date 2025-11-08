@@ -88,6 +88,23 @@ jobs:
       run: |
         uv sync --extra dev --extra pce500 --extra web
 
+    - name: Install maturin
+      run: |
+        uv tool install maturin
+
+    - name: Set up Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+
+    - name: Build optional Rust backend
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml --features enable_rust_cpu
+
     - name: Run pytest for both backends
       env:
         FORCE_BINJA_MOCK: 1
@@ -133,7 +150,7 @@ jobs:
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml
+        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml --features enable_rust_cpu
 
     - name: Run backend parity smoke tests
       env:
