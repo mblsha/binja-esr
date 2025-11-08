@@ -388,7 +388,7 @@ impl LlilRuntime {
             "XOR" => lhs ^ rhs,
             _ => unreachable!(),
         };
-        Ok(EvalResult::with_value(value).with_flags(Some(0), Some(bool_to_u8(value == 0))))
+        Ok(EvalResult::with_value(value).with_flags(None, Some(bool_to_u8(value == 0))))
     }
 
     fn eval_compare(

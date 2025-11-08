@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 libloading = "0.8"
 libc = "0.2"
+
+[dev-dependencies]
+proptest = "1"

@@ -44,7 +44,7 @@ class HD61202Controller:
         """Get current PC from CPU if available."""
         if self._cpu and hasattr(self._cpu, "regs"):
             try:
-                from sc62015.pysc62015.emulator import RegisterName
+                from sc62015.pysc62015 import RegisterName
 
                 return self._cpu.regs.get(RegisterName.PC)
             except Exception:

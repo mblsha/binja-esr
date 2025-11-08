@@ -12,6 +12,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
+        cpu-backend: ["python"]
 
     steps:
     - uses: actions/checkout@v4
@@ -36,6 +37,7 @@ jobs:
     - name: Run SC62015 tests
       env:
         FORCE_BINJA_MOCK: 1
+        SC62015_CPU_BACKEND: ${{ matrix.cpu-backend }}
       run: |
         uv run pytest sc62015 -v --cov=sc62015/pysc62015 --cov-report=term-missing
     
@@ -61,11 +63,11 @@ jobs:
       run: |
         uv run pyright sc62015/pysc62015
 
-  rust-backend:
-    name: Optional Rust Backend
+  dual-backend:
+    name: Dual Backend Pytests
     runs-on: ubuntu-latest
     needs: test
-    continue-on-error: true
+    timeout-minutes: 25
     steps:
     - uses: actions/checkout@v4
       with:
@@ -101,7 +103,54 @@ jobs:
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml
+        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml --features enable_rust_cpu
+
+    - name: Run pytest for both backends
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run python scripts/run_cpu_pytests.py --backends python,rust -- sc62015/pysc62015 -q
+
+  rust-backend:
+    name: Rust Backend Parity
+    runs-on: ubuntu-latest
+    needs: dual-backend
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+        cache-dependency-glob: "pyproject.toml"
+
+    - name: Install dependencies
+      run: |
+        uv sync --extra dev --extra pce500 --extra web
+
+    - name: Install maturin
+      run: |
+        uv tool install maturin
+
+    - name: Set up Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+
+    - name: Build optional Rust backend
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml --features enable_rust_cpu
 
     - name: Run backend parity smoke tests
       env:

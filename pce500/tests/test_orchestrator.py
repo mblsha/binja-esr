@@ -10,7 +10,7 @@ import pytest
 from pce500 import OrchestratorInputs, SnapshotOrchestrator
 from pce500.memory import INTERNAL_MEMORY_START
 from pce500.tracing import TraceEventType, trace_dispatcher
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 ROM_PATH = Path(__file__).resolve().parents[3] / "roms" / "pc-e500.bin"

@@ -16,7 +16,7 @@ from typing import Any
 os.environ["FORCE_BINJA_MOCK"] = "1"
 
 import app as webapp  # noqa: E402
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from sc62015.pysc62015.constants import IMRFlag, INTERNAL_MEMORY_START
 

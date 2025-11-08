@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from importlib import import_module
-from typing import Callable, Iterable, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Tuple, cast
 
 from .constants import ADDRESS_SPACE_SIZE
 from .emulator import (
@@ -21,6 +21,7 @@ from .emulator import (
     USE_CACHED_DECODER,
 )
 from .instr import Instruction, decode
+from .stepper import CPURegistersSnapshot, CPUStepResult, CPUStepper
 from .instr.opcode_table import OPCODES
 
 try:
@@ -183,6 +184,40 @@ class CPU:
             self._impl.power_on_reset()
         else:
             self._impl.power_on_reset()
+
+    def snapshot_registers(self) -> CPURegistersSnapshot:
+        if self.backend == "python":
+            return CPURegistersSnapshot.from_registers(self.regs)
+        rust_impl = cast(Any, self._impl)
+        snapshot = rust_impl.snapshot_cpu_registers()
+        assert isinstance(snapshot, CPURegistersSnapshot)
+        return snapshot
+
+    def apply_snapshot(self, snapshot: CPURegistersSnapshot) -> None:
+        if self.backend == "python":
+            snapshot.apply_to(self.regs)
+        else:
+            rust_impl = cast(Any, self._impl)
+            rust_impl.load_cpu_snapshot(snapshot)
+
+    def step_snapshot(
+        self,
+        registers: CPURegistersSnapshot,
+        memory_image: Mapping[int, int],
+        *,
+        default_memory_value: int = 0,
+    ) -> CPUStepResult:
+        """Execute a single instruction from `registers` + `memory_image`.
+
+        Returns the resulting `CPUStepResult`, regardless of whether the
+        underlying backend is Python or Rust.
+        """
+
+        stepper = CPUStepper(
+            default_memory_value=default_memory_value,
+            backend=self.backend,
+        )
+        return stepper.step(registers, memory_image)
 
 
 def _decode_instruction(memory, address: int) -> Instruction:

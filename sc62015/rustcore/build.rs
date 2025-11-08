@@ -201,14 +201,16 @@ fn run_generator(
 
     let python = find_python().ok_or_else(|| "python3/python not found in PATH".to_string())?;
     let mut pythonpath = project_root.as_os_str().to_os_string();
-    let venv_site = project_root
-        .join(".venv")
-        .join("lib")
-        .join("python3.12")
-        .join("site-packages");
-    if venv_site.exists() {
-        pythonpath.push(OsString::from(":"));
-        pythonpath.push(venv_site.as_os_str());
+    for version in ["python3.12", "python3.11", "python3.10"] {
+        let venv_site = project_root
+            .join(".venv")
+            .join("lib")
+            .join(version)
+            .join("site-packages");
+        if venv_site.exists() {
+            pythonpath.push(OsString::from(":"));
+            pythonpath.push(venv_site.as_os_str());
+        }
     }
     let output = Command::new(&python)
         .arg(script_path)
@@ -372,10 +374,46 @@ fn write_handlers(
     let mut sorted: Vec<&InstructionRecord> = instructions.iter().collect();
     sorted.sort_by_key(|record| record.opcode);
     let mut stats = HandlerStats::new();
- 
+
     for (index, record) in sorted.iter().enumerate() {
         let opcode = (record.opcode & 0xFF) as u8;
         let length = record.length.min(0xFF) as u8;
+
+        if opcode == 0x08 {
+            emit_specialized(
+                &mut file,
+                &mut stats,
+                opcode,
+                format!(
+                    "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let next_pc = ctx.read_named_register(\"PC\")?;\n    let base = next_pc - ({length} as i64);\n    let value = ctx.read_memory_value(base + 1, 1)?;\n    ctx.write_named_register(\"A\", value, Some(1))?;\n    Ok(())\n}}\n"
+                ),
+            )?;
+            continue;
+        }
+
+        if opcode == 0x40 {
+            emit_specialized(
+                &mut file,
+                &mut stats,
+                opcode,
+                format!(
+                    "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let next_pc = ctx.read_named_register(\"PC\")?;\n    let base = next_pc - ({length} as i64);\n    let lhs = ctx.read_named_register(\"A\")?;\n    let rhs = ctx.read_memory_value(base + 1, 1)?;\n    let (value, flags) = lowering::add(1, lhs, rhs);\n    ctx.apply_op_flags(flags)?;\n    ctx.write_named_register(\"A\", value, Some(1))?;\n    Ok(())\n}}\n"
+                ),
+            )?;
+            continue;
+        }
+
+        if opcode == 0xEF {
+            emit_specialized(
+                &mut file,
+                &mut stats,
+                opcode,
+                format!(
+                    "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    ctx.write_named_register(\"I\", 0, Some(2))?;\n    Ok(())\n}}\n"
+                ),
+            )?;
+            continue;
+        }
         if let Some(plan_map) = lowering_map {
             if let Some(plan) = plan_map.get(&opcode) {
                 if let Some(handler) = try_emit_const_set_reg(opcode, length, plan) {
@@ -1366,9 +1404,11 @@ fn write_fallback(path: &Path) -> std::io::Result<()> {
 
 fn write_handler_fallback(path: &Path) -> std::io::Result<()> {
     let mut file = File::create(path)?;
+    let fallback_opcodes: Vec<u8> = (0..=255).collect();
     writeln!(
         file,
-        "// @generated fallback\nuse crate::executor::{{ExecutionResult, LlilRuntime}};\npub type OpcodeHandler = fn(&mut LlilRuntime) -> ExecutionResult;\n#[allow(dead_code)]\nfn handler_unimplemented(_: &mut LlilRuntime) -> ExecutionResult {{ Err(crate::executor::ExecutionError::UnsupportedOpcode) }}\npub static OPCODE_HANDLERS: [OpcodeHandler; 256] = [handler_unimplemented; 256];"
+        "// @generated fallback\nuse crate::executor::{{ExecutionResult, LlilRuntime}};\npub type OpcodeHandler = fn(&mut LlilRuntime) -> ExecutionResult;\n#[allow(dead_code)]\nfn handler_unimplemented(_: &mut LlilRuntime) -> ExecutionResult {{ Err(crate::executor::ExecutionError::UnsupportedOpcode) }}\npub static OPCODE_HANDLERS: [OpcodeHandler; 256] = [handler_unimplemented; 256];\npub const OPCODE_LOWERING_SPECIALIZED: usize = 0;\npub const OPCODE_LOWERING_FALLBACK: usize = 256;\npub const OPCODE_LLIL_FALLBACKS: [u8; 256] = {:?};",
+        fallback_opcodes
     )?;
     Ok(())
 }

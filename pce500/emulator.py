@@ -8,8 +8,8 @@ from enum import Enum
 from collections import deque
 from datetime import datetime
 
-# Import the SC62015 emulator
-from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
+# Import the SC62015 CPU facade
+from sc62015.pysc62015 import CPU as SC62015CPU, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL,
     RetInstruction,
@@ -155,7 +155,7 @@ class PCE500Emulator:
 
         # Note: LCC overlay not needed for the keyboard handler
 
-        self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
+        self.cpu = SC62015CPU(self.memory, reset_on_init=True)
         self.memory.set_cpu(self.cpu)
 
         # Set performance tracer for SC62015 integration if available

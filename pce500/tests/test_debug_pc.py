@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import pytest
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.instr import decode, OPCODES
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 
 
 def test_debug_pc():

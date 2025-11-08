@@ -46,7 +46,15 @@ Use `sc62015/tools/compare_cpu_backends.py` to execute individual opcodes throug
 Every build prints an opcode-lowering coverage summary (specialized vs. LLIL fallback), and importing the `_sc62015_rustcore` module logs the same breakdown exactly once. This makes it easy to spot when new instructions slip back to the LLIL interpreter.
 
 ```bash
-uv run python sc62015/tools/compare_cpu_backends.py --start 0x00 --end 0x1F
+uv run python sc62015/tools/compare_cpu_backends.py --start 0x40 --end 0x4F
+# or run a custom program blob with trace output
+uv run python sc62015/tools/compare_cpu_backends.py --program samples/blink.bin --pc 0x200 --max-steps 64 --trace --dump-on-fail
+```
+
+To run the full pytest suite against both backends, use the helper script:
+
+```bash
+./scripts/run_cpu_pytests.py --backends python,rust -- sc62015/pysc62015 -q
 ```
 
 ### CI coverage
@@ -56,6 +64,7 @@ GitHub Actions runs an optional "Optional Rust Backend" job (see `.github/workfl
 1. Installs the Rust toolchain alongside the existing Python environment.
 2. Builds the PyO3 extension via `uv run maturin develop`.
 3. Executes the backend parity smoke tests with `--cpu-backends python,rust` so the suite is ready to toggle to the native core once implemented. The parity job also builds the extension with `enable_rust_cpu` so the semantics comparator can instantiate both backends.
+4. Runs the `sc62015-parity-harness` proptests, which call the shared `sc62015_run_parity` entry point with hundreds of random seeds/case counts to shake out divergence bugs.
 
 The job is marked `continue-on-error`, so failures provide signal without blocking merges while the backend is experimental.
 

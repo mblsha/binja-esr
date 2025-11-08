@@ -12,11 +12,11 @@ This note captures the Python-side contract that the upcoming Rust core must mir
   - `Emulator`: orchestrates instruction fetch/decode (`decode_instruction`), execution (`execute_instruction` / `_execute_instruction_impl`), LLIL evaluation (`evaluate`), and system reset handling (`power_on_reset`). The constructor accepts a `Memory` object and `reset_on_init` flag. Execution special-cases opcode `0xEF` (WAIT) to avoid long LLIL loops.
   - Module-level constants: `NUM_TEMP_REGISTERS`, `USE_CACHED_DECODER` (set when `CachedFetchDecoder` import succeeds), and `FLAG_TO_REGISTER`.
 - `sc62015.pysc62015.stepper`
-  - `CPURegistersSnapshot`: serializable snapshot of architected registers + temps + `call_sub_level`. Provides `from_registers`, `apply_to`, `to_dict`, and `diff` helpers.
+  - `CPURegistersSnapshot`: serializable snapshot of architected registers + temps + `call_sub_level`. Provides `from_registers`, `apply_to`, `to_dict`, and `diff` helpers. The Rust CPU exposes native snapshot import/export so the same object type is used across backends.
   - `_SnapshotMemory`: `binja_test_mocks.eval_llil.Memory` adapter that records writes while serving reads from a provided mapping. Exposes `writes` and `snapshot`.
   - `MemoryWrite`: dataclass describing a captured memory mutation.
   - `CPUStepResult`: named container for a single-step outcome (registers, diffs, writes, resulting memory image, instruction metadata).
-  - `CPUStepper`: stateless helper that takes a snapshot + sparse memory image, executes one instruction through `Emulator`, and returns a `CPUStepResult`. Used heavily by higher-level device tests.
+  - `CPUStepper`: helper that takes a snapshot + sparse memory image, executes one instruction through the unified `CPU` facade (Python or Rust), and returns a `CPUStepResult`.
 - `sc62015.pysc62015.constants`
   - Address space and PC metadata: `ADDRESS_SPACE_SIZE`, `INTERNAL_MEMORY_START`, `INTERNAL_MEMORY_LENGTH`, `PC_MASK`.
   - Flag enumerations: `IMRFlag`, `ISRFlag` (both `IntFlag`), providing bit masks for interrupt control/status registers.
@@ -36,7 +36,7 @@ This note captures the Python-side contract that the upcoming Rust core must mir
 - `sc62015.pysc62015.__init__`
   - Re-exports the new `CPU` facade alongside the legacy `Emulator`, `RegisterName`, and `Registers` helpers for convenience.
 - `sc62015.pysc62015.cpu`
-  - `CPU`: facade that selects between the Python `Emulator` and the optional Rust backend (when available). Accepts the same constructor arguments as `Emulator` and forwards attribute access to the underlying implementation. The selection honours an explicit `backend` argument or the `SC62015_CPU_BACKEND` environment variable.
+  - `CPU`: facade that selects between the Python `Emulator` and the optional Rust backend (when available). Accepts the same constructor arguments as `Emulator` and forwards attribute access to the underlying implementation. The selection honours an explicit `backend` argument or the `SC62015_CPU_BACKEND` environment variable. Snapshot helpers (`snapshot_registers`, `apply_snapshot`) and the new `step_snapshot` API make it possible to convert to/from `CPURegistersSnapshot`/`CPUStepResult` without caring which backend executed the instruction.
   - Helper functions: `available_backends()` and `select_backend()` to inspect or override backend resolution.
 
 ### External Types the Rust Core Must Respect
