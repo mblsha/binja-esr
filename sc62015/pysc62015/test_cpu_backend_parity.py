@@ -98,3 +98,21 @@ def test_cpu_snapshot_roundtrip(cpu_backend: str) -> None:
     round_trip = cpu.snapshot_registers()
 
     assert round_trip.to_dict() == snapshot.to_dict()
+
+
+def test_cpu_step_snapshot(cpu_backend: str) -> None:
+    memory = _make_memory(0x08, 0x01, 0xDE)  # MV A,#1 ; HALT
+
+    try:
+        cpu = CPU(memory, reset_on_init=False, backend=cpu_backend)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+
+    snapshot = CPURegistersSnapshot(pc=0x0000)
+    result = cpu.step_snapshot(snapshot, {0x0000: 0x08, 0x0001: 0x01})
+
+    assert result.instruction_name == "MV"
+    assert result.instruction_length == 2
+    assert result.registers.ba & 0xFF == 0x01
+    assert result.registers.pc == 0x0002
+    assert result.changed_registers["PC"] == (0x0000, 0x0002)
