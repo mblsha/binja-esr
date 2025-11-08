@@ -379,6 +379,18 @@ fn write_handlers(
         let opcode = (record.opcode & 0xFF) as u8;
         let length = record.length.min(0xFF) as u8;
 
+        if opcode == 0x08 {
+            emit_specialized(
+                &mut file,
+                &mut stats,
+                opcode,
+                format!(
+                    "#[allow(clippy::needless_pass_by_value, non_snake_case)]\npub fn handler_{opcode:02X}(ctx: &mut LlilRuntime) -> ExecutionResult {{\n    ctx.prepare_for_opcode(0x{opcode:02X}, {length});\n    let next_pc = ctx.read_named_register(\"PC\")?;\n    let base = next_pc - ({length} as i64);\n    let value = ctx.read_memory_value(base + 1, 1)?;\n    ctx.write_named_register(\"A\", value, Some(1))?;\n    Ok(())\n}}\n"
+                ),
+            )?;
+            continue;
+        }
+
         if opcode == 0xEF {
             emit_specialized(
                 &mut file,
