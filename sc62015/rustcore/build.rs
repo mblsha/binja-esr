@@ -1366,9 +1366,11 @@ fn write_fallback(path: &Path) -> std::io::Result<()> {
 
 fn write_handler_fallback(path: &Path) -> std::io::Result<()> {
     let mut file = File::create(path)?;
+    let fallback_opcodes: Vec<u8> = (0..=255).collect();
     writeln!(
         file,
-        "// @generated fallback\nuse crate::executor::{{ExecutionResult, LlilRuntime}};\npub type OpcodeHandler = fn(&mut LlilRuntime) -> ExecutionResult;\n#[allow(dead_code)]\nfn handler_unimplemented(_: &mut LlilRuntime) -> ExecutionResult {{ Err(crate::executor::ExecutionError::UnsupportedOpcode) }}\npub static OPCODE_HANDLERS: [OpcodeHandler; 256] = [handler_unimplemented; 256];"
+        "// @generated fallback\nuse crate::executor::{{ExecutionResult, LlilRuntime}};\npub type OpcodeHandler = fn(&mut LlilRuntime) -> ExecutionResult;\n#[allow(dead_code)]\nfn handler_unimplemented(_: &mut LlilRuntime) -> ExecutionResult {{ Err(crate::executor::ExecutionError::UnsupportedOpcode) }}\npub static OPCODE_HANDLERS: [OpcodeHandler; 256] = [handler_unimplemented; 256];\npub const OPCODE_LOWERING_SPECIALIZED: usize = 0;\npub const OPCODE_LOWERING_FALLBACK: usize = 256;\npub const OPCODE_LLIL_FALLBACKS: [u8; 256] = {:?};",
+        fallback_opcodes
     )?;
     Ok(())
 }
