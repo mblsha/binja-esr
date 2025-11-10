@@ -14,7 +14,7 @@ from binja_test_mocks.mock_llil import (
     MockLowLevelILFunction,
 )
 
-from sc62015.decoding.compat_il import emit_instruction as emit_legacy_il
+from .legacy_compat_il import emit_instruction as emit_legacy_il
 from sc62015.decoding.dispatcher import CompatDispatcher
 from sc62015.decoding.bind import DecodedInstr
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK

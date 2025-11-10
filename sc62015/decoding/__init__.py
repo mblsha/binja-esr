@@ -1,9 +1,7 @@
 """
 Typed decoding and binding helpers for SC62015 instruction bytes.
 
-Phase 2 introduces strictly-typed operand binds and a replay buffer so that
-legacy lifters can consume the exact byte stream they've always seen while we
-add richer metadata for the forthcoming SCIL emitters.
+Phase 2 introduces strictly-typed operand binds that power SCIL builders.
 """
 
 from .bind import (  # noqa: F401
@@ -19,7 +17,6 @@ from .bind import (  # noqa: F401
     RegSel,
 )
 from .reader import StreamCtx  # noqa: F401
-from .replay import BoundStream  # noqa: F401
 from . import decode_map  # noqa: F401
 
 __all__ = [
@@ -34,6 +31,5 @@ __all__ = [
     "PreLatch",
     "RegSel",
     "StreamCtx",
-    "BoundStream",
     "decode_map",
 ]

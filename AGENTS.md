@@ -46,18 +46,8 @@
 - Web UI: `uv run python web/run.py` then open the served address.
 - Binary Ninja: Not required for dev; mocks auto‑load via `FORCE_BINJA_MOCK=1` or `binja-test-mocks`.
 
-## SCIL Rollout & Gating
-- Production flips rely on env vars: `BN_USE_SCIL` (`off`/`shadow`/`prod`),
-  `BN_SCIL_ALLOW` (per-mnemonic), `BN_SCIL_BLOCK`, and `BN_SCIL_FAMILIES`
-  (comma/semicolon-separated family names). Families map 1:1 to the
-  `decode_map` `family` field.
-- Phase‑8 families you can now gate via `BN_SCIL_FAMILIES`:
-  `loop_move`, `loop_arith` (ADCL/SBCL), `loop_bcd` (DADL/DSBL),
-  `decimal_shift` (DSLL/DSRL), `pmdf`, and `system`
-  (`HALT`/`OFF`/`RESET`/`WAIT`/`IR`). Existing names from earlier phases
-  (e.g., `imm8`, `rel8`, `ext_reg`, `imem_move`, `jp_*`, `stack_sys`,
-  `pushu`, `popu`, `call_near`, `ret_near`, etc.) remain valid.
-- Example shadow rollout:
-  ``BN_USE_SCIL=shadow BN_SCIL_FAMILIES="imm8,rel8,loop_move,loop_arith,loop_bcd,decimal_shift,pmdf,system"``.
-  Add/remove entries to toggle specific families without touching per‑mnemonic
-  allow/block lists.
+- **Perf & counters:** `get_scil_counters()` exposes `scil_ok`, `scil_error`,
+  and `legacy_rescue` (the only time legacy code runs is when
+  `BN_ALLOW_LEGACY=1` is set for an emergency). The perf gate in CI runs the
+  shape-sensitive corpus (`tests/scil_phase3`) plus a fixed decode set to guard
+  regressions.

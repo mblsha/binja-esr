@@ -5,39 +5,24 @@ from sc62015.pysc62015 import config
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch):
-    for name in (
-        "BN_USE_SCIL",
-        "BN_SCIL_ALLOW",
-        "BN_SCIL_BLOCK",
-        "BN_SCIL_FAMILIES",
-        "BN_SCIL_STRICT_COMPARE",
-        "BN_SCIL_TRACE",
-    ):
+    for name in ("BN_ALLOW_LEGACY", "BN_SCIL_TRACE"):
         monkeypatch.delenv(name, raising=False)
     yield
 
 
-def test_default_config_is_shadow_mode() -> None:
+def test_default_config_has_legacy_off() -> None:
     cfg = config.load_scil_config()
-    assert cfg.mode == "shadow"
-    assert not cfg.allow
-    assert cfg.strict_compare is True
+    assert cfg.allow_legacy is False
+    assert cfg.trace is False
 
 
-def test_config_parses_lists(monkeypatch) -> None:
-    monkeypatch.setenv("BN_SCIL_ALLOW", "MV A,n;JRZ ±n")
-    monkeypatch.setenv("BN_SCIL_FAMILIES", "imm8, rel8 ")
+def test_allow_legacy_flag(monkeypatch) -> None:
+    monkeypatch.setenv("BN_ALLOW_LEGACY", "1")
     cfg = config.load_scil_config()
-    assert "MV A,n" in cfg.allow
-    assert "JRZ ±n" in cfg.allow
-    assert cfg.families == {"imm8", "rel8"}
+    assert cfg.allow_legacy is True
 
 
-def test_mode_normalization(monkeypatch) -> None:
-    monkeypatch.setenv("BN_USE_SCIL", "PROD")
+def test_trace_flag(monkeypatch) -> None:
+    monkeypatch.setenv("BN_SCIL_TRACE", "true")
     cfg = config.load_scil_config()
-    assert cfg.mode == "prod"
-
-    monkeypatch.setenv("BN_USE_SCIL", "unknown")
-    cfg = config.load_scil_config()
-    assert cfg.mode == "off"
+    assert cfg.trace is True
