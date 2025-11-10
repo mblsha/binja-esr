@@ -169,10 +169,13 @@ fn exec_stmt<B: Bus>(stmt: &Stmt, env: &mut Env<B>) -> Result<()> {
             mode,
             disp,
         } => {
-            let disp_val = disp
-                .as_ref()
-                .map_or(0, |expr| eval_expr(expr, env).unwrap().0);
-            let value = ext_ptr_read(env, &ptr.name, mode, disp_val as i32, dst.size)?;
+            let disp_val = if let Some(expr) = disp {
+                let (value, bits) = eval_expr(expr, env)?;
+                sign_extend(value, bits, 32) as i32
+            } else {
+                0
+            };
+            let value = ext_ptr_read(env, &ptr.name, mode, disp_val, dst.size)?;
             env.state.set_reg(&dst.name, value, dst.size);
         }
         Stmt::ExtRegStore {
@@ -181,11 +184,14 @@ fn exec_stmt<B: Bus>(stmt: &Stmt, env: &mut Env<B>) -> Result<()> {
             mode,
             disp,
         } => {
-            let disp_val = disp
-                .as_ref()
-                .map_or(0, |expr| eval_expr(expr, env).unwrap().0);
+            let disp_val = if let Some(expr) = disp {
+                let (value, bits) = eval_expr(expr, env)?;
+                sign_extend(value, bits, 32) as i32
+            } else {
+                0
+            };
             let value = env.state.get_reg(&src.name, src.size);
-            ext_ptr_store(env, &ptr.name, mode, disp_val as i32, src.size, value)?;
+            ext_ptr_store(env, &ptr.name, mode, disp_val, src.size, value)?;
         }
         Stmt::IntMemSwap { left, right, width } => {
             let (l, _) = eval_expr(left, env)?;
@@ -203,10 +209,13 @@ fn exec_stmt<B: Bus>(stmt: &Stmt, env: &mut Env<B>) -> Result<()> {
             dst,
             disp,
         } => {
-            let disp_val = disp
-                .as_ref()
-                .map_or(0, |expr| eval_expr(expr, env).unwrap().0);
-            let value = ext_ptr_read(env, &ptr.name, mode, disp_val as i32, dst.size)?;
+            let disp_val = if let Some(expr) = disp {
+                let (value, bits) = eval_expr(expr, env)?;
+                sign_extend(value, bits, 32) as i32
+            } else {
+                0
+            };
+            let value = ext_ptr_read(env, &ptr.name, mode, disp_val, dst.size)?;
             let (addr, _) = eval_expr(&dst.addr, env)?;
 
             let offset = match dst.space {
@@ -225,13 +234,16 @@ fn exec_stmt<B: Bus>(stmt: &Stmt, env: &mut Env<B>) -> Result<()> {
             src,
             disp,
         } => {
-            let disp_val = disp
-                .as_ref()
-                .map_or(0, |expr| eval_expr(expr, env).unwrap().0);
+            let disp_val = if let Some(expr) = disp {
+                let (value, bits) = eval_expr(expr, env)?;
+                sign_extend(value, bits, 32) as i32
+            } else {
+                0
+            };
             let (addr, _) = eval_expr(&src.addr, env)?;
             let offset = resolve_imem_addr(env, addr);
             let value = env.bus.load(Space::Int, offset, src.size);
-            ext_ptr_store(env, &ptr.name, mode, disp_val as i32, src.size, value)?;
+            ext_ptr_store(env, &ptr.name, mode, disp_val, src.size, value)?;
         }
         Stmt::Effect { kind, args } => {
             exec_effect(kind, args, env)?;
