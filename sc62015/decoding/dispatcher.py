@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Set, Tuple
 
-from binaryninja.lowlevelil import LowLevelILFunction  # type: ignore
-
-from .compat_il import emit_instruction
-from .decode_map import decode_opcode
+from .decode_map import PRE_LATCHES, decode_opcode
 from .reader import StreamCtx
 from .bind import DecodedInstr
 
@@ -14,15 +11,88 @@ class CompatDispatcher:
     """Lightweight bridge that uses the SCIL-friendly decoder for pilot opcodes."""
 
     def __init__(self) -> None:
-        self.pilot_opcodes: Set[int] = {0x02, 0x08, 0x18, 0x19, 0x32, 0x88}
+        self.pilot_opcodes: Set[int] = {
+            0x02,
+            0x08,
+            0x10,
+            0x11,
+            0x14,
+            0x15,
+            0x16,
+            0x17,
+            0x18,
+            0x19,
+            0x1A,
+            0x1B,
+            0x1C,
+            0x1D,
+            0x1E,
+            0x1F,
+            0x32,
+            0x40,
+            0x48,
+            0x50,
+            0x58,
+            0x64,
+            0x68,
+            0x70,
+            0x78,
+            0x6C,
+            0x7C,
+            0x80,
+            0x88,
+            0xA0,
+            0xA8,
+            0x90,
+            0x91,
+            0x92,
+            0x93,
+            0x94,
+            0x95,
+            0x96,
+            0x98,
+            0x99,
+            0x9A,
+            0x9B,
+            0x9C,
+            0x9D,
+            0x9E,
+            0xB0,
+            0xB1,
+            0xB2,
+            0xB3,
+            0xB4,
+            0xB5,
+            0xB6,
+            0xB8,
+            0xB9,
+            0xBA,
+            0xBB,
+            0xBC,
+            0xBD,
+            0xBE,
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC8,
+            0xC9,
+            0xCA,
+            0xE0,
+            0xE1,
+            0xE2,
+            0xE8,
+            0xE9,
+            0xEA,
+        }
+        self.pilot_opcodes.update(PRE_LATCHES.keys())
         self._pending_pre = None
 
     @property
     def pending_pre(self):
         return self._pending_pre
 
-    def try_emit(
-        self, data: bytes, addr: int, il: LowLevelILFunction
+    def try_decode(
+        self, data: bytes, addr: int
     ) -> Optional[Tuple[int, Optional[DecodedInstr]]]:
         if not data:
             return None
@@ -44,5 +114,4 @@ class CompatDispatcher:
         object.__setattr__(decoded, "pre_applied", self._pending_pre)
         self._pending_pre = None
 
-        emit_instruction(decoded, il, addr)
         return decoded.length, decoded

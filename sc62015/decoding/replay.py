@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from .bind import Addr16Page, Addr24, DecodedInstr, Disp8, Imm8, PreLatch
+from .bind import Addr16Page, Addr24, DecodedInstr, Imm8, PreLatch
 
 
 class BoundStream:
@@ -31,11 +31,8 @@ class BoundStream:
             self._append(imm.value)
 
         disp = binds.get("disp")
-        if isinstance(disp, Disp8):
-            if self._decoded.opcode == 0x19:
-                self._append(abs(disp.value))
-            else:
-                self._append(disp.value & 0xFF)
+        if isinstance(disp, Imm8):
+            self._append(disp.value)
 
         addr16 = binds.get("addr16_page")
         if isinstance(addr16, Addr16Page):

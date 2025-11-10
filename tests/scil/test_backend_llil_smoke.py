@@ -12,7 +12,7 @@ def test_mv_a_imm_emits_set_reg() -> None:
     instr = specs.mv_a_imm()
     il = MockLowLevelILFunction()
     binder = {"imm8": ast.Const(0x5A, 8)}
-    backend_llil.emit_llil(il, instr, binder, CompatLLILBuilder(il), 0x1000)
+    backend_llil.emit_llil(il, instr, binder, CompatLLILBuilder(il), 0x1000, None)
     assert il.ils == [
         mllil(
             "SET_REG.b{0}",
@@ -28,6 +28,6 @@ def test_jrz_emits_if_node() -> None:
     instr = specs.jrz_rel()
     il = MockLowLevelILFunction()
     binder = {"disp8": ast.Const(0x02, 8)}
-    backend_llil.emit_llil(il, instr, binder, CompatLLILBuilder(il), 0x2000)
+    backend_llil.emit_llil(il, instr, binder, CompatLLILBuilder(il), 0x2000, None)
     assert il.ils
     assert il.ils[0].op == "IF"

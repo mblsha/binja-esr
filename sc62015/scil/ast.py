@@ -39,6 +39,7 @@ EffectKind = Literal[
     "interrupt_enter",
     "interrupt_exit",
 ]
+ExtRegMode = Literal["simple", "post_inc", "pre_dec", "offset"]
 
 
 def _as_tuple(items: Sequence["Stmt"]) -> Tuple["Stmt", ...]:
@@ -115,7 +116,7 @@ class Join24:
     lo: "Expr"
 
 
-Expr = Union[Const, Tmp, Reg, Mem, UnOp, BinOp, TernOp, PcRel, Join24]
+Expr = Union[Const, Tmp, Reg, Flag, Mem, UnOp, BinOp, TernOp, PcRel, Join24]
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +187,45 @@ class Effect:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtRegLoad:
+    dst: Reg
+    ptr: Reg
+    mode: ExtRegMode
+    disp: Optional[Const] = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExtRegStore:
+    src: Reg
+    ptr: Reg
+    mode: ExtRegMode
+    disp: Optional[Const] = None
+
+
+@dataclass(frozen=True, slots=True)
+class IntMemSwap:
+    left: Expr
+    right: Expr
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExtRegToIntMem:
+    ptr: Reg
+    mode: ExtRegMode
+    disp: Optional[Const]
+    dst: Mem
+
+
+@dataclass(frozen=True, slots=True)
+class IntMemToExtReg:
+    src: Mem
+    ptr: Reg
+    mode: ExtRegMode
+    disp: Optional[Const]
+
+
+@dataclass(frozen=True, slots=True)
 class Label:
     name: str
 
@@ -205,6 +245,11 @@ Stmt = Union[
     Call,
     Ret,
     Effect,
+    ExtRegLoad,
+    ExtRegStore,
+    IntMemSwap,
+    ExtRegToIntMem,
+    IntMemToExtReg,
     Label,
     Comment,
 ]

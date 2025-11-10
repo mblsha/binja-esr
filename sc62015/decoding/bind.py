@@ -84,6 +84,20 @@ class RegSel:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtRegPtr:
+    ptr: RegSel
+    mode: Literal["simple", "post_inc", "pre_dec", "offset"]
+    disp: Optional[Disp8] = None
+
+
+@dataclass(frozen=True, slots=True)
+class ImemPtr:
+    base: Imm8
+    mode: Literal["simple", "pos", "neg"]
+    disp: Optional[Disp8] = None
+
+
+@dataclass(frozen=True, slots=True)
 class DecodedInstr:
     opcode: int
     mnemonic: str
@@ -91,3 +105,4 @@ class DecodedInstr:
     binds: Dict[str, object] = field(default_factory=dict)
     pre_latch: Optional[PreLatch] = None
     pre_applied: Optional[PreLatch] = None
+    family: Optional[str] = None

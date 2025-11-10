@@ -35,6 +35,8 @@ def expr_size(expr: ast.Expr) -> int:
         return expr.size
     if isinstance(expr, ast.Reg):
         return expr.size
+    if isinstance(expr, ast.Flag):
+        return 1
     if isinstance(expr, ast.Mem):
         return expr.size
     if isinstance(expr, ast.UnOp):
@@ -200,10 +202,37 @@ def _validate_stmt(stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List
 
     if isinstance(stmt, (ast.Goto, ast.Call)):
         target_bits = expr_size(stmt.target)
-        if target_bits != 20:
+        if target_bits not in {20, 24}:
             kind = "call" if isinstance(stmt, ast.Call) else "goto"
-            _err(errors, instr, f"{kind} target must be 20 bits (got {target_bits})")
+            _err(errors, instr, f"{kind} target must be 20 or 24 bits (got {target_bits})")
         _validate_expr(stmt.target, instr, errors)
+        return
+
+    if isinstance(stmt, ast.ExtRegLoad):
+        _validate_ext_reg_stmt(stmt, instr, errors)
+        return
+
+    if isinstance(stmt, ast.ExtRegStore):
+        _validate_ext_reg_stmt(stmt, instr, errors)
+        return
+
+    if isinstance(stmt, ast.IntMemSwap):
+        _validate_expr(stmt.left, instr, errors)
+        _validate_expr(stmt.right, instr, errors)
+        if stmt.width <= 0:
+            _err(errors, instr, "int_mem_swap width must be positive")
+        return
+    if isinstance(stmt, ast.ExtRegToIntMem):
+        _validate_ext_reg_stmt(stmt, instr, errors)
+        if stmt.dst.space != "int":
+            _err(errors, instr, "ext_reg_to_int destination must be internal memory")
+        _validate_mem(stmt.dst, instr, errors)
+        return
+    if isinstance(stmt, ast.IntMemToExtReg):
+        _validate_ext_reg_stmt(stmt, instr, errors)
+        if stmt.src.space != "int":
+            _err(errors, instr, "int_to_ext_reg source must be internal memory")
+        _validate_mem(stmt.src, instr, errors)
         return
 
     if isinstance(stmt, ast.Effect):
@@ -227,3 +256,12 @@ def validate(instr: ast.Instr) -> List[str]:
     for stmt in instr.semantics:
         _validate_stmt(stmt, instr, state, errors)
     return errors
+
+
+def _validate_ext_reg_stmt(stmt: ast.ExtRegLoad | ast.ExtRegStore, instr: ast.Instr, errors: List[str]) -> None:
+    if stmt.mode not in {"simple", "post_inc", "pre_dec", "offset"}:
+        _err(errors, instr, f"unsupported ext_reg mode {stmt.mode}")
+    if stmt.ptr.size != 24:
+        _err(errors, instr, f"pointer register {stmt.ptr.name} must be 24 bits")
+    if stmt.disp is not None and stmt.disp.size != 8:
+        _err(errors, instr, "ext_reg displacement must be 8 bits")

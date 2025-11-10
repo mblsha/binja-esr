@@ -47,6 +47,8 @@ def expr_to_dict(expr: ast.Expr) -> Dict[str, Any]:
         return _tmp_to_dict(expr)
     if isinstance(expr, ast.Reg):
         return _reg_to_dict(expr)
+    if isinstance(expr, ast.Flag):
+        return {_KIND: "flag", "name": expr.name}
     if isinstance(expr, ast.Mem):
         return _mem_to_dict(expr)
     if isinstance(expr, ast.UnOp):
@@ -134,6 +136,53 @@ def stmt_to_dict(stmt: ast.Stmt) -> Dict[str, Any]:
         }
     if isinstance(stmt, ast.Ret):
         return {_KIND: "ret", "far": stmt.far, "reti": stmt.reti}
+    if isinstance(stmt, ast.ExtRegLoad):
+        data: Dict[str, Any] = {
+            _KIND: "ext_reg_load",
+            "dst": _reg_to_dict(stmt.dst),
+            "ptr": _reg_to_dict(stmt.ptr),
+            "mode": stmt.mode,
+        }
+        if stmt.disp is not None:
+            data["disp"] = expr_to_dict(stmt.disp)
+        return data
+    if isinstance(stmt, ast.ExtRegStore):
+        data = {
+            _KIND: "ext_reg_store",
+            "src": _reg_to_dict(stmt.src),
+            "ptr": _reg_to_dict(stmt.ptr),
+            "mode": stmt.mode,
+        }
+        if stmt.disp is not None:
+            data["disp"] = expr_to_dict(stmt.disp)
+        return data
+    if isinstance(stmt, ast.IntMemSwap):
+        return {
+            _KIND: "int_mem_swap",
+            "left": expr_to_dict(stmt.left),
+            "right": expr_to_dict(stmt.right),
+            "width": stmt.width,
+        }
+    if isinstance(stmt, ast.ExtRegToIntMem):
+        data = {
+            _KIND: "ext_reg_to_int",
+            "ptr": _reg_to_dict(stmt.ptr),
+            "mode": stmt.mode,
+            "dst": _mem_to_dict(stmt.dst),
+        }
+        if stmt.disp is not None:
+            data["disp"] = expr_to_dict(stmt.disp)
+        return data
+    if isinstance(stmt, ast.IntMemToExtReg):
+        data = {
+            _KIND: "int_to_ext_reg",
+            "ptr": _reg_to_dict(stmt.ptr),
+            "mode": stmt.mode,
+            "src": _mem_to_dict(stmt.src),
+        }
+        if stmt.disp is not None:
+            data["disp"] = expr_to_dict(stmt.disp)
+        return data
     if isinstance(stmt, ast.Effect):
         return {
             _KIND: "effect",
@@ -192,6 +241,8 @@ def dict_to_expr(data: Dict[str, Any]) -> ast.Expr:
         return _dict_to_tmp(data)
     if kind == "reg":
         return _dict_to_reg(data)
+    if kind == "flag":
+        return ast.Flag(name=data["name"])
     if kind == "mem":
         return _dict_to_mem(data)
     if kind == "unop":
@@ -258,6 +309,40 @@ def dict_to_stmt(data: Dict[str, Any]) -> ast.Stmt:
         return ast.Call(target=dict_to_expr(data["target"]), far=data.get("far", False))
     if kind == "ret":
         return ast.Ret(far=data.get("far", False), reti=data.get("reti", False))
+    if kind == "ext_reg_load":
+        return ast.ExtRegLoad(
+            dst=_dict_to_reg(data["dst"]),
+            ptr=_dict_to_reg(data["ptr"]),
+            mode=data["mode"],
+            disp=dict_to_expr(data["disp"]) if "disp" in data else None,
+        )
+    if kind == "ext_reg_store":
+        return ast.ExtRegStore(
+            src=_dict_to_reg(data["src"]),
+            ptr=_dict_to_reg(data["ptr"]),
+            mode=data["mode"],
+            disp=dict_to_expr(data["disp"]) if "disp" in data else None,
+        )
+    if kind == "int_mem_swap":
+        return ast.IntMemSwap(
+            left=dict_to_expr(data["left"]),
+            right=dict_to_expr(data["right"]),
+            width=data["width"],
+        )
+    if kind == "ext_reg_to_int":
+        return ast.ExtRegToIntMem(
+            ptr=_dict_to_reg(data["ptr"]),
+            mode=data["mode"],
+            disp=dict_to_expr(data["disp"]) if "disp" in data else None,
+            dst=_dict_to_mem(data["dst"]),
+        )
+    if kind == "int_to_ext_reg":
+        return ast.IntMemToExtReg(
+            src=_dict_to_mem(data["src"]),
+            ptr=_dict_to_reg(data["ptr"]),
+            mode=data["mode"],
+            disp=dict_to_expr(data["disp"]) if "disp" in data else None,
+        )
     if kind == "effect":
         return ast.Effect(
             kind=data["kind"],
