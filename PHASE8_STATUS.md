@@ -1,6 +1,19 @@
 # Phase 8 Plan & Status
 
-Phase 8 must land every “hard” semantic family so SCIL fully mirrors the legacy lifter/emulator: control & stacks, looped transfers, carry-chain loops, packed‑BCD ops/shifts, and system-control instructions. Below is the original scope with current completion markers.
+Phase 8 must land every “hard” semantic family so SCIL fully mirrors the legacy lifter/emulator: control & stacks, looped transfers, carry-chain loops, packed‑BCD ops/shifts, and system-control instructions. Below is the original scope with current completion markers, aligned with the original plan so nothing gets dropped.
+
+---
+
+## Plan Audit (high-level goals → status)
+
+| Plan Item | Status | Notes |
+| --- | --- | --- |
+| Control/stack effects (CALL*/RET*/PUSH*/POP*/JPF/interrupts) | ✅ Completed | Specs, effect nodes, compat LLIL + PyEMU covered; RETI/interrupt exit semantics implemented. |
+| Looped transfers (`MVL/MVLD` & addressing variants) | ⛔ Outstanding | No decode/spec/backend work yet; remains top priority. |
+| Carry-chain loops (`ADCL/SBCL`) | ⛔ Outstanding | Effects/tests/backends pending. |
+| Packed‑BCD loops & decimal shifts (`DADL/DSBL`, `DSLL/DSRL`, `PMDF`) | ⛔ Outstanding | Need nibble-aware semantics everywhere. |
+| System control (`HALT/OFF/RESET/WAIT/IR`) | ⛔ Outstanding | Effects + IMEM side-effects still to implement. |
+| Test/property expansion + Rust parity | ⛔ Outstanding | Dedicated suites + prop harness updates + Rust backend support for new effects still missing. |
 
 ---
 
@@ -57,7 +70,26 @@ Phase 8 must land every “hard” semantic family so SCIL fully mirrors the l
 
 ---
 
+---
+
+## Files / Components Checklist (from original plan)
+
+| Component | Status | Notes |
+| --- | --- | --- |
+| `sc62015/scil/effects.py` definitions | ✅ In place | Control/stack effects landed; loop/BCD/system variants still to add. |
+| `sc62015/scil/specs/*` extensions | 🟡 Partial | Control/stack specs merged; need loop/BCD/system specs. |
+| `sc62015/scil/from_decoded.py` bindings | 🟡 Partial | Bindings exist for control/stack; loop/BCD/system bindings pending. |
+| `backend_llil_compat.py` lowering | 🟡 Partial | Supports control/stack; must add loop/BCD/system effects with legacy shapes. |
+| `pyemu` effect eval | 🟡 Partial | Handles call/ret stacks; needs loop/BCD/system logic. |
+| `emulators/rust_scil` effect eval | 🟡 Partial | Control/stack not implemented yet; future work must mirror Python semantics. |
+| Tests (`tests/effects_*`, `tests/loops_bcd_*`) | ❌ Missing | Need dedicated suites per plan. |
+| Property harness updates | ❌ Missing | Strategies/cases for new families pending. |
+| Rust parity tests | ❌ Missing | CLI parity must cover new effects once implemented. |
+
+---
+
 ## Invariants (remain enforced)
+
 - `PC` masked to 20 bits; external addresses 24-bit; internal addresses 8-bit; PRE applies once.
 - Paged control flow uses `(PC & 0xF0000) OR lo16`; JR family uses `PC+len ± sext8`.
 - Completed control/stack work preserves these invariants and existing MockLLIL shapes.
