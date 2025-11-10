@@ -13,7 +13,12 @@ class CompatDispatcher:
     """Lightweight bridge that uses the SCIL-friendly decoder for pilot opcodes."""
 
     def __init__(self) -> None:
-        self.pilot_opcodes: Set[int] = {0x08, 0x18, 0x19, 0x02, 0x88}
+        self.pilot_opcodes: Set[int] = {0x02, 0x08, 0x18, 0x19, 0x32, 0x88}
+        self._pending_pre = None
+
+    @property
+    def pending_pre(self):
+        return self._pending_pre
 
     def try_emit(
         self, data: bytes, addr: int, il: LowLevelILFunction
@@ -30,6 +35,13 @@ class CompatDispatcher:
             decoded = decode_opcode(opcode, ctx)
         except Exception:
             return None
+
+        if decoded.pre_latch is not None:
+            self._pending_pre = decoded.pre_latch
+            return decoded.length
+
+        object.__setattr__(decoded, "pre_applied", self._pending_pre)
+        self._pending_pre = None
 
         emit_instruction(decoded, il, addr)
         return decoded.length
