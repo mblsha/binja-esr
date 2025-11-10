@@ -314,6 +314,28 @@ def loop_bcd_instr(
     return Instr(name=name, length=length, semantics=tuple(semantics))
 
 
+def decimal_shift_instr(name: str, is_left: bool) -> Instr:
+    base = Tmp("dst_off", 8)
+    direction = Const((-1 if is_left else 1) & 0xFF, 8)
+    flag = Const(1 if is_left else 0, 1)
+    return Instr(
+        name=name,
+        length=2,
+        semantics=(
+            Fetch("u8", base),
+            Effect(
+                "decimal_shift",
+                (
+                    Reg("I", 16),
+                    LoopIntPtr(base),
+                    direction,
+                    flag,
+                ),
+            ),
+        ),
+    )
+
+
 def inc_dec_reg(name: str, reg_name: str, size: int, op: str) -> Instr:
     reg = Reg(reg_name, size)
     const_one = Const(1, size)

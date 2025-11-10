@@ -23,6 +23,7 @@ from ..pysc62015.instr.opcodes import (
     TempMultiByte2,
     TempLoopByteResult,
     TempOverallZeroAcc,
+    TempBcdDigitCarry,
     CFlag,
     ZFlag,
     CZFlag,
@@ -834,6 +835,69 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
                     width_bytes,
                     env.il.reg(width_bytes, TempOverallZeroAcc),
                     env.il.const(width_bytes, 0),
+                ),
+            )
+        )
+        return
+    if kind == "decimal_shift":
+        ptr = stmt.args[1]
+        if not isinstance(ptr, ast.LoopIntPtr):
+            raise NotImplementedError("decimal_shift requires internal memory operand")
+        offset = _loop_int_offset(ptr, env)
+        mode = env.next_imem_mode()
+        addr = env.compat.imem_address(mode, env.il.const(1, offset))
+        env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte1, addr))
+        env.il.append(env.il.set_reg(1, TempBcdDigitCarry, env.il.const(1, 0)))
+        env.il.append(env.il.set_reg(1, TempOverallZeroAcc, env.il.const(1, 0)))
+
+        direction_info = _const_value(stmt.args[2], env)
+        if direction_info is None:
+            raise ValueError("decimal_shift direction missing")
+        direction = _to_signed(direction_info[0], stmt.args[2].size)
+        left_info = _const_value(stmt.args[3], env)
+        if left_info is None:
+            raise ValueError("decimal_shift needs direction flag")
+        is_left = bool(left_info[0])
+
+        with lift_loop(env.il):
+            addr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte1)
+            current_byte = env.il.load(1, addr_reg)
+            low_nibble = env.il.and_expr(1, current_byte, env.il.const(1, 0x0F))
+            high_nibble = env.il.logical_shift_right(1, current_byte, env.il.const(1, 4))
+
+            shift_part = env.il.shift_left(1, low_nibble, env.il.const(1, 4))
+            carry_part = env.il.reg(1, TempBcdDigitCarry)
+            next_carry = high_nibble
+            addr_update = env.il.sub(bits_to_bytes(24), addr_reg, env.il.const(bits_to_bytes(24), 1))
+
+            if not is_left:
+                shift_part, high_nibble = high_nibble, shift_part
+                carry_part = env.il.shift_left(1, carry_part, env.il.const(1, 4))
+                next_carry = low_nibble
+                addr_update = env.il.add(bits_to_bytes(24), addr_reg, env.il.const(bits_to_bytes(24), 1))
+
+            shifted = env.il.or_expr(1, shift_part, carry_part)
+            env.il.append(env.il.store(1, addr_reg, shifted))
+            env.il.append(env.il.set_reg(1, TempBcdDigitCarry, next_carry))
+
+            overall = env.il.reg(1, TempOverallZeroAcc)
+            env.il.append(
+                env.il.set_reg(
+                    1,
+                    TempOverallZeroAcc,
+                    env.il.or_expr(1, overall, shifted),
+                )
+            )
+
+            env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte1, addr_update))
+
+        env.il.append(
+            env.il.set_flag(
+                ZFlag,
+                env.il.compare_equal(
+                    1,
+                    env.il.reg(1, TempOverallZeroAcc),
+                    env.il.const(1, 0),
                 ),
             )
         )

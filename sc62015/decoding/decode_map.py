@@ -492,6 +492,17 @@ def _dec_loop_bcd_reg(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInst
     )
 
 
+def _dec_decimal_shift(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
+    addr = Imm8(ctx.read_u8())
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="decimal_shift",
+        binds={"dst": addr},
+    )
+
+
 def _reg_from_byte(byte: int) -> Tuple[str, str]:
     idx = byte & 0x07
     try:
@@ -718,8 +729,10 @@ DECODERS: Dict[int, DecoderFunc] = {
     0xC9: _dec_imem_move,
     0xCA: _dec_imem_move,
     0xCF: _dec_imem_loop_move,
+    0xEC: lambda opcode, ctx: _dec_decimal_shift(opcode, ctx, "DSLL (m)"),
     0xD4: lambda opcode, ctx: _dec_loop_bcd_mem(opcode, ctx, "DSBL (m),(n)"),
     0xD5: lambda opcode, ctx: _dec_loop_bcd_reg(opcode, ctx, "DSBL (m),A"),
+    0xFC: lambda opcode, ctx: _dec_decimal_shift(opcode, ctx, "DSRL (m)"),
     0xE0: _dec_imem_from_ext,
     0xE1: _dec_imem_from_ext,
     0xE2: _dec_imem_from_ext,

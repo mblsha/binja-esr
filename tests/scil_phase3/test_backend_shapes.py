@@ -184,6 +184,14 @@ def test_dsbl_shape_matches() -> None:
     _assert_same("D41020", 0x1B00)
 
 
+def test_dsll_shape_matches() -> None:
+    _assert_same("EC11", 0x1C00)
+
+
+def test_dsrl_shape_matches() -> None:
+    _assert_same("FC10", 0x1D00)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
 

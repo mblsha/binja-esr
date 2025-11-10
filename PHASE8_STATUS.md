@@ -46,7 +46,7 @@ Phase 8 must land every “hard” semantic family so SCIL fully mirrors the l
 | --- | --- | --- |
 | `ADCL/SBCL` (`loop_add_carry` / `loop_sub_borrow`) | ✅ Done | SCIL effects + compat LLIL + PyEMU for IMEM↔IMEM + `(m),A`; tests cover carry/borrow cases. |
 | `DADL/DSBL` packed‑BCD loops | ✅ Done | SCIL BCD effects + PyEMU/LLIL parity with tests for mem/reg forms. |
-| `DSLL/DSRL` decimal shifts | ❌ Pending | Effect must shift decimal digits (directional, zero fill). |
+| `DSLL/DSRL` decimal shifts | ✅ Done | Decimal shift effect wired through SCIL + tests for both directions. |
 | `PMDF` | ❌ Pending | Single-byte packed modifier still to encode as effect. |
 
 ---

@@ -110,6 +110,8 @@ class CompatDispatcher:
             0xCF,
             0xD4,
             0xD5,
+            0xEC,
+            0xFC,
             0xE0,
             0xE1,
             0xE2,

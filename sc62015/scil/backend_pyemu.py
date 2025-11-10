@@ -592,6 +592,34 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         env.state.set_flag("C", carry)
         env.state.set_flag("Z", 1 if (overall_zero & 0xFF) == 0 else 0)
         return
+    if kind == "decimal_shift":
+        count_value, _ = _eval_expr(stmt.args[0], env)
+        ptr = stmt.args[1]
+        if not isinstance(ptr, ast.LoopIntPtr):
+            raise NotImplementedError("decimal_shift requires internal-memory operand")
+        direction = _to_signed(_const_arg(stmt.args[2]), stmt.args[2].size)
+        is_left = bool(_const_arg(stmt.args[3]))
+        remaining = count_value & 0xFFFF
+        addr = _loop_int_pointer(ptr, env)
+        digit_carry = 0
+        overall_zero = 0
+        while remaining:
+            byte = env.bus.load("int", addr & 0xFF, 8) & 0xFF
+            low = byte & 0x0F
+            high = (byte >> 4) & 0x0F
+            if is_left:
+                shifted = ((low << 4) & 0xF0) | (digit_carry & 0x0F)
+                digit_carry = low
+            else:
+                shifted = (high & 0x0F) | ((digit_carry & 0x0F) << 4)
+                digit_carry = high
+            env.bus.store("int", addr & 0xFF, shifted & 0xFF, 8)
+            overall_zero |= shifted
+            addr = (addr + direction) & 0xFF
+            remaining = (remaining - 1) & 0xFFFF
+        env.state.set_reg("I", remaining, 16)
+        env.state.set_flag("Z", 1 if (overall_zero & 0xFF) == 0 else 0)
+        return
     raise NotImplementedError(f"Effect {kind} not supported")
 
 

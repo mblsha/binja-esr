@@ -401,6 +401,14 @@ def _loop_bcd(
     return _with_pre(spec, binder, decoded)
 
 
+def _decimal_shift(decoded: DecodedInstr, *, is_left: bool) -> BuildResult:
+    dst = decoded.binds["dst"]
+    assert isinstance(dst, Imm8)
+    spec = examples.decimal_shift_instr(decoded.mnemonic, is_left=is_left)
+    binder = {"dst_off": _const(dst.value, 8)}
+    return _with_pre(spec, binder, decoded)
+
+
 def _imem_swap(decoded: DecodedInstr) -> BuildResult:
     left = decoded.binds["left"]
     right = decoded.binds["right"]
@@ -527,6 +535,8 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "DADL (m),A": lambda di: _loop_bcd(di, "loop_bcd_add", src_is_mem=False, clear_carry=True),
     "DSBL (m),(n)": lambda di: _loop_bcd(di, "loop_bcd_sub", src_is_mem=True, clear_carry=False),
     "DSBL (m),A": lambda di: _loop_bcd(di, "loop_bcd_sub", src_is_mem=False, clear_carry=False),
+    "DSLL (m)": lambda di: _decimal_shift(di, is_left=True),
+    "DSRL (m)": lambda di: _decimal_shift(di, is_left=False),
     "EX (m),(n)": _imem_swap,
     "EXW (m),(n)": _imem_swap,
     "EXP (m),(n)": _imem_swap,
