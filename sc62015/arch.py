@@ -129,7 +129,9 @@ class SC62015(Architecture):
                     f"SCIL emit failed at {addr:#x}, falling back to legacy: {exc}"
                 )
                 return self._emit_legacy(bytes(data), addr, il)
-            log_error(f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}")
+            log_error(
+                f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}"
+            )
             raise
 
     def get_scil_counters(self) -> dict[str, int]:

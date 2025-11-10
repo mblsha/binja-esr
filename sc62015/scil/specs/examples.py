@@ -11,7 +11,6 @@ from ..ast import (
     Goto,
     If,
     Instr,
-    Join24,
     Mem,
     PcRel,
     Reg,
@@ -516,48 +515,6 @@ def popu_imr() -> Instr:
                     Reg("U", 24),
                     _imr_mem(),
                     Const(8, 8),
-                    Const(1, 1),
-                ),
-            ),
-        ),
-    )
-
-
-def pushu_reg(name: str, reg_name: str, bits: int) -> Instr:
-    value: Expr
-    if reg_name == "F":
-        value = _flag_byte_expr()
-    else:
-        value = Reg(reg_name, bits)
-    return Instr(
-        name=name,
-        length=1,
-        semantics=(
-            Effect(
-                "push_bytes",
-                (
-                    Reg("U", 24),
-                    value,
-                    Const(bits, 8),
-                    Const(1, 1),
-                ),
-            ),
-        ),
-    )
-
-
-def popu_reg(name: str, reg_name: str, bits: int) -> Instr:
-    dest = Reg(reg_name, bits)
-    return Instr(
-        name=name,
-        length=1,
-        semantics=(
-            Effect(
-                "pop_bytes",
-                (
-                    Reg("U", 24),
-                    dest,
-                    Const(bits, 8),
                     Const(1, 1),
                 ),
             ),

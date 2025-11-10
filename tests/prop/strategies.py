@@ -6,7 +6,6 @@ from hypothesis import strategies as st
 
 from sc62015.decoding.decode_map import PRE_LATCHES
 from sc62015.pysc62015.constants import PC_MASK
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .models import PropState, Scenario
 
@@ -101,7 +100,9 @@ def cpu_states() -> st.SearchStrategy[PropState]:
     reg_strategy = st.fixed_dictionaries(
         {name: st.integers(0, limit) for name, limit in REG_LIMITS.items()}
     )
-    flag_strategy = st.fixed_dictionaries({flag: st.integers(0, 1) for flag in FLAG_NAMES})
+    flag_strategy = st.fixed_dictionaries(
+        {flag: st.integers(0, 1) for flag in FLAG_NAMES}
+    )
     internal_bytes = st.binary(min_size=256, max_size=256).map(
         lambda blob: {idx: blob[idx] for idx in range(256)}
     )
@@ -139,9 +140,7 @@ def _scenario(
 @st.composite
 def _imm8_scenarios(draw):
     opcode = draw(
-        st.sampled_from(
-            [0x08, 0x40, 0x48, 0x50, 0x58, 0x64, 0x68, 0x70, 0x78]
-        )
+        st.sampled_from([0x08, 0x40, 0x48, 0x50, 0x58, 0x64, 0x68, 0x70, 0x78])
     )
     imm = draw(st.integers(0, 0xFF))
     return _scenario([bytes([opcode, imm])], "imm8", {"opcode": opcode})
@@ -197,7 +196,9 @@ def _ext_abs_scenarios(draw):
     return _scenario([bytes([opcode, lo, mid, hi])], family, {"addr": addr})
 
 
-def _encode_ext_ptr(ptr_name: str, mode: str, disp: int | None = None) -> Tuple[int, List[int]]:
+def _encode_ext_ptr(
+    ptr_name: str, mode: str, disp: int | None = None
+) -> Tuple[int, List[int]]:
     mode_codes = {"simple": 0x0, "post": 0x2, "pre": 0x3, "pos": 0x8, "neg": 0xC}
     reg_byte = (mode_codes[mode] << 4) | PTR_REG_CODES[ptr_name]
     bytes_out = [reg_byte]
@@ -223,7 +224,11 @@ def _ext_reg_scenarios(draw):
     if disp is not None:
         signed = disp if mode == "pos" else -disp
         info["disp"] = signed
-    return _scenario([bytes([opcode] + operand_bytes)], "r3_simple" if mode == "simple" else f"r3_{mode}", info)
+    return _scenario(
+        [bytes([opcode] + operand_bytes)],
+        "r3_simple" if mode == "simple" else f"r3_{mode}",
+        info,
+    )
 
 
 @st.composite
@@ -255,7 +260,9 @@ def _imem_swap_scenarios(draw):
     opcode = draw(st.sampled_from([0xC0, 0xC1, 0xC2]))
     left = draw(st.integers(0, 0xFF))
     right = draw(st.integers(0, 0xFF))
-    return _scenario([bytes([opcode, left, right])], "imem_swap", {"left": left, "right": right})
+    return _scenario(
+        [bytes([opcode, left, right])], "imem_swap", {"left": left, "right": right}
+    )
 
 
 @st.composite
@@ -263,11 +270,18 @@ def _imem_from_ext_scenarios(draw):
     opcode, width = draw(st.sampled_from(IMEM_FROM_EXT_SPECS))
     ptr = draw(st.sampled_from(list(PTR_REG_CODES.keys())))
     mode = draw(st.sampled_from(["simple", "post", "pre"]))
-    reg_byte = ({"simple": 0x0, "post": 0x2, "pre": 0x3}[mode] << 4) | PTR_REG_CODES[ptr]
+    reg_byte = ({"simple": 0x0, "post": 0x2, "pre": 0x3}[mode] << 4) | PTR_REG_CODES[
+        ptr
+    ]
     seq = [opcode, reg_byte]
     offset = draw(st.integers(0, 0xFF))
     seq.append(offset)
-    info = {"ptr": ptr, "width": width, "mode": {"simple": 0, "post": 1, "pre": 2}[mode], "imem": offset}
+    info = {
+        "ptr": ptr,
+        "width": width,
+        "mode": {"simple": 0, "post": 1, "pre": 2}[mode],
+        "imem": offset,
+    }
     return _scenario([bytes(seq)], "imem_from_ext", info)
 
 
@@ -276,11 +290,18 @@ def _ext_from_imem_scenarios(draw):
     opcode, width = draw(st.sampled_from(EXT_FROM_IMEM_SPECS))
     ptr = draw(st.sampled_from(list(PTR_REG_CODES.keys())))
     mode = draw(st.sampled_from(["simple", "post", "pre"]))
-    reg_byte = ({"simple": 0x0, "post": 0x2, "pre": 0x3}[mode] << 4) | PTR_REG_CODES[ptr]
+    reg_byte = ({"simple": 0x0, "post": 0x2, "pre": 0x3}[mode] << 4) | PTR_REG_CODES[
+        ptr
+    ]
     seq = [opcode, reg_byte]
     offset = draw(st.integers(0, 0xFF))
     seq.append(offset)
-    info = {"ptr": ptr, "width": width, "mode": {"simple": 0, "post": 1, "pre": 2}[mode], "imem": offset}
+    info = {
+        "ptr": ptr,
+        "width": width,
+        "mode": {"simple": 0, "post": 1, "pre": 2}[mode],
+        "imem": offset,
+    }
     return _scenario([bytes(seq)], "ext_from_imem", info)
 
 
@@ -290,7 +311,13 @@ def _pre_scenarios(draw):
     op1 = draw(st.integers(0, 0xFF))
     op2 = draw(st.integers(0, 0xFF))
     seq = [bytes([pre_opcode]), bytes([0x80, op1]), bytes([0x80, op2])]
-    return Scenario(bytes_seq=seq, family="pre_single", info={}, description="pre_single", expect_pre_sequence=True)
+    return Scenario(
+        bytes_seq=seq,
+        family="pre_single",
+        info={},
+        description="pre_single",
+        expect_pre_sequence=True,
+    )
 
 
 @st.composite
@@ -306,7 +333,9 @@ def _loop_move_scenarios(draw):
         "direction": 1 if opcode == 0xCB else -1,
     }
     overrides = {"I": count}
-    return _scenario([bytes([opcode, dst, src])], "loop_move", info, state_overrides=overrides)
+    return _scenario(
+        [bytes([opcode, dst, src])], "loop_move", info, state_overrides=overrides
+    )
 
 
 LOOP_ARITH_MEM_SPECS: Sequence[Tuple[int, str]] = (
@@ -323,7 +352,9 @@ def _loop_arith_mem_scenarios(draw):
     count = draw(st.integers(0, 4))
     info = {"dst": dst, "src": src, "loop_count": count}
     overrides = {"I": count}
-    return _scenario([bytes([opcode, dst, src])], family, info, state_overrides=overrides)
+    return _scenario(
+        [bytes([opcode, dst, src])], family, info, state_overrides=overrides
+    )
 
 
 BCD_LOOP_SPECS: Sequence[Tuple[int, str]] = (
@@ -340,7 +371,9 @@ def _loop_bcd_scenarios(draw):
     count = draw(st.integers(0, 4))
     info = {"dst": dst, "src": src, "loop_count": count}
     overrides = {"I": count}
-    return _scenario([bytes([opcode, dst, src])], family, info, state_overrides=overrides)
+    return _scenario(
+        [bytes([opcode, dst, src])], family, info, state_overrides=overrides
+    )
 
 
 DECIMAL_SHIFT_SPECS: Sequence[Tuple[int, str]] = (
@@ -356,7 +389,9 @@ def _decimal_shift_scenarios(draw):
     count = draw(st.integers(0, 4))
     info = {"base": base, "direction": direction, "loop_count": count}
     overrides = {"I": count}
-    return _scenario([bytes([opcode, base])], "decimal_shift", info, state_overrides=overrides)
+    return _scenario(
+        [bytes([opcode, base])], "decimal_shift", info, state_overrides=overrides
+    )
 
 
 @st.composite

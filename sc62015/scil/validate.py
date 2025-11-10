@@ -96,7 +96,11 @@ def _validate_expr(expr: ast.Expr, instr: ast.Instr, errors: List[str]) -> None:
         _validate_cond(expr.cond, instr, errors)
     elif isinstance(expr, ast.PcRel):
         if expr.out_size != 20:
-            _err(errors, instr, f"pc-relative expressions must be 20 bits (got {expr.out_size})")
+            _err(
+                errors,
+                instr,
+                f"pc-relative expressions must be 20 bits (got {expr.out_size})",
+            )
         if expr.disp is not None:
             disp_bits = expr_size(expr.disp)
             if disp_bits not in {8, expr.out_size}:
@@ -148,12 +152,18 @@ def _validate_cond(cond: ast.Cond, instr: ast.Instr, errors: List[str]) -> None:
     size_a = expr_size(cond.a)
     size_b = expr_size(cond.b)
     if size_a != size_b:
-        _err(errors, instr, f"{cond.kind} operands must match in size ({size_a} vs {size_b})")
+        _err(
+            errors,
+            instr,
+            f"{cond.kind} operands must match in size ({size_a} vs {size_b})",
+        )
     _validate_expr(cond.a, instr, errors)
     _validate_expr(cond.b, instr, errors)
 
 
-def _validate_stmt(stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List[str]) -> None:
+def _validate_stmt(
+    stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List[str]
+) -> None:
     if isinstance(stmt, ast.Fetch):
         _validate_fetch(stmt, instr, errors)
         return
@@ -170,7 +180,11 @@ def _validate_stmt(stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List
         if stmt.flags:
             unsupported = [flag for flag in stmt.flags if flag not in _FLAG_SET]
             if unsupported:
-                _err(errors, instr, f"unsupported flags for SetReg: {', '.join(unsupported)}")
+                _err(
+                    errors,
+                    instr,
+                    f"unsupported flags for SetReg: {', '.join(unsupported)}",
+                )
         _validate_expr(stmt.value, instr, errors)
         return
 
@@ -179,8 +193,7 @@ def _validate_stmt(stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List
             _err(
                 errors,
                 instr,
-                "store width mismatch "
-                f"({expr_size(stmt.value)} vs {stmt.dst.size})",
+                f"store width mismatch ({expr_size(stmt.value)} vs {stmt.dst.size})",
             )
         _validate_mem(stmt.dst, instr, errors)
         _validate_expr(stmt.value, instr, errors)
@@ -204,7 +217,11 @@ def _validate_stmt(stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List
         target_bits = expr_size(stmt.target)
         if target_bits not in {20, 24}:
             kind = "call" if isinstance(stmt, ast.Call) else "goto"
-            _err(errors, instr, f"{kind} target must be 20 or 24 bits (got {target_bits})")
+            _err(
+                errors,
+                instr,
+                f"{kind} target must be 20 or 24 bits (got {target_bits})",
+            )
         _validate_expr(stmt.target, instr, errors)
         return
 
@@ -238,7 +255,9 @@ def _validate_stmt(stmt: ast.Stmt, instr: ast.Instr, state: _State, errors: List
     if isinstance(stmt, ast.Effect):
         if stmt.kind == "pre_latch":
             if state.pre_latch_seen:
-                _err(errors, instr, "multiple pre_latch effects in a single instruction")
+                _err(
+                    errors, instr, "multiple pre_latch effects in a single instruction"
+                )
             state.pre_latch_seen = True
         for arg in stmt.args:
             _validate_expr(arg, instr, errors)
@@ -258,7 +277,9 @@ def validate(instr: ast.Instr) -> List[str]:
     return errors
 
 
-def _validate_ext_reg_stmt(stmt: ast.ExtRegLoad | ast.ExtRegStore, instr: ast.Instr, errors: List[str]) -> None:
+def _validate_ext_reg_stmt(
+    stmt: ast.ExtRegLoad | ast.ExtRegStore, instr: ast.Instr, errors: List[str]
+) -> None:
     if stmt.mode not in {"simple", "post_inc", "pre_dec", "offset"}:
         _err(errors, instr, f"unsupported ext_reg mode {stmt.mode}")
     if stmt.ptr.size != 24:

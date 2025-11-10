@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Tuple
 
 from . import ast
 
@@ -55,7 +54,9 @@ def fold_expr(expr: ast.Expr) -> ast.Expr:
             and new_cond.b is expr.cond.b
         ):
             return expr
-        return ast.TernOp(op=expr.op, cond=new_cond, t=new_t, f=new_f, out_size=expr.out_size)
+        return ast.TernOp(
+            op=expr.op, cond=new_cond, t=new_t, f=new_f, out_size=expr.out_size
+        )
 
     if isinstance(expr, ast.PcRel):
         disp = fold_expr(expr.disp) if expr.disp is not None else None
@@ -67,14 +68,22 @@ def fold_expr(expr: ast.Expr) -> ast.Expr:
             return ast.Const(total, expr.out_size)
         if disp is expr.disp:
             return expr
-        return ast.PcRel(base_advance=expr.base_advance, disp=disp, out_size=expr.out_size)
+        return ast.PcRel(
+            base_advance=expr.base_advance, disp=disp, out_size=expr.out_size
+        )
 
     if isinstance(expr, ast.Join24):
         hi = fold_expr(expr.hi)
         mid = fold_expr(expr.mid)
         lo = fold_expr(expr.lo)
-        if all(isinstance(part, ast.Const) and part.size == 8 for part in (hi, mid, lo)):
-            value = ((hi.value & 0xFF) << 16) | ((mid.value & 0xFF) << 8) | (lo.value & 0xFF)
+        if all(
+            isinstance(part, ast.Const) and part.size == 8 for part in (hi, mid, lo)
+        ):
+            value = (
+                ((hi.value & 0xFF) << 16)
+                | ((mid.value & 0xFF) << 8)
+                | (lo.value & 0xFF)
+            )
             return ast.Const(value=value, size=24)
         if hi is expr.hi and mid is expr.mid and lo is expr.lo:
             return expr
@@ -89,7 +98,10 @@ def fold_stmt(stmt: ast.Stmt) -> ast.Stmt:
     if isinstance(stmt, ast.SetReg):
         return ast.SetReg(reg=stmt.reg, value=fold_expr(stmt.value), flags=stmt.flags)
     if isinstance(stmt, ast.Store):
-        return ast.Store(dst=ast.Mem(stmt.dst.space, fold_expr(stmt.dst.addr), stmt.dst.size), value=fold_expr(stmt.value))
+        return ast.Store(
+            dst=ast.Mem(stmt.dst.space, fold_expr(stmt.dst.addr), stmt.dst.size),
+            value=fold_expr(stmt.value),
+        )
     if isinstance(stmt, ast.SetFlag):
         return ast.SetFlag(flag=stmt.flag, value=fold_expr(stmt.value))
     if isinstance(stmt, ast.If):
@@ -109,7 +121,9 @@ def fold_stmt(stmt: ast.Stmt) -> ast.Stmt:
     if isinstance(stmt, ast.Ret):
         return stmt
     if isinstance(stmt, ast.Effect):
-        return ast.Effect(kind=stmt.kind, args=tuple(fold_expr(arg) for arg in stmt.args))
+        return ast.Effect(
+            kind=stmt.kind, args=tuple(fold_expr(arg) for arg in stmt.args)
+        )
     if isinstance(stmt, ast.Label):
         return stmt
     if isinstance(stmt, ast.Comment):

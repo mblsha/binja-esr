@@ -8,6 +8,7 @@ from ..pysc62015.instr.opcodes import IMEMRegisters, INTERRUPT_VECTOR_ADDR
 from ..pysc62015.constants import PC_MASK, INTERNAL_MEMORY_START
 from . import ast
 
+
 class Bus(Protocol):
     def load(self, space: ast.Space, addr: int, size: int) -> int: ...
     def store(self, space: ast.Space, addr: int, value: int, size: int) -> None: ...
@@ -178,7 +179,9 @@ def _eval_expr(expr: ast.Expr, env: _Env) -> Tuple[int, int]:
         if expr.op == "shr":
             return (left >> right) & _mask(expr.out_size), expr.out_size
         if expr.op == "sar":
-            return (_to_signed(left, expr.out_size) >> right) & _mask(expr.out_size), expr.out_size
+            return (_to_signed(left, expr.out_size) >> right) & _mask(
+                expr.out_size
+            ), expr.out_size
         if expr.op == "eq":
             return (1 if left == right else 0, 1)
         if expr.op == "ne":
@@ -292,7 +295,15 @@ def _exec_stmt(
     if isinstance(stmt, ast.Ret):
         return
     if isinstance(stmt, ast.ExtRegLoad):
-        _exec_ext_reg_op(state, bus, stmt.ptr.name, stmt.mode, stmt.disp, stmt.dst.size, load_reg=stmt.dst.name)
+        _exec_ext_reg_op(
+            state,
+            bus,
+            stmt.ptr.name,
+            stmt.mode,
+            stmt.disp,
+            stmt.dst.size,
+            load_reg=stmt.dst.name,
+        )
         return
     if isinstance(stmt, ast.ExtRegStore):
         _exec_ext_reg_op(
@@ -310,7 +321,9 @@ def _exec_stmt(
         return
     if isinstance(stmt, ast.ExtRegToIntMem):
         disp = _ext_disp_value(stmt.disp)
-        value = _ext_pointer_read_value(state, bus, stmt.ptr.name, stmt.mode, disp, stmt.dst.size)
+        value = _ext_pointer_read_value(
+            state, bus, stmt.ptr.name, stmt.mode, disp, stmt.dst.size
+        )
         addr, _ = _eval_expr(stmt.dst.addr, env)
         if stmt.dst.space == "int":
             addr = _resolve_imem_addr(env, addr & 0xFF)
@@ -319,7 +332,9 @@ def _exec_stmt(
     if isinstance(stmt, ast.IntMemToExtReg):
         disp = _ext_disp_value(stmt.disp)
         value, _ = _eval_expr(stmt.src, env)
-        _ext_pointer_store_value(state, bus, stmt.ptr.name, stmt.mode, disp, stmt.src.size, value)
+        _ext_pointer_store_value(
+            state, bus, stmt.ptr.name, stmt.mode, disp, stmt.src.size, value
+        )
         return
     if isinstance(stmt, (ast.Label, ast.Comment)):
         return
@@ -547,8 +562,12 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         count_value, count_bits = _eval_expr(stmt.args[0], env)
         dst_ptr = stmt.args[1]
         src_ptr = stmt.args[2]
-        if not isinstance(dst_ptr, ast.LoopIntPtr) or not isinstance(src_ptr, ast.LoopIntPtr):
-            raise NotImplementedError("loop_move currently supports internal-memory pointers only")
+        if not isinstance(dst_ptr, ast.LoopIntPtr) or not isinstance(
+            src_ptr, ast.LoopIntPtr
+        ):
+            raise NotImplementedError(
+                "loop_move currently supports internal-memory pointers only"
+            )
         step_raw = _const_arg(stmt.args[3])
         step_signed = _to_signed(step_raw, stmt.args[3].size)
         width_bits = _const_arg(stmt.args[4])
@@ -581,7 +600,9 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
             src_reg_bits = src_ptr.size
         else:
             raise NotImplementedError("loop carry source must be memory or register")
-        carry = env.state.get_flag(carry_flag.name if isinstance(carry_flag, ast.Flag) else "C")
+        carry = env.state.get_flag(
+            carry_flag.name if isinstance(carry_flag, ast.Flag) else "C"
+        )
         overall_zero = 0
         while remaining:
             dst_byte = env.bus.load("int", dst_offset & 0xFF, 8) & 0xFF

@@ -28,7 +28,9 @@ TRACE_BUFFER = TraceBuffer()
 
 
 def record(event: str, addr: int, mnemonic: str, detail: str) -> None:
-    TRACE_BUFFER.record(TraceEntry(event=event, addr=addr, mnemonic=mnemonic, detail=detail))
+    TRACE_BUFFER.record(
+        TraceEntry(event=event, addr=addr, mnemonic=mnemonic, detail=detail)
+    )
 
 
 def snapshot() -> List[TraceEntry]:

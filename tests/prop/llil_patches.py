@@ -111,4 +111,3 @@ _ensure_patch("SX", _eval_sx)
 _ensure_patch("ZX", _eval_zx)
 _ensure_patch("LOW_PART", _eval_low_part)
 _ensure_patch("HIGH_PART", _eval_high_part)
-

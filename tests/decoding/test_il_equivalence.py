@@ -1,6 +1,5 @@
 import re
 
-from binja_test_mocks.coding import Decoder
 from binja_test_mocks.mock_llil import MockLowLevelILFunction
 
 from sc62015.decoding import decode_map

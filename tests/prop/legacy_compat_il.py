@@ -8,7 +8,14 @@ from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel  # type: 
 from sc62015.scil.compat_builder import CompatLLILBuilder
 from sc62015.scil import from_decoded
 from sc62015.scil.backend_llil import emit_llil as emit_scil_llil
-from sc62015.decoding.bind import Addr16Page, Addr24, DecodedInstr, Imm8, RegSel, PreLatch
+from sc62015.decoding.bind import (
+    Addr16Page,
+    Addr24,
+    DecodedInstr,
+    Imm8,
+    RegSel,
+    PreLatch,
+)
 
 Z_FLAG = FlagName("Z")
 C_FLAG = FlagName("C")
@@ -178,8 +185,12 @@ EMITTERS: Dict[int, Callable[[DecodedInstr, LowLevelILFunction, int], None]] = {
     0x32: _emit_pre,
     0x40: lambda di, il, addr: _emit_alu_imm(di, il, "add", ("C", "Z")),
     0x48: lambda di, il, addr: _emit_alu_imm(di, il, "sub", ("C", "Z")),
-    0x50: lambda di, il, addr: _emit_alu_imm(di, il, "add", ("C", "Z"), with_carry=True),
-    0x58: lambda di, il, addr: _emit_alu_imm(di, il, "sub", ("C", "Z"), with_carry=True),
+    0x50: lambda di, il, addr: _emit_alu_imm(
+        di, il, "add", ("C", "Z"), with_carry=True
+    ),
+    0x58: lambda di, il, addr: _emit_alu_imm(
+        di, il, "sub", ("C", "Z"), with_carry=True
+    ),
     0x64: _emit_test,
     0x68: lambda di, il, addr: _emit_alu_imm(di, il, "xor", ("Z",)),
     0x70: lambda di, il, addr: _emit_alu_imm(di, il, "and", ("Z",)),

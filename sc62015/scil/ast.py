@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from typing import Literal, Optional, Sequence, Tuple, Union
 
 Space = Literal["int", "ext", "code"]
-UnaryOp = Literal["neg", "not", "sext", "zext", "low_part", "high_part", "band", "bor", "bxor"]
+UnaryOp = Literal[
+    "neg", "not", "sext", "zext", "low_part", "high_part", "band", "bor", "bxor"
+]
 BinaryOp = Literal[
     "add",
     "sub",

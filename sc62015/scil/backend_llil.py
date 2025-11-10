@@ -10,7 +10,7 @@ from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel  # type: 
 
 from .compat_builder import CompatLLILBuilder
 from . import ast
-from .validate import bits_to_bytes, expr_size
+from .validate import bits_to_bytes
 from ..decoding.bind import PreLatch
 from ..pysc62015.instr.opcodes import (
     RegF,
@@ -82,15 +82,15 @@ def _capture_user_stack_pointer(env: _Env, stack_name: str) -> None:
     )
 
 
-def _emit_user_stack_push(env: _Env, stack_name: str, value_expr: int, width_bits: int) -> None:
+def _emit_user_stack_push(
+    env: _Env, stack_name: str, value_expr: int, width_bits: int
+) -> None:
     width_bytes = bits_to_bytes(width_bits)
     _capture_user_stack_pointer(env, stack_name)
     temp_expr = env.il.reg(bits_to_bytes(24), TempIncDecHelper)
     offset = env.il.const(bits_to_bytes(24), width_bytes)
     new_ptr = env.il.sub(bits_to_bytes(24), temp_expr, offset)
-    env.il.append(
-        env.il.set_reg(bits_to_bytes(24), RegisterName(stack_name), new_ptr)
-    )
+    env.il.append(env.il.set_reg(bits_to_bytes(24), RegisterName(stack_name), new_ptr))
     env.il.append(env.il.store(width_bytes, new_ptr, value_expr))
 
 
@@ -117,7 +117,9 @@ def _finish_user_stack_pop(env: _Env, stack_name: str, width_bits: int) -> None:
     )
 
 
-def _assign_stack_pop_dest(env: _Env, dest: ast.Expr, value_expr: int, value_bits: int) -> None:
+def _assign_stack_pop_dest(
+    env: _Env, dest: ast.Expr, value_expr: int, value_bits: int
+) -> None:
     if isinstance(dest, ast.Reg):
         if dest.name == "F":
             reg_helper = RegF()
@@ -160,7 +162,9 @@ def _update_loop_int_pointer(env: _Env, temp_reg, step_signed: int) -> None:
     update_op = env.il.add if step_signed >= 0 else env.il.sub
     new_addr = update_op(width_bytes, current, step_expr)
     offset = env.il.sub(width_bytes, new_addr, base)
-    wrapped_offset = env.il.and_expr(width_bytes, offset, env.il.const(width_bytes, 0xFF))
+    wrapped_offset = env.il.and_expr(
+        width_bytes, offset, env.il.const(width_bytes, 0xFF)
+    )
     wrapped_addr = env.il.add(width_bytes, base, wrapped_offset)
     env.il.append(env.il.set_reg(width_bytes, temp_reg, wrapped_addr))
 
@@ -224,6 +228,7 @@ class _Env:
     pre_latch: Optional[PreLatch] = None
     tmps: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     imem_index: int = 0
+    branch_depth: int = 0
 
     def bind_fetches(self) -> None:
         for name, const in self.binder.items():
@@ -304,7 +309,9 @@ def _resolve_mem(mem: ast.Mem, env: _Env) -> Tuple[int, int]:
         return addr_expr, 24
     if mem.space == "int":
         if isinstance(mem.addr, ast.Const) and mem.addr.size > 8:
-            return env.il.const_pointer(bits_to_bytes(mem.addr.size), mem.addr.value), mem.addr.size
+            return env.il.const_pointer(
+                bits_to_bytes(mem.addr.size), mem.addr.value
+            ), mem.addr.size
         offset_expr, _ = _emit_expr(mem.addr, env)
         mode = env.next_imem_mode()
         ptr = env.compat.imem_address(mode, offset_expr)
@@ -388,9 +395,17 @@ def _emit_expr(expr: ast.Expr, env: _Env) -> Tuple[int, int]:
             if left_const and right_const:
                 lo_val, lo_bits = left_const
                 hi_val, hi_bits = right_const
-                if isinstance(expr.a, ast.UnOp) and expr.a.op == "zext" and isinstance(expr.a.a, ast.Const):
+                if (
+                    isinstance(expr.a, ast.UnOp)
+                    and expr.a.op == "zext"
+                    and isinstance(expr.a.a, ast.Const)
+                ):
                     lo_bits = expr.a.a.size
-                if isinstance(expr.b, ast.UnOp) and expr.b.op == "zext" and isinstance(expr.b.a, ast.Const):
+                if (
+                    isinstance(expr.b, ast.UnOp)
+                    and expr.b.op == "zext"
+                    and isinstance(expr.b.a, ast.Const)
+                ):
                     hi_bits = expr.b.a.size
                 # Ensure low operand is first (16-bit)
                 if lo_bits > hi_bits:
@@ -405,7 +420,9 @@ def _emit_expr(expr: ast.Expr, env: _Env) -> Tuple[int, int]:
             if left_const and right_const:
                 left_val, _ = left_const
                 right_val, _ = right_const
-                value = left_val + right_val if expr.op == "add" else left_val - right_val
+                value = (
+                    left_val + right_val if expr.op == "add" else left_val - right_val
+                )
                 return (
                     env.il.const(width_bytes, value & _mask(expr.out_size)),
                     expr.out_size,
@@ -432,7 +449,9 @@ def _emit_expr(expr: ast.Expr, env: _Env) -> Tuple[int, int]:
             "ror": env.il.rotate_right,
         }
         if expr.op == "cmp":
-            return env.il.compare_unsigned_less_than(width_bytes, left, right), expr.out_size
+            return env.il.compare_unsigned_less_than(
+                width_bytes, left, right
+            ), expr.out_size
         if expr.op not in op_map:
             raise NotImplementedError(f"Unsupported binary op {expr.op}")
         return op_map[expr.op](width_bytes, left, right), expr.out_size
@@ -511,6 +530,17 @@ def _emit_condition(cond: ast.Cond, env: _Env) -> int:
     return op_map[cond.kind](width_bytes, lhs, rhs)
 
 
+def _emit_unconditional_jump(target_expr: int, env: _Env) -> None:
+    if env.branch_depth > 0:
+        env.il.append(env.il.jump(target_expr))
+        return
+    entry = LowLevelILLabel()
+    exit_label = LowLevelILLabel()
+    env.il.mark_label(entry)
+    env.il.append(env.il.jump(target_expr))
+    env.il.mark_label(exit_label)
+
+
 def _emit_if(stmt: ast.If, env: _Env) -> None:
     cond_expr = _emit_condition(stmt.cond, env)
     true_label = LowLevelILLabel()
@@ -519,14 +549,22 @@ def _emit_if(stmt: ast.If, env: _Env) -> None:
 
     env.il.append(env.il.if_expr(cond_expr, true_label, false_label))
     env.il.mark_label(true_label)
-    for inner in stmt.then_ops:
-        _emit_stmt(inner, env)
+    env.branch_depth += 1
+    try:
+        for inner in stmt.then_ops:
+            _emit_stmt(inner, env)
+    finally:
+        env.branch_depth -= 1
     if stmt.else_ops:
         env.il.append(env.il.goto(end_label))
     env.il.mark_label(false_label)
     if stmt.else_ops:
-        for inner in stmt.else_ops:
-            _emit_stmt(inner, env)
+        env.branch_depth += 1
+        try:
+            for inner in stmt.else_ops:
+                _emit_stmt(inner, env)
+        finally:
+            env.branch_depth -= 1
         env.il.mark_label(end_label)
 
 
@@ -554,9 +592,7 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
         const_info = _const_value(stmt.args[0], env)
         if const_info is not None:
             value, _ = const_info
-            env.il.append(
-                env.il.push(2, env.il.const(bits_to_bytes(16), value))
-            )
+            env.il.append(env.il.push(2, env.il.const(bits_to_bytes(16), value)))
             return
         value_expr, bits = _emit_expr(stmt.args[0], env)
         coerced = _coerce_width_expr(value_expr, bits, 16, env)
@@ -634,8 +670,12 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
     if kind == "loop_move":
         dst_ptr = stmt.args[1]
         src_ptr = stmt.args[2]
-        if not isinstance(dst_ptr, ast.LoopIntPtr) or not isinstance(src_ptr, ast.LoopIntPtr):
-            raise NotImplementedError("loop_move currently supports internal-memory operands only")
+        if not isinstance(dst_ptr, ast.LoopIntPtr) or not isinstance(
+            src_ptr, ast.LoopIntPtr
+        ):
+            raise NotImplementedError(
+                "loop_move currently supports internal-memory operands only"
+            )
         dst_offset = _loop_int_offset(dst_ptr, env)
         src_offset = _loop_int_offset(src_ptr, env)
         dst_mode = env.next_imem_mode()
@@ -656,7 +696,9 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
         dst_ptr = stmt.args[1]
         src_ptr = stmt.args[2]
         if not isinstance(dst_ptr, ast.LoopIntPtr):
-            raise NotImplementedError("loop_add_carry requires internal memory destination")
+            raise NotImplementedError(
+                "loop_add_carry requires internal memory destination"
+            )
         dst_offset = _loop_int_offset(dst_ptr, env)
         dst_mode = env.next_imem_mode()
         dst_addr = env.compat.imem_address(dst_mode, env.il.const(1, dst_offset))
@@ -868,18 +910,24 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
             addr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte1)
             current_byte = env.il.load(1, addr_reg)
             low_nibble = env.il.and_expr(1, current_byte, env.il.const(1, 0x0F))
-            high_nibble = env.il.logical_shift_right(1, current_byte, env.il.const(1, 4))
+            high_nibble = env.il.logical_shift_right(
+                1, current_byte, env.il.const(1, 4)
+            )
 
             shift_part = env.il.shift_left(1, low_nibble, env.il.const(1, 4))
             carry_part = env.il.reg(1, TempBcdDigitCarry)
             next_carry = high_nibble
-            addr_update = env.il.sub(bits_to_bytes(24), addr_reg, env.il.const(bits_to_bytes(24), 1))
+            addr_update = env.il.sub(
+                bits_to_bytes(24), addr_reg, env.il.const(bits_to_bytes(24), 1)
+            )
 
             if not is_left:
                 shift_part, high_nibble = high_nibble, shift_part
                 carry_part = env.il.shift_left(1, carry_part, env.il.const(1, 4))
                 next_carry = low_nibble
-                addr_update = env.il.add(bits_to_bytes(24), addr_reg, env.il.const(bits_to_bytes(24), 1))
+                addr_update = env.il.add(
+                    bits_to_bytes(24), addr_reg, env.il.const(bits_to_bytes(24), 1)
+                )
 
             shifted = env.il.or_expr(1, shift_part, carry_part)
             env.il.append(env.il.store(1, addr_reg, shifted))
@@ -894,7 +942,9 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
                 )
             )
 
-            env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte1, addr_update))
+            env.il.append(
+                env.il.set_reg(bits_to_bytes(24), TempMultiByte1, addr_update)
+            )
 
         env.il.append(
             env.il.set_flag(
@@ -936,11 +986,11 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
         imr, *_ = RegIMR().operands()
         imr_value = imr.lift(env.il)
         env.il.append(env.il.push(1, imr_value))
-        imr.lift_assign(env.il, env.il.and_expr(1, imr.lift(env.il), env.il.const(1, 0x7F)))
-        env.il.append(env.il.push(1, env.il.reg(1, RegisterName("F"))))
-        env.il.append(
-            env.il.push(3, env.il.reg(bits_to_bytes(24), RegisterName("PC")))
+        imr.lift_assign(
+            env.il, env.il.and_expr(1, imr.lift(env.il), env.il.const(1, 0x7F))
         )
+        env.il.append(env.il.push(1, env.il.reg(1, RegisterName("F"))))
+        env.il.append(env.il.push(3, env.il.reg(bits_to_bytes(24), RegisterName("PC"))))
         mem = EMemAddr(width=3)
         mem.value = INTERRUPT_VECTOR_ADDR
         env.il.append(env.il.jump(mem.lift(env.il)))
@@ -981,7 +1031,7 @@ def _emit_stmt(stmt: ast.Stmt, env: _Env) -> None:
 
     if isinstance(stmt, ast.Goto):
         target_expr, _ = _emit_expr(stmt.target, env)
-        env.il.append(env.il.jump(target_expr))
+        _emit_unconditional_jump(target_expr, env)
         return
 
     if isinstance(stmt, ast.Call):
@@ -1025,7 +1075,9 @@ def _emit_stmt(stmt: ast.Stmt, env: _Env) -> None:
 
     if isinstance(stmt, ast.ExtRegToIntMem):
         disp = _const_to_signed(stmt.disp)
-        value = env.compat.ext_reg_read_value(stmt.ptr.name, stmt.mode, stmt.dst.size, disp)
+        value = env.compat.ext_reg_read_value(
+            stmt.ptr.name, stmt.mode, stmt.dst.size, disp
+        )
         addr_expr, _ = _resolve_mem(stmt.dst, env)
         env.il.append(env.il.store(bits_to_bytes(stmt.dst.size), addr_expr, value))
         return
@@ -1033,7 +1085,9 @@ def _emit_stmt(stmt: ast.Stmt, env: _Env) -> None:
     if isinstance(stmt, ast.IntMemToExtReg):
         disp = _const_to_signed(stmt.disp)
         value_expr, _ = _emit_expr(stmt.src, env)
-        env.compat.ext_reg_store_value(stmt.ptr.name, stmt.mode, stmt.src.size, disp, value_expr)
+        env.compat.ext_reg_store_value(
+            stmt.ptr.name, stmt.mode, stmt.src.size, disp, value_expr
+        )
         return
 
     if isinstance(stmt, (ast.Label, ast.Comment)):

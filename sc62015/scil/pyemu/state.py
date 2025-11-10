@@ -32,7 +32,9 @@ def _mask(bits: int) -> int:
 class CPUState:
     """Architecture-aware register bank for the SCIL Python emulator."""
 
-    _regs: Dict[str, int] = field(default_factory=lambda: {name: 0 for name in _BASE_WIDTHS})
+    _regs: Dict[str, int] = field(
+        default_factory=lambda: {name: 0 for name in _BASE_WIDTHS}
+    )
     _flags: Dict[str, int] = field(default_factory=lambda: {"C": 0, "Z": 0})
     pc: int = 0
     halted: bool = False

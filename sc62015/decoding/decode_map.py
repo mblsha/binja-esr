@@ -10,7 +10,6 @@ from .bind import (
     Imm16,
     Imm24,
     Imm8,
-    IntAddrCalc,
     PreLatch,
     ExtRegPtr,
     ImemPtr,
@@ -52,7 +51,9 @@ def _dec_mv_a_n(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     )
 
 
-def _dec_jr_cond(opcode: int, ctx: StreamCtx, cond: str, direction: int) -> DecodedInstr:
+def _dec_jr_cond(
+    opcode: int, ctx: StreamCtx, cond: str, direction: int
+) -> DecodedInstr:
     offset = Imm8(ctx.read_u8())
     return DecodedInstr(
         opcode=opcode,
@@ -85,6 +86,7 @@ def _dec_mv_a_abs24(opcode: int, ctx: StreamCtx) -> DecodedInstr:
         family="ext24",
         binds={"addr24": addr},
     )
+
 
 def _dec_call(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     lo, hi = ctx.read_u16_mn()
@@ -503,7 +505,9 @@ def _dec_decimal_shift(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedIns
     )
 
 
-def _dec_simple(opcode: int, ctx: StreamCtx, mnemonic: str, family: str) -> DecodedInstr:
+def _dec_simple(
+    opcode: int, ctx: StreamCtx, mnemonic: str, family: str
+) -> DecodedInstr:
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,

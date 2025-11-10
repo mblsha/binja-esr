@@ -3,14 +3,13 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 from binja_test_mocks.eval_llil import Memory, State, evaluate_llil
 from binja_test_mocks.mock_llil import (
     MockGoto,
     MockIfExpr,
     MockLabel,
-    MockLLIL,
     MockLowLevelILFunction,
 )
 
@@ -54,13 +53,27 @@ class PropMemory:
     def _read_byte(self, addr: int) -> int:
         space, backing, offset = self._space_for(addr)
         value = backing.get(offset, 0)
-        self.log.append({"op": 0, "space": 0 if space == "int" else 1, "addr": offset, "value": value})
+        self.log.append(
+            {
+                "op": 0,
+                "space": 0 if space == "int" else 1,
+                "addr": offset,
+                "value": value,
+            }
+        )
         return value
 
     def _write_byte(self, addr: int, value: int) -> None:
         space, backing, offset = self._space_for(addr)
         backing[offset] = value & 0xFF
-        self.log.append({"op": 1, "space": 0 if space == "int" else 1, "addr": offset, "value": value & 0xFF})
+        self.log.append(
+            {
+                "op": 1,
+                "space": 0 if space == "int" else 1,
+                "addr": offset,
+                "value": value & 0xFF,
+            }
+        )
 
 
 def _canonicalize(il_func: MockLowLevelILFunction) -> List[str]:
@@ -151,7 +164,9 @@ class InstructionRecord:
     decoded: DecodedInstr
 
 
-def _decode_sequence(bytes_seq: Sequence[bytes], start_pc: int) -> List[InstructionRecord]:
+def _decode_sequence(
+    bytes_seq: Sequence[bytes], start_pc: int
+) -> List[InstructionRecord]:
     dispatcher = CompatDispatcher()
     addr = start_pc
     records: List[InstructionRecord] = []
@@ -165,7 +180,9 @@ def _decode_sequence(bytes_seq: Sequence[bytes], start_pc: int) -> List[Instruct
     return records
 
 
-def _emit_pair(record: InstructionRecord) -> Tuple[MockLowLevelILFunction, MockLowLevelILFunction]:
+def _emit_pair(
+    record: InstructionRecord,
+) -> Tuple[MockLowLevelILFunction, MockLowLevelILFunction]:
     legacy_il = MockLowLevelILFunction()
     emit_legacy_il(record.decoded, legacy_il, record.addr)
 
@@ -185,7 +202,9 @@ def _emit_pair(record: InstructionRecord) -> Tuple[MockLowLevelILFunction, MockL
 def _compare_il_shapes(record: InstructionRecord, legacy_il, scil_il) -> None:
     lhs = _canonicalize(legacy_il)
     rhs = _canonicalize(scil_il)
-    assert lhs == rhs, f"IL shape mismatch for {record.decoded.mnemonic} @ {record.addr:#x}"
+    assert lhs == rhs, (
+        f"IL shape mismatch for {record.decoded.mnemonic} @ {record.addr:#x}"
+    )
 
 
 def _compare_results(left: ExecutionResult, right: ExecutionResult) -> None:
@@ -202,10 +221,14 @@ def _check_pc_width(result: ExecutionResult) -> None:
 def _check_external_width(log: List[Dict[str, int]]) -> None:
     for entry in log:
         if entry["space"] == 1:
-            assert 0 <= entry["addr"] < (1 << 20), "External address exceeded 24-bit space"
+            assert 0 <= entry["addr"] < (1 << 20), (
+                "External address exceeded 24-bit space"
+            )
 
 
-def _check_branch_invariants(info: Dict[str, int], state: PropState, result: ExecutionResult) -> None:
+def _check_branch_invariants(
+    info: Dict[str, int], state: PropState, result: ExecutionResult
+) -> None:
     disp = info["disp"]
     length = info.get("length", 2)
     fall = (state.regs["PC"] + length) & PC_MASK
@@ -213,7 +236,9 @@ def _check_branch_invariants(info: Dict[str, int], state: PropState, result: Exe
     assert result.regs["PC"] in {fall, taken}, "JR invariant violated"
 
 
-def _check_paged_jp(info: Dict[str, int], state: PropState, result: ExecutionResult) -> None:
+def _check_paged_jp(
+    info: Dict[str, int], state: PropState, result: ExecutionResult
+) -> None:
     cond_flag = info.get("cond")
     expect_one = info.get("expect", 1)
     lo16 = info["lo16"]
@@ -223,10 +248,14 @@ def _check_paged_jp(info: Dict[str, int], state: PropState, result: ExecutionRes
     should_take = True
     if cond_flag:
         should_take = state.flags.get(cond_flag, 0) == expect_one
-    assert result.regs["PC"] == (target if should_take else fall), "JP invariant violated"
+    assert result.regs["PC"] == (target if should_take else fall), (
+        "JP invariant violated"
+    )
 
 
-def _check_pointer_update(info: Dict[str, int], state: PropState, result: ExecutionResult) -> None:
+def _check_pointer_update(
+    info: Dict[str, int], state: PropState, result: ExecutionResult
+) -> None:
     if info.get("dest") == info["ptr"]:
         return
     reg = info["ptr"]
@@ -242,7 +271,12 @@ def _check_pointer_update(info: Dict[str, int], state: PropState, result: Execut
         assert end_val == start_val, "Pointer should remain unchanged"
 
 
-def _check_ptr_from_imem(info: Dict[str, int], state: PropState, result: ExecutionResult, log: List[Dict[str, int]]) -> None:
+def _check_ptr_from_imem(
+    info: Dict[str, int],
+    state: PropState,
+    result: ExecutionResult,
+    log: List[Dict[str, int]],
+) -> None:
     base = info["base"]
     bp_val = state.internal.get(IMEMRegisters["BP"], 0) & 0xFF
     start = (bp_val + base) & 0xFF
@@ -261,10 +295,17 @@ def _check_ptr_from_imem(info: Dict[str, int], state: PropState, result: Executi
     accessed = [entry for entry in log if entry["space"] == 1]
     if not accessed:
         return
-    assert any(entry["addr"] == (ptr & 0xFFFFF) for entry in accessed), "Pointer target not accessed"
+    assert any(entry["addr"] == (ptr & 0xFFFFF) for entry in accessed), (
+        "Pointer target not accessed"
+    )
 
 
-def _check_imem_ext_transfer(info: Dict[str, int], state: PropState, log: List[Dict[str, int]], expect_internal_write: bool) -> None:
+def _check_imem_ext_transfer(
+    info: Dict[str, int],
+    state: PropState,
+    log: List[Dict[str, int]],
+    expect_internal_write: bool,
+) -> None:
     offset = info["imem"]
     width = info.get("width", 1)
     bp_val = state.internal.get(IMEMRegisters["BP"], 0) & 0xFF
@@ -272,27 +313,31 @@ def _check_imem_ext_transfer(info: Dict[str, int], state: PropState, log: List[D
     addresses = {((base + delta) & 0xFF) for delta in range(max(1, width))}
     op_kind = 1 if expect_internal_write else 0
     touched = {
-        entry["addr"]
-        for entry in log
-        if entry["space"] == 0 and entry["op"] == op_kind
+        entry["addr"] for entry in log if entry["space"] == 0 and entry["op"] == op_kind
     }
-    debug = [
-        entry for entry in log if entry["space"] == 0
-    ]
+    debug = [entry for entry in log if entry["space"] == 0]
     if expect_internal_write:
-        assert addresses & touched, f"Expected internal write missing (need {addresses}, saw {touched}, log={debug})"
+        assert addresses & touched, (
+            f"Expected internal write missing (need {addresses}, saw {touched}, log={debug})"
+        )
     else:
-        assert addresses & touched, f"Expected internal read missing (need {addresses}, saw {touched}, log={debug})"
+        assert addresses & touched, (
+            f"Expected internal read missing (need {addresses}, saw {touched}, log={debug})"
+        )
 
 
-def _check_jp_reg(info: Dict[str, int], state: PropState, result: ExecutionResult) -> None:
+def _check_jp_reg(
+    info: Dict[str, int], state: PropState, result: ExecutionResult
+) -> None:
     reg = info["reg"]
     start = state.regs[reg]
     expected = start & PC_MASK
     assert result.regs["PC"] == expected, "JP r3 invariant violated"
 
 
-def _check_jp_imem(info: Dict[str, int], state: PropState, result: ExecutionResult) -> None:
+def _check_jp_imem(
+    info: Dict[str, int], state: PropState, result: ExecutionResult
+) -> None:
     offset = info["offset"]
     bp_val = state.internal.get(IMEMRegisters["BP"], 0) & 0xFF
     start = (bp_val + offset) & 0xFF
@@ -307,7 +352,9 @@ def _check_loop_counter(info: Dict[str, int], result: ExecutionResult) -> None:
     count = info.get("loop_count")
     if count is None:
         return
-    assert result.regs.get("I", 0) == 0, "Loop instructions must zero I after completion"
+    assert result.regs.get("I", 0) == 0, (
+        "Loop instructions must zero I after completion"
+    )
 
 
 def _check_invariants(
@@ -330,9 +377,13 @@ def _check_invariants(
     elif family == "imem_ptr":
         _check_ptr_from_imem(info, initial_state, result, mem_log)
     elif family == "imem_from_ext":
-        _check_imem_ext_transfer(info, initial_state, mem_log, expect_internal_write=True)
+        _check_imem_ext_transfer(
+            info, initial_state, mem_log, expect_internal_write=True
+        )
     elif family == "ext_from_imem":
-        _check_imem_ext_transfer(info, initial_state, mem_log, expect_internal_write=False)
+        _check_imem_ext_transfer(
+            info, initial_state, mem_log, expect_internal_write=False
+        )
     elif family == "jp_reg":
         _check_jp_reg(info, initial_state, result)
     elif family == "jp_imem":
@@ -341,12 +392,21 @@ def _check_invariants(
         assert len(records) >= 2, "PRE scenario requires at least two records"
         assert records[0].decoded.pre_applied is not None, "First consumer must see PRE"
         assert records[1].decoded.pre_applied is None, "PRE should apply only once"
-    elif family in {"loop_move", "loop_add", "loop_sub", "loop_bcd_add", "loop_bcd_sub", "decimal_shift"}:
+    elif family in {
+        "loop_move",
+        "loop_add",
+        "loop_sub",
+        "loop_bcd_add",
+        "loop_bcd_sub",
+        "decimal_shift",
+    }:
         _check_loop_counter(info, result)
     elif family == "system_wait":
         length = info.get("length", 1)
         expected = (initial_state.regs["PC"] + length) & PC_MASK
-        assert result.regs["PC"] == expected, "WAIT must advance PC by instruction length"
+        assert result.regs["PC"] == expected, (
+            "WAIT must advance PC by instruction length"
+        )
 
 
 def _state_from_result(result: ExecutionResult) -> PropState:
@@ -403,4 +463,6 @@ def run_scenario(scenario: Scenario, state: PropState) -> None:
         with open(fname, "wb") as fp:
             for chunk in scenario.bytes_seq:
                 fp.write(chunk)
+
+
 register_sc62015_intrinsics()

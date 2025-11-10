@@ -6,7 +6,6 @@ from sc62015.decoding import decode_map
 from sc62015.decoding.dispatcher import CompatDispatcher
 from sc62015.decoding.reader import StreamCtx
 from sc62015.scil.pyemu import CPUState, MemoryBus, execute_decoded
-from sc62015.scil import from_decoded
 from sc62015.pysc62015.constants import PC_MASK
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -17,7 +16,9 @@ def _decode(opcode: int, operands: Iterable[int], pc: int) -> decode_map.Decoded
     return decode_map.decode_opcode(opcode, ctx)
 
 
-def _decode_sequence(chunks: List[bytes], pc: int) -> List[Tuple[int, decode_map.DecodedInstr]]:
+def _decode_sequence(
+    chunks: List[bytes], pc: int
+) -> List[Tuple[int, decode_map.DecodedInstr]]:
     disp = CompatDispatcher()
     records: List[Tuple[int, decode_map.DecodedInstr]] = []
     cursor = pc

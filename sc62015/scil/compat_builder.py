@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, Optional, Tuple
+from typing import Optional, Tuple
 
 from binaryninja import FlagName, RegisterName  # type: ignore
 
@@ -33,7 +33,9 @@ class CompatLLILBuilder:
     def pc_relative(self, base_advance: int, disp_expr: Optional[int]) -> int:
         width_bytes = bits_to_bytes(20)
         pc = self.il.reg(width_bytes, RegisterName("PC"))
-        fallthrough = self.il.add(width_bytes, pc, self.il.const(width_bytes, base_advance))
+        fallthrough = self.il.add(
+            width_bytes, pc, self.il.const(width_bytes, base_advance)
+        )
         if disp_expr is None:
             return fallthrough
         return self.il.add(width_bytes, fallthrough, disp_expr)
@@ -61,18 +63,28 @@ class CompatLLILBuilder:
                 self.il.const(bits_to_bytes(24), disp & self._addr_mask),
             )
         elif mode == self._mode_post_inc:
-            self.il.append(self.il.set_reg(bits_to_bytes(24), TempIncDecHelper, ptr_expr))
+            self.il.append(
+                self.il.set_reg(bits_to_bytes(24), TempIncDecHelper, ptr_expr)
+            )
             self.il.append(
                 self.il.set_reg(
                     bits_to_bytes(24),
                     ptr_reg,
-                    self.il.add(bits_to_bytes(24), ptr_expr, self.il.const(bits_to_bytes(24), width)),
+                    self.il.add(
+                        bits_to_bytes(24),
+                        ptr_expr,
+                        self.il.const(bits_to_bytes(24), width),
+                    ),
                 )
             )
             base = self.il.reg(bits_to_bytes(24), TempIncDecHelper)
         elif mode == self._mode_pre_dec:
-            new_value = self.il.sub(bits_to_bytes(24), ptr_expr, self.il.const(bits_to_bytes(24), width))
-            self.il.append(self.il.set_reg(bits_to_bytes(24), TempIncDecHelper, new_value))
+            new_value = self.il.sub(
+                bits_to_bytes(24), ptr_expr, self.il.const(bits_to_bytes(24), width)
+            )
+            self.il.append(
+                self.il.set_reg(bits_to_bytes(24), TempIncDecHelper, new_value)
+            )
             self.il.append(self.il.set_reg(bits_to_bytes(24), ptr_reg, new_value))
             base = self.il.reg(bits_to_bytes(24), TempIncDecHelper)
         else:
@@ -85,18 +97,24 @@ class CompatLLILBuilder:
         addr = self._ext_ptr_address(ptr_name, mode_code, width_bytes, disp)
         return self.il.load(width_bytes, addr)
 
-    def ext_reg_store_value(self, ptr_name: str, mode: str, width_bits: int, disp: int, value) -> None:
+    def ext_reg_store_value(
+        self, ptr_name: str, mode: str, width_bits: int, disp: int, value
+    ) -> None:
         mode_code = self._resolve_ptr_mode(mode)
         width_bytes = bits_to_bytes(width_bits)
         addr = self._ext_ptr_address(ptr_name, mode_code, width_bytes, disp)
         self.il.append(self.il.store(width_bytes, addr, value))
 
-    def ext_reg_load(self, dst_name: str, dst_bits: int, ptr_name: str, mode: str, disp: int) -> None:
+    def ext_reg_load(
+        self, dst_name: str, dst_bits: int, ptr_name: str, mode: str, disp: int
+    ) -> None:
         width_bytes = bits_to_bytes(dst_bits)
         value = self.ext_reg_read_value(ptr_name, mode, dst_bits, disp)
         self.il.append(self.il.set_reg(width_bytes, RegisterName(dst_name), value))
 
-    def ext_reg_store(self, src_name: str, src_bits: int, ptr_name: str, mode: str, disp: int) -> None:
+    def ext_reg_store(
+        self, src_name: str, src_bits: int, ptr_name: str, mode: str, disp: int
+    ) -> None:
         width_bytes = bits_to_bytes(src_bits)
         value = self.il.reg(width_bytes, RegisterName(src_name))
         self.ext_reg_store_value(ptr_name, mode, src_bits, disp, value)

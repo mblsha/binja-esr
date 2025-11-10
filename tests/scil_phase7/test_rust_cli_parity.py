@@ -221,7 +221,9 @@ def test_rust_cli_matches_pyemu(opcode: int, operands: Iterable[int], setup) -> 
 
     build = from_decoded.build(decoded)
     instr_dict = serde.instr_to_dict(build.instr)
-    binder_dict = {name: serde.expr_to_dict(expr) for name, expr in build.binder.items()}
+    binder_dict = {
+        name: serde.expr_to_dict(expr) for name, expr in build.binder.items()
+    }
     pre_applied = (
         {"first": build.pre_applied.first, "second": build.pre_applied.second}
         if build.pre_applied

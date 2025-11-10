@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from .decode_map import PRE_LATCHES, decode_opcode
+from .decode_map import decode_opcode
 from .reader import StreamCtx
 from .bind import DecodedInstr
 

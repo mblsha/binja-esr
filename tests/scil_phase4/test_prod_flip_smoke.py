@@ -24,8 +24,10 @@ def test_scil_is_default() -> None:
 
 def test_allow_legacy_rescues_on_failure(monkeypatch) -> None:
     monkeypatch.setenv("BN_ALLOW_LEGACY", "1")
+
     def boom(_decoded):
         raise RuntimeError("boom")
+
     monkeypatch.setattr("sc62015.arch.from_decoded.build", boom)
     arch = SC62015()
     il = MockLowLevelILFunction()
@@ -38,6 +40,7 @@ def test_allow_legacy_rescues_on_failure(monkeypatch) -> None:
 def test_failure_raises_without_rescue(monkeypatch) -> None:
     def boom(_decoded):
         raise RuntimeError("boom")
+
     monkeypatch.setattr("sc62015.arch.from_decoded.build", boom)
     arch = SC62015()
     il = MockLowLevelILFunction()

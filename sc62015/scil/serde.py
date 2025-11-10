@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from . import ast
 
@@ -301,7 +301,9 @@ def dict_to_stmt(data: Dict[str, Any]) -> ast.Stmt:
             flags=flags if flags else None,
         )
     if kind == "store":
-        return ast.Store(dst=_dict_to_mem(data["dst"]), value=dict_to_expr(data["value"]))
+        return ast.Store(
+            dst=_dict_to_mem(data["dst"]), value=dict_to_expr(data["value"])
+        )
     if kind == "set_flag":
         return ast.SetFlag(flag=data["flag"], value=dict_to_expr(data["value"]))
     if kind == "if":

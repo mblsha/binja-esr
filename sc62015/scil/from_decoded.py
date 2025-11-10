@@ -34,6 +34,7 @@ _REG_BITS = {
     "r3": 24,
 }
 
+
 def _const(value: int, bits: int) -> ast.Const:
     mask = (1 << bits) - 1
     return ast.Const(value & mask, bits)
@@ -82,8 +83,12 @@ def _mv_a_n(decoded: DecodedInstr) -> BuildResult:
     return _with_pre(examples.mv_a_imm(), _imm8(decoded), decoded)
 
 
-def _alu(decoded: DecodedInstr, op: str, include_carry: bool, flags: tuple[str, ...]) -> BuildResult:
-    spec = examples.alu_a_imm(decoded.mnemonic, op, include_carry=include_carry, flags=flags)
+def _alu(
+    decoded: DecodedInstr, op: str, include_carry: bool, flags: tuple[str, ...]
+) -> BuildResult:
+    spec = examples.alu_a_imm(
+        decoded.mnemonic, op, include_carry=include_carry, flags=flags
+    )
     return _with_pre(spec, _imm8(decoded), decoded)
 
 
@@ -365,7 +370,9 @@ def _mvl_imem(decoded: DecodedInstr) -> BuildResult:
     return _with_pre(spec, binder, decoded)
 
 
-def _loop_carry(decoded: DecodedInstr, effect_kind: str, *, src_is_mem: bool) -> BuildResult:
+def _loop_carry(
+    decoded: DecodedInstr, effect_kind: str, *, src_is_mem: bool
+) -> BuildResult:
     dst = decoded.binds["dst"]
     assert isinstance(dst, Imm8)
     binder = {"dst_off": _const(dst.value, 8)}
@@ -373,7 +380,9 @@ def _loop_carry(decoded: DecodedInstr, effect_kind: str, *, src_is_mem: bool) ->
         src = decoded.binds["src"]
         assert isinstance(src, Imm8)
         binder["src_off"] = _const(src.value, 8)
-    spec = examples.loop_carry_instr(decoded.mnemonic, effect_kind, src_is_mem=src_is_mem)
+    spec = examples.loop_carry_instr(
+        decoded.mnemonic, effect_kind, src_is_mem=src_is_mem
+    )
     return _with_pre(spec, binder, decoded)
 
 
@@ -552,10 +561,18 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "ADCL (m),A": lambda di: _loop_carry(di, "loop_add_carry", src_is_mem=False),
     "SBCL (m),(n)": lambda di: _loop_carry(di, "loop_sub_borrow", src_is_mem=True),
     "SBCL (m),A": lambda di: _loop_carry(di, "loop_sub_borrow", src_is_mem=False),
-    "DADL (m),(n)": lambda di: _loop_bcd(di, "loop_bcd_add", src_is_mem=True, clear_carry=True),
-    "DADL (m),A": lambda di: _loop_bcd(di, "loop_bcd_add", src_is_mem=False, clear_carry=True),
-    "DSBL (m),(n)": lambda di: _loop_bcd(di, "loop_bcd_sub", src_is_mem=True, clear_carry=False),
-    "DSBL (m),A": lambda di: _loop_bcd(di, "loop_bcd_sub", src_is_mem=False, clear_carry=False),
+    "DADL (m),(n)": lambda di: _loop_bcd(
+        di, "loop_bcd_add", src_is_mem=True, clear_carry=True
+    ),
+    "DADL (m),A": lambda di: _loop_bcd(
+        di, "loop_bcd_add", src_is_mem=False, clear_carry=True
+    ),
+    "DSBL (m),(n)": lambda di: _loop_bcd(
+        di, "loop_bcd_sub", src_is_mem=True, clear_carry=False
+    ),
+    "DSBL (m),A": lambda di: _loop_bcd(
+        di, "loop_bcd_sub", src_is_mem=False, clear_carry=False
+    ),
     "DSLL (m)": lambda di: _decimal_shift(di, is_left=True),
     "DSRL (m)": lambda di: _decimal_shift(di, is_left=False),
     "PMDF (m),n": _pmdf_imm,
