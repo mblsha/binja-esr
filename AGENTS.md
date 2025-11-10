@@ -45,3 +45,9 @@
 - Emulator demo: `uv run python pce500/run_pce500.py` (use `--profile-emulator` to emit `emulator-profile.perfetto-trace`).
 - Web UI: `uv run python web/run.py` then open the served address.
 - Binary Ninja: Not required for dev; mocks auto‑load via `FORCE_BINJA_MOCK=1` or `binja-test-mocks`.
+
+- **Perf & counters:** `get_scil_counters()` exposes `scil_ok`, `scil_error`,
+  and `legacy_rescue` (the only time legacy code runs is when
+  `BN_ALLOW_LEGACY=1` is set for an emergency). The perf gate in CI runs the
+  shape-sensitive corpus (`tests/scil_phase3`) plus a fixed decode set to guard
+  regressions.
