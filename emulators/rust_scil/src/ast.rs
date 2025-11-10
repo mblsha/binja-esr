@@ -20,11 +20,19 @@ pub enum Expr {
     #[serde(rename = "tmp")]
     Tmp { name: String, size: u8 },
     #[serde(rename = "reg")]
-    Reg { name: String, size: u8, bank: Option<String> },
+    Reg {
+        name: String,
+        size: u8,
+        bank: Option<String>,
+    },
     #[serde(rename = "flag")]
     Flag { name: String },
     #[serde(rename = "mem")]
-    Mem { space: Space, size: u8, addr: Box<Expr> },
+    Mem {
+        space: Space,
+        size: u8,
+        addr: Box<Expr>,
+    },
     #[serde(rename = "unop")]
     UnOp {
         op: String,
@@ -59,6 +67,8 @@ pub enum Expr {
         mid: Box<Expr>,
         lo: Box<Expr>,
     },
+    #[serde(rename = "loop_ptr")]
+    LoopPtr { offset: Box<Expr> },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -152,6 +162,8 @@ pub enum Stmt {
     Label { name: String },
     #[serde(rename = "comment")]
     Comment { text: String },
+    #[serde(rename = "effect")]
+    Effect { kind: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, Clone, Deserialize)]

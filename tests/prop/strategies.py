@@ -119,8 +119,21 @@ def cpu_states() -> st.SearchStrategy[PropState]:
     )
 
 
-def _scenario(seq: Sequence[bytes], family: str, info: Dict[str, int]) -> Scenario:
-    return Scenario(bytes_seq=list(seq), family=family, info=info, description=family)
+def _scenario(
+    seq: Sequence[bytes],
+    family: str,
+    info: Dict[str, int],
+    *,
+    state_overrides: Dict[str, int] | None = None,
+    description: str | None = None,
+) -> Scenario:
+    return Scenario(
+        bytes_seq=list(seq),
+        family=family,
+        info=info,
+        description=description or family,
+        state_overrides=state_overrides,
+    )
 
 
 @st.composite
@@ -280,6 +293,95 @@ def _pre_scenarios(draw):
     return Scenario(bytes_seq=seq, family="pre_single", info={}, description="pre_single", expect_pre_sequence=True)
 
 
+@st.composite
+def _loop_move_scenarios(draw):
+    opcode = draw(st.sampled_from([0xCB, 0xCF]))
+    dst = draw(st.integers(0, 0xFF))
+    src = draw(st.integers(0, 0xFF))
+    count = draw(st.integers(0, 4))
+    info = {
+        "dst": dst,
+        "src": src,
+        "loop_count": count,
+        "direction": 1 if opcode == 0xCB else -1,
+    }
+    overrides = {"I": count}
+    return _scenario([bytes([opcode, dst, src])], "loop_move", info, state_overrides=overrides)
+
+
+LOOP_ARITH_MEM_SPECS: Sequence[Tuple[int, str]] = (
+    (0x54, "loop_add"),
+    (0x5C, "loop_sub"),
+)
+
+
+@st.composite
+def _loop_arith_mem_scenarios(draw):
+    opcode, family = draw(st.sampled_from(LOOP_ARITH_MEM_SPECS))
+    dst = draw(st.integers(0, 0xFF))
+    src = draw(st.integers(0, 0xFF))
+    count = draw(st.integers(0, 4))
+    info = {"dst": dst, "src": src, "loop_count": count}
+    overrides = {"I": count}
+    return _scenario([bytes([opcode, dst, src])], family, info, state_overrides=overrides)
+
+
+BCD_LOOP_SPECS: Sequence[Tuple[int, str]] = (
+    (0xC4, "loop_bcd_add"),
+    (0xD4, "loop_bcd_sub"),
+)
+
+
+@st.composite
+def _loop_bcd_scenarios(draw):
+    opcode, family = draw(st.sampled_from(BCD_LOOP_SPECS))
+    dst = draw(st.integers(0, 0xFF))
+    src = draw(st.integers(0, 0xFF))
+    count = draw(st.integers(0, 4))
+    info = {"dst": dst, "src": src, "loop_count": count}
+    overrides = {"I": count}
+    return _scenario([bytes([opcode, dst, src])], family, info, state_overrides=overrides)
+
+
+DECIMAL_SHIFT_SPECS: Sequence[Tuple[int, str]] = (
+    (0xEC, "left"),
+    (0xFC, "right"),
+)
+
+
+@st.composite
+def _decimal_shift_scenarios(draw):
+    opcode, direction = draw(st.sampled_from(DECIMAL_SHIFT_SPECS))
+    base = draw(st.integers(0, 0xFF))
+    count = draw(st.integers(0, 4))
+    info = {"base": base, "direction": direction, "loop_count": count}
+    overrides = {"I": count}
+    return _scenario([bytes([opcode, base])], "decimal_shift", info, state_overrides=overrides)
+
+
+@st.composite
+def _pmdf_scenarios(draw):
+    addr = draw(st.integers(0, 0xFF))
+    imm = draw(st.integers(0, 0xFF))
+    return _scenario([bytes([0x47, addr, imm])], "pmdf", {"addr": addr, "imm": imm})
+
+
+SYSTEM_SPECS: Sequence[Tuple[int, str]] = (
+    (0xDE, "system_intrinsic"),
+    (0xDF, "system_intrinsic"),
+    (0xEF, "system_wait"),
+    (0xFE, "system_intrinsic"),
+    (0xFF, "system_intrinsic"),
+)
+
+
+@st.composite
+def _system_scenarios(draw):
+    opcode, family = draw(st.sampled_from(SYSTEM_SPECS))
+    info = {"length": 1}
+    return _scenario([bytes([opcode])], family, info)
+
+
 def instruction_scenarios() -> st.SearchStrategy[Scenario]:
     return st.one_of(
         _imm8_scenarios(),
@@ -294,4 +396,10 @@ def instruction_scenarios() -> st.SearchStrategy[Scenario]:
         _imem_from_ext_scenarios(),
         _ext_from_imem_scenarios(),
         _pre_scenarios(),
+        _loop_move_scenarios(),
+        _loop_arith_mem_scenarios(),
+        _loop_bcd_scenarios(),
+        _decimal_shift_scenarios(),
+        _pmdf_scenarios(),
+        _system_scenarios(),
     )

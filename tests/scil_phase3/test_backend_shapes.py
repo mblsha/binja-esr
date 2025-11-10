@@ -200,6 +200,26 @@ def test_pmdf_reg_shape_matches() -> None:
     _assert_same("5710", 0x1F00)
 
 
+def test_halt_shape_matches() -> None:
+    _assert_same("DE", 0x2000)
+
+
+def test_off_shape_matches() -> None:
+    _assert_same("DF", 0x2010)
+
+
+def test_reset_shape_matches() -> None:
+    _assert_same("FF", 0x2020)
+
+
+def test_ir_shape_matches() -> None:
+    _assert_same("FE", 0x2030)
+
+
+def test_wait_shape_matches() -> None:
+    _assert_same("EF", 0x2040)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
 

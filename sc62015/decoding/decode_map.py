@@ -503,6 +503,16 @@ def _dec_decimal_shift(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedIns
     )
 
 
+def _dec_simple(opcode: int, ctx: StreamCtx, mnemonic: str, family: str) -> DecodedInstr:
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family=family,
+        binds={},
+    )
+
+
 def _dec_pmdf_imm(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     addr = Imm8(ctx.read_u8())
     imm = Imm8(ctx.read_u8())
@@ -764,6 +774,11 @@ DECODERS: Dict[int, DecoderFunc] = {
     0xE8: _dec_ext_from_imem,
     0xE9: _dec_ext_from_imem,
     0xEA: _dec_ext_from_imem,
+    0xDE: lambda opcode, ctx: _dec_simple(opcode, ctx, "HALT", "system"),
+    0xDF: lambda opcode, ctx: _dec_simple(opcode, ctx, "OFF", "system"),
+    0xEF: lambda opcode, ctx: _dec_simple(opcode, ctx, "WAIT", "system"),
+    0xFE: lambda opcode, ctx: _dec_simple(opcode, ctx, "IR", "system"),
+    0xFF: lambda opcode, ctx: _dec_simple(opcode, ctx, "RESET", "system"),
 }
 
 

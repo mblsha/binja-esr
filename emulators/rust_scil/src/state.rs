@@ -19,6 +19,8 @@ pub struct State {
     flags: HashMap<String, u8>,
     #[serde(default)]
     pub pc: u32,
+    #[serde(default)]
+    pub halted: bool,
 }
 
 impl Default for State {
@@ -27,6 +29,7 @@ impl Default for State {
             regs: HashMap::new(),
             flags: HashMap::new(),
             pc: 0,
+            halted: false,
         }
     }
 }

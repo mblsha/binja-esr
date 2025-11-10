@@ -27,7 +27,12 @@ from ..pysc62015.instr.opcodes import (
     CFlag,
     ZFlag,
     CZFlag,
+    HALTIntrinsic,
+    OFFIntrinsic,
+    RESETIntrinsic,
     lift_loop,
+    EMemAddr,
+    INTERRUPT_VECTOR_ADDR,
 )
 from ..pysc62015.instr.instructions import bcd_add_emul, bcd_sub_emul
 from ..pysc62015.constants import INTERNAL_MEMORY_START
@@ -913,6 +918,32 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
         coerced = _coerce_width_expr(value_expr, value_bits, 8, env)
         current = env.il.load(1, addr_expr)
         env.il.append(env.il.store(1, addr_expr, env.il.add(1, current, coerced)))
+        return
+    if kind == "halt":
+        env.il.append(env.il.intrinsic([], HALTIntrinsic, []))
+        return
+    if kind == "off":
+        env.il.append(env.il.intrinsic([], OFFIntrinsic, []))
+        return
+    if kind == "reset":
+        env.il.append(env.il.intrinsic([], RESETIntrinsic, []))
+        return
+    if kind == "wait":
+        with lift_loop(env.il):
+            env.il.append(env.il.nop())
+        return
+    if kind == "interrupt_enter":
+        imr, *_ = RegIMR().operands()
+        imr_value = imr.lift(env.il)
+        env.il.append(env.il.push(1, imr_value))
+        imr.lift_assign(env.il, env.il.and_expr(1, imr.lift(env.il), env.il.const(1, 0x7F)))
+        env.il.append(env.il.push(1, env.il.reg(1, RegisterName("F"))))
+        env.il.append(
+            env.il.push(3, env.il.reg(bits_to_bytes(24), RegisterName("PC")))
+        )
+        mem = EMemAddr(width=3)
+        mem.value = INTERRUPT_VECTOR_ADDR
+        env.il.append(env.il.jump(mem.lift(env.il)))
         return
     raise NotImplementedError(f"Effect {kind} not supported")
 

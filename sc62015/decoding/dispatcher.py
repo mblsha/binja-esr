@@ -120,6 +120,11 @@ class CompatDispatcher:
             0xE8,
             0xE9,
             0xEA,
+            0xDE,
+            0xDF,
+            0xEF,
+            0xFE,
+            0xFF,
         }
         self.pilot_opcodes.update(PRE_LATCHES.keys())
         self._pending_pre = None

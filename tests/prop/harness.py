@@ -20,6 +20,7 @@ from sc62015.decoding.bind import DecodedInstr
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK
 from sc62015.pysc62015.emulator import Registers
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from sc62015.pysc62015.intrinsics import register_sc62015_intrinsics
 from sc62015.scil import from_decoded
 from sc62015.scil.backend_llil import emit_llil
 from sc62015.scil.compat_builder import CompatLLILBuilder
@@ -302,6 +303,13 @@ def _check_jp_imem(info: Dict[str, int], state: PropState, result: ExecutionResu
     assert result.regs["PC"] == pointer, "JP (n) invariant violated"
 
 
+def _check_loop_counter(info: Dict[str, int], result: ExecutionResult) -> None:
+    count = info.get("loop_count")
+    if count is None:
+        return
+    assert result.regs.get("I", 0) == 0, "Loop instructions must zero I after completion"
+
+
 def _check_invariants(
     scenario: Scenario,
     initial_state: PropState,
@@ -333,6 +341,12 @@ def _check_invariants(
         assert len(records) >= 2, "PRE scenario requires at least two records"
         assert records[0].decoded.pre_applied is not None, "First consumer must see PRE"
         assert records[1].decoded.pre_applied is None, "PRE should apply only once"
+    elif family in {"loop_move", "loop_add", "loop_sub", "loop_bcd_add", "loop_bcd_sub", "decimal_shift"}:
+        _check_loop_counter(info, result)
+    elif family == "system_wait":
+        length = info.get("length", 1)
+        expected = (initial_state.regs["PC"] + length) & PC_MASK
+        assert result.regs["PC"] == expected, "WAIT must advance PC by instruction length"
 
 
 def _state_from_result(result: ExecutionResult) -> PropState:
@@ -346,6 +360,9 @@ def _state_from_result(result: ExecutionResult) -> PropState:
 
 def run_scenario(scenario: Scenario, state: PropState) -> None:
     initial_state = state.clone()
+    if scenario.state_overrides:
+        for name, value in scenario.state_overrides.items():
+            initial_state.regs[name] = value
     records = _decode_sequence(scenario.bytes_seq, initial_state.regs["PC"])
     assert records, "Scenario produced no executable instruction"
 
@@ -386,3 +403,4 @@ def run_scenario(scenario: Scenario, state: PropState) -> None:
         with open(fname, "wb") as fp:
             for chunk in scenario.bytes_seq:
                 fp.write(chunk)
+register_sc62015_intrinsics()

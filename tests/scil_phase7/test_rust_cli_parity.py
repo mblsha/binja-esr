@@ -10,6 +10,7 @@ from sc62015.decoding import decode_map
 from sc62015.decoding.reader import StreamCtx
 from sc62015.scil import from_decoded, serde
 from sc62015.scil.pyemu import CPUState, MemoryBus, execute_decoded
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERRUPT_VECTOR_ADDR
 
 CARGO_CMD = [
     "cargo",
@@ -48,7 +49,11 @@ def _snapshot(cpu: CPUState, bus: MemoryBus) -> Dict[str, Dict]:
     for name, width in _REG_WIDTHS.items():
         regs[name] = cpu.get_reg(name, width)
     flags = {"C": cpu.get_flag("C"), "Z": cpu.get_flag("Z")}
-    return {"state": {"pc": cpu.pc, "regs": regs, "flags": flags}, "int_mem": bus.dump_internal(), "ext_mem": bus.dump_external()}
+    return {
+        "state": {"pc": cpu.pc, "halted": cpu.halted, "regs": regs, "flags": flags},
+        "int_mem": bus.dump_internal(),
+        "ext_mem": bus.dump_external(),
+    }
 
 
 def _build_initial_state(pc: int = 0) -> Tuple[CPUState, MemoryBus]:
@@ -60,6 +65,7 @@ def _build_initial_state(pc: int = 0) -> Tuple[CPUState, MemoryBus]:
 
 def _apply_snapshot(cpu: CPUState, bus: MemoryBus, snapshot: Dict[str, Dict]) -> None:
     cpu.pc = snapshot["state"]["pc"] & 0xFFFFF
+    cpu.halted = snapshot["state"].get("halted", False)
     for name, value in snapshot["state"]["regs"].items():
         if name == "PC":
             continue
@@ -86,6 +92,7 @@ def _run_rust(payload: Dict) -> Dict:
 
 def _compare_states(py: Dict, rust: Dict) -> None:
     assert rust["state"]["pc"] == py["state"]["pc"]
+    assert rust["state"].get("halted", False) == py["state"].get("halted", False)
     for name, value in py["state"]["regs"].items():
         if name == "PC":
             continue
@@ -110,6 +117,92 @@ def _compare_states(py: Dict, rust: Dict) -> None:
             0xA8,
             [0x12, 0x20, 0x00],
             lambda cpu, bus: cpu.set_reg("A", 0xCC, 8),
+        ),
+        (
+            0xCB,
+            [0x10, 0x20],
+            lambda cpu, bus: (
+                cpu.set_reg("I", 2, 16),
+                bus.preload_internal(
+                    [
+                        (0x10, 0x00),
+                        (0x11, 0x00),
+                        (0x20, 0x11),
+                        (0x21, 0x22),
+                    ]
+                ),
+            ),
+        ),
+        (
+            0x54,
+            [0x30, 0x40],
+            lambda cpu, bus: (
+                cpu.set_reg("I", 2, 16),
+                cpu.set_flag("C", 1),
+                bus.preload_internal(
+                    [
+                        (0x30, 0x05),
+                        (0x31, 0x06),
+                        (0x40, 0x01),
+                        (0x41, 0x02),
+                    ]
+                ),
+            ),
+        ),
+        (
+            0xC4,
+            [0x50, 0x60],
+            lambda cpu, bus: (
+                cpu.set_reg("I", 2, 16),
+                bus.preload_internal(
+                    [
+                        (0x50, 0x12),
+                        (0x51, 0x34),
+                        (0x60, 0x11),
+                        (0x61, 0x22),
+                    ]
+                ),
+            ),
+        ),
+        (
+            0xEC,
+            [0x70],
+            lambda cpu, bus: (
+                cpu.set_reg("I", 3, 16),
+                bus.preload_internal(
+                    [
+                        (0x70, 0x09),
+                        (0x6F, 0x00),
+                        (0x6E, 0x00),
+                    ]
+                ),
+            ),
+        ),
+        (
+            0xDE,
+            [],
+            lambda cpu, bus: bus.preload_internal(
+                [
+                    (IMEMRegisters.USR, 0xFF),
+                    (IMEMRegisters.SSR, 0x00),
+                ]
+            ),
+        ),
+        (
+            0xFE,
+            [],
+            lambda cpu, bus: (
+                cpu.set_reg("S", 0x0200, 24),
+                cpu.set_reg("F", 0xA5, 8),
+                bus.preload_internal([(IMEMRegisters.IMR, 0xFF)]),
+                bus.preload_external(
+                    [
+                        (INTERRUPT_VECTOR_ADDR, 0xAA),
+                        (INTERRUPT_VECTOR_ADDR + 1, 0xBB),
+                        (INTERRUPT_VECTOR_ADDR + 2, 0x01),
+                    ]
+                ),
+            ),
         ),
     ],
 )

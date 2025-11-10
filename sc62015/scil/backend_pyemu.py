@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Protocol, Tuple
 
 from ..decoding.bind import PreLatch
-from ..pysc62015.instr.opcodes import IMEMRegisters
+from ..pysc62015.instr.opcodes import IMEMRegisters, INTERRUPT_VECTOR_ADDR
 from ..pysc62015.constants import PC_MASK, INTERNAL_MEMORY_START
 from . import ast
 
@@ -377,6 +377,66 @@ def _loop_int_pointer(ptr: ast.LoopIntPtr, env: _Env) -> int:
     return _resolve_imem_addr(env, offset & 0xFF)
 
 
+def _imem_addr(name: str) -> int:
+    return IMEMRegisters[name].value & 0xFF
+
+
+def _enter_low_power_state(env: _Env) -> None:
+    bus = env.bus
+    usr_addr = _imem_addr("USR")
+    usr = bus.load("int", usr_addr, 8) & 0xFF
+    usr = (usr & ~0x3F) | 0x18
+    bus.store("int", usr_addr, usr, 8)
+
+    ssr_addr = _imem_addr("SSR")
+    ssr = bus.load("int", ssr_addr, 8) & 0xFF
+    ssr |= 0x04
+    bus.store("int", ssr_addr, ssr, 8)
+
+
+def _perform_reset(env: _Env) -> None:
+    bus = env.bus
+    for reg in ("UCR", "ISR", "SCR"):
+        bus.store("int", _imem_addr(reg), 0x00, 8)
+
+    lcc_addr = _imem_addr("LCC")
+    lcc = bus.load("int", lcc_addr, 8) & 0xFF
+    lcc &= ~0x80
+    bus.store("int", lcc_addr, lcc, 8)
+
+    usr_addr = _imem_addr("USR")
+    usr = bus.load("int", usr_addr, 8) & 0xFF
+    usr = (usr & ~0x3F) | 0x18
+    bus.store("int", usr_addr, usr, 8)
+
+    ssr_addr = _imem_addr("SSR")
+    ssr = bus.load("int", ssr_addr, 8) & 0xFF
+    ssr &= ~0x04
+    bus.store("int", ssr_addr, ssr, 8)
+
+    lo = bus.load("code", INTERRUPT_VECTOR_ADDR, 8) & 0xFF
+    mid = bus.load("code", INTERRUPT_VECTOR_ADDR + 1, 8) & 0xFF
+    hi = bus.load("code", INTERRUPT_VECTOR_ADDR + 2, 8) & 0xFF
+    vector = ((hi << 16) | (mid << 8) | lo) & PC_MASK
+    env.state.set_reg("PC", vector, 20)
+
+
+def _interrupt_enter(env: _Env) -> None:
+    state = env.state
+    imr_addr = _imem_addr("IMR")
+    imr = env.bus.load("int", imr_addr, 8) & 0xFF
+    _stack_push(env, "S", imr, 1)
+    env.bus.store("int", imr_addr, imr & 0x7F, 8)
+    _stack_push(env, "S", state.get_reg("F", 8), 1)
+    _stack_push(env, "S", state.get_reg("PC", 24), 3)
+
+    lo = env.bus.load("code", INTERRUPT_VECTOR_ADDR, 8) & 0xFF
+    mid = env.bus.load("code", INTERRUPT_VECTOR_ADDR + 1, 8) & 0xFF
+    hi = env.bus.load("code", INTERRUPT_VECTOR_ADDR + 2, 8) & 0xFF
+    vector = ((hi << 16) | (mid << 8) | lo) & PC_MASK
+    state.set_reg("PC", vector, 20)
+
+
 def _bcd_add_byte(a: int, b: int, carry_in: int) -> tuple[int, int]:
     low = (a & 0xF) + (b & 0xF) + (carry_in & 1)
     carry_high = 0
@@ -600,22 +660,24 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         direction = _to_signed(_const_arg(stmt.args[2]), stmt.args[2].size)
         is_left = bool(_const_arg(stmt.args[3]))
         remaining = count_value & 0xFFFF
-        addr = _loop_int_pointer(ptr, env)
+        current_addr = _loop_int_pointer(ptr, env)
         digit_carry = 0
         overall_zero = 0
         while remaining:
-            byte = env.bus.load("int", addr & 0xFF, 8) & 0xFF
+            byte = env.bus.load("int", current_addr & 0xFF, 8) & 0xFF
             low = byte & 0x0F
             high = (byte >> 4) & 0x0F
             if is_left:
                 shifted = ((low << 4) & 0xF0) | (digit_carry & 0x0F)
                 digit_carry = low
+                next_addr = (current_addr - 1) & 0xFF
             else:
                 shifted = (high & 0x0F) | ((digit_carry & 0x0F) << 4)
                 digit_carry = high
-            env.bus.store("int", addr & 0xFF, shifted & 0xFF, 8)
+                next_addr = (current_addr + 1) & 0xFF
+            env.bus.store("int", current_addr & 0xFF, shifted & 0xFF, 8)
             overall_zero |= shifted
-            addr = (addr + direction) & 0xFF
+            current_addr = next_addr
             remaining = (remaining - 1) & 0xFFFF
         env.state.set_reg("I", remaining, 16)
         env.state.set_flag("Z", 1 if (overall_zero & 0xFF) == 0 else 0)
@@ -628,6 +690,20 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         value, _ = _eval_expr(stmt.args[1], env)
         current = env.bus.load("int", addr & 0xFF, 8) & 0xFF
         env.bus.store("int", addr & 0xFF, (current + value) & 0xFF, 8)
+        return
+    if kind in {"halt", "off"}:
+        _enter_low_power_state(env)
+        state.halted = True
+        return
+    if kind == "reset":
+        _perform_reset(env)
+        state.halted = False
+        return
+    if kind == "wait":
+        return
+    if kind == "interrupt_enter":
+        _interrupt_enter(env)
+        state.halted = False
         return
     raise NotImplementedError(f"Effect {kind} not supported")
 

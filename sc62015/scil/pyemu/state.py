@@ -35,6 +35,7 @@ class CPUState:
     _regs: Dict[str, int] = field(default_factory=lambda: {name: 0 for name in _BASE_WIDTHS})
     _flags: Dict[str, int] = field(default_factory=lambda: {"C": 0, "Z": 0})
     pc: int = 0
+    halted: bool = False
 
     def reset(self) -> None:
         for name in _BASE_WIDTHS:
@@ -42,6 +43,7 @@ class CPUState:
         for flag in self._flags:
             self._flags[flag] = 0
         self.pc = 0
+        self.halted = False
 
     # ------------------------------------------------------------------ #
     # Register access helpers

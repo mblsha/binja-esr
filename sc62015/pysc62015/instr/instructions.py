@@ -1050,8 +1050,7 @@ class MiscInstruction(Instruction):
 class WAIT(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         with lift_loop(il):
-            # Wait is just an idle loop
-            pass
+            il.append(il.nop())
 
 
 class PMDF(MiscInstruction):
@@ -1123,11 +1122,12 @@ class OFF(MiscInstruction):
 # 3. After pushing IMR, bit 7 (IRM) of IMR is forcibly cleared to 0.
 class IR(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        il.append(il.push(3, RegPC().lift(il)))
-        il.append(il.push(1, RegF().lift(il)))
         imr, *_rest = RegIMR().operands()
-        il.append(il.push(1, imr.lift(il)))
+        imr_value = imr.lift(il)
+        il.append(il.push(1, imr_value))
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
+        il.append(il.push(1, il.reg(1, RegisterName("F"))))
+        il.append(il.push(3, RegPC().lift(il)))
 
         mem = EMemAddr(width=3)
         mem.value = INTERRUPT_VECTOR_ADDR

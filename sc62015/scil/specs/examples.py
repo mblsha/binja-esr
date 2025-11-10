@@ -362,6 +362,26 @@ def pmdf_reg() -> Instr:
     )
 
 
+def halt_instr() -> Instr:
+    return Instr(name="HALT", length=1, semantics=(Effect("halt", ()),))
+
+
+def off_instr() -> Instr:
+    return Instr(name="OFF", length=1, semantics=(Effect("off", ()),))
+
+
+def wait_instr() -> Instr:
+    return Instr(name="WAIT", length=1, semantics=(Effect("wait", ()),))
+
+
+def reset_instr() -> Instr:
+    return Instr(name="RESET", length=1, semantics=(Effect("reset", ()),))
+
+
+def ir_instr() -> Instr:
+    return Instr(name="IR", length=1, semantics=(Effect("interrupt_enter", ()),))
+
+
 def inc_dec_reg(name: str, reg_name: str, size: int, op: str) -> Instr:
     reg = Reg(reg_name, size)
     const_one = Const(1, size)

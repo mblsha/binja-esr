@@ -31,6 +31,7 @@ class Scenario:
     info: Dict[str, int]
     description: str = ""
     expect_pre_sequence: bool = False
+    state_overrides: Dict[str, int] | None = None
 
     def flattened(self) -> bytes:
         return b"".join(self.bytes_seq)

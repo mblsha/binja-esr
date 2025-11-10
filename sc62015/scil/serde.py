@@ -92,6 +92,11 @@ def expr_to_dict(expr: ast.Expr) -> Dict[str, Any]:
             "mid": expr_to_dict(expr.mid),
             "lo": expr_to_dict(expr.lo),
         }
+    if isinstance(expr, ast.LoopIntPtr):
+        return {
+            _KIND: "loop_ptr",
+            "offset": expr_to_dict(expr.offset),
+        }
     raise TypeError(f"Unsupported expression {expr!r}")
 
 
@@ -279,6 +284,8 @@ def dict_to_expr(data: Dict[str, Any]) -> ast.Expr:
             mid=dict_to_expr(data["mid"]),
             lo=dict_to_expr(data["lo"]),
         )
+    if kind == "loop_ptr":
+        return ast.LoopIntPtr(dict_to_expr(data["offset"]))
     raise ValueError(f"Unknown expression kind {kind}")
 
 
