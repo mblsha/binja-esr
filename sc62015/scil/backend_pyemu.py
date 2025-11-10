@@ -475,6 +475,52 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
             remaining = (remaining - 1) & 0xFFFF
         env.state.set_reg("I", remaining, 16)
         return
+    if kind in {"loop_add_carry", "loop_sub_borrow"}:
+        count_value, _ = _eval_expr(stmt.args[0], env)
+        dst_ptr = stmt.args[1]
+        src_ptr = stmt.args[2]
+        carry_flag = stmt.args[3]
+        width_bits = _const_arg(stmt.args[4])
+        remaining = count_value & 0xFFFF
+        dst_offset = _loop_int_pointer(dst_ptr, env)
+        src_is_mem = isinstance(src_ptr, ast.LoopIntPtr)
+        if src_is_mem:
+            src_offset = _loop_int_pointer(src_ptr, env)
+        elif isinstance(src_ptr, ast.Reg):
+            src_reg_name = src_ptr.name
+            src_reg_bits = src_ptr.size
+        else:
+            raise NotImplementedError("loop carry source must be memory or register")
+        carry = env.state.get_flag(carry_flag.name if isinstance(carry_flag, ast.Flag) else "C")
+        overall_zero = 0
+        while remaining:
+            dst_byte = env.bus.load("int", dst_offset & 0xFF, 8) & 0xFF
+            if src_is_mem:
+                src_byte = env.bus.load("int", src_offset & 0xFF, 8) & 0xFF
+            else:
+                src_byte = env.state.get_reg(src_reg_name, src_reg_bits) & 0xFF
+            if kind == "loop_sub_borrow":
+                diff = dst_byte - src_byte - carry
+                if diff < 0:
+                    carry = 1
+                    result = (diff + 0x100) & 0xFF
+                else:
+                    carry = 0
+                    result = diff & 0xFF
+            else:
+                total = dst_byte + src_byte + carry
+                carry = 1 if total > 0xFF else 0
+                result = total & 0xFF
+            env.bus.store("int", dst_offset & 0xFF, result, 8)
+            overall_zero |= result
+            dst_offset = (dst_offset + 1) & 0xFF
+            if src_is_mem:
+                src_offset = (src_offset + 1) & 0xFF
+            remaining = (remaining - 1) & 0xFFFF
+        env.state.set_reg("I", remaining, 16)
+        env.state.set_flag("C", carry)
+        env.state.set_flag("Z", 1 if (overall_zero & 0xFF) == 0 else 0)
+        return
     raise NotImplementedError(f"Effect {kind} not supported")
 
 

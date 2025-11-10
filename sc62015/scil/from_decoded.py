@@ -365,6 +365,18 @@ def _mvl_imem(decoded: DecodedInstr) -> BuildResult:
     return _with_pre(spec, binder, decoded)
 
 
+def _loop_carry(decoded: DecodedInstr, effect_kind: str, *, src_is_mem: bool) -> BuildResult:
+    dst = decoded.binds["dst"]
+    assert isinstance(dst, Imm8)
+    binder = {"dst_off": _const(dst.value, 8)}
+    if src_is_mem:
+        src = decoded.binds["src"]
+        assert isinstance(src, Imm8)
+        binder["src_off"] = _const(src.value, 8)
+    spec = examples.loop_carry_instr(decoded.mnemonic, effect_kind, src_is_mem=src_is_mem)
+    return _with_pre(spec, binder, decoded)
+
+
 def _imem_swap(decoded: DecodedInstr) -> BuildResult:
     left = decoded.binds["left"]
     right = decoded.binds["right"]
@@ -483,6 +495,10 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "MVP (m),(n)": _imem_move,
     "MVL (m),(n)": _mvl_imem,
     "MVLD (m),(n)": _mvl_imem,
+    "ADCL (m),(n)": lambda di: _loop_carry(di, "loop_add_carry", src_is_mem=True),
+    "ADCL (m),A": lambda di: _loop_carry(di, "loop_add_carry", src_is_mem=False),
+    "SBCL (m),(n)": lambda di: _loop_carry(di, "loop_sub_borrow", src_is_mem=True),
+    "SBCL (m),A": lambda di: _loop_carry(di, "loop_sub_borrow", src_is_mem=False),
     "EX (m),(n)": _imem_swap,
     "EXW (m),(n)": _imem_swap,
     "EXP (m),(n)": _imem_swap,

@@ -446,6 +446,29 @@ def _dec_imem_loop_move(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     )
 
 
+def _dec_loop_arith_mem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
+    dst = Imm8(ctx.read_u8())
+    src = Imm8(ctx.read_u8())
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="loop_arith",
+        binds={"dst": dst, "src": src},
+    )
+
+
+def _dec_loop_arith_reg(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
+    dst = Imm8(ctx.read_u8())
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="loop_arith",
+        binds={"dst": dst},
+    )
+
+
 def _reg_from_byte(byte: int) -> Tuple[str, str]:
     idx = byte & 0x07
     try:
@@ -632,7 +655,11 @@ DECODERS: Dict[int, DecoderFunc] = {
     0x48: _dec_alu_imm,
     0x4F: _dec_stack_sys,
     0x50: _dec_alu_imm,
+    0x54: lambda opcode, ctx: _dec_loop_arith_mem(opcode, ctx, "ADCL (m),(n)"),
+    0x55: lambda opcode, ctx: _dec_loop_arith_reg(opcode, ctx, "ADCL (m),A"),
     0x58: _dec_alu_imm,
+    0x5C: lambda opcode, ctx: _dec_loop_arith_mem(opcode, ctx, "SBCL (m),(n)"),
+    0x5D: lambda opcode, ctx: _dec_loop_arith_reg(opcode, ctx, "SBCL (m),A"),
     0x5F: _dec_stack_sys,
     0x64: _dec_alu_imm,
     0x68: _dec_alu_imm,

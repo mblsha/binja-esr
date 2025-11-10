@@ -168,6 +168,14 @@ def test_mvld_imem_shape_matches() -> None:
     _assert_same("CF5150", 0x1200)
 
 
+def test_adcl_shape_matches() -> None:
+    _assert_same("541020", 0x1800)
+
+
+def test_sbcl_shape_matches() -> None:
+    _assert_same("5C1020", 0x1900)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
 

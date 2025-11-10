@@ -19,6 +19,14 @@ from ..pysc62015.instr.opcodes import (
     TempIncDecHelper,
     TempMvlSrc,
     TempMvlDst,
+    TempMultiByte1,
+    TempMultiByte2,
+    TempLoopByteResult,
+    TempOverallZeroAcc,
+    CFlag,
+    ZFlag,
+    CZFlag,
+    lift_loop,
 )
 from ..pysc62015.constants import INTERNAL_MEMORY_START
 
@@ -627,6 +635,110 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
         step_signed = _to_signed(step_info[0], stmt.args[3].size)
         width_bits = width_info[0]
         _emit_loop_move_int_body(env, width_bits, step_signed)
+        return
+    if kind in {"loop_add_carry", "loop_sub_borrow"}:
+        dst_ptr = stmt.args[1]
+        src_ptr = stmt.args[2]
+        if not isinstance(dst_ptr, ast.LoopIntPtr):
+            raise NotImplementedError("loop_add_carry requires internal memory destination")
+        dst_offset = _loop_int_offset(dst_ptr, env)
+        dst_mode = env.next_imem_mode()
+        dst_addr = env.compat.imem_address(dst_mode, env.il.const(1, dst_offset))
+        env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte1, dst_addr))
+
+        src_is_mem = isinstance(src_ptr, ast.LoopIntPtr)
+        src_expr = None
+        src_bits = 0
+        if src_is_mem:
+            src_offset = _loop_int_offset(src_ptr, env)
+            src_mode = env.next_imem_mode()
+            src_addr = env.compat.imem_address(src_mode, env.il.const(1, src_offset))
+            env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte2, src_addr))
+        else:
+            src_expr, src_bits = _emit_expr(src_ptr, env)
+
+        width_info = _const_value(stmt.args[4], env)
+        if width_info is None:
+            raise ValueError("loop carry width missing")
+        width_bits = width_info[0]
+        width_bytes = bits_to_bytes(width_bits)
+        env.il.append(
+            env.il.set_reg(
+                width_bytes,
+                TempOverallZeroAcc,
+                env.il.const(width_bytes, 0),
+            )
+        )
+
+        with lift_loop(env.il):
+            dst_ptr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte1)
+            dst_byte = env.il.load(width_bytes, dst_ptr_reg)
+
+            if src_is_mem:
+                src_ptr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte2)
+                src_byte = env.il.load(width_bytes, src_ptr_reg)
+            else:
+                assert src_expr is not None
+                src_byte = _coerce_width_expr(src_expr, src_bits, width_bits, env)
+
+            initial_carry = env.il.flag(CFlag)
+            if kind == "loop_sub_borrow":
+                term = env.il.add(width_bytes, src_byte, initial_carry)
+                main = env.il.sub(width_bytes, dst_byte, term, CZFlag)
+            else:
+                term = env.il.add(width_bytes, src_byte, initial_carry)
+                main = env.il.add(width_bytes, dst_byte, term, CZFlag)
+
+            env.il.append(env.il.set_reg(width_bytes, TempLoopByteResult, main))
+            byte_value = env.il.reg(width_bytes, TempLoopByteResult)
+            env.il.append(env.il.store(width_bytes, dst_ptr_reg, byte_value))
+
+            overall = env.il.reg(width_bytes, TempOverallZeroAcc)
+            env.il.append(
+                env.il.set_reg(
+                    width_bytes,
+                    TempOverallZeroAcc,
+                    env.il.or_expr(width_bytes, overall, byte_value),
+                )
+            )
+
+            env.il.append(
+                env.il.set_reg(
+                    bits_to_bytes(24),
+                    TempMultiByte1,
+                    env.il.add(
+                        bits_to_bytes(24),
+                        dst_ptr_reg,
+                        env.il.const(bits_to_bytes(24), width_bytes),
+                    ),
+                )
+            )
+
+            if src_is_mem:
+                src_ptr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte2)
+                env.il.append(
+                    env.il.set_reg(
+                        bits_to_bytes(24),
+                        TempMultiByte2,
+                        env.il.add(
+                            bits_to_bytes(24),
+                            src_ptr_reg,
+                            env.il.const(bits_to_bytes(24), width_bytes),
+                        ),
+                    )
+                )
+
+        overall = env.il.reg(width_bytes, TempOverallZeroAcc)
+        env.il.append(
+            env.il.set_flag(
+                ZFlag,
+                env.il.compare_equal(
+                    width_bytes,
+                    overall,
+                    env.il.const(width_bytes, 0),
+                ),
+            )
+        )
         return
     raise NotImplementedError(f"Effect {kind} not supported")
 
