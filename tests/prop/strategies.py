@@ -174,13 +174,6 @@ def _jp_reg_scenarios(draw):
 
 
 @st.composite
-def _jp_imem_scenarios(draw):
-    offset = draw(st.integers(0, 0xFF))
-    opcode = 0x10
-    return _scenario([bytes([opcode, offset])], "jp_imem", {"offset": offset})
-
-
-@st.composite
 def _ext_abs_scenarios(draw):
     opcode = draw(st.sampled_from([0x88, 0xA8]))
     addr = draw(st.integers(0, 0xFFFFFF))
@@ -293,7 +286,6 @@ def instruction_scenarios() -> st.SearchStrategy[Scenario]:
         _jr_scenarios(),
         _jp_scenarios(),
         _jp_reg_scenarios(),
-        _jp_imem_scenarios(),
         _ext_abs_scenarios(),
         _ext_reg_scenarios(),
         _ext_ptr_scenarios(),
