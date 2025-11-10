@@ -20,6 +20,7 @@ from ..ast import (
     SetReg,
     Tmp,
     UnOp,
+    LoopIntPtr,
 )
 from ...pysc62015.constants import INTERNAL_MEMORY_START
 from ...pysc62015.instr.opcodes import IMEMRegisters
@@ -239,6 +240,30 @@ def mv_imem_a() -> Instr:
         semantics=(
             Fetch("u8", offset),
             Store(Mem("int", offset, 8), Reg("A", 8)),
+        ),
+    )
+
+
+def mvl_imem_imem(name: str, step: int) -> Instr:
+    dst = Tmp("dst_off", 8)
+    src = Tmp("src_off", 8)
+    stride = Const(step & 0xFF, 8)
+    return Instr(
+        name=name,
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", src),
+            Effect(
+                "loop_move",
+                (
+                    Reg("I", 16),
+                    LoopIntPtr(dst),
+                    LoopIntPtr(src),
+                    stride,
+                    Const(8, 8),
+                ),
+            ),
         ),
     )
 

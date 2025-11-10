@@ -12,7 +12,15 @@ from .compat_builder import CompatLLILBuilder
 from . import ast
 from .validate import bits_to_bytes, expr_size
 from ..decoding.bind import PreLatch
-from ..pysc62015.instr.opcodes import RegF, RegIMR, TempExchange, TempIncDecHelper
+from ..pysc62015.instr.opcodes import (
+    RegF,
+    RegIMR,
+    TempExchange,
+    TempIncDecHelper,
+    TempMvlSrc,
+    TempMvlDst,
+)
+from ..pysc62015.constants import INTERNAL_MEMORY_START
 
 ExpressionResult = Tuple[int, int]
 
@@ -119,6 +127,68 @@ def _assign_stack_pop_dest(env: _Env, dest: ast.Expr, value_expr: int, value_bit
         )
         return
     raise NotImplementedError("Unsupported pop destination")
+
+
+def _loop_int_offset(ptr: ast.LoopIntPtr, env: _Env) -> int:
+    info = _const_value(ptr.offset, env)
+    if info is None:
+        raise ValueError("Loop pointer offset must be constant")
+    return info[0] & 0xFF
+
+
+def _update_loop_int_pointer(env: _Env, temp_reg, step_signed: int) -> None:
+    width_bytes = bits_to_bytes(24)
+    current = env.il.reg(width_bytes, temp_reg)
+    base = env.il.const(width_bytes, INTERNAL_MEMORY_START)
+    delta = abs(step_signed)
+    step_expr = env.il.const(width_bytes, delta)
+    update_op = env.il.add if step_signed >= 0 else env.il.sub
+    new_addr = update_op(width_bytes, current, step_expr)
+    offset = env.il.sub(width_bytes, new_addr, base)
+    wrapped_offset = env.il.and_expr(width_bytes, offset, env.il.const(width_bytes, 0xFF))
+    wrapped_addr = env.il.add(width_bytes, base, wrapped_offset)
+    env.il.append(env.il.set_reg(width_bytes, temp_reg, wrapped_addr))
+
+
+def _emit_loop_move_int_body(env: _Env, width_bits: int, step_signed: int) -> None:
+    loop_bytes = bits_to_bytes(16)
+    zero = env.il.const(loop_bytes, 0)
+    loop_label = LowLevelILLabel()
+    exit_label = LowLevelILLabel()
+    i_reg = RegisterName("I")
+
+    env.il.append(
+        env.il.if_expr(
+            env.il.compare_equal(loop_bytes, env.il.reg(loop_bytes, i_reg), zero),
+            exit_label,
+            loop_label,
+        )
+    )
+    env.il.mark_label(loop_label)
+
+    width_bytes = bits_to_bytes(width_bits)
+    src_ptr = env.il.reg(bits_to_bytes(24), TempMvlSrc)
+    dst_ptr = env.il.reg(bits_to_bytes(24), TempMvlDst)
+    value = env.il.load(width_bytes, src_ptr)
+    env.il.append(env.il.store(width_bytes, dst_ptr, value))
+
+    _update_loop_int_pointer(env, TempMvlDst, step_signed)
+    _update_loop_int_pointer(env, TempMvlSrc, step_signed)
+
+    decremented = env.il.sub(
+        loop_bytes,
+        env.il.reg(loop_bytes, i_reg),
+        env.il.const(1, 1),
+    )
+    env.il.append(env.il.set_reg(loop_bytes, i_reg, decremented))
+    env.il.append(
+        env.il.if_expr(
+            env.il.compare_equal(loop_bytes, env.il.reg(loop_bytes, i_reg), zero),
+            exit_label,
+            loop_label,
+        )
+    )
+    env.il.mark_label(exit_label)
 
 
 @dataclass
@@ -537,6 +607,27 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
             return
         else:
             raise NotImplementedError(f"pop_bytes unsupported stack {stack.name}")
+    if kind == "loop_move":
+        dst_ptr = stmt.args[1]
+        src_ptr = stmt.args[2]
+        if not isinstance(dst_ptr, ast.LoopIntPtr) or not isinstance(src_ptr, ast.LoopIntPtr):
+            raise NotImplementedError("loop_move currently supports internal-memory operands only")
+        dst_offset = _loop_int_offset(dst_ptr, env)
+        src_offset = _loop_int_offset(src_ptr, env)
+        dst_mode = env.next_imem_mode()
+        src_mode = env.next_imem_mode()
+        dst_addr = env.compat.imem_address(dst_mode, env.il.const(1, dst_offset))
+        src_addr = env.compat.imem_address(src_mode, env.il.const(1, src_offset))
+        env.il.append(env.il.set_reg(bits_to_bytes(24), TempMvlDst, dst_addr))
+        env.il.append(env.il.set_reg(bits_to_bytes(24), TempMvlSrc, src_addr))
+        step_info = _const_value(stmt.args[3], env)
+        width_info = _const_value(stmt.args[4], env)
+        if step_info is None or width_info is None:
+            raise ValueError("loop_move requires constant step and width")
+        step_signed = _to_signed(step_info[0], stmt.args[3].size)
+        width_bits = width_info[0]
+        _emit_loop_move_int_body(env, width_bits, step_signed)
+        return
     raise NotImplementedError(f"Effect {kind} not supported")
 
 

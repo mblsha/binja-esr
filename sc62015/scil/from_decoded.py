@@ -350,6 +350,21 @@ def _imem_move(decoded: DecodedInstr) -> BuildResult:
     return _with_pre(instr, {}, decoded)
 
 
+def _mvl_imem(decoded: DecodedInstr) -> BuildResult:
+    dst = decoded.binds["dst"]
+    src = decoded.binds["src"]
+    step = decoded.binds["step"]
+    assert isinstance(dst, Imm8)
+    assert isinstance(src, Imm8)
+    assert isinstance(step, int)
+    spec = examples.mvl_imem_imem(decoded.mnemonic, step)
+    binder = {
+        "dst_off": _const(dst.value, 8),
+        "src_off": _const(src.value, 8),
+    }
+    return _with_pre(spec, binder, decoded)
+
+
 def _imem_swap(decoded: DecodedInstr) -> BuildResult:
     left = decoded.binds["left"]
     right = decoded.binds["right"]
@@ -466,6 +481,8 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "MV (m),(n)": _imem_move,
     "MVW (m),(n)": _imem_move,
     "MVP (m),(n)": _imem_move,
+    "MVL (m),(n)": _mvl_imem,
+    "MVLD (m),(n)": _mvl_imem,
     "EX (m),(n)": _imem_swap,
     "EXW (m),(n)": _imem_swap,
     "EXP (m),(n)": _imem_swap,

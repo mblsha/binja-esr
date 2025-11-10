@@ -32,11 +32,11 @@ Phase 8 must land every “hard” semantic family so SCIL fully mirrors the l
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Decoders/pilots for 0xCB/0xCF IMEM↔IMEM | ❌ Not started | Need decode map + dispatcher entries and builders. |
-| `loop_move` SCIL effect + specs/binders for each addressing form | ❌ Not started | Must cover IMEM↔IMEM, IMEM↔[lmn], IMEM↔[r3±n], IMEM↔[(n)], EMEM counterparts. |
-| Compat LLIL lowering (TempMvlSrc/Dst, `lift_loop`-style labels, PRE handling) | ❌ Not started | Must preserve MockLLIL shape, IMEM wrapping, signed stride (+1/-1), pointer side-effects. |
-| PyEMU interpreter + future Rust emitter | ❌ Not started | Needs identical semantics (I register countdown, PRE single-use, address wrap). |
-| Regression/property tests | ❌ Not started | Shape tests per addressing class, behavior tests (I=0, wraparound, PRE), Phase 6 property coverage. |
+| Decoders/pilots for 0xCB/0xCF IMEM↔IMEM | ✅ Done | Decode map + dispatcher entries + builders landed. |
+| `loop_move` SCIL effect + specs/binders for each addressing form | 🟡 Partial | IMEM↔IMEM effect/specs live; external/int-mixed forms still pending. |
+| Compat LLIL lowering (TempMvlSrc/Dst, `lift_loop`-style labels, PRE handling) | 🟡 Partial | IMEM↔IMEM lowering matches legacy shapes; remaining addressing modes TBD. |
+| PyEMU interpreter + future Rust emitter | 🟡 Partial | PyEMU handles IMEM↔IMEM loops; Rust backend still missing coverage. |
+| Regression/property tests | 🟡 Partial | Shape + basic behavior tests for IMEM↔IMEM added; PRE/other variants + fuzzing outstanding. |
 
 ---
 

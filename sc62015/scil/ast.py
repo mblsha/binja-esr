@@ -254,6 +254,13 @@ class Comment:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class LoopIntPtr:
+    """Pointer descriptor for internal-memory loop transfers."""
+
+    offset: Expr
+
+
 Stmt = Union[
     Fetch,
     SetReg,

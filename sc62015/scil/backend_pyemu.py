@@ -372,6 +372,11 @@ def _stack_pop(env: _Env, register: str, count: int) -> int:
     return result
 
 
+def _loop_int_pointer(ptr: ast.LoopIntPtr, env: _Env) -> int:
+    offset, _ = _eval_expr(ptr.offset, env)
+    return _resolve_imem_addr(env, offset & 0xFF)
+
+
 def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
     kind = stmt.kind
     state = env.state
@@ -448,6 +453,28 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
             env.bus.store(dest.space, addr, value, dest.size)
             return
         raise TypeError("pop_bytes destination must be register or memory")
+    if kind == "loop_move":
+        count_value, count_bits = _eval_expr(stmt.args[0], env)
+        dst_ptr = stmt.args[1]
+        src_ptr = stmt.args[2]
+        if not isinstance(dst_ptr, ast.LoopIntPtr) or not isinstance(src_ptr, ast.LoopIntPtr):
+            raise NotImplementedError("loop_move currently supports internal-memory pointers only")
+        step_raw = _const_arg(stmt.args[3])
+        step_signed = _to_signed(step_raw, stmt.args[3].size)
+        width_bits = _const_arg(stmt.args[4])
+        width_bytes = max(1, width_bits // 8)
+        remaining = count_value & 0xFFFF
+        dst_offset = _loop_int_pointer(dst_ptr, env)
+        src_offset = _loop_int_pointer(src_ptr, env)
+        while remaining:
+            for byte in range(width_bytes):
+                value = env.bus.load("int", (src_offset + byte) & 0xFF, 8)
+                env.bus.store("int", (dst_offset + byte) & 0xFF, value, 8)
+            dst_offset = (dst_offset + step_signed) & 0xFF
+            src_offset = (src_offset + step_signed) & 0xFF
+            remaining = (remaining - 1) & 0xFFFF
+        env.state.set_reg("I", remaining, 16)
+        return
     raise NotImplementedError(f"Effect {kind} not supported")
 
 

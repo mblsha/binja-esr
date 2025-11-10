@@ -160,6 +160,14 @@ def test_reti_shape_matches() -> None:
     _assert_same("01", 0x2000)
 
 
+def test_mvl_imem_shape_matches() -> None:
+    _assert_same("CBFEF0", 0x1000)
+
+
+def test_mvld_imem_shape_matches() -> None:
+    _assert_same("CF5150", 0x1200)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
 

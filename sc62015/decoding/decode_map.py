@@ -228,6 +228,11 @@ _IMEM_MOVES: Dict[int, Tuple[str, int]] = {
     0xCA: ("MVP (m),(n)", 24),
 }
 
+_IMEM_LOOP_MOVES: Dict[int, Tuple[str, int]] = {
+    0xCB: ("MVL (m),(n)", +1),
+    0xCF: ("MVLD (m),(n)", -1),
+}
+
 _IMEM_EXCHANGES: Dict[int, Tuple[str, int]] = {
     0xC0: ("EX (m),(n)", 8),
     0xC1: ("EXW (m),(n)", 16),
@@ -425,6 +430,19 @@ def _dec_ext_from_imem(opcode: int, ctx: StreamCtx) -> DecodedInstr:
         length=_length(ctx),
         family="imem_ext",
         binds={"imem": addr, "ptr": ptr, "width": width},
+    )
+
+
+def _dec_imem_loop_move(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    mnemonic, step = _IMEM_LOOP_MOVES[opcode]
+    dst = Imm8(ctx.read_u8())
+    src = Imm8(ctx.read_u8())
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="loop_move",
+        binds={"dst": dst, "src": src, "step": step},
     )
 
 
@@ -644,8 +662,10 @@ DECODERS: Dict[int, DecoderFunc] = {
     0xC1: _dec_imem_swap,
     0xC2: _dec_imem_swap,
     0xC8: _dec_imem_move,
+    0xCB: _dec_imem_loop_move,
     0xC9: _dec_imem_move,
     0xCA: _dec_imem_move,
+    0xCF: _dec_imem_loop_move,
     0xE0: _dec_imem_from_ext,
     0xE1: _dec_imem_from_ext,
     0xE2: _dec_imem_from_ext,
