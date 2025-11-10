@@ -117,6 +117,12 @@ def _resolve_imem_addr(env: _Env, offset: int) -> int:
     return (bp + offset) & 0xFF
 
 
+def _coerce_internal_store_addr(env: _Env, addr: int, addr_bits: int) -> int:
+    if addr_bits > 8:
+        return (addr - INTERNAL_MEMORY_START) & 0xFF
+    return _resolve_imem_addr(env, addr & 0xFF)
+
+
 def _eval_expr(expr: ast.Expr, env: _Env) -> Tuple[int, int]:
     state = env.state
     bus = env.bus
@@ -268,9 +274,9 @@ def _exec_stmt(
                 state.set_flag("C", (value >> (width - 1)) & 1)
         return
     if isinstance(stmt, ast.Store):
-        addr, _ = _eval_expr(stmt.dst.addr, env)
+        addr, addr_bits = _eval_expr(stmt.dst.addr, env)
         if stmt.dst.space == "int":
-            addr = _resolve_imem_addr(env, addr & 0xFF)
+            addr = _coerce_internal_store_addr(env, addr, addr_bits)
         value, _ = _eval_expr(stmt.value, env)
         bus.store(stmt.dst.space, addr, value, stmt.dst.size)
         return
@@ -554,9 +560,9 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
                 state.set_flag("Z", (value >> 1) & 1)
             return
         if isinstance(dest, ast.Mem):
-            addr, _ = _eval_expr(dest.addr, env)
+            addr, addr_bits = _eval_expr(dest.addr, env)
             if dest.space == "int":
-                addr = _resolve_imem_addr(env, addr & 0xFF)
+                addr = _coerce_internal_store_addr(env, addr, addr_bits)
             env.bus.store(dest.space, addr, value, dest.size)
             return
         raise TypeError("pop_bytes destination must be register or memory")

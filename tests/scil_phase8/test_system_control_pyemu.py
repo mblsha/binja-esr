@@ -115,3 +115,35 @@ def test_ir_pushes_context_and_jumps_to_vector() -> None:
     assert stack_bytes[3] == ((original_pc >> 8) & 0xFF)
     assert stack_bytes[4] == ((original_pc >> 16) & 0xFF)
     assert state.get_reg("PC", 24) == 0x01BBAA & 0xFFFFF
+
+
+def test_pushu_imr_pushes_and_masks_register() -> None:
+    state = CPUState()
+    state.pc = 0x4050
+    state.set_reg("U", 0x001000, 24)
+    bus = MemoryBus()
+    _write_internal(bus, "IMR", 0xF3)
+
+    decoded = _decode(0x2F, state.pc)
+    execute_decoded(state, bus, decoded)
+
+    new_sp = state.get_reg("U", 24)
+    assert new_sp == (0x001000 - 1) & ((1 << 24) - 1)
+    assert bus.load("ext", new_sp, 8) & 0xFF == 0xF3
+    assert _read_internal(bus, "IMR") == 0xF3 & 0x7F
+
+
+def test_popu_imr_restores_value_from_stack() -> None:
+    state = CPUState()
+    state.pc = 0x4060
+    initial_u = 0x001200
+    state.set_reg("U", initial_u, 24)
+    bus = MemoryBus()
+    bus.store("ext", initial_u, 0x5A, 8)
+    _write_internal(bus, "IMR", 0x00)
+
+    decoded = _decode(0x3F, state.pc)
+    execute_decoded(state, bus, decoded)
+
+    assert state.get_reg("U", 24) == (initial_u + 1) & ((1 << 24) - 1)
+    assert _read_internal(bus, "IMR") == 0x5A
