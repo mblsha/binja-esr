@@ -33,7 +33,6 @@ def mv_a_imm() -> Instr:
 def jrz_rel() -> Instr:
     disp = Tmp("disp8", 8)
     taken = PcRel(base_advance=2, disp=UnOp("sext", disp, 20), out_size=20)
-    fallthrough = PcRel(base_advance=2, out_size=20)
     return Instr(
         name="JRZ_REL",
         length=2,
@@ -42,24 +41,18 @@ def jrz_rel() -> Instr:
             If(
                 cond=Cond(kind="flag", flag="Z"),
                 then_ops=(Goto(taken),),
-                else_ops=(Goto(fallthrough),),
             ),
         ),
     )
 
 
 def mv_a_abs_ext() -> Instr:
-    b0 = Tmp("addr_lo", 8)
-    b1 = Tmp("addr_mid", 8)
-    b2 = Tmp("addr_hi", 8)
-    addr = Join24(hi=b2, mid=b1, lo=b0)
+    addr = Tmp("addr_ptr", 24)
     return Instr(
         name="MV_A_ABS_EXT",
         length=4,
         semantics=(
-            Fetch("u8", b0),
-            Fetch("u8", b1),
-            Fetch("u8", b2),
+            Fetch("addr24", addr),
             SetReg(Reg("A", 8), Mem("ext", addr, 8)),
         ),
     )
@@ -70,8 +63,8 @@ def jp_paged() -> Instr:
     page_hi = Tmp("page_hi", 20)
     joined = BinOp(
         "or",
-        UnOp("zext", page_hi, 20),
         UnOp("zext", addr_lo, 20),
+        UnOp("zext", page_hi, 20),
         20,
     )
     return Instr(

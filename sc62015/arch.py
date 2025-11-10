@@ -1,3 +1,6 @@
+import os
+from typing import List
+
 from binaryninja import (
     Architecture,
     RegisterInfo,
@@ -12,6 +15,15 @@ from .pysc62015.instr import decode, encode, OPCODES
 from .pysc62015.instr.opcodes import InvalidInstruction
 from binja_test_mocks.tokens import asm
 from .decoding.dispatcher import CompatDispatcher
+from .decoding.compat_il import emit_instruction as emit_compat_instruction
+from .scil import from_decoded
+from .scil.backend_llil import emit_llil as emit_scil_llil
+from .scil.compat_builder import CompatLLILBuilder
+
+try:
+    from binja_test_mocks.mock_llil import MockLowLevelILFunction
+except ImportError:
+    MockLowLevelILFunction = None
 
 
 class SC62015(Architecture):
@@ -66,6 +78,13 @@ class SC62015(Architecture):
     def __init__(self) -> None:
         super().__init__()
         self._compat_dispatcher = CompatDispatcher()
+        self._scil_shadow_enabled = bool(int(os.getenv("SC62015_SCIL_SHADOW", "0")))
+        self._scil_allow = {
+            "MV A,n",
+            "JRZ ±n",
+            "JP mn",
+            "MV A,[lmn]",
+        }
 
     def get_instruction_info(self, data, addr):
         try:
@@ -99,9 +118,12 @@ class SC62015(Architecture):
 
     def get_instruction_low_level_il(self, data, addr, il):
         try:
-            compat_len = self._compat_dispatcher.try_emit(bytes(data), addr, il)
-            if compat_len is not None:
-                return compat_len
+            compat_result = self._compat_dispatcher.try_emit(bytes(data), addr, il)
+            if compat_result is not None:
+                length, decoded_instr = compat_result
+                if decoded_instr is not None:
+                    self._run_scil_shadow(decoded_instr, addr)
+                return length
 
             if decoded := decode(data, addr, OPCODES):
                 decoded.lift(il, addr)
@@ -114,6 +136,38 @@ class SC62015(Architecture):
                 f"SC62015.get_instruction_low_level_il() failed at {addr:#x}: {exc}"
             )
             raise
+
+    def _run_scil_shadow(self, decoded_instr, addr: int) -> None:
+        if not self._scil_shadow_enabled:
+            return
+        if MockLowLevelILFunction is None:
+            return
+        if decoded_instr.mnemonic not in self._scil_allow:
+            return
+
+        scil_instr, binder = from_decoded.build(decoded_instr)
+
+        compat_il = MockLowLevelILFunction()
+        emit_compat_instruction(decoded_instr, compat_il, addr)
+
+        scil_il = MockLowLevelILFunction()
+        emit_scil_llil(scil_il, scil_instr, binder, CompatLLILBuilder(scil_il), addr)
+
+        if self._canonical_il(compat_il) != self._canonical_il(scil_il):
+            raise AssertionError(
+                f"SCIL mismatch for {decoded_instr.mnemonic} at {addr:#x}"
+            )
+
+    @staticmethod
+    def _canonical_il(il_func: MockLowLevelILFunction) -> List[str]:
+        out: List[str] = []
+        for node in il_func.ils:
+            if getattr(node, "op", "") == "LABEL":
+                continue
+            text = repr(node)
+            text = text.replace("object at 0x", "object at 0x?")
+            out.append(text)
+        return out
 
 
 class SC62015CallingConvention(CallingConvention):

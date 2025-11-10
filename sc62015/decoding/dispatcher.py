@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional, Set
+from typing import Optional, Set, Tuple
 
 from binaryninja.lowlevelil import LowLevelILFunction  # type: ignore
 
 from .compat_il import emit_instruction
 from .decode_map import decode_opcode
 from .reader import StreamCtx
+from .bind import DecodedInstr
 
 
 class CompatDispatcher:
@@ -22,7 +23,7 @@ class CompatDispatcher:
 
     def try_emit(
         self, data: bytes, addr: int, il: LowLevelILFunction
-    ) -> Optional[int]:
+    ) -> Optional[Tuple[int, Optional[DecodedInstr]]]:
         if not data:
             return None
 
@@ -38,10 +39,10 @@ class CompatDispatcher:
 
         if decoded.pre_latch is not None:
             self._pending_pre = decoded.pre_latch
-            return decoded.length
+            return decoded.length, None
 
         object.__setattr__(decoded, "pre_applied", self._pending_pre)
         self._pending_pre = None
 
         emit_instruction(decoded, il, addr)
-        return decoded.length
+        return decoded.length, decoded

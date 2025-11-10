@@ -48,9 +48,7 @@ def _mv_a_abs(decoded: DecodedInstr) -> BuildResult:
     addr = decoded.binds["addr24"]
     assert isinstance(addr, Addr24)
     binder = {
-        "addr_lo": _const(addr.v.lo, 8),
-        "addr_mid": _const(addr.v.mid, 8),
-        "addr_hi": _const(addr.v.hi, 8),
+        "addr_ptr": _const(addr.v.u24, 24),
     }
     return spec, binder
 

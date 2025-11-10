@@ -31,6 +31,4 @@ def test_jp_binder_splits_lo_and_page() -> None:
 def test_mv_abs24_binder_breaks_bytes() -> None:
     di = _decode(0x88, bytes([0x10, 0x20, 0x03]))
     _, binder = from_decoded.build(di)
-    assert binder["addr_lo"].value == 0x10
-    assert binder["addr_mid"].value == 0x20
-    assert binder["addr_hi"].value == 0x03
+    assert binder["addr_ptr"].value == 0x032010

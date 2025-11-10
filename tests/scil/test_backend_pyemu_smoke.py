@@ -18,7 +18,12 @@ class _ImmediateStream:
         self._values = list(values)
         self._index = 0
 
-    def read(self, _kind: str) -> int:
+    def read(self, kind: str) -> int:
+        if kind == "addr24":
+            lo = self.read("u8")
+            mid = self.read("u8")
+            hi = self.read("u8")
+            return lo | (mid << 8) | (hi << 16)
         value = self._values[self._index]
         self._index += 1
         return value
