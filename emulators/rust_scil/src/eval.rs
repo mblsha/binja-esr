@@ -813,13 +813,13 @@ fn perform_reset<B: Bus>(env: &mut Env<B>) {
 }
 
 fn interrupt_enter<B: Bus>(env: &mut Env<B>) {
+    let pc = env.state.get_reg("PC", 24);
+    stack_push(env, "S", pc, 3);
+    let flag = env.state.get_reg("F", 8) & 0xFF;
+    stack_push(env, "S", flag, 1);
     let imr = env.bus.load(Space::Int, IMR_ADDR, 8) & 0xFF;
     stack_push(env, "S", imr, 1);
     env.bus.store(Space::Int, IMR_ADDR, 8, imr & 0x7F);
-    let flag = env.state.get_reg("F", 8) & 0xFF;
-    stack_push(env, "S", flag, 1);
-    let pc = env.state.get_reg("PC", 24);
-    stack_push(env, "S", pc, 3);
     let vector = read_interrupt_vector(env);
     env.state.set_reg("PC", vector, 20);
 }

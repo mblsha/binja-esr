@@ -988,12 +988,12 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
     if kind == "interrupt_enter":
         imr, *_ = RegIMR().operands()
         imr_value = imr.lift(env.il)
+        env.il.append(env.il.push(3, env.il.reg(bits_to_bytes(24), RegisterName("PC"))))
+        env.il.append(env.il.push(1, env.il.reg(1, RegisterName("F"))))
         env.il.append(env.il.push(1, imr_value))
         imr.lift_assign(
             env.il, env.il.and_expr(1, imr.lift(env.il), env.il.const(1, 0x7F))
         )
-        env.il.append(env.il.push(1, env.il.reg(1, RegisterName("F"))))
-        env.il.append(env.il.push(3, env.il.reg(bits_to_bytes(24), RegisterName("PC"))))
         mem = EMemAddr(width=3)
         mem.value = INTERRUPT_VECTOR_ADDR
         env.il.append(env.il.jump(mem.lift(env.il)))

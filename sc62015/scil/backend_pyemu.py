@@ -440,10 +440,10 @@ def _interrupt_enter(env: _Env) -> None:
     state = env.state
     imr_addr = _imem_addr("IMR")
     imr = env.bus.load("int", imr_addr, 8) & 0xFF
+    _stack_push(env, "S", state.get_reg("PC", 24), 3)
+    _stack_push(env, "S", state.get_reg("F", 8), 1)
     _stack_push(env, "S", imr, 1)
     env.bus.store("int", imr_addr, imr & 0x7F, 8)
-    _stack_push(env, "S", state.get_reg("F", 8), 1)
-    _stack_push(env, "S", state.get_reg("PC", 24), 3)
 
     lo = env.bus.load("code", INTERRUPT_VECTOR_ADDR, 8) & 0xFF
     mid = env.bus.load("code", INTERRUPT_VECTOR_ADDR + 1, 8) & 0xFF

@@ -109,9 +109,9 @@ def test_ir_pushes_context_and_jumps_to_vector() -> None:
     stack_bytes = [
         bus.load("ext", (new_sp + i) & ((1 << 24) - 1), 8) & 0xFF for i in range(5)
     ]
-    assert stack_bytes[0] == (original_pc & 0xFF)
-    assert stack_bytes[1] == ((original_pc >> 8) & 0xFF)
-    assert stack_bytes[2] == ((original_pc >> 16) & 0xFF)
-    assert stack_bytes[3] == 0xA5
-    assert stack_bytes[4] == 0xFF
+    assert stack_bytes[0] == 0xFF  # IMR
+    assert stack_bytes[1] == 0xA5  # F
+    assert stack_bytes[2] == (original_pc & 0xFF)
+    assert stack_bytes[3] == ((original_pc >> 8) & 0xFF)
+    assert stack_bytes[4] == ((original_pc >> 16) & 0xFF)
     assert state.get_reg("PC", 24) == 0x01BBAA & 0xFFFFF

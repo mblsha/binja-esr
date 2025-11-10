@@ -1124,10 +1124,10 @@ class IR(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         imr, *_rest = RegIMR().operands()
         imr_value = imr.lift(il)
+        il.append(il.push(3, RegPC().lift(il)))
+        il.append(il.push(1, il.reg(1, RegisterName("F"))))
         il.append(il.push(1, imr_value))
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
-        il.append(il.push(1, il.reg(1, RegisterName("F"))))
-        il.append(il.push(3, RegPC().lift(il)))
 
         mem = EMemAddr(width=3)
         mem.value = INTERRUPT_VECTOR_ADDR
