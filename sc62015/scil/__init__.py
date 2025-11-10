@@ -38,8 +38,6 @@ from .ast import (  # noqa: F401
 from . import validate  # noqa: F401
 from . import serde  # noqa: F401
 from . import passes  # noqa: F401
-from . import backend_llil  # noqa: F401
-from . import backend_pyemu  # noqa: F401
 
 __all__ = [
     "Instr",
@@ -71,6 +69,4 @@ __all__ = [
     "validate",
     "serde",
     "passes",
-    "backend_llil",
-    "backend_pyemu",
 ]

@@ -20,7 +20,16 @@ BinaryOp = Literal[
 ]
 TernaryOp = Literal["select"]
 CondKind = Literal["flag", "eq", "ne", "ltu", "geu", "lts", "ges"]
-FetchKind = Literal["u8", "s8", "u16", "u24", "disp8", "addr16_page", "addr24"]
+FetchKind = Literal[
+    "u8",
+    "s8",
+    "u16",
+    "u24",
+    "disp8",
+    "addr16_page",
+    "addr16_page_hi",
+    "addr24",
+]
 EffectKind = Literal[
     "push_ret20",
     "push_ret24",

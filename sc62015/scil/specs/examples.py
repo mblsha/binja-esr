@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..ast import (
+    BinOp,
     Const,
     Fetch,
     Goto,
@@ -60,5 +61,36 @@ def mv_a_abs_ext() -> Instr:
             Fetch("u8", b1),
             Fetch("u8", b2),
             SetReg(Reg("A", 8), Mem("ext", addr, 8)),
+        ),
+    )
+
+
+def jp_paged() -> Instr:
+    addr_lo = Tmp("addr16", 16)
+    page_hi = Tmp("page_hi", 20)
+    joined = BinOp(
+        "or",
+        UnOp("zext", page_hi, 20),
+        UnOp("zext", addr_lo, 20),
+        20,
+    )
+    return Instr(
+        name="JP_PAGED",
+        length=3,
+        semantics=(
+            Fetch("addr16_page", addr_lo),
+            Fetch("addr16_page_hi", page_hi),
+            Goto(joined),
+        ),
+    )
+
+
+def inc_a() -> Instr:
+    value = BinOp("add", Reg("A", 8), Const(1, 8), 8)
+    return Instr(
+        name="INC_A",
+        length=2,
+        semantics=(
+            SetReg(Reg("A", 8), value, flags=("Z",)),
         ),
     )
