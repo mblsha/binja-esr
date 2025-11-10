@@ -11,6 +11,7 @@ from binaryninja.log import log_error
 from .pysc62015.instr import decode, encode, OPCODES
 from .pysc62015.instr.opcodes import InvalidInstruction
 from binja_test_mocks.tokens import asm
+from .decoding.dispatcher import CompatDispatcher
 
 
 class SC62015(Architecture):
@@ -62,6 +63,10 @@ class SC62015(Architecture):
         "RESET": IntrinsicInfo(inputs=[], outputs=[]),
     }
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._compat_dispatcher = CompatDispatcher()
+
     def get_instruction_info(self, data, addr):
         try:
             if decoded := decode(data, addr, OPCODES):
@@ -94,6 +99,10 @@ class SC62015(Architecture):
 
     def get_instruction_low_level_il(self, data, addr, il):
         try:
+            compat_len = self._compat_dispatcher.try_emit(bytes(data), addr, il)
+            if compat_len is not None:
+                return compat_len
+
             if decoded := decode(data, addr, OPCODES):
                 decoded.lift(il, addr)
                 return decoded.length()
