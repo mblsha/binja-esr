@@ -377,6 +377,36 @@ def _loop_int_pointer(ptr: ast.LoopIntPtr, env: _Env) -> int:
     return _resolve_imem_addr(env, offset & 0xFF)
 
 
+def _bcd_add_byte(a: int, b: int, carry_in: int) -> tuple[int, int]:
+    low = (a & 0xF) + (b & 0xF) + (carry_in & 1)
+    carry_high = 0
+    if low >= 10:
+        low -= 10
+        carry_high = 1
+    high = ((a >> 4) & 0xF) + ((b >> 4) & 0xF) + carry_high
+    carry_out = 0
+    if high >= 10:
+        high -= 10
+        carry_out = 1
+    result = ((high & 0xF) << 4) | (low & 0xF)
+    return result & 0xFF, carry_out
+
+
+def _bcd_sub_byte(a: int, b: int, borrow_in: int) -> tuple[int, int]:
+    low = (a & 0xF) - (b & 0xF) - (borrow_in & 1)
+    borrow_high = 0
+    if low < 0:
+        low += 10
+        borrow_high = 1
+    high = ((a >> 4) & 0xF) - ((b >> 4) & 0xF) - borrow_high
+    borrow_out = 0
+    if high < 0:
+        high += 10
+        borrow_out = 1
+    result = ((high & 0xF) << 4) | (low & 0xF)
+    return result & 0xFF, borrow_out
+
+
 def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
     kind = stmt.kind
     state = env.state
@@ -516,6 +546,47 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
             dst_offset = (dst_offset + 1) & 0xFF
             if src_is_mem:
                 src_offset = (src_offset + 1) & 0xFF
+            remaining = (remaining - 1) & 0xFFFF
+        env.state.set_reg("I", remaining, 16)
+        env.state.set_flag("C", carry)
+        env.state.set_flag("Z", 1 if (overall_zero & 0xFF) == 0 else 0)
+        return
+    if kind in {"loop_bcd_add", "loop_bcd_sub"}:
+        count_value, _ = _eval_expr(stmt.args[0], env)
+        dst_ptr = stmt.args[1]
+        src_operand = stmt.args[2]
+        if not isinstance(dst_ptr, ast.LoopIntPtr):
+            raise NotImplementedError("loop_bcd requires internal-memory destination")
+        direction_raw = _const_arg(stmt.args[5])
+        direction = _to_signed(direction_raw, stmt.args[5].size)
+        clear_carry = bool(_const_arg(stmt.args[6]))
+        dst_offset = _loop_int_pointer(dst_ptr, env)
+        src_is_mem = isinstance(src_operand, ast.LoopIntPtr)
+        if src_is_mem:
+            src_offset = _loop_int_pointer(src_operand, env)
+        elif isinstance(src_operand, ast.Reg):
+            src_reg_name = src_operand.name
+            src_reg_bits = src_operand.size
+        else:
+            raise NotImplementedError("loop_bcd source must be memory or register")
+        carry = 0 if clear_carry else env.state.get_flag("C")
+        remaining = count_value & 0xFFFF
+        overall_zero = 0
+        while remaining:
+            dst_byte = env.bus.load("int", dst_offset & 0xFF, 8) & 0xFF
+            if src_is_mem:
+                src_byte = env.bus.load("int", src_offset & 0xFF, 8) & 0xFF
+            else:
+                src_byte = env.state.get_reg(src_reg_name, src_reg_bits) & 0xFF
+            if kind == "loop_bcd_sub":
+                result, carry = _bcd_sub_byte(dst_byte, src_byte, carry)
+            else:
+                result, carry = _bcd_add_byte(dst_byte, src_byte, carry)
+            env.bus.store("int", dst_offset & 0xFF, result, 8)
+            overall_zero |= result
+            dst_offset = (dst_offset + direction) & 0xFF
+            if src_is_mem:
+                src_offset = (src_offset + direction) & 0xFF
             remaining = (remaining - 1) & 0xFFFF
         env.state.set_reg("I", remaining, 16)
         env.state.set_flag("C", carry)

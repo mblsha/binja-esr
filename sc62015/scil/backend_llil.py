@@ -28,6 +28,7 @@ from ..pysc62015.instr.opcodes import (
     CZFlag,
     lift_loop,
 )
+from ..pysc62015.instr.instructions import bcd_add_emul, bcd_sub_emul
 from ..pysc62015.constants import INTERNAL_MEMORY_START
 
 ExpressionResult = Tuple[int, int]
@@ -156,6 +157,15 @@ def _update_loop_int_pointer(env: _Env, temp_reg, step_signed: int) -> None:
     wrapped_offset = env.il.and_expr(width_bytes, offset, env.il.const(width_bytes, 0xFF))
     wrapped_addr = env.il.add(width_bytes, base, wrapped_offset)
     env.il.append(env.il.set_reg(width_bytes, temp_reg, wrapped_addr))
+
+
+def _advance_temp_pointer(env: _Env, temp_reg, direction: int) -> None:
+    width_bytes = bits_to_bytes(24)
+    current = env.il.reg(width_bytes, temp_reg)
+    step = env.il.const(width_bytes, abs(direction))
+    op = env.il.add if direction >= 0 else env.il.sub
+    updated = op(width_bytes, current, step)
+    env.il.append(env.il.set_reg(width_bytes, temp_reg, updated))
 
 
 def _emit_loop_move_int_body(env: _Env, width_bits: int, step_signed: int) -> None:
@@ -735,6 +745,94 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
                 env.il.compare_equal(
                     width_bytes,
                     overall,
+                    env.il.const(width_bytes, 0),
+                ),
+            )
+        )
+        return
+    if kind in {"loop_bcd_add", "loop_bcd_sub"}:
+        dst_ptr = stmt.args[1]
+        src_op = stmt.args[2]
+        if not isinstance(dst_ptr, ast.LoopIntPtr):
+            raise NotImplementedError("loop_bcd requires internal memory destination")
+        dst_offset = _loop_int_offset(dst_ptr, env)
+        dst_mode = env.next_imem_mode()
+        dst_addr = env.compat.imem_address(dst_mode, env.il.const(1, dst_offset))
+        env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte1, dst_addr))
+
+        src_is_mem = isinstance(src_op, ast.LoopIntPtr)
+        if src_is_mem:
+            src_offset = _loop_int_offset(src_op, env)
+            src_mode = env.next_imem_mode()
+            src_addr = env.compat.imem_address(src_mode, env.il.const(1, src_offset))
+            env.il.append(env.il.set_reg(bits_to_bytes(24), TempMultiByte2, src_addr))
+        else:
+            if not isinstance(src_op, ast.Reg):
+                raise NotImplementedError("loop_bcd register source required")
+            src_reg = RegisterName(src_op.name)
+            src_bits = src_op.size
+
+        width_info = _const_value(stmt.args[4], env)
+        if width_info is None:
+            raise ValueError("loop_bcd width missing")
+        width_bits = width_info[0]
+        width_bytes = bits_to_bytes(width_bits)
+
+        direction_info = _const_value(stmt.args[5], env)
+        if direction_info is None:
+            raise ValueError("loop_bcd direction missing")
+        direction = _to_signed(direction_info[0], stmt.args[5].size)
+
+        clear_info = _const_value(stmt.args[6], env)
+        clear_carry = bool(clear_info[0] if clear_info else 0)
+        if clear_carry:
+            env.il.append(env.il.set_flag(CFlag, env.il.const(1, 0)))
+
+        env.il.append(
+            env.il.set_reg(
+                width_bytes,
+                TempOverallZeroAcc,
+                env.il.const(width_bytes, 0),
+            )
+        )
+
+        with lift_loop(env.il):
+            dst_ptr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte1)
+            dst_byte = env.il.load(width_bytes, dst_ptr_reg)
+
+            if src_is_mem:
+                src_ptr_reg = env.il.reg(bits_to_bytes(24), TempMultiByte2)
+                src_byte = env.il.load(width_bytes, src_ptr_reg)
+            else:
+                src_byte = env.il.reg(width_bytes, src_reg)
+
+            if kind == "loop_bcd_sub":
+                result_operand = bcd_sub_emul(env.il, width_bytes, dst_byte, src_byte)
+            else:
+                result_operand = bcd_add_emul(env.il, width_bytes, dst_byte, src_byte)
+            result_expr = result_operand.lift(env.il)
+
+            env.il.append(env.il.store(width_bytes, dst_ptr_reg, result_expr))
+
+            overall = env.il.reg(width_bytes, TempOverallZeroAcc)
+            env.il.append(
+                env.il.set_reg(
+                    width_bytes,
+                    TempOverallZeroAcc,
+                    env.il.or_expr(width_bytes, overall, result_expr),
+                )
+            )
+
+            _advance_temp_pointer(env, TempMultiByte1, direction)
+            if src_is_mem:
+                _advance_temp_pointer(env, TempMultiByte2, direction)
+
+        env.il.append(
+            env.il.set_flag(
+                ZFlag,
+                env.il.compare_equal(
+                    width_bytes,
+                    env.il.reg(width_bytes, TempOverallZeroAcc),
                     env.il.const(width_bytes, 0),
                 ),
             )

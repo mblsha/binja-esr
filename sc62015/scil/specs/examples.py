@@ -284,6 +284,36 @@ def loop_carry_instr(name: str, effect_kind: str, *, src_is_mem: bool) -> Instr:
     return Instr(name=name, length=length, semantics=tuple(semantics))
 
 
+def loop_bcd_instr(
+    name: str,
+    effect_kind: str,
+    *,
+    src_is_mem: bool,
+    direction: int,
+    clear_carry: bool,
+) -> Instr:
+    dst = Tmp("dst_off", 8)
+    semantics: list[object] = [Fetch("u8", dst)]
+    args: list[object] = [Reg("I", 16), LoopIntPtr(dst)]
+    if src_is_mem:
+        src = Tmp("src_off", 8)
+        semantics.append(Fetch("u8", src))
+        args.append(LoopIntPtr(src))
+    else:
+        args.append(Reg("A", 8))
+    args.extend(
+        [
+            Flag("C"),
+            Const(8, 8),
+            Const(direction & 0xFF, 8),
+            Const(1 if clear_carry else 0, 1),
+        ]
+    )
+    semantics.append(Effect(effect_kind, tuple(args)))  # type: ignore[arg-type]
+    length = 3 if src_is_mem else 2
+    return Instr(name=name, length=length, semantics=tuple(semantics))
+
+
 def inc_dec_reg(name: str, reg_name: str, size: int, op: str) -> Instr:
     reg = Reg(reg_name, size)
     const_one = Const(1, size)

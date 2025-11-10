@@ -176,6 +176,14 @@ def test_sbcl_shape_matches() -> None:
     _assert_same("5C1020", 0x1900)
 
 
+def test_dadl_shape_matches() -> None:
+    _assert_same("C41020", 0x1A00)
+
+
+def test_dsbl_shape_matches() -> None:
+    _assert_same("D41020", 0x1B00)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
 
