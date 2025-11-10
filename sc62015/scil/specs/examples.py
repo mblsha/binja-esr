@@ -336,6 +336,32 @@ def decimal_shift_instr(name: str, is_left: bool) -> Instr:
     )
 
 
+def pmdf_immediate() -> Instr:
+    addr = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    return Instr(
+        name="PMDF (m),n",
+        length=3,
+        semantics=(
+            Fetch("u8", addr),
+            Fetch("u8", value),
+            Effect("pmdf", (LoopIntPtr(addr), value)),
+        ),
+    )
+
+
+def pmdf_reg() -> Instr:
+    addr = Tmp("dst_off", 8)
+    return Instr(
+        name="PMDF (m),A",
+        length=2,
+        semantics=(
+            Fetch("u8", addr),
+            Effect("pmdf", (LoopIntPtr(addr), Reg("A", 8))),
+        ),
+    )
+
+
 def inc_dec_reg(name: str, reg_name: str, size: int, op: str) -> Instr:
     reg = Reg(reg_name, size)
     const_one = Const(1, size)

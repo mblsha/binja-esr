@@ -192,6 +192,14 @@ def test_dsrl_shape_matches() -> None:
     _assert_same("FC10", 0x1D00)
 
 
+def test_pmdf_imm_shape_matches() -> None:
+    _assert_same("471107", 0x1E00)
+
+
+def test_pmdf_reg_shape_matches() -> None:
+    _assert_same("5710", 0x1F00)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
 

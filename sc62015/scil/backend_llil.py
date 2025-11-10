@@ -902,6 +902,18 @@ def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
             )
         )
         return
+    if kind == "pmdf":
+        ptr = stmt.args[0]
+        if not isinstance(ptr, ast.LoopIntPtr):
+            raise NotImplementedError("pmdf requires internal memory operand")
+        offset = _loop_int_offset(ptr, env)
+        mode = env.next_imem_mode()
+        addr_expr = env.compat.imem_address(mode, env.il.const(1, offset))
+        value_expr, value_bits = _emit_expr(stmt.args[1], env)
+        coerced = _coerce_width_expr(value_expr, value_bits, 8, env)
+        current = env.il.load(1, addr_expr)
+        env.il.append(env.il.store(1, addr_expr, env.il.add(1, current, coerced)))
+        return
     raise NotImplementedError(f"Effect {kind} not supported")
 
 

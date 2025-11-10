@@ -409,6 +409,27 @@ def _decimal_shift(decoded: DecodedInstr, *, is_left: bool) -> BuildResult:
     return _with_pre(spec, binder, decoded)
 
 
+def _pmdf_imm(decoded: DecodedInstr) -> BuildResult:
+    dst = decoded.binds["dst"]
+    imm = decoded.binds["imm"]
+    assert isinstance(dst, Imm8)
+    assert isinstance(imm, Imm8)
+    spec = examples.pmdf_immediate()
+    binder = {
+        "dst_off": _const(dst.value, 8),
+        "imm8": _const(imm.value, 8),
+    }
+    return _with_pre(spec, binder, decoded)
+
+
+def _pmdf_reg(decoded: DecodedInstr) -> BuildResult:
+    dst = decoded.binds["dst"]
+    assert isinstance(dst, Imm8)
+    spec = examples.pmdf_reg()
+    binder = {"dst_off": _const(dst.value, 8)}
+    return _with_pre(spec, binder, decoded)
+
+
 def _imem_swap(decoded: DecodedInstr) -> BuildResult:
     left = decoded.binds["left"]
     right = decoded.binds["right"]
@@ -537,6 +558,8 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "DSBL (m),A": lambda di: _loop_bcd(di, "loop_bcd_sub", src_is_mem=False, clear_carry=False),
     "DSLL (m)": lambda di: _decimal_shift(di, is_left=True),
     "DSRL (m)": lambda di: _decimal_shift(di, is_left=False),
+    "PMDF (m),n": _pmdf_imm,
+    "PMDF (m),A": _pmdf_reg,
     "EX (m),(n)": _imem_swap,
     "EXW (m),(n)": _imem_swap,
     "EXP (m),(n)": _imem_swap,

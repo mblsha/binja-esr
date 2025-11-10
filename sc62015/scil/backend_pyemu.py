@@ -620,6 +620,15 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         env.state.set_reg("I", remaining, 16)
         env.state.set_flag("Z", 1 if (overall_zero & 0xFF) == 0 else 0)
         return
+    if kind == "pmdf":
+        ptr = stmt.args[0]
+        if not isinstance(ptr, ast.LoopIntPtr):
+            raise NotImplementedError("pmdf requires internal-memory operand")
+        addr = _loop_int_pointer(ptr, env)
+        value, _ = _eval_expr(stmt.args[1], env)
+        current = env.bus.load("int", addr & 0xFF, 8) & 0xFF
+        env.bus.store("int", addr & 0xFF, (current + value) & 0xFF, 8)
+        return
     raise NotImplementedError(f"Effect {kind} not supported")
 
 
