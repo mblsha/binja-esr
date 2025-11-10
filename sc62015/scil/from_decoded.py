@@ -146,6 +146,37 @@ def _mv_a_abs(decoded: DecodedInstr) -> BuildResult:
     return _with_pre(spec, binder, decoded)
 
 
+def _call_near(decoded: DecodedInstr) -> BuildResult:
+    spec = examples.call_near()
+    addr = decoded.binds["addr16_page"]
+    assert isinstance(addr, Addr16Page)
+    binder = {
+        "call_addr16": _const(addr.offs16.u16, 16),
+        "call_page_hi": _const(addr.page20, 20),
+    }
+    return _with_pre(spec, binder, decoded)
+
+
+def _call_far(decoded: DecodedInstr) -> BuildResult:
+    spec = examples.call_far()
+    addr = decoded.binds["addr24"]
+    assert isinstance(addr, Addr24)
+    binder = {"call_addr24": _const(addr.v.u24, 24)}
+    return _with_pre(spec, binder, decoded)
+
+
+def _ret_near(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.ret_near(), {}, decoded)
+
+
+def _ret_far(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.ret_far(), {}, decoded)
+
+
+def _reti(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.reti(), {}, decoded)
+
+
 def _mv_ext_store(decoded: DecodedInstr) -> BuildResult:
     spec = examples.mv_ext_store()
     addr = decoded.binds["addr24"]
@@ -358,6 +389,38 @@ def _inc_dec(decoded: DecodedInstr, op: str) -> BuildResult:
     return _with_pre(spec, {}, decoded)
 
 
+def _pushu(decoded: DecodedInstr) -> BuildResult:
+    reg_sel = decoded.binds["reg"]
+    assert isinstance(reg_sel, RegSel)
+    bits = _REG_BITS.get(reg_sel.size_group, 8)
+    spec = examples.pushu_reg(decoded.mnemonic, reg_sel.name, bits)
+    return _with_pre(spec, {}, decoded)
+
+
+def _popu(decoded: DecodedInstr) -> BuildResult:
+    reg_sel = decoded.binds["reg"]
+    assert isinstance(reg_sel, RegSel)
+    bits = _REG_BITS.get(reg_sel.size_group, 8)
+    spec = examples.popu_reg(decoded.mnemonic, reg_sel.name, bits)
+    return _with_pre(spec, {}, decoded)
+
+
+def _pushu_imr(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.pushu_imr(), {}, decoded)
+
+
+def _popu_imr(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.popu_imr(), {}, decoded)
+
+
+def _pushs(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.pushs_f(), {}, decoded)
+
+
+def _pops(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.pops_f(), {}, decoded)
+
+
 BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "MV A,n": _mv_a_n,
     "ADD A,n": lambda di: _alu(di, "add", False, ("C", "Z")),
@@ -383,6 +446,11 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "MV [lmn],A": _mv_ext_store,
     "MV A,(n)": _mv_imem_load,
     "MV (n),A": _mv_imem_store,
+    "CALL mn": _call_near,
+    "CALLF lmn": _call_far,
+    "RET": _ret_near,
+    "RETF": _ret_far,
+    "RETI": _reti,
     "MV r,[r3]": _ext_reg_load,
     "MV [r3],r": _ext_reg_store,
     "MV r,[(n)]": _ext_ptr_load,
@@ -401,6 +469,24 @@ BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
     "EX (m),(n)": _imem_swap,
     "EXW (m),(n)": _imem_swap,
     "EXP (m),(n)": _imem_swap,
+    "PUSHS F": _pushs,
+    "POPS F": _pops,
+    "PUSHU A": _pushu,
+    "PUSHU IL": _pushu,
+    "PUSHU BA": _pushu,
+    "PUSHU I": _pushu,
+    "PUSHU X": _pushu,
+    "PUSHU Y": _pushu,
+    "PUSHU F": _pushu,
+    "PUSHU IMR": _pushu_imr,
+    "POPU A": _popu,
+    "POPU IL": _popu,
+    "POPU BA": _popu,
+    "POPU I": _popu,
+    "POPU X": _popu,
+    "POPU Y": _popu,
+    "POPU F": _popu,
+    "POPU IMR": _popu_imr,
 }
 
 

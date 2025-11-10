@@ -12,7 +12,7 @@ from .compat_builder import CompatLLILBuilder
 from . import ast
 from .validate import bits_to_bytes, expr_size
 from ..decoding.bind import PreLatch
-from ..pysc62015.instr.opcodes import TempExchange
+from ..pysc62015.instr.opcodes import RegF, RegIMR, TempExchange, TempIncDecHelper
 
 ExpressionResult = Tuple[int, int]
 
@@ -30,6 +30,95 @@ def _const_to_signed(const: Optional[ast.Const]) -> int:
     if const is None:
         return 0
     return _to_signed(const.value, const.size)
+
+
+def _const_pointer_expr(expr: ast.Expr, env: _Env) -> Optional[int]:
+    bound = _bound_const(expr, env)
+    if bound is None:
+        return None
+    width_bytes = bits_to_bytes(bound.size)
+    return env.il.const_pointer(width_bytes, bound.value & _mask(bound.size))
+
+
+def _coerce_width_expr(expr: int, expr_bits: int, target_bits: int, env: _Env) -> int:
+    if expr_bits == target_bits:
+        return expr
+    width_bytes = bits_to_bytes(target_bits)
+    if expr_bits > target_bits:
+        return env.il.low_part(width_bytes, expr)
+    return env.il.zero_extend(width_bytes, expr)
+
+
+def _capture_user_stack_pointer(env: _Env, stack_name: str) -> None:
+    env.il.append(
+        env.il.set_reg(
+            bits_to_bytes(24),
+            TempIncDecHelper,
+            env.il.reg(bits_to_bytes(24), RegisterName(stack_name)),
+        )
+    )
+
+
+def _emit_user_stack_push(env: _Env, stack_name: str, value_expr: int, width_bits: int) -> None:
+    width_bytes = bits_to_bytes(width_bits)
+    _capture_user_stack_pointer(env, stack_name)
+    temp_expr = env.il.reg(bits_to_bytes(24), TempIncDecHelper)
+    offset = env.il.const(bits_to_bytes(24), width_bytes)
+    new_ptr = env.il.sub(bits_to_bytes(24), temp_expr, offset)
+    env.il.append(
+        env.il.set_reg(bits_to_bytes(24), RegisterName(stack_name), new_ptr)
+    )
+    env.il.append(env.il.store(width_bytes, new_ptr, value_expr))
+
+
+def _emit_user_stack_pop(env: _Env, stack_name: str, width_bits: int) -> int:
+    width_bytes = bits_to_bytes(width_bits)
+    _capture_user_stack_pointer(env, stack_name)
+    temp_expr = env.il.reg(bits_to_bytes(24), TempIncDecHelper)
+    return env.il.load(width_bytes, temp_expr)
+
+
+def _finish_user_stack_pop(env: _Env, stack_name: str, width_bits: int) -> None:
+    width_bytes = bits_to_bytes(width_bits)
+    temp_expr = env.il.reg(bits_to_bytes(24), TempIncDecHelper)
+    env.il.append(
+        env.il.set_reg(
+            bits_to_bytes(24),
+            RegisterName(stack_name),
+            env.il.add(
+                bits_to_bytes(24),
+                temp_expr,
+                env.il.const(bits_to_bytes(24), width_bytes),
+            ),
+        )
+    )
+
+
+def _assign_stack_pop_dest(env: _Env, dest: ast.Expr, value_expr: int, value_bits: int) -> None:
+    if isinstance(dest, ast.Reg):
+        if dest.name == "F":
+            reg_helper = RegF()
+            reg_helper.lift_assign(env.il, value_expr)
+            return
+        env.il.append(
+            env.il.set_reg(
+                bits_to_bytes(dest.size),
+                RegisterName(dest.name),
+                _coerce_width_expr(value_expr, value_bits, dest.size, env),
+            )
+        )
+        return
+    if isinstance(dest, ast.Mem):
+        ptr_expr, _ = _resolve_mem(dest, env)
+        env.il.append(
+            env.il.store(
+                bits_to_bytes(dest.size),
+                ptr_expr,
+                _coerce_width_expr(value_expr, value_bits, dest.size, env),
+            )
+        )
+        return
+    raise NotImplementedError("Unsupported pop destination")
 
 
 @dataclass
@@ -95,6 +184,17 @@ def _const_value(expr: ast.Expr, env: _Env) -> Optional[Tuple[int, int]]:
         elif expr.op == "zext":
             bits = expr.a.size
         return value, bits
+    if isinstance(expr, ast.PcRel):
+        base = (env.addr + expr.base_advance) & _mask(expr.out_size)
+        if expr.disp is None:
+            return base, expr.out_size
+        disp_info = _const_value(expr.disp, env)
+        if disp_info is None:
+            return None
+        signed, bits = disp_info
+        if signed & (1 << (bits - 1)):
+            signed -= 1 << bits
+        return (base + signed) & _mask(expr.out_size), expr.out_size
     bound = _bound_const(expr, env)
     if bound is None:
         return None
@@ -109,6 +209,8 @@ def _resolve_mem(mem: ast.Mem, env: _Env) -> Tuple[int, int]:
             addr_expr = env.il.const_pointer(bits_to_bytes(24), bound.value & _mask(24))
         return addr_expr, 24
     if mem.space == "int":
+        if isinstance(mem.addr, ast.Const) and mem.addr.size > 8:
+            return env.il.const_pointer(bits_to_bytes(mem.addr.size), mem.addr.value), mem.addr.size
         offset_expr, _ = _emit_expr(mem.addr, env)
         mode = env.next_imem_mode()
         ptr = env.compat.imem_address(mode, offset_expr)
@@ -334,6 +436,110 @@ def _emit_if(stmt: ast.If, env: _Env) -> None:
         env.il.mark_label(end_label)
 
 
+def _emit_ret_near(env: _Env) -> None:
+    pop_val = env.il.pop(2)
+    high = env.il.and_expr(
+        3,
+        env.il.reg(3, RegisterName("PC")),
+        env.il.const(3, 0xFF0000),
+    )
+    env.il.append(env.il.ret(env.il.or_expr(3, pop_val, high)))
+
+
+def _emit_reti(env: _Env) -> None:
+    reg_imr = RegIMR()
+    reg_imr.lift_assign(env.il, env.il.pop(1))
+    reg_f = RegF()
+    reg_f.lift_assign(env.il, env.il.pop(1))
+    env.il.append(env.il.ret(env.il.pop(3)))
+
+
+def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
+    kind = stmt.kind
+    if kind == "push_ret16":
+        const_info = _const_value(stmt.args[0], env)
+        if const_info is not None:
+            value, _ = const_info
+            env.il.append(
+                env.il.push(2, env.il.const(bits_to_bytes(16), value))
+            )
+            return
+        value_expr, bits = _emit_expr(stmt.args[0], env)
+        coerced = _coerce_width_expr(value_expr, bits, 16, env)
+        env.il.append(env.il.push(2, coerced))
+        return
+    if kind == "push_ret24":
+        # Legacy CALLF emitted BN's call primitive which already models the stack effect.
+        # Keep the legacy LLIL shape by omitting an explicit push here.
+        return
+    if kind == "goto_page_join":
+        lo_const = _const_value(stmt.args[0], env)
+        page_const = _const_value(stmt.args[1], env)
+        if lo_const is not None and page_const is not None:
+            lo_val, _ = lo_const
+            page_val, _ = page_const
+            joined = ((page_val & 0xF0000) | (lo_val & 0xFFFF)) & _mask(20)
+            env.il.append(env.il.jump(env.il.const_pointer(3, joined)))
+            return
+        lo_expr, _ = _emit_expr(stmt.args[0], env)
+        page_expr, _ = _emit_expr(stmt.args[1], env)
+        target = env.compat.paged_join(page_expr, lo_expr)
+        env.il.append(env.il.jump(target))
+        return
+    if kind == "goto_far24":
+        ptr_expr = _const_pointer_expr(stmt.args[0], env)
+        if ptr_expr is None:
+            ptr_expr, _ = _emit_expr(stmt.args[0], env)
+        env.il.append(env.il.call(ptr_expr))
+        return
+    if kind == "ret_near":
+        _emit_ret_near(env)
+        return
+    if kind == "ret_far":
+        env.il.append(env.il.ret(env.il.pop(3)))
+        return
+    if kind == "reti":
+        _emit_reti(env)
+        return
+    if kind == "push_bytes":
+        width_info = _const_value(stmt.args[2], env)
+        if width_info is None:
+            raise ValueError("push_bytes requires constant width")
+        width_bits, _ = width_info
+        value_expr, value_bits = _emit_expr(stmt.args[1], env)
+        coerced = _coerce_width_expr(value_expr, value_bits, width_bits, env)
+        stack = stmt.args[0]
+        if not isinstance(stack, ast.Reg):
+            raise TypeError("push_bytes requires stack register")
+        if stack.name == "S":
+            env.il.append(env.il.push(bits_to_bytes(width_bits), coerced))
+            return
+        if stack.name == "U":
+            _emit_user_stack_push(env, stack.name, coerced, width_bits)
+            return
+        raise NotImplementedError(f"push_bytes unsupported stack {stack.name}")
+    if kind == "pop_bytes":
+        width_info = _const_value(stmt.args[2], env)
+        if width_info is None:
+            raise ValueError("pop_bytes requires constant width")
+        width_bits, _ = width_info
+        stack = stmt.args[0]
+        if not isinstance(stack, ast.Reg):
+            raise TypeError("pop_bytes requires stack register")
+        if stack.name == "S":
+            value_expr = env.il.pop(bits_to_bytes(width_bits))
+            _assign_stack_pop_dest(env, stmt.args[1], value_expr, width_bits)
+            return
+        if stack.name == "U":
+            value_expr = _emit_user_stack_pop(env, stack.name, width_bits)
+            _assign_stack_pop_dest(env, stmt.args[1], value_expr, width_bits)
+            _finish_user_stack_pop(env, stack.name, width_bits)
+            return
+        else:
+            raise NotImplementedError(f"pop_bytes unsupported stack {stack.name}")
+    raise NotImplementedError(f"Effect {kind} not supported")
+
+
 def _emit_stmt(stmt: ast.Stmt, env: _Env) -> None:
     if isinstance(stmt, ast.Fetch):
         bound = env.binder.get(stmt.dst.name)
@@ -380,8 +586,7 @@ def _emit_stmt(stmt: ast.Stmt, env: _Env) -> None:
         return
 
     if isinstance(stmt, ast.Effect):
-        # Structured effects are stubs during Phase 1; keep the IL stream aligned with a nop.
-        env.il.append(env.il.nop())
+        _emit_effect_stmt(stmt, env)
         return
 
     if isinstance(stmt, ast.ExtRegLoad):

@@ -86,6 +86,39 @@ def _dec_mv_a_abs24(opcode: int, ctx: StreamCtx) -> DecodedInstr:
         binds={"addr24": addr},
     )
 
+def _dec_call(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    lo, hi = ctx.read_u16_mn()
+    addr = Addr16Page(Imm16(lo, hi), ctx.page20())
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic="CALL mn",
+        length=_length(ctx),
+        family="call_near",
+        binds={"addr16_page": addr},
+    )
+
+
+def _dec_callf(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    lo, mid, hi = ctx.read_u24_lmn()
+    addr = Addr24(Imm24(lo, mid, hi))
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic="CALLF lmn",
+        length=_length(ctx),
+        family="call_far",
+        binds={"addr24": addr},
+    )
+
+
+def _dec_ret(opcode: int, ctx: StreamCtx, mnemonic: str, family: str) -> DecodedInstr:
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family=family,
+        binds={},
+    )
+
 
 PRE_LATCHES: Dict[int, PreLatch] = {
     0x32: PreLatch("(n)", "(n)"),
@@ -122,6 +155,31 @@ _ALU_IMM8_OPS: Dict[int, str] = {
     0x68: "XOR A,n",
     0x70: "AND A,n",
     0x78: "OR A,n",
+}
+
+_STACK_SYS: Dict[int, Tuple[str, RegSel]] = {
+    0x4F: ("PUSHS F", RegSel("r1", "F")),
+    0x5F: ("POPS F", RegSel("r1", "F")),
+}
+
+_PUSHU_REGS: Dict[int, Tuple[str, RegSel]] = {
+    0x28: ("PUSHU A", RegSel("r1", "A")),
+    0x29: ("PUSHU IL", RegSel("r1", "IL")),
+    0x2A: ("PUSHU BA", RegSel("r2", "BA")),
+    0x2B: ("PUSHU I", RegSel("r2", "I")),
+    0x2C: ("PUSHU X", RegSel("r3", "X")),
+    0x2D: ("PUSHU Y", RegSel("r3", "Y")),
+    0x2E: ("PUSHU F", RegSel("r1", "F")),
+}
+
+_POPU_REGS: Dict[int, Tuple[str, RegSel]] = {
+    0x38: ("POPU A", RegSel("r1", "A")),
+    0x39: ("POPU IL", RegSel("r1", "IL")),
+    0x3A: ("POPU BA", RegSel("r2", "BA")),
+    0x3B: ("POPU I", RegSel("r2", "I")),
+    0x3C: ("POPU X", RegSel("r3", "X")),
+    0x3D: ("POPU Y", RegSel("r3", "Y")),
+    0x3E: ("POPU F", RegSel("r1", "F")),
 }
 
 _EXT_REG_LOADS: Dict[int, Tuple[str, RegSel]] = {
@@ -209,6 +267,59 @@ def _dec_mv_ext_store(opcode: int, ctx: StreamCtx) -> DecodedInstr:
         length=_length(ctx),
         family="ext24",
         binds={"addr24": addr},
+    )
+
+
+def _dec_stack_sys(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    mnemonic, reg = _STACK_SYS[opcode]
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="stack_sys",
+        binds={"reg": reg},
+    )
+
+
+def _dec_pushu(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    mnemonic, reg = _PUSHU_REGS[opcode]
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="pushu",
+        binds={"reg": reg},
+    )
+
+
+def _dec_popu(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    mnemonic, reg = _POPU_REGS[opcode]
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic=mnemonic,
+        length=_length(ctx),
+        family="popu",
+        binds={"reg": reg},
+    )
+
+
+def _dec_pushu_imr(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic="PUSHU IMR",
+        length=_length(ctx),
+        family="pushu",
+        binds={},
+    )
+
+
+def _dec_popu_imr(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic="POPU IMR",
+        length=_length(ctx),
+        family="popu",
+        binds={},
     )
 
 
@@ -441,8 +552,13 @@ def _dec_jp_reg(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 DECODERS: Dict[int, DecoderFunc] = {
+    0x01: lambda opcode, ctx: _dec_ret(opcode, ctx, "RETI", "reti"),
     0x02: _dec_jp_mn,
     0x08: _dec_mv_a_n,
+    0x04: _dec_call,
+    0x05: _dec_callf,
+    0x06: lambda opcode, ctx: _dec_ret(opcode, ctx, "RET", "ret_near"),
+    0x07: lambda opcode, ctx: _dec_ret(opcode, ctx, "RETF", "ret_far"),
     0x10: _dec_jp_imem,
     0x11: _dec_jp_reg,
     0x14: lambda opcode, ctx: _dec_jp_cond(opcode, ctx, "Z"),
@@ -464,6 +580,22 @@ DECODERS: Dict[int, DecoderFunc] = {
     0x32: _dec_pre,
     0x33: _dec_pre,
     0x36: _dec_pre,
+    0x28: _dec_pushu,
+    0x29: _dec_pushu,
+    0x2A: _dec_pushu,
+    0x2B: _dec_pushu,
+    0x2C: _dec_pushu,
+    0x2D: _dec_pushu,
+    0x2E: _dec_pushu,
+    0x2F: _dec_pushu_imr,
+    0x38: _dec_popu,
+    0x39: _dec_popu,
+    0x3A: _dec_popu,
+    0x3B: _dec_popu,
+    0x3C: _dec_popu,
+    0x3D: _dec_popu,
+    0x3E: _dec_popu,
+    0x3F: _dec_popu_imr,
     0x90: _dec_ext_reg_load,
     0x91: _dec_ext_reg_load,
     0x92: _dec_ext_reg_load,
@@ -480,8 +612,10 @@ DECODERS: Dict[int, DecoderFunc] = {
     0x9E: _dec_ext_ptr_load,
     0x40: _dec_alu_imm,
     0x48: _dec_alu_imm,
+    0x4F: _dec_stack_sys,
     0x50: _dec_alu_imm,
     0x58: _dec_alu_imm,
+    0x5F: _dec_stack_sys,
     0x64: _dec_alu_imm,
     0x68: _dec_alu_imm,
     0x70: _dec_alu_imm,

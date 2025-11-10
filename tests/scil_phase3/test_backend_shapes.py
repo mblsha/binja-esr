@@ -140,8 +140,68 @@ def test_jp_r3_shape_matches() -> None:
     _assert_same("1104", 0x6000)
 
 
+def test_call_shape_matches() -> None:
+    _assert_same("041234", 0x34567)
+
+
+def test_callf_shape_matches() -> None:
+    _assert_same("05123400", 0x12345)
+
+
+def test_ret_shape_matches() -> None:
+    _assert_same("06", 0x2000)
+
+
+def test_retf_shape_matches() -> None:
+    _assert_same("07", 0x2000)
+
+
+def test_reti_shape_matches() -> None:
+    _assert_same("01", 0x2000)
+
+
 def test_ext_ptr_load_shape_matches() -> None:
     _assert_same("980012", 0x7000)
+
+
+def test_pushs_f_shape_matches() -> None:
+    _assert_same("4F", 0x2000)
+
+
+def test_pops_f_shape_matches() -> None:
+    _assert_same("5F", 0x2000)
+
+
+def test_pushu_a_shape_matches() -> None:
+    _assert_same("28", 0x2000)
+
+
+def test_popu_a_shape_matches() -> None:
+    _assert_same("38", 0x2000)
+
+
+def test_pushu_ba_shape_matches() -> None:
+    _assert_same("2A", 0x2000)
+
+
+def test_popu_ba_shape_matches() -> None:
+    _assert_same("3A", 0x2000)
+
+
+def test_pushu_f_shape_matches() -> None:
+    _assert_same("2E", 0x2000)
+
+
+def test_popu_f_shape_matches() -> None:
+    _assert_same("3E", 0x2000)
+
+
+def test_pushu_imr_shape_matches() -> None:
+    _assert_same("2F", 0x2000)
+
+
+def test_popu_imr_shape_matches() -> None:
+    _assert_same("3F", 0x2000)
 
 
 def test_ext_ptr_store_shape_matches() -> None:

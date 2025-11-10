@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from ..ast import (
     BinOp,
+    Expr,
     Cond,
     Const,
+    Effect,
     Fetch,
     Flag,
     Goto,
@@ -19,6 +21,15 @@ from ..ast import (
     Tmp,
     UnOp,
 )
+from ...pysc62015.constants import INTERNAL_MEMORY_START
+from ...pysc62015.instr.opcodes import IMEMRegisters
+
+_IMR_OFFSET = IMEMRegisters["IMR"].value & 0xFF
+_IMR_ABS_ADDR = INTERNAL_MEMORY_START + _IMR_OFFSET
+
+
+def _imr_mem() -> Mem:
+    return Mem("int", Const(_IMR_ABS_ADDR, 24), 8)
 
 
 def mv_a_imm() -> Instr:
@@ -154,6 +165,60 @@ def mv_ext_store() -> Instr:
     )
 
 
+def call_near() -> Instr:
+    lo = Tmp("call_addr16", 16)
+    page = Tmp("call_page_hi", 20)
+    next_pc = PcRel(base_advance=3, out_size=20)
+    return Instr(
+        name="CALL mn",
+        length=3,
+        semantics=(
+            Fetch("addr16_page", lo),
+            Fetch("addr16_page_hi", page),
+            Effect("push_ret16", (next_pc,)),
+            Effect("goto_page_join", (lo, page)),
+        ),
+    )
+
+
+def call_far() -> Instr:
+    addr = Tmp("call_addr24", 24)
+    next_pc = PcRel(base_advance=4, out_size=20)
+    return Instr(
+        name="CALLF lmn",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Effect("push_ret24", (next_pc,)),
+            Effect("goto_far24", (addr,)),
+        ),
+    )
+
+
+def ret_near() -> Instr:
+    return Instr(
+        name="RET",
+        length=1,
+        semantics=(Effect("ret_near", ()),),
+    )
+
+
+def ret_far() -> Instr:
+    return Instr(
+        name="RETF",
+        length=1,
+        semantics=(Effect("ret_far", ()),),
+    )
+
+
+def reti() -> Instr:
+    return Instr(
+        name="RETI",
+        length=1,
+        semantics=(Effect("reti", ()),),
+    )
+
+
 def mv_a_imem() -> Instr:
     offset = Tmp("imem_off", 8)
     return Instr(
@@ -195,3 +260,167 @@ def jrz_rel() -> Instr:
 
 def inc_a() -> Instr:
     return inc_dec_reg("INC_A", "A", 8, "add")
+
+
+def _flag_byte_expr() -> BinOp:
+    z_shift = BinOp("shl", Flag("Z"), Const(1, 8), 8)
+    return BinOp("or", Flag("C"), z_shift, 8)
+
+
+def pushs_f() -> Instr:
+    return Instr(
+        name="PUSHS F",
+        length=1,
+        semantics=(
+            Effect(
+                "push_bytes",
+                (
+                    Reg("S", 24),
+                    _flag_byte_expr(),
+                    Const(8, 8),
+                    Const(0, 1),
+                ),
+            ),
+        ),
+    )
+
+
+def pops_f() -> Instr:
+    return Instr(
+        name="POPS F",
+        length=1,
+        semantics=(
+            Effect(
+                "pop_bytes",
+                (
+                    Reg("S", 24),
+                    Reg("F", 8),
+                    Const(8, 8),
+                    Const(0, 1),
+                ),
+            ),
+        ),
+    )
+
+
+def pushu_reg(name: str, reg_name: str, bits: int) -> Instr:
+    value: Expr
+    if reg_name == "F":
+        value = _flag_byte_expr()
+    else:
+        value = Reg(reg_name, bits)
+    return Instr(
+        name=name,
+        length=1,
+        semantics=(
+            Effect(
+                "push_bytes",
+                (
+                    Reg("U", 24),
+                    value,
+                    Const(bits, 8),
+                    Const(1, 1),
+                ),
+            ),
+        ),
+    )
+
+
+def popu_reg(name: str, reg_name: str, bits: int) -> Instr:
+    dest = Reg(reg_name, bits)
+    return Instr(
+        name=name,
+        length=1,
+        semantics=(
+            Effect(
+                "pop_bytes",
+                (
+                    Reg("U", 24),
+                    dest,
+                    Const(bits, 8),
+                    Const(1, 1),
+                ),
+            ),
+        ),
+    )
+
+
+def pushu_imr() -> Instr:
+    imr_mem = _imr_mem()
+    masked = BinOp("and", _imr_mem(), Const(0x7F, 8), 8)
+    return Instr(
+        name="PUSHU IMR",
+        length=1,
+        semantics=(
+            Effect(
+                "push_bytes",
+                (
+                    Reg("U", 24),
+                    imr_mem,
+                    Const(8, 8),
+                    Const(1, 1),
+                ),
+            ),
+            Store(_imr_mem(), masked),
+        ),
+    )
+
+
+def popu_imr() -> Instr:
+    return Instr(
+        name="POPU IMR",
+        length=1,
+        semantics=(
+            Effect(
+                "pop_bytes",
+                (
+                    Reg("U", 24),
+                    _imr_mem(),
+                    Const(8, 8),
+                    Const(1, 1),
+                ),
+            ),
+        ),
+    )
+
+
+def pushu_reg(name: str, reg_name: str, bits: int) -> Instr:
+    value: Expr
+    if reg_name == "F":
+        value = _flag_byte_expr()
+    else:
+        value = Reg(reg_name, bits)
+    return Instr(
+        name=name,
+        length=1,
+        semantics=(
+            Effect(
+                "push_bytes",
+                (
+                    Reg("U", 24),
+                    value,
+                    Const(bits, 8),
+                    Const(1, 1),
+                ),
+            ),
+        ),
+    )
+
+
+def popu_reg(name: str, reg_name: str, bits: int) -> Instr:
+    dest = Reg(reg_name, bits)
+    return Instr(
+        name=name,
+        length=1,
+        semantics=(
+            Effect(
+                "pop_bytes",
+                (
+                    Reg("U", 24),
+                    dest,
+                    Const(bits, 8),
+                    Const(1, 1),
+                ),
+            ),
+        ),
+    )

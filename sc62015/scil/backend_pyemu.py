@@ -5,6 +5,7 @@ from typing import Dict, Optional, Protocol, Tuple
 
 from ..decoding.bind import PreLatch
 from ..pysc62015.instr.opcodes import IMEMRegisters
+from ..pysc62015.constants import PC_MASK, INTERNAL_MEMORY_START
 from . import ast
 
 class Bus(Protocol):
@@ -23,9 +24,14 @@ class CPUState:
     pc: int = 0
 
     def get_reg(self, name: str, default_bits: int) -> int:
+        if name == "PC":
+            return self.pc & PC_MASK
         return self.regs.get(name, 0) & ((1 << default_bits) - 1)
 
     def set_reg(self, name: str, value: int, bits: int) -> None:
+        if name == "PC":
+            self.pc = value & PC_MASK
+            return
         self.regs[name] = value & ((1 << bits) - 1)
 
     def set_flag(self, name: str, value: int) -> None:
@@ -122,8 +128,12 @@ def _eval_expr(expr: ast.Expr, env: _Env) -> Tuple[int, int]:
     if isinstance(expr, ast.Flag):
         return state.get_flag(expr.name), 1
     if isinstance(expr, ast.Mem):
-        addr, _ = _eval_expr(expr.addr, env)
+        addr, addr_bits = _eval_expr(expr.addr, env)
         if expr.space == "int":
+            if addr_bits > 8:
+                offset = (addr - INTERNAL_MEMORY_START) & 0xFF
+                value = bus.load("int", offset, expr.size)
+                return value & _mask(expr.size), expr.size
             addr = _resolve_imem_addr(env, addr & 0xFF)
         value = bus.load(expr.space, addr, expr.size)
         return value & _mask(expr.size), expr.size
@@ -313,6 +323,9 @@ def _exec_stmt(
         return
     if isinstance(stmt, (ast.Label, ast.Comment)):
         return
+    if isinstance(stmt, ast.Effect):
+        _exec_effect(stmt, env)
+        return
     raise NotImplementedError(f"Statement {stmt} unsupported in emulator backend")
 
 
@@ -334,6 +347,108 @@ def _ext_disp_value(const: Optional[ast.Const]) -> int:
     if const is None:
         return 0
     return _to_signed(const.value, const.size)
+
+
+def _stack_push(env: _Env, register: str, value: int, count: int) -> None:
+    state = env.state
+    bus = env.bus
+    sp = state.get_reg(register, 24)
+    new_sp = (sp - count) & _ADDR_MASK
+    state.set_reg(register, new_sp, 24)
+    for i in range(count):
+        byte = (value >> (8 * i)) & 0xFF
+        bus.store("ext", (new_sp + i) & _ADDR_MASK, byte, 8)
+
+
+def _stack_pop(env: _Env, register: str, count: int) -> int:
+    state = env.state
+    bus = env.bus
+    sp = state.get_reg(register, 24)
+    result = 0
+    for i in range(count):
+        byte = bus.load("ext", (sp + i) & _ADDR_MASK, 8) & 0xFF
+        result |= byte << (8 * i)
+    state.set_reg(register, (sp + count) & _ADDR_MASK, 24)
+    return result
+
+
+def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
+    kind = stmt.kind
+    state = env.state
+    if kind == "push_ret16":
+        value, _ = _eval_expr(stmt.args[0], env)
+        _stack_push(env, "S", value, 2)
+        return
+    if kind == "push_ret24":
+        value, _ = _eval_expr(stmt.args[0], env)
+        _stack_push(env, "S", value, 3)
+        return
+    if kind == "goto_page_join":
+        lo, _ = _eval_expr(stmt.args[0], env)
+        page, _ = _eval_expr(stmt.args[1], env)
+        target = ((page & 0xF0000) | (lo & 0xFFFF)) & PC_MASK
+        state.pc = target
+        return
+    if kind == "goto_far24":
+        value, _ = _eval_expr(stmt.args[0], env)
+        state.pc = value & PC_MASK
+        return
+    if kind == "ret_near":
+        value = _stack_pop(env, "S", 2)
+        page = state.pc & 0xF0000
+        state.pc = (page | (value & 0xFFFF)) & PC_MASK
+        return
+    if kind == "ret_far":
+        value = _stack_pop(env, "S", 3)
+        state.pc = value & PC_MASK
+        return
+    if kind == "reti":
+        sp = state.get_reg("S", 24)
+        imr = env.bus.load("ext", sp & _ADDR_MASK, 8) & 0xFF
+        f_val = env.bus.load("ext", (sp + 1) & _ADDR_MASK, 8) & 0xFF
+        lo = env.bus.load("ext", (sp + 2) & _ADDR_MASK, 8) & 0xFF
+        hi = env.bus.load("ext", (sp + 3) & _ADDR_MASK, 8) & 0xFF
+        page = env.bus.load("ext", (sp + 4) & _ADDR_MASK, 8) & 0xFF
+        state.set_reg("S", (sp + 5) & _ADDR_MASK, 24)
+        env.bus.store("int", IMEMRegisters["IMR"].value & 0xFF, imr, 8)
+        state.set_reg("F", f_val, 8)
+        state.set_flag("C", f_val & 1)
+        state.set_flag("Z", (f_val >> 1) & 1)
+        target = (((page & 0xFF) << 16) | (hi << 8) | lo) & PC_MASK
+        state.pc = target
+        return
+    if kind == "push_bytes":
+        stack_reg = stmt.args[0]
+        if not isinstance(stack_reg, ast.Reg):
+            raise TypeError("push_bytes requires stack register arg")
+        value, value_bits = _eval_expr(stmt.args[1], env)
+        width_bits = _const_arg(stmt.args[2])
+        width_bytes = width_bits // 8
+        mask = _mask(width_bits)
+        _stack_push(env, stack_reg.name, value & mask, width_bytes)
+        return
+    if kind == "pop_bytes":
+        stack_reg = stmt.args[0]
+        dest = stmt.args[1]
+        if not isinstance(stack_reg, ast.Reg):
+            raise TypeError("pop_bytes requires stack register arg")
+        width_bits = _const_arg(stmt.args[2])
+        width_bytes = width_bits // 8
+        value = _stack_pop(env, stack_reg.name, width_bytes) & _mask(width_bits)
+        if isinstance(dest, ast.Reg):
+            state.set_reg(dest.name, value, dest.size)
+            if dest.name == "F":
+                state.set_flag("C", value & 1)
+                state.set_flag("Z", (value >> 1) & 1)
+            return
+        if isinstance(dest, ast.Mem):
+            addr, _ = _eval_expr(dest.addr, env)
+            if dest.space == "int":
+                addr = _resolve_imem_addr(env, addr & 0xFF)
+            env.bus.store(dest.space, addr, value, dest.size)
+            return
+        raise TypeError("pop_bytes destination must be register or memory")
+    raise NotImplementedError(f"Effect {kind} not supported")
 
 
 def _exec_ext_reg_op(
