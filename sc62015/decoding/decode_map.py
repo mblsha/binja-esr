@@ -37,6 +37,16 @@ def _length(ctx: StreamCtx) -> int:
     return ctx.total_length()
 
 
+def _dec_nop(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    return DecodedInstr(
+        opcode=opcode,
+        mnemonic="NOP",
+        length=_length(ctx),
+        family="nop",
+        binds={},
+    )
+
+
 def _dec_mv_a_n(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     imm = Imm8(ctx.read_u8())
     return DecodedInstr(
@@ -664,6 +674,7 @@ def _dec_jp_reg(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 DECODERS: Dict[int, DecoderFunc] = {
+    0x00: _dec_nop,
     0x01: lambda opcode, ctx: _dec_ret(opcode, ctx, "RETI", "reti"),
     0x02: _dec_jp_mn,
     0x08: _dec_mv_a_n,

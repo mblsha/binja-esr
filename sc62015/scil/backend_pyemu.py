@@ -485,6 +485,8 @@ def _bcd_sub_byte(a: int, b: int, borrow_in: int) -> tuple[int, int]:
 def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
     kind = stmt.kind
     state = env.state
+    if kind == "nop":
+        return
     if kind == "push_ret16":
         value, _ = _eval_expr(stmt.args[0], env)
         _stack_push(env, "S", value, 2)

@@ -588,6 +588,9 @@ def _emit_reti(env: _Env) -> None:
 
 def _emit_effect_stmt(stmt: ast.Effect, env: _Env) -> None:
     kind = stmt.kind
+    if kind == "nop":
+        env.il.append(env.il.nop())
+        return
     if kind == "push_ret16":
         const_info = _const_value(stmt.args[0], env)
         if const_info is not None:

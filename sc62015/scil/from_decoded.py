@@ -83,6 +83,10 @@ def _mv_a_n(decoded: DecodedInstr) -> BuildResult:
     return _with_pre(examples.mv_a_imm(), _imm8(decoded), decoded)
 
 
+def _nop(decoded: DecodedInstr) -> BuildResult:
+    return _with_pre(examples.nop_instr(), {}, decoded)
+
+
 def _alu(
     decoded: DecodedInstr, op: str, include_carry: bool, flags: tuple[str, ...]
 ) -> BuildResult:
@@ -511,6 +515,7 @@ def _pops(decoded: DecodedInstr) -> BuildResult:
 
 
 BUILDERS: Dict[str, Callable[[DecodedInstr], BuildResult]] = {
+    "NOP": _nop,
     "MV A,n": _mv_a_n,
     "ADD A,n": lambda di: _alu(di, "add", False, ("C", "Z")),
     "SUB A,n": lambda di: _alu(di, "sub", False, ("C", "Z")),

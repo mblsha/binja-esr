@@ -33,6 +33,7 @@ FetchKind = Literal[
     "addr24",
 ]
 EffectKind = Literal[
+    "nop",
     "push_ret16",
     "push_ret20",
     "push_ret24",

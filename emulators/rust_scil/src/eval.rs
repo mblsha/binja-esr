@@ -463,6 +463,7 @@ fn sign_extend(value: u32, from_bits: u8, to_bits: u8) -> u32 {
 
 fn exec_effect<B: Bus>(kind: &str, args: &[Expr], env: &mut Env<B>) -> Result<()> {
     match kind {
+        "nop" => {}
         "push_ret16" => {
             let (value, _) = eval_expr(expect_arg(args, 0)?, env)?;
             stack_push(env, "S", value, 2);

@@ -32,6 +32,14 @@ def _imr_mem() -> Mem:
     return Mem("int", Const(_IMR_ABS_ADDR, 24), 8)
 
 
+def nop_instr() -> Instr:
+    return Instr(
+        name="NOP",
+        length=1,
+        semantics=(Effect("nop", ()),),
+    )
+
+
 def mv_a_imm() -> Instr:
     imm = Tmp("imm8", 8)
     return Instr(
