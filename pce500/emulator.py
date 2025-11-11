@@ -9,7 +9,7 @@ from collections import deque
 from datetime import datetime
 
 # Import the SC62015 emulator
-from sc62015.pysc62015.emulator import Emulator as SC62015Emulator, RegisterName
+from sc62015.pysc62015 import CPU, RegisterName
 from sc62015.pysc62015.instr.instructions import (
     CALL,
     RetInstruction,
@@ -48,6 +48,13 @@ class IRQSource(Enum):
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
 KOL, KOH, KIL = IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL
+
+
+def _env_flag(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    return raw not in {"0", "false", "False", "off", ""}
 
 
 def _trace_probe_pc_and_opcode(emu):
@@ -155,7 +162,16 @@ class PCE500Emulator:
 
         # Note: LCC overlay not needed for the keyboard handler
 
-        self.cpu = SC62015Emulator(self.memory, reset_on_init=True)
+        backend = os.getenv("SC62015_CPU_BACKEND")
+        if not backend and _env_flag("BN_SCIL_PYEMU"):
+            backend = "rust"
+        try:
+            self.cpu = CPU(self.memory, reset_on_init=True, backend=backend)
+        except RuntimeError as exc:
+            # Fall back to the legacy backend if the requested one is unavailable.
+            print(f"[pce500] Falling back to python CPU backend: {exc}")
+            self.cpu = CPU(self.memory, reset_on_init=True, backend="python")
+
         self.memory.set_cpu(self.cpu)
 
         # Set performance tracer for SC62015 integration if available

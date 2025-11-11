@@ -1,0 +1,13 @@
+[package]
+name = "sc62015-rustcore"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Slim PyO3 bridge for the SC62015 CPU facade."
+
+[lib]
+name = "_sc62015_rustcore"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
