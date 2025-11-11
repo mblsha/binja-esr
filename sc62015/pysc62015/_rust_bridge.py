@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Tuple, Optional
 
+from sc62015.decoding.bind import DecodedInstr
 from sc62015.decoding.dispatcher import CompatDispatcher
 from sc62015.pysc62015.emulator import InstructionInfo
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
-from sc62015.pysc62015.emulator import Emulator
-from sc62015.scil import from_decoded
 from sc62015.scil.pyemu import CPUState, execute_decoded
 
 
@@ -72,10 +71,12 @@ class BridgeCPU:
         self.bus = MemoryAdapter(memory)
         self.state = CPUState()
         self.dispatcher = CompatDispatcher()
-        self._legacy = Emulator(memory, reset_on_init=reset_on_init)
         self.call_sub_level = 0
         self.halted = False
         self._temps: Dict[int, int] = {}
+        self._fallback_cpu = None  # Lazily instantiated façade (python backend)
+        self.stats_steps_rust = 0
+        self.stats_decode_miss = 0
         if reset_on_init:
             self.power_on_reset()
 
@@ -125,11 +126,18 @@ class BridgeCPU:
     def execute_instruction(self, address: int) -> Tuple[int, int]:
         decoded, length, opcode = self._decode_instruction(address)
 
-        execute_decoded(self.state, self.bus, decoded, advance_pc=True)
-        self.halted = bool(getattr(self.state, "halted", False))
+        if isinstance(decoded, DecodedInstr):
+            execute_decoded(self.state, self.bus, decoded, advance_pc=True)
+            self.halted = bool(getattr(self.state, "halted", False))
+            self.stats_steps_rust += 1
+            return opcode, length
+
+        # SCIL decode miss: execute via python façade fallback
+        self.stats_decode_miss += 1
+        self._execute_via_fallback(address, length)
         return opcode, length
 
-    def _decode_instruction(self, address: int):
+    def _decode_instruction(self, address: int) -> Tuple[Optional[DecodedInstr], int, int]:
         # Reset pending PRE latch before decoding a fresh instruction
         if hasattr(self.dispatcher, "_pending_pre"):
             self.dispatcher._pending_pre = None  # type: ignore[attr-defined]
@@ -152,12 +160,13 @@ class BridgeCPU:
             if decoded is not None:
                 return decoded, total, opcode
         # Fallback: use legacy decoder just to recover metadata
-        instr = self._legacy.decode_instruction(address)
+        fallback = self._get_fallback_cpu()
+        instr = fallback.decode_instruction(address)
         if instr is None:
             raise ValueError(f"Failed to decode instruction at {address:#06X}")
         info = InstructionInfo()
         instr.analyze(info, address)
-        return instr, int(info.length), instr.opcode or opcode
+        return None, int(info.length), instr.opcode or opcode
 
     # ------------------------------------------------------------------ #
     # Snapshots
@@ -200,6 +209,38 @@ class BridgeCPU:
     def load_snapshot(self, snapshot: _Snapshot) -> None:
         self.load_cpu_snapshot(snapshot.registers)
         self._temps = dict(snapshot.temps)
+
+    # ------------------------------------------------------------------ #
+    # Fallback helpers
+
+    def _get_fallback_cpu(self):
+        if self._fallback_cpu is None:
+            from sc62015.pysc62015.cpu import CPU as _FacadeCPU
+
+            self._fallback_cpu = _FacadeCPU(
+                self.memory, reset_on_init=False, backend="python"
+            )
+        return self._fallback_cpu
+
+    def _execute_via_fallback(self, address: int, _length: int) -> None:
+        fallback = self._get_fallback_cpu()
+        snapshot = self.snapshot_cpu_registers()
+        fallback.apply_snapshot(snapshot.registers)
+
+        previous_cpu = getattr(self.memory, "cpu", None)
+        self.memory.set_cpu(fallback)
+        try:
+            fallback.execute_instruction(address)
+            new_snapshot = fallback.snapshot_registers()
+        finally:
+            if previous_cpu is not None:
+                self.memory.set_cpu(previous_cpu)
+            else:
+                self.memory.set_cpu(self)
+
+        self.load_cpu_snapshot(new_snapshot)
+        self.state.pc = new_snapshot.registers.pc & PC_MASK
+        self.halted = False  # Legacy path doesn't provide halted info; assume false
 
 
 __all__ = ["BridgeCPU", "MemoryAdapter"]
