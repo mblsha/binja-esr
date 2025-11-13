@@ -6,7 +6,10 @@ from pathlib import Path
 from collections import Counter
 
 # Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+repo_root = Path(__file__).parent.parent.parent
+repo_root_str = str(repo_root)
+if repo_root_str not in sys.path:
+    sys.path.insert(0, repo_root_str)
 
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.emulator import RegisterName
