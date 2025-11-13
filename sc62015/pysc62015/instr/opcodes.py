@@ -869,7 +869,7 @@ class Instruction:
             src_mode = dst_mode
 
         operands = tuple(self.operands())
-        if len(operands) == 0:
+        if not operands:
             il.append(il.unimplemented())
         else:
             # For destination operand, disable side effects on first lift() to avoid double increment
