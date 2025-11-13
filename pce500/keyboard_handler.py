@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -33,7 +32,7 @@ class PCE500KeyboardHandler:
 
     def __init__(
         self,
-        memory: Optional["PCE500Memory"] = None,
+        memory: "PCE500Memory" | None = None,
         *,
         columns_active_high: bool = True,
     ):
@@ -64,7 +63,7 @@ class PCE500KeyboardHandler:
         self._matrix.release_all_keys()
         self._last_kil = 0
 
-    def handle_register_read(self, register: int) -> Optional[int]:
+    def handle_register_read(self, register: int) -> int | None:
         reg = register & 0xFF
         if reg == KOL:
             return self._last_kol
@@ -93,7 +92,7 @@ class PCE500KeyboardHandler:
             return True
         return False
 
-    def scan_tick(self) -> List[MatrixEvent]:
+    def scan_tick(self) -> list[MatrixEvent]:
         events = self._matrix.scan_tick()
         if events:
             # Ensure KIL latch reflects the latest active rows after the tick.
@@ -104,16 +103,16 @@ class PCE500KeyboardHandler:
         self._scan_enabled = bool(enabled)
         self._matrix.scan_enabled = bool(enabled)
 
-    def get_active_columns(self) -> List[int]:
+    def get_active_columns(self) -> list[int]:
         return self._matrix.get_active_columns()
 
-    def get_pressed_keys(self) -> List[str]:
+    def get_pressed_keys(self) -> list[str]:
         return list(self._matrix.get_pressed_keys())
 
     def peek_keyboard_input(self) -> int:
         return self._matrix.peek_kil()
 
-    def get_debug_info(self) -> Dict[str, object]:
+    def get_debug_info(self) -> dict[str, object]:
         return {
             "pressed_keys": self.get_pressed_keys(),
             "kol": f"0x{self._last_kol:02X}",
@@ -125,8 +124,8 @@ class PCE500KeyboardHandler:
             "irq_count": self._matrix.irq_count,
         }
 
-    def get_queue_info(self) -> List[Dict[str, object]]:
-        entries: List[Dict[str, object]] = []
+    def get_queue_info(self) -> list[dict[str, object]]:
+        entries: list[dict[str, object]] = []
         snapshot = self._matrix.fifo_snapshot()
         for raw in snapshot:
             release = bool(raw & 0x80)
@@ -144,7 +143,7 @@ class PCE500KeyboardHandler:
             )
         return entries
 
-    def fifo_snapshot(self) -> List[int]:
+    def fifo_snapshot(self) -> list[int]:
         return self._matrix.fifo_snapshot()
 
     # Metrics used by emulator instrumentation --------------------------------
@@ -154,7 +153,7 @@ class PCE500KeyboardHandler:
         return self._matrix.strobe_count
 
     @property
-    def column_histogram(self) -> List[int]:
+    def column_histogram(self) -> list[int]:
         return list(self._matrix.column_histogram)
 
     @property
@@ -170,7 +169,7 @@ class PCE500KeyboardHandler:
         return self._last_koh
 
     @property
-    def key_locations(self) -> Dict[str, KeyLocation]:
+    def key_locations(self) -> dict[str, KeyLocation]:
         return KEY_LOCATIONS
 
     # ------------------------------------------------------------------ #
