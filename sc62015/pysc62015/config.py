@@ -8,7 +8,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw not in {"0", "false", "False", "off", ""}
+    normalized = raw.strip().casefold()
+    return normalized not in {"0", "false", "off", ""}
 
 
 @dataclass(frozen=True)
