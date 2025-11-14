@@ -128,7 +128,6 @@ fn exec_stmt<B: Bus>(stmt: &Stmt, env: &mut Env<B>) -> Result<()> {
         }
         Stmt::Store { dst, value } => {
             let (addr, _) = eval_expr(&dst.addr, env)?;
-            let (val, _) = eval_expr(value, env)?;
             let target = match dst.space {
                 AstSpace::Int => {
                     let offset = resolve_imem_addr(env, addr as u32);
@@ -137,6 +136,7 @@ fn exec_stmt<B: Bus>(stmt: &Stmt, env: &mut Env<B>) -> Result<()> {
                 AstSpace::Ext => (Space::Ext, addr),
                 AstSpace::Code => (Space::Ext, addr),
             };
+            let (val, _) = eval_expr(value, env)?;
             env.bus.store(target.0, target.1, dst.size, val);
         }
         Stmt::SetFlag { flag, value } => {
@@ -299,6 +299,7 @@ fn eval_expr<B: Bus>(expr: &Expr, env: &mut Env<B>) -> Result<(u32, u8)> {
                 "shl" => lhs << rhs,
                 "shr" => lhs >> rhs,
                 "sar" => ((lhs as i32) >> rhs) as u32,
+                "eq" => u32::from(lhs == rhs),
                 _ => return Err(Error::Unsupported("binop")),
             };
             (res & mask(*out_size), *out_size)

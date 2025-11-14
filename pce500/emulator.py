@@ -1,5 +1,6 @@
 """Simplified PC-E500 emulator combining machine and emulator functionality."""
 
+import json
 import time
 import os
 from pathlib import Path
@@ -93,6 +94,8 @@ class PCE500Emulator:
         enable_display_trace: bool = False,
         display_trace_functions: Optional[Dict[int, str]] = None,
         display_trace_event_limit: int = 2048,
+        lcd_trace_file: Optional[str] = None,
+        lcd_trace_event_limit: int = 50000,
     ):
         self.instruction_count = 0
         self.memory_read_count = 0
@@ -119,6 +122,12 @@ class PCE500Emulator:
 
         self.lcd = HD61202Controller()
         self.memory.set_lcd_controller(self.lcd)
+        self._lcd_trace_events: List[Dict[str, Any]] = []
+        self._lcd_trace_limit = max(0, int(lcd_trace_event_limit))
+        self._lcd_trace_truncated = False
+        self._lcd_trace_path = Path(lcd_trace_file) if lcd_trace_file else None
+        if self._lcd_trace_path and self._lcd_trace_limit > 0:
+            self.lcd.add_write_trace_callback(self._record_lcd_trace_event)
 
         # Display tracing hooks (optional)
         self.display_trace_enabled = bool(enable_display_trace)
@@ -140,7 +149,7 @@ class PCE500Emulator:
                 if addr in self._display_trace_watch:
                     self._display_trace_watch[addr] = name
             self._display_trace_function_index = self._load_function_addresses()
-            self.lcd.set_write_trace_callback(self._on_lcd_trace_event)
+            self.lcd.add_write_trace_callback(self._on_lcd_trace_event)
 
         self._keyboard_columns_active_high = keyboard_columns_active_high
 
@@ -858,6 +867,38 @@ class PCE500Emulator:
                 if condition:
                     trace_data["condition"] = condition
                 trace_dispatcher.record_instant("CPU", "jump", trace_data)
+
+    # ------------------------------------------------------------------ #
+    # LCD write tracing helpers
+
+    def _record_lcd_trace_event(self, event: Dict[str, Any]) -> None:
+        if self._lcd_trace_limit <= 0:
+            return
+        if len(self._lcd_trace_events) >= self._lcd_trace_limit:
+            self._lcd_trace_truncated = True
+            return
+        record = dict(event)
+        record.setdefault("pc", event.get("pc"))
+        record["instruction_index"] = self.instruction_count
+        self._lcd_trace_events.append(record)
+
+    def get_lcd_trace_events(self) -> List[Dict[str, Any]]:
+        return list(self._lcd_trace_events)
+
+    def save_lcd_trace(self, path: Optional[str] = None) -> Optional[Path]:
+        target = Path(path) if path else self._lcd_trace_path
+        if target is None or not self._lcd_trace_events:
+            return None
+        payload = {
+            "backend": getattr(self.cpu, "backend", "python"),
+            "event_count": len(self._lcd_trace_events),
+            "truncated": self._lcd_trace_truncated,
+            "limit": self._lcd_trace_limit,
+            "events": self._lcd_trace_events,
+        }
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, indent=2))
+        return target
 
     def press_key(self, key_code: str) -> bool:
         # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ

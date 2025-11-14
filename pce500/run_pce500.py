@@ -46,6 +46,8 @@ def run_emulator(
     press_when_col: int | None = None,
     display_trace: bool = False,
     display_trace_log: str | None = None,
+    lcd_trace_file: str | None = None,
+    lcd_trace_limit: int = 50000,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -71,6 +73,8 @@ def run_emulator(
         trace_path=trace_file,
         disasm_trace=disasm_trace,
         enable_display_trace=display_trace,
+        lcd_trace_file=lcd_trace_file,
+        lcd_trace_event_limit=lcd_trace_limit,
     )
     # Enable debug draw-on-key if requested
     try:
@@ -413,6 +417,24 @@ def run_emulator(
         print(f"Memory reads: {emu.memory_read_count}")
         print(f"Memory writes: {emu.memory_write_count}")
 
+        backend_stats = getattr(emu.cpu, "backend_stats", None)
+        if callable(backend_stats):
+            stats = backend_stats()
+            backend_name = stats.get("backend")
+            if backend_name == "rust":
+                print(
+                    "\nSC62015 Rust backend stats: "
+                    f"steps={stats.get('steps_rust', 0)} "
+                    f"decode_miss={stats.get('decode_miss', 0)} "
+                    f"fallback_steps={stats.get('fallback_steps', 0)}"
+                )
+                hist = stats.get("decode_miss_hist")
+                if isinstance(hist, dict) and hist:
+                    top = ", ".join(
+                        f"0x{op:02X}:{count}" for op, count in list(hist.items())[:8]
+                    )
+                    print(f"  Decode-miss histogram: {top}")
+
         print(f"\nCPU State after {emu.cycle_count} cycles:")
         print(f"  PC: {emu.cpu.regs.get(RegisterName.PC):06X}")
         print(
@@ -515,6 +537,13 @@ def run_emulator(
     if disasm_trace:
         emu.save_disasm_trace()
 
+    if lcd_trace_file:
+        trace_path = emu.save_lcd_trace(lcd_trace_file)
+        if trace_path and print_stats:
+            print(f"LCD write trace saved to {trace_path}")
+        elif lcd_trace_file and print_stats:
+            print("LCD trace requested but no events were captured")
+
     return emu
 
 
@@ -549,6 +578,8 @@ def main(
     auto2_hold_instr: int | None = None,
     display_trace: bool = False,
     display_trace_log: str | None = None,
+    lcd_trace: str | None = None,
+    lcd_trace_limit: int = 50000,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -584,6 +615,8 @@ def main(
         press_when_col=press_when_col,
         display_trace=display_trace,
         display_trace_log=display_trace_log,
+        lcd_trace_file=lcd_trace,
+        lcd_trace_limit=lcd_trace_limit,
     ) as emu:
         # Pass-through secondary scheduling parameters via emulator attributes
         if auto2_press_key and auto2_press_after_steps is not None:
@@ -750,6 +783,16 @@ if __name__ == "__main__":
         "--display-trace-log",
         help="Write display trace JSON payload to this path",
     )
+    parser.add_argument(
+        "--lcd-trace",
+        help="Write raw LCD controller write trace (JSON) to this path",
+    )
+    parser.add_argument(
+        "--lcd-trace-limit",
+        type=int,
+        default=50000,
+        help="Maximum LCD write events to capture (default: 50000)",
+    )
     # Secondary auto-key scheduling for experiments (step-based)
     parser.add_argument(
         "--auto2-press-key",
@@ -796,4 +839,6 @@ if __name__ == "__main__":
         auto2_hold_instr=args.auto2_hold_instr,
         display_trace=args.display_trace,
         display_trace_log=args.display_trace_log,
+        lcd_trace=args.lcd_trace,
+        lcd_trace_limit=args.lcd_trace_limit,
     )

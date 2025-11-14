@@ -134,17 +134,32 @@ class CPU:
 
         return self._impl
 
+    def backend_stats(self) -> dict[str, int | str]:
+        """Expose backend-specific counters (e.g., Rust bridge stats)."""
+
+        if self.backend == "python":
+            return {"backend": "python"}
+        rust_impl = cast(Any, self._impl)
+        getter = getattr(rust_impl, "get_stats", None)
+        if not callable(getter):
+            return {"backend": self.backend}
+        stats = getter()
+        if not isinstance(stats, dict):
+            return {"backend": self.backend}
+        return {"backend": self.backend, **stats}
+
     def decode_instruction(self, address: int) -> Instruction:
         if self.backend == "python":
             return self._impl.decode_instruction(address)
 
         prev_cpu = getattr(self.memory, "cpu", None)
-        if prev_cpu is not self._legacy_decoder:
+        can_switch = hasattr(self.memory, "set_cpu")
+        if can_switch and prev_cpu is not self._legacy_decoder:
             self.memory.set_cpu(self._legacy_decoder)
         try:
             instr = self._legacy_decoder.decode_instruction(address)
         finally:
-            if prev_cpu is not self._legacy_decoder:
+            if can_switch and prev_cpu is not self._legacy_decoder:
                 self.memory.set_cpu(prev_cpu)
         if instr is None:
             opcode = self.memory.read_byte(address) & 0xFF
@@ -159,9 +174,7 @@ class CPU:
         info = InstructionInfo()
         instr.analyze(info, address)
 
-        opcode, length = cast(
-            Tuple[int, int], self._impl.execute_instruction(address)
-        )
+        opcode, length = cast(Tuple[int, int], self._impl.execute_instruction(address))
         declared_length = int(info.length) if info.length is not None else None
         if declared_length is not None and declared_length != length:
             raise RuntimeError(
@@ -283,6 +296,8 @@ __all__ = [
     "available_backends",
     "select_backend",
 ]
+
+
 class _PlaceholderInstruction:
     def __init__(self, opcode: int, length: int = 1) -> None:
         self._opcode = opcode & 0xFF

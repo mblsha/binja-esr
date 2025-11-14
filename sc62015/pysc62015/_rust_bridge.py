@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+import json
+import logging
 from typing import Dict, Iterable, Tuple, Optional
 
+import _sc62015_rustcore as rustcore
 from sc62015.decoding.bind import DecodedInstr
 from sc62015.decoding.dispatcher import CompatDispatcher
 from sc62015.pysc62015.emulator import InstructionInfo
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
-from sc62015.scil.pyemu import CPUState, execute_decoded
+from sc62015.scil import from_decoded, serde
+from sc62015.scil.pyemu import CPUState
+
+
+logger = logging.getLogger(__name__)
 
 
 def _mask(bits: int) -> int:
@@ -77,6 +85,9 @@ class BridgeCPU:
         self._fallback_cpu = None  # Lazily instantiated façade (python backend)
         self.stats_steps_rust = 0
         self.stats_decode_miss = 0
+        self.stats_fallback_steps = 0
+        self.stats_rust_errors = 0
+        self._decode_hist: Counter[int] = Counter()
         if reset_on_init:
             self.power_on_reset()
 
@@ -127,17 +138,53 @@ class BridgeCPU:
         decoded, length, opcode = self._decode_instruction(address)
 
         if isinstance(decoded, DecodedInstr):
-            execute_decoded(self.state, self.bus, decoded, advance_pc=True)
+            build = from_decoded.build(decoded)
+            start_pc = self.state.pc & PC_MASK
+            snapshot = self.snapshot_registers()
+            state_json = json.dumps(self.state.to_dict())
+            instr_json = json.dumps(serde.instr_to_dict(build.instr))
+            binder_json = json.dumps(serde.binder_to_dict(build.binder))
+            pre_json = (
+                json.dumps(serde.prelatch_to_dict(build.pre_applied))
+                if build.pre_applied
+                else None
+            )
+            try:
+                new_state_json = rustcore.scil_step_json(
+                    state_json,
+                    instr_json,
+                    binder_json,
+                    self.bus,
+                    pre_json,
+                )
+            except Exception as exc:  # pragma: no cover - exercised via integration
+                self.stats_rust_errors += 1
+                logger.warning(
+                    "Rust SCIL execution failed at PC=%06X opcode=%02X: %s",
+                    address & PC_MASK,
+                    opcode & 0xFF,
+                    exc,
+                )
+                self.load_snapshot(snapshot)
+                self._execute_via_fallback(address, length)
+                return opcode, length
+
+            self.state.load_dict(json.loads(new_state_json))
+            if (self.state.pc & PC_MASK) == start_pc:
+                self.state.pc = (start_pc + length) & PC_MASK
             self.halted = bool(getattr(self.state, "halted", False))
             self.stats_steps_rust += 1
             return opcode, length
 
         # SCIL decode miss: execute via python façade fallback
         self.stats_decode_miss += 1
+        self._decode_hist[opcode & 0xFF] += 1
         self._execute_via_fallback(address, length)
         return opcode, length
 
-    def _decode_instruction(self, address: int) -> Tuple[Optional[DecodedInstr], int, int]:
+    def _decode_instruction(
+        self, address: int
+    ) -> Tuple[Optional[DecodedInstr], int, int]:
         # Reset pending PRE latch before decoding a fresh instruction
         if hasattr(self.dispatcher, "_pending_pre"):
             self.dispatcher._pending_pre = None  # type: ignore[attr-defined]
@@ -160,6 +207,7 @@ class BridgeCPU:
             if decoded is not None:
                 return decoded, total, opcode
         # Fallback: use legacy decoder just to recover metadata
+        self._log_decode_failure(address, opcode, buf[:8])
         fallback = self._get_fallback_cpu()
         instr = fallback.decode_instruction(address)
         if instr is None:
@@ -224,23 +272,61 @@ class BridgeCPU:
 
     def _execute_via_fallback(self, address: int, _length: int) -> None:
         fallback = self._get_fallback_cpu()
-        snapshot = self.snapshot_cpu_registers()
+        snapshot = self.snapshot_registers()
         fallback.apply_snapshot(snapshot.registers)
 
         previous_cpu = getattr(self.memory, "cpu", None)
         self.memory.set_cpu(fallback)
         try:
             fallback.execute_instruction(address)
-            new_snapshot = fallback.snapshot_registers()
+            new_regs = fallback.snapshot_registers()
+            self.stats_fallback_steps += 1
         finally:
             if previous_cpu is not None:
                 self.memory.set_cpu(previous_cpu)
             else:
                 self.memory.set_cpu(self)
 
-        self.load_cpu_snapshot(new_snapshot)
-        self.state.pc = new_snapshot.registers.pc & PC_MASK
+        self.load_cpu_snapshot(new_regs)
+        self.state.pc = new_regs.pc & PC_MASK
         self.halted = False  # Legacy path doesn't provide halted info; assume false
+
+    # ------------------------------------------------------------------ #
+    # Stats
+
+    def get_stats(self) -> Dict[str, int]:
+        return {
+            "steps_rust": self.stats_steps_rust,
+            "decode_miss": self.stats_decode_miss,
+            "fallback_steps": self.stats_fallback_steps,
+            "rust_errors": self.stats_rust_errors,
+            "decode_miss_hist": dict(self._decode_hist.most_common(10)),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+
+    def _log_decode_failure(
+        self, address: int, opcode: int, window: Iterable[int]
+    ) -> None:
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        pre = getattr(self.dispatcher, "pending_pre", None)
+        if pre is None and hasattr(self.dispatcher, "_pending_pre"):
+            pre = getattr(self.dispatcher, "_pending_pre", None)
+        pre_desc = "-"
+        if pre is not None:
+            first = getattr(pre, "first", "?")
+            second = getattr(pre, "second", "?")
+            pre_desc = f"{first}->{second}"
+        preview = " ".join(f"{byte:02X}" for byte in window)
+        logger.debug(
+            "scil_decode_miss pc=%06X opcode=%02X pre=%s bytes=%s",
+            address & PC_MASK,
+            opcode & 0xFF,
+            pre_desc,
+            preview or "<none>",
+        )
 
 
 __all__ = ["BridgeCPU", "MemoryAdapter"]
