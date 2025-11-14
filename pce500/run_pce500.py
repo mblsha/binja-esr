@@ -14,7 +14,7 @@ from pce500.display.text_decoder import decode_display_text
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from pce500.emulator import IRQSource
 from sc62015.pysc62015.constants import ISRFlag
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 
 
 def run_emulator(

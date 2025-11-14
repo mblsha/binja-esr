@@ -15,12 +15,7 @@ from typing import Dict, Iterable, Mapping, MutableMapping, Tuple, List
 
 from binja_test_mocks.eval_llil import Memory
 
-from .emulator import (
-    Emulator,
-    NUM_TEMP_REGISTERS,
-    RegisterName,
-    Registers,
-)
+from .emulator import NUM_TEMP_REGISTERS, RegisterName, Registers
 
 
 _CORE_REGISTER_FIELDS: Tuple[str, ...] = (
@@ -176,24 +171,32 @@ class CPUStepResult:
 class CPUStepper:
     """Utility that executes a single SC62015 instruction from a snapshot."""
 
-    def __init__(self, *, default_memory_value: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        default_memory_value: int = 0,
+        backend: str | None = None,
+    ) -> None:
         self._default_memory_value = default_memory_value & 0xFF
+        self._backend = backend
 
     def step(
         self,
         registers: CPURegistersSnapshot,
         memory_image: Mapping[int, int],
     ) -> CPUStepResult:
+        from .cpu import CPU  # Local import to avoid circular dependency
+
         snapshot_memory = _SnapshotMemory(
             memory_image,
             default_value=self._default_memory_value,
         )
-        emulator = Emulator(snapshot_memory, reset_on_init=False)
-        registers.apply_to(emulator.regs)
+        cpu = CPU(snapshot_memory, reset_on_init=False, backend=self._backend)
+        cpu.apply_snapshot(registers)
 
-        eval_info = emulator.execute_instruction(registers.pc)
+        eval_info = cpu.execute_instruction(registers.pc)
 
-        new_registers = CPURegistersSnapshot.from_registers(emulator.regs)
+        new_registers = cpu.snapshot_registers()
         changed_registers = registers.diff(new_registers)
         instruction_length = int(eval_info.instruction_info.length or 0)
 

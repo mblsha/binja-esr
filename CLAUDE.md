@@ -128,7 +128,11 @@ The emulator correctly advances PC after each instruction execution. The `execut
 When writing tests, always use the correct register access pattern:
 
 ```python
-from sc62015.pysc62015.emulator import Emulator, Memory, RegisterName
+from sc62015.pysc62015 import CPU, RegisterName
+from binja_test_mocks.eval_llil import Memory
+
+memory = Memory(lambda addr: 0, lambda addr, value: None)
+emu = CPU(memory, reset_on_init=False)
 
 # Set PC
 emu.regs.set(RegisterName.PC, 0x1000)

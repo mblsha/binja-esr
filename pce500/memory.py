@@ -525,7 +525,7 @@ class PCE500Memory:
         """Get current PC from CPU if available."""
         if self.cpu and hasattr(self.cpu, "regs"):
             try:
-                from sc62015.pysc62015.emulator import RegisterName
+                from sc62015.pysc62015 import RegisterName
 
                 return self.cpu.regs.get(RegisterName.PC)
             except Exception:

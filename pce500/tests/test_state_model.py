@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 
 from pce500.emulator import PCE500Emulator
 from pce500.state_model import (

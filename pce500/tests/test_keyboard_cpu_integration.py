@@ -13,7 +13,7 @@ os.environ["FORCE_BINJA_MOCK"] = "1"
 
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 
 
 class TestKeyboardCPUIntegration(unittest.TestCase):

@@ -10,7 +10,7 @@ from typing import List
 
 from pce500 import PCE500Emulator
 from sc62015.pysc62015.instr import decode, OPCODES
-from sc62015.pysc62015.emulator import RegisterName
+from sc62015.pysc62015 import RegisterName
 
 
 def test_pce500_execution_trace():

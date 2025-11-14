@@ -17,6 +17,10 @@ lcd_right.png
 *.perfetto-trace
 .claude/
 *.bin
+target/
+
+# Rust optional core
+sc62015/rustcore/target/
 
 # uv
 .venv/
