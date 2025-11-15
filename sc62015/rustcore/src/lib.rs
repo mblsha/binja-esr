@@ -1,10 +1,12 @@
 mod generated {
     pub mod types;
-    pub mod handlers {
+    pub mod payload {
         include!("../generated/handlers.rs");
     }
 }
 
+use generated::types::{BoundInstrRepr, ManifestEntry, PreInfo};
+use once_cell::sync::Lazy;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -15,7 +17,12 @@ use rust_scil::{
     eval,
     state::State as RsState,
 };
-use serde_json;
+use serde_json::{self, Value};
+use std::collections::HashMap;
+
+static MANIFEST: Lazy<Vec<ManifestEntry>> = Lazy::new(|| {
+    serde_json::from_str(generated::payload::PAYLOAD).expect("manifest json")
+});
 
 #[pyclass(name = "CPU")]
 struct Cpu {
@@ -64,6 +71,32 @@ fn space_to_str(space: &Space) -> &'static str {
         Space::Int => "int",
         Space::Ext => "ext",
         Space::Code => "code",
+    }
+}
+
+fn find_entry(bound: &BoundInstrRepr) -> Option<&'static ManifestEntry> {
+    MANIFEST.iter().find(|entry| {
+        entry.opcode == bound.opcode && entry.pre == bound.pre
+    })
+}
+
+fn patch_binder(
+    template: &HashMap<String, Value>,
+    operands: &HashMap<String, Value>,
+) -> HashMap<String, Value> {
+    let mut merged = template.clone();
+    for (key, value) in operands {
+        merged.insert(key.clone(), value.clone());
+    }
+    merged
+}
+
+impl From<&PreInfo> for PreLatch {
+    fn from(info: &PreInfo) -> Self {
+        PreLatch {
+            first: info.first.clone(),
+            second: info.second.clone(),
+        }
     }
 }
 
@@ -213,6 +246,31 @@ fn scil_step_json(
         .map_err(|e| PyRuntimeError::new_err(format!("state serialize: {e}")))
 }
 
+#[pyfunction]
+fn execute_bound_repr(state_json: &str, bound_json: &str, py_bus: PyObject) -> PyResult<String> {
+    let mut state: RsState = serde_json::from_str(state_json)
+        .map_err(|e| PyValueError::new_err(format!("state json: {e}")))?;
+    let bound: BoundInstrRepr = serde_json::from_str(bound_json)
+        .map_err(|e| PyValueError::new_err(format!("bound json: {e}")))?;
+    let entry = find_entry(&bound).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "no manifest entry for opcode {} pre {:?}",
+            bound.opcode, bound.pre
+        ))
+    })?;
+    let binder_json = patch_binder(&entry.binder, &bound.operands);
+    let binder: Binder = serde_json::from_value(Value::Object(binder_json))
+        .map_err(|e| PyValueError::new_err(format!("binder json: {e}")))?;
+    let instr: Instr = serde_json::from_value(entry.instr.clone())
+        .map_err(|e| PyValueError::new_err(format!("instr json: {e}")))?;
+    let pre = bound.pre.as_ref().map(|info| info.into());
+    let mut bus = PyBus::new(py_bus);
+    eval::step(&mut state, &mut bus, &instr, &binder, pre)
+        .map_err(|e| PyRuntimeError::new_err(format!("{e}")))?;
+    serde_json::to_string(&state)
+        .map_err(|e| PyRuntimeError::new_err(format!("state serialize: {e}")))
+}
+
 #[pymodule]
 fn _sc62015_rustcore(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Cpu>()?;
@@ -221,5 +279,6 @@ fn _sc62015_rustcore(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(backend_name, m)?)?;
     m.add_function(wrap_pyfunction!(is_ready, m)?)?;
     m.add_function(wrap_pyfunction!(scil_step_json, m)?)?;
+    m.add_function(wrap_pyfunction!(execute_bound_repr, m)?)?;
     Ok(())
 }

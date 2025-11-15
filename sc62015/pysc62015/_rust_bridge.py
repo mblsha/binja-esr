@@ -12,7 +12,7 @@ from sc62015.decoding.dispatcher import CompatDispatcher
 from sc62015.pysc62015 import emulator as _emulator
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
-from sc62015.scil import from_decoded, serde
+from sc62015.scil.bound_repr import BoundInstrRepr
 from sc62015.scil.pyemu import CPUState
 
 InstructionInfo = _emulator.InstructionInfo  # type: ignore[attr-defined]
@@ -140,24 +140,15 @@ class BridgeCPU:
         decoded, length, opcode = self._decode_instruction(address)
 
         if isinstance(decoded, DecodedInstr):
-            build = from_decoded.build(decoded)
             start_pc = self.state.pc & PC_MASK
             snapshot = self.snapshot_registers()
             state_json = json.dumps(self.state.to_dict())
-            instr_json = json.dumps(serde.instr_to_dict(build.instr))
-            binder_json = json.dumps(serde.binder_to_dict(build.binder))
-            pre_json = (
-                json.dumps(serde.prelatch_to_dict(build.pre_applied))
-                if build.pre_applied
-                else None
-            )
+            bound_json = BoundInstrRepr.from_decoded(decoded).pack()
             try:
-                new_state_json = rustcore.scil_step_json(
+                new_state_json = rustcore.execute_bound_repr(
                     state_json,
-                    instr_json,
-                    binder_json,
+                    bound_json,
                     self.bus,
-                    pre_json,
                 )
             except Exception as exc:  # pragma: no cover - exercised via integration
                 self.stats_rust_errors += 1

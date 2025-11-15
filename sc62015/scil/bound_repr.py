@@ -118,16 +118,16 @@ class BoundInstrRepr:
             "operands": self.operands,
         }
 
-    def pack(self) -> bytes:
+    def pack(self) -> str:
         import json
 
-        return json.dumps(self.to_dict(), sort_keys=True).encode("utf-8")
+        return json.dumps(self.to_dict(), sort_keys=True)
 
     @classmethod
-    def unpack(cls, payload: bytes) -> "BoundInstrRepr":
+    def unpack(cls, payload: str) -> "BoundInstrRepr":
         import json
 
-        data = json.loads(payload.decode("utf-8"))
+        data = json.loads(payload)
         return cls(
             opcode=data["opcode"],
             mnemonic=data["mnemonic"],
