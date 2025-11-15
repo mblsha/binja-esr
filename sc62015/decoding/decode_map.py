@@ -18,35 +18,45 @@ from .pre_modes import iter_all_pre_variants, prelatch_for_opcode
 from .reader import StreamCtx
 
 
-def _record(ctx: StreamCtx, key: str, kind: str, **meta) -> None:
+def _record(
+    ctx: StreamCtx, key: str, kind: str, *, start: Optional[int] = None, **meta
+) -> None:
+    if start is not None:
+        meta = dict(meta)
+        meta.setdefault("offset", start)
+        meta.setdefault("length_bytes", ctx.bytes_consumed() - start)
     ctx.record_operand(key, kind, **meta)
 
 
 def _read_imm8(ctx: StreamCtx, key: str) -> Imm8:
+    start = ctx.bytes_consumed()
     value = ctx.read_u8()
-    _record(ctx, key, "imm8", width=8)
+    _record(ctx, key, "imm8", start=start, width=8)
     return Imm8(value)
 
 
 def _read_disp8(ctx: StreamCtx, key: str) -> Disp8:
+    start = ctx.bytes_consumed()
     raw = ctx.read_u8()
     signed = raw - 0x100 if raw & 0x80 else raw
-    _record(ctx, key, "disp8", width=8)
+    _record(ctx, key, "disp8", start=start, width=8)
     return Disp8(signed)
 
 
 def _read_addr16(ctx: StreamCtx, key: str, *, kind: str = "imm16") -> Imm16:
+    start = ctx.bytes_consumed()
     lo = ctx.read_u8()
     hi = ctx.read_u8()
-    _record(ctx, key, kind, order="mn")
+    _record(ctx, key, kind, start=start, order="mn")
     return Imm16(lo, hi)
 
 
 def _read_addr24(ctx: StreamCtx, key: str, *, kind: str = "imm24") -> Imm24:
+    start = ctx.bytes_consumed()
     lo = ctx.read_u8()
     mid = ctx.read_u8()
     hi = ctx.read_u8()
-    _record(ctx, key, kind, order="lmn")
+    _record(ctx, key, kind, start=start, order="lmn")
     return Imm24(lo, mid, hi)
 
 DecoderFunc = Callable[[int, StreamCtx], DecodedInstr]
@@ -593,6 +603,7 @@ _EMEM_IMEM_MODE_MAP: Dict[int, Tuple[str, bool, int]] = {
 
 
 def _decode_ext_reg_ptr(ctx: StreamCtx, width_bytes: int) -> ExtRegPtr:
+    start = ctx.bytes_consumed()
     reg_byte = ctx.read_u8()
     mode_code = (reg_byte >> 4) & 0x0F
     try:
@@ -613,11 +624,18 @@ def _decode_ext_reg_ptr(ctx: StreamCtx, width_bytes: int) -> ExtRegPtr:
         disp = None
 
     ptr = ExtRegPtr(ptr=RegSel(ptr_group, ptr_name), mode=mode_name, disp=disp)
-    _record(ctx, "ptr", "ext_reg_ptr", width_bytes=width_bytes)
+    _record(
+        ctx,
+        "ptr",
+        "ext_reg_ptr",
+        start=start,
+        width_bytes=width_bytes,
+    )
     return ptr
 
 
 def _decode_emem_imem(ctx: StreamCtx) -> ImemPtr:
+    start = ctx.bytes_consumed()
     mode_byte = ctx.read_u8()
     try:
         mode_name, needs_disp, disp_sign = _EMEM_IMEM_MODE_MAP[mode_byte]
@@ -628,13 +646,14 @@ def _decode_emem_imem(ctx: StreamCtx) -> ImemPtr:
     if needs_disp:
         magnitude = ctx.read_u8()
         disp = Disp8(magnitude if disp_sign > 0 else -magnitude)
-    _record(ctx, "ptr", "imem_ptr")
+    _record(ctx, "ptr", "imem_ptr", start=start)
     return ImemPtr(base=base, mode=mode_name, disp=disp)
 
 
 def _dec_inc_dec(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
+    start = ctx.bytes_consumed()
     reg_byte = ctx.read_u8()
-    _record(ctx, "reg", "regsel", allowed_groups=("r1",))
+    _record(ctx, "reg", "regsel", start=start, allowed_groups=("r1",))
     name, size_group = _reg_from_byte(reg_byte)
     if size_group != "r1":
         raise ValueError(f"{mnemonic} unsupported for register {name}")
@@ -683,8 +702,9 @@ def _dec_jp_imem(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_jp_reg(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    start = ctx.bytes_consumed()
     reg_byte = ctx.read_u8()
-    _record(ctx, "reg", "regsel", allowed_groups=("r3",))
+    _record(ctx, "reg", "regsel", start=start, allowed_groups=("r3",))
     name, size_group = _reg_from_byte(reg_byte)
     if size_group != "r3":
         raise ValueError(f"JP r3 requires r3 register, got {name}")

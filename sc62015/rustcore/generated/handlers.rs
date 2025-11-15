@@ -155,7 +155,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -253,7 +255,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -332,7 +336,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr24",
         "kind": "addr24",
         "meta": {
-          "order": "lmn"
+          "order": "lmn",
+          "offset": 0,
+          "length_bytes": 3
         }
       }
     ],
@@ -461,7 +467,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -511,7 +519,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -567,7 +577,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -623,7 +635,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -679,7 +693,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -735,7 +751,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -791,7 +809,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -847,7 +867,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -903,7 +925,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -959,7 +983,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1015,7 +1041,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1071,7 +1099,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1127,7 +1157,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1183,7 +1215,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1239,7 +1273,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1295,7 +1331,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1351,7 +1389,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1400,7 +1440,9 @@ pub const PAYLOAD: &str = r#"
         "meta": {
           "allowed_groups": [
             "r3"
-          ]
+          ],
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1524,7 +1566,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1648,7 +1692,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1772,7 +1818,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1896,7 +1944,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1979,7 +2029,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2062,7 +2114,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2145,7 +2199,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2228,7 +2284,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2311,7 +2369,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2394,7 +2454,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2477,7 +2539,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2560,7 +2624,9 @@ pub const PAYLOAD: &str = r#"
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -3615,7 +3681,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -3704,14 +3772,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imm",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -3792,7 +3864,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -3957,7 +4031,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -4064,14 +4140,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4184,14 +4264,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4304,14 +4388,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4424,14 +4512,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4544,14 +4636,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4664,14 +4760,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4784,14 +4884,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4904,14 +5008,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5024,14 +5132,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5144,14 +5256,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5264,14 +5380,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5384,14 +5504,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5504,14 +5628,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5624,14 +5752,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5744,14 +5876,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5864,14 +6000,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5958,7 +6098,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6051,7 +6193,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6144,7 +6288,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6237,7 +6383,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6330,7 +6478,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6423,7 +6573,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6516,7 +6668,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6609,7 +6763,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6702,7 +6858,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6795,7 +6953,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6888,7 +7048,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6981,7 +7143,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7074,7 +7238,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7167,7 +7333,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7260,7 +7428,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7353,7 +7523,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7425,7 +7597,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7515,7 +7689,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7622,14 +7798,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -7742,14 +7922,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -7862,14 +8046,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -7982,14 +8170,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8102,14 +8294,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8222,14 +8418,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8342,14 +8542,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8462,14 +8666,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8582,14 +8790,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8702,14 +8914,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8822,14 +9038,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8942,14 +9162,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9062,14 +9286,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9182,14 +9410,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9302,14 +9534,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9422,14 +9658,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9516,7 +9756,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9609,7 +9851,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9702,7 +9946,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9795,7 +10041,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9888,7 +10136,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9981,7 +10231,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10074,7 +10326,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10167,7 +10421,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10260,7 +10516,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10353,7 +10611,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10446,7 +10706,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10539,7 +10801,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10632,7 +10896,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10725,7 +10991,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10818,7 +11086,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10911,7 +11181,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11051,7 +11323,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11131,7 +11405,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11199,7 +11475,9 @@ pub const PAYLOAD: &str = r#"
         "meta": {
           "allowed_groups": [
             "r1"
-          ]
+          ],
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11279,7 +11557,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11359,7 +11639,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11427,7 +11709,9 @@ pub const PAYLOAD: &str = r#"
         "meta": {
           "allowed_groups": [
             "r1"
-          ]
+          ],
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11498,7 +11782,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11575,7 +11861,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11652,7 +11940,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11729,7 +12019,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11806,7 +12098,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11883,7 +12177,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11960,7 +12256,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12037,7 +12335,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12114,7 +12414,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12191,7 +12493,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12268,7 +12572,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12345,7 +12651,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12422,7 +12730,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12499,7 +12809,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12576,7 +12888,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12653,7 +12967,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12729,7 +13045,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr24",
         "kind": "addr24",
         "meta": {
-          "order": "lmn"
+          "order": "lmn",
+          "offset": 0,
+          "length_bytes": 3
         }
       }
     ],
@@ -12792,7 +13110,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12855,7 +13175,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12918,7 +13240,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12981,7 +13305,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13044,7 +13370,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13107,7 +13435,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13170,7 +13500,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13239,7 +13571,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 155
@@ -13307,7 +13642,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 156
@@ -13375,7 +13713,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 157
@@ -13443,7 +13784,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 158
@@ -13511,7 +13855,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 159
@@ -13579,7 +13926,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 160
@@ -13647,7 +13997,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 161
@@ -13717,7 +14070,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13794,7 +14149,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13871,7 +14228,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13948,7 +14307,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14025,7 +14386,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14102,7 +14465,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14179,7 +14544,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14256,7 +14623,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14333,7 +14702,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14410,7 +14781,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14487,7 +14860,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14564,7 +14939,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14641,7 +15018,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14718,7 +15097,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14795,7 +15176,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14872,7 +15255,9 @@ pub const PAYLOAD: &str = r#"
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14948,7 +15333,9 @@ pub const PAYLOAD: &str = r#"
         "key": "addr24",
         "kind": "imm24",
         "meta": {
-          "order": "lmn"
+          "order": "lmn",
+          "offset": 0,
+          "length_bytes": 3
         }
       }
     ],
@@ -15011,7 +15398,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15074,7 +15463,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15137,7 +15528,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15200,7 +15593,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15263,7 +15658,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15326,7 +15723,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15389,7 +15788,9 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15458,7 +15859,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 186
@@ -15526,7 +15930,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 187
@@ -15594,7 +16001,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 188
@@ -15662,7 +16072,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 189
@@ -15730,7 +16143,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 190
@@ -15798,7 +16214,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 191
@@ -15866,7 +16285,10 @@ pub const PAYLOAD: &str = r#"
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 192
@@ -15924,14 +16346,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -15996,14 +16422,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16068,14 +16498,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16140,14 +16574,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16212,14 +16650,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16284,14 +16726,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16356,14 +16802,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16428,14 +16878,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16500,14 +16954,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16572,14 +17030,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16644,14 +17106,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16716,14 +17182,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16788,14 +17258,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16860,14 +17334,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16932,14 +17410,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17004,14 +17486,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17070,14 +17556,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17142,14 +17632,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17214,14 +17708,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17286,14 +17784,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17358,14 +17860,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17430,14 +17936,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17502,14 +18012,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17574,14 +18088,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17646,14 +18164,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17718,14 +18240,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17790,14 +18316,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17862,14 +18392,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17934,14 +18468,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18006,14 +18544,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18078,14 +18620,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18150,14 +18696,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18216,14 +18766,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18288,14 +18842,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18360,14 +18918,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18432,14 +18994,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18504,14 +19070,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18576,14 +19146,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18648,14 +19222,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18720,14 +19298,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18792,14 +19374,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18864,14 +19450,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18936,14 +19526,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19008,14 +19602,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19080,14 +19678,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19152,14 +19754,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19224,14 +19830,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19296,14 +19906,18 @@ pub const PAYLOAD: &str = r#"
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19420,14 +20034,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19550,14 +20168,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19680,14 +20302,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19810,14 +20436,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19940,14 +20570,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20070,14 +20704,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20200,14 +20838,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20330,14 +20972,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20460,14 +21106,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20590,14 +21240,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20720,14 +21374,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20850,14 +21508,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20980,14 +21642,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21110,14 +21776,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21240,14 +21910,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21370,14 +22044,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21474,7 +22152,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21577,7 +22257,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21680,7 +22362,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21783,7 +22467,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21886,7 +22572,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21989,7 +22677,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22092,7 +22782,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22195,7 +22887,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22298,7 +22992,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22401,7 +23097,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22504,7 +23202,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22607,7 +23307,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22710,7 +23412,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22813,7 +23517,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22916,7 +23622,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -23019,7 +23727,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -23087,14 +23797,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23168,14 +23882,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23249,14 +23967,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23330,14 +24052,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23411,14 +24137,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23492,14 +24222,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23573,14 +24307,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23654,14 +24392,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23735,14 +24477,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23816,14 +24562,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23897,14 +24647,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23978,14 +24732,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24059,14 +24817,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24140,14 +24902,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24221,14 +24987,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24302,14 +25072,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24377,14 +25151,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24458,14 +25236,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24539,14 +25321,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24620,14 +25406,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24701,14 +25491,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24782,14 +25576,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24863,14 +25661,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24944,14 +25746,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25025,14 +25831,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25106,14 +25916,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25187,14 +26001,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25268,14 +26086,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25349,14 +26171,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25430,14 +26256,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25511,14 +26341,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25592,14 +26426,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25667,14 +26505,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25748,14 +26590,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25829,14 +26675,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25910,14 +26760,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25991,14 +26845,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26072,14 +26930,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26153,14 +27015,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26234,14 +27100,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26315,14 +27185,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26396,14 +27270,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26477,14 +27355,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26558,14 +27440,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26639,14 +27525,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26720,14 +27610,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26801,14 +27695,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26882,14 +27780,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27001,14 +27903,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27126,14 +28032,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27251,14 +28161,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27376,14 +28290,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27501,14 +28419,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27626,14 +28548,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27751,14 +28677,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27876,14 +28806,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28001,14 +28935,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28126,14 +29064,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28251,14 +29193,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28376,14 +29322,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28501,14 +29451,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28626,14 +29580,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28751,14 +29709,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28876,14 +29838,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28995,14 +29961,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29120,14 +30090,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29245,14 +30219,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29370,14 +30348,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29495,14 +30477,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29620,14 +30606,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29745,14 +30735,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29870,14 +30864,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29995,14 +30993,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30120,14 +31122,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30245,14 +31251,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30370,14 +31380,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30495,14 +31509,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30620,14 +31638,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30745,14 +31767,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30870,14 +31896,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30994,14 +32024,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31124,14 +32158,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31254,14 +32292,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31384,14 +32426,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31514,14 +32560,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31644,14 +32694,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31774,14 +32828,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31904,14 +32962,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32034,14 +33096,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32164,14 +33230,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32294,14 +33364,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32424,14 +33498,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32554,14 +33632,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32684,14 +33766,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32814,14 +33900,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32944,14 +34034,18 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -33048,7 +34142,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33151,7 +34247,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33254,7 +34352,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33357,7 +34457,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33460,7 +34562,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33563,7 +34667,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33666,7 +34772,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33769,7 +34877,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33872,7 +34982,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33975,7 +35087,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34078,7 +35192,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34181,7 +35297,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34284,7 +35402,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34387,7 +35507,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34490,7 +35612,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34593,7 +35717,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34721,14 +35847,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -34804,14 +35934,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -34887,14 +36021,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -34970,14 +36108,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35053,14 +36195,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35136,14 +36282,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35219,14 +36369,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35302,14 +36456,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35385,14 +36543,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35468,14 +36630,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35551,14 +36717,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35634,14 +36804,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35717,14 +36891,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35800,14 +36978,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35883,14 +37065,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35966,14 +37152,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36043,14 +37233,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36126,14 +37320,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36209,14 +37407,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36292,14 +37494,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36375,14 +37581,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36458,14 +37668,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36541,14 +37755,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36624,14 +37842,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36707,14 +37929,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36790,14 +38016,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36873,14 +38103,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36956,14 +38190,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37039,14 +38277,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37122,14 +38364,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37205,14 +38451,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37288,14 +38538,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37365,14 +38619,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37448,14 +38706,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37531,14 +38793,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37614,14 +38880,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37697,14 +38967,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37780,14 +39054,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37863,14 +39141,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37946,14 +39228,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38029,14 +39315,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38112,14 +39402,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38195,14 +39489,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38278,14 +39576,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38361,14 +39663,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38444,14 +39750,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38527,14 +39837,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38610,14 +39924,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38687,14 +40005,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38770,14 +40092,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38853,14 +40179,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38936,14 +40266,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39019,14 +40353,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39102,14 +40440,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39185,14 +40527,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39268,14 +40614,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39351,14 +40701,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39434,14 +40788,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39517,14 +40875,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39600,14 +40962,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39683,14 +41049,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39766,14 +41136,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39849,14 +41223,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39932,14 +41310,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40009,14 +41391,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40092,14 +41478,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40175,14 +41565,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40258,14 +41652,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40341,14 +41739,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40424,14 +41826,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40507,14 +41913,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40590,14 +42000,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40673,14 +42087,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40756,14 +42174,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40839,14 +42261,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40922,14 +42348,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41005,14 +42435,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41088,14 +42522,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41171,14 +42609,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41254,14 +42696,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41331,14 +42777,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41414,14 +42864,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41497,14 +42951,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41580,14 +43038,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41663,14 +43125,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41746,14 +43212,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41829,14 +43299,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41912,14 +43386,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41995,14 +43473,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42078,14 +43560,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42161,14 +43647,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42244,14 +43734,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42327,14 +43821,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42410,14 +43908,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42493,14 +43995,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42576,14 +44082,18 @@ pub const PAYLOAD: &str = r#"
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42665,7 +44175,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -42776,7 +44288,9 @@ pub const PAYLOAD: &str = r#"
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],

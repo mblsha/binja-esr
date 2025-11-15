@@ -152,7 +152,9 @@
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -250,7 +252,9 @@
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -329,7 +333,9 @@
         "key": "addr24",
         "kind": "addr24",
         "meta": {
-          "order": "lmn"
+          "order": "lmn",
+          "offset": 0,
+          "length_bytes": 3
         }
       }
     ],
@@ -458,7 +464,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -508,7 +516,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -564,7 +574,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -620,7 +632,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -676,7 +690,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -732,7 +748,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -788,7 +806,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -844,7 +864,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -900,7 +922,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -956,7 +980,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1012,7 +1038,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1068,7 +1096,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1124,7 +1154,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1180,7 +1212,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1236,7 +1270,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1292,7 +1328,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1348,7 +1386,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1397,7 +1437,9 @@
         "meta": {
           "allowed_groups": [
             "r3"
-          ]
+          ],
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -1521,7 +1563,9 @@
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1645,7 +1689,9 @@
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1769,7 +1815,9 @@
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1893,7 +1941,9 @@
         "key": "addr16_page",
         "kind": "addr16_page",
         "meta": {
-          "order": "mn"
+          "order": "mn",
+          "offset": 0,
+          "length_bytes": 2
         }
       }
     ],
@@ -1976,7 +2026,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2059,7 +2111,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2142,7 +2196,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2225,7 +2281,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2308,7 +2366,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2391,7 +2451,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2474,7 +2536,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -2557,7 +2621,9 @@
         "key": "disp",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -3612,7 +3678,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -3701,14 +3769,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imm",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -3789,7 +3861,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -3954,7 +4028,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -4061,14 +4137,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4181,14 +4261,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4301,14 +4385,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4421,14 +4509,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4541,14 +4633,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4661,14 +4757,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4781,14 +4881,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -4901,14 +5005,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5021,14 +5129,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5141,14 +5253,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5261,14 +5377,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5381,14 +5501,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5501,14 +5625,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5621,14 +5749,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5741,14 +5873,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5861,14 +5997,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -5955,7 +6095,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6048,7 +6190,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6141,7 +6285,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6234,7 +6380,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6327,7 +6475,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6420,7 +6570,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6513,7 +6665,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6606,7 +6760,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6699,7 +6855,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6792,7 +6950,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6885,7 +7045,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -6978,7 +7140,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7071,7 +7235,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7164,7 +7330,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7257,7 +7425,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7350,7 +7520,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7422,7 +7594,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7512,7 +7686,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -7619,14 +7795,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -7739,14 +7919,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -7859,14 +8043,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -7979,14 +8167,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8099,14 +8291,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8219,14 +8415,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8339,14 +8539,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8459,14 +8663,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8579,14 +8787,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8699,14 +8911,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8819,14 +9035,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -8939,14 +9159,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9059,14 +9283,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9179,14 +9407,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9299,14 +9531,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9419,14 +9655,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -9513,7 +9753,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9606,7 +9848,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9699,7 +9943,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9792,7 +10038,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9885,7 +10133,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -9978,7 +10228,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10071,7 +10323,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10164,7 +10418,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10257,7 +10513,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10350,7 +10608,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10443,7 +10703,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10536,7 +10798,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10629,7 +10893,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10722,7 +10988,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10815,7 +11083,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -10908,7 +11178,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11048,7 +11320,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11128,7 +11402,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11196,7 +11472,9 @@
         "meta": {
           "allowed_groups": [
             "r1"
-          ]
+          ],
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11276,7 +11554,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11356,7 +11636,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11424,7 +11706,9 @@
         "meta": {
           "allowed_groups": [
             "r1"
-          ]
+          ],
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11495,7 +11779,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11572,7 +11858,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11649,7 +11937,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11726,7 +12016,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11803,7 +12095,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11880,7 +12174,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -11957,7 +12253,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12034,7 +12332,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12111,7 +12411,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12188,7 +12490,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12265,7 +12569,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12342,7 +12648,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12419,7 +12727,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12496,7 +12806,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12573,7 +12885,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12650,7 +12964,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12726,7 +13042,9 @@
         "key": "addr24",
         "kind": "addr24",
         "meta": {
-          "order": "lmn"
+          "order": "lmn",
+          "offset": 0,
+          "length_bytes": 3
         }
       }
     ],
@@ -12789,7 +13107,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12852,7 +13172,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12915,7 +13237,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -12978,7 +13302,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13041,7 +13367,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13104,7 +13432,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13167,7 +13497,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13236,7 +13568,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 155
@@ -13304,7 +13639,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 156
@@ -13372,7 +13710,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 157
@@ -13440,7 +13781,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 158
@@ -13508,7 +13852,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 159
@@ -13576,7 +13923,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 160
@@ -13644,7 +13994,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 161
@@ -13714,7 +14067,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13791,7 +14146,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13868,7 +14225,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -13945,7 +14304,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14022,7 +14383,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14099,7 +14462,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14176,7 +14541,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14253,7 +14620,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14330,7 +14699,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14407,7 +14778,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14484,7 +14857,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14561,7 +14936,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14638,7 +15015,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14715,7 +15094,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14792,7 +15173,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14869,7 +15252,9 @@
         "key": "n",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -14945,7 +15330,9 @@
         "key": "addr24",
         "kind": "imm24",
         "meta": {
-          "order": "lmn"
+          "order": "lmn",
+          "offset": 0,
+          "length_bytes": 3
         }
       }
     ],
@@ -15008,7 +15395,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15071,7 +15460,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15134,7 +15525,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15197,7 +15590,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15260,7 +15655,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15323,7 +15720,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15386,7 +15785,9 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -15455,7 +15856,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 186
@@ -15523,7 +15927,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 187
@@ -15591,7 +15998,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 188
@@ -15659,7 +16069,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 189
@@ -15727,7 +16140,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 190
@@ -15795,7 +16211,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 191
@@ -15863,7 +16282,10 @@
       {
         "key": "ptr",
         "kind": "imem_ptr",
-        "meta": {}
+        "meta": {
+          "offset": 0,
+          "length_bytes": 2
+        }
       }
     ],
     "id": 192
@@ -15921,14 +16343,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -15993,14 +16419,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16065,14 +16495,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16137,14 +16571,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16209,14 +16647,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16281,14 +16723,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16353,14 +16799,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16425,14 +16875,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16497,14 +16951,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16569,14 +17027,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16641,14 +17103,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16713,14 +17179,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16785,14 +17255,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16857,14 +17331,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -16929,14 +17407,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17001,14 +17483,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17067,14 +17553,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17139,14 +17629,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17211,14 +17705,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17283,14 +17781,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17355,14 +17857,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17427,14 +17933,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17499,14 +18009,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17571,14 +18085,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17643,14 +18161,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17715,14 +18237,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17787,14 +18313,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17859,14 +18389,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -17931,14 +18465,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18003,14 +18541,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18075,14 +18617,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18147,14 +18693,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18213,14 +18763,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18285,14 +18839,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18357,14 +18915,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18429,14 +18991,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18501,14 +19067,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18573,14 +19143,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18645,14 +19219,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18717,14 +19295,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18789,14 +19371,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18861,14 +19447,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -18933,14 +19523,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19005,14 +19599,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19077,14 +19675,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19149,14 +19751,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19221,14 +19827,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19293,14 +19903,18 @@
         "key": "left",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "right",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19417,14 +20031,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19547,14 +20165,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19677,14 +20299,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19807,14 +20433,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -19937,14 +20567,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20067,14 +20701,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20197,14 +20835,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20327,14 +20969,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20457,14 +21103,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20587,14 +21237,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20717,14 +21371,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20847,14 +21505,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -20977,14 +21639,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21107,14 +21773,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21237,14 +21907,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21367,14 +22041,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -21471,7 +22149,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21574,7 +22254,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21677,7 +22359,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21780,7 +22464,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21883,7 +22569,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -21986,7 +22674,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22089,7 +22779,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22192,7 +22884,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22295,7 +22989,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22398,7 +23094,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22501,7 +23199,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22604,7 +23304,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22707,7 +23409,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22810,7 +23514,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -22913,7 +23619,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -23016,7 +23724,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -23084,14 +23794,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23165,14 +23879,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23246,14 +23964,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23327,14 +24049,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23408,14 +24134,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23489,14 +24219,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23570,14 +24304,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23651,14 +24389,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23732,14 +24474,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23813,14 +24559,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23894,14 +24644,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -23975,14 +24729,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24056,14 +24814,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24137,14 +24899,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24218,14 +24984,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24299,14 +25069,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24374,14 +25148,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24455,14 +25233,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24536,14 +25318,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24617,14 +25403,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24698,14 +25488,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24779,14 +25573,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24860,14 +25658,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -24941,14 +25743,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25022,14 +25828,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25103,14 +25913,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25184,14 +25998,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25265,14 +26083,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25346,14 +26168,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25427,14 +26253,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25508,14 +26338,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25589,14 +26423,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25664,14 +26502,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25745,14 +26587,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25826,14 +26672,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25907,14 +26757,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -25988,14 +26842,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26069,14 +26927,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26150,14 +27012,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26231,14 +27097,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26312,14 +27182,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26393,14 +27267,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26474,14 +27352,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26555,14 +27437,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26636,14 +27522,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26717,14 +27607,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26798,14 +27692,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26879,14 +27777,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -26998,14 +27900,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27123,14 +28029,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27248,14 +28158,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27373,14 +28287,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27498,14 +28416,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27623,14 +28545,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27748,14 +28674,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27873,14 +28803,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -27998,14 +28932,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28123,14 +29061,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28248,14 +29190,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28373,14 +29319,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28498,14 +29448,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28623,14 +29577,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28748,14 +29706,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28873,14 +29835,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -28992,14 +29958,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29117,14 +30087,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29242,14 +30216,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29367,14 +30345,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29492,14 +30474,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29617,14 +30603,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29742,14 +30732,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29867,14 +30861,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -29992,14 +30990,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30117,14 +31119,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30242,14 +31248,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30367,14 +31377,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30492,14 +31506,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30617,14 +31635,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30742,14 +31764,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30867,14 +31893,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -30991,14 +32021,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31121,14 +32155,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31251,14 +32289,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31381,14 +32423,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31511,14 +32557,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31641,14 +32691,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31771,14 +32825,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -31901,14 +32959,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32031,14 +33093,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32161,14 +33227,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32291,14 +33361,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32421,14 +33495,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32551,14 +33629,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32681,14 +33763,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32811,14 +33897,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -32941,14 +34031,18 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "src",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -33045,7 +34139,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33148,7 +34244,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33251,7 +34349,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33354,7 +34454,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33457,7 +34559,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33560,7 +34664,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33663,7 +34769,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33766,7 +34874,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33869,7 +34979,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -33972,7 +35084,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34075,7 +35189,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34178,7 +35294,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34281,7 +35399,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34384,7 +35504,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34487,7 +35609,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34590,7 +35714,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -34718,14 +35844,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -34801,14 +35931,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -34884,14 +36018,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -34967,14 +36105,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35050,14 +36192,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35133,14 +36279,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35216,14 +36366,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35299,14 +36453,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35382,14 +36540,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35465,14 +36627,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35548,14 +36714,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35631,14 +36801,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35714,14 +36888,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35797,14 +36975,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35880,14 +37062,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -35963,14 +37149,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36040,14 +37230,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36123,14 +37317,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36206,14 +37404,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36289,14 +37491,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36372,14 +37578,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36455,14 +37665,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36538,14 +37752,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36621,14 +37839,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36704,14 +37926,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36787,14 +38013,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36870,14 +38100,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -36953,14 +38187,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37036,14 +38274,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37119,14 +38361,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37202,14 +38448,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37285,14 +38535,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37362,14 +38616,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37445,14 +38703,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37528,14 +38790,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37611,14 +38877,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37694,14 +38964,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37777,14 +39051,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37860,14 +39138,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -37943,14 +39225,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38026,14 +39312,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38109,14 +39399,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38192,14 +39486,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38275,14 +39573,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38358,14 +39660,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38441,14 +39747,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38524,14 +39834,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38607,14 +39921,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38684,14 +40002,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38767,14 +40089,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38850,14 +40176,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -38933,14 +40263,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39016,14 +40350,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39099,14 +40437,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39182,14 +40524,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39265,14 +40611,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39348,14 +40698,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39431,14 +40785,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39514,14 +40872,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39597,14 +40959,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39680,14 +41046,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39763,14 +41133,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39846,14 +41220,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -39929,14 +41307,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 1
+          "width_bytes": 1,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40006,14 +41388,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40089,14 +41475,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40172,14 +41562,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40255,14 +41649,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40338,14 +41736,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40421,14 +41823,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40504,14 +41910,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40587,14 +41997,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40670,14 +42084,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40753,14 +42171,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40836,14 +42258,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -40919,14 +42345,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41002,14 +42432,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41085,14 +42519,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41168,14 +42606,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41251,14 +42693,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 2
+          "width_bytes": 2,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41328,14 +42774,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41411,14 +42861,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41494,14 +42948,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41577,14 +43035,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41660,14 +43122,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41743,14 +43209,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41826,14 +43296,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41909,14 +43383,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -41992,14 +43470,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42075,14 +43557,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42158,14 +43644,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42241,14 +43731,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42324,14 +43818,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42407,14 +43905,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42490,14 +43992,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42573,14 +44079,18 @@
         "key": "ptr",
         "kind": "ext_reg_ptr",
         "meta": {
-          "width_bytes": 3
+          "width_bytes": 3,
+          "offset": 0,
+          "length_bytes": 1
         }
       },
       {
         "key": "imem",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 1,
+          "length_bytes": 1
         }
       }
     ],
@@ -42662,7 +44172,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],
@@ -42773,7 +44285,9 @@
         "key": "dst",
         "kind": "imm8",
         "meta": {
-          "width": 8
+          "width": 8,
+          "offset": 0,
+          "length_bytes": 1
         }
       }
     ],

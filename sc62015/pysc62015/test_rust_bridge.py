@@ -108,11 +108,17 @@ def test_rust_bridge_fallback_steps_once() -> None:
     memory = _ArrayMemory(bytes([0x00]))  # Legacy decoder: NOP
     bridge = BridgeCPU(memory, reset_on_init=False)
 
-    class _NullDispatcher(CompatDispatcher):
-        def try_decode(self, data: bytes, addr: int):
-            return None
+    class _FailRuntime:
+        def __init__(self, inner):
+            self._inner = inner
 
-    bridge.dispatcher = _NullDispatcher()
+        def execute_instruction(self):
+            raise RuntimeError("boom")
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    bridge._runtime = _FailRuntime(bridge._runtime)
 
     stats_before = bridge.get_stats().copy()
     opcode, length = bridge.execute_instruction(0)
@@ -130,9 +136,10 @@ def test_rust_bridge_fallback_steps_once() -> None:
     assert isinstance(decode_miss_after, int)
     assert isinstance(fallback_after, int)
     assert isinstance(steps_after, int)
-    assert decode_miss_after == decode_miss_before + 1
+    assert decode_miss_after == decode_miss_before
     assert fallback_after == fallback_before + 1
     assert steps_after == steps_before
+    assert stats_after["rust_errors"] == stats_before["rust_errors"] + 1
 
     assert opcode == 0x00
     assert length == 1

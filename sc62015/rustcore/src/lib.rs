@@ -5,9 +5,13 @@ mod generated {
     pub mod payload {
         include!("../generated/handlers.rs");
     }
+    pub mod opcode_index {
+        include!("../generated/opcode_index.rs");
+    }
 }
 
-use generated::types::{BoundInstrRepr, ManifestEntry, PreInfo};
+use generated::opcode_index::OPCODE_INDEX;
+use generated::types::{BoundInstrRepr, LayoutEntry, ManifestEntry, PreInfo};
 use once_cell::sync::Lazy;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -19,7 +23,7 @@ use rust_scil::{
     eval,
     state::State as RsState,
 };
-use serde_json::{self, Map, Value};
+use serde_json::{self, json, Map, Value};
 use std::collections::HashMap;
 
 static MANIFEST: Lazy<Vec<ManifestEntry>> = Lazy::new(|| {
@@ -129,6 +133,341 @@ impl rust_scil::bus::Bus for MemoryProxyBus {
     }
 }
 
+struct InstructionStream {
+    reader: MemoryProxyBus,
+    cursor: u32,
+    consumed: usize,
+    start_pc: u32,
+}
+
+impl InstructionStream {
+    fn new(memory: Py<PyAny>, start_pc: u32) -> Self {
+        Self {
+            reader: MemoryProxyBus::new(memory),
+            cursor: start_pc & ADDRESS_MASK,
+            consumed: 0,
+            start_pc: start_pc & ADDRESS_MASK,
+        }
+    }
+
+    fn read_u8(&mut self) -> u8 {
+        let byte = self.reader.read_byte(self.cursor);
+        self.cursor = (self.cursor + 1) & ADDRESS_MASK;
+        self.consumed += 1;
+        byte
+    }
+
+    fn consumed(&self) -> usize {
+        self.consumed
+    }
+
+    fn page20(&self) -> u32 {
+        self.start_pc & 0xF0000
+    }
+}
+
+const REG_TABLE: [(&str, &str, u8); 8] = [
+    ("A", "r1", 8),
+    ("IL", "r1", 8),
+    ("BA", "r2", 16),
+    ("I", "r2", 16),
+    ("X", "r3", 24),
+    ("Y", "r3", 24),
+    ("U", "r3", 24),
+    ("S", "r3", 24),
+];
+
+struct ExtRegMode {
+    code: u8,
+    name: &'static str,
+    needs_disp: bool,
+    disp_sign: i8,
+}
+
+const EXT_REG_MODES: [ExtRegMode; 5] = [
+    ExtRegMode {
+        code: 0x0,
+        name: "simple",
+        needs_disp: false,
+        disp_sign: 0,
+    },
+    ExtRegMode {
+        code: 0x2,
+        name: "post_inc",
+        needs_disp: false,
+        disp_sign: 0,
+    },
+    ExtRegMode {
+        code: 0x3,
+        name: "pre_dec",
+        needs_disp: false,
+        disp_sign: 0,
+    },
+    ExtRegMode {
+        code: 0x8,
+        name: "offset",
+        needs_disp: true,
+        disp_sign: 1,
+    },
+    ExtRegMode {
+        code: 0xC,
+        name: "offset",
+        needs_disp: true,
+        disp_sign: -1,
+    },
+];
+
+struct ImemMode {
+    code: u8,
+    name: &'static str,
+    needs_disp: bool,
+    disp_sign: i8,
+}
+
+const IMEM_MODES: [ImemMode; 3] = [
+    ImemMode {
+        code: 0x00,
+        name: "simple",
+        needs_disp: false,
+        disp_sign: 0,
+    },
+    ImemMode {
+        code: 0x80,
+        name: "pos",
+        needs_disp: true,
+        disp_sign: 1,
+    },
+    ImemMode {
+        code: 0xC0,
+        name: "neg",
+        needs_disp: true,
+        disp_sign: -1,
+    },
+];
+
+fn encode_imm8(value: u8) -> Value {
+    json!({"kind": "imm8", "value": value})
+}
+
+fn encode_disp8(value: i32) -> Value {
+    json!({"kind": "disp8", "value": value})
+}
+
+fn encode_imm16(lo: u8, hi: u8) -> Value {
+    json!({"kind": "imm16", "lo": lo, "hi": hi})
+}
+
+fn encode_imm24(lo: u8, mid: u8, hi: u8) -> Value {
+    json!({"kind": "imm24", "lo": lo, "mid": mid, "hi": hi})
+}
+
+fn encode_addr16(page20: u32, lo: u8, hi: u8) -> Value {
+    json!({
+        "kind": "addr16_page",
+        "offs16": encode_imm16(lo, hi),
+        "page20": page20,
+    })
+}
+
+fn encode_addr24(lo: u8, mid: u8, hi: u8) -> Value {
+    json!({
+        "kind": "addr24",
+        "imm24": encode_imm24(lo, mid, hi),
+    })
+}
+
+fn encode_regsel(name: &str, group: &str) -> Value {
+    json!({
+        "kind": "regsel",
+        "size_group": group,
+        "name": name,
+    })
+}
+
+struct OperandDecoder<'a> {
+    stream: &'a mut InstructionStream,
+}
+
+impl<'a> OperandDecoder<'a> {
+    fn new(stream: &'a mut InstructionStream) -> Self {
+        Self { stream }
+    }
+
+    fn decode_operands(
+        &mut self,
+        layout: &[LayoutEntry],
+        page20: u32,
+    ) -> PyResult<HashMap<String, Value>> {
+        let mut operands = HashMap::new();
+        for entry in layout {
+            let value = self.decode_entry(entry, page20)?;
+            operands.insert(entry.key.clone(), value);
+        }
+        Ok(operands)
+    }
+
+    fn decode_entry(&mut self, entry: &LayoutEntry, page20: u32) -> PyResult<Value> {
+        match entry.kind.as_str() {
+            "imm8" => Ok(encode_imm8(self.stream.read_u8())),
+            "addr16_page" => {
+                let lo = self.stream.read_u8();
+                let hi = self.stream.read_u8();
+                Ok(encode_addr16(page20, lo, hi))
+            }
+            "addr24" => {
+                let lo = self.stream.read_u8();
+                let mid = self.stream.read_u8();
+                let hi = self.stream.read_u8();
+                Ok(encode_addr24(lo, mid, hi))
+            }
+            "imm24" => {
+                let lo = self.stream.read_u8();
+                let mid = self.stream.read_u8();
+                let hi = self.stream.read_u8();
+                Ok(encode_imm24(lo, mid, hi))
+            }
+            "ext_reg_ptr" => self.decode_ext_reg_ptr(entry),
+            "imem_ptr" => self.decode_imem_ptr(),
+            "regsel" => self.decode_regsel(entry),
+            other => Err(PyValueError::new_err(format!(
+                "unsupported layout kind {other}"
+            ))),
+        }
+    }
+
+    fn decode_regsel(&mut self, entry: &LayoutEntry) -> PyResult<Value> {
+        let allowed = entry.meta.get("allowed_groups").and_then(|value| {
+            value.as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+        });
+        let byte = self.stream.read_u8();
+        let idx = (byte & 0x07) as usize;
+        let (name, group, _) = REG_TABLE
+            .get(idx)
+            .ok_or_else(|| PyValueError::new_err("unsupported register index"))?;
+        if let Some(groups) = allowed.as_ref() {
+            if !groups.iter().any(|g| g.eq_ignore_ascii_case(group)) {
+                return Err(PyValueError::new_err(format!(
+                    "register {name} not allowed for operand"
+                )));
+            }
+        }
+        Ok(encode_regsel(name, group))
+    }
+
+    fn decode_ext_reg_ptr(&mut self, entry: &LayoutEntry) -> PyResult<Value> {
+        let reg_byte = self.stream.read_u8();
+        let mode_code = (reg_byte >> 4) & 0x0F;
+        let mode = EXT_REG_MODES
+            .iter()
+            .find(|mode| mode.code == mode_code)
+            .ok_or_else(|| PyValueError::new_err("unsupported ext-reg pointer mode"))?;
+        let idx = (reg_byte & 0x07) as usize;
+        let (name, group, _) = REG_TABLE
+            .get(idx)
+            .ok_or_else(|| PyValueError::new_err("invalid pointer register"))?;
+        if !group.eq_ignore_ascii_case("r3") {
+            return Err(PyValueError::new_err(format!(
+                "pointer register must be r3, got {name}"
+            )));
+        }
+        let mut payload = Map::new();
+        payload.insert("kind".into(), Value::String("ext_reg_ptr".into()));
+        payload.insert("ptr".into(), encode_regsel(name, group));
+        payload.insert("mode".into(), Value::String(mode.name.into()));
+        if mode.needs_disp {
+            let magnitude = self.stream.read_u8() as i32;
+            let signed = if mode.disp_sign >= 0 {
+                magnitude
+            } else {
+                -magnitude
+            };
+            payload.insert("disp".into(), encode_disp8(signed));
+        }
+        Ok(Value::Object(payload))
+    }
+
+    fn decode_imem_ptr(&mut self) -> PyResult<Value> {
+        let mode_byte = self.stream.read_u8();
+        let mode = IMEM_MODES
+            .iter()
+            .find(|entry| entry.code == mode_byte)
+            .ok_or_else(|| PyValueError::new_err("unsupported IMEM pointer mode"))?;
+        let base = self.stream.read_u8();
+        let mut payload = Map::new();
+        payload.insert("kind".into(), Value::String("imem_ptr".into()));
+        payload.insert("base".into(), encode_imm8(base));
+        payload.insert("mode".into(), Value::String(mode.name.into()));
+        if mode.needs_disp {
+            let magnitude = self.stream.read_u8() as i32;
+            let signed = if mode.disp_sign >= 0 {
+                magnitude
+            } else {
+                -magnitude
+            };
+            payload.insert("disp".into(), encode_disp8(signed));
+        }
+        Ok(Value::Object(payload))
+    }
+}
+
+fn lookup_manifest_entry(
+    opcode: u8,
+    pre: Option<PreTuple>,
+) -> PyResult<&'static ManifestEntry> {
+    let key = OpcodeLookupKey { opcode, pre };
+    OPCODE_LOOKUP
+        .get(&key)
+        .copied()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "no manifest entry for opcode 0x{opcode:02X} (pre={pre:?})"
+            ))
+        })
+}
+
+fn decode_bound_from_memory(
+    memory: Py<PyAny>,
+    pc: u32,
+) -> PyResult<(BoundInstrRepr, u8, usize)> {
+    let mut stream = InstructionStream::new(memory, pc);
+    let mut pending_pre: Option<PreTuple> = None;
+    let mut prefix_guard = 0usize;
+
+    loop {
+        let byte = stream.read_u8();
+        if let Some(pair) = PRE_BY_OPCODE.get(&byte).copied() {
+            pending_pre = Some(pair);
+            prefix_guard += 1;
+            if prefix_guard > MAX_PREFIX_CHAIN {
+                return Err(PyValueError::new_err(
+                    "excessive PRE prefixes before instruction",
+                ));
+            }
+            continue;
+        }
+
+        let entry = lookup_manifest_entry(byte, pending_pre)?;
+        let page20 = stream.page20();
+        let mut decoder = OperandDecoder::new(&mut stream);
+        let operands = decoder.decode_operands(&entry.layout, page20)?;
+        let length = stream.consumed();
+        let bound = BoundInstrRepr {
+            opcode: byte as u32,
+            mnemonic: entry.mnemonic.clone(),
+            family: entry.family.clone(),
+            length: length as u8,
+            pre: entry.pre.clone(),
+            operands,
+        };
+        return Ok((bound, byte, length));
+    }
+}
+
 fn space_to_str(space: &Space) -> &'static str {
     match space {
         Space::Int => "int",
@@ -153,6 +492,56 @@ fn register_width(name: &str) -> u8 {
         _ => DEFAULT_REG_WIDTH,
     }
 }
+
+type PreTuple = (&'static str, &'static str);
+
+#[derive(Hash, Eq, PartialEq, Copy, Clone)]
+struct OpcodeLookupKey {
+    opcode: u8,
+    pre: Option<PreTuple>,
+}
+
+static OPCODE_LOOKUP: Lazy<HashMap<OpcodeLookupKey, &'static ManifestEntry>> =
+    Lazy::new(|| {
+        let mut map = HashMap::new();
+        for entry in OPCODE_INDEX.iter() {
+            let key = OpcodeLookupKey {
+                opcode: entry.opcode,
+                pre: entry.pre.map(|pre| (pre.first, pre.second)),
+            };
+            let manifest_entry = &(*MANIFEST)[entry.manifest_index];
+            map.insert(key, manifest_entry);
+        }
+        map
+    });
+
+const PRE_PREFIXES: &[(u8, PreTuple)] = &[
+    (0x32, ("(n)", "(n)")),
+    (0x30, ("(n)", "(BP+n)")),
+    (0x33, ("(n)", "(PY+n)")),
+    (0x31, ("(n)", "(BP+PY)")),
+    (0x22, ("(BP+n)", "(n)")),
+    (0x23, ("(BP+n)", "(PY+n)")),
+    (0x21, ("(BP+n)", "(BP+PY)")),
+    (0x36, ("(PX+n)", "(n)")),
+    (0x34, ("(PX+n)", "(BP+n)")),
+    (0x37, ("(PX+n)", "(PY+n)")),
+    (0x35, ("(PX+n)", "(BP+PY)")),
+    (0x26, ("(BP+PX)", "(n)")),
+    (0x24, ("(BP+PX)", "(BP+n)")),
+    (0x27, ("(BP+PX)", "(PY+n)")),
+    (0x25, ("(BP+PX)", "(BP+PY)")),
+];
+
+const MAX_PREFIX_CHAIN: usize = 4;
+
+static PRE_BY_OPCODE: Lazy<HashMap<u8, PreTuple>> = Lazy::new(|| {
+    let mut map = HashMap::new();
+    for (opcode, pair) in PRE_PREFIXES.iter() {
+        map.insert(*opcode, *pair);
+    }
+    map
+});
 
 fn patch_binder(
     template: &Map<String, Value>,
@@ -218,6 +607,21 @@ impl Runtime {
 
     fn power_on_reset(&mut self) {
         self.state = RsState::default();
+    }
+
+    fn execute_instruction(&mut self) -> PyResult<(u8, u8)> {
+        let pc = self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK;
+        let (bound, opcode, length) =
+            decode_bound_from_memory(self.memory.clone(), pc)?;
+        let mut bus = MemoryProxyBus::new(self.memory.clone());
+        eval_manifest_entry(&mut self.state, &mut bus, &bound)?;
+        let current_pc = self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK;
+        if current_pc == pc {
+            let next_pc = (pc + length as u32) & ADDRESS_MASK;
+            self.state
+                .set_reg("PC", next_pc, register_width("PC"));
+        }
+        Ok((opcode, length as u8))
     }
 
     fn execute_bound_repr(&mut self, bound_json: &str) -> PyResult<()> {
