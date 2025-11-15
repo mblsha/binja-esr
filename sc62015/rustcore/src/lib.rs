@@ -1,5 +1,7 @@
 mod generated {
-    pub mod types;
+    pub mod types {
+        include!("../generated/types.rs");
+    }
     pub mod payload {
         include!("../generated/handlers.rs");
     }
@@ -17,7 +19,7 @@ use rust_scil::{
     eval,
     state::State as RsState,
 };
-use serde_json::{self, Value};
+use serde_json::{self, Map, Value};
 use std::collections::HashMap;
 
 static MANIFEST: Lazy<Vec<ManifestEntry>> = Lazy::new(|| {
@@ -75,15 +77,15 @@ fn space_to_str(space: &Space) -> &'static str {
 }
 
 fn find_entry(bound: &BoundInstrRepr) -> Option<&'static ManifestEntry> {
-    MANIFEST.iter().find(|entry| {
+    (*MANIFEST).iter().find(|entry| {
         entry.opcode == bound.opcode && entry.pre == bound.pre
     })
 }
 
 fn patch_binder(
-    template: &HashMap<String, Value>,
+    template: &Map<String, Value>,
     operands: &HashMap<String, Value>,
-) -> HashMap<String, Value> {
+) -> Map<String, Value> {
     let mut merged = template.clone();
     for (key, value) in operands {
         merged.insert(key.clone(), value.clone());

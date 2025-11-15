@@ -1,6 +1,6 @@
 // @generated; shared types for generated handlers
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -12,7 +12,7 @@ pub struct ManifestEntry {
     pub length: u8,
     pub pre: Option<PreInfo>,
     pub instr: Value,
-    pub binder: HashMap<String, Value>,
+    pub binder: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
