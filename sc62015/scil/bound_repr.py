@@ -62,12 +62,12 @@ def _encode_operand(value: object) -> OperandValue:
         if value.disp is not None:
             payload["disp"] = _encode_operand(value.disp)
         return payload
+    if isinstance(value, bool):
+        return {"kind": "bool", "value": value}
     if isinstance(value, int):
         return {"kind": "int", "value": value}
     if isinstance(value, str):
         return {"kind": "str", "value": value}
-    if isinstance(value, bool):
-        return {"kind": "bool", "value": value}
     if isinstance(value, tuple):
         return {"kind": "tuple", "items": [_encode_operand(v) for v in value]}
     if isinstance(value, list):
