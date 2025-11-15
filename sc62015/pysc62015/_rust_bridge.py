@@ -68,6 +68,7 @@ class BridgeCPU:
         self.stats_decode_miss = 0
         self.stats_fallback_steps = 0
         self.stats_rust_errors = 0
+        self._memory_synced = False
         if reset_on_init:
             self.power_on_reset()
 
@@ -76,6 +77,7 @@ class BridgeCPU:
         self.call_sub_level = 0
         self.halted = False
         self._temps.clear()
+        self._memory_synced = False
 
     # ------------------------------------------------------------------ #
     # Register / flag access
@@ -108,12 +110,15 @@ class BridgeCPU:
     # Execution helpers
 
     def execute_instruction(self, address: int) -> Tuple[int, int]:
+        if not self._memory_synced:
+            self._initialise_rust_memory()
         address &= PC_MASK
         if address != self._read_pc():
             self._runtime.write_register("PC", address)
         snapshot = self.snapshot_registers()
         try:
             opcode, length = self._runtime.execute_instruction()
+            self._flush_external_writes()
         except Exception as exc:  # pragma: no cover - exercised via integration
             self.stats_rust_errors += 1
             logger.warning(
@@ -212,6 +217,7 @@ class BridgeCPU:
         if instr_info is not None and getattr(instr_info, "length", None) is not None:
             length = int(instr_info.length)  # type: ignore[attr-defined]
         opcode = self.memory.read_byte(address & PC_MASK) & 0xFF
+        self._memory_synced = False
         return opcode, length or 1
 
     # ------------------------------------------------------------------ #
@@ -224,5 +230,21 @@ class BridgeCPU:
             "fallback_steps": self.stats_fallback_steps,
             "rust_errors": self.stats_rust_errors,
         }
+
+    def _initialise_rust_memory(self) -> None:
+        snapshot, fallback_ranges = self.memory.export_flat_memory()
+        # Ensure SC62015 internal memory space is Python-backed.
+        ranges = list(fallback_ranges)
+        ranges.append((INTERNAL_MEMORY_START, INTERNAL_MEMORY_START + 0xFF))
+        self._runtime.load_external_memory(snapshot)
+        self._runtime.set_python_ranges(ranges)
+        self._memory_synced = True
+
+    def _flush_external_writes(self) -> None:
+        writes = self._runtime.drain_external_writes()
+        if not writes:
+            return
+        self.memory.apply_external_writes([(addr, value) for addr, value in writes])
+
 
 __all__ = ["BridgeCPU", "MemoryAdapter"]

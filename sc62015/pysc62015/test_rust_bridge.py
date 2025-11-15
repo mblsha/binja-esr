@@ -37,6 +37,13 @@ class _ArrayMemory:
         self.cpu = cpu
         self.set_cpu_calls.append(cpu)
 
+    def export_flat_memory(self):
+        return bytes(self._data[: 0x100000]), tuple()
+
+    def apply_external_writes(self, writes):
+        for address, value in writes:
+            self.write_byte(address, value)
+
 
 @pytest.mark.parametrize(
     "program",

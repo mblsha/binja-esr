@@ -15,7 +15,7 @@ use generated::types::{BoundInstrRepr, LayoutEntry, ManifestEntry, PreInfo};
 use once_cell::sync::Lazy;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyBytes, PyModule};
 use pyo3::wrap_pyfunction;
 use rust_scil::{
     ast::{Binder, Instr, PreLatch},
@@ -33,7 +33,85 @@ static MANIFEST: Lazy<Vec<ManifestEntry>> = Lazy::new(|| {
 const INTERNAL_MEMORY_START: u32 = 0x100000;
 const ADDRESS_MASK: u32 = 0x00FF_FFFF;
 const INTERNAL_ADDR_MASK: u32 = 0xFF;
+const EXTERNAL_SPACE: usize = 0x100000;
 const DEFAULT_REG_WIDTH: u8 = 24;
+
+#[derive(Default)]
+struct MemoryImage {
+    external: Vec<u8>,
+    dirty: Vec<(u32, u8)>,
+    python_ranges: Vec<(u32, u32)>,
+}
+
+impl MemoryImage {
+    fn new() -> Self {
+        Self {
+            external: vec![0; EXTERNAL_SPACE],
+            dirty: Vec::new(),
+            python_ranges: Vec::new(),
+        }
+    }
+
+    fn load_external(&mut self, blob: &[u8]) {
+        let limit = self.external.len().min(blob.len());
+        self.external[..limit].copy_from_slice(&blob[..limit]);
+        self.dirty.clear();
+    }
+
+    fn set_python_ranges(&mut self, ranges: Vec<(u32, u32)>) {
+        self.python_ranges = ranges;
+    }
+
+    fn requires_python(&self, address: u32) -> bool {
+        if address >= EXTERNAL_SPACE as u32 {
+            return true;
+        }
+        for (start, end) in &self.python_ranges {
+            if address >= *start && address <= *end {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn read_byte(&self, address: u32) -> Option<u8> {
+        self.external.get(address as usize).copied()
+    }
+
+    fn load(&self, address: u32, bits: u8) -> Option<u32> {
+        let bytes = (bits / 8).max(1) as usize;
+        let end = address as usize + bytes;
+        if end > self.external.len() {
+            return None;
+        }
+        let mut value = 0u32;
+        for offset in 0..bytes {
+            value |= (self.external[address as usize + offset] as u32) << (offset * 8);
+        }
+        Some(value)
+    }
+
+    fn store(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
+        let bytes = (bits / 8).max(1) as usize;
+        let end = address as usize + bytes;
+        if end > self.external.len() {
+            return None;
+        }
+        for offset in 0..bytes {
+            let byte = ((value >> (offset * 8)) & 0xFF) as u8;
+            let slot = &mut self.external[address as usize + offset];
+            if *slot != byte {
+                *slot = byte;
+                self.dirty.push((address + offset as u32, byte));
+            }
+        }
+        Some(())
+    }
+
+    fn drain_dirty(&mut self) -> Vec<(u32, u8)> {
+        std::mem::take(&mut self.dirty)
+    }
+}
 
 #[pyclass(name = "CPU")]
 struct Cpu {
@@ -133,17 +211,54 @@ impl rust_scil::bus::Bus for MemoryProxyBus {
     }
 }
 
-struct InstructionStream {
-    reader: MemoryProxyBus,
+struct HybridBus<'a> {
+    memory: &'a mut MemoryImage,
+    fallback: MemoryProxyBus,
+}
+
+impl<'a> HybridBus<'a> {
+    fn new(memory: &'a mut MemoryImage, fallback: MemoryProxyBus) -> Self {
+        Self { memory, fallback }
+    }
+}
+
+impl<'a> rust_scil::bus::Bus for HybridBus<'a> {
+    fn load(&mut self, space: Space, addr: u32, bits: u8) -> u32 {
+        let absolute = MemoryProxyBus::resolve(space, addr);
+        if self.memory.requires_python(absolute) {
+            return self.fallback.load(space, addr, bits);
+        }
+        if let Some(value) = self.memory.load(absolute, bits) {
+            return value;
+        }
+        self.fallback.load(space, addr, bits)
+    }
+
+    fn store(&mut self, space: Space, addr: u32, bits: u8, value: u32) {
+        let absolute = MemoryProxyBus::resolve(space, addr);
+        if self.memory.requires_python(absolute) {
+            self.fallback.store(space, addr, bits, value);
+            return;
+        }
+        if self.memory.store(absolute, bits, value).is_none() {
+            self.fallback.store(space, addr, bits, value);
+        }
+    }
+}
+
+struct InstructionStream<'a> {
+    memory: &'a mut MemoryImage,
+    fallback: MemoryProxyBus,
     cursor: u32,
     consumed: usize,
     start_pc: u32,
 }
 
-impl InstructionStream {
-    fn new(memory: Py<PyAny>, start_pc: u32) -> Self {
+impl<'a> InstructionStream<'a> {
+    fn new(memory: &'a mut MemoryImage, fallback: MemoryProxyBus, start_pc: u32) -> Self {
         Self {
-            reader: MemoryProxyBus::new(memory),
+            memory,
+            fallback,
             cursor: start_pc & ADDRESS_MASK,
             consumed: 0,
             start_pc: start_pc & ADDRESS_MASK,
@@ -151,10 +266,15 @@ impl InstructionStream {
     }
 
     fn read_u8(&mut self) -> u8 {
-        let byte = self.reader.read_byte(self.cursor);
+        let absolute = self.cursor & ADDRESS_MASK;
         self.cursor = (self.cursor + 1) & ADDRESS_MASK;
         self.consumed += 1;
-        byte
+        if !self.memory.requires_python(absolute) {
+            if let Some(byte) = self.memory.read_byte(absolute) {
+                return byte;
+            }
+        }
+        self.fallback.read_byte(absolute)
     }
 
     fn consumed(&self) -> usize {
@@ -284,135 +404,132 @@ fn encode_regsel(name: &str, group: &str) -> Value {
     })
 }
 
-struct OperandDecoder<'a> {
-    stream: &'a mut InstructionStream,
+fn decode_operands(
+    stream: &mut InstructionStream<'_>,
+    layout: &[LayoutEntry],
+    page20: u32,
+) -> PyResult<HashMap<String, Value>> {
+    let mut operands = HashMap::new();
+    for entry in layout {
+        let value = decode_operand_entry(stream, entry, page20)?;
+        operands.insert(entry.key.clone(), value);
+    }
+    Ok(operands)
 }
 
-impl<'a> OperandDecoder<'a> {
-    fn new(stream: &'a mut InstructionStream) -> Self {
-        Self { stream }
-    }
-
-    fn decode_operands(
-        &mut self,
-        layout: &[LayoutEntry],
-        page20: u32,
-    ) -> PyResult<HashMap<String, Value>> {
-        let mut operands = HashMap::new();
-        for entry in layout {
-            let value = self.decode_entry(entry, page20)?;
-            operands.insert(entry.key.clone(), value);
+fn decode_operand_entry(
+    stream: &mut InstructionStream<'_>,
+    entry: &LayoutEntry,
+    page20: u32,
+) -> PyResult<Value> {
+    match entry.kind.as_str() {
+        "imm8" => Ok(encode_imm8(stream.read_u8())),
+        "addr16_page" => {
+            let lo = stream.read_u8();
+            let hi = stream.read_u8();
+            Ok(encode_addr16(page20, lo, hi))
         }
-        Ok(operands)
-    }
-
-    fn decode_entry(&mut self, entry: &LayoutEntry, page20: u32) -> PyResult<Value> {
-        match entry.kind.as_str() {
-            "imm8" => Ok(encode_imm8(self.stream.read_u8())),
-            "addr16_page" => {
-                let lo = self.stream.read_u8();
-                let hi = self.stream.read_u8();
-                Ok(encode_addr16(page20, lo, hi))
-            }
-            "addr24" => {
-                let lo = self.stream.read_u8();
-                let mid = self.stream.read_u8();
-                let hi = self.stream.read_u8();
-                Ok(encode_addr24(lo, mid, hi))
-            }
-            "imm24" => {
-                let lo = self.stream.read_u8();
-                let mid = self.stream.read_u8();
-                let hi = self.stream.read_u8();
-                Ok(encode_imm24(lo, mid, hi))
-            }
-            "ext_reg_ptr" => self.decode_ext_reg_ptr(entry),
-            "imem_ptr" => self.decode_imem_ptr(),
-            "regsel" => self.decode_regsel(entry),
-            other => Err(PyValueError::new_err(format!(
-                "unsupported layout kind {other}"
-            ))),
+        "addr24" => {
+            let lo = stream.read_u8();
+            let mid = stream.read_u8();
+            let hi = stream.read_u8();
+            Ok(encode_addr24(lo, mid, hi))
         }
-    }
-
-    fn decode_regsel(&mut self, entry: &LayoutEntry) -> PyResult<Value> {
-        let allowed = entry.meta.get("allowed_groups").and_then(|value| {
-            value.as_array().map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect::<Vec<_>>()
-            })
-        });
-        let byte = self.stream.read_u8();
-        let idx = (byte & 0x07) as usize;
-        let (name, group, _) = REG_TABLE
-            .get(idx)
-            .ok_or_else(|| PyValueError::new_err("unsupported register index"))?;
-        if let Some(groups) = allowed.as_ref() {
-            if !groups.iter().any(|g| g.eq_ignore_ascii_case(group)) {
-                return Err(PyValueError::new_err(format!(
-                    "register {name} not allowed for operand"
-                )));
-            }
+        "imm24" => {
+            let lo = stream.read_u8();
+            let mid = stream.read_u8();
+            let hi = stream.read_u8();
+            Ok(encode_imm24(lo, mid, hi))
         }
-        Ok(encode_regsel(name, group))
+        "ext_reg_ptr" => decode_ext_reg_ptr(stream),
+        "imem_ptr" => decode_imem_ptr(stream),
+        "regsel" => decode_regsel(stream, entry),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported layout kind {other}"
+        ))),
     }
+}
 
-    fn decode_ext_reg_ptr(&mut self, entry: &LayoutEntry) -> PyResult<Value> {
-        let reg_byte = self.stream.read_u8();
-        let mode_code = (reg_byte >> 4) & 0x0F;
-        let mode = EXT_REG_MODES
-            .iter()
-            .find(|mode| mode.code == mode_code)
-            .ok_or_else(|| PyValueError::new_err("unsupported ext-reg pointer mode"))?;
-        let idx = (reg_byte & 0x07) as usize;
-        let (name, group, _) = REG_TABLE
-            .get(idx)
-            .ok_or_else(|| PyValueError::new_err("invalid pointer register"))?;
-        if !group.eq_ignore_ascii_case("r3") {
+fn decode_regsel(
+    stream: &mut InstructionStream<'_>,
+    entry: &LayoutEntry,
+) -> PyResult<Value> {
+    let allowed = entry.meta.get("allowed_groups").and_then(|value| {
+        value.as_array().map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+    });
+    let byte = stream.read_u8();
+    let idx = (byte & 0x07) as usize;
+    let (name, group, _) = REG_TABLE
+        .get(idx)
+        .ok_or_else(|| PyValueError::new_err("unsupported register index"))?;
+    if let Some(groups) = allowed.as_ref() {
+        if !groups.iter().any(|g| g.eq_ignore_ascii_case(group)) {
             return Err(PyValueError::new_err(format!(
-                "pointer register must be r3, got {name}"
+                "register {name} not allowed for operand"
             )));
         }
-        let mut payload = Map::new();
-        payload.insert("kind".into(), Value::String("ext_reg_ptr".into()));
-        payload.insert("ptr".into(), encode_regsel(name, group));
-        payload.insert("mode".into(), Value::String(mode.name.into()));
-        if mode.needs_disp {
-            let magnitude = self.stream.read_u8() as i32;
-            let signed = if mode.disp_sign >= 0 {
-                magnitude
-            } else {
-                -magnitude
-            };
-            payload.insert("disp".into(), encode_disp8(signed));
-        }
-        Ok(Value::Object(payload))
     }
+    Ok(encode_regsel(name, group))
+}
 
-    fn decode_imem_ptr(&mut self) -> PyResult<Value> {
-        let mode_byte = self.stream.read_u8();
-        let mode = IMEM_MODES
-            .iter()
-            .find(|entry| entry.code == mode_byte)
-            .ok_or_else(|| PyValueError::new_err("unsupported IMEM pointer mode"))?;
-        let base = self.stream.read_u8();
-        let mut payload = Map::new();
-        payload.insert("kind".into(), Value::String("imem_ptr".into()));
-        payload.insert("base".into(), encode_imm8(base));
-        payload.insert("mode".into(), Value::String(mode.name.into()));
-        if mode.needs_disp {
-            let magnitude = self.stream.read_u8() as i32;
-            let signed = if mode.disp_sign >= 0 {
-                magnitude
-            } else {
-                -magnitude
-            };
-            payload.insert("disp".into(), encode_disp8(signed));
-        }
-        Ok(Value::Object(payload))
+fn decode_ext_reg_ptr(stream: &mut InstructionStream<'_>) -> PyResult<Value> {
+    let reg_byte = stream.read_u8();
+    let mode_code = (reg_byte >> 4) & 0x0F;
+    let mode = EXT_REG_MODES
+        .iter()
+        .find(|mode| mode.code == mode_code)
+        .ok_or_else(|| PyValueError::new_err("unsupported ext-reg pointer mode"))?;
+    let idx = (reg_byte & 0x07) as usize;
+    let (name, group, _) = REG_TABLE
+        .get(idx)
+        .ok_or_else(|| PyValueError::new_err("invalid pointer register"))?;
+    if !group.eq_ignore_ascii_case("r3") {
+        return Err(PyValueError::new_err(format!(
+            "pointer register must be r3, got {name}"
+        )));
     }
+    let mut payload = Map::new();
+    payload.insert("kind".into(), Value::String("ext_reg_ptr".into()));
+    payload.insert("ptr".into(), encode_regsel(name, group));
+    payload.insert("mode".into(), Value::String(mode.name.into()));
+    if mode.needs_disp {
+        let magnitude = stream.read_u8() as i32;
+        let signed = if mode.disp_sign >= 0 {
+            magnitude
+        } else {
+            -magnitude
+        };
+        payload.insert("disp".into(), encode_disp8(signed));
+    }
+    Ok(Value::Object(payload))
+}
+
+fn decode_imem_ptr(stream: &mut InstructionStream<'_>) -> PyResult<Value> {
+    let mode_byte = stream.read_u8();
+    let mode = IMEM_MODES
+        .iter()
+        .find(|entry| entry.code == mode_byte)
+        .ok_or_else(|| PyValueError::new_err("unsupported IMEM pointer mode"))?;
+    let base = stream.read_u8();
+    let mut payload = Map::new();
+    payload.insert("kind".into(), Value::String("imem_ptr".into()));
+    payload.insert("base".into(), encode_imm8(base));
+    payload.insert("mode".into(), Value::String(mode.name.into()));
+    if mode.needs_disp {
+        let magnitude = stream.read_u8() as i32;
+        let signed = if mode.disp_sign >= 0 {
+            magnitude
+        } else {
+            -magnitude
+        };
+        payload.insert("disp".into(), encode_disp8(signed));
+    }
+    Ok(Value::Object(payload))
 }
 
 fn lookup_manifest_entry(
@@ -431,10 +548,11 @@ fn lookup_manifest_entry(
 }
 
 fn decode_bound_from_memory(
-    memory: Py<PyAny>,
+    memory: &mut MemoryImage,
+    fallback: MemoryProxyBus,
     pc: u32,
 ) -> PyResult<(BoundInstrRepr, u8, usize)> {
-    let mut stream = InstructionStream::new(memory, pc);
+    let mut stream = InstructionStream::new(memory, fallback, pc);
     let mut pending_pre: Option<PreTuple> = None;
     let mut prefix_guard = 0usize;
 
@@ -453,8 +571,7 @@ fn decode_bound_from_memory(
 
         let entry = lookup_manifest_entry(byte, pending_pre)?;
         let page20 = stream.page20();
-        let mut decoder = OperandDecoder::new(&mut stream);
-        let operands = decoder.decode_operands(&entry.layout, page20)?;
+        let operands = decode_operands(&mut stream, &entry.layout, page20)?;
         let length = stream.consumed();
         let bound = BoundInstrRepr {
             opcode: byte as u32,
@@ -588,6 +705,7 @@ fn eval_manifest_entry<B: rust_scil::bus::Bus>(
 struct Runtime {
     state: RsState,
     memory: Py<PyAny>,
+    memory_image: MemoryImage,
 }
 
 #[pymethods]
@@ -598,6 +716,7 @@ impl Runtime {
         let mut runtime = Self {
             state: RsState::default(),
             memory: memory.into(),
+            memory_image: MemoryImage::new(),
         };
         if reset_on_init {
             runtime.power_on_reset();
@@ -609,11 +728,27 @@ impl Runtime {
         self.state = RsState::default();
     }
 
+    fn load_external_memory(&mut self, snapshot: &PyBytes) -> PyResult<()> {
+        self.memory_image.load_external(snapshot.as_bytes());
+        Ok(())
+    }
+
+    fn set_python_ranges(&mut self, ranges: Vec<(u32, u32)>) -> PyResult<()> {
+        self.memory_image.set_python_ranges(ranges);
+        Ok(())
+    }
+
+    fn drain_external_writes(&mut self) -> PyResult<Vec<(u32, u8)>> {
+        Ok(self.memory_image.drain_dirty())
+    }
+
     fn execute_instruction(&mut self) -> PyResult<(u8, u8)> {
         let pc = self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK;
+        let decode_proxy = MemoryProxyBus::new(self.memory.clone());
         let (bound, opcode, length) =
-            decode_bound_from_memory(self.memory.clone(), pc)?;
-        let mut bus = MemoryProxyBus::new(self.memory.clone());
+            decode_bound_from_memory(&mut self.memory_image, decode_proxy, pc)?;
+        let fallback_bus = MemoryProxyBus::new(self.memory.clone());
+        let mut bus = HybridBus::new(&mut self.memory_image, fallback_bus);
         eval_manifest_entry(&mut self.state, &mut bus, &bound)?;
         let current_pc = self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK;
         if current_pc == pc {
