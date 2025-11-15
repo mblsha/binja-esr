@@ -136,6 +136,6 @@ def test_rust_bridge_fallback_steps_once() -> None:
 
     assert opcode == 0x00
     assert length == 1
-    assert bridge.state.pc & PC_MASK == 1  # Legacy path advanced PC
+    assert bridge.read_register("PC") & PC_MASK == 1  # Legacy path advanced PC
     # Bridge should reattach itself after fallback
     assert memory.set_cpu_calls[-1] is bridge

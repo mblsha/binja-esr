@@ -26,6 +26,11 @@ static MANIFEST: Lazy<Vec<ManifestEntry>> = Lazy::new(|| {
     serde_json::from_str(generated::payload::PAYLOAD).expect("manifest json")
 });
 
+const INTERNAL_MEMORY_START: u32 = 0x100000;
+const ADDRESS_MASK: u32 = 0x00FF_FFFF;
+const INTERNAL_ADDR_MASK: u32 = 0xFF;
+const DEFAULT_REG_WIDTH: u8 = 24;
+
 #[pyclass(name = "CPU")]
 struct Cpu {
     inner: Py<PyAny>,
@@ -68,6 +73,62 @@ impl rust_scil::bus::Bus for PyBus {
     }
 }
 
+struct MemoryProxyBus {
+    memory: Py<PyAny>,
+}
+
+impl MemoryProxyBus {
+    fn new(memory: Py<PyAny>) -> Self {
+        Self { memory }
+    }
+
+    fn resolve(space: Space, addr: u32) -> u32 {
+        match space {
+            Space::Int => INTERNAL_MEMORY_START + (addr & INTERNAL_ADDR_MASK),
+            Space::Ext | Space::Code => addr & ADDRESS_MASK,
+        }
+    }
+
+    fn read_byte(&self, address: u32) -> u8 {
+        Python::with_gil(|py| {
+            self.memory
+                .call_method(py, "read_byte", (address,), None)
+                .and_then(|obj| obj.extract::<u8>(py))
+                .expect("memory.read_byte must return int")
+        })
+    }
+
+    fn write_byte(&self, address: u32, value: u8) {
+        Python::with_gil(|py| {
+            let _ = self
+                .memory
+                .call_method(py, "write_byte", (address, value), None);
+        });
+    }
+}
+
+impl rust_scil::bus::Bus for MemoryProxyBus {
+    fn load(&mut self, space: Space, addr: u32, bits: u8) -> u32 {
+        let bytes = (bits / 8).max(1);
+        let mut value = 0u32;
+        let base = Self::resolve(space, addr);
+        for offset in 0..bytes {
+            let byte = self.read_byte(base + offset as u32);
+            value |= (byte as u32) << (offset * 8);
+        }
+        value
+    }
+
+    fn store(&mut self, space: Space, addr: u32, bits: u8, value: u32) {
+        let bytes = (bits / 8).max(1);
+        let base = Self::resolve(space, addr);
+        for offset in 0..bytes {
+            let byte = ((value >> (offset * 8)) & 0xFF) as u8;
+            self.write_byte(base + offset as u32, byte);
+        }
+    }
+}
+
 fn space_to_str(space: &Space) -> &'static str {
     match space {
         Space::Int => "int",
@@ -80,6 +141,17 @@ fn find_entry(bound: &BoundInstrRepr) -> Option<&'static ManifestEntry> {
     (*MANIFEST).iter().find(|entry| {
         entry.opcode == bound.opcode && entry.pre == bound.pre
     })
+}
+
+fn register_width(name: &str) -> u8 {
+    match name.to_ascii_uppercase().as_str() {
+        "A" | "B" | "IL" | "IH" => 8,
+        "BA" | "I" => 16,
+        "X" | "Y" | "U" | "S" => 24,
+        "F" => 8,
+        "PC" => 20,
+        _ => DEFAULT_REG_WIDTH,
+    }
 }
 
 fn patch_binder(
@@ -99,6 +171,100 @@ impl From<&PreInfo> for PreLatch {
             first: info.first.clone(),
             second: info.second.clone(),
         }
+    }
+}
+
+fn eval_manifest_entry<B: rust_scil::bus::Bus>(
+    state: &mut RsState,
+    bus: &mut B,
+    bound: &BoundInstrRepr,
+) -> PyResult<()> {
+    let entry = find_entry(bound).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "no manifest entry for opcode {} pre {:?}",
+            bound.opcode, bound.pre
+        ))
+    })?;
+    let binder_json = patch_binder(&entry.binder, &bound.operands);
+    let binder: Binder = serde_json::from_value(Value::Object(binder_json))
+        .map_err(|e| PyValueError::new_err(format!("binder json: {e}")))?;
+    let instr: Instr = serde_json::from_value(entry.instr.clone())
+        .map_err(|e| PyValueError::new_err(format!("instr json: {e}")))?;
+    let pre = bound.pre.as_ref().map(|info| info.into());
+    eval::step(state, bus, &instr, &binder, pre)
+        .map_err(|e| PyRuntimeError::new_err(format!("{e}")))
+}
+
+#[pyclass]
+struct Runtime {
+    state: RsState,
+    memory: Py<PyAny>,
+}
+
+#[pymethods]
+impl Runtime {
+    #[new]
+    #[pyo3(signature = (memory, *, reset_on_init = true))]
+    fn new(memory: PyObject, reset_on_init: bool) -> PyResult<Self> {
+        let mut runtime = Self {
+            state: RsState::default(),
+            memory: memory.into(),
+        };
+        if reset_on_init {
+            runtime.power_on_reset();
+        }
+        Ok(runtime)
+    }
+
+    fn power_on_reset(&mut self) {
+        self.state = RsState::default();
+    }
+
+    fn execute_bound_repr(&mut self, bound_json: &str) -> PyResult<()> {
+        let bound: BoundInstrRepr = serde_json::from_str(bound_json)
+            .map_err(|e| PyValueError::new_err(format!("bound json: {e}")))?;
+        let mut bus = MemoryProxyBus::new(self.memory.clone());
+        eval_manifest_entry(&mut self.state, &mut bus, &bound)
+    }
+
+    fn read_register(&self, name: &str) -> PyResult<u32> {
+        Ok(self.state.get_reg(name, register_width(name)))
+    }
+
+    fn write_register(&mut self, name: &str, value: u32) -> PyResult<()> {
+        let width = register_width(name);
+        self.state.set_reg(name, value, width);
+        Ok(())
+    }
+
+    fn read_flag(&self, name: &str) -> PyResult<u8> {
+        Ok(self.state.get_flag(name) as u8)
+    }
+
+    fn write_flag(&mut self, name: &str, value: u8) -> PyResult<()> {
+        self.state.set_flag(name, value as u32);
+        Ok(())
+    }
+
+    fn snapshot_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.state)
+            .map_err(|e| PyRuntimeError::new_err(format!("state serialize: {e}")))
+    }
+
+    fn load_snapshot_json(&mut self, payload: &str) -> PyResult<()> {
+        self.state = serde_json::from_str(payload)
+            .map_err(|e| PyValueError::new_err(format!("state json: {e}")))?;
+        Ok(())
+    }
+
+    #[getter]
+    fn halted(&self) -> bool {
+        self.state.halted
+    }
+
+    #[setter]
+    fn set_halted(&mut self, value: bool) {
+        self.state.halted = value;
     }
 }
 
@@ -254,21 +420,8 @@ fn execute_bound_repr(state_json: &str, bound_json: &str, py_bus: PyObject) -> P
         .map_err(|e| PyValueError::new_err(format!("state json: {e}")))?;
     let bound: BoundInstrRepr = serde_json::from_str(bound_json)
         .map_err(|e| PyValueError::new_err(format!("bound json: {e}")))?;
-    let entry = find_entry(&bound).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "no manifest entry for opcode {} pre {:?}",
-            bound.opcode, bound.pre
-        ))
-    })?;
-    let binder_json = patch_binder(&entry.binder, &bound.operands);
-    let binder: Binder = serde_json::from_value(Value::Object(binder_json))
-        .map_err(|e| PyValueError::new_err(format!("binder json: {e}")))?;
-    let instr: Instr = serde_json::from_value(entry.instr.clone())
-        .map_err(|e| PyValueError::new_err(format!("instr json: {e}")))?;
-    let pre = bound.pre.as_ref().map(|info| info.into());
     let mut bus = PyBus::new(py_bus);
-    eval::step(&mut state, &mut bus, &instr, &binder, pre)
-        .map_err(|e| PyRuntimeError::new_err(format!("{e}")))?;
+    eval_manifest_entry(&mut state, &mut bus, &bound)?;
     serde_json::to_string(&state)
         .map_err(|e| PyRuntimeError::new_err(format!("state serialize: {e}")))
 }
@@ -276,6 +429,7 @@ fn execute_bound_repr(state_json: &str, bound_json: &str, py_bus: PyObject) -> P
 #[pymodule]
 fn _sc62015_rustcore(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Cpu>()?;
+    m.add_class::<Runtime>()?;
     m.add("__backend_name__", backend_name())?;
     m.add("HAS_CPU_IMPLEMENTATION", true)?;
     m.add_function(wrap_pyfunction!(backend_name, m)?)?;
