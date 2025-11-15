@@ -47,6 +47,38 @@ class CPUState:
         self.pc = 0
         self.halted = False
 
+    def to_dict(self) -> Dict[str, int]:
+        regs = dict(self._regs)
+        for name, (_, _, mask) in _SUBREG_INFO.items():
+            regs[name] = self.get_reg(name, mask.bit_length())
+        return {
+            "pc": self.pc & PC_MASK,
+            "halted": bool(self.halted),
+            "regs": regs,
+            "flags": dict(self._flags),
+        }
+
+    def load_dict(self, payload: Dict[str, int]) -> None:
+        self.reset()
+        self.pc = payload.get("pc", 0) & PC_MASK
+        self.halted = bool(payload.get("halted", False))
+        regs = payload.get("regs", {})
+        skip_subregs = {
+            name
+            for name in regs
+            if name in _SUBREG_INFO and _SUBREG_INFO[name][0] in regs
+        }
+        for name, value in regs.items():
+            if name in skip_subregs:
+                continue
+            bits = _BASE_WIDTHS.get(name, 24)
+            if name in _SUBREG_INFO and name not in _BASE_WIDTHS:
+                bits = _SUBREG_INFO[name][2].bit_length()
+            self.set_reg(name, int(value), bits)
+        flags = payload.get("flags", {})
+        for name, value in flags.items():
+            self.set_flag(name, int(value))
+
     # ------------------------------------------------------------------ #
     # Register access helpers
 

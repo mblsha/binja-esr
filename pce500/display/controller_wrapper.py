@@ -23,7 +23,7 @@ class HD61202Controller:
         self.chips = self.pipeline.chips
         self.perfetto_enabled = False
         self._cpu = None  # Reference to CPU for getting current PC
-        self._write_trace_callback = None
+        self._write_trace_callbacks: list = []
 
         # Debug counters
         self.cs_both_count = 0
@@ -36,9 +36,20 @@ class HD61202Controller:
         """Set reference to CPU emulator for getting current PC."""
         self._cpu = cpu
 
+    def add_write_trace_callback(self, callback) -> None:
+        """Register a callback invoked for every LCD controller write."""
+        if callback not in self._write_trace_callbacks:
+            self._write_trace_callbacks.append(callback)
+
+    def clear_write_trace_callbacks(self) -> None:
+        """Remove all registered LCD write callbacks."""
+        self._write_trace_callbacks.clear()
+
     def set_write_trace_callback(self, callback) -> None:
-        """Register callback invoked for every LCD controller write."""
-        self._write_trace_callback = callback
+        """Backwards-compatible helper that resets to a single callback."""
+        self.clear_write_trace_callbacks()
+        if callback is not None:
+            self.add_write_trace_callback(callback)
 
     def _get_current_pc(self) -> Optional[int]:
         """Get current PC from CPU if available."""
@@ -106,8 +117,11 @@ class HD61202Controller:
                     },
                 )
 
-        if self._write_trace_callback:
-            self._write_trace_callback(event)
+        for callback in self._write_trace_callbacks:
+            try:
+                callback(event)
+            except Exception:
+                pass
 
     def reset(self) -> None:
         """Reset both chips and all statistics."""

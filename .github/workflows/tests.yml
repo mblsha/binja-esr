@@ -32,7 +32,12 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --extra dev --extra pce500 --extra web
-    
+
+    - name: Build Rust SCIL backend
+      run: |
+        uv pip install maturin
+        uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml
+
     - name: Run SC62015 tests
       env:
         FORCE_BINJA_MOCK: 1

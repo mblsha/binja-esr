@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict
 
 from . import ast
+from ..decoding.bind import PreLatch
 
 _KIND = "type"
 
@@ -207,6 +208,14 @@ def instr_to_dict(instr: ast.Instr) -> Dict[str, Any]:
         "length": instr.length,
         "semantics": [stmt_to_dict(stmt) for stmt in instr.semantics],
     }
+
+
+def binder_to_dict(binder) -> Dict[str, Any]:
+    return {name: expr_to_dict(expr) for name, expr in binder.items()}
+
+
+def prelatch_to_dict(pre: PreLatch) -> Dict[str, Any]:
+    return {"first": pre.first, "second": pre.second}
 
 
 def to_json(instr: ast.Instr, *, indent: int = 2) -> str:
