@@ -164,7 +164,7 @@ class CPU:
         if instr is None:
             opcode = self.memory.read_byte(address) & 0xFF
             instr = _PlaceholderInstruction(opcode)
-        return instr
+        return cast(Instruction, instr)
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
         if self.backend == "python":

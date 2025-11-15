@@ -118,9 +118,21 @@ def test_rust_bridge_fallback_steps_once() -> None:
     opcode, length = bridge.execute_instruction(0)
 
     stats_after = bridge.get_stats()
-    assert stats_after["decode_miss"] == stats_before["decode_miss"] + 1
-    assert stats_after["fallback_steps"] == stats_before["fallback_steps"] + 1
-    assert stats_after["steps_rust"] == stats_before["steps_rust"]
+    decode_miss_before = stats_before["decode_miss"]
+    fallback_before = stats_before["fallback_steps"]
+    steps_before = stats_before["steps_rust"]
+    decode_miss_after = stats_after["decode_miss"]
+    fallback_after = stats_after["fallback_steps"]
+    steps_after = stats_after["steps_rust"]
+    assert isinstance(decode_miss_before, int)
+    assert isinstance(fallback_before, int)
+    assert isinstance(steps_before, int)
+    assert isinstance(decode_miss_after, int)
+    assert isinstance(fallback_after, int)
+    assert isinstance(steps_after, int)
+    assert decode_miss_after == decode_miss_before + 1
+    assert fallback_after == fallback_before + 1
+    assert steps_after == steps_before
 
     assert opcode == 0x00
     assert length == 1

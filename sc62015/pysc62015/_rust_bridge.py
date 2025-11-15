@@ -9,11 +9,13 @@ from typing import Dict, Iterable, Tuple, Optional
 import _sc62015_rustcore as rustcore
 from sc62015.decoding.bind import DecodedInstr
 from sc62015.decoding.dispatcher import CompatDispatcher
-from sc62015.pysc62015.emulator import InstructionInfo
+from sc62015.pysc62015 import emulator as _emulator
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
 from sc62015.scil import from_decoded, serde
 from sc62015.scil.pyemu import CPUState
+
+InstructionInfo = _emulator.InstructionInfo  # type: ignore[attr-defined]
 
 
 logger = logging.getLogger(__name__)
@@ -294,7 +296,7 @@ class BridgeCPU:
     # ------------------------------------------------------------------ #
     # Stats
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> Dict[str, int | dict[int, int]]:
         return {
             "steps_rust": self.stats_steps_rust,
             "decode_miss": self.stats_decode_miss,
