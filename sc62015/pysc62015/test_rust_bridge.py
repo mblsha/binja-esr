@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING, cast
 
 import pytest
 
@@ -15,6 +15,13 @@ from sc62015.scil.pyemu.eval import execute_build  # noqa: E402
 rustcore = pytest.importorskip(
     "_sc62015_rustcore", reason="Rust SCIL backend not built in this environment"
 )
+
+if TYPE_CHECKING:
+    from _sc62015_rustcore import Runtime as RustRuntime
+else:  # pragma: no cover - typing helper
+
+    class RustRuntime:  # type: ignore[too-many-ancestors]
+        ...
 
 
 class _ArrayMemory:
@@ -125,28 +132,24 @@ def test_rust_bridge_fallback_steps_once() -> None:
         def __getattr__(self, name):
             return getattr(self._inner, name)
 
-    bridge._runtime = _FailRuntime(bridge._runtime)
+    bridge._runtime = cast(RustRuntime, _FailRuntime(bridge._runtime))
 
     stats_before = bridge.get_stats().copy()
     opcode, length = bridge.execute_instruction(0)
 
     stats_after = bridge.get_stats()
-    decode_miss_before = stats_before["decode_miss"]
-    fallback_before = stats_before["fallback_steps"]
-    steps_before = stats_before["steps_rust"]
-    decode_miss_after = stats_after["decode_miss"]
-    fallback_after = stats_after["fallback_steps"]
-    steps_after = stats_after["steps_rust"]
-    assert isinstance(decode_miss_before, int)
-    assert isinstance(fallback_before, int)
-    assert isinstance(steps_before, int)
-    assert isinstance(decode_miss_after, int)
-    assert isinstance(fallback_after, int)
-    assert isinstance(steps_after, int)
+    decode_miss_before = cast(int, stats_before["decode_miss"])
+    fallback_before = cast(int, stats_before["fallback_steps"])
+    steps_before = cast(int, stats_before["steps_rust"])
+    decode_miss_after = cast(int, stats_after["decode_miss"])
+    fallback_after = cast(int, stats_after["fallback_steps"])
+    steps_after = cast(int, stats_after["steps_rust"])
+    rust_errors_before = cast(int, stats_before["rust_errors"])
+    rust_errors_after = cast(int, stats_after["rust_errors"])
     assert decode_miss_after == decode_miss_before
     assert fallback_after == fallback_before + 1
     assert steps_after == steps_before
-    assert stats_after["rust_errors"] == stats_before["rust_errors"] + 1
+    assert rust_errors_after == rust_errors_before + 1
 
     assert opcode == 0x00
     assert length == 1
