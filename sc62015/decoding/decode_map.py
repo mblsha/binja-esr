@@ -59,6 +59,7 @@ def _read_addr24(ctx: StreamCtx, key: str, *, kind: str = "imm24") -> Imm24:
     _record(ctx, key, kind, start=start, order="lmn")
     return Imm24(lo, mid, hi)
 
+
 DecoderFunc = Callable[[int, StreamCtx], DecodedInstr]
 
 _REG_TABLE: Tuple[Tuple[str, str, int], ...] = (

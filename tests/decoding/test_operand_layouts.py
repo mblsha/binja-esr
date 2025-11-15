@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import pytest
-
 from sc62015.decoding import decode_map
 from sc62015.decoding.reader import LayoutEntry, StreamCtx
 
 
-def _capture_layout(opcode: int, data: Iterable[int] | None = None) -> tuple[LayoutEntry, ...]:
+def _capture_layout(
+    opcode: int, data: Iterable[int] | None = None
+) -> tuple[LayoutEntry, ...]:
     payload = bytes(data or [0x00] * 16)
     ctx = StreamCtx(pc=0, data=payload, base_len=1, record_layout=True)
     decode_map.decode_with_pre_variants(opcode, ctx)

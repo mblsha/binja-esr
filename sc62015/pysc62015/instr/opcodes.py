@@ -72,7 +72,8 @@ AddressingMode = IntAddrCalc
 
 
 def _build_pre_tables() -> Tuple[
-    Dict[int, Dict[int, AddressingMode]], Dict[Tuple[AddressingMode, AddressingMode], int]
+    Dict[int, Dict[int, AddressingMode]],
+    Dict[Tuple[AddressingMode, AddressingMode], int],
 ]:
     per_operand: Dict[int, Dict[int, AddressingMode]] = {1: {}, 2: {}}
     reverse: Dict[Tuple[AddressingMode, AddressingMode], int] = {}
@@ -92,11 +93,16 @@ PRE_TABLE, REVERSE_PRE_TABLE = _build_pre_tables()
 # manual: for modes that only exist in the second slot (e.g., PY+n), we reuse
 # the corresponding prefix even though there is no “first slot” form.
 SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
-    AddressingMode.BP_N: opcode_for_modes(AddressingMode.BP_N, AddressingMode.N) or 0x22,
-    AddressingMode.PX_N: opcode_for_modes(AddressingMode.PX_N, AddressingMode.N) or 0x36,
-    AddressingMode.PY_N: opcode_for_modes(AddressingMode.N, AddressingMode.PY_N) or 0x33,
-    AddressingMode.BP_PX: opcode_for_modes(AddressingMode.BP_PX, AddressingMode.N) or 0x26,
-    AddressingMode.BP_PY: opcode_for_modes(AddressingMode.N, AddressingMode.BP_PY) or 0x31,
+    AddressingMode.BP_N: opcode_for_modes(AddressingMode.BP_N, AddressingMode.N)
+    or 0x22,
+    AddressingMode.PX_N: opcode_for_modes(AddressingMode.PX_N, AddressingMode.N)
+    or 0x36,
+    AddressingMode.PY_N: opcode_for_modes(AddressingMode.N, AddressingMode.PY_N)
+    or 0x33,
+    AddressingMode.BP_PX: opcode_for_modes(AddressingMode.BP_PX, AddressingMode.N)
+    or 0x26,
+    AddressingMode.BP_PY: opcode_for_modes(AddressingMode.N, AddressingMode.BP_PY)
+    or 0x31,
 }
 
 

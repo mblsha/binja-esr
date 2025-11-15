@@ -20,9 +20,7 @@ def test_all_documented_pre_modes_present() -> None:
     modes = list(iter_pre_modes())
     assert len(modes) == 15
     for mode in modes:
-        assert mode.opcode == opcode_for_modes(
-            mode.latch.first, mode.latch.second
-        )
+        assert mode.opcode == opcode_for_modes(mode.latch.first, mode.latch.second)
 
 
 def test_roundtrip_lookup() -> None:
@@ -51,7 +49,7 @@ def test_needs_pre_variants_false_for_non_imem() -> None:
 
 def test_decode_with_pre_variants_matches_helper() -> None:
     variants = decode_map.decode_with_pre_variants(
-    0x80, StreamCtx(pc=0x1000, data=bytes([0x02]), base_len=1)
+        0x80, StreamCtx(pc=0x1000, data=bytes([0x02]), base_len=1)
     )
     helper = tuple(iter_all_pre_variants(_decode(0x80, bytes([0x02]))))
     assert variants == helper

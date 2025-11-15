@@ -62,7 +62,9 @@ _PRE_OPCODE_MATRIX = {
 }
 
 
-def _build_modes() -> Tuple[Dict[int, PreMode], Dict[Tuple[IntAddrCalc, IntAddrCalc], int]]:
+def _build_modes() -> Tuple[
+    Dict[int, PreMode], Dict[Tuple[IntAddrCalc, IntAddrCalc], int]
+]:
     by_opcode: Dict[int, PreMode] = {}
     by_pair: Dict[Tuple[IntAddrCalc, IntAddrCalc], int] = {}
 

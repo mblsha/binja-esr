@@ -38,7 +38,7 @@ class _ArrayMemory:
         self.set_cpu_calls.append(cpu)
 
     def export_flat_memory(self):
-        return bytes(self._data[: 0x100000]), tuple()
+        return bytes(self._data[:0x100000]), tuple()
 
     def apply_external_writes(self, writes):
         for address, value in writes:

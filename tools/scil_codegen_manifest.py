@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 from sc62015.decoding import decode_map
 from sc62015.decoding.bind import DecodedInstr, PreLatch
@@ -62,7 +62,9 @@ def _entry_from_variant(
         if pre
         else None,
         "instr": serde.instr_to_dict(build.instr),
-        "binder": {name: serde.expr_to_dict(expr) for name, expr in build.binder.items()},
+        "binder": {
+            name: serde.expr_to_dict(expr) for name, expr in build.binder.items()
+        },
         "bound_repr": BoundInstrRepr.from_decoded(variant).to_dict(),
         "layout": _serialize_layout(layout_entries),
     }

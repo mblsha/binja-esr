@@ -13,7 +13,6 @@ from ..decoding.bind import (
     Imm24,
     Imm8,
     ImemPtr,
-    IntAddrCalc,
     PreLatch,
     RegSel,
 )
@@ -74,7 +73,10 @@ def _encode_operand(value: object) -> OperandValue:
     if isinstance(value, list):
         return {"kind": "list", "items": [_encode_operand(v) for v in value]}
     if isinstance(value, dict):
-        return {"kind": "dict", "items": {k: _encode_operand(v) for k, v in value.items()}}
+        return {
+            "kind": "dict",
+            "items": {k: _encode_operand(v) for k, v in value.items()},
+        }
     raise TypeError(f"Unsupported operand type: {type(value)!r}")
 
 
@@ -98,7 +100,9 @@ class BoundInstrRepr:
 
     @classmethod
     def from_decoded(cls, decoded: DecodedInstr) -> "BoundInstrRepr":
-        operands = {name: _encode_operand(value) for name, value in decoded.binds.items()}
+        operands = {
+            name: _encode_operand(value) for name, value in decoded.binds.items()
+        }
         return cls(
             opcode=decoded.opcode,
             mnemonic=decoded.mnemonic,

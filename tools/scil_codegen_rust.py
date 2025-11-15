@@ -21,7 +21,7 @@ def _write_handlers(entries, path: Path) -> None:
 pub const PAYLOAD: &str = r#"
 """
     payload = json.dumps(entries, indent=2)
-    path.write_text(f"{header}{payload}\n\"#;\n", encoding="utf-8")
+    path.write_text(f'{header}{payload}\n"#;\n', encoding="utf-8")
 
 
 def _write_opcode_index(entries, path: Path) -> None:
@@ -49,9 +49,7 @@ pub static OPCODE_INDEX: &[OpcodeIndexEntry] = &[
         if pre:
             first = json.dumps(pre["first"])
             second = json.dumps(pre["second"])
-            pre_repr = (
-                f"Some(PreKey {{ first: {first}, second: {second} }})"
-            )
+            pre_repr = f"Some(PreKey {{ first: {first}, second: {second} }})"
         else:
             pre_repr = "None"
         lines.append(
@@ -64,7 +62,9 @@ pub static OPCODE_INDEX: &[OpcodeIndexEntry] = &[
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Rust stubs from SCIL manifest")
+    parser = argparse.ArgumentParser(
+        description="Generate Rust stubs from SCIL manifest"
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
