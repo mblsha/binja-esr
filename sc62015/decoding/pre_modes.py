@@ -41,6 +41,25 @@ _COL_LABELS: Tuple[IntAddrCalc, ...] = (
     IntAddrCalc.BP_PY,
 )
 
+# This table defines the hexadecimal value of the PRE (Prefix) byte required for
+# certain complex internal RAM addressing modes, based on the combination of
+# addressing calculations used for the first and second address components.
+# Rows indicate the addressing mode calculation specified by the first operand
+# byte (e.g., in MV (m) (n), this corresponds to (m)).
+# Columns indicate the addressing mode calculation specified by the second
+# operand byte (e.g., in MV (m) (n), this corresponds to (n)).
+#
+# +---------------+-------+--------+--------+--------+
+# | 1st op \ 2nd  | (n)   | (BP+n) | (PY+n) |(BP+PY) |
+# +---------------+-------+--------+--------+--------+
+# | (n)           | 32H   | 30H    | 33H    | 31H    |
+# +---------------+-------+--------+--------+--------+
+# | (BP+n)        | 22H   |        | 23H    | 21H    |
+# +---------------+-------+--------+--------+--------+
+# | (PX+n)        | 36H   | 34H    | 37H    | 35H    |
+# +---------------+-------+--------+--------+--------+
+# | (BP+PX)       | 26H   | 24H    | 27H    | 25H    |
+# +---------------+-------+--------+--------+--------+
 _PRE_OPCODE_MATRIX = {
     # First-op rows: (n), (BP+n), (PX+n), (BP+PX)
     # Second-op cols: (n), (BP+n), (PY+n), (BP+PY)
