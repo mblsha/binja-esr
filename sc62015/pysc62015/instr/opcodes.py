@@ -58,111 +58,51 @@ from binaryninja.lowlevelil import (  # type: ignore
     ExpressionIndex,
 )
 
+from ...decoding.bind import IntAddrCalc
+from ...decoding.pre_modes import iter_pre_modes, opcode_for_modes
+
 
 class InvalidInstruction(Exception):
     pass
 
 
-# This table defines the hexadecimal value of the PRE (Prefix) byte required for
-# certain complex internal RAM addressing modes, based on the combination of
-# addressing calculations used for the first and second address components.
-#
-# Rows indicate the addressing mode calculation specified by the first operand
-# byte (e.g., in MV (m) (n), this corresponds to (m)).
-#
-# Columns indicate the addressing mode calculation specified by the second
-# operand byte (e.g., in MV (m) (n), this corresponds to (n)).
-#
-# +---------------+-------+--------+--------+--------+
-# | 1st op \ 2nd  | (n)   | (BP+n) | (PY+n) |(BP+PY) |
-# +---------------+-------+--------+--------+--------+
-# | (n)           | 32H   | 30H    | 33H    | 31H    |
-# +---------------+-------+--------+--------+--------+
-# | (BP+n)        | 22H   |        | 23H    | 21H    |
-# +---------------+-------+--------+--------+--------+
-# | (PX+n)        | 36H   | 34H    | 37H    | 35H    |
-# +---------------+-------+--------+--------+--------+
-# | (BP+PX)       | 26H   | 24H    | 27H    | 25H    |
-# +---------------+-------+--------+--------+--------+
+# `AddressingMode` historically lived in this module; now it aliases the shared
+# IntAddrCalc enum so SCIL, BN, and future codegen consume the same values.
+AddressingMode = IntAddrCalc
 
 
-class AddressingMode(enum.Enum):
-    N = "(n)"
-    BP_N = "(BP+n)"
-    PX_N = "(PX+n)"
-    PY_N = "(PY+n)"
-    BP_PX = "(BP+PX)"
-    BP_PY = "(BP+PY)"
+def _build_pre_tables() -> Tuple[
+    Dict[int, Dict[int, AddressingMode]],
+    Dict[Tuple[AddressingMode, AddressingMode], int],
+]:
+    per_operand: Dict[int, Dict[int, AddressingMode]] = {1: {}, 2: {}}
+    reverse: Dict[Tuple[AddressingMode, AddressingMode], int] = {}
+    for mode in iter_pre_modes():
+        per_operand[1][mode.opcode] = mode.latch.first
+        per_operand[2][mode.opcode] = mode.latch.second
+        reverse[(mode.latch.first, mode.latch.second)] = mode.opcode
+    return per_operand, reverse
 
 
-PRE_TABLE = {
-    1: {  # 1st operand (row, left)
-        0x32: AddressingMode.N,
-        0x30: AddressingMode.N,
-        0x33: AddressingMode.N,
-        0x31: AddressingMode.N,
-        0x22: AddressingMode.BP_N,
-        0x23: AddressingMode.BP_N,
-        0x21: AddressingMode.BP_N,
-        0x36: AddressingMode.PX_N,
-        0x34: AddressingMode.PX_N,
-        0x37: AddressingMode.PX_N,
-        0x35: AddressingMode.PX_N,
-        0x26: AddressingMode.BP_PX,
-        0x24: AddressingMode.BP_PX,
-        0x27: AddressingMode.BP_PX,
-        0x25: AddressingMode.BP_PX,
-    },
-    2: {  # 2nd operand (column, top)
-        0x32: AddressingMode.N,
-        0x22: AddressingMode.N,
-        0x36: AddressingMode.N,
-        0x26: AddressingMode.N,
-        0x30: AddressingMode.BP_N,
-        0x34: AddressingMode.BP_N,
-        0x24: AddressingMode.BP_N,
-        0x33: AddressingMode.PY_N,
-        0x23: AddressingMode.PY_N,
-        0x37: AddressingMode.PY_N,
-        0x27: AddressingMode.PY_N,
-        0x31: AddressingMode.BP_PY,
-        0x21: AddressingMode.BP_PY,
-        0x35: AddressingMode.BP_PY,
-        0x25: AddressingMode.BP_PY,
-    },
-}
+PRE_TABLE, REVERSE_PRE_TABLE = _build_pre_tables()
 
-REVERSE_PRE_TABLE: Dict[Tuple[AddressingMode, AddressingMode], int] = {
-    # 1st Op \ 2nd Op: (n)
-    (AddressingMode.N, AddressingMode.N): 0x32,
-    (AddressingMode.BP_N, AddressingMode.N): 0x22,
-    (AddressingMode.PX_N, AddressingMode.N): 0x36,
-    (AddressingMode.BP_PX, AddressingMode.N): 0x26,
-    # 1st Op \ 2nd Op: (BP+n)
-    (AddressingMode.N, AddressingMode.BP_N): 0x30,
-    (AddressingMode.PX_N, AddressingMode.BP_N): 0x34,
-    (AddressingMode.BP_PX, AddressingMode.BP_N): 0x24,
-    # 1st Op \ 2nd Op: (PY+n)
-    (AddressingMode.N, AddressingMode.PY_N): 0x33,
-    (AddressingMode.BP_N, AddressingMode.PY_N): 0x23,
-    (AddressingMode.PX_N, AddressingMode.PY_N): 0x37,
-    (AddressingMode.BP_PX, AddressingMode.PY_N): 0x27,
-    # 1st Op \ 2nd Op: (BP+PY)
-    (AddressingMode.N, AddressingMode.BP_PY): 0x31,
-    (AddressingMode.BP_N, AddressingMode.BP_PY): 0x21,
-    (AddressingMode.PX_N, AddressingMode.BP_PY): 0x35,
-}
 
-# Lookup table for instructions that operate on a single internal
-# memory operand requiring a PRE prefix.  The mapping is based on the
-# addressing mode used for that operand.  Simple `(n)` addressing does
-# not require a prefix and therefore isn't included here.
+# Lookup table for instructions that operate on a single internal memory operand
+# requiring a PRE prefix. `(n)` addressing does not require a prefix, so it is
+# omitted. These values mirror the hardware table documented in the PC‑E500
+# manual: for modes that only exist in the second slot (e.g., PY+n), we reuse
+# the corresponding prefix even though there is no “first slot” form.
 SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
-    AddressingMode.BP_N: 0x22,
-    AddressingMode.PX_N: 0x36,
-    AddressingMode.PY_N: 0x33,
-    AddressingMode.BP_PX: 0x26,
-    AddressingMode.BP_PY: 0x31,
+    AddressingMode.BP_N: opcode_for_modes(AddressingMode.BP_N, AddressingMode.N)
+    or 0x22,
+    AddressingMode.PX_N: opcode_for_modes(AddressingMode.PX_N, AddressingMode.N)
+    or 0x36,
+    AddressingMode.PY_N: opcode_for_modes(AddressingMode.N, AddressingMode.PY_N)
+    or 0x33,
+    AddressingMode.BP_PX: opcode_for_modes(AddressingMode.BP_PX, AddressingMode.N)
+    or 0x26,
+    AddressingMode.BP_PY: opcode_for_modes(AddressingMode.N, AddressingMode.BP_PY)
+    or 0x31,
 }
 
 

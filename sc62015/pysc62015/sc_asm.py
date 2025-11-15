@@ -262,9 +262,11 @@ class Assembler:
 
                     pre_byte: Optional[int] = None
                     if len(imem_ops) == 2:
-                        pre_byte = REVERSE_PRE_TABLE.get(
-                            (imem_ops[0].mode, imem_ops[1].mode)
-                        )
+                        pair = (imem_ops[0].mode, imem_ops[1].mode)
+                        if pair == (AddressingMode.BP_PX, AddressingMode.BP_PY):
+                            pre_byte = None
+                        else:
+                            pre_byte = REVERSE_PRE_TABLE.get(pair)
                         if pre_byte is None:
                             raise AssemblerError(
                                 f"Invalid addressing mode combination for {mnemonic}: "

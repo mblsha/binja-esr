@@ -1,7 +1,7 @@
 """PC-E500 memory system implementation with overlay bus integration."""
 
 from collections import deque
-from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any
+from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any, Iterable, List
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -371,6 +371,31 @@ class PCE500Memory:
     def overlays(self) -> Tuple[MemoryOverlay, ...]:
         """Compatibility view of overlays for legacy code paths."""
         return tuple(self._bus.iter_overlays())
+
+    # ------------------------------------------------------------------ #
+    # Rust backend helpers
+
+    def export_flat_memory(self) -> Tuple[bytes, Tuple[Tuple[int, int], ...]]:
+        """Return a flattened view of external memory plus ranges that must stay Python-backed."""
+
+        blob = bytearray(self.external_memory)
+        fallback: List[Tuple[int, int]] = []
+        for overlay in self._bus.iter_overlays():
+            length = overlay.end - overlay.start + 1
+            if overlay.data is not None and overlay.read_only:
+                # Copy read-only overlay bytes directly into the flattened view.
+                blob[overlay.start : overlay.start + min(len(overlay.data), length)] = (
+                    overlay.data[:length]
+                )
+            else:
+                fallback.append((overlay.start, overlay.end))
+        return bytes(blob), tuple(fallback)
+
+    def apply_external_writes(self, writes: Iterable[Tuple[int, int]]) -> None:
+        """Apply external-memory writes that originated from the Rust backend."""
+
+        for address, value in writes:
+            self.write_byte(address & 0xFFFFFF, value & 0xFF)
 
     def load_rom(self, rom_data: bytes) -> None:
         """Load ROM as an overlay at 0xC0000."""

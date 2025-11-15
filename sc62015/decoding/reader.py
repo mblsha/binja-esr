@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Dict, List
+
+
+@dataclass(frozen=True)
+class LayoutEntry:
+    key: str
+    kind: str
+    meta: Dict[str, object]
 
 
 @dataclass
@@ -16,6 +24,8 @@ class StreamCtx:
     data: bytes
     base_len: int = 1
     idx: int = 0
+    record_layout: bool = False
+    _layout: List[LayoutEntry] = field(default_factory=list, init=False)
 
     def _require(self, count: int) -> None:
         if self.idx + count > len(self.data):
@@ -23,6 +33,11 @@ class StreamCtx:
                 f"Insufficient bytes: need {count}, "
                 f"have {len(self.data) - self.idx} remaining"
             )
+
+    def record_operand(self, key: str, kind: str, **meta) -> None:
+        if not self.record_layout:
+            return
+        self._layout.append(LayoutEntry(key=key, kind=kind, meta=dict(meta)))
 
     def read_u8(self) -> int:
         self._require(1)
@@ -56,3 +71,6 @@ class StreamCtx:
 
     def page20(self) -> int:
         return self.pc & 0xF0000
+
+    def snapshot_layout(self) -> tuple[LayoutEntry, ...]:
+        return tuple(self._layout)

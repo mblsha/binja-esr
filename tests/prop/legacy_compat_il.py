@@ -13,6 +13,7 @@ from sc62015.decoding.bind import (
     Addr24,
     DecodedInstr,
     Imm8,
+    IntAddrCalc,
     RegSel,
     PreLatch,
 )
@@ -142,10 +143,10 @@ def _emit_inc_dec(di: DecodedInstr, il: LowLevelILFunction, op: str) -> None:
     il.append(il.set_reg(1, reg, expr))
 
 
-def _imem_mode(di: DecodedInstr, *, slot: int) -> str:
+def _imem_mode(di: DecodedInstr, *, slot: int) -> IntAddrCalc:
     latch: PreLatch | None = getattr(di, "pre_applied", None)
     if latch is None:
-        return "(BP+n)"
+        return IntAddrCalc.BP_N
     if slot == 0:
         return latch.first
     return latch.second

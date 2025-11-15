@@ -10,12 +10,55 @@ from .bind import (
     Imm16,
     Imm24,
     Imm8,
-    PreLatch,
     ExtRegPtr,
     ImemPtr,
     RegSel,
 )
+from .pre_modes import iter_all_pre_variants, prelatch_for_opcode
 from .reader import StreamCtx
+
+
+def _record(
+    ctx: StreamCtx, key: str, kind: str, *, start: Optional[int] = None, **meta
+) -> None:
+    if start is not None:
+        meta = dict(meta)
+        meta.setdefault("offset", start)
+        meta.setdefault("length_bytes", ctx.bytes_consumed() - start)
+    ctx.record_operand(key, kind, **meta)
+
+
+def _read_imm8(ctx: StreamCtx, key: str) -> Imm8:
+    start = ctx.bytes_consumed()
+    value = ctx.read_u8()
+    _record(ctx, key, "imm8", start=start, width=8)
+    return Imm8(value)
+
+
+def _read_disp8(ctx: StreamCtx, key: str) -> Disp8:
+    start = ctx.bytes_consumed()
+    raw = ctx.read_u8()
+    signed = raw - 0x100 if raw & 0x80 else raw
+    _record(ctx, key, "disp8", start=start, width=8)
+    return Disp8(signed)
+
+
+def _read_addr16(ctx: StreamCtx, key: str, *, kind: str = "imm16") -> Imm16:
+    start = ctx.bytes_consumed()
+    lo = ctx.read_u8()
+    hi = ctx.read_u8()
+    _record(ctx, key, kind, start=start, order="mn")
+    return Imm16(lo, hi)
+
+
+def _read_addr24(ctx: StreamCtx, key: str, *, kind: str = "imm24") -> Imm24:
+    start = ctx.bytes_consumed()
+    lo = ctx.read_u8()
+    mid = ctx.read_u8()
+    hi = ctx.read_u8()
+    _record(ctx, key, kind, start=start, order="lmn")
+    return Imm24(lo, mid, hi)
+
 
 DecoderFunc = Callable[[int, StreamCtx], DecodedInstr]
 
@@ -48,7 +91,7 @@ def _dec_nop(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_mv_a_n(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    imm = Imm8(ctx.read_u8())
+    imm = _read_imm8(ctx, "n")
     return DecodedInstr(
         opcode=opcode,
         mnemonic="MV A,n",
@@ -64,7 +107,7 @@ def _dec_mv_a_n(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 def _dec_jr_cond(
     opcode: int, ctx: StreamCtx, cond: str, direction: int
 ) -> DecodedInstr:
-    offset = Imm8(ctx.read_u8())
+    offset = _read_imm8(ctx, "disp")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=f"JR{cond} ±n",
@@ -75,8 +118,8 @@ def _dec_jr_cond(
 
 
 def _dec_jp_mn(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    lo, hi = ctx.read_u16_mn()
-    addr = Addr16Page(Imm16(lo, hi), ctx.page20())
+    imm = _read_addr16(ctx, "addr16_page", kind="addr16_page")
+    addr = Addr16Page(imm, ctx.page20())
     return DecodedInstr(
         opcode=opcode,
         mnemonic="JP mn",
@@ -87,8 +130,8 @@ def _dec_jp_mn(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_mv_a_abs24(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    lo, mid, hi = ctx.read_u24_lmn()
-    addr = Addr24(Imm24(lo, mid, hi))
+    imm = _read_addr24(ctx, "addr24", kind="addr24")
+    addr = Addr24(imm)
     return DecodedInstr(
         opcode=opcode,
         mnemonic="MV A,[lmn]",
@@ -99,8 +142,9 @@ def _dec_mv_a_abs24(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_call(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    lo, hi = ctx.read_u16_mn()
-    addr = Addr16Page(Imm16(lo, hi), ctx.page20())
+    addr = Addr16Page(
+        _read_addr16(ctx, "addr16_page", kind="addr16_page"), ctx.page20()
+    )
     return DecodedInstr(
         opcode=opcode,
         mnemonic="CALL mn",
@@ -111,8 +155,7 @@ def _dec_call(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_callf(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    lo, mid, hi = ctx.read_u24_lmn()
-    addr = Addr24(Imm24(lo, mid, hi))
+    addr = Addr24(_read_addr24(ctx, "addr24", kind="addr24"))
     return DecodedInstr(
         opcode=opcode,
         mnemonic="CALLF lmn",
@@ -132,21 +175,8 @@ def _dec_ret(opcode: int, ctx: StreamCtx, mnemonic: str, family: str) -> Decoded
     )
 
 
-PRE_LATCHES: Dict[int, PreLatch] = {
-    0x32: PreLatch("(n)", "(n)"),
-    0x22: PreLatch("(BP+n)", "(n)"),
-    0x36: PreLatch("(PX+n)", "(n)"),
-    0x26: PreLatch("(BP+PX)", "(n)"),
-    0x30: PreLatch("(n)", "(BP+n)"),
-    0x33: PreLatch("(n)", "(PY+n)"),
-    0x31: PreLatch("(n)", "(BP+PY)"),
-}
-
-
 def _dec_pre(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    latch = PRE_LATCHES.get(opcode)
-    if latch is None:
-        raise ValueError(f"Unsupported PRE opcode {opcode:#x}")
+    latch = prelatch_for_opcode(opcode)
     # No operand bytes for PRE; ctx.idx stays 0 so total length == base_len
     return DecodedInstr(
         opcode=opcode,
@@ -265,7 +295,7 @@ _EXT_FROM_IMEM: Dict[int, Tuple[str, int]] = {
 
 
 def _dec_alu_imm(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    imm = Imm8(ctx.read_u8())
+    imm = _read_imm8(ctx, "n")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=_ALU_IMM8_OPS[opcode],
@@ -276,8 +306,7 @@ def _dec_alu_imm(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_mv_ext_store(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    lo, mid, hi = ctx.read_u24_lmn()
-    addr = Addr24(Imm24(lo, mid, hi))
+    addr = Addr24(_read_addr24(ctx, "addr24"))
     return DecodedInstr(
         opcode=opcode,
         mnemonic="MV [lmn],A",
@@ -395,8 +424,8 @@ def _dec_ext_ptr_store(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 def _dec_imem_move(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     mnemonic, width = _IMEM_MOVES[opcode]
-    dst = Imm8(ctx.read_u8())
-    src = Imm8(ctx.read_u8())
+    dst = _read_imm8(ctx, "dst")
+    src = _read_imm8(ctx, "src")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -408,8 +437,8 @@ def _dec_imem_move(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 def _dec_imem_swap(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     mnemonic, width = _IMEM_EXCHANGES[opcode]
-    left = Imm8(ctx.read_u8())
-    right = Imm8(ctx.read_u8())
+    left = _read_imm8(ctx, "left")
+    right = _read_imm8(ctx, "right")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -422,7 +451,7 @@ def _dec_imem_swap(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 def _dec_imem_from_ext(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     mnemonic, width = _IMEM_FROM_EXT[opcode]
     ptr = _decode_ext_reg_ptr(ctx, width // 8)
-    addr = Imm8(ctx.read_u8())
+    addr = _read_imm8(ctx, "imem")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -435,7 +464,7 @@ def _dec_imem_from_ext(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 def _dec_ext_from_imem(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     mnemonic, width = _EXT_FROM_IMEM[opcode]
     ptr = _decode_ext_reg_ptr(ctx, width // 8)
-    addr = Imm8(ctx.read_u8())
+    addr = _read_imm8(ctx, "imem")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -447,8 +476,8 @@ def _dec_ext_from_imem(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 def _dec_imem_loop_move(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     mnemonic, step = _IMEM_LOOP_MOVES[opcode]
-    dst = Imm8(ctx.read_u8())
-    src = Imm8(ctx.read_u8())
+    dst = _read_imm8(ctx, "dst")
+    src = _read_imm8(ctx, "src")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -459,8 +488,8 @@ def _dec_imem_loop_move(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_loop_arith_mem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
-    dst = Imm8(ctx.read_u8())
-    src = Imm8(ctx.read_u8())
+    dst = _read_imm8(ctx, "dst")
+    src = _read_imm8(ctx, "src")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -471,7 +500,7 @@ def _dec_loop_arith_mem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedIn
 
 
 def _dec_loop_arith_reg(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
-    dst = Imm8(ctx.read_u8())
+    dst = _read_imm8(ctx, "dst")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -482,8 +511,8 @@ def _dec_loop_arith_reg(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedIn
 
 
 def _dec_loop_bcd_mem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
-    dst = Imm8(ctx.read_u8())
-    src = Imm8(ctx.read_u8())
+    dst = _read_imm8(ctx, "dst")
+    src = _read_imm8(ctx, "src")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -494,7 +523,7 @@ def _dec_loop_bcd_mem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInst
 
 
 def _dec_loop_bcd_reg(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
-    dst = Imm8(ctx.read_u8())
+    dst = _read_imm8(ctx, "dst")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -505,7 +534,7 @@ def _dec_loop_bcd_reg(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInst
 
 
 def _dec_decimal_shift(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
-    addr = Imm8(ctx.read_u8())
+    addr = _read_imm8(ctx, "dst")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -528,8 +557,8 @@ def _dec_simple(
 
 
 def _dec_pmdf_imm(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    addr = Imm8(ctx.read_u8())
-    imm = Imm8(ctx.read_u8())
+    addr = _read_imm8(ctx, "dst")
+    imm = _read_imm8(ctx, "imm")
     return DecodedInstr(
         opcode=opcode,
         mnemonic="PMDF (m),n",
@@ -540,7 +569,7 @@ def _dec_pmdf_imm(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_pmdf_reg(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    addr = Imm8(ctx.read_u8())
+    addr = _read_imm8(ctx, "dst")
     return DecodedInstr(
         opcode=opcode,
         mnemonic="PMDF (m),A",
@@ -575,6 +604,7 @@ _EMEM_IMEM_MODE_MAP: Dict[int, Tuple[str, bool, int]] = {
 
 
 def _decode_ext_reg_ptr(ctx: StreamCtx, width_bytes: int) -> ExtRegPtr:
+    start = ctx.bytes_consumed()
     reg_byte = ctx.read_u8()
     mode_code = (reg_byte >> 4) & 0x0F
     try:
@@ -594,10 +624,19 @@ def _decode_ext_reg_ptr(ctx: StreamCtx, width_bytes: int) -> ExtRegPtr:
     else:
         disp = None
 
-    return ExtRegPtr(ptr=RegSel(ptr_group, ptr_name), mode=mode_name, disp=disp)
+    ptr = ExtRegPtr(ptr=RegSel(ptr_group, ptr_name), mode=mode_name, disp=disp)
+    _record(
+        ctx,
+        "ptr",
+        "ext_reg_ptr",
+        start=start,
+        width_bytes=width_bytes,
+    )
+    return ptr
 
 
 def _decode_emem_imem(ctx: StreamCtx) -> ImemPtr:
+    start = ctx.bytes_consumed()
     mode_byte = ctx.read_u8()
     try:
         mode_name, needs_disp, disp_sign = _EMEM_IMEM_MODE_MAP[mode_byte]
@@ -608,11 +647,14 @@ def _decode_emem_imem(ctx: StreamCtx) -> ImemPtr:
     if needs_disp:
         magnitude = ctx.read_u8()
         disp = Disp8(magnitude if disp_sign > 0 else -magnitude)
+    _record(ctx, "ptr", "imem_ptr", start=start)
     return ImemPtr(base=base, mode=mode_name, disp=disp)
 
 
 def _dec_inc_dec(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
+    start = ctx.bytes_consumed()
     reg_byte = ctx.read_u8()
+    _record(ctx, "reg", "regsel", start=start, allowed_groups=("r1",))
     name, size_group = _reg_from_byte(reg_byte)
     if size_group != "r1":
         raise ValueError(f"{mnemonic} unsupported for register {name}")
@@ -626,7 +668,7 @@ def _dec_inc_dec(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
 
 
 def _dec_mv_imem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
-    imm = Imm8(ctx.read_u8())
+    imm = _read_imm8(ctx, "n")
     return DecodedInstr(
         opcode=opcode,
         mnemonic=mnemonic,
@@ -637,8 +679,9 @@ def _dec_mv_imem(opcode: int, ctx: StreamCtx, mnemonic: str) -> DecodedInstr:
 
 
 def _dec_jp_cond(opcode: int, ctx: StreamCtx, cond: str) -> DecodedInstr:
-    lo, hi = ctx.read_u16_mn()
-    addr = Addr16Page(Imm16(lo, hi), ctx.page20())
+    addr = Addr16Page(
+        _read_addr16(ctx, "addr16_page", kind="addr16_page"), ctx.page20()
+    )
     return DecodedInstr(
         opcode=opcode,
         mnemonic=f"JP{cond} mn",
@@ -649,7 +692,7 @@ def _dec_jp_cond(opcode: int, ctx: StreamCtx, cond: str) -> DecodedInstr:
 
 
 def _dec_jp_imem(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    addr = Imm8(ctx.read_u8())
+    addr = _read_imm8(ctx, "n")
     return DecodedInstr(
         opcode=opcode,
         mnemonic="JP (n)",
@@ -660,7 +703,9 @@ def _dec_jp_imem(opcode: int, ctx: StreamCtx) -> DecodedInstr:
 
 
 def _dec_jp_reg(opcode: int, ctx: StreamCtx) -> DecodedInstr:
+    start = ctx.bytes_consumed()
     reg_byte = ctx.read_u8()
+    _record(ctx, "reg", "regsel", start=start, allowed_groups=("r3",))
     name, size_group = _reg_from_byte(reg_byte)
     if size_group != "r3":
         raise ValueError(f"JP r3 requires r3 register, got {name}")
@@ -803,3 +848,10 @@ def decode_opcode(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     except KeyError as exc:
         raise KeyError(f"No decoder registered for opcode {opcode:#x}") from exc
     return decoder(opcode, ctx)
+
+
+def decode_with_pre_variants(opcode: int, ctx: StreamCtx) -> Tuple[DecodedInstr, ...]:
+    """Decode an opcode and return all PRE variants (baseline + prefixes)."""
+
+    decoded = decode_opcode(opcode, ctx)
+    return tuple(iter_all_pre_variants(decoded))

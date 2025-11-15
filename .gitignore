@@ -18,6 +18,9 @@ lcd_right.png
 .claude/
 *.bin
 
+# Rust build artifacts
+target/
+
 # uv
 .venv/
 uv.lock

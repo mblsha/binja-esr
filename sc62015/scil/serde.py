@@ -215,7 +215,7 @@ def binder_to_dict(binder) -> Dict[str, Any]:
 
 
 def prelatch_to_dict(pre: PreLatch) -> Dict[str, Any]:
-    return {"first": pre.first, "second": pre.second}
+    return {"first": pre.first.value, "second": pre.second.value}
 
 
 def to_json(instr: ast.Instr, *, indent: int = 2) -> str:

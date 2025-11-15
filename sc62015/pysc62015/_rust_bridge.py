@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
-import json
 import logging
-from typing import Dict, Iterable, Tuple, Optional
+from typing import Dict, Tuple
 
 import _sc62015_rustcore as rustcore
-from sc62015.decoding.bind import DecodedInstr
-from sc62015.decoding.dispatcher import CompatDispatcher
 from sc62015.pysc62015 import emulator as _emulator
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_START, PC_MASK
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
-from sc62015.scil import from_decoded, serde
-from sc62015.scil.pyemu import CPUState
 
 InstructionInfo = _emulator.InstructionInfo  # type: ignore[attr-defined]
 
@@ -23,20 +17,6 @@ logger = logging.getLogger(__name__)
 
 def _mask(bits: int) -> int:
     return (1 << bits) - 1
-
-
-_REGISTER_WIDTHS: Dict[str, int] = {
-    "A": 8,
-    "B": 8,
-    "BA": 16,
-    "I": 16,
-    "X": 24,
-    "Y": 24,
-    "U": 24,
-    "S": 24,
-    "F": 8,
-    "PC": 20,
-}
 
 
 @dataclass
@@ -74,13 +54,11 @@ class MemoryAdapter:
 
 
 class BridgeCPU:
-    """Python helper that executes instructions via SCIL PyEMU."""
+    """Python helper that executes instructions via the Rust SCIL backend."""
 
     def __init__(self, memory, reset_on_init: bool = True) -> None:
         self.memory = memory
-        self.bus = MemoryAdapter(memory)
-        self.state = CPUState()
-        self.dispatcher = CompatDispatcher()
+        self._runtime = rustcore.Runtime(memory=memory, reset_on_init=reset_on_init)
         self.call_sub_level = 0
         self.halted = False
         self._temps: Dict[int, int] = {}
@@ -89,15 +67,16 @@ class BridgeCPU:
         self.stats_decode_miss = 0
         self.stats_fallback_steps = 0
         self.stats_rust_errors = 0
-        self._decode_hist: Counter[int] = Counter()
+        self._memory_synced = False
         if reset_on_init:
             self.power_on_reset()
 
     def power_on_reset(self) -> None:
-        self.state.reset()
+        self._runtime.power_on_reset()
         self.call_sub_level = 0
         self.halted = False
         self._temps.clear()
+        self._memory_synced = False
 
     # ------------------------------------------------------------------ #
     # Register / flag access
@@ -107,10 +86,7 @@ class BridgeCPU:
         if name.startswith("TEMP"):
             index = int(name[4:])
             return self._temps.get(index, 0)
-        if name == "PC":
-            return self.state.pc & PC_MASK
-        width = _REGISTER_WIDTHS.get(name, 24)
-        return self.state.get_reg(name, width)
+        return int(self._runtime.read_register(name))
 
     def write_register(self, name: str, value: int) -> None:
         name = name.upper()
@@ -121,131 +97,73 @@ class BridgeCPU:
             elif index in self._temps:
                 del self._temps[index]
             return
-        if name == "PC":
-            self.state.pc = value & PC_MASK
-            return
-        width = _REGISTER_WIDTHS.get(name, 24)
-        self.state.set_reg(name, value, width)
+        self._runtime.write_register(name, int(value))
 
     def read_flag(self, name: str) -> int:
-        return self.state.get_flag(name.upper())
+        return int(self._runtime.read_flag(name.upper()))
 
     def write_flag(self, name: str, value: int) -> None:
-        self.state.set_flag(name.upper(), value)
+        self._runtime.write_flag(name.upper(), int(value))
 
     # ------------------------------------------------------------------ #
     # Execution helpers
 
     def execute_instruction(self, address: int) -> Tuple[int, int]:
-        decoded, length, opcode = self._decode_instruction(address)
-
-        if isinstance(decoded, DecodedInstr):
-            build = from_decoded.build(decoded)
-            start_pc = self.state.pc & PC_MASK
-            snapshot = self.snapshot_registers()
-            state_json = json.dumps(self.state.to_dict())
-            instr_json = json.dumps(serde.instr_to_dict(build.instr))
-            binder_json = json.dumps(serde.binder_to_dict(build.binder))
-            pre_json = (
-                json.dumps(serde.prelatch_to_dict(build.pre_applied))
-                if build.pre_applied
-                else None
+        if not self._memory_synced:
+            self._initialise_rust_memory()
+        address &= PC_MASK
+        if address != self._read_pc():
+            self._runtime.write_register("PC", address)
+        snapshot = self.snapshot_registers()
+        try:
+            opcode, length = self._runtime.execute_instruction()
+            self._flush_external_writes()
+        except Exception as exc:  # pragma: no cover - exercised via integration
+            self.stats_rust_errors += 1
+            logger.warning(
+                "Rust SCIL execution failed at PC=%06X: %s",
+                address & PC_MASK,
+                exc,
             )
-            try:
-                new_state_json = rustcore.scil_step_json(
-                    state_json,
-                    instr_json,
-                    binder_json,
-                    self.bus,
-                    pre_json,
-                )
-            except Exception as exc:  # pragma: no cover - exercised via integration
-                self.stats_rust_errors += 1
-                logger.warning(
-                    "Rust SCIL execution failed at PC=%06X opcode=%02X: %s",
-                    address & PC_MASK,
-                    opcode & 0xFF,
-                    exc,
-                )
-                self.load_snapshot(snapshot)
-                self._execute_via_fallback(address, length)
-                return opcode, length
-
-            self.state.load_dict(json.loads(new_state_json))
-            if (self.state.pc & PC_MASK) == start_pc:
-                self.state.pc = (start_pc + length) & PC_MASK
-            self.halted = bool(getattr(self.state, "halted", False))
-            self.stats_steps_rust += 1
+            self.load_snapshot(snapshot)
+            opcode, length = self._execute_via_fallback(address)
             return opcode, length
 
-        # SCIL decode miss: execute via python façade fallback
-        self.stats_decode_miss += 1
-        self._decode_hist[opcode & 0xFF] += 1
-        self._execute_via_fallback(address, length)
+        self.halted = bool(getattr(self._runtime, "halted", False))
+        self.stats_steps_rust += 1
         return opcode, length
-
-    def _decode_instruction(
-        self, address: int
-    ) -> Tuple[Optional[DecodedInstr], int, int]:
-        # Reset pending PRE latch before decoding a fresh instruction
-        if hasattr(self.dispatcher, "_pending_pre"):
-            self.dispatcher._pending_pre = None  # type: ignore[attr-defined]
-        buf = bytearray(
-            self.memory.read_byte((address + offset) & 0xFFFFFF) & 0xFF
-            for offset in range(128)
-        )
-        total = 0
-        cursor = 0
-        opcode = buf[0]
-        dispatcher = self.dispatcher
-        while cursor < len(buf):
-            data = bytes(buf[cursor:])
-            result = dispatcher.try_decode(data, (address + cursor) & PC_MASK)
-            if result is None:
-                break
-            length, decoded = result
-            total += length
-            cursor += length
-            if decoded is not None:
-                return decoded, total, opcode
-        # Fallback: use legacy decoder just to recover metadata
-        self._log_decode_failure(address, opcode, buf[:8])
-        fallback = self._get_fallback_cpu()
-        instr = fallback.decode_instruction(address)
-        if instr is None:
-            raise ValueError(f"Failed to decode instruction at {address:#06X}")
-        info = InstructionInfo()
-        instr.analyze(info, address)
-        return None, int(info.length), instr.opcode or opcode
 
     # ------------------------------------------------------------------ #
     # Snapshots
 
+    def _read_pc(self) -> int:
+        return int(self._runtime.read_register("PC")) & PC_MASK
+
     def snapshot_cpu_registers(self) -> CPURegistersSnapshot:
         temps = dict(self._temps)
         snapshot = CPURegistersSnapshot(
-            pc=self.state.pc & PC_MASK,
-            ba=self.state.get_reg("BA", 16),
-            i=self.state.get_reg("I", 16),
-            x=self.state.get_reg("X", 24),
-            y=self.state.get_reg("Y", 24),
-            u=self.state.get_reg("U", 24),
-            s=self.state.get_reg("S", 24),
-            f=self.state.get_reg("F", 8),
+            pc=self._read_pc(),
+            ba=self.read_register("BA"),
+            i=self.read_register("I"),
+            x=self.read_register("X"),
+            y=self.read_register("Y"),
+            u=self.read_register("U"),
+            s=self.read_register("S"),
+            f=self.read_register("F"),
             temps=temps,
             call_sub_level=self.call_sub_level,
         )
         return snapshot
 
     def load_cpu_snapshot(self, snapshot: CPURegistersSnapshot) -> None:
-        self.state.pc = snapshot.pc & PC_MASK
-        self.state.set_reg("BA", snapshot.ba, 16)
-        self.state.set_reg("I", snapshot.i, 16)
-        self.state.set_reg("X", snapshot.x, 24)
-        self.state.set_reg("Y", snapshot.y, 24)
-        self.state.set_reg("U", snapshot.u, 24)
-        self.state.set_reg("S", snapshot.s, 24)
-        self.state.set_reg("F", snapshot.f, 8)
+        self._runtime.write_register("PC", snapshot.pc & PC_MASK)
+        self._runtime.write_register("BA", snapshot.ba)
+        self._runtime.write_register("I", snapshot.i)
+        self._runtime.write_register("X", snapshot.x)
+        self._runtime.write_register("Y", snapshot.y)
+        self._runtime.write_register("U", snapshot.u)
+        self._runtime.write_register("S", snapshot.s)
+        self._runtime.write_register("F", snapshot.f)
         self._temps = dict(snapshot.temps)
         self.call_sub_level = snapshot.call_sub_level
 
@@ -272,15 +190,16 @@ class BridgeCPU:
             )
         return self._fallback_cpu
 
-    def _execute_via_fallback(self, address: int, _length: int) -> None:
+    def _execute_via_fallback(self, address: int) -> Tuple[int, int]:
         fallback = self._get_fallback_cpu()
         snapshot = self.snapshot_registers()
         fallback.apply_snapshot(snapshot.registers)
 
         previous_cpu = getattr(self.memory, "cpu", None)
         self.memory.set_cpu(fallback)
+        eval_info = None
         try:
-            fallback.execute_instruction(address)
+            eval_info = fallback.execute_instruction(address)
             new_regs = fallback.snapshot_registers()
             self.stats_fallback_steps += 1
         finally:
@@ -290,8 +209,15 @@ class BridgeCPU:
                 self.memory.set_cpu(self)
 
         self.load_cpu_snapshot(new_regs)
-        self.state.pc = new_regs.pc & PC_MASK
+        self._runtime.write_register("PC", new_regs.pc & PC_MASK)
         self.halted = False  # Legacy path doesn't provide halted info; assume false
+        instr_info = getattr(eval_info, "instruction_info", None) if eval_info else None
+        length = 0
+        if instr_info is not None and getattr(instr_info, "length", None) is not None:
+            length = int(instr_info.length)  # type: ignore[attr-defined]
+        opcode = self.memory.read_byte(address & PC_MASK) & 0xFF
+        self._memory_synced = False
+        return opcode, length or 1
 
     # ------------------------------------------------------------------ #
     # Stats
@@ -302,33 +228,22 @@ class BridgeCPU:
             "decode_miss": self.stats_decode_miss,
             "fallback_steps": self.stats_fallback_steps,
             "rust_errors": self.stats_rust_errors,
-            "decode_miss_hist": dict(self._decode_hist.most_common(10)),
         }
 
-    # ------------------------------------------------------------------ #
-    # Internal helpers
+    def _initialise_rust_memory(self) -> None:
+        snapshot, fallback_ranges = self.memory.export_flat_memory()
+        # Ensure SC62015 internal memory space is Python-backed.
+        ranges = list(fallback_ranges)
+        ranges.append((INTERNAL_MEMORY_START, INTERNAL_MEMORY_START + 0xFF))
+        self._runtime.load_external_memory(snapshot)
+        self._runtime.set_python_ranges(ranges)
+        self._memory_synced = True
 
-    def _log_decode_failure(
-        self, address: int, opcode: int, window: Iterable[int]
-    ) -> None:
-        if not logger.isEnabledFor(logging.DEBUG):
+    def _flush_external_writes(self) -> None:
+        writes = self._runtime.drain_external_writes()
+        if not writes:
             return
-        pre = getattr(self.dispatcher, "pending_pre", None)
-        if pre is None and hasattr(self.dispatcher, "_pending_pre"):
-            pre = getattr(self.dispatcher, "_pending_pre", None)
-        pre_desc = "-"
-        if pre is not None:
-            first = getattr(pre, "first", "?")
-            second = getattr(pre, "second", "?")
-            pre_desc = f"{first}->{second}"
-        preview = " ".join(f"{byte:02X}" for byte in window)
-        logger.debug(
-            "scil_decode_miss pc=%06X opcode=%02X pre=%s bytes=%s",
-            address & PC_MASK,
-            opcode & 0xFF,
-            pre_desc,
-            preview or "<none>",
-        )
+        self.memory.apply_external_writes([(addr, value) for addr, value in writes])
 
 
 __all__ = ["BridgeCPU", "MemoryAdapter"]
