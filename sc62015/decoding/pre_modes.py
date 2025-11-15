@@ -58,7 +58,6 @@ _PRE_OPCODE_MATRIX = {
     (IntAddrCalc.BP_PX, IntAddrCalc.N): 0x26,
     (IntAddrCalc.BP_PX, IntAddrCalc.BP_N): 0x24,
     (IntAddrCalc.BP_PX, IntAddrCalc.PY_N): 0x27,
-    (IntAddrCalc.BP_PX, IntAddrCalc.BP_PY): 0x25,
 }
 
 
