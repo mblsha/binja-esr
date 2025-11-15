@@ -13,6 +13,7 @@ pub struct ManifestEntry {
     pub pre: Option<PreInfo>,
     pub instr: Value,
     pub binder: Map<String, Value>,
+    pub layout: Vec<LayoutEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Hash)]
@@ -29,4 +30,11 @@ pub struct BoundInstrRepr {
     pub length: u8,
     pub pre: Option<PreInfo>,
     pub operands: HashMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LayoutEntry {
+    pub key: String,
+    pub kind: String,
+    pub meta: HashMap<String, Value>,
 }

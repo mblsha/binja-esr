@@ -17,20 +17,37 @@ _STREAM_TEMPLATES = (
 )
 
 
-def _decode_with_templates(opcode: int) -> Iterable[DecodedInstr]:
+def _decode_with_templates(opcode: int):
     last_exc: Exception | None = None
     for template in _STREAM_TEMPLATES:
-        ctx = StreamCtx(pc=0, data=template, base_len=1)
+        ctx = StreamCtx(pc=0, data=template, base_len=1, record_layout=True)
         try:
-            return decode_map.decode_with_pre_variants(opcode, ctx)
+            variants = decode_map.decode_with_pre_variants(opcode, ctx)
+            layout = ctx.snapshot_layout()
+            return variants, layout
         except Exception as exc:
             last_exc = exc
     if last_exc:
         raise last_exc
-    return ()
+    return (), ()
 
 
-def _entry_from_variant(opcode: int, variant: DecodedInstr) -> Dict[str, object]:
+def _serialize_layout(layout_entries) -> List[Dict[str, object]]:
+    serialized = []
+    for entry in layout_entries:
+        serialized.append(
+            {
+                "key": entry.key,
+                "kind": entry.kind,
+                "meta": entry.meta,
+            }
+        )
+    return serialized
+
+
+def _entry_from_variant(
+    opcode: int, variant: DecodedInstr, layout_entries
+) -> Dict[str, object]:
     build = from_decoded.build(variant)
     pre: PreLatch | None = build.pre_applied
     return {
@@ -47,6 +64,7 @@ def _entry_from_variant(opcode: int, variant: DecodedInstr) -> Dict[str, object]
         "instr": serde.instr_to_dict(build.instr),
         "binder": {name: serde.expr_to_dict(expr) for name, expr in build.binder.items()},
         "bound_repr": BoundInstrRepr.from_decoded(variant).to_dict(),
+        "layout": _serialize_layout(layout_entries),
     }
 
 
@@ -57,13 +75,13 @@ def generate_manifest() -> Tuple[List[Dict[str, object]], List[Tuple[int, str]]]
 
     for opcode in sorted(decode_map.DECODERS):
         try:
-            variants = _decode_with_templates(opcode)
+            variants, layout = _decode_with_templates(opcode)
         except Exception as exc:
             errors.append((opcode, f"decode failure: {exc}"))
             continue
         for variant in variants:
             try:
-                entry = _entry_from_variant(opcode, variant)
+                entry = _entry_from_variant(opcode, variant, layout)
                 entry["id"] = entry_id
                 entry_id += 1
                 manifest.append(entry)

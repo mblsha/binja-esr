@@ -28,6 +28,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 0
   },
   {
@@ -56,6 +57,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 1
   },
   {
@@ -148,6 +150,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr16_page",
+        "kind": "addr16_page",
+        "meta": {
+          "order": "mn"
+        }
+      }
+    ],
     "id": 2
   },
   {
@@ -237,6 +248,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr16_page",
+        "kind": "addr16_page",
+        "meta": {
+          "order": "mn"
+        }
+      }
+    ],
     "id": 3
   },
   {
@@ -307,6 +327,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr24",
+        "kind": "addr24",
+        "meta": {
+          "order": "lmn"
+        }
+      }
+    ],
     "id": 4
   },
   {
@@ -335,6 +364,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 5
   },
   {
@@ -363,6 +393,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 6
   },
   {
@@ -425,6 +456,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 7
   },
   {
@@ -466,6 +506,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 8
   },
   {
@@ -513,6 +562,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 9
   },
   {
@@ -560,6 +618,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 10
   },
   {
@@ -607,6 +674,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 11
   },
   {
@@ -654,6 +730,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 12
   },
   {
@@ -701,6 +786,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 13
   },
   {
@@ -748,6 +842,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 14
   },
   {
@@ -795,6 +898,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 15
   },
   {
@@ -842,6 +954,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 16
   },
   {
@@ -889,6 +1010,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 17
   },
   {
@@ -936,6 +1066,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 18
   },
   {
@@ -983,6 +1122,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 19
   },
   {
@@ -1030,6 +1178,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 20
   },
   {
@@ -1077,6 +1234,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 21
   },
   {
@@ -1124,6 +1290,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 22
   },
   {
@@ -1171,6 +1346,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 23
   },
   {
@@ -1209,6 +1393,17 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "reg",
+        "kind": "regsel",
+        "meta": {
+          "allowed_groups": [
+            "r3"
+          ]
+        }
+      }
+    ],
     "id": 24
   },
   {
@@ -1324,6 +1519,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr16_page",
+        "kind": "addr16_page",
+        "meta": {
+          "order": "mn"
+        }
+      }
+    ],
     "id": 25
   },
   {
@@ -1439,6 +1643,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr16_page",
+        "kind": "addr16_page",
+        "meta": {
+          "order": "mn"
+        }
+      }
+    ],
     "id": 26
   },
   {
@@ -1554,6 +1767,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr16_page",
+        "kind": "addr16_page",
+        "meta": {
+          "order": "mn"
+        }
+      }
+    ],
     "id": 27
   },
   {
@@ -1669,6 +1891,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr16_page",
+        "kind": "addr16_page",
+        "meta": {
+          "order": "mn"
+        }
+      }
+    ],
     "id": 28
   },
   {
@@ -1743,6 +1974,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 29
   },
   {
@@ -1817,6 +2057,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 30
   },
   {
@@ -1891,6 +2140,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 31
   },
   {
@@ -1965,6 +2223,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 32
   },
   {
@@ -2039,6 +2306,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 33
   },
   {
@@ -2113,6 +2389,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 34
   },
   {
@@ -2187,6 +2472,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 35
   },
   {
@@ -2261,6 +2555,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "disp",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 36
   },
   {
@@ -2318,6 +2621,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 37
   },
   {
@@ -2375,6 +2679,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 38
   },
   {
@@ -2432,6 +2737,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 39
   },
   {
@@ -2489,6 +2795,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 40
   },
   {
@@ -2546,6 +2853,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 41
   },
   {
@@ -2603,6 +2911,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 42
   },
   {
@@ -2677,6 +2986,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 43
   },
   {
@@ -2765,6 +3075,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 44
   },
   {
@@ -2822,6 +3133,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 45
   },
   {
@@ -2879,6 +3191,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 46
   },
   {
@@ -2936,6 +3249,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 47
   },
   {
@@ -2993,6 +3307,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 48
   },
   {
@@ -3050,6 +3365,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 49
   },
   {
@@ -3107,6 +3423,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 50
   },
   {
@@ -3164,6 +3481,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 51
   },
   {
@@ -3219,6 +3537,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 52
   },
   {
@@ -3291,6 +3610,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 53
   },
   {
@@ -3371,6 +3699,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "imm",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 54
   },
   {
@@ -3443,6 +3787,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 55
   },
   {
@@ -3517,6 +3870,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 56
   },
   {
@@ -3598,6 +3952,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 57
   },
   {
@@ -3696,6 +4059,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 58
   },
   {
@@ -3800,6 +4179,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 59
   },
   {
@@ -3904,6 +4299,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 60
   },
   {
@@ -4008,6 +4419,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 61
   },
   {
@@ -4112,6 +4539,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 62
   },
   {
@@ -4216,6 +4659,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 63
   },
   {
@@ -4320,6 +4779,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 64
   },
   {
@@ -4424,6 +4899,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 65
   },
   {
@@ -4528,6 +5019,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 66
   },
   {
@@ -4632,6 +5139,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 67
   },
   {
@@ -4736,6 +5259,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 68
   },
   {
@@ -4840,6 +5379,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 69
   },
   {
@@ -4944,6 +5499,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 70
   },
   {
@@ -5048,6 +5619,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 71
   },
   {
@@ -5152,6 +5739,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 72
   },
   {
@@ -5256,6 +5859,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 73
   },
   {
@@ -5334,6 +5953,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 74
   },
   {
@@ -5418,6 +6046,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 75
   },
   {
@@ -5502,6 +6139,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 76
   },
   {
@@ -5586,6 +6232,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 77
   },
   {
@@ -5670,6 +6325,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 78
   },
   {
@@ -5754,6 +6418,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 79
   },
   {
@@ -5838,6 +6511,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 80
   },
   {
@@ -5922,6 +6604,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 81
   },
   {
@@ -6006,6 +6697,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 82
   },
   {
@@ -6090,6 +6790,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 83
   },
   {
@@ -6174,6 +6883,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 84
   },
   {
@@ -6258,6 +6976,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 85
   },
   {
@@ -6342,6 +7069,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 86
   },
   {
@@ -6426,6 +7162,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 87
   },
   {
@@ -6510,6 +7255,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 88
   },
   {
@@ -6594,6 +7348,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 89
   },
   {
@@ -6657,6 +7420,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 90
   },
   {
@@ -6738,6 +7510,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 91
   },
   {
@@ -6836,6 +7617,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 92
   },
   {
@@ -6940,6 +7737,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 93
   },
   {
@@ -7044,6 +7857,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 94
   },
   {
@@ -7148,6 +7977,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 95
   },
   {
@@ -7252,6 +8097,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 96
   },
   {
@@ -7356,6 +8217,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 97
   },
   {
@@ -7460,6 +8337,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 98
   },
   {
@@ -7564,6 +8457,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 99
   },
   {
@@ -7668,6 +8577,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 100
   },
   {
@@ -7772,6 +8697,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 101
   },
   {
@@ -7876,6 +8817,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 102
   },
   {
@@ -7980,6 +8937,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 103
   },
   {
@@ -8084,6 +9057,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 104
   },
   {
@@ -8188,6 +9177,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 105
   },
   {
@@ -8292,6 +9297,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 106
   },
   {
@@ -8396,6 +9417,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 107
   },
   {
@@ -8474,6 +9511,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 108
   },
   {
@@ -8558,6 +9604,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 109
   },
   {
@@ -8642,6 +9697,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 110
   },
   {
@@ -8726,6 +9790,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 111
   },
   {
@@ -8810,6 +9883,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 112
   },
   {
@@ -8894,6 +9976,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 113
   },
   {
@@ -8978,6 +10069,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 114
   },
   {
@@ -9062,6 +10162,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 115
   },
   {
@@ -9146,6 +10255,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 116
   },
   {
@@ -9230,6 +10348,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 117
   },
   {
@@ -9314,6 +10441,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 118
   },
   {
@@ -9398,6 +10534,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 119
   },
   {
@@ -9482,6 +10627,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 120
   },
   {
@@ -9566,6 +10720,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 121
   },
   {
@@ -9650,6 +10813,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 122
   },
   {
@@ -9734,6 +10906,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 123
   },
   {
@@ -9791,6 +10972,7 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [],
     "id": 124
   },
   {
@@ -9864,6 +11046,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 125
   },
   {
@@ -9935,6 +11126,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 126
   },
   {
@@ -9992,6 +11192,17 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "reg",
+        "kind": "regsel",
+        "meta": {
+          "allowed_groups": [
+            "r1"
+          ]
+        }
+      }
+    ],
     "id": 127
   },
   {
@@ -10063,6 +11274,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 128
   },
   {
@@ -10134,6 +11354,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 129
   },
   {
@@ -10191,6 +11420,17 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "reg",
+        "kind": "regsel",
+        "meta": {
+          "allowed_groups": [
+            "r1"
+          ]
+        }
+      }
+    ],
     "id": 130
   },
   {
@@ -10253,6 +11493,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 131
   },
   {
@@ -10321,6 +11570,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 132
   },
   {
@@ -10389,6 +11647,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 133
   },
   {
@@ -10457,6 +11724,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 134
   },
   {
@@ -10525,6 +11801,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 135
   },
   {
@@ -10593,6 +11878,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 136
   },
   {
@@ -10661,6 +11955,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 137
   },
   {
@@ -10729,6 +12032,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 138
   },
   {
@@ -10797,6 +12109,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 139
   },
   {
@@ -10865,6 +12186,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 140
   },
   {
@@ -10933,6 +12263,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 141
   },
   {
@@ -11001,6 +12340,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 142
   },
   {
@@ -11069,6 +12417,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 143
   },
   {
@@ -11137,6 +12494,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 144
   },
   {
@@ -11205,6 +12571,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 145
   },
   {
@@ -11273,6 +12648,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 146
   },
   {
@@ -11340,6 +12724,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr24",
+        "kind": "addr24",
+        "meta": {
+          "order": "lmn"
+        }
+      }
+    ],
     "id": 147
   },
   {
@@ -11394,6 +12787,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      }
+    ],
     "id": 148
   },
   {
@@ -11448,6 +12850,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      }
+    ],
     "id": 149
   },
   {
@@ -11502,6 +12913,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      }
+    ],
     "id": 150
   },
   {
@@ -11556,6 +12976,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      }
+    ],
     "id": 151
   },
   {
@@ -11610,6 +13039,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      }
+    ],
     "id": 152
   },
   {
@@ -11664,6 +13102,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      }
+    ],
     "id": 153
   },
   {
@@ -11718,6 +13165,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      }
+    ],
     "id": 154
   },
   {
@@ -11779,6 +13235,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 155
   },
   {
@@ -11840,6 +13303,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 156
   },
   {
@@ -11901,6 +13371,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 157
   },
   {
@@ -11962,6 +13439,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 158
   },
   {
@@ -12023,6 +13507,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 159
   },
   {
@@ -12084,6 +13575,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 160
   },
   {
@@ -12145,6 +13643,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 161
   },
   {
@@ -12207,6 +13712,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 162
   },
   {
@@ -12275,6 +13789,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 163
   },
   {
@@ -12343,6 +13866,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 164
   },
   {
@@ -12411,6 +13943,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 165
   },
   {
@@ -12479,6 +14020,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 166
   },
   {
@@ -12547,6 +14097,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 167
   },
   {
@@ -12615,6 +14174,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 168
   },
   {
@@ -12683,6 +14251,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 169
   },
   {
@@ -12751,6 +14328,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 170
   },
   {
@@ -12819,6 +14405,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 171
   },
   {
@@ -12887,6 +14482,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 172
   },
   {
@@ -12955,6 +14559,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 173
   },
   {
@@ -13023,6 +14636,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 174
   },
   {
@@ -13091,6 +14713,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 175
   },
   {
@@ -13159,6 +14790,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 176
   },
   {
@@ -13227,6 +14867,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "n",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 177
   },
   {
@@ -13294,6 +14943,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "addr24",
+        "kind": "imm24",
+        "meta": {
+          "order": "lmn"
+        }
+      }
+    ],
     "id": 178
   },
   {
@@ -13348,6 +15006,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      }
+    ],
     "id": 179
   },
   {
@@ -13402,6 +15069,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      }
+    ],
     "id": 180
   },
   {
@@ -13456,6 +15132,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      }
+    ],
     "id": 181
   },
   {
@@ -13510,6 +15195,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      }
+    ],
     "id": 182
   },
   {
@@ -13564,6 +15258,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      }
+    ],
     "id": 183
   },
   {
@@ -13618,6 +15321,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      }
+    ],
     "id": 184
   },
   {
@@ -13672,6 +15384,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      }
+    ],
     "id": 185
   },
   {
@@ -13733,6 +15454,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 186
   },
   {
@@ -13794,6 +15522,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 187
   },
   {
@@ -13855,6 +15590,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 188
   },
   {
@@ -13916,6 +15658,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 189
   },
   {
@@ -13977,6 +15726,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 190
   },
   {
@@ -14038,6 +15794,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 191
   },
   {
@@ -14099,6 +15862,13 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "imem_ptr",
+        "meta": {}
+      }
+    ],
     "id": 192
   },
   {
@@ -14149,6 +15919,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 193
   },
   {
@@ -14205,6 +15991,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 194
   },
   {
@@ -14261,6 +16063,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 195
   },
   {
@@ -14317,6 +16135,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 196
   },
   {
@@ -14373,6 +16207,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 197
   },
   {
@@ -14429,6 +16279,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 198
   },
   {
@@ -14485,6 +16351,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 199
   },
   {
@@ -14541,6 +16423,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 200
   },
   {
@@ -14597,6 +16495,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 201
   },
   {
@@ -14653,6 +16567,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 202
   },
   {
@@ -14709,6 +16639,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 203
   },
   {
@@ -14765,6 +16711,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 204
   },
   {
@@ -14821,6 +16783,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 205
   },
   {
@@ -14877,6 +16855,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 206
   },
   {
@@ -14933,6 +16927,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 207
   },
   {
@@ -14989,6 +16999,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 208
   },
   {
@@ -15039,6 +17065,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 209
   },
   {
@@ -15095,6 +17137,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 210
   },
   {
@@ -15151,6 +17209,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 211
   },
   {
@@ -15207,6 +17281,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 212
   },
   {
@@ -15263,6 +17353,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 213
   },
   {
@@ -15319,6 +17425,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 214
   },
   {
@@ -15375,6 +17497,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 215
   },
   {
@@ -15431,6 +17569,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 216
   },
   {
@@ -15487,6 +17641,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 217
   },
   {
@@ -15543,6 +17713,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 218
   },
   {
@@ -15599,6 +17785,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 219
   },
   {
@@ -15655,6 +17857,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 220
   },
   {
@@ -15711,6 +17929,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 221
   },
   {
@@ -15767,6 +18001,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 222
   },
   {
@@ -15823,6 +18073,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 223
   },
   {
@@ -15879,6 +18145,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 224
   },
   {
@@ -15929,6 +18211,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 225
   },
   {
@@ -15985,6 +18283,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 226
   },
   {
@@ -16041,6 +18355,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 227
   },
   {
@@ -16097,6 +18427,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 228
   },
   {
@@ -16153,6 +18499,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 229
   },
   {
@@ -16209,6 +18571,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 230
   },
   {
@@ -16265,6 +18643,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 231
   },
   {
@@ -16321,6 +18715,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 232
   },
   {
@@ -16377,6 +18787,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 233
   },
   {
@@ -16433,6 +18859,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 234
   },
   {
@@ -16489,6 +18931,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 235
   },
   {
@@ -16545,6 +19003,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 236
   },
   {
@@ -16601,6 +19075,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 237
   },
   {
@@ -16657,6 +19147,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 238
   },
   {
@@ -16713,6 +19219,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 239
   },
   {
@@ -16769,6 +19291,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "left",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "right",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 240
   },
   {
@@ -16877,6 +19415,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 241
   },
   {
@@ -16991,6 +19545,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 242
   },
   {
@@ -17105,6 +19675,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 243
   },
   {
@@ -17219,6 +19805,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 244
   },
   {
@@ -17333,6 +19935,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 245
   },
   {
@@ -17447,6 +20065,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 246
   },
   {
@@ -17561,6 +20195,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 247
   },
   {
@@ -17675,6 +20325,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 248
   },
   {
@@ -17789,6 +20455,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 249
   },
   {
@@ -17903,6 +20585,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 250
   },
   {
@@ -18017,6 +20715,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 251
   },
   {
@@ -18131,6 +20845,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 252
   },
   {
@@ -18245,6 +20975,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 253
   },
   {
@@ -18359,6 +21105,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 254
   },
   {
@@ -18473,6 +21235,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 255
   },
   {
@@ -18587,6 +21365,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 256
   },
   {
@@ -18675,6 +21469,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 257
   },
   {
@@ -18769,6 +21572,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 258
   },
   {
@@ -18863,6 +21675,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 259
   },
   {
@@ -18957,6 +21778,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 260
   },
   {
@@ -19051,6 +21881,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 261
   },
   {
@@ -19145,6 +21984,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 262
   },
   {
@@ -19239,6 +22087,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 263
   },
   {
@@ -19333,6 +22190,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 264
   },
   {
@@ -19427,6 +22293,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 265
   },
   {
@@ -19521,6 +22396,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 266
   },
   {
@@ -19615,6 +22499,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 267
   },
   {
@@ -19709,6 +22602,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 268
   },
   {
@@ -19803,6 +22705,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 269
   },
   {
@@ -19897,6 +22808,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 270
   },
   {
@@ -19991,6 +22911,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 271
   },
   {
@@ -20085,6 +23014,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 272
   },
   {
@@ -20144,6 +23082,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 273
   },
   {
@@ -20209,6 +23163,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 274
   },
   {
@@ -20274,6 +23244,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 275
   },
   {
@@ -20339,6 +23325,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 276
   },
   {
@@ -20404,6 +23406,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 277
   },
   {
@@ -20469,6 +23487,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 278
   },
   {
@@ -20534,6 +23568,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 279
   },
   {
@@ -20599,6 +23649,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 280
   },
   {
@@ -20664,6 +23730,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 281
   },
   {
@@ -20729,6 +23811,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 282
   },
   {
@@ -20794,6 +23892,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 283
   },
   {
@@ -20859,6 +23973,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 284
   },
   {
@@ -20924,6 +24054,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 285
   },
   {
@@ -20989,6 +24135,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 286
   },
   {
@@ -21054,6 +24216,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 287
   },
   {
@@ -21119,6 +24297,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 288
   },
   {
@@ -21178,6 +24372,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 289
   },
   {
@@ -21243,6 +24453,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 290
   },
   {
@@ -21308,6 +24534,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 291
   },
   {
@@ -21373,6 +24615,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 292
   },
   {
@@ -21438,6 +24696,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 293
   },
   {
@@ -21503,6 +24777,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 294
   },
   {
@@ -21568,6 +24858,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 295
   },
   {
@@ -21633,6 +24939,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 296
   },
   {
@@ -21698,6 +25020,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 297
   },
   {
@@ -21763,6 +25101,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 298
   },
   {
@@ -21828,6 +25182,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 299
   },
   {
@@ -21893,6 +25263,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 300
   },
   {
@@ -21958,6 +25344,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 301
   },
   {
@@ -22023,6 +25425,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 302
   },
   {
@@ -22088,6 +25506,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 303
   },
   {
@@ -22153,6 +25587,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 304
   },
   {
@@ -22212,6 +25662,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 305
   },
   {
@@ -22277,6 +25743,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 306
   },
   {
@@ -22342,6 +25824,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 307
   },
   {
@@ -22407,6 +25905,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 308
   },
   {
@@ -22472,6 +25986,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 309
   },
   {
@@ -22537,6 +26067,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 310
   },
   {
@@ -22602,6 +26148,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 311
   },
   {
@@ -22667,6 +26229,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 312
   },
   {
@@ -22732,6 +26310,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 313
   },
   {
@@ -22797,6 +26391,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 314
   },
   {
@@ -22862,6 +26472,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 315
   },
   {
@@ -22927,6 +26553,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 316
   },
   {
@@ -22992,6 +26634,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 317
   },
   {
@@ -23057,6 +26715,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 318
   },
   {
@@ -23122,6 +26796,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 319
   },
   {
@@ -23187,6 +26877,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 320
   },
   {
@@ -23290,6 +26996,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 321
   },
   {
@@ -23399,6 +27121,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 322
   },
   {
@@ -23508,6 +27246,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 323
   },
   {
@@ -23617,6 +27371,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 324
   },
   {
@@ -23726,6 +27496,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 325
   },
   {
@@ -23835,6 +27621,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 326
   },
   {
@@ -23944,6 +27746,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 327
   },
   {
@@ -24053,6 +27871,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 328
   },
   {
@@ -24162,6 +27996,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 329
   },
   {
@@ -24271,6 +28121,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 330
   },
   {
@@ -24380,6 +28246,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 331
   },
   {
@@ -24489,6 +28371,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 332
   },
   {
@@ -24598,6 +28496,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 333
   },
   {
@@ -24707,6 +28621,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 334
   },
   {
@@ -24816,6 +28746,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 335
   },
   {
@@ -24925,6 +28871,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 336
   },
   {
@@ -25028,6 +28990,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 337
   },
   {
@@ -25137,6 +29115,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 338
   },
   {
@@ -25246,6 +29240,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 339
   },
   {
@@ -25355,6 +29365,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 340
   },
   {
@@ -25464,6 +29490,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 341
   },
   {
@@ -25573,6 +29615,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 342
   },
   {
@@ -25682,6 +29740,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 343
   },
   {
@@ -25791,6 +29865,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 344
   },
   {
@@ -25900,6 +29990,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 345
   },
   {
@@ -26009,6 +30115,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 346
   },
   {
@@ -26118,6 +30240,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 347
   },
   {
@@ -26227,6 +30365,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 348
   },
   {
@@ -26336,6 +30490,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 349
   },
   {
@@ -26445,6 +30615,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 350
   },
   {
@@ -26554,6 +30740,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 351
   },
   {
@@ -26663,6 +30865,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 352
   },
   {
@@ -26771,6 +30989,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 353
   },
   {
@@ -26885,6 +31119,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 354
   },
   {
@@ -26999,6 +31249,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 355
   },
   {
@@ -27113,6 +31379,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 356
   },
   {
@@ -27227,6 +31509,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 357
   },
   {
@@ -27341,6 +31639,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 358
   },
   {
@@ -27455,6 +31769,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 359
   },
   {
@@ -27569,6 +31899,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 360
   },
   {
@@ -27683,6 +32029,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 361
   },
   {
@@ -27797,6 +32159,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 362
   },
   {
@@ -27911,6 +32289,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 363
   },
   {
@@ -28025,6 +32419,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 364
   },
   {
@@ -28139,6 +32549,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 365
   },
   {
@@ -28253,6 +32679,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 366
   },
   {
@@ -28367,6 +32809,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 367
   },
   {
@@ -28481,6 +32939,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      },
+      {
+        "key": "src",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 368
   },
   {
@@ -28569,6 +33043,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 369
   },
   {
@@ -28663,6 +33146,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 370
   },
   {
@@ -28757,6 +33249,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 371
   },
   {
@@ -28851,6 +33352,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 372
   },
   {
@@ -28945,6 +33455,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 373
   },
   {
@@ -29039,6 +33558,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 374
   },
   {
@@ -29133,6 +33661,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 375
   },
   {
@@ -29227,6 +33764,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 376
   },
   {
@@ -29321,6 +33867,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 377
   },
   {
@@ -29415,6 +33970,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 378
   },
   {
@@ -29509,6 +34073,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 379
   },
   {
@@ -29603,6 +34176,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 380
   },
   {
@@ -29697,6 +34279,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 381
   },
   {
@@ -29791,6 +34382,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 382
   },
   {
@@ -29885,6 +34485,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 383
   },
   {
@@ -29979,6 +34588,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 384
   },
   {
@@ -30007,6 +34625,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 385
   },
   {
@@ -30035,6 +34654,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 386
   },
   {
@@ -30096,6 +34716,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 387
   },
   {
@@ -30163,6 +34799,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 388
   },
   {
@@ -30230,6 +34882,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 389
   },
   {
@@ -30297,6 +34965,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 390
   },
   {
@@ -30364,6 +35048,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 391
   },
   {
@@ -30431,6 +35131,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 392
   },
   {
@@ -30498,6 +35214,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 393
   },
   {
@@ -30565,6 +35297,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 394
   },
   {
@@ -30632,6 +35380,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 395
   },
   {
@@ -30699,6 +35463,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 396
   },
   {
@@ -30766,6 +35546,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 397
   },
   {
@@ -30833,6 +35629,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 398
   },
   {
@@ -30900,6 +35712,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 399
   },
   {
@@ -30967,6 +35795,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 400
   },
   {
@@ -31034,6 +35878,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 401
   },
   {
@@ -31101,6 +35961,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 402
   },
   {
@@ -31162,6 +36038,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 403
   },
   {
@@ -31229,6 +36121,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 404
   },
   {
@@ -31296,6 +36204,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 405
   },
   {
@@ -31363,6 +36287,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 406
   },
   {
@@ -31430,6 +36370,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 407
   },
   {
@@ -31497,6 +36453,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 408
   },
   {
@@ -31564,6 +36536,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 409
   },
   {
@@ -31631,6 +36619,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 410
   },
   {
@@ -31698,6 +36702,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 411
   },
   {
@@ -31765,6 +36785,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 412
   },
   {
@@ -31832,6 +36868,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 413
   },
   {
@@ -31899,6 +36951,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 414
   },
   {
@@ -31966,6 +37034,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 415
   },
   {
@@ -32033,6 +37117,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 416
   },
   {
@@ -32100,6 +37200,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 417
   },
   {
@@ -32167,6 +37283,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 418
   },
   {
@@ -32228,6 +37360,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 419
   },
   {
@@ -32295,6 +37443,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 420
   },
   {
@@ -32362,6 +37526,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 421
   },
   {
@@ -32429,6 +37609,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 422
   },
   {
@@ -32496,6 +37692,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 423
   },
   {
@@ -32563,6 +37775,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 424
   },
   {
@@ -32630,6 +37858,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 425
   },
   {
@@ -32697,6 +37941,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 426
   },
   {
@@ -32764,6 +38024,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 427
   },
   {
@@ -32831,6 +38107,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 428
   },
   {
@@ -32898,6 +38190,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 429
   },
   {
@@ -32965,6 +38273,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 430
   },
   {
@@ -33032,6 +38356,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 431
   },
   {
@@ -33099,6 +38439,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 432
   },
   {
@@ -33166,6 +38522,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 433
   },
   {
@@ -33233,6 +38605,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 434
   },
   {
@@ -33294,6 +38682,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 435
   },
   {
@@ -33361,6 +38765,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 436
   },
   {
@@ -33428,6 +38848,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 437
   },
   {
@@ -33495,6 +38931,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 438
   },
   {
@@ -33562,6 +39014,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 439
   },
   {
@@ -33629,6 +39097,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 440
   },
   {
@@ -33696,6 +39180,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 441
   },
   {
@@ -33763,6 +39263,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 442
   },
   {
@@ -33830,6 +39346,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 443
   },
   {
@@ -33897,6 +39429,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 444
   },
   {
@@ -33964,6 +39512,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 445
   },
   {
@@ -34031,6 +39595,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 446
   },
   {
@@ -34098,6 +39678,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 447
   },
   {
@@ -34165,6 +39761,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 448
   },
   {
@@ -34232,6 +39844,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 449
   },
   {
@@ -34299,6 +39927,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 1
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 450
   },
   {
@@ -34360,6 +40004,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 451
   },
   {
@@ -34427,6 +40087,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 452
   },
   {
@@ -34494,6 +40170,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 453
   },
   {
@@ -34561,6 +40253,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 454
   },
   {
@@ -34628,6 +40336,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 455
   },
   {
@@ -34695,6 +40419,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 456
   },
   {
@@ -34762,6 +40502,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 457
   },
   {
@@ -34829,6 +40585,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 458
   },
   {
@@ -34896,6 +40668,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 459
   },
   {
@@ -34963,6 +40751,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 460
   },
   {
@@ -35030,6 +40834,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 461
   },
   {
@@ -35097,6 +40917,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 462
   },
   {
@@ -35164,6 +41000,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 463
   },
   {
@@ -35231,6 +41083,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 464
   },
   {
@@ -35298,6 +41166,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 465
   },
   {
@@ -35365,6 +41249,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 2
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 466
   },
   {
@@ -35426,6 +41326,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 467
   },
   {
@@ -35493,6 +41409,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 468
   },
   {
@@ -35560,6 +41492,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 469
   },
   {
@@ -35627,6 +41575,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 470
   },
   {
@@ -35694,6 +41658,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 471
   },
   {
@@ -35761,6 +41741,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 472
   },
   {
@@ -35828,6 +41824,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 473
   },
   {
@@ -35895,6 +41907,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 474
   },
   {
@@ -35962,6 +41990,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 475
   },
   {
@@ -36029,6 +42073,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 476
   },
   {
@@ -36096,6 +42156,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 477
   },
   {
@@ -36163,6 +42239,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 478
   },
   {
@@ -36230,6 +42322,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 479
   },
   {
@@ -36297,6 +42405,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 480
   },
   {
@@ -36364,6 +42488,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 481
   },
   {
@@ -36431,6 +42571,22 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "ptr",
+        "kind": "ext_reg_ptr",
+        "meta": {
+          "width_bytes": 3
+        }
+      },
+      {
+        "key": "imem",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 482
   },
   {
@@ -36504,6 +42660,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 483
   },
   {
@@ -36532,6 +42697,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 484
   },
   {
@@ -36605,6 +42771,15 @@ pub const PAYLOAD: &str = r#"
         }
       }
     },
+    "layout": [
+      {
+        "key": "dst",
+        "kind": "imm8",
+        "meta": {
+          "width": 8
+        }
+      }
+    ],
     "id": 485
   },
   {
@@ -36633,6 +42808,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 486
   },
   {
@@ -36661,6 +42837,7 @@ pub const PAYLOAD: &str = r#"
       "pre": null,
       "operands": {}
     },
+    "layout": [],
     "id": 487
   }
 ]
