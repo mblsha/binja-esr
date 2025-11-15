@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from binaryninja import FlagName, RegisterName  # type: ignore
 
 from ..pysc62015.constants import INTERNAL_MEMORY_START
 from ..pysc62015.instr.opcodes import IMEMRegisters, TempIncDecHelper
+from ..decoding.bind import IntAddrCalc
 from .validate import bits_to_bytes
 
 
@@ -129,9 +130,10 @@ class CompatLLILBuilder:
     def _internal_base(self) -> int:
         return self.il.const(bits_to_bytes(24), INTERNAL_MEMORY_START)
 
-    def imem_address(self, mode: str, offset_expr: int) -> int:
+    def imem_address(self, mode: Union[str, IntAddrCalc], offset_expr: int) -> int:
         """Reproduce IMemHelper tree for the requested addressing mode."""
-        if mode not in {
+        mode_name = mode.value if isinstance(mode, IntAddrCalc) else mode
+        if mode_name not in {
             "(n)",
             "(BP+n)",
             "(PX+n)",
@@ -144,15 +146,15 @@ class CompatLLILBuilder:
         def _add_byte(lhs: int, rhs: int) -> int:
             return self.il.add(1, lhs, rhs)
 
-        if mode == "(n)":
+        if mode_name == "(n)":
             offset = offset_expr
-        elif mode == "(BP+n)":
+        elif mode_name == "(BP+n)":
             offset = _add_byte(self._imem_reg("BP"), offset_expr)
-        elif mode == "(PX+n)":
+        elif mode_name == "(PX+n)":
             offset = _add_byte(self._imem_reg("PX"), offset_expr)
-        elif mode == "(PY+n)":
+        elif mode_name == "(PY+n)":
             offset = _add_byte(self._imem_reg("PY"), offset_expr)
-        elif mode == "(BP+PX)":
+        elif mode_name == "(BP+PX)":
             offset = _add_byte(self._imem_reg("BP"), self._imem_reg("PX"))
         else:  # (BP+PY)
             offset = _add_byte(self._imem_reg("BP"), self._imem_reg("PY"))

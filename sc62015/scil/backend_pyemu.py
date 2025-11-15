@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Protocol, Tuple
 
-from ..decoding.bind import PreLatch
+from ..decoding.bind import IntAddrCalc, PreLatch
 from ..pysc62015.instr.opcodes import IMEMRegisters, INTERRUPT_VECTOR_ADDR
 from ..pysc62015.constants import PC_MASK, INTERNAL_MEMORY_START
 from . import ast
@@ -60,12 +60,12 @@ class _Env:
             raise KeyError(f"Temporary {tmp.name} not populated")
         return self.tmps[tmp.name]
 
-    def next_imem_mode(self) -> str:
-        mode = "(BP+n)"
+    def next_imem_mode(self) -> IntAddrCalc:
+        mode = IntAddrCalc.BP_N
         if self.pre_latch is not None:
-            if self.imem_index == 0 and self.pre_latch.first:
+            if self.imem_index == 0:
                 mode = self.pre_latch.first
-            elif self.imem_index == 1 and self.pre_latch.second:
+            elif self.imem_index == 1:
                 mode = self.pre_latch.second
         self.imem_index += 1
         return mode
@@ -96,21 +96,21 @@ def _read_imem_reg(bus: Bus, name: str) -> int:
 
 def _resolve_imem_addr(env: _Env, offset: int) -> int:
     mode = env.next_imem_mode()
-    if mode == "(n)":
+    if mode is IntAddrCalc.N:
         return offset & 0xFF
     bp = _read_imem_reg(env.bus, "BP")
-    if mode == "(BP+n)":
+    if mode is IntAddrCalc.BP_N:
         return (bp + offset) & 0xFF
-    if mode == "(PX+n)":
+    if mode is IntAddrCalc.PX_N:
         px = _read_imem_reg(env.bus, "PX")
         return (px + offset) & 0xFF
-    if mode == "(PY+n)":
+    if mode is IntAddrCalc.PY_N:
         py = _read_imem_reg(env.bus, "PY")
         return (py + offset) & 0xFF
-    if mode == "(BP+PX)":
+    if mode is IntAddrCalc.BP_PX:
         px = _read_imem_reg(env.bus, "PX")
         return (bp + px) & 0xFF
-    if mode == "(BP+PY)":
+    if mode is IntAddrCalc.BP_PY:
         py = _read_imem_reg(env.bus, "PY")
         return (bp + py) & 0xFF
     # Default fallback

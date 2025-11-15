@@ -10,11 +10,11 @@ from .bind import (
     Imm16,
     Imm24,
     Imm8,
-    PreLatch,
     ExtRegPtr,
     ImemPtr,
     RegSel,
 )
+from .pre_modes import iter_all_pre_variants, prelatch_for_opcode
 from .reader import StreamCtx
 
 DecoderFunc = Callable[[int, StreamCtx], DecodedInstr]
@@ -132,21 +132,8 @@ def _dec_ret(opcode: int, ctx: StreamCtx, mnemonic: str, family: str) -> Decoded
     )
 
 
-PRE_LATCHES: Dict[int, PreLatch] = {
-    0x32: PreLatch("(n)", "(n)"),
-    0x22: PreLatch("(BP+n)", "(n)"),
-    0x36: PreLatch("(PX+n)", "(n)"),
-    0x26: PreLatch("(BP+PX)", "(n)"),
-    0x30: PreLatch("(n)", "(BP+n)"),
-    0x33: PreLatch("(n)", "(PY+n)"),
-    0x31: PreLatch("(n)", "(BP+PY)"),
-}
-
-
 def _dec_pre(opcode: int, ctx: StreamCtx) -> DecodedInstr:
-    latch = PRE_LATCHES.get(opcode)
-    if latch is None:
-        raise ValueError(f"Unsupported PRE opcode {opcode:#x}")
+    latch = prelatch_for_opcode(opcode)
     # No operand bytes for PRE; ctx.idx stays 0 so total length == base_len
     return DecodedInstr(
         opcode=opcode,
@@ -803,3 +790,10 @@ def decode_opcode(opcode: int, ctx: StreamCtx) -> DecodedInstr:
     except KeyError as exc:
         raise KeyError(f"No decoder registered for opcode {opcode:#x}") from exc
     return decoder(opcode, ctx)
+
+
+def decode_with_pre_variants(opcode: int, ctx: StreamCtx) -> Tuple[DecodedInstr, ...]:
+    """Decode an opcode and return all PRE variants (baseline + prefixes)."""
+
+    decoded = decode_opcode(opcode, ctx)
+    return tuple(iter_all_pre_variants(decoded))

@@ -11,7 +11,7 @@ from binaryninja.lowlevelil import LowLevelILFunction, LowLevelILLabel  # type: 
 from .compat_builder import CompatLLILBuilder
 from . import ast
 from .validate import bits_to_bytes
-from ..decoding.bind import PreLatch
+from ..decoding.bind import IntAddrCalc, PreLatch
 from ..pysc62015.instr.opcodes import (
     RegF,
     RegIMR,
@@ -242,12 +242,12 @@ class _Env:
             raise KeyError(f"Temporary {tmp.name} not bound")
         return self.tmps[tmp.name]
 
-    def next_imem_mode(self) -> str:
-        mode = "(BP+n)"
+    def next_imem_mode(self) -> IntAddrCalc:
+        mode = IntAddrCalc.BP_N
         if self.pre_latch is not None:
-            if self.imem_index == 0 and self.pre_latch.first:
+            if self.imem_index == 0:
                 mode = self.pre_latch.first
-            elif self.imem_index == 1 and self.pre_latch.second:
+            elif self.imem_index == 1:
                 mode = self.pre_latch.second
         self.imem_index += 1
         return mode

@@ -212,10 +212,14 @@ def test_rust_cli_matches_pyemu(opcode: int, operands: Iterable[int], setup) -> 
     setup(base_cpu, base_bus)
     base_snapshot = _snapshot(base_cpu, base_bus)
 
+    ctx = StreamCtx(pc=pc, data=bytes(operands), base_len=1)
+    for variant in decode_map.decode_with_pre_variants(opcode, ctx):
+        _run_variant_parity(variant, base_snapshot)
+
+
+def _run_variant_parity(decoded, base_snapshot: Dict[str, Dict]) -> None:
     cpu_py, bus_py = _build_initial_state()
     _apply_snapshot(cpu_py, bus_py, base_snapshot)
-    decoded = _decode(opcode, operands, pc)
-
     execute_decoded(cpu_py, bus_py, decoded)
     py_snapshot = _snapshot(cpu_py, bus_py)
 
@@ -225,7 +229,10 @@ def test_rust_cli_matches_pyemu(opcode: int, operands: Iterable[int], setup) -> 
         name: serde.expr_to_dict(expr) for name, expr in build.binder.items()
     }
     pre_applied = (
-        {"first": build.pre_applied.first, "second": build.pre_applied.second}
+        {
+            "first": build.pre_applied.first.value,
+            "second": build.pre_applied.second.value,
+        }
         if build.pre_applied
         else None
     )
@@ -238,5 +245,4 @@ def test_rust_cli_matches_pyemu(opcode: int, operands: Iterable[int], setup) -> 
         "pre_applied": pre_applied,
     }
     rust_output = _run_rust(payload)
-
     _compare_states(py_snapshot, rust_output)

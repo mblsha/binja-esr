@@ -1,6 +1,6 @@
 from sc62015.decoding import decode_map
 from sc62015.decoding.reader import StreamCtx
-from sc62015.decoding.bind import Imm8
+from sc62015.decoding.bind import Imm8, IntAddrCalc
 
 
 def test_decode_mv_a_n() -> None:
@@ -44,8 +44,8 @@ def test_decode_pre_32_sets_latch() -> None:
     di = decode_map.decode_opcode(0x32, ctx)
     assert di.length == 1
     assert di.pre_latch is not None
-    assert di.pre_latch.first == "(n)"
-    assert di.pre_latch.second == "(n)"
+    assert di.pre_latch.first is IntAddrCalc.N
+    assert di.pre_latch.second is IntAddrCalc.N
 
 
 def test_decode_add_imm_sets_family() -> None:

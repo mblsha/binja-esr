@@ -1,3 +1,10 @@
+mod generated {
+    pub mod types;
+    pub mod handlers {
+        include!("../generated/handlers.rs");
+    }
+}
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;

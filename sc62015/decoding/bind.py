@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, Literal, Optional
 
-IntAddrCalc = Literal["(n)", "(BP+n)", "(PX+n)", "(PY+n)", "(BP+PX)", "(BP+PY)"]
+
+class IntAddrCalc(str, Enum):
+    """Enumeration of supported internal memory addressing calculations."""
+
+    N = "(n)"
+    BP_N = "(BP+n)"
+    PX_N = "(PX+n)"
+    PY_N = "(PY+n)"
+    BP_PX = "(BP+PX)"
+    BP_PY = "(BP+PY)"
+
+
 RegSizeGroup = Literal["r1", "r2", "r3", "r4"]
 
 
