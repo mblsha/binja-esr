@@ -367,6 +367,112 @@ class KeyboardMatrix:
         return True
 
     # ------------------------------------------------------------------ #
+    # Snapshot helpers
+    # ------------------------------------------------------------------ #
+
+    def snapshot_state(self) -> Dict[str, object]:
+        """Return a JSON-serialisable representation of the matrix state."""
+
+        key_states: Dict[str, Dict[str, int | bool]] = {}
+        for key_code, state in self._key_states.items():
+            key_states[key_code] = {
+                "pressed": state.pressed,
+                "debounced": state.debounced,
+                "press_ticks": state.press_ticks,
+                "release_ticks": state.release_ticks,
+                "repeat_ticks": state.repeat_ticks,
+            }
+
+        snapshot_fifo = list(self._fifo)
+
+        return {
+            "kol": self.kol,
+            "koh": self.koh,
+            "kil_latch": self._kil_latch,
+            "scan_enabled": self.scan_enabled,
+            "pressed_keys": list(self._pressed_keys),
+            "key_states": key_states,
+            "fifo": snapshot_fifo,
+            "head": self._head,
+            "tail": self._tail,
+            "strobe_count": self.strobe_count,
+            "column_histogram": list(self.column_histogram),
+            "irq_count": self.irq_count,
+            "press_threshold": self.press_threshold,
+            "release_threshold": self.release_threshold,
+            "repeat_delay": self.repeat_delay,
+            "repeat_interval": self.repeat_interval,
+            "columns_active_high": self.columns_active_high,
+        }
+
+    def load_state(self, state: Dict[str, object]) -> None:
+        """Restore the matrix from a snapshot created by ``snapshot_state``."""
+
+        def _get_int(key: str, default: int = 0) -> int:
+            value = state.get(key, default)
+            return _to_int(value, default)
+
+        def _to_int(value: object, default: int = 0) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        self.columns_active_high = bool(state.get("columns_active_high", True))
+        self.press_threshold = max(1, _get_int("press_threshold", self.press_threshold))
+        self.release_threshold = max(
+            1, _get_int("release_threshold", self.release_threshold)
+        )
+        self.repeat_delay = max(0, _get_int("repeat_delay", self.repeat_delay))
+        self.repeat_interval = max(0, _get_int("repeat_interval", self.repeat_interval))
+
+        self.kol = _get_int("kol", self.kol) & 0xFF
+        self.koh = _get_int("koh", self.koh) & 0x0F
+        self._kil_latch = _get_int("kil_latch", self._kil_latch) & 0xFF
+        self.scan_enabled = bool(state.get("scan_enabled", self.scan_enabled))
+
+        pressed_keys = state.get("pressed_keys", [])
+        if isinstance(pressed_keys, list):
+            self._pressed_keys = {str(key) for key in pressed_keys}
+        else:
+            self._pressed_keys = set()
+
+        key_states_snapshot = state.get("key_states", {})
+        if isinstance(key_states_snapshot, dict):
+            for key_code, saved in key_states_snapshot.items():
+                state_obj = self._key_states.get(key_code)
+                if state_obj is None or not isinstance(saved, dict):
+                    continue
+                state_obj.pressed = bool(saved.get("pressed", state_obj.pressed))
+                state_obj.debounced = bool(saved.get("debounced", state_obj.debounced))
+                state_obj.press_ticks = _to_int(saved.get("press_ticks", 0))
+                state_obj.release_ticks = _to_int(saved.get("release_ticks", 0))
+                state_obj.repeat_ticks = _to_int(saved.get("repeat_ticks", 0))
+
+        fifo_data = state.get("fifo", [])
+        if not isinstance(fifo_data, list):
+            fifo_data = []
+        for idx in range(FIFO_SIZE):
+            value = _to_int(fifo_data[idx]) if idx < len(fifo_data) else 0
+            self._fifo[idx] = value & 0xFF
+            self._write_fifo_slot(idx, self._fifo[idx])
+
+        self._head = _get_int("head", self._head) % FIFO_SIZE
+        self._tail = _get_int("tail", self._tail) % FIFO_SIZE
+        self._write_head(self._head)
+        self._write_tail(self._tail)
+
+        self.strobe_count = _get_int("strobe_count", self.strobe_count)
+        hist = state.get("column_histogram")
+        if isinstance(hist, list) and len(hist) == len(self.column_histogram):
+            self.column_histogram = [int(val) for val in hist]
+        self.irq_count = _get_int("irq_count", self.irq_count)
+
+        # Recompute derived latch to keep KIL consistent with restored state.
+        self._kil_latch = self._compute_kil(allow_pending=True)
+
+    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
 

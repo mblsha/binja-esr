@@ -11,25 +11,121 @@ from sc62015.decoding.reader import StreamCtx
 from sc62015.scil import from_decoded, serde
 from sc62015.scil.bound_repr import BoundInstrRepr
 
-_STREAM_TEMPLATES = (
-    bytes([0x00] * 16),
-    bytes([0x04] + [0x00] * 15),
-)
+def _build_stream_templates() -> Tuple[bytes, ...]:
+    """Generate operand templates that cover all register and pointer selectors."""
+
+    def _pack(first_byte: int) -> bytes:
+        return bytes([first_byte & 0xFF] + [0x00] * 15)
+
+    templates: list[int] = [0x00]
+
+    # Register pair selectors (dst hi nibble, src lo nibble) for each width class.
+    reg_groups = (
+        (0, 1),  # r1
+        (2, 3),  # r2
+        (4, 5, 6, 7),  # r3
+    )
+    for group in reg_groups:
+        for dst in group:
+            for src in group:
+                byte = ((dst & 0x07) << 4) | (src & 0x07)
+                if byte & 0x88:
+                    continue
+                templates.append(byte)
+
+    # External register pointer selectors use the high nibble for modes.
+    for raw_mode in (0x0, 0x1, 0x2, 0x3, 0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF):
+        for idx in range(8):
+            byte = ((raw_mode & 0x0F) << 4) | (idx & 0x07)
+            templates.append(byte | 0x08)  # mark as pointer-only so reg decoders skip
+
+    seen: set[int] = set()
+    ordered: list[bytes] = []
+    for byte in templates:
+        if byte in seen:
+            continue
+        seen.add(byte)
+        ordered.append(_pack(byte))
+    return tuple(ordered)
+
+
+_STREAM_TEMPLATES = _build_stream_templates()
+
+
+def _build_cross_reg_pair_templates() -> Tuple[bytes, ...]:
+    """Construct register-pair templates that mix width classes (r1↔r2↔r3)."""
+
+    def _pack(byte: int) -> bytes:
+        return bytes([byte & 0xFF] + [0x00] * 15)
+
+    reg_table = getattr(decode_map, "_REG_TABLE")
+    cross_templates: list[int] = []
+    for dst_idx, (_, dst_group, _) in enumerate(reg_table):
+        for src_idx, (_, src_group, _) in enumerate(reg_table):
+            if dst_group == src_group:
+                continue
+            raw = ((dst_idx & 0x07) << 4) | (src_idx & 0x07)
+            if raw & 0x88:
+                continue
+            cross_templates.append(raw)
+    seen: set[int] = set()
+    ordered: list[bytes] = []
+    for byte in cross_templates:
+        if byte in seen:
+            continue
+        seen.add(byte)
+        ordered.append(_pack(byte))
+    return tuple(ordered)
+
+
+_REG_ARITH_OPCODES = frozenset({0x44, 0x45, 0x46, 0x4C, 0x4D, 0x4E, 0xFD})
+_CROSS_REG_PAIR_TEMPLATES = _build_cross_reg_pair_templates()
 
 
 def _decode_with_templates(opcode: int):
+    collected: list[DecodedInstr] = []
+    layout = ()
     last_exc: Exception | None = None
     for template in _STREAM_TEMPLATES:
         ctx = StreamCtx(pc=0, data=template, base_len=1, record_layout=True)
         try:
             variants = decode_map.decode_with_pre_variants(opcode, ctx)
-            layout = ctx.snapshot_layout()
-            return variants, layout
         except Exception as exc:
             last_exc = exc
-    if last_exc:
-        raise last_exc
-    return (), ()
+            continue
+        if not layout:
+            layout = ctx.snapshot_layout()
+        collected.extend(variants)
+
+    if opcode in _REG_ARITH_OPCODES:
+        for template in _CROSS_REG_PAIR_TEMPLATES:
+            ctx = StreamCtx(pc=0, data=template, base_len=1, record_layout=True)
+            try:
+                variants = decode_map.decode_with_pre_variants(opcode, ctx)
+            except Exception:
+                continue
+            if not layout:
+                layout = ctx.snapshot_layout()
+            collected.extend(variants)
+
+    if not collected:
+        if last_exc:
+            raise last_exc
+        return (), ()
+    dedup: dict[tuple, DecodedInstr] = {}
+    for variant in collected:
+        key = (
+            variant.mnemonic,
+            variant.length,
+            variant.family,
+            variant.pre_applied,
+            tuple(
+                (name, type(value).__name__, getattr(value, "value", repr(value)))
+                for name, value in sorted(variant.binds.items())
+            ),
+        )
+        dedup.setdefault(key, variant)
+    return tuple(dedup.values()), layout
 
 
 def _serialize_layout(layout_entries) -> List[Dict[str, object]]:
@@ -82,6 +178,8 @@ def generate_manifest() -> Tuple[List[Dict[str, object]], List[Tuple[int, str]]]
             errors.append((opcode, f"decode failure: {exc}"))
             continue
         for variant in variants:
+            if variant.family == "pre" or variant.mnemonic.upper().startswith("PRE"):
+                continue
             try:
                 entry = _entry_from_variant(opcode, variant, layout)
                 entry["id"] = entry_id

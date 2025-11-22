@@ -1,5 +1,8 @@
 """PC-E500 memory system implementation with overlay bus integration."""
 
+from __future__ import annotations
+
+import os
 from collections import deque
 from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any, Iterable, List
 
@@ -16,6 +19,93 @@ IMEM_ACCESS_HISTORY_LIMIT = 10
 IMEM_OFFSET_TO_NAME: Dict[int, str] = {
     reg.value: name for name, reg in IMEMRegisters.__members__.items()
 }
+IMEM_TRACE_ALL = os.getenv("IMEM_TRACE_ALL") == "1"
+IMEM_TRACE_REG = os.getenv("IMEM_TRACE_REG") or ""
+
+
+def _is_lcd_region(address: int) -> bool:
+    return 0x2000 <= address <= 0x200F or 0xA000 <= address <= 0xAFFF
+
+
+def _trace_lcd_write(
+    memory: "PCE500Memory", address: int, value: int, cpu_pc: Optional[int]
+) -> None:
+    if not os.getenv("LCD_WRITE_TRACE"):
+        return
+    if not _is_lcd_region(address):
+        return
+    pc = cpu_pc
+    if pc is None and memory is not None:
+        pc = memory._get_current_pc()
+    if pc is None and memory.cpu is not None:
+        try:
+            from sc62015.pysc62015.emulator import RegisterName
+
+            pc = memory.cpu.regs.get(RegisterName.PC)
+        except Exception:
+            pass
+    pc_str = f"0x{pc:06X}" if pc is not None else "N/A"
+    print(f"[LCD TRACE] addr=0x{address:06X} val=0x{value:02X} pc={pc_str}")
+
+
+def _lcd_write_wrapper(
+    memory: "PCE500Memory",
+    handler: Callable[[int, int, Optional[int]], None],
+    address: int,
+    value: int,
+    cpu_pc: Optional[int],
+) -> None:
+    handler(address, value, cpu_pc)
+    _trace_lcd_write(memory, address, value, cpu_pc)
+    if os.getenv("LCD_WRITE_TRACE"):
+        pc_str = f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
+        print(
+            f"[LCD TRACE HANDLER] addr=0x{address:06X} val=0x{value:02X} pc={pc_str}"
+        )
+
+
+_STACK_TRACE_RANGES: Optional[List[Tuple[int, int]]] = None
+
+
+def _stack_trace_ranges() -> List[Tuple[int, int]]:
+    global _STACK_TRACE_RANGES
+    if _STACK_TRACE_RANGES is not None:
+        return _STACK_TRACE_RANGES
+    raw = os.getenv("STACK_TRACE_ADDRS", "").strip()
+    ranges: List[Tuple[int, int]] = []
+    if raw:
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                start_str, end_str = part.split("-", 1)
+            else:
+                start_str = end_str = part
+            try:
+                start = int(start_str, 0) & 0xFFFFFF
+                end = int(end_str, 0) & 0xFFFFFF
+            except ValueError:
+                continue
+            if start > end:
+                start, end = end, start
+            ranges.append((start, end))
+    _STACK_TRACE_RANGES = ranges
+    return ranges
+
+
+def _trace_stack_write(
+    address: int, value: int, cpu_pc: Optional[int], *, label: str = "stack-trace"
+) -> None:
+    ranges = _stack_trace_ranges()
+    if not ranges:
+        return
+    addr24 = address & 0xFFFFFF
+    for start, end in ranges:
+        if start <= addr24 <= end:
+            pc_str = f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
+            print(f"[{label}] addr=0x{addr24:06X} val=0x{value:02X} pc={pc_str}")
+            break
 
 
 class PCE500Memory:
@@ -52,11 +142,14 @@ class PCE500Memory:
 
         # Reference to LCD controller
         self._lcd_controller = None
+        self._keyboard_bridge_enabled = False
 
         # Callback for IMEM register access tracking
         self._imem_access_callback: Optional[Callable[[int, str, str, int], None]] = (
             None
         )
+        self._suppress_rust_sync = 0
+        self._perf_tracer = None
 
     def set_imem_access_callback(
         self, callback: Callable[[int, str, str, int], None]
@@ -105,8 +198,115 @@ class PCE500Memory:
                 access_type,
                 value & 0xFF,
             )
+        if IMEM_TRACE_ALL or (IMEM_TRACE_REG and reg_name == IMEM_TRACE_REG):
+            pc_str = f"0x{effective_pc:06X}" if effective_pc is not None else "N/A"
+            print(
+                f"[imem-track] pc={pc_str} reg={reg_name} type={access_type} value=0x{value & 0xFF:02X}"
+            )
 
         return reg_name
+
+    def _record_perfetto_write(
+        self,
+        *,
+        address: int,
+        value: int,
+        effective_pc: Optional[int],
+        space: str,
+        size: int = 1,
+    ) -> None:
+        """Emit a Perfetto instant event for a memory write when tracing is active."""
+
+        tracer = getattr(self, "_perf_tracer", None)
+        if tracer is None or not getattr(tracer, "instant", None):
+            return
+
+        payload: Dict[str, Any] = {
+            "address": address & 0xFFFFFF,
+            "value": value & 0xFF,
+            "space": space,
+            "size": size,
+        }
+        if effective_pc is not None:
+            payload["pc"] = effective_pc & 0xFFFFFF
+        emulator = getattr(self, "_emulator", None)
+        if emulator is not None:
+            op_index = getattr(emulator, "_active_trace_instruction", None)
+            if op_index is not None:
+                payload["op_index"] = op_index
+            if getattr(emulator, "_new_trace_enabled", False) and hasattr(
+                emulator, "_next_memory_trace_units"
+            ):
+                units = emulator._next_memory_trace_units()
+                setter = getattr(tracer, "set_manual_clock_units", None)
+                if units is not None and callable(setter):
+                    setter(units)
+
+        tracer.instant(
+            "MemoryWrites",
+            f"write@0x{address & 0xFFFFFF:06X}",
+            payload,
+        )
+
+    def _trace_write_event(
+        self,
+        perfetto_thread: Optional[str],
+        address: int,
+        value: int,
+        cpu_pc: Optional[int],
+        overlay_name: Optional[str] = None,
+    ) -> None:
+        """Emit a legacy trace-dispatcher instant for overlay writes."""
+
+        thread = perfetto_thread or "Memory"
+        trace_dispatcher.record_instant(
+            thread,
+            "MemoryWrite",
+            {
+                "addr": f"0x{address & 0xFFFFFF:06X}",
+                "value": f"0x{value & 0xFF:02X}",
+                "pc": f"0x{cpu_pc & 0xFFFFFF:06X}" if cpu_pc is not None else "N/A",
+                "overlay": overlay_name or thread,
+            },
+        )
+
+    def _maybe_sync_rust_host_write(
+        self, address: int, value: int, cpu_pc: Optional[int]
+    ) -> None:
+        """Mirror host-initiated external writes into the Rust backend snapshot."""
+
+        emulator = getattr(self, "_emulator", None)
+        facade_cpu = getattr(emulator, "cpu", None) if emulator else None
+        cpu = facade_cpu or getattr(self, "cpu", None)
+        debug = os.getenv("RUST_HOST_WRITE_TRACE") == "1"
+        if cpu is None or getattr(cpu, "backend", None) != "rust":
+            if debug:
+                print("[rust-host-sync] skipped (no rust backend)")
+            return
+        if self._suppress_rust_sync > 0:
+            if debug:
+                print("[rust-host-sync] suppressed")
+            return
+        if cpu_pc is not None:
+            if debug:
+                print(
+                    f"[rust-host-sync] skipped (cpu_pc=0x{int(cpu_pc) & 0xFFFFFF:06X})"
+                )
+            return
+        backend_impl = cpu.unwrap() if hasattr(cpu, "unwrap") else cpu
+        notifier = getattr(backend_impl, "notify_host_write", None) or getattr(
+            cpu, "notify_host_write", None
+        )
+        if notifier is None:
+            return
+        if debug:
+            print(
+                f"[rust-host-sync] addr=0x{address & 0xFFFFFF:06X} value=0x{value & 0xFF:02X}"
+            )
+        try:
+            notifier(address & 0xFFFFFF, value & 0xFF)
+        except Exception:
+            pass
 
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
@@ -124,47 +324,43 @@ class PCE500Memory:
 
         # Check for SC62015 internal memory (0x100000-0x1000FF)
         if address >= 0x100000:
-            offset = address - 0x100000
-            if offset < 0x100:
-                # Fast path for keyboard overlay
-                if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    value: int
-                    if self._keyboard_overlay.read_handler:
+            offset = (address - 0x100000) & 0xFF
+            # Fast path for keyboard overlay
+            if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                value: int
+                if self._keyboard_overlay.read_handler:
+                    value = (
+                        int(self._keyboard_overlay.read_handler(address, cpu_pc))
+                        & 0xFF
+                    )
+                elif self._keyboard_overlay.data:
+                    overlay_offset = address - self._keyboard_overlay.start
+                    if overlay_offset < len(self._keyboard_overlay.data):
                         value = (
-                            int(self._keyboard_overlay.read_handler(address, cpu_pc))
-                            & 0xFF
+                            int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
                         )
-                    elif self._keyboard_overlay.data:
-                        overlay_offset = address - self._keyboard_overlay.start
-                        if overlay_offset < len(self._keyboard_overlay.data):
-                            value = (
-                                int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
-                            )
-                        else:
-                            value = 0x00
                     else:
                         value = 0x00
+                else:
+                    value = 0x00
 
-                    # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
-                    effective_pc = (
-                        cpu_pc if cpu_pc is not None else self._get_current_pc()
-                    )
-                    self._track_imem_access(offset, "read", value, effective_pc)
-                    return value
-
-                # Normal internal memory access (most common case)
-                internal_offset = len(self.external_memory) - 256 + offset
-                value = self.external_memory[internal_offset]
-
-                # Track IMEMRegisters reads
-                # Get PC from CPU if not provided
-                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+                # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
+                effective_pc = (
+                    cpu_pc if cpu_pc is not None else self._get_current_pc()
+                )
                 self._track_imem_access(offset, "read", value, effective_pc)
-
                 return value
-            raise ValueError(
-                f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)"
-            )
+
+            # Normal internal memory access (most common case)
+            internal_offset = len(self.external_memory) - 256 + offset
+            value = self.external_memory[internal_offset]
+
+            # Track IMEMRegisters reads
+            # Get PC from CPU if not provided
+            effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+            self._track_imem_access(offset, "read", value, effective_pc)
+
+            return value
 
         # External memory space (0x00000-0xFFFFF)
         address &= 0xFFFFF
@@ -193,134 +389,182 @@ class PCE500Memory:
 
         address &= 0xFFFFFF  # 24-bit address space
         value &= 0xFF
+        effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
+        if (
+            os.getenv("EXT_TRACE_PC") == "1"
+            and 0x0BFC60 <= address <= 0x0BFC7F
+            and effective_pc is not None
+        ):
+            print(
+                f"[ext-write] pc=0x{effective_pc:06X} addr=0x{address:06X} value=0x{value:02X}"
+            )
+        if getattr(self, "_emulator", None) is not None and getattr(
+            self._emulator, "_rust_pure_lcd", False
+        ):
+            if (
+                effective_pc is not None
+                and 0x0BFCE0 <= address <= 0x0BFCFF
+                and 0x0F2040 <= (effective_pc & 0xFFFFFF) <= 0x0F205F
+            ):
+                notify = getattr(self._emulator, "notify_lcd_interrupt", None)
+                if callable(notify):
+                    notify(address, value, effective_pc)
 
         # Check for SC62015 internal memory (0x100000-0x1000FF)
         if address >= 0x100000:
-            offset = address - 0x100000
-            if offset < 0x100:
-                # Fast path for keyboard overlay
-                if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                    if self._keyboard_overlay.write_handler:
-                        self._keyboard_overlay.write_handler(address, value, cpu_pc)
-                        # Track IMEMRegisters writes (ensure disasm trace sees KOL/KOH/KIL)
-                        effective_pc = (
-                            cpu_pc if cpu_pc is not None else self._get_current_pc()
-                        )
-                        self._track_imem_access(offset, "write", value, effective_pc)
-                        # Add tracing for write_handler overlays
-                        if self.perfetto_enabled:
-                            trace_data = {
-                                "addr": f"0x{address:06X}",
-                                "value": f"0x{value:02X}",
-                            }
-                            if cpu_pc is not None:
-                                trace_data["pc"] = f"0x{cpu_pc:06X}"
-                            trace_data["overlay"] = self._keyboard_overlay.name
-                            trace_dispatcher.record_instant(
-                                self._keyboard_overlay.perfetto_thread,
-                                "KeyboardOverlayWrite",
-                                trace_data,
-                            )
-                        return
-                    elif self._keyboard_overlay.read_only:
-                        # Silently ignore writes to read-only overlays
-                        return
-                    elif self._keyboard_overlay.data and isinstance(
-                        self._keyboard_overlay.data, bytearray
-                    ):
-                        # Write to writable overlay data
-                        overlay_offset = address - self._keyboard_overlay.start
-                        if overlay_offset < len(self._keyboard_overlay.data):
-                            self._keyboard_overlay.data[overlay_offset] = value
-                            return
-
-                # Normal internal memory write (most common case)
-                # Internal memory stored at end of external_memory for compatibility
-                internal_offset = len(self.external_memory) - 256 + offset
-                prev_val = int(self.external_memory[internal_offset])
-                self.external_memory[internal_offset] = value
-
-                # Track IMEMRegisters writes
-                # Get PC from CPU if not provided
-                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
-                reg_name = self._track_imem_access(offset, "write", value, effective_pc)
-
-                # Interrupt bit watch for IMR/ISR
-                if reg_name in ("IMR", "ISR"):
-                    try:
-                        if (
-                            self._emulator
-                            and hasattr(self._emulator, "_record_irq_bit_watch")
-                            and effective_pc is not None
-                        ):
-                            self._emulator._record_irq_bit_watch(
-                                reg_name,
-                                prev_val & 0xFF,
-                                value & 0xFF,
-                                int(effective_pc),
-                            )
-                    except Exception:
-                        pass
-
-                if self.perfetto_enabled:
-                    # Get current BP value from internal memory if CPU is available
-                    bp_value = "N/A"
-                    if self.cpu:
-                        try:
-                            bp_addr = INTERNAL_MEMORY_START + IMEMRegisters.BP
-                            bp_value = f"0x{self.cpu.memory.read_byte(bp_addr):02X}"
-                        except Exception:
-                            bp_value = "N/A"
-
-                    # Check if this offset corresponds to a known internal memory register
-                    imem_name = IMEM_OFFSET_TO_NAME.get(offset, "N/A")
-
-                    trace_dispatcher.record_instant(
-                        "Memory_Internal",
-                        "MemoryWrite",
-                        {
-                            "offset": f"0x{offset:02X}",
+            offset = (address - 0x100000) & 0xFF
+            # Fast path for keyboard overlay
+            if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                if self._keyboard_overlay.write_handler:
+                    self._keyboard_overlay.write_handler(address, value, effective_pc)
+                    # Track IMEMRegisters writes (ensure disasm trace sees KOL/KOH/KIL)
+                    self._track_imem_access(offset, "write", value, effective_pc)
+                    # Add tracing for write_handler overlays
+                    if self.perfetto_enabled:
+                        trace_data = {
+                            "addr": f"0x{address:06X}",
                             "value": f"0x{value:02X}",
-                            "pc": f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A",
-                            "bp": bp_value,
-                            "imem_name": imem_name,
-                            "size": "1",
-                        },
+                        }
+                        if effective_pc is not None:
+                            trace_data["pc"] = f"0x{effective_pc:06X}"
+                        trace_data["overlay"] = self._keyboard_overlay.name
+                        trace_dispatcher.record_instant(
+                            self._keyboard_overlay.perfetto_thread,
+                            "KeyboardOverlayWrite",
+                            trace_data,
+                        )
+                    self._record_perfetto_write(
+                        address=address,
+                        value=value,
+                        effective_pc=effective_pc,
+                        space=self._keyboard_overlay.name or "keyboard_overlay",
                     )
-            else:
-                raise ValueError(
-                    f"Invalid SC62015 internal memory address: 0x{address:06X} (offset 0x{offset:02X} >= 0x100)"
+                    _trace_lcd_write(self, address, value, effective_pc)
+                    return
+                elif self._keyboard_overlay.read_only:
+                    # Silently ignore writes to read-only overlays
+                    return
+                elif (
+                    self._keyboard_overlay.data
+                    and isinstance(self._keyboard_overlay.data, bytearray)
+                ):
+                    # Write to writable overlay data
+                    overlay_offset = address - self._keyboard_overlay.start
+                    if overlay_offset < len(self._keyboard_overlay.data):
+                        self._keyboard_overlay.data[overlay_offset] = value
+                        self._record_perfetto_write(
+                            address=address,
+                            value=value,
+                            effective_pc=effective_pc,
+                            space=self._keyboard_overlay.name or "keyboard_overlay",
+                        )
+                        return
+
+            # Normal internal memory write (most common case)
+            # Internal memory stored at end of external_memory for compatibility
+            internal_offset = len(self.external_memory) - 256 + offset
+            prev_val = int(self.external_memory[internal_offset])
+            self.external_memory[internal_offset] = value
+
+            # Track IMEMRegisters writes
+            reg_name = self._track_imem_access(offset, "write", value, effective_pc)
+
+            # Interrupt bit watch for IMR/ISR
+            if reg_name in ("IMR", "ISR"):
+                try:
+                    if (
+                        self._emulator
+                        and hasattr(self._emulator, "_record_irq_bit_watch")
+                        and effective_pc is not None
+                    ):
+                        self._emulator._record_irq_bit_watch(
+                            reg_name,
+                            prev_val & 0xFF,
+                            value & 0xFF,
+                            int(effective_pc),
+                        )
+                except Exception:
+                    pass
+
+            if self.perfetto_enabled:
+                # Get current BP value from internal memory if CPU is available
+                bp_value = "N/A"
+                if self.cpu:
+                    try:
+                        bp_addr = INTERNAL_MEMORY_START + IMEMRegisters.BP
+                        bp_value = f"0x{self.cpu.memory.read_byte(bp_addr):02X}"
+                    except Exception:
+                        bp_value = "N/A"
+
+                # Check if this offset corresponds to a known internal memory register
+                imem_name = IMEM_OFFSET_TO_NAME.get(offset, "N/A")
+
+                trace_dispatcher.record_instant(
+                    "Memory_Internal",
+                    "MemoryWrite",
+                    {
+                        "offset": f"0x{offset:02X}",
+                        "value": f"0x{value:02X}",
+                        "pc": f"0x{effective_pc:06X}" if effective_pc is not None else "N/A",
+                        "bp": bp_value,
+                        "imem_name": imem_name,
+                        "size": "1",
+                    },
                 )
+            self._record_perfetto_write(
+                address=address,
+                value=value,
+                effective_pc=effective_pc,
+                space="internal",
+            )
+            _trace_lcd_write(self, address, value, effective_pc)
+            _trace_stack_write(address, value, effective_pc)
+            self._maybe_sync_rust_host_write(address, value, cpu_pc)
             return
 
         # External memory space (0x00000-0xFFFFF)
         address &= 0xFFFFF
 
-        write_result = self._bus.write(address, value, cpu_pc)
+        write_result = self._bus.write(address, value, effective_pc)
         if write_result is not None:
             if self.perfetto_enabled:
                 self._trace_write_event(
                     write_result.overlay.perfetto_thread,
                     address,
                     value,
-                    cpu_pc,
+                    effective_pc,
                     write_result.overlay.name,
                 )
+            self._record_perfetto_write(
+                address=address,
+                value=value,
+                effective_pc=effective_pc,
+                space=write_result.overlay.name,
+            )
+            _trace_stack_write(address, value, effective_pc)
             return
 
         # Default to external memory
         self.external_memory[address] = value
+        _trace_stack_write(address, value, effective_pc)
+        self._maybe_sync_rust_host_write(address, value, cpu_pc)
 
         # Perfetto tracing for all writes
         if self.perfetto_enabled:
             trace_data = {"addr": f"0x{address:06X}", "value": f"0x{value:02X}"}
-            if cpu_pc is not None:
-                trace_data["pc"] = f"0x{cpu_pc:06X}"
+            if effective_pc is not None:
+                trace_data["pc"] = f"0x{effective_pc:06X}"
             trace_dispatcher.record_instant(
                 "Memory_External",
                 "MemoryWrite",
                 trace_data,
             )
+        self._record_perfetto_write(
+            address=address,
+            value=value,
+            effective_pc=effective_pc,
+            space="external",
+        )
 
     @perf_trace("Memory", sample_rate=100)
     def read_word(self, address: int) -> int:
@@ -375,27 +619,63 @@ class PCE500Memory:
     # ------------------------------------------------------------------ #
     # Rust backend helpers
 
-    def export_flat_memory(self) -> Tuple[bytes, Tuple[Tuple[int, int], ...]]:
-        """Return a flattened view of external memory plus ranges that must stay Python-backed."""
+    def export_flat_memory(
+        self,
+    ) -> Tuple[bytes, Tuple[Tuple[int, int], ...], Tuple[Tuple[int, int], ...]]:
+        """Return a flattened view plus Python-backed + read-only ranges."""
 
         blob = bytearray(self.external_memory)
+        blob_len = len(blob)
         fallback: List[Tuple[int, int]] = []
+        readonly: List[Tuple[int, int]] = []
         for overlay in self._bus.iter_overlays():
-            length = overlay.end - overlay.start + 1
-            if overlay.data is not None and overlay.read_only:
-                # Copy read-only overlay bytes directly into the flattened view.
-                blob[overlay.start : overlay.start + min(len(overlay.data), length)] = (
-                    overlay.data[:length]
-                )
-            else:
-                fallback.append((overlay.start, overlay.end))
-        return bytes(blob), tuple(fallback)
+            start = overlay.start & 0xFFFFFF
+            end = overlay.end & 0xFFFFFF
+            # Internal-memory overlays (>= INTERNAL_MEMORY_START) always rely on Python.
+            if start >= INTERNAL_MEMORY_START:
+                fallback.append((start, end))
+                continue
+
+            if overlay.data is not None and start < blob_len:
+                # Copy as much of the overlay payload as fits in the flattened blob.
+                max_len = min(end - start + 1, blob_len - start, len(overlay.data))
+                if max_len > 0:
+                    blob[start : start + max_len] = overlay.data[:max_len]
+            if overlay.read_only:
+                clamped_end = min(end, INTERNAL_MEMORY_START - 1)
+                readonly.append((start, clamped_end))
+
+            needs_python = (
+                overlay.read_handler is not None
+                or overlay.write_handler is not None
+                or overlay.data is None
+            )
+            if needs_python:
+                fallback.append((start, end))
+
+        return bytes(blob), tuple(fallback), tuple(readonly)
 
     def apply_external_writes(self, writes: Iterable[Tuple[int, int]]) -> None:
         """Apply external-memory writes that originated from the Rust backend."""
+        self._suppress_rust_sync += 1
+        try:
+            for address, value in writes:
+                self.write_byte(address & 0xFFFFFF, value & 0xFF)
+        finally:
+            self._suppress_rust_sync = max(0, self._suppress_rust_sync - 1)
 
-        for address, value in writes:
-            self.write_byte(address & 0xFFFFFF, value & 0xFF)
+    def apply_internal_writes(self, writes: Iterable[Tuple[int, int]]) -> None:
+        """Apply internal-memory writes (IMEM registers) from the Rust backend."""
+        self._suppress_rust_sync += 1
+        try:
+            for address, value in writes:
+                if os.getenv("RUST_INTERNAL_WRITE_TRACE") == "1":
+                    print(
+                        f"[rust-internal-apply] addr=0x{address:06X} value=0x{value:02X}"
+                    )
+                self.write_byte(address & 0xFFFFFF, value & 0xFF)
+        finally:
+            self._suppress_rust_sync = max(0, self._suppress_rust_sync - 1)
 
     def load_rom(self, rom_data: bytes) -> None:
         """Load ROM as an overlay at 0xC0000."""
@@ -471,13 +751,27 @@ class PCE500Memory:
             )
         )
 
-    def set_lcd_controller(self, lcd_controller) -> None:
-        """Set LCD controller and add memory-mapped I/O overlay."""
+    def set_lcd_controller(self, lcd_controller, *, enable_overlay: bool = True) -> None:
+        """Set LCD controller and optionally add memory-mapped I/O overlay."""
         self._lcd_controller = lcd_controller
 
         # Pass CPU reference to LCD controller if available
         if self.cpu and hasattr(lcd_controller, "set_cpu"):
             lcd_controller.set_cpu(self.cpu)
+
+        if not enable_overlay:
+            # Pure-Rust path: forward writes to the overlay hooks so Python-side
+            # peripherals (keyboard/LCD) and IMEM sync stay active even without
+            # the MemoryOverlay objects.
+            def _rust_lcd_write(addr: int, val: int, pc: Optional[int]) -> None:
+                _lcd_write_wrapper(self, lcd_controller.write, addr, val, pc)
+
+            setattr(self, "_rust_lcd_write", _rust_lcd_write)
+            return
+
+        def lcd_write_handler(addr: int, val: int, pc: Optional[int]) -> None:
+            _lcd_write_wrapper(self, lcd_controller.write, addr, val, pc)
+
         # LCD controllers at 0x2000 and 0xA000
         self.add_overlay(
             MemoryOverlay(
@@ -486,7 +780,7 @@ class PCE500Memory:
                 name="lcd_controller_low",
                 read_only=False,
                 read_handler=lambda addr, pc: lcd_controller.read(addr, pc),
-                write_handler=lambda addr, val, pc: lcd_controller.write(addr, val, pc),
+                write_handler=lcd_write_handler,
                 perfetto_thread="Display",
             )
         )
@@ -497,8 +791,35 @@ class PCE500Memory:
                 name="lcd_controller",
                 read_only=False,
                 read_handler=lambda addr, pc: lcd_controller.read(addr, pc),
-                write_handler=lambda addr, val, pc: lcd_controller.write(addr, val, pc),
+                write_handler=lcd_write_handler,
                 perfetto_thread="Display",
+            )
+        )
+
+    def set_keyboard_handler(
+        self,
+        read_callback: Callable[[int, Optional[int]], int],
+        write_callback: Callable[[int, int, Optional[int]], None],
+        *,
+        enable_overlay: bool = True,
+    ) -> None:
+        """Configure keyboard register handlers when using the Python backend."""
+
+        self.remove_overlay("keyboard_io")
+        if not enable_overlay:
+            self._keyboard_bridge_enabled = True
+            return
+
+        self._keyboard_bridge_enabled = False
+        self.add_overlay(
+            MemoryOverlay(
+                start=INTERNAL_MEMORY_START + IMEMRegisters.KOL,
+                end=INTERNAL_MEMORY_START + IMEMRegisters.KIL,
+                name="keyboard_io",
+                read_only=False,
+                read_handler=read_callback,
+                write_handler=write_callback,
+                perfetto_thread="I/O",
             )
         )
 

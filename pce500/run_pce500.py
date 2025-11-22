@@ -2,6 +2,7 @@
 """Example script to run PC-E500 emulator."""
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,7 +25,7 @@ def run_emulator(
     save_lcd=True,
     perfetto_trace=True,
     print_stats=True,
-    timeout_secs: float = 10.0,
+    timeout_secs: float | None = None,
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
     # Optional auto key-press controls
@@ -40,7 +41,7 @@ def run_emulator(
     sweep_hold_instr: int = 2000,
     debug_draw_on_key: bool = False,
     force_display_on: bool = False,
-    fast_mode: bool = False,
+    fast_mode: bool | None = None,
     boot_skip_steps: int = 0,
     disasm_trace: bool = False,
     press_when_col: int | None = None,
@@ -48,6 +49,8 @@ def run_emulator(
     display_trace_log: str | None = None,
     lcd_trace_file: str | None = None,
     lcd_trace_limit: int = 50000,
+    load_snapshot: str | Path | None = None,
+    save_snapshot: str | Path | None = None,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -64,6 +67,12 @@ def run_emulator(
     Returns:
         PCE500Emulator: The emulator instance after running
     """
+    backend_env = (os.getenv("SC62015_CPU_BACKEND") or "").lower()
+    default_fast_mode = backend_env == "rust"
+    resolved_fast_mode = default_fast_mode if fast_mode is None else bool(fast_mode)
+    default_timeout = 0.0 if backend_env == "rust" else 10.0
+    timeout_secs = default_timeout if timeout_secs is None else float(timeout_secs)
+
     # Create emulator
     emu = PCE500Emulator(
         trace_enabled=False,
@@ -86,7 +95,7 @@ def run_emulator(
     except Exception:
         pass
     try:
-        setattr(emu, "fast_mode", bool(fast_mode))
+        setattr(emu, "fast_mode", bool(resolved_fast_mode))
     except Exception:
         pass
 
@@ -100,6 +109,9 @@ def run_emulator(
                 return
             if not inject(key_code, release=release):
                 return
+            ensure = getattr(emu, "_ensure_key_irq_mask", None)
+            if callable(ensure):
+                ensure()
             emu._set_isr_bits(int(ISRFlag.KEYI))
             emu._irq_pending = True
             emu._irq_source = IRQSource.KEY
@@ -146,9 +158,16 @@ def run_emulator(
             rom_portion = rom_data[0xC0000:0x100000]
             emu.load_rom(rom_portion)
 
-    # Reset and run
+    # Reset and/or load snapshot then run
     emu.reset()
-    if print_stats:
+    if load_snapshot:
+        if print_stats:
+            print(f"Loading snapshot from {load_snapshot} ...")
+        emu.load_snapshot(load_snapshot, backend=backend_env or None)
+        if print_stats:
+            print(f"PC after snapshot: {emu.cpu.regs.get(RegisterName.PC):06X}")
+        boot_skip_steps = 0
+    elif print_stats:
         print(f"PC after reset: {emu.cpu.regs.get(RegisterName.PC):06X}")
 
     if print_stats:
@@ -175,7 +194,7 @@ def run_emulator(
             emu.step()
         # Restore requested fast_mode after skip
         try:
-            setattr(emu, "fast_mode", bool(fast_mode))
+            setattr(emu, "fast_mode", bool(resolved_fast_mode))
         except Exception:
             pass
         # Restart new tracer if requested for this run
@@ -204,7 +223,9 @@ def run_emulator(
     current_sweep_row = 0
     sweep_hold_until = None
     last_active_cols = []
-    for _ in range(num_steps):
+    start_instruction_count = emu.instruction_count
+    target_instructions = start_instruction_count + int(num_steps)
+    while emu.instruction_count < target_instructions:
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
 
@@ -222,11 +243,13 @@ def run_emulator(
                 # Prime the keyboard matrix so the ROM sees the key without
                 # waiting for the timer scheduler to advance a full debounce cycle.
                 try:
-                    warm_ticks = 1
-                    matrix = getattr(emu.keyboard, "_matrix", None)
-                    warm_ticks = max(1, int(getattr(matrix, "press_threshold", 1)))
-                    for _ in range(warm_ticks):
-                        emu.keyboard.scan_tick()
+                    # Skip the Python warm-up when the Rust bridge already scans per-instruction.
+                    if not getattr(emu.keyboard, "_bridge_enabled", False):
+                        warm_ticks = 1
+                        matrix = getattr(emu.keyboard, "_matrix", None)
+                        warm_ticks = max(1, int(getattr(matrix, "press_threshold", 1)))
+                        for _ in range(warm_ticks):
+                            emu.keyboard.scan_tick()
                 except Exception:
                     pass
                 if auto_release_after_instr and auto_release_after_instr > 0:
@@ -403,7 +426,7 @@ def run_emulator(
             if auto2_release <= 0:
                 emu.release_key(auto2_key)
                 auto2_release = None
-        if (time.perf_counter() - start_time) > timeout_secs:
+        if timeout_secs > 0 and (time.perf_counter() - start_time) > timeout_secs:
             timed_out = True
             if print_stats:
                 print(
@@ -544,6 +567,14 @@ def run_emulator(
         elif lcd_trace_file and print_stats:
             print("LCD trace requested but no events were captured")
 
+    if save_snapshot:
+        snapshot_path = emu.save_snapshot(save_snapshot)
+        if print_stats:
+            print(f"Snapshot saved to {snapshot_path}")
+
+    if hasattr(emu, "close"):
+        emu.close()
+
     return emu
 
 
@@ -556,7 +587,7 @@ def main(
     trace_file="pc-e500.perfetto-trace",
     profile_emulator=False,
     steps: int = 20000,
-    timeout_secs: float = 10.0,
+    timeout_secs: float | None = None,
     auto_press_key: str | None = None,
     auto_press_after_pc: int | None = None,
     auto_press_after_steps: int | None = None,
@@ -568,7 +599,7 @@ def main(
     sweep_hold_instr: int = 2000,
     debug_draw_on_key: bool = False,
     force_display_on: bool = False,
-    fast_mode: bool = False,
+    fast_mode: bool | None = None,
     boot_skip: int = 0,
     disasm_trace: bool = False,
     press_when_col: int | None = None,
@@ -580,6 +611,8 @@ def main(
     display_trace_log: str | None = None,
     lcd_trace: str | None = None,
     lcd_trace_limit: int = 50000,
+    load_snapshot: str | Path | None = None,
+    save_snapshot: str | Path | None = None,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -588,16 +621,29 @@ def main(
 
         enable_profiling("emulator-profile.perfetto-trace")
 
+    backend_env = (os.getenv("SC62015_CPU_BACKEND") or "").lower()
+    resolved_fast_mode = fast_mode
+    if resolved_fast_mode is None:
+        resolved_fast_mode = backend_env == "rust"
+    resolved_timeout = timeout_secs
+    if resolved_timeout is None:
+        resolved_timeout = 0.0 if backend_env == "rust" else 10.0
+    perfetto_enabled = perfetto
+    # When loading from a snapshot and the caller did not explicitly enable tracing,
+    # default to no perfetto to avoid overhead on short replay windows.
+    if load_snapshot and not new_perfetto and perfetto_enabled:
+        perfetto_enabled = False
+
     # Use context manager for automatic cleanup
     with run_emulator(
         num_steps=steps,
         dump_pc=dump_pc,
         no_dump=no_dump,
         save_lcd=save_lcd,
-        perfetto_trace=perfetto,
+        perfetto_trace=perfetto_enabled,
         new_perfetto=new_perfetto,
         trace_file=trace_file,
-        timeout_secs=timeout_secs,
+        timeout_secs=resolved_timeout,
         auto_press_key=auto_press_key,
         auto_press_after_pc=auto_press_after_pc,
         auto_press_after_steps=auto_press_after_steps,
@@ -609,7 +655,7 @@ def main(
         sweep_hold_instr=sweep_hold_instr,
         debug_draw_on_key=debug_draw_on_key,
         force_display_on=force_display_on,
-        fast_mode=fast_mode,
+        fast_mode=resolved_fast_mode,
         boot_skip_steps=boot_skip,
         disasm_trace=disasm_trace,
         press_when_col=press_when_col,
@@ -617,6 +663,8 @@ def main(
         display_trace_log=display_trace_log,
         lcd_trace_file=lcd_trace,
         lcd_trace_limit=lcd_trace_limit,
+        load_snapshot=load_snapshot,
+        save_snapshot=save_snapshot,
     ) as emu:
         # Pass-through secondary scheduling parameters via emulator attributes
         if auto2_press_key and auto2_press_after_steps is not None:
@@ -639,6 +687,8 @@ def main(
         sys.exit(1)
 
     # Emit LCD text derived from controller state
+    if hasattr(emu, "_sync_lcd_from_backend"):
+        emu._sync_lcd_from_backend()
     lines = decode_display_text(emu.lcd, emu.memory)
     print("\nLCD TEXT:")
     if lines:
@@ -679,8 +729,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--timeout-secs",
         type=float,
-        default=10.0,
-        help="Abort run after this many seconds (default: 10.0)",
+        default=None,
+        help="Abort run after this many seconds (default: 0 for Rust backend, 10.0 otherwise)",
     )
     parser.add_argument(
         "--perfetto",
@@ -755,8 +805,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fast-mode",
-        action="store_true",
-        help="Minimize step() overhead to run more instructions",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Minimize step() overhead to run more instructions (default: on for Rust backend)",
     )
     parser.add_argument(
         "--boot-skip",
@@ -792,6 +843,16 @@ if __name__ == "__main__":
         type=int,
         default=50000,
         help="Maximum LCD write events to capture (default: 50000)",
+    )
+    parser.add_argument(
+        "--load-snapshot",
+        type=str,
+        help="Load a .pcsnap bundle before stepping (disables perfetto by default for speed)",
+    )
+    parser.add_argument(
+        "--save-snapshot",
+        type=str,
+        help="Save a .pcsnap bundle after execution",
     )
     # Secondary auto-key scheduling for experiments (step-based)
     parser.add_argument(
@@ -841,4 +902,6 @@ if __name__ == "__main__":
         display_trace_log=args.display_trace_log,
         lcd_trace=args.lcd_trace,
         lcd_trace_limit=args.lcd_trace_limit,
+        load_snapshot=args.load_snapshot,
+        save_snapshot=args.save_snapshot,
     )

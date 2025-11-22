@@ -1,5 +1,6 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple
 import enum
+import os
 from dataclasses import dataclass
 from binja_test_mocks.coding import FetchDecoder
 
@@ -9,9 +10,10 @@ try:
     USE_CACHED_DECODER = True
 except ImportError:
     USE_CACHED_DECODER = False
-from .constants import PC_MASK, ADDRESS_SPACE_SIZE
+from .constants import PC_MASK, ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 
 from .instr.opcode_table import OPCODES
+from .instr.opcodes import IMEMRegisters
 from .instr import (
     decode,
     Instruction,
@@ -52,6 +54,29 @@ CALL_STACK_EFFECTS = {
 class InstructionEvalInfo:
     instruction_info: InstructionInfo
     instruction: Instruction
+
+
+class _FallbackInstruction:
+    """Minimal stand-in when decode fails so execution can continue."""
+
+    def __init__(self, opcode: int, length: int = 1) -> None:
+        self._opcode = opcode & 0xFF
+        self._length = max(1, length)
+
+    def name(self) -> str:
+        return f"UNK_{self._opcode:02X}"
+
+    def length(self) -> int:
+        return self._length
+
+    def analyze(self, info: InstructionInfo, addr: int) -> None:  # pragma: no cover - defensive
+        info.length += self._length
+
+    def lift(self, il: MockLowLevelILFunction, addr: int) -> None:  # pragma: no cover - defensive
+        il.append(il.nop())
+
+    def render(self):
+        return []
 
 
 class RegisterName(enum.Enum):
@@ -111,6 +136,162 @@ FLAG_TO_REGISTER: Dict[str, RegisterName] = {
     "C": RegisterName.FC,
     "Z": RegisterName.FZ,
 }
+
+
+_LCD_LOOP_TRACE_ENABLED: bool = os.getenv("LCD_LOOP_TRACE") == "1"
+_LCD_LOOP_RANGE: tuple[int, int] | None = None
+_LCD_LOOP_RANGE_DEFAULT: tuple[int, int] = (0x0F29A0, 0x0F2B00)
+_LCD_LOOP_REGS = (
+    RegisterName.PC,
+    RegisterName.A,
+    RegisterName.B,
+    RegisterName.BA,
+    RegisterName.I,
+    RegisterName.X,
+    RegisterName.Y,
+    RegisterName.U,
+    RegisterName.S,
+)
+_LCD_LOOP_FLAGS = ("C", "Z")
+_LCD_TRACE_BP_ENABLED: bool = os.getenv("LCD_TRACE_BP") == "1"
+
+_STACK_SNAPSHOT_RANGE: tuple[int, int] | None = None
+_STACK_SNAPSHOT_LEN: int | None = None
+
+
+def _lcd_loop_range() -> tuple[int, int]:
+    global _LCD_LOOP_RANGE
+    if _LCD_LOOP_RANGE is not None:
+        return _LCD_LOOP_RANGE
+    env = os.getenv("LCD_LOOP_RANGE")
+    if env:
+        parts = env.strip().split("-")
+        try:
+            start = int(parts[0], 0)
+        except ValueError:
+            start = _LCD_LOOP_RANGE_DEFAULT[0]
+        if len(parts) > 1:
+            try:
+                end = int(parts[1], 0)
+            except ValueError:
+                end = _LCD_LOOP_RANGE_DEFAULT[1]
+        else:
+            end = start
+        if start > end:
+            start, end = end, start
+        _LCD_LOOP_RANGE = (start, end)
+    else:
+        _LCD_LOOP_RANGE = _LCD_LOOP_RANGE_DEFAULT
+    return _LCD_LOOP_RANGE
+
+
+def _should_trace_lcd(address: int) -> bool:
+    if not _LCD_LOOP_TRACE_ENABLED:
+        return False
+    start, end = _lcd_loop_range()
+    return start <= address <= end
+
+
+def _log_lcd_loop_state(prefix: str, pc: int, regs: "Registers") -> None:
+    reg_vals = " ".join(f"{reg.name}={regs.get(reg):06X}" for reg in _LCD_LOOP_REGS)
+    flag_vals = " ".join(f"{name}={regs.get_flag(name):01X}" for name in _LCD_LOOP_FLAGS)
+    print(f"[lcd-loop] {prefix} pc=0x{pc:06X} {reg_vals} flags={flag_vals}")
+
+
+def _log_bp_bytes(prefix: str, pc: int, memory: Memory) -> None:
+    if not _LCD_TRACE_BP_ENABLED:
+        return
+    try:
+        bp = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.BP) & 0xFF
+    except Exception:
+        return
+    window = []
+    for offset in (3, 4, 5):
+        addr = INTERNAL_MEMORY_START + ((bp + offset) & 0xFF)
+        try:
+            window.append(memory.read_byte(addr) & 0xFF)
+        except Exception:
+            window.append(0)
+    print(
+        "[lcd-loop-bp] {prefix} pc=0x{pc:06X} BP=0x{bp:02X} "
+        "bp+3=0x{bp3:02X} bp+4=0x{bp4:02X} bp+5=0x{bp5:02X}".format(
+            prefix=prefix,
+            pc=pc,
+            bp=bp,
+            bp3=window[0],
+            bp4=window[1],
+            bp5=window[2],
+        )
+    )
+
+
+def _stack_snapshot_range() -> tuple[int, int] | None:
+    global _STACK_SNAPSHOT_RANGE
+    if _STACK_SNAPSHOT_RANGE is not None:
+        return _STACK_SNAPSHOT_RANGE
+    env = os.getenv("STACK_SNAPSHOT_RANGE")
+    if not env:
+        return None
+    parts = env.strip().split("-")
+    if not parts:
+        return None
+    try:
+        start = int(parts[0], 0)
+        end = int(parts[1], 0) if len(parts) > 1 else start
+    except ValueError:
+        return None
+    if start > end:
+        start, end = end, start
+    _STACK_SNAPSHOT_RANGE = (start, end)
+    return _STACK_SNAPSHOT_RANGE
+
+
+def _stack_snapshot_len() -> int:
+    global _STACK_SNAPSHOT_LEN
+    if _STACK_SNAPSHOT_LEN is not None:
+        return _STACK_SNAPSHOT_LEN
+    length = 8
+    env = os.getenv("STACK_SNAPSHOT_LEN")
+    if env:
+        try:
+            candidate = int(env, 0)
+            if candidate > 0:
+                length = candidate
+        except ValueError:
+            pass
+    _STACK_SNAPSHOT_LEN = length
+    return length
+
+
+def _log_stack_snapshot(prefix: str, pc: int, regs: "Registers", memory: Memory) -> None:
+    rng = _stack_snapshot_range()
+    if not rng:
+        return
+    start, end = rng
+    if not (start <= pc <= end):
+        return
+    stack = regs.get(RegisterName.S)
+    length = _stack_snapshot_len()
+    bytes_ = [
+        memory.read_byte((stack + offset) & (ADDRESS_SPACE_SIZE - 1))
+        for offset in range(length)
+    ]
+    byte_str = " ".join(f"{b:02X}" for b in bytes_)
+    reg_str = " ".join(
+        f"{name.name}={regs.get(name):06X}"
+        for name in (
+            RegisterName.A,
+            RegisterName.B,
+            RegisterName.BA,
+            RegisterName.X,
+            RegisterName.Y,
+            RegisterName.U,
+            RegisterName.S,
+        )
+    )
+    print(
+        f"[stack-snapshot] backend={prefix} pc=0x{pc:06X} S=0x{stack:06X} bytes={byte_str} {reg_str}"
+    )
 
 
 class Registers:
@@ -173,6 +354,7 @@ class Registers:
 
         raise ValueError(f"Attempted to set unknown or non-base register: {reg}")
 
+
     def get_by_name(self, name: str) -> int:
         return self.get(RegisterName[name])
 
@@ -218,7 +400,11 @@ class Emulator:
             decoder = CachedFetchDecoder(fecher, ADDRESS_SPACE_SIZE)
         else:
             decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
-        return decode(decoder, address, OPCODES)  # type: ignore
+        instr = decode(decoder, address, OPCODES)  # type: ignore
+        if instr is None:
+            opcode = self.memory.read_byte(address) & 0xFF
+            instr = _FallbackInstruction(opcode)
+        return instr
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
         # Check if performance tracing is available through memory context
@@ -233,10 +419,16 @@ class Emulator:
 
     def _execute_instruction_impl(self, address: int) -> InstructionEvalInfo:
         # Track PC history for tracing
+        pc_value = address & PC_MASK
+        if _should_trace_lcd(pc_value):
+            _log_lcd_loop_state("python", pc_value, self.regs)
+            _log_bp_bytes("python", pc_value, self.memory)
+        if _stack_snapshot_range():
+            _log_stack_snapshot("python", pc_value, self.regs, self.memory)
         self._last_pc = self._current_pc
-        self._current_pc = address
+        self._current_pc = pc_value
 
-        self.regs.set(RegisterName.PC, address)
+        self.regs.set(RegisterName.PC, pc_value)
         instr = self.decode_instruction(address)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
 

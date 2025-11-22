@@ -135,6 +135,46 @@ class HD61202Controller:
         """Return the current LCD snapshot (for diagnostics/tests)."""
         return self.pipeline.snapshot
 
+    def load_snapshot(self, metadata: Dict[str, object], vram_bytes: bytes) -> None:
+        """Restore LCD controller state from metadata + VRAM payload."""
+
+        chips_meta = metadata.get("chips")
+        if not isinstance(chips_meta, list) or not chips_meta:
+            return
+
+        pages = int(metadata.get("pages", HD61202.LCD_PAGES))
+        width = int(metadata.get("width", HD61202.LCD_WIDTH_PIXELS))
+        expected_len = len(chips_meta) * pages * width
+        if len(vram_bytes) != expected_len:
+            raise ValueError(
+                f"lcd_vram.bin length mismatch (expected {expected_len}, got {len(vram_bytes)})"
+            )
+
+        offset = 0
+        for chip, chip_meta in zip(self.chips, chips_meta):
+            chip.state.on = bool(chip_meta.get("on", False))
+            chip.state.start_line = int(chip_meta.get("start_line", 0)) & 0x3F
+            chip.state.page = int(chip_meta.get("page", 0)) % pages
+            chip.state.y_address = int(chip_meta.get("y_address", 0)) % width
+
+            chip.vram = [[0] * width for _ in range(pages)]
+            for page in range(pages):
+                for column in range(width):
+                    chip.vram[page][column] = vram_bytes[offset]
+                    offset += 1
+
+            chip.vram_pc_source = [
+                [None] * width for _ in range(pages)
+            ]  # PC provenance not persisted
+            chip.instruction_count = int(chip_meta.get("instruction_count", 0))
+            chip.data_write_count = int(chip_meta.get("data_write_count", 0))
+            chip.data_read_count = int(chip_meta.get("data_read_count", 0))
+            chip.on_off_count = int(chip_meta.get("on_off_count", 0))
+
+        self.cs_both_count = int(metadata.get("cs_both_count", 0))
+        self.cs_left_count = int(metadata.get("cs_left_count", 0))
+        self.cs_right_count = int(metadata.get("cs_right_count", 0))
+
     @perf_trace("Display")
     def get_display_buffer(self) -> np.ndarray:
         """Return a 32×240 boolean buffer representing the LCD contents."""

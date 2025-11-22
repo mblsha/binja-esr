@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Protocol, Tuple
 
@@ -75,11 +76,36 @@ def _mask(bits: int) -> int:
     return (1 << bits) - 1
 
 
+def _lcd_loop_trace_enabled() -> bool:
+    return os.getenv("LCD_LOOP_TRACE") == "1"
+
+
+def _log_lcd_interrupt(event: str, env: _Env) -> None:
+    if not _lcd_loop_trace_enabled():
+        return
+    state = env.state
+    pc = state.get_reg("PC", 20)
+    sp = state.get_reg("S", 24)
+    print(f"[lcd-loop] python {event} pc=0x{pc:06X} stack=0x{sp:06X}")
+
+
+def _log_lcd_reti(env: _Env, popped_pc: int) -> None:
+    if not _lcd_loop_trace_enabled():
+        return
+    state = env.state
+    pc = state.get_reg("PC", 20)
+    sp = state.get_reg("S", 24)
+    print(
+        f"[lcd-loop] python reti pc=0x{pc:06X} stack=0x{sp:06X} pop_pc=0x{popped_pc:06X}"
+    )
+
+
 _PTR_MODE_SIMPLE = 0
 _PTR_MODE_POST_INC = 1
 _PTR_MODE_PRE_DEC = 2
 _PTR_MODE_OFFSET = 3
 _ADDR_MASK = (1 << 24) - 1
+_LOOP_EXT_MODE_IMM = 0xFF
 
 
 def _to_signed(value: int, bits: int) -> int:
@@ -379,6 +405,11 @@ def _stack_push(env: _Env, register: str, value: int, count: int) -> None:
     for i in range(count):
         byte = (value >> (8 * i)) & 0xFF
         bus.store("ext", (new_sp + i) & _ADDR_MASK, byte, 8)
+    if os.getenv("STACK_TRACE"):
+        pc = state.get_reg("PC", 20)
+        print(
+            f"[stack-push] python pc=0x{pc:06X} reg={register} value=0x{value:06X} bytes={count} new_sp=0x{new_sp:06X}"
+        )
 
 
 def _stack_pop(env: _Env, register: str, count: int) -> int:
@@ -390,12 +421,29 @@ def _stack_pop(env: _Env, register: str, count: int) -> int:
         byte = bus.load("ext", (sp + i) & _ADDR_MASK, 8) & 0xFF
         result |= byte << (8 * i)
     state.set_reg(register, (sp + count) & _ADDR_MASK, 24)
+    if os.getenv("STACK_TRACE"):
+        pc = state.get_reg("PC", 20)
+        print(
+            f"[stack-pop] python pc=0x{pc:06X} reg={register} value=0x{result:06X} bytes={count} new_sp=0x{(sp + count) & _ADDR_MASK:06X}"
+        )
     return result
 
 
 def _loop_int_pointer(ptr: ast.LoopIntPtr, env: _Env) -> int:
     offset, _ = _eval_expr(ptr.offset, env)
     return _resolve_imem_addr(env, offset & 0xFF)
+
+
+def _loop_mode_str(tag: int) -> str:
+    if tag == _PTR_MODE_SIMPLE:
+        return "simple"
+    if tag == _PTR_MODE_POST_INC:
+        return "post_inc"
+    if tag == _PTR_MODE_PRE_DEC:
+        return "pre_dec"
+    if tag == _PTR_MODE_OFFSET:
+        return "offset"
+    raise ValueError(f"Unsupported loop mode tag {tag}")
 
 
 def _imem_addr(name: str) -> int:
@@ -444,6 +492,7 @@ def _perform_reset(env: _Env) -> None:
 
 def _interrupt_enter(env: _Env) -> None:
     state = env.state
+    _log_lcd_interrupt("interrupt_enter", env)
     imr_addr = _imem_addr("IMR")
     imr = env.bus.load("int", imr_addr, 8) & 0xFF
     _stack_push(env, "S", state.get_reg("PC", 24), 3)
@@ -521,19 +570,18 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         state.pc = value & PC_MASK
         return
     if kind == "reti":
-        sp = state.get_reg("S", 24)
-        imr = env.bus.load("ext", sp & _ADDR_MASK, 8) & 0xFF
-        f_val = env.bus.load("ext", (sp + 1) & _ADDR_MASK, 8) & 0xFF
-        lo = env.bus.load("ext", (sp + 2) & _ADDR_MASK, 8) & 0xFF
-        hi = env.bus.load("ext", (sp + 3) & _ADDR_MASK, 8) & 0xFF
-        page = env.bus.load("ext", (sp + 4) & _ADDR_MASK, 8) & 0xFF
-        state.set_reg("S", (sp + 5) & _ADDR_MASK, 24)
+        imr = _stack_pop(env, "S", 1)
+        flags_val = _stack_pop(env, "S", 1)
+        lo = _stack_pop(env, "S", 1)
+        mid = _stack_pop(env, "S", 1)
+        hi = _stack_pop(env, "S", 1)
         env.bus.store("int", IMEMRegisters["IMR"].value & 0xFF, imr, 8)
-        state.set_reg("F", f_val, 8)
-        state.set_flag("C", f_val & 1)
-        state.set_flag("Z", (f_val >> 1) & 1)
-        target = (((page & 0xFF) << 16) | (hi << 8) | lo) & PC_MASK
-        state.pc = target
+        state.set_reg("F", flags_val, 8)
+        state.set_flag("C", flags_val & 1)
+        state.set_flag("Z", (flags_val >> 1) & 1)
+        target = (((hi & 0xFF) << 16) | ((mid & 0xFF) << 8) | (lo & 0xFF)) & PC_MASK
+        state.set_reg("PC", target, 20)
+        _log_lcd_reti(env, target)
         return
     if kind == "push_bytes":
         stack_reg = stmt.args[0]
@@ -590,6 +638,88 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
             dst_offset = (dst_offset + step_signed) & 0xFF
             src_offset = (src_offset + step_signed) & 0xFF
             remaining = (remaining - 1) & 0xFFFF
+        env.state.set_reg("I", remaining, 16)
+        return
+    if kind == "loop_ext_to_int":
+        count_value, _ = _eval_expr(stmt.args[0], env)
+        dst_ptr = stmt.args[1]
+        if not isinstance(dst_ptr, ast.LoopIntPtr):
+            raise TypeError("loop_ext_to_int expects LoopIntPtr destination")
+        src_operand = stmt.args[2]
+        mode_tag = _const_arg(stmt.args[3])
+        disp_expr = stmt.args[4]
+        disp = _to_signed(_const_arg(disp_expr), disp_expr.size)
+        width_expr = stmt.args[5]
+        width_bits = _const_arg(width_expr)
+        width_bytes = max(1, width_bits // 8)
+        step_expr = stmt.args[6]
+        step = _to_signed(_const_arg(step_expr), step_expr.size)
+        remaining = count_value & 0xFFFF
+        dst_offset = _loop_int_pointer(dst_ptr, env)
+        if mode_tag == _LOOP_EXT_MODE_IMM:
+            base_value, _ = _eval_expr(src_operand, env)
+            src_addr = base_value & _ADDR_MASK
+            while remaining:
+                value = env.bus.load("ext", src_addr, width_bits)
+                env.bus.store("int", dst_offset, value, width_bits)
+                src_addr = (src_addr + width_bytes) & _ADDR_MASK
+                dst_offset = (dst_offset + step) & 0xFF
+                remaining = (remaining - 1) & 0xFFFF
+        else:
+            if not isinstance(src_operand, ast.Reg):
+                raise TypeError("loop_ext_to_int expects register pointer source")
+            mode = _loop_mode_str(mode_tag)
+            while remaining:
+                value = _ext_pointer_read_value(
+                    env.state, env.bus, src_operand.name, mode, disp, width_bits
+                )
+                env.bus.store("int", dst_offset, value, width_bits)
+                dst_offset = (dst_offset + step) & 0xFF
+                remaining = (remaining - 1) & 0xFFFF
+        env.state.set_reg("I", remaining, 16)
+        return
+    if kind == "loop_int_to_ext":
+        count_value, _ = _eval_expr(stmt.args[0], env)
+        src_ptr = stmt.args[1]
+        if not isinstance(src_ptr, ast.LoopIntPtr):
+            raise TypeError("loop_int_to_ext expects LoopIntPtr source")
+        dest_operand = stmt.args[2]
+        mode_tag = _const_arg(stmt.args[3])
+        disp_expr = stmt.args[4]
+        disp = _to_signed(_const_arg(disp_expr), disp_expr.size)
+        width_expr = stmt.args[5]
+        width_bits = _const_arg(width_expr)
+        width_bytes = max(1, width_bits // 8)
+        step_expr = stmt.args[6]
+        step = _to_signed(_const_arg(step_expr), step_expr.size)
+        remaining = count_value & 0xFFFF
+        src_offset = _loop_int_pointer(src_ptr, env)
+        if mode_tag == _LOOP_EXT_MODE_IMM:
+            dest_value, _ = _eval_expr(dest_operand, env)
+            dest_addr = dest_value & _ADDR_MASK
+            while remaining:
+                value = env.bus.load("int", src_offset, width_bits)
+                env.bus.store("ext", dest_addr, value, width_bits)
+                src_offset = (src_offset + step) & 0xFF
+                dest_addr = (dest_addr + width_bytes) & _ADDR_MASK
+                remaining = (remaining - 1) & 0xFFFF
+        else:
+            if not isinstance(dest_operand, ast.Reg):
+                raise TypeError("loop_int_to_ext expects register pointer destination")
+            mode = _loop_mode_str(mode_tag)
+            while remaining:
+                value = env.bus.load("int", src_offset, width_bits)
+                _ext_pointer_store_value(
+                    env.state,
+                    env.bus,
+                    dest_operand.name,
+                    mode,
+                    disp,
+                    width_bits,
+                    value,
+                )
+                src_offset = (src_offset + step) & 0xFF
+                remaining = (remaining - 1) & 0xFFFF
         env.state.set_reg("I", remaining, 16)
         return
     if kind in {"loop_add_carry", "loop_sub_borrow"}:
@@ -719,6 +849,22 @@ def _exec_effect(stmt: ast.Effect, env: _Env) -> None:
         value, _ = _eval_expr(stmt.args[1], env)
         current = env.bus.load("int", addr & 0xFF, 8) & 0xFF
         env.bus.store("int", addr & 0xFF, (current + value) & 0xFF, 8)
+        if os.getenv("PYTHON_PMDF_TRACE"):
+            pc = env.state.get_reg("PC", 20)
+            pre = env.pre_latch
+            pre_str = (
+                f"({pre.first.value}, {pre.second.value})" if pre is not None else "none"
+            )
+            print(
+                "[pmdf] python pc=0x{pc:06X} pre={pre} addr=0x{addr:02X} current=0x{cur:02X} value=0x{val:02X} updated=0x{upd:02X}".format(
+                    pc=pc & PC_MASK,
+                    pre=pre_str,
+                    addr=addr & 0xFF,
+                    cur=current,
+                    val=value & 0xFF,
+                    upd=(current + value) & 0xFF,
+                )
+            )
         return
     if kind in {"halt", "off"}:
         _enter_low_power_state(env)

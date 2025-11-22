@@ -24,3 +24,7 @@ target/
 # uv
 .venv/
 uv.lock
+
+# Generated SCIL payload (rustcore)
+sc62015/rustcore/generated/*.rs
+sc62015/rustcore/generated/manifest.json

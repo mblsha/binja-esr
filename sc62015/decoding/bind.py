@@ -59,6 +59,24 @@ class Imm16:
 
 
 @dataclass(frozen=True, slots=True)
+class Imm20:
+    lo: int
+    mid: int
+    hi: int
+
+    def __post_init__(self) -> None:
+        for label, val in (("lo", self.lo), ("mid", self.mid), ("hi", self.hi)):
+            if not 0 <= val <= 0xFF:
+                raise ValueError(f"Imm20 {label} byte out of range: {val:#x}")
+        if self.hi & ~0x0F:
+            raise ValueError(f"Imm20 high nibble out of range: {self.hi:#x}")
+
+    @property
+    def value(self) -> int:
+        return (self.hi << 16) | (self.mid << 8) | self.lo
+
+
+@dataclass(frozen=True, slots=True)
 class Imm24:
     lo: int
     mid: int
