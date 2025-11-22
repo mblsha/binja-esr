@@ -68,9 +68,9 @@ def run_emulator(
         PCE500Emulator: The emulator instance after running
     """
     backend_env = (os.getenv("SC62015_CPU_BACKEND") or "").lower()
-    default_fast_mode = backend_env == "rust"
+    default_fast_mode = backend_env == "llama"
     resolved_fast_mode = default_fast_mode if fast_mode is None else bool(fast_mode)
-    default_timeout = 0.0 if backend_env == "rust" else 10.0
+    default_timeout = 0.0 if backend_env == "llama" else 10.0
     timeout_secs = default_timeout if timeout_secs is None else float(timeout_secs)
 
     # Create emulator
@@ -444,19 +444,8 @@ def run_emulator(
         if callable(backend_stats):
             stats = backend_stats()
             backend_name = stats.get("backend")
-            if backend_name == "rust":
-                print(
-                    "\nSC62015 Rust backend stats: "
-                    f"steps={stats.get('steps_rust', 0)} "
-                    f"decode_miss={stats.get('decode_miss', 0)} "
-                    f"fallback_steps={stats.get('fallback_steps', 0)}"
-                )
-                hist = stats.get("decode_miss_hist")
-                if isinstance(hist, dict) and hist:
-                    top = ", ".join(
-                        f"0x{op:02X}:{count}" for op, count in list(hist.items())[:8]
-                    )
-                    print(f"  Decode-miss histogram: {top}")
+            if backend_name == "llama":
+                print("\nSC62015 LLAMA backend stats: no additional counters exposed")
 
         print(f"\nCPU State after {emu.cycle_count} cycles:")
         print(f"  PC: {emu.cpu.regs.get(RegisterName.PC):06X}")
@@ -624,10 +613,10 @@ def main(
     backend_env = (os.getenv("SC62015_CPU_BACKEND") or "").lower()
     resolved_fast_mode = fast_mode
     if resolved_fast_mode is None:
-        resolved_fast_mode = backend_env == "rust"
+        resolved_fast_mode = backend_env == "llama"
     resolved_timeout = timeout_secs
     if resolved_timeout is None:
-        resolved_timeout = 0.0 if backend_env == "rust" else 10.0
+        resolved_timeout = 0.0 if backend_env == "llama" else 10.0
     perfetto_enabled = perfetto
     # When loading from a snapshot and the caller did not explicitly enable tracing,
     # default to no perfetto to avoid overhead on short replay windows.
@@ -730,7 +719,7 @@ if __name__ == "__main__":
         "--timeout-secs",
         type=float,
         default=None,
-        help="Abort run after this many seconds (default: 0 for Rust backend, 10.0 otherwise)",
+        help="Abort run after this many seconds (default: 0 for LLAMA backend, 10.0 otherwise)",
     )
     parser.add_argument(
         "--perfetto",
@@ -807,7 +796,7 @@ if __name__ == "__main__":
         "--fast-mode",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Minimize step() overhead to run more instructions (default: on for Rust backend)",
+        help="Minimize step() overhead to run more instructions (default: on for LLAMA backend)",
     )
     parser.add_argument(
         "--boot-skip",

@@ -11,10 +11,8 @@
 - Root: `plugin.json`, `pyproject.toml`, lint/type configs.
 
 ## Reference Docs
-- `docs/scil_arch_report.md`: SCIL architecture, manifest pipeline, binder/pre notes.
-- `docs/rust_emulator_file_map.md`: Rust-side file map for SCIL payload consumption.
-- `docs/rust_emulator_reuse.md`: What Rust pieces can/can’t be reused without SCIL.
-- `plan_llama.md`: Plan for the LLIL-based Rust CPU core (Project LLAMA).
+- `plan_llama.md`: LLAMA roadmap and current progress.
+- `docs/llama_design.md`: LLAMA design notes (decode/eval layout, runtime interfaces).
 - `docs/llama_parity_plan.md`: Perfetto/pytest parity guardrails for LLAMA.
 - `.github/workflows/llama-perfetto-smoke.yml`: nightly/dispatch Perfetto trace smoke (NOP/CALL/EMEM MV/DSBL/EMEM reg-indirect/PUSHU).
 
@@ -53,9 +51,6 @@
 - Emulator demo: `uv run python pce500/run_pce500.py` (use `--profile-emulator` to emit `emulator-profile.perfetto-trace`).
 - Web UI: `uv run python web/run.py` then open the served address.
 - Binary Ninja: Not required for dev; mocks auto‑load via `FORCE_BINJA_MOCK=1` or `binja-test-mocks`.
+- Native backend: LLAMA is the only Rust core; SCIL/manifest tooling and tests were removed.
 
-- **Perf & counters:** `get_scil_counters()` exposes `scil_ok`, `scil_error`,
-  and `legacy_rescue` (the only time legacy code runs is when
-  `BN_ALLOW_LEGACY=1` is set for an emergency). The perf gate in CI runs the
-  shape-sensitive corpus (`tests/scil_phase3`) plus a fixed decode set to guard
-  regressions.
+- **LLAMA tracing/parity:** Perfetto traces (binary `retrobus-perfetto`) from Python and LLAMA cores align on instruction-index timestamps; `scripts/compare_perfetto_traces.py` compares them. Nightly smoke lives in `.github/workflows/llama-perfetto-smoke.yml`.

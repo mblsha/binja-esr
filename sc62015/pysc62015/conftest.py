@@ -8,7 +8,7 @@ import pytest
 
 from sc62015.pysc62015 import available_backends
 
-_VALID_BACKENDS = {"python", "rust", "llama"}
+_VALID_BACKENDS = {"python", "llama"}
 
 
 def _parse_backend_option(raw: str | None) -> List[str]:

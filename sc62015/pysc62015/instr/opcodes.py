@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import (
     Optional,
     List,
+    Iterable,
     Generator,
     Iterator,
     Dict,
@@ -58,16 +59,95 @@ from binaryninja.lowlevelil import (  # type: ignore
     ExpressionIndex,
 )
 
-from ...decoding.bind import IntAddrCalc
-from ...decoding.pre_modes import iter_pre_modes, opcode_for_modes
+from dataclasses import dataclass
 
 
 class InvalidInstruction(Exception):
     pass
 
 
+class IntAddrCalc(str, enum.Enum):
+    """Enumeration of supported internal memory addressing calculations."""
+
+    N = "(n)"
+    BP_N = "(BP+n)"
+    PX_N = "(PX+n)"
+    PY_N = "(PY+n)"
+    BP_PX = "(BP+PX)"
+    BP_PY = "(BP+PY)"
+
+
+@dataclass(frozen=True)
+class PreLatch:
+    first: IntAddrCalc
+    second: IntAddrCalc
+
+
+@dataclass(frozen=True)
+class PreMode:
+    """Represents a single PRE opcode and the IMEM mappings it enforces."""
+
+    opcode: int
+    latch: PreLatch
+
+
+_PRE_OPCODE_MATRIX = {
+    # First-op rows: (n), (BP+n), (PX+n), (BP+PX)
+    # Second-op cols: (n), (BP+n), (PY+n), (BP+PY)
+    (IntAddrCalc.N, IntAddrCalc.N): 0x32,
+    (IntAddrCalc.N, IntAddrCalc.BP_N): 0x30,
+    (IntAddrCalc.N, IntAddrCalc.PY_N): 0x33,
+    (IntAddrCalc.N, IntAddrCalc.BP_PY): 0x31,
+    (IntAddrCalc.BP_N, IntAddrCalc.N): 0x22,
+    (IntAddrCalc.BP_N, IntAddrCalc.PY_N): 0x23,
+    (IntAddrCalc.BP_N, IntAddrCalc.BP_PY): 0x21,
+    (IntAddrCalc.PX_N, IntAddrCalc.N): 0x36,
+    (IntAddrCalc.PX_N, IntAddrCalc.BP_N): 0x34,
+    (IntAddrCalc.PX_N, IntAddrCalc.PY_N): 0x37,
+    (IntAddrCalc.PX_N, IntAddrCalc.BP_PY): 0x35,
+    (IntAddrCalc.BP_PX, IntAddrCalc.N): 0x26,
+    (IntAddrCalc.BP_PX, IntAddrCalc.BP_N): 0x24,
+    (IntAddrCalc.BP_PX, IntAddrCalc.PY_N): 0x27,
+    (IntAddrCalc.BP_PX, IntAddrCalc.BP_PY): 0x25,
+}
+
+
+def _build_modes() -> Tuple[
+    Dict[int, PreMode], Dict[Tuple[IntAddrCalc, IntAddrCalc], int]
+]:
+    by_opcode: Dict[int, PreMode] = {}
+    by_pair: Dict[Tuple[IntAddrCalc, IntAddrCalc], int] = {}
+
+    for (row, col), opcode in _PRE_OPCODE_MATRIX.items():
+        if opcode == 0x20:
+            continue
+        if opcode in by_opcode:
+            raise ValueError(f"Duplicate PRE opcode {opcode:#x}")
+        latch = PreLatch(row, col)
+        by_opcode[opcode] = PreMode(opcode=opcode, latch=latch)
+        by_pair[(row, col)] = opcode
+
+    return by_opcode, by_pair
+
+
+PRE_BY_OPCODE, PRE_BY_PAIR = _build_modes()
+
+
+def opcode_for_modes(first: IntAddrCalc, second: IntAddrCalc) -> int | None:
+    """Return the PRE opcode byte for a given pair of IMEM addressing modes."""
+
+    return PRE_BY_PAIR.get((first, second))
+
+
+def iter_pre_modes() -> Iterable[PreMode]:
+    """Yield all supported PRE modes sorted by opcode."""
+
+    for opcode in sorted(PRE_BY_OPCODE):
+        yield PRE_BY_OPCODE[opcode]
+
+
 # `AddressingMode` historically lived in this module; now it aliases the shared
-# IntAddrCalc enum so SCIL, BN, and future codegen consume the same values.
+# IntAddrCalc enum kept in sync with opcode helpers and potential codegen.
 AddressingMode = IntAddrCalc
 
 

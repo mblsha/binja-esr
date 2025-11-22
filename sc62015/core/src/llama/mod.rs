@@ -1,9 +1,8 @@
 //! Project LLAMA: direct-execution Rust core mirroring the Python LLIL lifter.
 //!
-//! This module is intentionally not wired into the build yet; it serves as a
-//! staging area for the LLIL-less evaluator, keeping types and tables close to
-//! the existing core. The goal is drop-in swapability with the current SCIL
-//! path once the evaluator is implemented.
+//! LLAMA is now the sole Rust CPU core; the SCIL/manifest interpreter path has
+//! been removed. These modules hold the opcode table, evaluator, and supporting
+//! state/parity helpers used by the PyO3 wrapper.
 
 #![allow(dead_code)]
 
