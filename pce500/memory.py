@@ -148,7 +148,7 @@ class PCE500Memory:
         self._imem_access_callback: Optional[Callable[[int, str, str, int], None]] = (
             None
         )
-        self._suppress_rust_sync = 0
+        self._suppress_llama_sync = 0
         self._perf_tracer = None
 
     def set_imem_access_callback(
@@ -270,27 +270,27 @@ class PCE500Memory:
             },
         )
 
-    def _maybe_sync_rust_host_write(
+    def _maybe_sync_llama_host_write(
         self, address: int, value: int, cpu_pc: Optional[int]
     ) -> None:
-        """Mirror host-initiated external writes into the Rust backend snapshot."""
+        """Mirror host-initiated external writes into the LLAMA backend snapshot."""
 
         emulator = getattr(self, "_emulator", None)
         facade_cpu = getattr(emulator, "cpu", None) if emulator else None
         cpu = facade_cpu or getattr(self, "cpu", None)
-        debug = os.getenv("RUST_HOST_WRITE_TRACE") == "1"
-        if cpu is None or getattr(cpu, "backend", None) != "rust":
+        debug = os.getenv("LLAMA_HOST_WRITE_TRACE") == "1"
+        if cpu is None or getattr(cpu, "backend", None) != "llama":
             if debug:
-                print("[rust-host-sync] skipped (no rust backend)")
+                print("[llama-host-sync] skipped (no LLAMA backend)")
             return
-        if self._suppress_rust_sync > 0:
+        if self._suppress_llama_sync > 0:
             if debug:
-                print("[rust-host-sync] suppressed")
+                print("[llama-host-sync] suppressed")
             return
         if cpu_pc is not None:
             if debug:
                 print(
-                    f"[rust-host-sync] skipped (cpu_pc=0x{int(cpu_pc) & 0xFFFFFF:06X})"
+                    f"[llama-host-sync] skipped (cpu_pc=0x{int(cpu_pc) & 0xFFFFFF:06X})"
                 )
             return
         backend_impl = cpu.unwrap() if hasattr(cpu, "unwrap") else cpu
@@ -301,7 +301,7 @@ class PCE500Memory:
             return
         if debug:
             print(
-                f"[rust-host-sync] addr=0x{address & 0xFFFFFF:06X} value=0x{value & 0xFF:02X}"
+                f"[llama-host-sync] addr=0x{address & 0xFFFFFF:06X} value=0x{value & 0xFF:02X}"
             )
         try:
             notifier(address & 0xFFFFFF, value & 0xFF)
@@ -399,7 +399,7 @@ class PCE500Memory:
                 f"[ext-write] pc=0x{effective_pc:06X} addr=0x{address:06X} value=0x{value:02X}"
             )
         if getattr(self, "_emulator", None) is not None and getattr(
-            self._emulator, "_rust_pure_lcd", False
+            self._emulator, "_llama_pure_lcd", False
         ):
             if (
                 effective_pc is not None
@@ -519,7 +519,7 @@ class PCE500Memory:
             )
             _trace_lcd_write(self, address, value, effective_pc)
             _trace_stack_write(address, value, effective_pc)
-            self._maybe_sync_rust_host_write(address, value, cpu_pc)
+            self._maybe_sync_llama_host_write(address, value, cpu_pc)
             return
 
         # External memory space (0x00000-0xFFFFF)
@@ -547,7 +547,7 @@ class PCE500Memory:
         # Default to external memory
         self.external_memory[address] = value
         _trace_stack_write(address, value, effective_pc)
-        self._maybe_sync_rust_host_write(address, value, cpu_pc)
+        self._maybe_sync_llama_host_write(address, value, cpu_pc)
 
         # Perfetto tracing for all writes
         if self.perfetto_enabled:
@@ -617,7 +617,7 @@ class PCE500Memory:
         return tuple(self._bus.iter_overlays())
 
     # ------------------------------------------------------------------ #
-    # Rust backend helpers
+    # LLAMA backend helpers
 
     def export_flat_memory(
         self,
@@ -656,26 +656,26 @@ class PCE500Memory:
         return bytes(blob), tuple(fallback), tuple(readonly)
 
     def apply_external_writes(self, writes: Iterable[Tuple[int, int]]) -> None:
-        """Apply external-memory writes that originated from the Rust backend."""
-        self._suppress_rust_sync += 1
+        """Apply external-memory writes that originated from the LLAMA backend."""
+        self._suppress_llama_sync += 1
         try:
             for address, value in writes:
                 self.write_byte(address & 0xFFFFFF, value & 0xFF)
         finally:
-            self._suppress_rust_sync = max(0, self._suppress_rust_sync - 1)
+            self._suppress_llama_sync = max(0, self._suppress_llama_sync - 1)
 
     def apply_internal_writes(self, writes: Iterable[Tuple[int, int]]) -> None:
-        """Apply internal-memory writes (IMEM registers) from the Rust backend."""
-        self._suppress_rust_sync += 1
+        """Apply internal-memory writes (IMEM registers) from the LLAMA backend."""
+        self._suppress_llama_sync += 1
         try:
             for address, value in writes:
-                if os.getenv("RUST_INTERNAL_WRITE_TRACE") == "1":
+                if os.getenv("LLAMA_INTERNAL_WRITE_TRACE") == "1":
                     print(
-                        f"[rust-internal-apply] addr=0x{address:06X} value=0x{value:02X}"
+                        f"[llama-internal-apply] addr=0x{address:06X} value=0x{value:02X}"
                     )
                 self.write_byte(address & 0xFFFFFF, value & 0xFF)
         finally:
-            self._suppress_rust_sync = max(0, self._suppress_rust_sync - 1)
+            self._suppress_llama_sync = max(0, self._suppress_llama_sync - 1)
 
     def load_rom(self, rom_data: bytes) -> None:
         """Load ROM as an overlay at 0xC0000."""
@@ -760,13 +760,13 @@ class PCE500Memory:
             lcd_controller.set_cpu(self.cpu)
 
         if not enable_overlay:
-            # Pure-Rust path: forward writes to the overlay hooks so Python-side
+            # Native path: forward writes to the overlay hooks so Python-side
             # peripherals (keyboard/LCD) and IMEM sync stay active even without
             # the MemoryOverlay objects.
-            def _rust_lcd_write(addr: int, val: int, pc: Optional[int]) -> None:
+            def _llama_lcd_write(addr: int, val: int, pc: Optional[int]) -> None:
                 _lcd_write_wrapper(self, lcd_controller.write, addr, val, pc)
 
-            setattr(self, "_rust_lcd_write", _rust_lcd_write)
+            setattr(self, "_llama_lcd_write", _llama_lcd_write)
             return
 
         def lcd_write_handler(addr: int, val: int, pc: Optional[int]) -> None:

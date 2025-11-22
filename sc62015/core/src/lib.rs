@@ -1,24 +1,16 @@
-//! Placeholder pure-Rust SC62015 core crate.
-//!
-//! This scaffolding exists to start the extraction away from the PyO3-specific
-//! runtime. The goal is to grow this crate into the real runtime/bus/peripheral
-//! layer, leaving the PyO3 crate as a thin wrapper.
-
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::SystemTime;
-use thiserror::Error;
-use rust_scil::state::State as RsState;
-
 pub mod memory;
 pub mod keyboard;
 pub mod lcd;
 pub mod snapshot;
 pub mod timer;
-pub mod eval;
-pub mod exec;
 pub mod perfetto;
 pub mod llama;
+
+use crate::llama::{opcodes::RegName, state::LlamaState};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::SystemTime;
+use thiserror::Error;
 
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
@@ -26,19 +18,13 @@ pub use memory::{
     MemoryImage, ADDRESS_MASK, EXTERNAL_SPACE, INTERNAL_ADDR_MASK, INTERNAL_MEMORY_START,
     INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
 };
-pub use eval::{LayoutEntryView, ManifestEntryView, BoundInstrView, eval_manifest_entry};
-pub use exec::{
-    BoundInstrBuilder, BusProfiler, DecodedInstr, ExecManifestEntry, HostMemory, HybridBus,
-    InstructionStream, NullProfiler, OpcodeIndexView, OpcodeLookup, OpcodeLookupKey,
-    decode_bound_from_memory, execute_step, resolve_bus_address, PRE_PREFIXES,
-};
 pub use perfetto::PerfettoTracer;
 pub use timer::TimerContext;
 pub use snapshot::{
     load_snapshot, pack_registers, save_snapshot, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC,
     SNAPSHOT_REGISTER_LAYOUT, SNAPSHOT_VERSION,
 };
-pub use rust_scil::state::State as CpuState;
+pub use llama::state::LlamaState as CpuState;
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
@@ -148,6 +134,37 @@ pub fn now_timestamp() -> String {
 
 pub const DEFAULT_REG_WIDTH: u8 = 24;
 
+fn mask_for_width(bits: u8) -> u32 {
+    if bits == 0 {
+        0
+    } else if bits >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << bits) - 1
+    }
+}
+
+fn reg_from_name(name: &str) -> Option<RegName> {
+    match name.to_ascii_uppercase().as_str() {
+        "A" => Some(RegName::A),
+        "B" => Some(RegName::B),
+        "BA" => Some(RegName::BA),
+        "IL" => Some(RegName::IL),
+        "IH" => Some(RegName::IH),
+        "I" => Some(RegName::I),
+        "X" => Some(RegName::X),
+        "Y" => Some(RegName::Y),
+        "U" => Some(RegName::U),
+        "S" => Some(RegName::S),
+        "PC" => Some(RegName::PC),
+        "F" => Some(RegName::F),
+        "FC" => Some(RegName::FC),
+        "FZ" => Some(RegName::FZ),
+        "IMR" => Some(RegName::IMR),
+        _ => None,
+    }
+}
+
 pub fn register_width(name: &str) -> u8 {
     match name.to_ascii_uppercase().as_str() {
         "A" | "B" | "IL" | "IH" => 8,
@@ -160,29 +177,32 @@ pub fn register_width(name: &str) -> u8 {
     }
 }
 
-pub fn collect_registers(state: &RsState) -> HashMap<String, u32> {
+pub fn collect_registers(state: &LlamaState) -> HashMap<String, u32> {
     let mut regs = HashMap::new();
     for (name, width_bytes) in snapshot::SNAPSHOT_REGISTER_LAYOUT.iter() {
         let bits = (width_bytes * 8) as u8;
-        regs.insert((*name).to_string(), state.get_reg(name, bits));
+        let value = reg_from_name(name)
+            .map(|reg| state.get_reg(reg) & mask_for_width(bits))
+            .unwrap_or(0);
+        regs.insert((*name).to_string(), value);
     }
     regs
 }
 
-pub fn apply_registers(state: &mut RsState, regs: &HashMap<String, u32>) {
+pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) {
     for (name, _) in snapshot::SNAPSHOT_REGISTER_LAYOUT.iter() {
         let value = *regs.get(*name).unwrap_or(&0);
-        let width = register_width(name);
-        state.set_reg(name, value, width);
+        if let Some(reg) = reg_from_name(name) {
+            state.set_reg(reg, value & mask_for_width(register_width(name)));
+        }
     }
 }
 
-/// Extremely small placeholder runtime. This will be replaced with the full
-/// SC62015 execution/bus once extracted.
+/// Extremely small placeholder runtime for LLAMA-only execution.
 pub struct CoreRuntime {
     metadata: SnapshotMetadata,
     pub memory: MemoryImage,
-    pub state: RsState,
+    pub state: LlamaState,
     pub fast_mode: bool,
 }
 
@@ -197,7 +217,7 @@ impl CoreRuntime {
         Self {
             metadata: SnapshotMetadata::default(),
             memory: MemoryImage::new(),
-            state: RsState::default(),
+            state: LlamaState::new(),
             fast_mode: false,
         }
     }
@@ -211,10 +231,8 @@ impl CoreRuntime {
     }
 
     pub fn step(&mut self, _instructions: usize) -> Result<()> {
-        // Placeholder: real execution will live here after extraction.
-        let pc = self.state.get_reg("PC", register_width("PC"));
-        self.state
-            .set_reg("PC", pc.wrapping_add(1), register_width("PC"));
+        let pc = self.state.get_reg(RegName::PC);
+        self.state.set_pc(pc.wrapping_add(1) & ADDRESS_MASK);
         self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
         self.metadata.cycle_count = self.metadata.cycle_count.wrapping_add(1);
         Ok(())
@@ -239,19 +257,26 @@ impl CoreRuntime {
     }
 
     pub fn set_reg(&mut self, name: &str, value: u32) {
-        let width = register_width(name);
-        self.state.set_reg(name, value, width);
+        if let Some(reg) = reg_from_name(name) {
+            self.state.set_reg(reg, value);
+        }
     }
 
     pub fn get_reg(&self, name: &str) -> u32 {
-        self.state.get_reg(name, register_width(name))
+        reg_from_name(name)
+            .map(|reg| self.state.get_reg(reg) & mask_for_width(register_width(name)))
+            .unwrap_or(0)
     }
 
     pub fn set_flag(&mut self, name: &str, value: u8) {
-        self.state.set_flag(name, value as u32);
+        if let Some(reg) = reg_from_name(name) {
+            self.state.set_reg(reg, value as u32);
+        }
     }
 
     pub fn get_flag(&self, name: &str) -> u8 {
-        self.state.get_flag(name) as u8
+        reg_from_name(name)
+            .map(|reg| self.state.get_reg(reg) as u8)
+            .unwrap_or(0)
     }
 }

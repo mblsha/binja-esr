@@ -244,8 +244,6 @@ class PCE500Emulator:
         # Note: LCC overlay not needed for the keyboard handler
 
         backend = os.getenv("SC62015_CPU_BACKEND")
-        if not backend and _env_flag("BN_SCIL_PYEMU"):
-            backend = "rust"
         try:
             self.cpu = CPU(self.memory, reset_on_init=True, backend=backend)
         except RuntimeError as exc:
@@ -260,13 +258,12 @@ class PCE500Emulator:
         if pure_keyboard_env is not None:
             disable_keyboard_overlay = pure_keyboard_env == "1"
         else:
-            disable_keyboard_overlay = backend_name == "rust"
+            disable_keyboard_overlay = backend_name == "llama"
         self.memory.set_keyboard_handler(
             self._keyboard_read_handler,
             self._keyboard_write_handler,
             enable_overlay=not disable_keyboard_overlay,
         )
-        self._rust_keyboard_bridge = disable_keyboard_overlay
         try:
             self.keyboard.set_bridge_cpu(self.cpu if disable_keyboard_overlay else None, disable_keyboard_overlay)
         except Exception:
@@ -276,11 +273,11 @@ class PCE500Emulator:
         if pure_lcd_env is not None:
             disable_overlay = pure_lcd_env == "1"
         else:
-            disable_overlay = backend_name == "rust"
+            disable_overlay = backend_name == "llama"
         enable_overlay = not disable_overlay
         self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
-        self._rust_pure_lcd = disable_overlay
-        self._rust_lcd_write = getattr(self.memory, "_rust_lcd_write", None) if disable_overlay else None
+        self._llama_pure_lcd = disable_overlay
+        self._llama_lcd_write = getattr(self.memory, "_llama_lcd_write", None) if disable_overlay else None
 
         # Set performance tracer for SC62015 integration if available
         if new_tracer.enabled:
@@ -308,7 +305,7 @@ class PCE500Emulator:
             trace_dispatcher.start_trace(trace_path)
             self.lcd.set_perfetto_enabled(True)
             self.memory.set_perfetto_enabled(True)
-            if getattr(self.cpu, "backend", None) == "rust":
+            if getattr(self.cpu, "backend", None) == "llama":
                 try:
                     self.cpu.set_perfetto_trace(trace_path)
                 except Exception:
@@ -418,7 +415,7 @@ class PCE500Emulator:
         self._next_interrupt_id = 1
         self._scheduler.reset()
         self._kb_irq_count = 0
-        if getattr(self, "_rust_pure_lcd", False):
+        if getattr(self, "_llama_pure_lcd", False):
             self._seed_interrupt_mask()
         # Reset interrupt accounting
         try:
@@ -438,7 +435,7 @@ class PCE500Emulator:
         try:
             if self._timer_enabled and not getattr(self, "_in_interrupt", False):
                 if not getattr(self.keyboard, "_bridge_enabled", False) or not getattr(
-                    self.cpu, "_timer_in_rust", False
+                    self.cpu, "_timer_in_llama", False
                 ):
                     self._tick_timers()
         except Exception:
@@ -866,8 +863,8 @@ class PCE500Emulator:
 
     def _sync_lcd_from_backend(self) -> None:
         if (
-            getattr(self.cpu, "backend", None) != "rust"
-            or not getattr(self, "_rust_pure_lcd", False)
+            getattr(self.cpu, "backend", None) != "llama"
+            or not getattr(self, "_llama_pure_lcd", False)
         ):
             return
         exporter = getattr(self.cpu, "export_lcd_snapshot", None)
@@ -878,7 +875,7 @@ class PCE500Emulator:
             try:
                 self.lcd.load_snapshot(metadata, payload)
             except Exception as exc:  # pragma: no cover - diagnostic path
-                print(f"WARNING: failed to apply LCD snapshot from Rust backend: {exc}")
+                print(f"WARNING: failed to apply LCD snapshot from LLAMA backend: {exc}")
 
     def _capture_lcd_snapshot(self) -> Tuple[Dict[str, object], bytes]:
         self._sync_lcd_from_backend()
@@ -917,14 +914,14 @@ class PCE500Emulator:
             return
         self.lcd.load_snapshot(metadata, payload)
 
-    def _patch_rust_snapshot_metadata(self, target: Path) -> None:
-        """Add Python-only metadata fields to a Rust-authored snapshot."""
+    def _patch_llama_snapshot_metadata(self, target: Path) -> None:
+        """Add Python-only metadata fields to a LLAMA-authored snapshot."""
 
         try:
             with zipfile.ZipFile(target, "r") as zf:
                 entries = {name: zf.read(name) for name in zf.namelist()}
         except Exception as exc:  # pragma: no cover - diagnostic path
-            print(f"[snapshot] Unable to post-process Rust snapshot: {exc}")
+            print(f"[snapshot] Unable to post-process LLAMA snapshot: {exc}")
             return
 
         try:
@@ -940,7 +937,7 @@ class PCE500Emulator:
         }
         metadata.update(
             {
-                "backend": getattr(self.cpu, "backend", "rust"),
+                "backend": getattr(self.cpu, "backend", "llama"),
                 "call_depth": int(getattr(self, "call_depth", 0)),
                 "call_sub_level": int(getattr(cpu_snapshot, "call_sub_level", 0)),
                 "temps": temps,
@@ -986,22 +983,22 @@ class PCE500Emulator:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        if getattr(self.cpu, "backend", None) == "rust":
-            rust_impl = self.cpu.unwrap()
-            saver = getattr(rust_impl, "save_snapshot", None)
+        if getattr(self.cpu, "backend", None) == "llama":
+            llama_impl = self.cpu.unwrap()
+            saver = getattr(llama_impl, "save_snapshot", None)
             if callable(saver):
                 try:
-                    is_synced = getattr(rust_impl, "is_memory_synced", None)
+                    is_synced = getattr(llama_impl, "is_memory_synced", None)
                     if callable(is_synced) and not is_synced():
-                        reinit = getattr(rust_impl, "_initialise_rust_memory", None)
+                        reinit = getattr(llama_impl, "_initialise_rust_memory", None)
                         if callable(reinit):
                             reinit()
                     saver(str(target))
-                    self._patch_rust_snapshot_metadata(target)
+                    self._patch_llama_snapshot_metadata(target)
                     return target
                 except Exception as exc:  # pragma: no cover - fallback path
                     print(
-                        f"[snapshot] Rust save failed, falling back to python path: {exc}"
+                        f"[snapshot] LLAMA save failed, falling back to python path: {exc}"
                     )
 
         cpu_snapshot = self.cpu.snapshot_registers()
@@ -1143,9 +1140,9 @@ class PCE500Emulator:
         except Exception:
             pass
 
-        if getattr(self.cpu, "backend", None) == "rust":
-            rust_impl = getattr(self.cpu, "_impl", None)
-            marker = getattr(rust_impl, "mark_memory_dirty", None)
+        if getattr(self.cpu, "backend", None) == "llama":
+            llama_impl = getattr(self.cpu, "_impl", None)
+            marker = getattr(llama_impl, "mark_memory_dirty", None)
             if callable(marker):
                 try:
                     marker()
@@ -1245,16 +1242,16 @@ class PCE500Emulator:
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
 
-        if self.cpu.backend == "rust":
-            rust_impl = self.cpu.unwrap()
-            reinit = getattr(rust_impl, "_initialise_rust_memory", None)
+        if self.cpu.backend == "llama":
+            llama_impl = self.cpu.unwrap()
+            reinit = getattr(llama_impl, "_initialise_rust_memory", None)
             if callable(reinit):
                 try:
-                    setattr(rust_impl, "_memory_synced", False)
+                    setattr(llama_impl, "_memory_synced", False)
                 except Exception:
                     pass
                 reinit()
-            sync_irq = getattr(rust_impl, "set_interrupt_state", None)
+            sync_irq = getattr(llama_impl, "set_interrupt_state", None)
             if callable(sync_irq):
                 try:
                     sync_irq(
@@ -1620,7 +1617,7 @@ class PCE500Emulator:
     ) -> None:
         """Handle a pure-Rust LCD write that should nudge the KEY interrupt."""
 
-        if not getattr(self, "_rust_pure_lcd", False):
+        if not getattr(self, "_llama_pure_lcd", False):
             return
         if not getattr(self, "_kb_irq_enabled", True):
             return
@@ -1649,7 +1646,7 @@ class PCE500Emulator:
             pass
 
     def _ensure_key_irq_mask(self) -> None:
-        if not getattr(self, "_rust_pure_lcd", False):
+        if not getattr(self, "_llama_pure_lcd", False):
             return
         try:
             imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR

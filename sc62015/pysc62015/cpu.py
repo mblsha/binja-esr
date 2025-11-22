@@ -24,14 +24,14 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     CachedFetchDecoder = None  # type: ignore
 
-CPUBackendName = Literal["python", "rust", "llama"]
+CPUBackendName = Literal["python", "llama"]
 
 _ENV_VAR = "SC62015_CPU_BACKEND"
 _DEFAULT_BACKEND: CPUBackendName = "python"
 
 
-def _load_rust_backend() -> Optional[object]:
-    """Attempt to import the optional Rust backend module."""
+def _load_native_backend() -> Optional[object]:
+    """Attempt to import the optional native (LLAMA) backend module."""
 
     try:
         rust_module = import_module("_sc62015_rustcore")
@@ -42,16 +42,14 @@ def _load_rust_backend() -> Optional[object]:
 
 
 def available_backends(
-    rust_loader: Callable[[], Optional[object]] | None = None,
+    native_loader: Callable[[], Optional[object]] | None = None,
 ) -> Tuple[CPUBackendName, ...]:
     """Return the list of CPU backends available in this runtime."""
 
-    loader = rust_loader or _load_rust_backend
+    loader = native_loader or _load_native_backend
     backends: list[CPUBackendName] = ["python"]
     rust_module = loader()
     if rust_module is not None:
-        if getattr(rust_module, "HAS_CPU_IMPLEMENTATION", False):
-            backends.append("rust")
         if getattr(rust_module, "HAS_LLAMA_IMPLEMENTATION", False):
             backends.append("llama")
     return tuple(backends)
@@ -61,8 +59,6 @@ def _normalise_backend_name(name: str) -> CPUBackendName:
     lowered = name.strip().lower()
     if lowered in {"py", "python"}:
         return "python"
-    if lowered in {"rs", "rust", "rustcore"}:
-        return "rust"
     if lowered in {"llama"}:
         return "llama"
     raise ValueError(f"Unknown SC62015 backend '{name}'")
@@ -71,11 +67,11 @@ def _normalise_backend_name(name: str) -> CPUBackendName:
 def select_backend(
     preferred: Optional[str] = None,
     *,
-    rust_loader: Callable[[], Optional[object]] | None = None,
+    native_loader: Callable[[], Optional[object]] | None = None,
 ) -> Tuple[CPUBackendName, Optional[object]]:
     """Resolve the backend that should power CPU instances."""
 
-    loader = rust_loader or _load_rust_backend
+    loader = native_loader or _load_native_backend
 
     requested: Optional[str] = preferred or os.environ.get(_ENV_VAR)
     backend_name: CPUBackendName
@@ -85,22 +81,16 @@ def select_backend(
     else:
         backend_name = _DEFAULT_BACKEND
 
-    if backend_name in {"rust", "llama"}:
+    if backend_name == "llama":
         rust_module = loader()
         if rust_module is None:
             raise RuntimeError(
-                "SC62015 Rust backend requested but not available. "
+                "SC62015 LLAMA backend requested but not available. "
                 "Run `uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml` "
                 "to build the optional extension."
             )
-        if backend_name == "llama" and not getattr(
-            rust_module, "HAS_LLAMA_IMPLEMENTATION", False
-        ):
+        if not getattr(rust_module, "HAS_LLAMA_IMPLEMENTATION", False):
             raise RuntimeError("LLAMA backend requested but not available in rustcore module.")
-        if backend_name == "rust" and not getattr(
-            rust_module, "HAS_CPU_IMPLEMENTATION", False
-        ):
-            raise RuntimeError("Rust SCIL backend requested but not available in rustcore module.")
 
     return backend_name, rust_module
 
@@ -125,10 +115,7 @@ class CPU:
             self._legacy_decoder = legacy
         else:
             assert rust_module is not None
-            if backend_name == "rust":
-                rust_cpu_cls = getattr(rust_module, "CPU")
-            else:
-                rust_cpu_cls = getattr(rust_module, "LlamaCPU")
+            rust_cpu_cls = getattr(rust_module, "LlamaCPU")
             self._impl = rust_cpu_cls(memory=memory, reset_on_init=reset_on_init)
             self.regs = _RustRegisterProxy(self._impl)
             self.state = _RustStateProxy(self._impl)
@@ -171,43 +158,15 @@ class CPU:
         return {"backend": self.backend, **stats}
 
     def runtime_profile_stats(self) -> dict[str, object]:
-        if self.backend != "rust":
-            return {}
-        rust_impl = cast(Any, self._impl)
-        getter = getattr(rust_impl, "get_runtime_profile_stats", None)
-        if not callable(getter):
-            return {}
-        stats = getter()
-        if isinstance(stats, dict):
-            return stats
-        try:
-            return dict(stats)
-        except Exception:
-            return {}
+        return {}
 
     def set_runtime_profile_enabled(self, enabled: bool) -> None:
-        if self.backend != "rust":
-            return
-        rust_impl = cast(Any, self._impl)
-        setter = getattr(rust_impl, "set_runtime_profile_enabled", None)
-        if callable(setter):
-            setter(bool(enabled))
+        _ = enabled
 
     def reset_runtime_profile_stats(self) -> None:
-        if self.backend != "rust":
-            return
-        rust_impl = cast(Any, self._impl)
-        reset = getattr(rust_impl, "reset_runtime_profile_stats", None)
-        if callable(reset):
-            reset()
+        return
 
     def export_lcd_snapshot(self):
-        if self.backend != "rust":
-            return None, None
-        rust_impl = cast(Any, self._impl)
-        exporter = getattr(rust_impl, "export_lcd_snapshot", None)
-        if callable(exporter):
-            return exporter()
         return None, None
 
     def decode_instruction(self, address: int) -> Instruction:
@@ -268,7 +227,7 @@ class CPU:
     def notify_host_write(self, address: int, value: int) -> None:
         """Propagate host-initiated memory writes into the active backend."""
 
-        if self.backend not in {"rust", "llama"}:
+        if self.backend != "llama":
             return
         rust_impl = cast(Any, self._impl)
         notifier = getattr(rust_impl, "notify_host_write", None)
@@ -312,7 +271,7 @@ def _decode_instruction(memory, address: int) -> Instruction:
 
 
 class _RustRegisterProxy:
-    """Adapter exposing the Emulator.Registers API for the Rust backend."""
+    """Adapter exposing the Emulator.Registers API for the LLAMA (native) backend."""
 
     def __init__(self, backend) -> None:
         self._backend = backend
@@ -356,7 +315,7 @@ class _RustRegisterProxy:
 
 
 class _RustStateProxy:
-    """Adapter exposing the Emulator.State API for the Rust backend."""
+    """Adapter exposing the Emulator.State API for the LLAMA (native) backend."""
 
     def __init__(self, backend) -> None:
         self._backend = backend

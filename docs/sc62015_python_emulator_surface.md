@@ -44,12 +44,12 @@ This note captures the Python-side contract that the upcoming Rust core must mir
 ## CPU Execution Lifecycle
 1. **Construction**: `Emulator(memory, reset_on_init=True)` stores a fresh `Registers` instance, keeps the supplied `Memory`, initialises `State()`, records `call_sub_level`, and registers intrinsic evaluators.
 2. **Reset path**: `power_on_reset()` delegates to `intrinsics.eval_intrinsic_reset`, ensuring PC, IMEM registers, and flags are set per hardware spec. External users often pass `reset_on_init=False` and call `power_on_reset` manually when they need fine-grained control.
-3. **Fetch/decode**: `decode_instruction(address)` builds a `FetchDecoder` (cached variant when available) that reads bytes via `Memory.read_byte`, then calls `instr.decode`. Any Rust replacement must honour `ADDRESS_SPACE_SIZE` bounds and PC masking.
+3. **Fetch/decode**: `decode_instruction(address)` builds a `FetchDecoder` (cached variant when available) that reads bytes via `Memory.read_byte`, then calls `instr.decode`. Any LLAMA/native replacement must honour `ADDRESS_SPACE_SIZE` bounds and PC masking.
 4. **Execution**: `execute_instruction(address)` updates tracing metadata, optionally wraps the LLIL evaluation in a Perfetto slice when the memory stub exposes `_perf_tracer`. It then defers to `_execute_instruction_impl`.
 5. **LLIL evaluation**: `_execute_instruction_impl` sets the architected PC, decodes the instruction, bumps `call_sub_level` per opcode, fast-paths `WAIT`, lifts to LLIL, and runs the resulting graph via `evaluate_llil`, feeding register and memory accessors. It updates the PC using the decoded `InstructionInfo.length`.
 6. **Post-step state**: The emulator returns `InstructionEvalInfo` containing the Binary Ninja metadata. Register and memory mutations have already been applied through the `Registers` and `Memory` abstractions.
 
-The Rust backend must mimic each stage so that existing consumers (assemblers, snapshot steppers, and the PC-E500 device model) continue to work unchanged.
+The LLAMA backend must mimic each stage so that existing consumers (assemblers, snapshot steppers, and the PC-E500 device model) continue to work unchanged.
 
 ## Memory & Peripheral Expectations
 - `Memory` callbacks are provided by callers; the emulator assumes `read_byte`/`write_byte` raise on out-of-range access. Internal memory accesses use `INTERNAL_MEMORY_START` offsets. Tests rely on this to mirror IMEM behaviour.
@@ -57,9 +57,9 @@ The Rust backend must mimic each stage so that existing consumers (assemblers, s
 - `Registers.call_sub_level` is used downstream for profiling (`pce500/tests/test_tracing_call_stack.py`). The Rust implementation must expose the same attribute on the register file or an equivalent property reachable from Python.
 
 ## Configuration & Environment Hooks
-- `USE_CACHED_DECODER` toggles automatically depending on whether `cached_decoder` imports successfully. Parity requires the Rust backend to expose a similar knob or transparently outperform the Python cache.
-- Tests set `FORCE_BINJA_MOCK=1` so imports from `binaryninja` resolve to `binja_test_mocks`. The Rust tooling should continue to honour this environment variable, especially when generating LLIL metadata.
-- `reset_on_init`: honoured by both `Emulator` and `CPUStepper`; the Rust constructor must take—and default—this flag identically.
+- `USE_CACHED_DECODER` toggles automatically depending on whether `cached_decoder` imports successfully. Parity requires the native backend to expose a similar knob or transparently outperform the Python cache.
+- Tests set `FORCE_BINJA_MOCK=1` so imports from `binaryninja` resolve to `binja_test_mocks`. The native tooling should continue to honour this environment variable, especially when generating LLIL metadata.
+- `reset_on_init`: honoured by both `Emulator` and `CPUStepper`; the native constructor must take—and default—this flag identically.
 
 ## pytest Coverage Matrix
 The following files are under `sc62015/pysc62015/tests` and define the behavioural envelope the Rust backend must satisfy:
