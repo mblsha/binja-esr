@@ -10,7 +10,6 @@
 pub mod dispatch;
 pub mod eval;
 pub mod opcodes;
-pub mod operands;
 pub mod parity;
 pub mod state;
 

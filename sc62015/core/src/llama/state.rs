@@ -15,6 +15,7 @@ pub fn mask_for(name: RegName) -> u32 {
         RegName::PC => 0x0F_FFFF,
         RegName::F | RegName::IMR => 0xFF,
         RegName::FC | RegName::FZ => 0x1,
+        RegName::Temp(_) => 0xFFFFFF,
         RegName::Unknown(_) => 0xFFFF_FFFF,
     }
 }
@@ -23,6 +24,7 @@ pub fn mask_for(name: RegName) -> u32 {
 pub struct LlamaState {
     regs: HashMap<RegName, u32>,
     halted: bool,
+    call_depth: u32,
 }
 
 impl LlamaState {
@@ -30,6 +32,7 @@ impl LlamaState {
         Self {
             regs: HashMap::new(),
             halted: false,
+            call_depth: 0,
         }
     }
 
@@ -86,6 +89,9 @@ impl LlamaState {
                 f |= (masked & 0x1) << 1;
                 self.regs.insert(RegName::F, f);
             }
+            RegName::Temp(_) => {
+                self.regs.insert(name, masked);
+            }
             _ => {
                 self.regs.insert(name, masked);
             }
@@ -110,6 +116,7 @@ impl LlamaState {
                 let fz = *self.regs.get(&RegName::FZ).unwrap_or(&0) & 0x1;
                 (f | fc | (fz << 1)) & mask_for(RegName::F)
             }
+            RegName::Temp(_) => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
             _ => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
         }
     }
@@ -137,5 +144,20 @@ impl LlamaState {
     pub fn reset(&mut self) {
         self.regs.clear();
         self.halted = false;
+        self.call_depth = 0;
+    }
+
+    pub fn call_depth_inc(&mut self) {
+        self.call_depth = self.call_depth.saturating_add(1);
+    }
+
+    pub fn call_depth_dec(&mut self) {
+        if self.call_depth > 0 {
+            self.call_depth -= 1;
+        }
+    }
+
+    pub fn call_depth(&self) -> u32 {
+        self.call_depth
     }
 }

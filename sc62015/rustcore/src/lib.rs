@@ -164,6 +164,7 @@ impl RuntimeProfile {
         self.enabled.then(Instant::now)
     }
 
+    #[allow(dead_code)]
     fn record_decode(&mut self, start: Option<Instant>) {
         if let (true, Some(instant)) = (self.enabled, start) {
             self.decode_calls += 1;
@@ -496,6 +497,8 @@ impl LlamaCpu {
             .executor
             .execute(opcode, &mut self.state, &mut bus)
             .map_err(|e| PyRuntimeError::new_err(format!("llama execute: {e}")))?;
+        // Keep the exposed call_sub_level in sync with the executor’s call depth.
+        self.call_sub_level = self.state.call_depth();
         Ok((opcode, len))
     }
 
