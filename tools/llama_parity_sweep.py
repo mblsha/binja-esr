@@ -64,8 +64,12 @@ class LoggingMemory(Memory):
         address &= 0xFFFFFF
         if address < 0 or address >= len(self._backing):
             raise IndexError(f"Write address {address:#x} out of bounds")
-        self._backing[address] = value & 0xFF
-        self.writes.append((address, value & 0xFF))
+        value &= 0xFF
+        # Only record writes that change the stored value to avoid noisy
+        # parity diffs when both sides write the existing contents.
+        if self._backing[address] != value:
+            self._backing[address] = value
+            self.writes.append((address, value))
 
     def snapshot(self) -> dict[int, int]:
         return {idx: byte for idx, byte in enumerate(self._backing) if byte}
