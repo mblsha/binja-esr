@@ -63,10 +63,12 @@ impl Hd61202Chip {
         self.state.y_address = ((self.state.y_address as usize + 1) % LCD_WIDTH) as u8;
     }
 
+    #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
         0xFF
     }
 
+    #[allow(dead_code)]
     fn read_data(&mut self) -> u8 {
         self.data_read_count = self.data_read_count.wrapping_add(1);
         let page = (self.state.page as usize) % LCD_PAGES;

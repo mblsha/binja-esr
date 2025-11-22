@@ -15,6 +15,8 @@
 - `docs/rust_emulator_file_map.md`: Rust-side file map for SCIL payload consumption.
 - `docs/rust_emulator_reuse.md`: What Rust pieces can/can’t be reused without SCIL.
 - `plan_llama.md`: Plan for the LLIL-based Rust CPU core (Project LLAMA).
+- `docs/llama_parity_plan.md`: Perfetto/pytest parity guardrails for LLAMA.
+- `.github/workflows/llama-perfetto-smoke.yml`: nightly/dispatch Perfetto trace smoke (NOP/CALL/EMEM MV/DSBL/EMEM reg-indirect/PUSHU).
 
 ## Setup, Build, and Dev Commands
 - Environment (preferred): `uv sync` then `uv sync --extra dev [--extra pce500] [--extra web]`

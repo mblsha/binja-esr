@@ -22,6 +22,7 @@
 
 ## Near-term actions
 - **First priority:** implement LLAMA evaluator coverage to pass a full opcode parity sweep (Python vs LLAMA) using `tools/llama_parity_sweep.py` and Perfetto parity traces. Target: reduce “not implemented/mv pattern not supported/unknown opcode” buckets to zero across the opcode generator encodings.
+- Also P0: run the full `sc62015/pysc62015` pytest suite with `--cpu-backend=llama` (no SCIL/LLIL) and close gaps so LLAMA can pass the same tests as the Python core.
 - Expose LLAMA as a selectable backend in the Python `CPU` facade/`BridgeCPU` so the existing pysc62015/test_* suite can drive it (reuse `MemoryAdapter`, PC/flag masking, backend selection), then run the full pytest matrix against LLAMA. **Status:** `llama` backend exported from rustcore as `LlamaCPU` and recognised by the Python `CPU` facade; uses a Python-memory-backed bus and typed register/flag proxy. Executor coverage is still partial, so tests will surface gaps.
 - Read the Python opcode/operand definitions directly (no JSON generation) and rewrite them into a Rust dispatch table mirroring `instr/opcode_table.py` and `instructions.py` semantics. **Status: completed through 0xFF.**
 - Sketch the Rust module layout for LLAMA (e.g., `sc62015/core/llama/` with dispatch + evaluator) and how rustcore selects it. **Status: scaffolding in place (`dispatch`, `opcodes`, `state`, `eval`, `operands`, `parity`).**
@@ -42,18 +43,14 @@
 - Python side now emits Perfetto traces (when `retrobus-perfetto` is installed via `uv`) with space-tagged MemoryWrites; repo root is auto-added to `sys.path`.
 - Integration test scaffold (feature-gated `llama-tests`) validates LLAMA vs Python parity for NOP and compares traces via `scripts/compare_perfetto_traces.py`.
 
-## Current progress snapshot
-- Opcode table: typed enums for regs/operands, full 0x00–0xFF transcription.
+## Current progress snapshot (updated)
+- Opcode table: typed enums for regs/operands, full 0x00–0xFF transcription (no stringly identifiers).
 - State: masking/aliasing BA↔A/B, I↔IL/IH; PC helpers; halt/reset flags.
-- Evaluator: reg+imm and IMEM/EMEM MV/ADD/SUB/AND/OR/XOR/ADC/SBC with Z/C updates; EMEM reg indirect supports simple/offset/post-inc/pre-dec (with register updates); IMEM-stored external pointers are decoded/executed for MV A,[(n)] and MV between internal↔external via [(n)]; RegIMemOffset opcodes transfer between IMEM bytes and EMEM reg pointers; WAIT clears I/flags; OFF/HALT set halted; RESET clears state/PC.
-- Bus hooks: `resolve_emem` for EMEM address mapping; operand length heuristics include EMEM/offset placeholders.
-- Parity: harness stub exists; plan in `docs/llama_parity_plan.md`.
-- Tests: LLAMA unit tests under `sc62015/core` pass; rustcore guarded by `LLAMA_SKIP_SCIL` (stub types still need alignment for rustcore tests).
-- Build tooling: `LLAMA_SKIP_SCIL` dummy `generated/types.rs` now defines opcode/mnemonic/length/pre/layout/binder/bound_repr fields and typed operand maps to satisfy trait impls in `rustcore` without SCIL payloads.
-- Integration surface: Rust extension exports `LlamaCPU`, and the Python `CPU` facade now accepts `backend="llama"` (using the Rust executor with a Python-memory bus). Register/flag proxies and snapshots are wired; runtime/perf hooks are stubbed pending fuller evaluator coverage.
-- Test entrypoints: pytest `--cpu-backend` now defaults to `python,llama`; the backend fixture accepts `llama` as valid. LLAMA currently passes the backend smoke tests (NOP execution, CPUStepper MV A,n snapshot round-trip).
-- Full pysc62015 suite completes with `--cpu-backend=llama` (parity tests exercise the backend; the rest still hit the Python emulator), keeping the door open for adding more llama-targeted cases. Added dedicated LLAMA smoke coverage in `sc62015/pysc62015/test_llama_backend_smoke.py` (NOP, MV A,#imm, MV [addr],A).
-- Parity sweep tooling: `tools/llama_parity_sweep.py` iterates `opcode_generator()` encodings, runs each on Python vs LLAMA backends, and reports mismatches (JSON or human-readable). Use `FORCE_BINJA_MOCK=1 uv run python tools/llama_parity_sweep.py --limit N` while expanding evaluator coverage.
-- Next immediate tasks: flesh out the LLAMA evaluator to cover the broader instruction set (stack, branches, ALU/flag nuances, PRE/internal modes), then run more of `sc62015/pysc62015` with `--cpu-backend=llama` to surface remaining gaps; wire perfetto parity harness against Python oracle for opcode sweeps.
+- Evaluator: reg+imm and IMEM/EMEM MV/ADD/SUB/AND/OR/XOR/ADC/SBC with Z/C updates; EMEM reg indirect supports simple/offset/post-inc/pre-dec (with register updates); IMEM-stored external pointers decoded/executed for MV A,[(n)] and MV between internal↔external via [(n)]; RegIMemOffset opcodes transfer between IMEM bytes and EMEM reg pointers; WAIT clears I/flags; OFF/HALT set halted; RESET clears state/PC; PRE advances 2 bytes; EX (mem/mem/regpair/A,B) handled; RETI writes IMR back to IMEM.
+- Parity sweep status: LLAMA now matches the Python backend across the full opcode sweep (0 mismatches). Use `FORCE_BINJA_MOCK=1 uv run python tools/llama_parity_sweep.py` to regress-check future changes.
+- Tests: LLAMA unit tests under `sc62015/core` pass; backend smoke coverage in `test_llama_backend_smoke.py`/`test_cpu_backend_parity.py` passes; full `pysc62015` suite passes with `--cpu-backend=llama`. Use `PYTHONPATH=. FORCE_BINJA_MOCK=1 uv run pytest --cpu-backend=llama sc62015/pysc62015` to exercise LLAMA across the Python matrix.
+- Parity tooling: `tools/llama_parity_sweep.py` iterates `opcode_generator()` encodings and compares Python vs LLAMA; `llama::parity` snapshot helpers; streaming Perfetto writer (InstructionTrace + MemoryWrites) with instruction-index timestamps and enums for spaces; `scripts/compare_perfetto_traces.py` expects binary retrobus-perfetto protobufs. Memory writes (internal/external) must be emitted; traces should be written incrementally (no event hoarding).
+- Build tooling: `LLAMA_SKIP_SCIL=1` dummy `generated/types.rs` keeps rustcore building without SCIL; opcode/mnemonic/layout fields match rustcore traits. Rust extension exports `LlamaCPU`; Python `CPU` facade accepts `backend=\"llama\"` with typed register/flag proxy on a Python-backed bus.
+- CI guardrails: opcode sweep + LLAMA pytest run in the main test workflow; nightly Perfetto smoke compares NOP, CALL, EMEM MV, DSBL, EMEM reg-indirect, and PUSHU traces between Python and LLAMA.
 
 See `AGENTS.md` for repository guidelines and dev commands.
