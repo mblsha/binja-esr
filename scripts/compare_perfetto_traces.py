@@ -114,9 +114,7 @@ def _format_reg_dump(annotations: Dict[str, object]) -> str:
     """Pretty-print register annotations for diagnostics."""
 
     regs = sorted(
-        (key, value)
-        for key, value in annotations.items()
-        if key.startswith("reg_")
+        (key, value) for key, value in annotations.items() if key.startswith("reg_")
     )
     if not regs:
         return "<no registers>"
@@ -168,7 +166,8 @@ def _replay_internal_memory(
         if not isinstance(size, int) or size <= 0:
             size = 1
         if not (
-            INTERNAL_MEMORY_START <= addr
+            INTERNAL_MEMORY_START
+            <= addr
             < INTERNAL_MEMORY_START + INTERNAL_MEMORY_LENGTH
         ):
             continue
@@ -279,7 +278,7 @@ def main() -> None:
             if isinstance(pc_a, int) and isinstance(opcode_a, int)
             else f"  Trace A: {evt_a}"
         )
-        print(f"           { _format_reg_dump(ann) }")
+        print(f"           {_format_reg_dump(ann)}")
     if evt_b is None:
         print(f"  Trace B missing instruction #{mismatch_index}")
     else:
@@ -291,7 +290,7 @@ def main() -> None:
             if isinstance(pc_b, int) and isinstance(opcode_b, int)
             else f"  Trace B: {evt_b}"
         )
-        print(f"           { _format_reg_dump(ann) }")
+        print(f"           {_format_reg_dump(ann)}")
 
     if mismatch_fields:
         print("  Differing fields:", ", ".join(mismatch_fields))
@@ -313,9 +312,7 @@ def main() -> None:
             print("  Internal memory differences at divergence:")
             for addr, va, vb in diffs:
                 offset = addr - INTERNAL_MEMORY_START
-                print(
-                    f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}"
-                )
+                print(f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}")
         else:
             print("  Internal memory identical at divergence.")
 

@@ -69,10 +69,14 @@ class _FallbackInstruction:
     def length(self) -> int:
         return self._length
 
-    def analyze(self, info: InstructionInfo, addr: int) -> None:  # pragma: no cover - defensive
+    def analyze(
+        self, info: InstructionInfo, addr: int
+    ) -> None:  # pragma: no cover - defensive
         info.length += self._length
 
-    def lift(self, il: MockLowLevelILFunction, addr: int) -> None:  # pragma: no cover - defensive
+    def lift(
+        self, il: MockLowLevelILFunction, addr: int
+    ) -> None:  # pragma: no cover - defensive
         il.append(il.nop())
 
     def render(self):
@@ -194,7 +198,9 @@ def _should_trace_lcd(address: int) -> bool:
 
 def _log_lcd_loop_state(prefix: str, pc: int, regs: "Registers") -> None:
     reg_vals = " ".join(f"{reg.name}={regs.get(reg):06X}" for reg in _LCD_LOOP_REGS)
-    flag_vals = " ".join(f"{name}={regs.get_flag(name):01X}" for name in _LCD_LOOP_FLAGS)
+    flag_vals = " ".join(
+        f"{name}={regs.get_flag(name):01X}" for name in _LCD_LOOP_FLAGS
+    )
     print(f"[lcd-loop] {prefix} pc=0x{pc:06X} {reg_vals} flags={flag_vals}")
 
 
@@ -263,7 +269,9 @@ def _stack_snapshot_len() -> int:
     return length
 
 
-def _log_stack_snapshot(prefix: str, pc: int, regs: "Registers", memory: Memory) -> None:
+def _log_stack_snapshot(
+    prefix: str, pc: int, regs: "Registers", memory: Memory
+) -> None:
     rng = _stack_snapshot_range()
     if not rng:
         return
@@ -353,7 +361,6 @@ class Registers:
             return
 
         raise ValueError(f"Attempted to set unknown or non-base register: {reg}")
-
 
     def get_by_name(self, name: str) -> int:
         return self.get(RegisterName[name])

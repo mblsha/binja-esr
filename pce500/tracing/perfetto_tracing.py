@@ -292,7 +292,9 @@ class _PerfettoObserver:
         elif event.type == TraceEventType.FUNCTION_END:
             tracer.end_slice(event.thread or "CPU")
         elif event.type == TraceEventType.FLOW_BEGIN:
-            tracer.begin_slice(event.thread or "Flow", event.name or "flow", event.payload)
+            tracer.begin_slice(
+                event.thread or "Flow", event.name or "flow", event.payload
+            )
         elif event.type == TraceEventType.FLOW_END:
             tracer.end_slice(event.thread or "Flow")
 

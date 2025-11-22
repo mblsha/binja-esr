@@ -144,9 +144,7 @@ class PCE500KeyboardHandler:
         matrix_code = ((loc.column & 0x0F) << 3) | (loc.row & 0x07)
         try:
             if release:
-                return bool(
-                    self._bridge_cpu.keyboard_release_matrix_code(matrix_code)
-                )
+                return bool(self._bridge_cpu.keyboard_release_matrix_code(matrix_code))
             return bool(self._bridge_cpu.keyboard_press_matrix_code(matrix_code))
         except Exception:
             return False
@@ -155,10 +153,7 @@ class PCE500KeyboardHandler:
         if not self._memory:
             return 0
         try:
-            return (
-                self._memory.read_byte(INTERNAL_MEMORY_START + KIL)
-                & 0xFF
-            )
+            return self._memory.read_byte(INTERNAL_MEMORY_START + KIL) & 0xFF
         except Exception:
             return 0
 

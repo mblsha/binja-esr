@@ -59,9 +59,7 @@ def _lcd_write_wrapper(
     _trace_lcd_write(memory, address, value, cpu_pc)
     if os.getenv("LCD_WRITE_TRACE"):
         pc_str = f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
-        print(
-            f"[LCD TRACE HANDLER] addr=0x{address:06X} val=0x{value:02X} pc={pc_str}"
-        )
+        print(f"[LCD TRACE HANDLER] addr=0x{address:06X} val=0x{value:02X} pc={pc_str}")
 
 
 _STACK_TRACE_RANGES: Optional[List[Tuple[int, int]]] = None
@@ -330,24 +328,19 @@ class PCE500Memory:
                 value: int
                 if self._keyboard_overlay.read_handler:
                     value = (
-                        int(self._keyboard_overlay.read_handler(address, cpu_pc))
-                        & 0xFF
+                        int(self._keyboard_overlay.read_handler(address, cpu_pc)) & 0xFF
                     )
                 elif self._keyboard_overlay.data:
                     overlay_offset = address - self._keyboard_overlay.start
                     if overlay_offset < len(self._keyboard_overlay.data):
-                        value = (
-                            int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
-                        )
+                        value = int(self._keyboard_overlay.data[overlay_offset]) & 0xFF
                     else:
                         value = 0x00
                 else:
                     value = 0x00
 
                 # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
-                effective_pc = (
-                    cpu_pc if cpu_pc is not None else self._get_current_pc()
-                )
+                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
                 self._track_imem_access(offset, "read", value, effective_pc)
                 return value
 
@@ -444,9 +437,8 @@ class PCE500Memory:
                 elif self._keyboard_overlay.read_only:
                     # Silently ignore writes to read-only overlays
                     return
-                elif (
-                    self._keyboard_overlay.data
-                    and isinstance(self._keyboard_overlay.data, bytearray)
+                elif self._keyboard_overlay.data and isinstance(
+                    self._keyboard_overlay.data, bytearray
                 ):
                     # Write to writable overlay data
                     overlay_offset = address - self._keyboard_overlay.start
@@ -505,7 +497,9 @@ class PCE500Memory:
                     {
                         "offset": f"0x{offset:02X}",
                         "value": f"0x{value:02X}",
-                        "pc": f"0x{effective_pc:06X}" if effective_pc is not None else "N/A",
+                        "pc": f"0x{effective_pc:06X}"
+                        if effective_pc is not None
+                        else "N/A",
                         "bp": bp_value,
                         "imem_name": imem_name,
                         "size": "1",
@@ -751,7 +745,9 @@ class PCE500Memory:
             )
         )
 
-    def set_lcd_controller(self, lcd_controller, *, enable_overlay: bool = True) -> None:
+    def set_lcd_controller(
+        self, lcd_controller, *, enable_overlay: bool = True
+    ) -> None:
         """Set LCD controller and optionally add memory-mapped I/O overlay."""
         self._lcd_controller = lcd_controller
 

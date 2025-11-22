@@ -7,6 +7,7 @@ state for a synthetic instruction stream. When retrobus-perfetto is available,
 the runner also emits a Perfetto trace with InstructionTrace/MemoryWrites
 tracks so `scripts/compare_perfetto_traces.py` can diff against the Rust trace.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,6 +30,7 @@ from sc62015.pysc62015.constants import (
 
 try:
     from retrobus_perfetto import PerfettoTraceBuilder
+
     HAVE_PERFETTO = True
 except ImportError:  # pragma: no cover - optional dependency
     PerfettoTraceBuilder = None  # type: ignore
@@ -81,7 +83,11 @@ class TrackedMemory(emulator.MemoryImage):
         super().write_word(address, value)
 
     def _space_for(self, address: int) -> str:
-        if INTERNAL_MEMORY_START <= address < INTERNAL_MEMORY_START + INTERNAL_MEMORY_LENGTH:
+        if (
+            INTERNAL_MEMORY_START
+            <= address
+            < INTERNAL_MEMORY_START + INTERNAL_MEMORY_LENGTH
+        ):
             return "internal"
         return "external"
 
@@ -117,31 +123,39 @@ def run_once(payload: str) -> Snapshot:
 
     perfetto_out: str | None = None
     if HAVE_PERFETTO:
-        builder = PerfettoTraceBuilder.new("PythonParity") if hasattr(PerfettoTraceBuilder, "new") else PerfettoTraceBuilder("PythonParity")
+        builder = (
+            PerfettoTraceBuilder.new("PythonParity")
+            if hasattr(PerfettoTraceBuilder, "new")
+            else PerfettoTraceBuilder("PythonParity")
+        )
         instr_track = builder.add_thread("InstructionTrace")
         mem_track = builder.add_thread("MemoryWrites")
         ts = 0
         ev = builder.add_instant_event(instr_track, f"Exec@0x{pc:06X}", ts)
-        ev.add_annotations([
-            ("backend", "python"),
-            ("pc", pc),
-            ("opcode", bytes_in[0] if bytes_in else 0),
-            ("op_index", 0),
-        ])
+        ev.add_annotations(
+            [
+                ("backend", "python"),
+                ("pc", pc),
+                ("opcode", bytes_in[0] if bytes_in else 0),
+                ("op_index", 0),
+            ]
+        )
         for name, value in regs_out.items():
             ev.add_annotation(f"reg_{name.lower()}", value & 0xFF_FFFF)
         ev.finish()
         for addr, bits, value, space in mem.writes():
             mev = builder.add_instant_event(mem_track, f"Write@0x{addr:06X}", ts + 1)
-            mev.add_annotations([
-                ("backend", "python"),
-                ("pc", pc),
-                ("address", addr),
-                ("value", value & 0xFF_FFFF),
-                ("size", bits),
-                ("op_index", 0),
-                ("space", space),
-            ])
+            mev.add_annotations(
+                [
+                    ("backend", "python"),
+                    ("pc", pc),
+                    ("address", addr),
+                    ("value", value & 0xFF_FFFF),
+                    ("size", bits),
+                    ("op_index", 0),
+                    ("space", space),
+                ]
+            )
             mev.finish()
         out_path = Path("python_parity.pftrace")
         builder.save(out_path)

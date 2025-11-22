@@ -91,11 +91,7 @@ def _snapshot_registers(cpu: CPU) -> dict[str, int]:
     snap = cpu.snapshot_registers()
     raw = snap.to_dict()
     # Ignore TEMP* internal scratch registers for parity; focus on architectural state.
-    return {
-        k: v
-        for k, v in raw.items()
-        if not k.startswith("TEMP") and k != "f"
-    }
+    return {k: v for k, v in raw.items() if not k.startswith("TEMP") and k != "f"}
 
 
 def _compare_writes(
@@ -113,7 +109,9 @@ def _compare_writes(
 
 def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
     # Seed stacks inside internal memory to avoid out-of-bounds pushes in the sweep.
-    reg_init = CPURegistersSnapshot(pc=pc, s=INTERNAL_MEMORY_START, u=INTERNAL_MEMORY_START)
+    reg_init = CPURegistersSnapshot(
+        pc=pc, s=INTERNAL_MEMORY_START, u=INTERNAL_MEMORY_START
+    )
 
     # Python backend
     mem_py = _make_memory(instr_bytes, pc)

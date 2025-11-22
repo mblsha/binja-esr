@@ -90,7 +90,9 @@ def select_backend(
                 "to build the optional extension."
             )
         if not getattr(rust_module, "HAS_LLAMA_IMPLEMENTATION", False):
-            raise RuntimeError("LLAMA backend requested but not available in rustcore module.")
+            raise RuntimeError(
+                "LLAMA backend requested but not available in rustcore module."
+            )
 
     return backend_name, rust_module
 
