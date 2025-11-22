@@ -35,6 +35,9 @@ fn main() {
     py_path.push_str(repo_root.to_string_lossy().as_ref());
     cmd.env("PYTHONPATH", py_path);
 
+    // Ensure output dir exists.
+    std::fs::create_dir_all(&generated).expect("create generated dir");
+
     let status = cmd
         .arg(script)
         .arg("--out-dir")
@@ -47,6 +50,16 @@ fn main() {
             "SCIL payload generation failed; ensure binja-test-mocks is on PYTHONPATH and rerun \
              `python tools/scil_codegen_rust.py --out-dir sc62015/rustcore/generated`"
         );
+    }
+
+    // Verify outputs exist; bail early if generation didn't produce them.
+    for path in [&handlers, &opcode_index, &types] {
+        if !path.exists() {
+            panic!(
+                "SCIL payload missing expected artifact: {}; rerun codegen locally",
+                path.display()
+            );
+        }
     }
 
     println!("cargo:rerun-if-changed={}", generated.display());
