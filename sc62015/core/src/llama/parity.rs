@@ -10,8 +10,6 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "llama-tests")]
 use std::path::Path;
 #[cfg(feature = "llama-tests")]
-use std::process::{Command, Stdio};
-#[cfg(feature = "llama-tests")]
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 #[cfg(feature = "llama-tests")]
 use std::path::{PathBuf, Path as StdPath};
@@ -23,9 +21,7 @@ use super::state::LlamaState;
 #[cfg(feature = "llama-tests")]
 use super::eval::{LlamaBus, LlamaExecutor};
 #[cfg(feature = "llama-tests")]
-use std::process::{Output, Stdio};
-#[cfg(feature = "llama-tests")]
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
 /// Result of invoking the Python oracle.
 #[cfg(feature = "llama-tests")]
@@ -295,6 +291,7 @@ fn reg_to_key(reg: RegName) -> &'static str {
         RegName::FC => "flag_c",
         RegName::FZ => "flag_z",
         RegName::IMR => "reg_imr",
+        RegName::Temp(_) => "reg_temp",
         RegName::Unknown(_) => "reg_unknown",
     }
 }

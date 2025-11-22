@@ -155,7 +155,7 @@ impl MemoryImage {
             );
         }
         if env::var("RUST_ROM_TRACE").is_ok()
-            && (0x00F2_000..=0x00F3_000).contains(&address)
+            && (0x000F_2000..=0x000F_3000).contains(&address)
         {
             let mask = mask_bits(bits);
             println!(
