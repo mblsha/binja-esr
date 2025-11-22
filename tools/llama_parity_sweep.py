@@ -16,8 +16,10 @@ Run with:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 import sys
 from typing import Iterable, List, Tuple
@@ -31,7 +33,16 @@ if str(ROOT) not in sys.path:
 from sc62015.pysc62015 import CPU, RegisterName, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
-from sc62015.pysc62015.test_instr import opcode_generator
+from sc62015.pysc62015.test_instr import opcode_generator, decode as decode_instr
+from sc62015.pysc62015.instr.opcodes import (
+    Imm8,
+    Imm16,
+    Imm20,
+    ImmOffset,
+    Instruction,
+    encode as encode_instr,
+    Operand,
+)
 
 
 class LoggingMemory(Memory):
@@ -162,21 +173,84 @@ def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
     return None
 
 
-def sweep(limit: int | None) -> list[ParityResult]:
+def _edge_values_for(op: Operand) -> list[int] | None:
+    if isinstance(op, ImmOffset):
+        # ImmOffset.value stores the magnitude; sign is fixed on the instance.
+        base = [0, 1, 0x7F, 0x80]
+        if op.sign == "-":
+            return [abs(v) for v in base]
+        else:
+            return [v for v in base if v >= 0]
+    if isinstance(op, Imm20):
+        return [0x00000, 0x00001, 0x7FFFF, 0x80000, 0xFFFFF]
+    if isinstance(op, Imm16):
+        return [0x0000, 0x0001, 0x7FFF, 0x8000, 0xFFFF]
+    if isinstance(op, Imm8):
+        return [0x00, 0x01, 0x7F, 0x80, 0xFF]
+    return None
+
+
+def _mutated_encodings(instr: Instruction) -> Iterable[bytes]:
+    immediates: list[Operand] = [
+        op for op in instr.operands() if _edge_values_for(op) is not None
+    ]
+    if not immediates:
+        yield bytes(encode_instr(instr, 0))
+        return
+
+    value_sets: list[list[int]] = []
+    for op in immediates:
+        choices = _edge_values_for(op)
+        if not choices:
+            choices = []
+        value_sets.append(choices)
+
+    for combo in product(*value_sets):
+        inst = copy.deepcopy(instr)
+        for op, val in zip(immediates, combo):
+            # Locate the corresponding operand in the copied instruction by index
+            # (operands() order matches immediates list order).
+            target = list(inst.operands())[immediates.index(op)]
+            if isinstance(target, Imm20):
+                target.value = val & 0xFFFFF
+                target.extra_hi = (val >> 16) & 0x0F
+            elif isinstance(target, Imm16):
+                target.value = val & 0xFFFF
+            elif isinstance(target, ImmOffset):
+                target.value = abs(val) & 0xFF
+            elif isinstance(target, Imm8):
+                target.value = val & 0xFF
+        try:
+            yield bytes(encode_instr(inst, 0))
+        except Exception:
+            continue
+
+
+def sweep(limit: int | None, stress_immediates: bool) -> list[ParityResult]:
     failures: list[ParityResult] = []
     for idx, encoding in enumerate(opcode_generator()):
         if limit is not None and idx >= limit:
             break
-        if isinstance(encoding, tuple):
-            raw = encoding[0]
-        else:
-            raw = encoding
+        raw = encoding[0] if isinstance(encoding, tuple) else encoding
         if raw is None:
             continue
-        instr_bytes = bytes(raw)
-        result = run_case(instr_bytes, pc=0)
-        if result is not None:
-            failures.append(result)
+        variants: Iterable[bytes]
+        if stress_immediates:
+            try:
+                instr = decode_instr(bytearray(raw), 0)
+            except Exception:
+                instr = None
+            if instr is None:
+                variants = [bytes(raw)]
+            else:
+                variants = _mutated_encodings(instr)
+        else:
+            variants = [bytes(raw)]
+
+        for instr_bytes in variants:
+            result = run_case(instr_bytes, pc=0)
+            if result is not None:
+                failures.append(result)
     return failures
 
 
@@ -188,12 +262,17 @@ def main() -> None:
         action="store_true",
         help="emit JSON report instead of human-readable summary",
     )
+    parser.add_argument(
+        "--stress-immediates",
+        action="store_true",
+        help="mutate immediate/offset operands across edge values",
+    )
     args = parser.parse_args()
 
     if "llama" not in available_backends():
         raise SystemExit("LLAMA backend not available; build rustcore first.")
 
-    failures = sweep(args.limit)
+    failures = sweep(args.limit, args.stress_immediates)
 
     if args.json:
         print(
