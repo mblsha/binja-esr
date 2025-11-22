@@ -129,6 +129,14 @@ class CPU:
     def __dir__(self) -> Iterable[str]:
         return sorted(set(dir(self.__class__)) | set(dir(self._impl)))
 
+    def set_perfetto_trace(self, path: Optional[str]) -> None:
+        if hasattr(self._impl, "set_perfetto_trace"):
+            self._impl.set_perfetto_trace(path)
+
+    def flush_perfetto(self) -> None:
+        if hasattr(self._impl, "flush_perfetto"):
+            self._impl.flush_perfetto()
+
     def unwrap(self) -> object:
         """Expose the underlying backend instance (useful for testing)."""
 
@@ -148,9 +156,53 @@ class CPU:
             return {"backend": self.backend}
         return {"backend": self.backend, **stats}
 
+    def runtime_profile_stats(self) -> dict[str, object]:
+        if self.backend != "rust":
+            return {}
+        rust_impl = cast(Any, self._impl)
+        getter = getattr(rust_impl, "get_runtime_profile_stats", None)
+        if not callable(getter):
+            return {}
+        stats = getter()
+        if isinstance(stats, dict):
+            return stats
+        try:
+            return dict(stats)
+        except Exception:
+            return {}
+
+    def set_runtime_profile_enabled(self, enabled: bool) -> None:
+        if self.backend != "rust":
+            return
+        rust_impl = cast(Any, self._impl)
+        setter = getattr(rust_impl, "set_runtime_profile_enabled", None)
+        if callable(setter):
+            setter(bool(enabled))
+
+    def reset_runtime_profile_stats(self) -> None:
+        if self.backend != "rust":
+            return
+        rust_impl = cast(Any, self._impl)
+        reset = getattr(rust_impl, "reset_runtime_profile_stats", None)
+        if callable(reset):
+            reset()
+
+    def export_lcd_snapshot(self):
+        if self.backend != "rust":
+            return None, None
+        rust_impl = cast(Any, self._impl)
+        exporter = getattr(rust_impl, "export_lcd_snapshot", None)
+        if callable(exporter):
+            return exporter()
+        return None, None
+
     def decode_instruction(self, address: int) -> Instruction:
         if self.backend == "python":
-            return self._impl.decode_instruction(address)
+            instr = self._impl.decode_instruction(address)
+            if instr is None:
+                opcode = self.memory.read_byte(address) & 0xFF
+                instr = _PlaceholderInstruction(opcode)
+            return instr
 
         prev_cpu = getattr(self.memory, "cpu", None)
         can_switch = hasattr(self.memory, "set_cpu")
@@ -176,7 +228,11 @@ class CPU:
 
         opcode, length = cast(Tuple[int, int], self._impl.execute_instruction(address))
         declared_length = int(info.length) if info.length is not None else None
-        if declared_length is not None and declared_length != length:
+        if (
+            declared_length is not None
+            and declared_length != length
+            and self.backend == "python"
+        ):
             raise RuntimeError(
                 f"Decoded length ({declared_length}) disagrees with runtime ({length}) "
                 f"for opcode 0x{opcode:02X} at {address:#06X}"
@@ -194,6 +250,16 @@ class CPU:
         snapshot = rust_impl.snapshot_cpu_registers()
         assert isinstance(snapshot, CPURegistersSnapshot)
         return snapshot
+
+    def notify_host_write(self, address: int, value: int) -> None:
+        """Propagate host-initiated memory writes into the active backend."""
+
+        if self.backend != "rust":
+            return
+        rust_impl = cast(Any, self._impl)
+        notifier = getattr(rust_impl, "notify_host_write", None)
+        if callable(notifier):
+            notifier(int(address) & 0xFFFFFF, int(value) & 0xFF)
 
     def apply_snapshot(self, snapshot: CPURegistersSnapshot) -> None:
         if self.backend == "python":

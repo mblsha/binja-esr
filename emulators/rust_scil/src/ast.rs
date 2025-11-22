@@ -69,6 +69,13 @@ pub enum Expr {
     },
     #[serde(rename = "loop_ptr")]
     LoopPtr { offset: Box<Expr> },
+    #[serde(rename = "ext_reg_ptr")]
+    ExtRegPtr {
+        ptr: Box<Expr>,
+        mode: String,
+        #[serde(default)]
+        disp: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

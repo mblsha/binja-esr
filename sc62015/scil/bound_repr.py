@@ -10,73 +10,72 @@ from ..decoding.bind import (
     Disp8,
     ExtRegPtr,
     Imm16,
+    Imm20,
     Imm24,
     Imm8,
     ImemPtr,
     PreLatch,
-    RegSel,
+RegSel,
 )
 
 
 OperandValue = Dict[str, Any]
 
+_REG_BITS = {"r1": 8, "r2": 16, "r3": 24}
+
+
+def _const_operand(value: int, size: int) -> OperandValue:
+    mask = (1 << size) - 1
+    return {"type": "const", "value": value & mask, "size": size}
+
+
+def _reg_operand(sel: RegSel) -> OperandValue:
+    size = _REG_BITS.get(sel.size_group, 8)
+    return {"type": "reg", "name": sel.name, "size": size, "bank": "gpr"}
+
 
 def _encode_operand(value: object) -> OperandValue:
     if isinstance(value, Imm8):
-        return {"kind": "imm8", "value": value.value}
+        return _const_operand(value.value, 8)
     if isinstance(value, Imm16):
-        return {"kind": "imm16", "lo": value.lo, "hi": value.hi}
+        return _const_operand(value.u16, 16)
+    if isinstance(value, Imm20):
+        return _const_operand(value.value, 20)
     if isinstance(value, Imm24):
-        return {"kind": "imm24", "lo": value.lo, "mid": value.mid, "hi": value.hi}
+        return _const_operand(value.u24, 24)
     if isinstance(value, Disp8):
-        return {"kind": "disp8", "value": value.value}
+        return _const_operand(value.value & 0xFF, 8)
     if isinstance(value, Addr16Page):
-        return {
-            "kind": "addr16_page",
-            "offs16": _encode_operand(value.offs16),
-            "page20": value.page20,
-        }
+        full = (value.page20 << 16) | value.offs16.u16
+        return _const_operand(full, 20)
     if isinstance(value, Addr24):
-        return {"kind": "addr24", "imm24": _encode_operand(value.v)}
+        return _const_operand(value.v.u24, 24)
     if isinstance(value, RegSel):
-        return {
-            "kind": "regsel",
-            "size_group": value.size_group,
-            "name": value.name,
-        }
+        return _reg_operand(value)
     if isinstance(value, ExtRegPtr):
         payload: OperandValue = {
-            "kind": "ext_reg_ptr",
-            "ptr": _encode_operand(value.ptr),
+            "type": "ext_reg_ptr",
+            "ptr": _reg_operand(value.ptr),
             "mode": value.mode,
         }
         if value.disp is not None:
-            payload["disp"] = _encode_operand(value.disp)
+            payload["disp"] = _const_operand(value.disp.value & 0xFF, 8)
         return payload
     if isinstance(value, ImemPtr):
         payload = {
-            "kind": "imem_ptr",
-            "base": _encode_operand(value.base),
+            "type": "imem_ptr",
+            "base": _const_operand(value.base.value, 8),
             "mode": value.mode,
         }
         if value.disp is not None:
-            payload["disp"] = _encode_operand(value.disp)
+            payload["disp"] = _const_operand(value.disp.value & 0xFF, 8)
         return payload
     if isinstance(value, bool):
-        return {"kind": "bool", "value": value}
+        return _const_operand(1 if value else 0, 8)
     if isinstance(value, int):
-        return {"kind": "int", "value": value}
+        return _const_operand(value, 32)
     if isinstance(value, str):
-        return {"kind": "str", "value": value}
-    if isinstance(value, tuple):
-        return {"kind": "tuple", "items": [_encode_operand(v) for v in value]}
-    if isinstance(value, list):
-        return {"kind": "list", "items": [_encode_operand(v) for v in value]}
-    if isinstance(value, dict):
-        return {
-            "kind": "dict",
-            "items": {k: _encode_operand(v) for k, v in value.items()},
-        }
+        return _const_operand(0, 8)
     raise TypeError(f"Unsupported operand type: {type(value)!r}")
 
 
