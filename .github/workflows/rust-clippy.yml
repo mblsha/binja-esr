@@ -1,0 +1,28 @@
+name: Rust Clippy
+
+on:
+  push:
+    branches: [ main, master, fast ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy (core)
+        working-directory: sc62015/core
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy (pybindings)
+        working-directory: sc62015/rustcore
+        run: cargo clippy --all-targets --all-features -- -D warnings
