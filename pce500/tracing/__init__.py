@@ -7,6 +7,7 @@ from .dispatcher import (
     TraceObserver,
     trace_dispatcher,
 )
+
 # Import perfetto tracer to register its observer with the dispatcher.
 from . import perfetto_tracing  # noqa: F401
 

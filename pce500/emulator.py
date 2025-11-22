@@ -265,7 +265,9 @@ class PCE500Emulator:
             enable_overlay=not disable_keyboard_overlay,
         )
         try:
-            self.keyboard.set_bridge_cpu(self.cpu if disable_keyboard_overlay else None, disable_keyboard_overlay)
+            self.keyboard.set_bridge_cpu(
+                self.cpu if disable_keyboard_overlay else None, disable_keyboard_overlay
+            )
         except Exception:
             pass
 
@@ -277,7 +279,9 @@ class PCE500Emulator:
         enable_overlay = not disable_overlay
         self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
         self._llama_pure_lcd = disable_overlay
-        self._llama_lcd_write = getattr(self.memory, "_llama_lcd_write", None) if disable_overlay else None
+        self._llama_lcd_write = (
+            getattr(self.memory, "_llama_lcd_write", None) if disable_overlay else None
+        )
 
         # Set performance tracer for SC62015 integration if available
         if new_tracer.enabled:
@@ -862,9 +866,8 @@ class PCE500Emulator:
             pass
 
     def _sync_lcd_from_backend(self) -> None:
-        if (
-            getattr(self.cpu, "backend", None) != "llama"
-            or not getattr(self, "_llama_pure_lcd", False)
+        if getattr(self.cpu, "backend", None) != "llama" or not getattr(
+            self, "_llama_pure_lcd", False
         ):
             return
         exporter = getattr(self.cpu, "export_lcd_snapshot", None)
@@ -875,7 +878,9 @@ class PCE500Emulator:
             try:
                 self.lcd.load_snapshot(metadata, payload)
             except Exception as exc:  # pragma: no cover - diagnostic path
-                print(f"WARNING: failed to apply LCD snapshot from LLAMA backend: {exc}")
+                print(
+                    f"WARNING: failed to apply LCD snapshot from LLAMA backend: {exc}"
+                )
 
     def _capture_lcd_snapshot(self) -> Tuple[Dict[str, object], bytes]:
         self._sync_lcd_from_backend()
@@ -932,9 +937,7 @@ class PCE500Emulator:
             return
 
         cpu_snapshot = self.cpu.snapshot_registers()
-        temps = {
-            str(k): int(v) for k, v in getattr(cpu_snapshot, "temps", {}).items()
-        }
+        temps = {str(k): int(v) for k, v in getattr(cpu_snapshot, "temps", {}).items()}
         metadata.update(
             {
                 "backend": getattr(self.cpu, "backend", "llama"),
@@ -1080,9 +1083,7 @@ class PCE500Emulator:
         }
 
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                "snapshot.json", json.dumps(metadata, indent=2, sort_keys=True)
-            )
+            zf.writestr("snapshot.json", json.dumps(metadata, indent=2, sort_keys=True))
             zf.writestr("registers.bin", registers_blob)
             zf.writestr("external_ram.bin", bytes(flat_memory))
             zf.writestr("internal_ram.bin", bytes(internal_slice))
@@ -1121,7 +1122,7 @@ class PCE500Emulator:
             end = min(overlay.end + 1, len(flat_memory))
             span = max(0, end - start)
             if span and span <= len(overlay.data):
-                overlay.data[:span] = flat_memory[start:start + span]
+                overlay.data[:span] = flat_memory[start : start + span]
 
         if imem_bytes:
             self.memory.external_memory[-len(imem_bytes) :] = imem_bytes
@@ -1157,8 +1158,7 @@ class PCE500Emulator:
 
         reg_values = _unpack_register_bytes(registers_blob)
         temps = {
-            int(key): int(value)
-            for key, value in (metadata.get("temps") or {}).items()
+            int(key): int(value) for key, value in (metadata.get("temps") or {}).items()
         }
         snapshot = CPURegistersSnapshot(
             pc=reg_values["pc"],
@@ -1200,8 +1200,12 @@ class PCE500Emulator:
 
         timer_info = metadata.get("timer", {})
         self._timer_enabled = bool(timer_info.get("enabled", True))
-        self._timer_mti_period = int(timer_info.get("mti_period", self._timer_mti_period))
-        self._timer_sti_period = int(timer_info.get("sti_period", self._timer_sti_period))
+        self._timer_mti_period = int(
+            timer_info.get("mti_period", self._timer_mti_period)
+        )
+        self._timer_sti_period = int(
+            timer_info.get("sti_period", self._timer_sti_period)
+        )
         self._timer_next_mti = int(timer_info.get("next_mti", self._timer_next_mti))
         self._timer_next_sti = int(timer_info.get("next_sti", self._timer_next_sti))
 
@@ -1237,7 +1241,9 @@ class PCE500Emulator:
         self._kb_irq_enabled = bool(kb_metrics.get("kb_irq_enabled", True))
 
         self.MEMORY_DUMP_PC = int(metadata.get("memory_dump_pc", self.MEMORY_DUMP_PC))
-        self.fast_mode = bool(metadata.get("fast_mode", getattr(self, "fast_mode", False)))
+        self.fast_mode = bool(
+            metadata.get("fast_mode", getattr(self, "fast_mode", False))
+        )
 
         self.instruction_history.clear()
         self.memory.clear_imem_access_tracking()
@@ -1256,8 +1262,18 @@ class PCE500Emulator:
                 try:
                     sync_irq(
                         bool(self._irq_pending),
-                        int(self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)) & 0xFF,
-                        int(self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)) & 0xFF,
+                        int(
+                            self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                            )
+                        )
+                        & 0xFF,
+                        int(
+                            self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                            )
+                        )
+                        & 0xFF,
                         int(self._scheduler.next_mti),
                         int(self._scheduler.next_sti),
                         self._irq_source.name if self._irq_source else None,
@@ -1363,9 +1379,7 @@ class PCE500Emulator:
             "units": units,
         }
 
-    def _emit_instruction_trace_event(
-        self, snapshot: Optional[Dict[str, Any]]
-    ) -> None:
+    def _emit_instruction_trace_event(self, snapshot: Optional[Dict[str, Any]]) -> None:
         """Emit the captured instruction snapshot as a Perfetto instant event."""
 
         if not snapshot or not new_tracer.enabled:
@@ -1470,9 +1484,7 @@ class PCE500Emulator:
             return None
         # Space out memory writes within the same instruction.
         self._trace_substep += 1
-        return (
-            instr_index * self._trace_units_per_instruction + self._trace_substep
-        )
+        return instr_index * self._trace_units_per_instruction + self._trace_substep
 
     def _trace_execution(self, pc: int, opcode: Optional[int]):
         payload: Dict[str, Any] = {"pc": f"0x{pc:06X}"}
@@ -1636,7 +1648,9 @@ class PCE500Emulator:
                 f"lcd-notify irq addr=0x{address:06X} value=0x{value:02X} pc={pc_str}"
             )
 
-    def _seed_interrupt_mask(self, imr_value: int = 0x43, isr_value: int = 0x00) -> None:
+    def _seed_interrupt_mask(
+        self, imr_value: int = 0x43, isr_value: int = 0x00
+    ) -> None:
         imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
         isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
         try:
@@ -2499,6 +2513,8 @@ class PCE500Emulator:
 
         print(f"\nDisassembly trace saved to: {filepath}")
         return filepath
+
+
 def _stack_snapshot_range() -> tuple[int, int] | None:
     global _STACK_SNAPSHOT_RANGE
     if _STACK_SNAPSHOT_RANGE is not None:

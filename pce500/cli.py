@@ -29,19 +29,55 @@ def _apply_llama_fast_defaults(ns: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PC-E500 CLI (snapshot-friendly)")
-    parser.add_argument("--rom", type=str, help="Optional ROM override (unused; kept for future)")
-    parser.add_argument("--steps", type=int, default=20000, help="Number of instructions to execute")
-    parser.add_argument("--fast-mode", action=argparse.BooleanOptionalAction, default=None, help="Enable fast mode (default on for LLAMA)")
-    parser.add_argument("--timeout-secs", type=float, default=None, help="Wall clock timeout (default 0 for LLAMA, 10 otherwise)")
-    parser.add_argument("--load-snapshot", type=str, help="Load a .pcsnap before stepping")
-    parser.add_argument("--save-snapshot", type=str, help="Save a .pcsnap after stepping")
-    parser.add_argument("--no-perfetto", action=argparse.BooleanOptionalAction, default=None, help="Disable perfetto tracing (default off for llama-fast)")
-    parser.add_argument("--perfetto", action="store_true", help="Enable new perfetto tracing")
-    parser.add_argument("--trace-file", type=str, default="pc-e500.perfetto-trace", help="Perfetto trace path")
-    parser.add_argument("--no-lcd", action="store_true", help="Skip saving LCD PNGs on exit")
-    parser.add_argument("--preset", choices=["llama-fast"], help="Apply llama-fast defaults")
+    parser.add_argument(
+        "--rom", type=str, help="Optional ROM override (unused; kept for future)"
+    )
+    parser.add_argument(
+        "--steps", type=int, default=20000, help="Number of instructions to execute"
+    )
+    parser.add_argument(
+        "--fast-mode",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable fast mode (default on for LLAMA)",
+    )
+    parser.add_argument(
+        "--timeout-secs",
+        type=float,
+        default=None,
+        help="Wall clock timeout (default 0 for LLAMA, 10 otherwise)",
+    )
+    parser.add_argument(
+        "--load-snapshot", type=str, help="Load a .pcsnap before stepping"
+    )
+    parser.add_argument(
+        "--save-snapshot", type=str, help="Save a .pcsnap after stepping"
+    )
+    parser.add_argument(
+        "--no-perfetto",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Disable perfetto tracing (default off for llama-fast)",
+    )
+    parser.add_argument(
+        "--perfetto", action="store_true", help="Enable new perfetto tracing"
+    )
+    parser.add_argument(
+        "--trace-file",
+        type=str,
+        default="pc-e500.perfetto-trace",
+        help="Perfetto trace path",
+    )
+    parser.add_argument(
+        "--no-lcd", action="store_true", help="Skip saving LCD PNGs on exit"
+    )
+    parser.add_argument(
+        "--preset", choices=["llama-fast"], help="Apply llama-fast defaults"
+    )
     parser.add_argument("--auto-press-key", help="Auto key code (e.g., KEY_F1)")
-    parser.add_argument("--auto-press-after-steps", type=int, help="Trigger auto key after N steps")
+    parser.add_argument(
+        "--auto-press-after-steps", type=int, help="Trigger auto key after N steps"
+    )
     args = parser.parse_args()
 
     _apply_llama_fast_defaults(args)
