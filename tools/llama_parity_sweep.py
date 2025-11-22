@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """
 Parity sweep runner for LLAMA vs Python backend.
 
@@ -22,7 +23,7 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 import sys
-from typing import Iterable, List, Tuple
+from typing import Iterable, Tuple
 
 from binja_test_mocks.eval_llil import Memory
 
@@ -30,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sc62015.pysc62015 import CPU, RegisterName, available_backends
+from sc62015.pysc62015 import CPU, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
 from sc62015.pysc62015.test_instr import opcode_generator, decode as decode_instr
