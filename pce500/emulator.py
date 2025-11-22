@@ -741,13 +741,10 @@ class PCE500Emulator:
                 if self.disasm_trace_enabled:
                     self._capture_disasm_trace(pc_before, eval_info.instruction, instr)
 
-                should_emit_trace = (
-                    self.perfetto_enabled
-                    or trace_dispatcher.has_observers()
-                    or new_tracer.enabled
-                )
-                if should_emit_trace:
-                    self._trace_execution(pc, opcode)
+                # Always emit an execution event so registered observers (and the
+                # new tracer when enabled) see every instruction regardless of
+                # perfetto wiring.
+                self._trace_execution(pc, opcode)
 
                 if self.perfetto_enabled:
                     self._trace_control_flow(pc_before, eval_info)
