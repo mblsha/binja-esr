@@ -1,13 +1,14 @@
 """Simplified PC-E500 emulator combining machine and emulator functionality."""
 
 import json
-import time
 import os
-from pathlib import Path
-from typing import Optional, Dict, Any, Set, List
-from enum import Enum
+import time
+import zipfile
 from collections import deque
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+from enum import Enum
 
 # Import the SC62015 emulator
 from sc62015.pysc62015 import CPU, RegisterName
@@ -19,6 +20,7 @@ from sc62015.pysc62015.instr.instructions import (
 )
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
+from sc62015.pysc62015.stepper import CPURegistersSnapshot
 
 from .memory import (
     PCE500Memory,
@@ -37,6 +39,47 @@ from .peripherals import PeripheralManager
 MTI_PERIOD_CYCLES_DEFAULT = 500
 STI_PERIOD_CYCLES_DEFAULT = 5000
 
+SNAPSHOT_MAGIC = "pc-e500.snapshot"
+SNAPSHOT_VERSION = 1
+_SNAPSHOT_REGISTER_LAYOUT = (
+    ("pc", 3),
+    ("ba", 2),
+    ("i", 2),
+    ("x", 3),
+    ("y", 3),
+    ("u", 3),
+    ("s", 3),
+    ("f", 1),
+)
+
+
+def _pack_register_bytes(snapshot: CPURegistersSnapshot) -> bytes:
+    """Pack the core registers into a deterministic little-endian blob."""
+
+    chunks: list[bytes] = []
+    for name, width in _SNAPSHOT_REGISTER_LAYOUT:
+        value = getattr(snapshot, name)
+        chunks.append(int(value).to_bytes(width, byteorder="little", signed=False))
+    return b"".join(chunks)
+
+
+def _unpack_register_bytes(payload: bytes) -> Dict[str, int]:
+    """Unpack a register blob created by ``_pack_register_bytes``."""
+
+    expected = sum(width for _, width in _SNAPSHOT_REGISTER_LAYOUT)
+    if len(payload) != expected:
+        raise ValueError(
+            f"registers.bin length mismatch (expected {expected}, got {len(payload)})"
+        )
+    offset = 0
+    values: Dict[str, int] = {}
+    for name, width in _SNAPSHOT_REGISTER_LAYOUT:
+        values[name] = int.from_bytes(
+            payload[offset : offset + width], byteorder="little", signed=False
+        )
+        offset += width
+    return values
+
 
 class IRQSource(Enum):
     # Enum values store ISR bit index directly
@@ -49,6 +92,11 @@ class IRQSource(Enum):
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
 KOL, KOH, KIL = IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL
+IRQ_STACK_TRACE_ENABLED = os.getenv("IRQ_STACK_TRACE") == "1"
+PYTHON_PC_TRACE_ENABLED = os.getenv("PYTHON_PC_TRACE") == "1"
+
+_STACK_SNAPSHOT_RANGE: tuple[int, int] | None = None
+_STACK_SNAPSHOT_LEN: int | None = None
 
 
 def _env_flag(name: str) -> bool:
@@ -56,6 +104,14 @@ def _env_flag(name: str) -> bool:
     if raw is None:
         return False
     return raw not in {"0", "false", "False", "off", ""}
+
+
+IRQ_DEBUG_ENABLED = _env_flag("IRQ_DEBUG")
+
+
+def _log_irq_debug(message: str) -> None:
+    if IRQ_DEBUG_ENABLED:
+        print(f"[irq-debug] {message}")
 
 
 def _trace_probe_pc_and_opcode(emu):
@@ -73,6 +129,23 @@ def _trace_probe_pc_and_opcode(emu):
 class PCE500Emulator:
     """PC-E500 emulator with integrated machine configuration."""
 
+    _TRACE_UNITS_PER_INSTRUCTION = 10_000
+    _TRACE_REGISTERS = (
+        RegisterName.PC,
+        RegisterName.A,
+        RegisterName.B,
+        RegisterName.BA,
+        RegisterName.I,
+        RegisterName.IL,
+        RegisterName.IH,
+        RegisterName.X,
+        RegisterName.Y,
+        RegisterName.U,
+        RegisterName.S,
+        RegisterName.F,
+        RegisterName.FC,
+        RegisterName.FZ,
+    )
     INTERNAL_ROM_START = 0xC0000
     INTERNAL_ROM_SIZE = 0x40000
     INTERNAL_RAM_START = 0xB8000
@@ -121,7 +194,6 @@ class PCE500Emulator:
         self.memory._emulator = self  # Set reference for tracking counters
 
         self.lcd = HD61202Controller()
-        self.memory.set_lcd_controller(self.lcd)
         self._lcd_trace_events: List[Dict[str, Any]] = []
         self._lcd_trace_limit = max(0, int(lcd_trace_event_limit))
         self._lcd_trace_truncated = False
@@ -182,6 +254,33 @@ class PCE500Emulator:
             self.cpu = CPU(self.memory, reset_on_init=True, backend="python")
 
         self.memory.set_cpu(self.cpu)
+        backend_name = getattr(self.cpu, "backend", "python")
+
+        pure_keyboard_env = os.getenv("RUST_PURE_KEYBOARD")
+        if pure_keyboard_env is not None:
+            disable_keyboard_overlay = pure_keyboard_env == "1"
+        else:
+            disable_keyboard_overlay = backend_name == "rust"
+        self.memory.set_keyboard_handler(
+            self._keyboard_read_handler,
+            self._keyboard_write_handler,
+            enable_overlay=not disable_keyboard_overlay,
+        )
+        self._rust_keyboard_bridge = disable_keyboard_overlay
+        try:
+            self.keyboard.set_bridge_cpu(self.cpu if disable_keyboard_overlay else None, disable_keyboard_overlay)
+        except Exception:
+            pass
+
+        pure_lcd_env = os.getenv("RUST_PURE_LCD")
+        if pure_lcd_env is not None:
+            disable_overlay = pure_lcd_env == "1"
+        else:
+            disable_overlay = backend_name == "rust"
+        enable_overlay = not disable_overlay
+        self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
+        self._rust_pure_lcd = disable_overlay
+        self._rust_lcd_write = getattr(self.memory, "_rust_lcd_write", None) if disable_overlay else None
 
         # Set performance tracer for SC62015 integration if available
         if new_tracer.enabled:
@@ -206,16 +305,28 @@ class PCE500Emulator:
         }
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
-            trace_dispatcher.start_trace("pc-e500.trace")
+            trace_dispatcher.start_trace(trace_path)
             self.lcd.set_perfetto_enabled(True)
             self.memory.set_perfetto_enabled(True)
+            if getattr(self.cpu, "backend", None) == "rust":
+                try:
+                    self.cpu.set_perfetto_trace(trace_path)
+                except Exception:
+                    pass
+        elif trace_dispatcher.has_observers():
+            trace_dispatcher.start_trace(trace_path)
 
         # New tracing system
         self._new_trace_enabled = enable_new_tracing
         self._trace_path = trace_path
         self._trace_instr_count = 0
+        self._trace_units_per_instruction = self._TRACE_UNITS_PER_INSTRUCTION
+        self._trace_substep = 0
+        self._active_trace_instruction: Optional[int] = None
         if self._new_trace_enabled:
             new_tracer.start(self._trace_path)
+            new_tracer.set_manual_clock_mode(True, tick_ns=1)
+            self.memory.set_perf_tracer(new_tracer)
 
         self.call_depth = 0
         self._interrupt_stack = []
@@ -307,6 +418,8 @@ class PCE500Emulator:
         self._next_interrupt_id = 1
         self._scheduler.reset()
         self._kb_irq_count = 0
+        if getattr(self, "_rust_pure_lcd", False):
+            self._seed_interrupt_mask()
         # Reset interrupt accounting
         try:
             self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
@@ -320,10 +433,14 @@ class PCE500Emulator:
 
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
+        trace_snapshot: Optional[Dict[str, Any]] = None
         # Tick rough timers to set ISR bits and arm IRQ when due
         try:
-            if self._timer_enabled:
-                self._tick_timers()
+            if self._timer_enabled and not getattr(self, "_in_interrupt", False):
+                if not getattr(self.keyboard, "_bridge_enabled", False) or not getattr(
+                    self.cpu, "_timer_in_rust", False
+                ):
+                    self._tick_timers()
         except Exception:
             pass
         # Honor HALT: do not execute instructions while halted. Any ISR bit cancels HALT.
@@ -344,11 +461,13 @@ class PCE500Emulator:
                             self._irq_source = IRQSource(b)
                             break
                     setattr(self, "_irq_pending", True)
+                    _log_irq_debug(
+                        f"HALT wake IRQ pending (ISR=0x{isr_val_chk:02X}) source={self._irq_source}"
+                    )
                 else:
                     # Remain halted; model passage of one cycle of time
                     try:
-                        # Keep instruction_count aligned with steps for perf tests
-                        self.instruction_count += 1
+                        # Model one cycle of idle time while halted; no instruction executed.
                         self.cycle_count += 1
                     except Exception:
                         pass
@@ -365,38 +484,68 @@ class PCE500Emulator:
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 imr_val_chk = self.memory.read_byte(imr_addr_chk) & 0xFF
                 isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
+                _log_irq_debug(
+                    f"pending IRQ check pc=0x{self.cpu.regs.get(RegisterName.PC):06X} "
+                    f"imr=0x{imr_val_chk:02X} isr=0x{isr_val_chk:02X} in_interrupt={self._in_interrupt}"
+                )
                 if (imr_val_chk & int(IMRFlag.IRM)) == 0 or (
                     imr_val_chk & isr_val_chk
                 ) == 0:
                     # Keep pending; CPU continues executing normal flow
+                    _log_irq_debug(
+                        f"IRQ masked; pending retained (IMR=0x{imr_val_chk:02X} ISR=0x{isr_val_chk:02X})"
+                    )
                     pass
                 else:
                     # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
                     cur_pc = self.cpu.regs.get(RegisterName.PC)
                     s = self.cpu.regs.get(RegisterName.S)
+                    _log_irq_debug(
+                        f"Delivering IRQ src={self._irq_source} pc=0x{cur_pc:06X} s=0x{s:06X}"
+                    )
                     # Require a valid, initialized stack pointer; defer IRQ until firmware sets SP
                     if not isinstance(s, int) or s < 5:
                         raise RuntimeError(
                             "IRQ deferred: stack pointer not initialized"
                         )
+                    if IRQ_STACK_TRACE_ENABLED:
+                        print(
+                            f"[irq-stack] deliver start pc=0x{cur_pc:06X} s=0x{s:06X} f=0x{int(self.cpu.regs.get(RegisterName.F)) & 0xFF:02X} imr=0x{imr_val_chk:02X}"
+                        )
                     # push PC (little-endian 3 bytes)
                     s_new = s - 3
                     self.memory.write_bytes(3, s_new, cur_pc)
+                    if IRQ_STACK_TRACE_ENABLED:
+                        print(
+                            f"[irq-stack] push_pc from 0x{s:06X} to 0x{s_new:06X} value=0x{cur_pc & 0xFFFFFF:06X}"
+                        )
                     self.cpu.regs.set(RegisterName.S, s_new)
                     # push F (1 byte)
                     f_val = self.cpu.regs.get(RegisterName.F)
                     s_new = self.cpu.regs.get(RegisterName.S) - 1
                     self.memory.write_bytes(1, s_new, f_val)
+                    if IRQ_STACK_TRACE_ENABLED:
+                        print(
+                            f"[irq-stack] push_f value=0x{int(f_val) & 0xFF:02X} new_s=0x{s_new:06X}"
+                        )
                     self.cpu.regs.set(RegisterName.S, s_new)
                     # push IMR (1 byte) and clear IRM bit 7
                     imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
                     imr_val = self.memory.read_byte(imr_addr)
                     s_new = self.cpu.regs.get(RegisterName.S) - 1
                     self.memory.write_bytes(1, s_new, imr_val)
+                    if IRQ_STACK_TRACE_ENABLED:
+                        print(
+                            f"[irq-stack] push_imr value=0x{imr_val & 0xFF:02X} new_s=0x{s_new:06X}"
+                        )
                     self.cpu.regs.set(RegisterName.S, s_new)
                     self.memory.write_byte(
                         imr_addr, imr_val & (~int(IMRFlag.IRM) & 0xFF)
                     )
+                    if IRQ_STACK_TRACE_ENABLED:
+                        print(
+                            f"[irq-stack] deliver done s=0x{int(self.cpu.regs.get(RegisterName.S)):06X}"
+                        )
                     # ISR status was set by the triggering source (device/timer)
                     # Do not modify ISR here; only deliver the interrupt.
                     # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
@@ -404,6 +553,9 @@ class PCE500Emulator:
                     self.cpu.regs.set(RegisterName.PC, vector_addr)
                     self._in_interrupt = True
                     self._irq_pending = False
+                    _log_irq_debug(
+                        f"IRQ delivered vector=0x{vector_addr:06X} new_s=0x{self.cpu.regs.get(RegisterName.S):06X}"
+                    )
                     # Interrupt accounting
                     try:
                         src = (
@@ -454,6 +606,25 @@ class PCE500Emulator:
 
         pc = self.cpu.regs.get(RegisterName.PC)
         self._last_pc, self._current_pc = self._current_pc, pc
+        if os.getenv("IRQ_DEBUG_CYCLES") == "1" and pc in (
+            0x0F2051,
+            0x0F2053,
+            0x0F2055,
+            0x0F2056,
+            0x0F2059,
+            0x0F205C,
+        ):
+            print(
+                f"[irq-cycle] pc=0x{pc:06X} cycles={self.cycle_count} in_irq={self._in_interrupt}"
+            )
+
+        if self._new_trace_enabled and new_tracer.enabled:
+            trace_snapshot = self._snapshot_instruction_trace(
+                pc, self.instruction_count
+            )
+            if trace_snapshot is not None:
+                self._active_trace_instruction = self.instruction_count
+                self._trace_substep = 0
 
         if pc in self.breakpoints:
             return False
@@ -464,6 +635,7 @@ class PCE500Emulator:
         if pc == self.MEMORY_DUMP_PC and self.perfetto_enabled:
             self._dump_internal_memory(pc)
 
+        opcode = None
         try:
             # Pre-read opcode and I for WAIT simulation (so we can model time passing)
             # Always simulate WAIT loops to advance timers, regardless of tracing.
@@ -474,6 +646,7 @@ class PCE500Emulator:
                     i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
                     if i_before > 0:
                         wait_sim_count = i_before
+                opcode = opcode_peek
             except Exception:
                 pass
 
@@ -485,6 +658,9 @@ class PCE500Emulator:
                 self._reset_instruction_access_log()
 
                 eval_info = self.cpu.execute_instruction(pc)
+                if PYTHON_PC_TRACE_ENABLED:
+                    print(f"[python-pc] PC=0x{pc:06X}")
+                _log_stack_snapshot_emulator(self, pc)
 
                 # Associate accumulated register accesses with this instruction
                 self._flush_instruction_access_log(pc_before)
@@ -497,26 +673,19 @@ class PCE500Emulator:
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
-                # Emit lightweight Exec@ events for new tracer even in fast mode
                 if new_tracer.enabled:
-                    pc2, opcode2 = _trace_probe_pc_and_opcode(self)
-                    name = f"Exec@{pc2:#06x}" if isinstance(pc2, int) else "Exec@?"
-                    args = {}
-                    if isinstance(pc2, int):
-                        args["pc"] = pc2
-                    if isinstance(opcode2, int):
-                        args["opcode"] = opcode2
-                    # Minimal register state to keep overhead low
-                    try:
-                        state = self.get_cpu_state()
-                        args["sp"] = state["s"] & 0xFFFFFF
-                        args["flags"] = (state["flags"]["c"] << 1) | state["flags"]["z"]
-                    except Exception:
-                        pass
-                    new_tracer.instant("Execution", name, args)
-                    new_tracer.counter(
-                        "Counters", "instructions", float(self.instruction_count)
+                    new_tracer.instant(
+                        "Execution",
+                        f"Exec@0x{pc_before:06X}",
+                        {"pc": f"0x{pc_before:06X}"},
                     )
+                elif self.perfetto_enabled or trace_dispatcher.has_observers():
+                    trace_dispatcher.record_instant(
+                        "Execution",
+                        f"Exec@0x{pc_before:06X}",
+                        {"pc": f"0x{pc_before:06X}"},
+                    )
+                # Emit lightweight Exec@ events for new tracer even in fast mode
             else:
                 # Decode instruction first to get opcode name for tracing
                 instr = self.cpu.decode_instruction(pc)
@@ -543,6 +712,9 @@ class PCE500Emulator:
                     },
                 ):
                     eval_info = self.cpu.execute_instruction(pc)
+                    if PYTHON_PC_TRACE_ENABLED:
+                        print(f"[python-pc] PC=0x{pc:06X}")
+                _log_stack_snapshot_emulator(self, pc)
 
                 # Associate accumulated register accesses with this instruction
                 self._flush_instruction_access_log(pc_before)
@@ -569,7 +741,9 @@ class PCE500Emulator:
                     self._capture_disasm_trace(pc_before, eval_info.instruction, instr)
 
                 should_emit_trace = (
-                    self.perfetto_enabled or trace_dispatcher.has_observers()
+                    self.perfetto_enabled
+                    or trace_dispatcher.has_observers()
+                    or new_tracer.enabled
                 )
                 if should_emit_trace:
                     self._trace_execution(pc, opcode)
@@ -589,34 +763,6 @@ class PCE500Emulator:
                             self.control_flow_edges[pc_after] = set()
                         self.control_flow_edges[pc_after].add(pc_before)
 
-                # New tracing system
-                if new_tracer.enabled:
-                    self._trace_instr_count += 1
-                    pc, opcode = _trace_probe_pc_and_opcode(self)
-
-                    # Instruction instant event
-                    name = f"Exec@{pc:#06x}" if isinstance(pc, int) else "Exec@?"
-                    args = {}
-                    if isinstance(pc, int):
-                        args["pc"] = pc
-                    if isinstance(opcode, int):
-                        args["opcode"] = opcode
-
-                    # Add register values
-                    state = self.get_cpu_state()
-                    args["a"] = state["a"] & 0xFF
-                    args["b"] = state["b"] & 0xFF
-                    args["x"] = state["x"] & 0xFFFFFF
-                    args["y"] = state["y"] & 0xFFFFFF
-                    args["sp"] = state["s"] & 0xFFFFFF
-                    args["flags"] = (state["flags"]["c"] << 1) | state["flags"]["z"]
-
-                    new_tracer.instant("Execution", name, args)
-
-                    # Update counters
-                    new_tracer.counter(
-                        "Counters", "instructions", float(self._trace_instr_count)
-                    )
         except Exception as e:
             if self.trace is not None:
                 self.trace.append(("error", pc, str(e)))
@@ -625,6 +771,12 @@ class PCE500Emulator:
                     "CPU", "Error", {"error": str(e), "pc": f"0x{pc:06X}"}
                 )
             raise
+        # Always emit an Execution instant when the new tracer is enabled so the
+        # Perfetto stream has one Exec@ per instruction regardless of legacy
+        # dispatcher state.
+        if self._new_trace_enabled and new_tracer.enabled and opcode is not None:
+            self._trace_execution(pc, opcode)
+        self._emit_instruction_trace_event(trace_snapshot)
         # Detect end of interrupt roughly by RETI opcode name
         try:
             instr_name = type(eval_info.instruction).__name__
@@ -691,12 +843,435 @@ class PCE500Emulator:
     def save_lcd_displays(
         self, combined_filename: str = "lcd_display.png", save_individual: bool = False
     ) -> None:
+        self._sync_lcd_from_backend()
         img = self.lcd.get_combined_display(zoom=1)
         img.save(combined_filename)
-        print(f"LCD display saved to {combined_filename}")
-        if save_individual:
-            self.lcd.save_displays_to_png("lcd_left.png", "lcd_right.png")
-            print("Individual chip displays saved to lcd_left.png and lcd_right.png")
+
+    def close(self) -> None:
+        """Release backend resources (flush traces, etc.)."""
+        try:
+            if hasattr(self.cpu, "flush_perfetto"):
+                self.cpu.flush_perfetto()
+            trace_dispatcher.stop_trace()
+            if self._new_trace_enabled and new_tracer.enabled:
+                new_tracer.stop()
+        except Exception:
+            pass
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def _sync_lcd_from_backend(self) -> None:
+        if (
+            getattr(self.cpu, "backend", None) != "rust"
+            or not getattr(self, "_rust_pure_lcd", False)
+        ):
+            return
+        exporter = getattr(self.cpu, "export_lcd_snapshot", None)
+        if not callable(exporter):
+            return
+        metadata, payload = exporter()
+        if metadata and payload:
+            try:
+                self.lcd.load_snapshot(metadata, payload)
+            except Exception as exc:  # pragma: no cover - diagnostic path
+                print(f"WARNING: failed to apply LCD snapshot from Rust backend: {exc}")
+
+    def _capture_lcd_snapshot(self) -> Tuple[Dict[str, object], bytes]:
+        self._sync_lcd_from_backend()
+        snapshot = self.lcd.get_snapshot()
+        chips = snapshot.chips
+        meta: Dict[str, object] = {
+            "chip_count": len(chips),
+            "pages": len(chips[0].vram) if chips else 0,
+            "width": len(chips[0].vram[0]) if chips and chips[0].vram else 0,
+            "chips": [],
+            "cs_both_count": getattr(self.lcd, "cs_both_count", 0),
+            "cs_left_count": getattr(self.lcd, "cs_left_count", 0),
+            "cs_right_count": getattr(self.lcd, "cs_right_count", 0),
+        }
+        payload = bytearray()
+        for chip_snap in chips:
+            meta["chips"].append(
+                {
+                    "on": chip_snap.on,
+                    "start_line": chip_snap.start_line,
+                    "page": chip_snap.page,
+                    "y_address": chip_snap.y_address,
+                    "instruction_count": chip_snap.instruction_count,
+                    "data_write_count": chip_snap.data_write_count,
+                }
+            )
+            for page in chip_snap.vram:
+                for value in page:
+                    payload.append(int(value) & 0xFF)
+        return meta, bytes(payload)
+
+    def _restore_lcd_snapshot(
+        self, metadata: Optional[Dict[str, object]], payload: Optional[bytes]
+    ) -> None:
+        if not metadata or payload is None:
+            return
+        self.lcd.load_snapshot(metadata, payload)
+
+    def _patch_rust_snapshot_metadata(self, target: Path) -> None:
+        """Add Python-only metadata fields to a Rust-authored snapshot."""
+
+        try:
+            with zipfile.ZipFile(target, "r") as zf:
+                entries = {name: zf.read(name) for name in zf.namelist()}
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            print(f"[snapshot] Unable to post-process Rust snapshot: {exc}")
+            return
+
+        try:
+            raw_meta = entries.get("snapshot.json", b"{}")
+            metadata = json.loads(raw_meta.decode("utf-8"))
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            print(f"[snapshot] Failed to parse snapshot metadata: {exc}")
+            return
+
+        cpu_snapshot = self.cpu.snapshot_registers()
+        temps = {
+            str(k): int(v) for k, v in getattr(cpu_snapshot, "temps", {}).items()
+        }
+        metadata.update(
+            {
+                "backend": getattr(self.cpu, "backend", "rust"),
+                "call_depth": int(getattr(self, "call_depth", 0)),
+                "call_sub_level": int(getattr(cpu_snapshot, "call_sub_level", 0)),
+                "temps": temps,
+                "memory_reads": int(getattr(self, "memory_read_count", 0)),
+                "memory_writes": int(getattr(self, "memory_write_count", 0)),
+                "memory_dump_pc": int(getattr(self, "MEMORY_DUMP_PC", 0)),
+                "fast_mode": bool(getattr(self, "fast_mode", False)),
+            }
+        )
+
+        keyboard_state = (
+            self.keyboard.snapshot_state() if hasattr(self, "keyboard") else None
+        )
+        if keyboard_state is not None:
+            metadata["keyboard"] = keyboard_state
+
+        kb_metrics = {
+            "irq_count": int(getattr(self, "_kb_irq_count", 0)),
+            "strobe_count": int(getattr(self, "_kb_strobe_count", 0)),
+            "column_hist": list(getattr(self, "_kb_col_hist", [])),
+            "last_cols": list(getattr(self, "_last_kil_columns", [])),
+            "last_kol": int(getattr(self, "_last_kol", 0)),
+            "last_koh": int(getattr(self, "_last_koh", 0)),
+            "kil_reads": int(getattr(self, "_kil_read_count", 0)),
+            "kb_irq_enabled": bool(getattr(self, "_kb_irq_enabled", True)),
+        }
+        metadata["kb_metrics"] = kb_metrics
+
+        entries["snapshot.json"] = json.dumps(
+            metadata, indent=2, sort_keys=True
+        ).encode("utf-8")
+
+        try:
+            with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for name, data in entries.items():
+                    zf.writestr(name, data)
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            print(f"[snapshot] Failed to rewrite Rust snapshot metadata: {exc}")
+
+    def save_snapshot(self, path: str | Path) -> Path:
+        """Persist CPU/memory/peripheral state to a .pcsnap bundle."""
+
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        if getattr(self.cpu, "backend", None) == "rust":
+            rust_impl = self.cpu.unwrap()
+            saver = getattr(rust_impl, "save_snapshot", None)
+            if callable(saver):
+                try:
+                    is_synced = getattr(rust_impl, "is_memory_synced", None)
+                    if callable(is_synced) and not is_synced():
+                        reinit = getattr(rust_impl, "_initialise_rust_memory", None)
+                        if callable(reinit):
+                            reinit()
+                    saver(str(target))
+                    self._patch_rust_snapshot_metadata(target)
+                    return target
+                except Exception as exc:  # pragma: no cover - fallback path
+                    print(
+                        f"[snapshot] Rust save failed, falling back to python path: {exc}"
+                    )
+
+        cpu_snapshot = self.cpu.snapshot_registers()
+        registers_blob = _pack_register_bytes(cpu_snapshot)
+        flat_memory, fallback_ranges, readonly_ranges = self.memory.export_flat_memory()
+
+        internal_slice = self.memory.external_memory[
+            self.INTERNAL_RAM_START : self.INTERNAL_RAM_START + self.INTERNAL_RAM_SIZE
+        ]
+        imem_bytes = self.memory.get_internal_memory_bytes()
+        lcd_meta, lcd_payload = self._capture_lcd_snapshot()
+        keyboard_state = (
+            self.keyboard.snapshot_state() if hasattr(self, "keyboard") else None
+        )
+
+        timer_info = {
+            "enabled": bool(self._timer_enabled),
+            "mti_period": int(self._timer_mti_period),
+            "sti_period": int(self._timer_sti_period),
+            "next_mti": int(self._timer_next_mti),
+            "next_sti": int(self._timer_next_sti),
+        }
+        irq_source_name = self._irq_source.name if self._irq_source else None
+        interrupts = {
+            "pending": bool(getattr(self, "_irq_pending", False)),
+            "in_interrupt": bool(getattr(self, "_in_interrupt", False)),
+            "source": irq_source_name,
+            "stack": list(self._interrupt_stack),
+            "next_id": int(self._next_interrupt_id),
+            "irq_counts": dict(self.irq_counts),
+            "last_irq": dict(self.last_irq),
+            "irq_bit_watch": self.irq_bit_watch,
+        }
+
+        kb_metrics = {
+            "irq_count": int(getattr(self, "_kb_irq_count", 0)),
+            "strobe_count": int(getattr(self, "_kb_strobe_count", 0)),
+            "column_hist": list(getattr(self, "_kb_col_hist", [])),
+            "last_cols": list(getattr(self, "_last_kil_columns", [])),
+            "last_kol": int(getattr(self, "_last_kol", 0)),
+            "last_koh": int(getattr(self, "_last_koh", 0)),
+            "kil_reads": int(getattr(self, "_kil_read_count", 0)),
+            "kb_irq_enabled": bool(getattr(self, "_kb_irq_enabled", True)),
+        }
+
+        metadata = {
+            "magic": SNAPSHOT_MAGIC,
+            "version": SNAPSHOT_VERSION,
+            "backend": self.cpu.backend,
+            "created": datetime.utcnow().isoformat() + "Z",
+            "instruction_count": int(self.instruction_count),
+            "cycle_count": int(self.cycle_count),
+            "memory_reads": int(self.memory_read_count),
+            "memory_writes": int(self.memory_write_count),
+            "pc": int(cpu_snapshot.pc),
+            "call_depth": int(self.call_depth),
+            "call_sub_level": int(cpu_snapshot.call_sub_level),
+            "temps": {str(k): int(v) for k, v in cpu_snapshot.temps.items()},
+            "timer": timer_info,
+            "interrupts": interrupts,
+            "keyboard": keyboard_state,
+            "lcd": lcd_meta,
+            "fallback_ranges": [
+                [int(start), int(end)] for start, end in fallback_ranges
+            ],
+            "readonly_ranges": [
+                [int(start), int(end)] for start, end in readonly_ranges
+            ],
+            "internal_ram": {
+                "start": self.INTERNAL_RAM_START,
+                "size": self.INTERNAL_RAM_SIZE,
+            },
+            "imem": {"start": INTERNAL_MEMORY_START, "size": 0x100},
+            "kb_metrics": kb_metrics,
+            "memory_dump_pc": int(self.MEMORY_DUMP_PC),
+            "fast_mode": bool(getattr(self, "fast_mode", False)),
+            "memory_image_size": len(flat_memory),
+            "lcd_payload_size": len(lcd_payload),
+        }
+
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "snapshot.json", json.dumps(metadata, indent=2, sort_keys=True)
+            )
+            zf.writestr("registers.bin", registers_blob)
+            zf.writestr("external_ram.bin", bytes(flat_memory))
+            zf.writestr("internal_ram.bin", bytes(internal_slice))
+            zf.writestr("imem.bin", imem_bytes)
+            zf.writestr("lcd_vram.bin", lcd_payload)
+
+        return target
+
+    def load_snapshot(self, path: str | Path, *, backend: Optional[str] = None) -> None:
+        """Load a snapshot created by ``save_snapshot``."""
+
+        source = Path(path)
+        if not source.exists():
+            raise FileNotFoundError(source)
+
+        with zipfile.ZipFile(source, "r") as zf:
+            metadata = json.loads(zf.read("snapshot.json"))
+            if metadata.get("magic") != SNAPSHOT_MAGIC:
+                raise ValueError("Snapshot magic mismatch")
+            if int(metadata.get("version", -1)) != SNAPSHOT_VERSION:
+                raise ValueError("Unsupported snapshot version")
+            registers_blob = zf.read("registers.bin")
+            flat_memory = zf.read("external_ram.bin")
+            imem_bytes = zf.read("imem.bin") if "imem.bin" in zf.namelist() else b""
+            lcd_payload = (
+                zf.read("lcd_vram.bin") if "lcd_vram.bin" in zf.namelist() else None
+            )
+
+        if len(flat_memory) != len(self.memory.external_memory):
+            raise ValueError("external_ram.bin size mismatch")
+        self.memory.external_memory[:] = flat_memory
+        for overlay in self.memory.overlays:
+            if overlay.data is None:
+                continue
+            start = max(overlay.start, 0)
+            end = min(overlay.end + 1, len(flat_memory))
+            span = max(0, end - start)
+            if span and span <= len(overlay.data):
+                overlay.data[:span] = flat_memory[start:start + span]
+
+        if imem_bytes:
+            self.memory.external_memory[-len(imem_bytes) :] = imem_bytes
+
+        # Hardware invariant: USR bits 3/4 (TXR/TXE) come up set after reset.
+        try:
+            usr_addr = INTERNAL_MEMORY_START + IMEMRegisters.USR.value
+            usr_val = self.memory.read_byte(usr_addr) & 0xFF
+            self.memory.write_byte(usr_addr, usr_val | 0x18)
+            # IMR often defaults to IRM|EXM|STM|MTM in the Python backend; seed
+            # a sane value so Rust and Python start aligned when snapshots lack it.
+            imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR.value
+            imr_val = self.memory.read_byte(imr_addr) & 0xFF
+            if imr_val == 0:
+                self.memory.write_byte(imr_addr, 0xC3)
+        except Exception:
+            pass
+
+        if getattr(self.cpu, "backend", None) == "rust":
+            rust_impl = getattr(self.cpu, "_impl", None)
+            marker = getattr(rust_impl, "mark_memory_dirty", None)
+            if callable(marker):
+                try:
+                    marker()
+                except Exception:
+                    pass
+
+        self._restore_lcd_snapshot(metadata.get("lcd"), lcd_payload)
+
+        keyboard_state = metadata.get("keyboard")
+        if isinstance(keyboard_state, dict) and hasattr(self, "keyboard"):
+            self.keyboard.load_state(keyboard_state)
+
+        reg_values = _unpack_register_bytes(registers_blob)
+        temps = {
+            int(key): int(value)
+            for key, value in (metadata.get("temps") or {}).items()
+        }
+        snapshot = CPURegistersSnapshot(
+            pc=reg_values["pc"],
+            ba=reg_values["ba"],
+            i=reg_values["i"],
+            x=reg_values["x"],
+            y=reg_values["y"],
+            u=reg_values["u"],
+            s=reg_values["s"],
+            f=reg_values["f"],
+            temps=temps,
+            call_sub_level=int(metadata.get("call_sub_level", 0)),
+        )
+        self.cpu.apply_snapshot(snapshot)
+
+        snapshot_backend = metadata.get("backend")
+        if backend and snapshot_backend and backend != snapshot_backend:
+            print(
+                f"[snapshot] Warning: snapshot backend {snapshot_backend} "
+                f"!= requested {backend}"
+            )
+        elif snapshot_backend and snapshot_backend != self.cpu.backend:
+            print(
+                f"[snapshot] Warning: emulator backend {self.cpu.backend} "
+                f"!= snapshot backend {snapshot_backend}"
+            )
+
+        self.instruction_count = int(metadata.get("instruction_count", 0))
+        self.cycle_count = int(metadata.get("cycle_count", 0))
+        self.memory_read_count = int(metadata.get("memory_reads", 0))
+        self.memory_write_count = int(metadata.get("memory_writes", 0))
+        self.call_depth = int(metadata.get("call_depth", 0))
+        self._current_pc = int(metadata.get("pc", snapshot.pc)) & 0xFFFFFF
+        self._last_pc = self._current_pc
+        self._trace_instr_count = self.instruction_count
+        self._active_trace_instruction = None
+        self._trace_substep = 0
+        self.start_time = time.time()
+
+        timer_info = metadata.get("timer", {})
+        self._timer_enabled = bool(timer_info.get("enabled", True))
+        self._timer_mti_period = int(timer_info.get("mti_period", self._timer_mti_period))
+        self._timer_sti_period = int(timer_info.get("sti_period", self._timer_sti_period))
+        self._timer_next_mti = int(timer_info.get("next_mti", self._timer_next_mti))
+        self._timer_next_sti = int(timer_info.get("next_sti", self._timer_next_sti))
+
+        interrupts = metadata.get("interrupts", {})
+        self._irq_pending = bool(interrupts.get("pending", False))
+        self._in_interrupt = bool(interrupts.get("in_interrupt", False))
+        source_name = interrupts.get("source")
+        self._irq_source = IRQSource[source_name] if source_name else None
+        self._interrupt_stack = list(interrupts.get("stack", []))
+        self._next_interrupt_id = int(interrupts.get("next_id", 1))
+        irq_counts = interrupts.get("irq_counts")
+        if isinstance(irq_counts, dict):
+            self.irq_counts = {key: int(val) for key, val in irq_counts.items()}
+        last_irq = interrupts.get("last_irq")
+        if isinstance(last_irq, dict):
+            self.last_irq = last_irq
+        irq_watch = interrupts.get("irq_bit_watch")
+        if isinstance(irq_watch, dict):
+            self.irq_bit_watch = irq_watch
+
+        kb_metrics = metadata.get("kb_metrics", {})
+        self._kb_irq_count = int(kb_metrics.get("irq_count", 0))
+        self._kb_strobe_count = int(kb_metrics.get("strobe_count", 0))
+        hist = kb_metrics.get("column_hist")
+        if isinstance(hist, list) and hist:
+            self._kb_col_hist = [int(val) for val in hist]
+        last_cols = kb_metrics.get("last_cols")
+        if isinstance(last_cols, list):
+            self._last_kil_columns = [int(val) for val in last_cols]
+        self._last_kol = int(kb_metrics.get("last_kol", self._last_kol)) & 0xFF
+        self._last_koh = int(kb_metrics.get("last_koh", self._last_koh)) & 0xFF
+        self._kil_read_count = int(kb_metrics.get("kil_reads", self._kil_read_count))
+        self._kb_irq_enabled = bool(kb_metrics.get("kb_irq_enabled", True))
+
+        self.MEMORY_DUMP_PC = int(metadata.get("memory_dump_pc", self.MEMORY_DUMP_PC))
+        self.fast_mode = bool(metadata.get("fast_mode", getattr(self, "fast_mode", False)))
+
+        self.instruction_history.clear()
+        self.memory.clear_imem_access_tracking()
+
+        if self.cpu.backend == "rust":
+            rust_impl = self.cpu.unwrap()
+            reinit = getattr(rust_impl, "_initialise_rust_memory", None)
+            if callable(reinit):
+                try:
+                    setattr(rust_impl, "_memory_synced", False)
+                except Exception:
+                    pass
+                reinit()
+            sync_irq = getattr(rust_impl, "set_interrupt_state", None)
+            if callable(sync_irq):
+                try:
+                    sync_irq(
+                        bool(self._irq_pending),
+                        int(self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)) & 0xFF,
+                        int(self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)) & 0xFF,
+                        int(self._scheduler.next_mti),
+                        int(self._scheduler.next_sti),
+                        self._irq_source.name if self._irq_source else None,
+                        bool(self._in_interrupt),
+                        list(self._interrupt_stack),
+                        int(self._next_interrupt_id),
+                    )
+                except Exception:
+                    pass
+
+        self.memory.set_cpu(self.cpu)
 
     def stop_tracing(self) -> None:
         if self.perfetto_enabled:
@@ -704,6 +1279,7 @@ class PCE500Emulator:
             trace_dispatcher.stop_trace()
         if self._new_trace_enabled and new_tracer.enabled:
             print(f"Stopping new tracing, saved to {self._trace_path}")
+            new_tracer.set_manual_clock_mode(False)
             new_tracer.stop()
         self._new_trace_enabled = False
 
@@ -743,7 +1319,7 @@ class PCE500Emulator:
         """Advance cycle count and timers for simulated WAIT loops."""
         for _ in range(int(cycles)):
             self.cycle_count += 1
-            if self._timer_enabled:
+            if self._timer_enabled and not getattr(self, "_in_interrupt", False):
                 try:
                     self._tick_timers()
                 except Exception:
@@ -765,12 +1341,151 @@ class PCE500Emulator:
             "flag_Z": state["flags"]["z"],
         }
 
+    def _snapshot_instruction_trace(
+        self, pc: Optional[int], instr_index: int
+    ) -> Optional[Dict[str, Any]]:
+        """Capture register + opcode state prior to executing an instruction."""
+
+        if not (self._new_trace_enabled and new_tracer.enabled):
+            return None
+        if pc is None:
+            return None
+        try:
+            opcode = self.memory.read_byte(pc) & 0xFF
+        except Exception:
+            opcode = None
+
+        registers = self._collect_trace_registers()
+
+        units = instr_index * self._trace_units_per_instruction
+        return {
+            "pc": pc & 0xFFFFFF,
+            "opcode": opcode,
+            "op_index": instr_index,
+            "registers": registers,
+            "units": units,
+        }
+
+    def _emit_instruction_trace_event(
+        self, snapshot: Optional[Dict[str, Any]]
+    ) -> None:
+        """Emit the captured instruction snapshot as a Perfetto instant event."""
+
+        if not snapshot or not new_tracer.enabled:
+            return
+        units = snapshot.get("units")
+        if isinstance(units, int):
+            new_tracer.set_manual_clock_units(units)
+        pc = snapshot.get("pc")
+        name = f"Exec@0x{pc:06X}" if isinstance(pc, int) else "Exec@?"
+        payload: Dict[str, Any] = {
+            "backend": getattr(self.cpu, "backend", "python"),
+        }
+        if isinstance(pc, int):
+            payload["pc"] = pc & 0xFFFFFF
+        opcode = snapshot.get("opcode")
+        if isinstance(opcode, int):
+            payload["opcode"] = opcode & 0xFF
+        op_index = snapshot.get("op_index")
+        if isinstance(op_index, int):
+            payload["op_index"] = op_index
+        registers = snapshot.get("registers", {})
+        for reg_name, value in registers.items():
+            payload[f"reg_{reg_name.lower()}"] = int(value)
+        new_tracer.instant("InstructionTrace", name, payload)
+        self._trace_instr_count = int(snapshot.get("op_index", 0)) + 1
+        new_tracer.counter(
+            "InstructionClock", "instructions", float(self._trace_instr_count)
+        )
+        self._active_trace_instruction = None
+
+    def _collect_trace_registers(self) -> Dict[str, int]:
+        """Collect the register snapshot for Perfetto tracing with minimal overhead."""
+
+        snapshot_func = getattr(self.cpu, "snapshot_registers", None)
+        if callable(snapshot_func):
+            try:
+                snapshot = snapshot_func()
+            except Exception:
+                snapshot = None
+            else:
+                registers = self._collect_trace_registers_from_snapshot(snapshot)
+                if registers:
+                    return registers
+        return self._collect_trace_registers_legacy()
+
+    def _collect_trace_registers_from_snapshot(self, snapshot: Any) -> Dict[str, int]:
+        """Extract trace registers from a CPURegistersSnapshot-like object."""
+
+        registers: Dict[str, int] = {}
+        try:
+            pc_val = int(getattr(snapshot, "pc", 0)) & 0xFFFFFF
+            registers["PC"] = pc_val
+        except Exception:
+            pass
+
+        def _mask(attr: str, mask: int) -> int:
+            try:
+                return int(getattr(snapshot, attr, 0)) & mask
+            except Exception:
+                return 0
+
+        ba_val = _mask("ba", 0xFFFF)
+        registers["BA"] = ba_val
+        registers["A"] = ba_val & 0xFF
+        registers["B"] = (ba_val >> 8) & 0xFF
+
+        i_val = _mask("i", 0xFFFF)
+        registers["I"] = i_val
+        registers["IL"] = i_val & 0xFF
+        registers["IH"] = (i_val >> 8) & 0xFF
+
+        registers["X"] = _mask("x", 0xFFFFFF)
+        registers["Y"] = _mask("y", 0xFFFFFF)
+        registers["U"] = _mask("u", 0xFFFFFF)
+        registers["S"] = _mask("s", 0xFFFFFF)
+
+        f_val = _mask("f", 0xFF)
+        registers["F"] = f_val
+        registers["FC"] = f_val & 0x01
+        registers["FZ"] = (f_val >> 1) & 0x01
+
+        return registers
+
+    def _collect_trace_registers_legacy(self) -> Dict[str, int]:
+        """Fallback register collector using per-register accessor calls."""
+
+        registers: Dict[str, int] = {}
+        for reg in self._TRACE_REGISTERS:
+            try:
+                registers[reg.name] = int(self.cpu.regs.get(reg))
+            except Exception:
+                continue
+        return registers
+
+    def _next_memory_trace_units(self) -> Optional[int]:
+        """Reserve Perfetto clock units for a memory write within the current opcode."""
+
+        if not (self._new_trace_enabled and new_tracer.enabled):
+            return None
+        instr_index = self._active_trace_instruction
+        if instr_index is None:
+            return None
+        # Space out memory writes within the same instruction.
+        self._trace_substep += 1
+        return (
+            instr_index * self._trace_units_per_instruction + self._trace_substep
+        )
+
     def _trace_execution(self, pc: int, opcode: Optional[int]):
         payload: Dict[str, Any] = {"pc": f"0x{pc:06X}"}
         if opcode is not None:
             payload["opcode"] = f"0x{opcode:02X}"
         payload.update(self._build_register_annotations())
-        trace_dispatcher.record_instant("Execution", f"Exec@0x{pc:06X}", payload)
+        if new_tracer.enabled:
+            new_tracer.instant("Execution", f"Exec@0x{pc:06X}", payload)
+        else:
+            trace_dispatcher.record_instant("Execution", f"Exec@0x{pc:06X}", payload)
 
     def _update_perfetto_counters(self):
         trace_dispatcher.record_counter("cycles", self.cycle_count)
@@ -900,6 +1615,55 @@ class PCE500Emulator:
         target.write_text(json.dumps(payload, indent=2))
         return target
 
+    def notify_lcd_interrupt(
+        self, address: int, value: int, pc: Optional[int] = None
+    ) -> None:
+        """Handle a pure-Rust LCD write that should nudge the KEY interrupt."""
+
+        if not getattr(self, "_rust_pure_lcd", False):
+            return
+        if not getattr(self, "_kb_irq_enabled", True):
+            return
+        self._ensure_key_irq_mask()
+        self._set_isr_bits(int(ISRFlag.KEYI))
+        self._irq_pending = True
+        self._irq_source = IRQSource.KEY
+        try:
+            self.irq_counts["KEY"] += 1
+            self.irq_counts["total"] += 1
+        except Exception:
+            pass
+        if IRQ_DEBUG_ENABLED:
+            pc_str = f"0x{pc:06X}" if pc is not None else "N/A"
+            _log_irq_debug(
+                f"lcd-notify irq addr=0x{address:06X} value=0x{value:02X} pc={pc_str}"
+            )
+
+    def _seed_interrupt_mask(self, imr_value: int = 0x43, isr_value: int = 0x00) -> None:
+        imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+        isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+        try:
+            self.memory.write_byte(imr_addr, imr_value & 0xFF)
+            self.memory.write_byte(isr_addr, isr_value & 0xFF)
+        except Exception:
+            pass
+
+    def _ensure_key_irq_mask(self) -> None:
+        if not getattr(self, "_rust_pure_lcd", False):
+            return
+        try:
+            imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+            current = self.memory.read_byte(imr_addr) & 0xFF
+        except Exception:
+            return
+        required = int(IMRFlag.IRM | IMRFlag.KEY)
+        if (current & required) == required:
+            return
+        try:
+            self.memory.write_byte(imr_addr, (current | required) & 0xFF)
+        except Exception:
+            pass
+
     def press_key(self, key_code: str) -> bool:
         # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ
         if key_code == "KEY_ON":
@@ -918,6 +1682,7 @@ class PCE500Emulator:
             events = self.keyboard.scan_tick()
             if events:
                 self._kb_irq_count += len(events)
+            self._ensure_key_irq_mask()
             self._set_isr_bits(int(ISRFlag.KEYI))
             self._irq_pending = True
             self._irq_source = IRQSource.KEY
@@ -959,6 +1724,13 @@ class PCE500Emulator:
         isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
         val = self.memory.read_byte(isr_addr)
         self.memory.write_byte(isr_addr, (val | (mask & 0xFF)) & 0xFF)
+        if mask & int(ISRFlag.KEYI):
+            self._ensure_key_irq_mask()
+        if IRQ_DEBUG_ENABLED:
+            pc = self.cpu.regs.get(RegisterName.PC)
+            _log_irq_debug(
+                f"set_isr_bits mask=0x{mask:02X} prev=0x{val & 0xFF:02X} new=0x{(val | (mask & 0xFF)) & 0xFF:02X} pc=0x{pc:06X}"
+            )
 
     def _tick_timers(self) -> None:
         """Rough timer emulation: set ISR bits periodically and arm IRQ."""
@@ -969,20 +1741,37 @@ class PCE500Emulator:
         key_events: List[MatrixEvent] = []
         for source in fired_sources:
             if source is TimerSource.MTI:
-                key_events = self.keyboard.scan_tick()
+                # When the Rust bridge is active, the keyboard scan runs inside the
+                # Rust instruction loop; skip the Python-side scan to avoid double
+                # counting or flag changes.
+                if not getattr(self.keyboard, "_bridge_enabled", False):
+                    key_events = self.keyboard.scan_tick()
                 self._set_isr_bits(int(ISRFlag.MTI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.MTI
+                if IRQ_DEBUG_ENABLED:
+                    _log_irq_debug(
+                        f"timer fired source=MTI cycle={self.cycle_count} next_mti={self._scheduler.next_mti}"
+                    )
             elif source is TimerSource.STI:
                 self._set_isr_bits(int(ISRFlag.STI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.STI
+                if IRQ_DEBUG_ENABLED:
+                    _log_irq_debug(
+                        f"timer fired source=STI cycle={self.cycle_count} next_sti={self._scheduler.next_sti}"
+                    )
 
-        if key_events and self._kb_irq_enabled:
-            self._set_isr_bits(int(ISRFlag.KEYI))
-            self._irq_pending = True
-            self._irq_source = IRQSource.KEY
-            self._kb_irq_count += len(key_events)
+        if key_events:
+            if self._kb_irq_enabled:
+                self._set_isr_bits(int(ISRFlag.KEYI))
+                self._irq_pending = True
+                self._irq_source = IRQSource.KEY
+                self._kb_irq_count += len(key_events)
+                if IRQ_DEBUG_ENABLED:
+                    _log_irq_debug(
+                        f"key_events_irq count={len(key_events)} cycle={self.cycle_count}"
+                    )
 
         if new_tracer.enabled and self._irq_source is not None:
             new_tracer.instant(
@@ -1713,3 +2502,64 @@ class PCE500Emulator:
 
         print(f"\nDisassembly trace saved to: {filepath}")
         return filepath
+def _stack_snapshot_range() -> tuple[int, int] | None:
+    global _STACK_SNAPSHOT_RANGE
+    if _STACK_SNAPSHOT_RANGE is not None:
+        return _STACK_SNAPSHOT_RANGE
+    raw = os.getenv("STACK_SNAPSHOT_RANGE")
+    if not raw:
+        return None
+    try:
+        start_str, end_str = raw.split("-", 1)
+        start = int(start_str, 0)
+        end = int(end_str, 0)
+    except ValueError:
+        try:
+            start = end = int(raw, 0)
+        except ValueError:
+            return None
+    if start > end:
+        start, end = end, start
+    _STACK_SNAPSHOT_RANGE = (start & 0xFFFFFF, end & 0xFFFFFF)
+    return _STACK_SNAPSHOT_RANGE
+
+
+def _stack_snapshot_len() -> int:
+    global _STACK_SNAPSHOT_LEN
+    if _STACK_SNAPSHOT_LEN is not None:
+        return _STACK_SNAPSHOT_LEN
+    raw = os.getenv("STACK_SNAPSHOT_LEN")
+    length = 10
+    if raw:
+        try:
+            candidate = int(raw, 0)
+            if candidate > 0:
+                length = candidate
+        except ValueError:
+            pass
+    _STACK_SNAPSHOT_LEN = length
+    return length
+
+
+def _log_stack_snapshot_emulator(emu: "PCE500Emulator", pc: int) -> None:
+    rng = _stack_snapshot_range()
+    if not rng:
+        return
+    start, end = rng
+    if not (start <= (pc & 0xFFFFFF) <= end):
+        return
+    try:
+        s = int(emu.cpu.regs.get(RegisterName.S)) & 0xFFFFFF
+    except Exception:
+        return
+    length = _stack_snapshot_len()
+    bytes_: list[int] = []
+    for offset in range(length):
+        try:
+            bytes_.append(emu.memory.read_byte((s + offset) & 0xFFFFFF))
+        except Exception:
+            bytes_.append(0)
+    byte_str = " ".join(f"{b:02X}" for b in bytes_)
+    print(
+        f"[stack-snapshot] backend={emu.cpu.backend} pc=0x{pc:06X} S=0x{s:06X} bytes={byte_str}"
+    )

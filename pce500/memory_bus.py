@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Callable, Deque, Iterable, List, Literal, Optional, Tuple
 from collections import deque
@@ -115,6 +116,9 @@ class MemoryBus:
         for overlay in self._overlays:
             if not overlay.contains(address):
                 continue
+
+            if os.getenv("LCD_WRITE_TRACE"):
+                print(f"[bus] overlay {overlay.name} handling addr=0x{address:05X}")
 
             handled, previous = self._write_to_overlay(overlay, address, value, cpu_pc)
             if not handled:

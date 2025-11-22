@@ -8,6 +8,7 @@ from functools import wraps
 from typing import Any, Callable, Dict, Optional, cast
 
 from retrobus_perfetto import PerfettoTraceBuilder
+from .dispatcher import TraceEvent, TraceEventType, trace_dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ class PerfettoTracer:
         self._track_uuids: Dict[str, int] = {}
         self._counter_tracks: Dict[str, int] = {}
         self._slice_stacks: Dict[str, list] = {}
+        self._manual_clock_enabled = False
+        self._manual_clock_units = 0
+        self._manual_tick_ns = 1
 
     @property
     def enabled(self) -> bool:
@@ -35,6 +39,8 @@ class PerfettoTracer:
 
     def _now_ns(self) -> int:
         """Get current timestamp in nanoseconds."""
+        if self._manual_clock_enabled:
+            return int(self._manual_clock_units * self._manual_tick_ns)
         return int((time.perf_counter() - self._start) * 1_000_000_000)
 
     def _ensure_track(self, name: str) -> int:
@@ -91,16 +97,19 @@ class PerfettoTracer:
             self._track_uuids.clear()
             self._counter_tracks.clear()
             self._slice_stacks.clear()
+            self._manual_clock_enabled = False
+            self._manual_clock_units = 0
+            self._manual_tick_ns = 1
 
             # Create the trace builder
             self._builder = PerfettoTraceBuilder("PC-E500 Emulator")
 
             # Pre-create common tracks
-            for t in ("CPU", "Execution", "I/O"):
+            for t in ("CPU", "Execution", "Memory", "I/O"):
                 self._ensure_track(t)
 
             # Add performance profiling tracks
-            for t in ("Emulation", "Opcodes", "Memory", "Display", "Lifting", "System"):
+            for t in ("Emulation", "Opcodes", "Display", "Lifting", "System"):
                 self._ensure_track(t)
 
             # Pre-create counter track
@@ -140,6 +149,9 @@ class PerfettoTracer:
             self._counter_tracks.clear()
             self._slice_stacks.clear()
             self._path = None
+            self._manual_clock_enabled = False
+            self._manual_clock_units = 0
+            self._manual_tick_ns = 1
 
     # ---- Event APIs ----
 
@@ -226,9 +238,73 @@ class PerfettoTracer:
         finally:
             self.end_slice(track)
 
+    def set_manual_clock_mode(self, enabled: bool, *, tick_ns: int = 1) -> None:
+        """Enable or disable deterministic logical clocking for trace events."""
+
+        with self._lock:
+            self._manual_clock_enabled = bool(enabled)
+            self._manual_clock_units = 0
+            self._manual_tick_ns = max(1, int(tick_ns))
+
+    def set_manual_clock_units(self, units: int) -> None:
+        """Set the logical clock position when manual clocking is active."""
+
+        if not self._manual_clock_enabled:
+            return
+        with self._lock:
+            self._manual_clock_units = max(0, int(units))
+
+    def advance_manual_clock_units(self, delta: int = 1) -> None:
+        """Advance the logical clock by ``delta`` units."""
+
+        if not self._manual_clock_enabled:
+            return
+        if delta <= 0:
+            return
+        with self._lock:
+            self._manual_clock_units += int(delta)
+
 
 # Global tracer for convenience
 tracer = PerfettoTracer()
+
+
+class _PerfettoObserver:
+    """Bridge trace_dispatcher events into the PerfettoTraceBuilder tracer."""
+
+    def handle_event(self, event: TraceEvent) -> None:
+        if event.type == TraceEventType.START:
+            path = event.payload.get("output_path") if event.payload else None
+            if path:
+                tracer.start(str(path))
+        elif event.type == TraceEventType.STOP:
+            tracer.safe_stop()
+        elif event.type == TraceEventType.INSTANT:
+            tracker = event.thread or "CPU"
+            tracer.instant(tracker, event.name or "event", event.payload)
+        elif event.type == TraceEventType.COUNTER:
+            tracker = event.thread or "CPU"
+            value = event.payload.get("value") if event.payload else None
+            if value is not None:
+                tracer.counter(tracker, event.name or "counter", value)
+        elif event.type == TraceEventType.FUNCTION_BEGIN:
+            tracer.begin_slice(event.thread or "CPU", event.name or "fn", event.payload)
+        elif event.type == TraceEventType.FUNCTION_END:
+            tracer.end_slice(event.thread or "CPU")
+        elif event.type == TraceEventType.FLOW_BEGIN:
+            tracer.begin_slice(event.thread or "Flow", event.name or "flow", event.payload)
+        elif event.type == TraceEventType.FLOW_END:
+            tracer.end_slice(event.thread or "Flow")
+
+
+# Register observer so dispatcher-driven events flush into perfetto files.
+trace_dispatcher.register(_PerfettoObserver())
+
+
+def ensure_trace_started(path: str) -> None:
+    """Force-start the Perfetto tracer if it is not already active."""
+    if not tracer.enabled:
+        tracer.start(path)
 
 
 def perf_trace(

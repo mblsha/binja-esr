@@ -44,22 +44,46 @@ class PCE500KeyboardHandler:
         self._last_koh = self._matrix.koh
         self._last_kil = 0
         self._scan_enabled = True
+        self._bridge_cpu = None
+        self._bridge_enabled = False
+        self._bridge_keys: set[str] = set()
+        self._bridge_cpu = None
+        self._bridge_enabled = False
 
     # ------------------------------------------------------------------ #
     # Public API used by emulator/tests
     # ------------------------------------------------------------------ #
 
     def press_key(self, key_code: str) -> bool:
+        if self._bridge_enabled:
+            if not self._forward_bridge_event(key_code, release=False):
+                return False
+            self._bridge_keys.add(key_code)
+            self._last_kil = self._read_kil_from_memory()
+            return True
         if not self._matrix.press_key(key_code):
             return False
         self._last_kil = self._matrix.peek_kil()
+        self._forward_bridge_event(key_code, release=False)
         return True
 
     def release_key(self, key_code: str) -> None:
+        if self._bridge_enabled:
+            if self._forward_bridge_event(key_code, release=True):
+                self._bridge_keys.discard(key_code)
+                self._last_kil = self._read_kil_from_memory()
+            return
         self._matrix.release_key(key_code)
         self._last_kil = self._matrix.peek_kil()
+        self._forward_bridge_event(key_code, release=True)
 
     def release_all_keys(self) -> None:
+        if self._bridge_enabled:
+            for key_code in list(self._bridge_keys):
+                self._forward_bridge_event(key_code, release=True)
+            self._bridge_keys.clear()
+            self._last_kil = self._read_kil_from_memory()
+            return
         self._matrix.release_all_keys()
         self._last_kil = 0
 
@@ -103,6 +127,41 @@ class PCE500KeyboardHandler:
         self._scan_enabled = bool(enabled)
         self._matrix.scan_enabled = bool(enabled)
 
+    def set_bridge_cpu(self, bridge_cpu, enabled: bool) -> None:
+        """Attach/detach the pure-Rust bridge CPU."""
+
+        self._bridge_cpu = bridge_cpu
+        self._bridge_enabled = bool(enabled and bridge_cpu)
+        if not self._bridge_enabled:
+            self._bridge_keys.clear()
+
+    def _forward_bridge_event(self, key_code: str, *, release: bool) -> bool:
+        if not self._bridge_enabled or not self._bridge_cpu:
+            return False
+        loc = KEY_LOCATIONS.get(key_code)
+        if loc is None:
+            return False
+        matrix_code = ((loc.column & 0x0F) << 3) | (loc.row & 0x07)
+        try:
+            if release:
+                return bool(
+                    self._bridge_cpu.keyboard_release_matrix_code(matrix_code)
+                )
+            return bool(self._bridge_cpu.keyboard_press_matrix_code(matrix_code))
+        except Exception:
+            return False
+
+    def _read_kil_from_memory(self) -> int:
+        if not self._memory:
+            return 0
+        try:
+            return (
+                self._memory.read_byte(INTERNAL_MEMORY_START + KIL)
+                & 0xFF
+            )
+        except Exception:
+            return 0
+
     def get_active_columns(self) -> list[int]:
         return self._matrix.get_active_columns()
 
@@ -145,6 +204,30 @@ class PCE500KeyboardHandler:
 
     def fifo_snapshot(self) -> list[int]:
         return self._matrix.fifo_snapshot()
+
+    def snapshot_state(self) -> dict[str, object]:
+        """Capture current keyboard handler + matrix state."""
+
+        return {
+            "matrix": self._matrix.snapshot_state(),
+            "last_kol": self._last_kol,
+            "last_koh": self._last_koh,
+            "last_kil": self._last_kil,
+            "scan_enabled": self._scan_enabled,
+        }
+
+    def load_state(self, state: dict[str, object]) -> None:
+        """Restore the keyboard handler from ``snapshot_state`` output."""
+
+        matrix_state = state.get("matrix")
+        if isinstance(matrix_state, dict):
+            self._matrix.load_state(matrix_state)
+
+        self._last_kol = int(state.get("last_kol", self._last_kol)) & 0xFF
+        self._last_koh = int(state.get("last_koh", self._last_koh)) & 0xFF
+        self._last_kil = int(state.get("last_kil", self._last_kil)) & 0xFF
+        self._scan_enabled = bool(state.get("scan_enabled", self._scan_enabled))
+        self._matrix.scan_enabled = self._scan_enabled
 
     # Metrics used by emulator instrumentation --------------------------------
 
