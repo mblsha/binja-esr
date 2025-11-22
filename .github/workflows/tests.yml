@@ -44,7 +44,7 @@ jobs:
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        uv run python tools/llama_parity_sweep.py --allow-mismatches
+        uv run python tools/llama_parity_sweep.py
 
 
     - name: Run SC62015 tests
