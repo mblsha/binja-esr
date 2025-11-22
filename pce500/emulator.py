@@ -1488,10 +1488,11 @@ class PCE500Emulator:
         if opcode is not None:
             payload["opcode"] = f"0x{opcode:02X}"
         payload.update(self._build_register_annotations())
+        # Always dispatch to legacy observers for register snapshots, even when
+        # the perfetto tracer is active.
+        trace_dispatcher.record_instant("Execution", f"Exec@0x{pc:06X}", payload)
         if new_tracer.enabled:
             new_tracer.instant("Execution", f"Exec@0x{pc:06X}", payload)
-        else:
-            trace_dispatcher.record_instant("Execution", f"Exec@0x{pc:06X}", payload)
 
     def _update_perfetto_counters(self):
         trace_dispatcher.record_counter("cycles", self.cycle_count)
