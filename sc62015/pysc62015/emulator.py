@@ -411,7 +411,7 @@ class Emulator:
         if instr is None:
             opcode = self.memory.read_byte(address) & 0xFF
             instr = _FallbackInstruction(opcode)
-        return instr
+        return cast(Instruction, instr)
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
         # Check if performance tracing is available through memory context

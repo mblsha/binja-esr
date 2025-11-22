@@ -110,6 +110,7 @@ class CPU:
         backend_name, rust_module = select_backend(backend)
 
         legacy = Emulator(memory, reset_on_init=reset_on_init)
+        self._impl: Any
         if backend_name == "python":
             self._impl = legacy
             self.regs = self._impl.regs
@@ -177,7 +178,7 @@ class CPU:
             if instr is None:
                 opcode = self.memory.read_byte(address) & 0xFF
                 instr = _PlaceholderInstruction(opcode)
-            return instr
+            return cast(Instruction, instr)
 
         prev_cpu = getattr(self.memory, "cpu", None)
         can_switch = hasattr(self.memory, "set_cpu")
