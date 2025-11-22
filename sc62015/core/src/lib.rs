@@ -18,6 +18,7 @@ pub mod timer;
 pub mod eval;
 pub mod exec;
 pub mod perfetto;
+pub mod llama;
 
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};

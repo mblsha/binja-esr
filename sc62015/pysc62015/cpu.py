@@ -24,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     CachedFetchDecoder = None  # type: ignore
 
-CPUBackendName = Literal["python", "rust"]
+CPUBackendName = Literal["python", "rust", "llama"]
 
 _ENV_VAR = "SC62015_CPU_BACKEND"
 _DEFAULT_BACKEND: CPUBackendName = "python"
@@ -38,9 +38,6 @@ def _load_rust_backend() -> Optional[object]:
     except ModuleNotFoundError:
         return None
 
-    if not getattr(rust_module, "HAS_CPU_IMPLEMENTATION", False):
-        return None
-
     return rust_module
 
 
@@ -51,8 +48,12 @@ def available_backends(
 
     loader = rust_loader or _load_rust_backend
     backends: list[CPUBackendName] = ["python"]
-    if loader() is not None:
-        backends.append("rust")
+    rust_module = loader()
+    if rust_module is not None:
+        if getattr(rust_module, "HAS_CPU_IMPLEMENTATION", False):
+            backends.append("rust")
+        if getattr(rust_module, "HAS_LLAMA_IMPLEMENTATION", False):
+            backends.append("llama")
     return tuple(backends)
 
 
@@ -62,6 +63,8 @@ def _normalise_backend_name(name: str) -> CPUBackendName:
         return "python"
     if lowered in {"rs", "rust", "rustcore"}:
         return "rust"
+    if lowered in {"llama"}:
+        return "llama"
     raise ValueError(f"Unknown SC62015 backend '{name}'")
 
 
@@ -82,7 +85,7 @@ def select_backend(
     else:
         backend_name = _DEFAULT_BACKEND
 
-    if backend_name == "rust":
+    if backend_name in {"rust", "llama"}:
         rust_module = loader()
         if rust_module is None:
             raise RuntimeError(
@@ -90,6 +93,14 @@ def select_backend(
                 "Run `uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml` "
                 "to build the optional extension."
             )
+        if backend_name == "llama" and not getattr(
+            rust_module, "HAS_LLAMA_IMPLEMENTATION", False
+        ):
+            raise RuntimeError("LLAMA backend requested but not available in rustcore module.")
+        if backend_name == "rust" and not getattr(
+            rust_module, "HAS_CPU_IMPLEMENTATION", False
+        ):
+            raise RuntimeError("Rust SCIL backend requested but not available in rustcore module.")
 
     return backend_name, rust_module
 
@@ -114,7 +125,10 @@ class CPU:
             self._legacy_decoder = legacy
         else:
             assert rust_module is not None
-            rust_cpu_cls = getattr(rust_module, "CPU")
+            if backend_name == "rust":
+                rust_cpu_cls = getattr(rust_module, "CPU")
+            else:
+                rust_cpu_cls = getattr(rust_module, "LlamaCPU")
             self._impl = rust_cpu_cls(memory=memory, reset_on_init=reset_on_init)
             self.regs = _RustRegisterProxy(self._impl)
             self.state = _RustStateProxy(self._impl)
@@ -254,7 +268,7 @@ class CPU:
     def notify_host_write(self, address: int, value: int) -> None:
         """Propagate host-initiated memory writes into the active backend."""
 
-        if self.backend != "rust":
+        if self.backend not in {"rust", "llama"}:
             return
         rust_impl = cast(Any, self._impl)
         notifier = getattr(rust_impl, "notify_host_write", None)
