@@ -76,7 +76,8 @@ class ParityResult:
     opcode: int
     bytes_hex: str
     reg_diff: dict[str, tuple[int, int]]
-    writes_diff: tuple[Tuple[int, int], Tuple[int, int]]
+    # Snapshot of last writes per address for Python vs LLAMA runs.
+    writes_diff: tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]
     python_error: str | None = None
     llama_error: str | None = None
 
@@ -96,7 +97,7 @@ def _snapshot_registers(cpu: CPU) -> dict[str, int]:
 
 def _compare_writes(
     lhs: list[tuple[int, int]], rhs: list[tuple[int, int]]
-) -> tuple[Tuple[int, int], Tuple[int, int]] | None:
+) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]] | None:
     if lhs == rhs:
         return None
     # Compare last write per address
@@ -104,7 +105,7 @@ def _compare_writes(
     rmap: dict[int, int] = {addr: val for addr, val in rhs}
     if lmap == rmap:
         return None
-    return ((-1, -1), (-1, -1))  # placeholder; detailed diffs logged via reg_diff
+    return (tuple(sorted(lmap.items())), tuple(sorted(rmap.items())))
 
 
 def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
@@ -159,9 +160,6 @@ def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
             if lp != rp:
                 reg_diff[key] = (lp, rp)
         writes_diff = _compare_writes(mem_py.writes, mem_ll.writes)
-        # If only write ordering differs (placeholder diff) and regs match, ignore.
-        if not reg_diff and writes_diff == ((-1, -1), (-1, -1)):
-            return None
         return ParityResult(
             opcode=opcode,
             bytes_hex=instr_bytes.hex(),
