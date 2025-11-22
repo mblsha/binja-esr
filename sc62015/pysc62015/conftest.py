@@ -8,7 +8,7 @@ import pytest
 
 from sc62015.pysc62015 import available_backends
 
-_VALID_BACKENDS = {"python", "rust"}
+_VALID_BACKENDS = {"python", "rust", "llama"}
 
 
 def _parse_backend_option(raw: str | None) -> List[str]:
@@ -32,8 +32,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--cpu-backend",
         action="store",
         metavar="LIST",
-        default="python",
-        help="Comma-separated list of CPU backends to exercise (default: python)",
+        default="python,llama",
+        help="Comma-separated list of CPU backends to exercise (default: python,llama)",
     )
 
 

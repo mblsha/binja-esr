@@ -1,6 +1,6 @@
 use rust_scil::{
     ast::{Binder, Expr, Instr, PreLatch},
-    bus::{Bus, Space},
+    bus::Bus,
     eval,
     state::State as RsState,
 };

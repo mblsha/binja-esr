@@ -10,6 +10,12 @@
 - `data/`: ROMs and traces (e.g., `pc-e500.bin`).
 - Root: `plugin.json`, `pyproject.toml`, lint/type configs.
 
+## Reference Docs
+- `docs/scil_arch_report.md`: SCIL architecture, manifest pipeline, binder/pre notes.
+- `docs/rust_emulator_file_map.md`: Rust-side file map for SCIL payload consumption.
+- `docs/rust_emulator_reuse.md`: What Rust pieces can/can’t be reused without SCIL.
+- `plan_llama.md`: Plan for the LLIL-based Rust CPU core (Project LLAMA).
+
 ## Setup, Build, and Dev Commands
 - Environment (preferred): `uv sync` then `uv sync --extra dev [--extra pce500] [--extra web]`
 - Install all deps at once: `uv sync --extra dev --extra pce500 --extra web`  # recommended
