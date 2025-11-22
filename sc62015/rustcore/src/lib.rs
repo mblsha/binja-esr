@@ -15,101 +15,200 @@ use generated::types::{BoundInstrRepr, LayoutEntry, ManifestEntry, PreInfo};
 use once_cell::sync::Lazy;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyModule};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyModule};
+use pyo3::Bound;
 use pyo3::wrap_pyfunction;
 use rust_scil::{
-    ast::{Binder, Instr, PreLatch},
+    ast::{Binder, Expr, Instr, PreLatch},
     bus::Space,
     eval,
     state::State as RsState,
 };
-use serde_json::{self, json, Map, Value};
+use serde_json::{self, Map, Value};
 use std::collections::HashMap;
-
-static MANIFEST: Lazy<Vec<ManifestEntry>> = Lazy::new(|| {
-    serde_json::from_str(generated::payload::PAYLOAD).expect("manifest json")
-});
-
-const INTERNAL_MEMORY_START: u32 = 0x100000;
-const ADDRESS_MASK: u32 = 0x00FF_FFFF;
-const INTERNAL_ADDR_MASK: u32 = 0xFF;
-const EXTERNAL_SPACE: usize = 0x100000;
-const DEFAULT_REG_WIDTH: u8 = 24;
-
-#[derive(Default)]
-struct MemoryImage {
-    external: Vec<u8>,
-    dirty: Vec<(u32, u8)>,
-    python_ranges: Vec<(u32, u32)>,
+use std::env;
+use std::path::PathBuf;
+use std::time::Instant;
+use sc62015_core::{
+    apply_registers, collect_registers, eval_manifest_entry as core_eval_manifest_entry,
+    load_snapshot as core_load_snapshot,
+    now_timestamp, register_width, save_snapshot as core_save_snapshot,
+    BoundInstrBuilder, BoundInstrView, BusProfiler, CoreError, ExecManifestEntry, HostMemory,
+    HybridBus, LayoutEntryView, ManifestEntryView, MemoryImage, OpcodeIndexView, OpcodeLookup,
+    PerfettoTracer, SnapshotLoad, SnapshotMetadata, TimerContext, ADDRESS_MASK, execute_step,
+    INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE, SNAPSHOT_MAGIC,
+    SNAPSHOT_VERSION,
+};
+mod keyboard;
+mod lcd;
+use lcd::LcdController;
+use keyboard::KeyboardMatrix;
+#[derive(Clone)]
+struct CachedManifestEntry {
+    inner: ManifestEntry,
+    instr_parsed: Instr,
+    binder_template: Binder,
 }
 
-impl MemoryImage {
-    fn new() -> Self {
+static MANIFEST: Lazy<Vec<CachedManifestEntry>> = Lazy::new(|| {
+    let raw: Vec<ManifestEntry> =
+        serde_json::from_str(generated::payload::PAYLOAD).expect("manifest json");
+    raw.into_iter()
+        .map(|entry| {
+            let instr_parsed: Instr = serde_json::from_value(entry.instr.clone())
+                .expect("manifest instr json");
+            let binder_template: Binder =
+                serde_json::from_value(Value::Object(entry.binder.clone())).expect("manifest binder json");
+            CachedManifestEntry {
+                inner: entry,
+                instr_parsed,
+                binder_template,
+            }
+        })
+        .collect()
+});
+
+#[derive(Default)]
+struct FallbackHistogram {
+    shift: u32,
+    load: HashMap<u32, u64>,
+    store: HashMap<u32, u64>,
+}
+
+impl FallbackHistogram {
+    fn new(shift: u32) -> Self {
         Self {
-            external: vec![0; EXTERNAL_SPACE],
-            dirty: Vec::new(),
-            python_ranges: Vec::new(),
+            shift,
+            load: HashMap::new(),
+            store: HashMap::new(),
         }
     }
 
-    fn load_external(&mut self, blob: &[u8]) {
-        let limit = self.external.len().min(blob.len());
-        self.external[..limit].copy_from_slice(&blob[..limit]);
-        self.dirty.clear();
+    fn bucket(&self, address: u32) -> u32 {
+        address >> self.shift
     }
 
-    fn set_python_ranges(&mut self, ranges: Vec<(u32, u32)>) {
-        self.python_ranges = ranges;
+    fn record_load(&mut self, address: u32) {
+        let bucket = self.bucket(address);
+        *self.load.entry(bucket).or_insert(0) += 1;
     }
 
-    fn requires_python(&self, address: u32) -> bool {
-        if address >= EXTERNAL_SPACE as u32 {
-            return true;
-        }
-        for (start, end) in &self.python_ranges {
-            if address >= *start && address <= *end {
-                return true;
-            }
-        }
-        false
+    fn record_store(&mut self, address: u32) {
+        let bucket = self.bucket(address);
+        *self.store.entry(bucket).or_insert(0) += 1;
     }
 
-    fn read_byte(&self, address: u32) -> Option<u8> {
-        self.external.get(address as usize).copied()
+    fn loads_dict(&self, py: Python<'_>) -> PyObject {
+        let dict = PyDict::new_bound(py);
+        for (bucket, count) in &self.load {
+            dict.set_item(bucket << self.shift, count).unwrap();
+        }
+        dict.into_py(py)
     }
 
-    fn load(&self, address: u32, bits: u8) -> Option<u32> {
-        let bytes = (bits / 8).max(1) as usize;
-        let end = address as usize + bytes;
-        if end > self.external.len() {
-            return None;
+    fn stores_dict(&self, py: Python<'_>) -> PyObject {
+        let dict = PyDict::new_bound(py);
+        for (bucket, count) in &self.store {
+            dict.set_item(bucket << self.shift, count).unwrap();
         }
-        let mut value = 0u32;
-        for offset in 0..bytes {
-            value |= (self.external[address as usize + offset] as u32) << (offset * 8);
-        }
-        Some(value)
+        dict.into_py(py)
     }
 
-    fn store(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
-        let bytes = (bits / 8).max(1) as usize;
-        let end = address as usize + bytes;
-        if end > self.external.len() {
-            return None;
+    fn as_dict(&self, py: Python<'_>) -> PyObject {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("bucket_shift", self.shift).unwrap();
+        dict.set_item("loads", self.loads_dict(py)).unwrap();
+        dict.set_item("stores", self.stores_dict(py)).unwrap();
+        dict.into_py(py)
+    }
+}
+
+#[derive(Default)]
+struct RuntimeProfile {
+    enabled: bool,
+    total_calls: u64,
+    total_ns: u128,
+    decode_calls: u64,
+    decode_ns: u128,
+    eval_calls: u64,
+    eval_ns: u128,
+    bus_load_calls: u64,
+    bus_load_python: u64,
+    bus_store_calls: u64,
+    bus_store_python: u64,
+    fallback_hist: Option<FallbackHistogram>,
+}
+
+impl RuntimeProfile {
+    fn from_env() -> Self {
+        let enabled = env::var("SCIL_RUNTIME_PROFILE")
+            .map(|value| value != "0")
+            .unwrap_or(false);
+        let fallback_hist = env::var("SCIL_RUNTIME_PROFILE_HIST")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .map(FallbackHistogram::new);
+        Self {
+            enabled,
+            fallback_hist,
+            ..Default::default()
         }
-        for offset in 0..bytes {
-            let byte = ((value >> (offset * 8)) & 0xFF) as u8;
-            let slot = &mut self.external[address as usize + offset];
-            if *slot != byte {
-                *slot = byte;
-                self.dirty.push((address + offset as u32, byte));
-            }
-        }
-        Some(())
     }
 
-    fn drain_dirty(&mut self) -> Vec<(u32, u8)> {
-        std::mem::take(&mut self.dirty)
+    fn timer_start(&self) -> Option<Instant> {
+        self.enabled.then(Instant::now)
+    }
+
+    fn record_decode(&mut self, start: Option<Instant>) {
+        if let (true, Some(instant)) = (self.enabled, start) {
+            self.decode_calls += 1;
+            self.decode_ns += instant.elapsed().as_nanos();
+        }
+    }
+
+    fn record_eval(&mut self, start: Option<Instant>) {
+        if let (true, Some(instant)) = (self.enabled, start) {
+            self.eval_calls += 1;
+            self.eval_ns += instant.elapsed().as_nanos();
+        }
+    }
+
+    fn record_total(&mut self, start: Option<Instant>) {
+        if let (true, Some(instant)) = (self.enabled, start) {
+            self.total_calls += 1;
+            self.total_ns += instant.elapsed().as_nanos();
+        }
+    }
+
+    fn reset(&mut self) {
+        let enabled = self.enabled;
+        let hist_shift = self.fallback_hist.as_ref().map(|hist| hist.shift);
+        *self = RuntimeProfile {
+            enabled,
+            fallback_hist: hist_shift.map(FallbackHistogram::new),
+            ..Default::default()
+        };
+        self.enabled = enabled;
+    }
+
+    fn as_dict(&self, py: Python<'_>) -> PyObject {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("enabled", self.enabled).unwrap();
+        dict.set_item("total_calls", self.total_calls).unwrap();
+        dict.set_item("total_time_ns", self.total_ns).unwrap();
+        dict.set_item("decode_calls", self.decode_calls).unwrap();
+        dict.set_item("decode_time_ns", self.decode_ns).unwrap();
+        dict.set_item("eval_calls", self.eval_calls).unwrap();
+        dict.set_item("eval_time_ns", self.eval_ns).unwrap();
+        dict.set_item("bus_load_calls", self.bus_load_calls).unwrap();
+        dict.set_item("bus_load_python", self.bus_load_python).unwrap();
+        dict.set_item("bus_store_calls", self.bus_store_calls).unwrap();
+        dict.set_item("bus_store_python", self.bus_store_python).unwrap();
+        if let Some(hist) = &self.fallback_hist {
+            dict.set_item("python_fallback_hist", hist.as_dict(py))
+                .unwrap();
+        }
+        dict.into_py(py)
     }
 }
 
@@ -123,8 +222,8 @@ struct PyBus {
 }
 
 impl PyBus {
-    fn new(obj: PyObject) -> Self {
-        Self { inner: obj.into() }
+    fn new(obj: PyObject, py: Python<'_>) -> Self {
+        Self { inner: obj.into_py(py) }
     }
 }
 
@@ -132,457 +231,219 @@ impl rust_scil::bus::Bus for PyBus {
     fn load(&mut self, space: Space, addr: u32, bits: u8) -> u32 {
         Python::with_gil(|py| {
             self.inner
-                .call_method(
-                    py,
-                    "load",
-                    (space_to_str(&space), addr, bits),
-                    None,
-                )
-                .and_then(|obj| obj.extract::<u32>(py))
+                .bind(py)
+                .call_method1("load", (space_to_str(&space), addr, bits))
+                .and_then(|obj| obj.extract::<u32>())
                 .expect("MemoryAdapter.load returned non-u32")
         })
     }
 
     fn store(&mut self, space: Space, addr: u32, bits: u8, value: u32) {
         Python::with_gil(|py| {
-            let _ = self.inner.call_method(
-                py,
-                "store",
-                (space_to_str(&space), addr, bits, value),
-                None,
-            );
+            let _ = self
+                .inner
+                .bind(py)
+                .call_method1("store", (space_to_str(&space), addr, bits, value));
         });
     }
 }
 
-struct MemoryProxyBus {
+struct PythonHost {
     memory: Py<PyAny>,
 }
 
-impl MemoryProxyBus {
-    fn new(memory: Py<PyAny>) -> Self {
-        Self { memory }
-    }
-
-    fn resolve(space: Space, addr: u32) -> u32 {
-        match space {
-            Space::Int => INTERNAL_MEMORY_START + (addr & INTERNAL_ADDR_MASK),
-            Space::Ext | Space::Code => addr & ADDRESS_MASK,
+impl PythonHost {
+    fn new(py: Python<'_>, memory: &Py<PyAny>) -> Self {
+        Self {
+            memory: memory.clone_ref(py),
         }
     }
+}
 
-    fn read_byte(&self, address: u32) -> u8 {
+impl HostMemory for PythonHost {
+    fn load(&mut self, space: Space, addr: u32, bits: u8) -> u32 {
         Python::with_gil(|py| {
             self.memory
-                .call_method(py, "read_byte", (address,), None)
-                .and_then(|obj| obj.extract::<u8>(py))
+                .bind(py)
+                .call_method1("load", (space_to_str(&space), addr, bits))
+                .and_then(|obj| obj.extract::<u32>())
+                .expect("MemoryAdapter.load returned non-u32")
+        })
+    }
+
+    fn store(&mut self, space: Space, addr: u32, bits: u8, value: u32) {
+        Python::with_gil(|py| {
+            let _ = self
+                .memory
+                .bind(py)
+                .call_method1("store", (space_to_str(&space), addr, bits, value));
+        });
+    }
+
+    fn read_byte(&mut self, address: u32) -> u8 {
+        Python::with_gil(|py| {
+            self.memory
+                .bind(py)
+                .call_method1("read_byte", (address,))
+                .and_then(|obj| obj.extract::<u8>())
                 .expect("memory.read_byte must return int")
         })
     }
 
-    fn write_byte(&self, address: u32, value: u8) {
+    fn notify_lcd_write(&mut self, address: u32, value: u32) {
         Python::with_gil(|py| {
-            let _ = self
-                .memory
-                .call_method(py, "write_byte", (address, value), None);
+            let bound = self.memory.bind(py);
+            if let Ok(callback) = bound.getattr("_rust_lcd_write") {
+                let _ = callback.call1((address, value, py.None()));
+            }
         });
     }
 }
 
-impl rust_scil::bus::Bus for MemoryProxyBus {
-    fn load(&mut self, space: Space, addr: u32, bits: u8) -> u32 {
-        let bytes = (bits / 8).max(1);
-        let mut value = 0u32;
-        let base = Self::resolve(space, addr);
-        for offset in 0..bytes {
-            let byte = self.read_byte(base + offset as u32);
-            value |= (byte as u32) << (offset * 8);
-        }
-        value
+impl BusProfiler for RuntimeProfile {
+    fn record_bus_load(&mut self) {
+        self.bus_load_calls += 1;
     }
 
-    fn store(&mut self, space: Space, addr: u32, bits: u8, value: u32) {
-        let bytes = (bits / 8).max(1);
-        let base = Self::resolve(space, addr);
-        for offset in 0..bytes {
-            let byte = ((value >> (offset * 8)) & 0xFF) as u8;
-            self.write_byte(base + offset as u32, byte);
-        }
-    }
-}
-
-struct HybridBus<'a> {
-    memory: &'a mut MemoryImage,
-    fallback: MemoryProxyBus,
-}
-
-impl<'a> HybridBus<'a> {
-    fn new(memory: &'a mut MemoryImage, fallback: MemoryProxyBus) -> Self {
-        Self { memory, fallback }
-    }
-}
-
-impl<'a> rust_scil::bus::Bus for HybridBus<'a> {
-    fn load(&mut self, space: Space, addr: u32, bits: u8) -> u32 {
-        let absolute = MemoryProxyBus::resolve(space, addr);
-        if self.memory.requires_python(absolute) {
-            return self.fallback.load(space, addr, bits);
-        }
-        if let Some(value) = self.memory.load(absolute, bits) {
-            return value;
-        }
-        self.fallback.load(space, addr, bits)
+    fn record_bus_store(&mut self) {
+        self.bus_store_calls += 1;
     }
 
-    fn store(&mut self, space: Space, addr: u32, bits: u8, value: u32) {
-        let absolute = MemoryProxyBus::resolve(space, addr);
-        if self.memory.requires_python(absolute) {
-            self.fallback.store(space, addr, bits, value);
-            return;
+    fn record_python_load(&mut self, address: u32) {
+        self.bus_load_python += 1;
+        if let Some(hist) = self.fallback_hist.as_mut() {
+            hist.record_load(address);
         }
-        if self.memory.store(absolute, bits, value).is_none() {
-            self.fallback.store(space, addr, bits, value);
+    }
+
+    fn record_python_store(&mut self, address: u32) {
+        self.bus_store_python += 1;
+        if let Some(hist) = self.fallback_hist.as_mut() {
+            hist.record_store(address);
         }
     }
 }
 
-struct InstructionStream<'a> {
-    memory: &'a mut MemoryImage,
-    fallback: MemoryProxyBus,
-    cursor: u32,
-    consumed: usize,
-    start_pc: u32,
+impl LayoutEntryView for LayoutEntry {
+    fn key(&self) -> &str {
+        &self.key
+    }
+
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    fn meta(&self) -> &HashMap<String, Value> {
+        &self.meta
+    }
 }
 
-impl<'a> InstructionStream<'a> {
-    fn new(memory: &'a mut MemoryImage, fallback: MemoryProxyBus, start_pc: u32) -> Self {
+impl ManifestEntryView for CachedManifestEntry {
+    type Layout = LayoutEntry;
+
+    fn opcode(&self) -> u8 {
+        self.inner.opcode as u8
+    }
+
+    fn pre(&self) -> Option<(String, String)> {
+        self.inner
+            .pre
+            .as_ref()
+            .map(|info| (info.first.clone(), info.second.clone()))
+    }
+
+    fn binder(&self) -> &Map<String, Value> {
+        &self.inner.binder
+    }
+
+    fn instr(&self) -> &Value {
+        &self.inner.instr
+    }
+
+    fn layout(&self) -> &[Self::Layout] {
+        &self.inner.layout
+    }
+
+    fn parsed_instr(&self) -> Option<&Instr> {
+        Some(&self.instr_parsed)
+    }
+
+    fn parsed_binder(&self) -> Option<&Binder> {
+        Some(&self.binder_template)
+    }
+}
+
+impl ExecManifestEntry for CachedManifestEntry {
+    fn mnemonic(&self) -> &str {
+        &self.inner.mnemonic
+    }
+
+    fn family(&self) -> Option<&str> {
+        self.inner.family.as_deref()
+    }
+}
+
+impl BoundInstrView for BoundInstrRepr {
+    fn opcode(&self) -> u32 {
+        self.opcode
+    }
+
+    fn operands(&self) -> &HashMap<String, Value> {
+        &self.operands
+    }
+
+    fn pre(&self) -> Option<(String, String)> {
+        self.pre
+            .as_ref()
+            .map(|pre| (pre.first.clone(), pre.second.clone()))
+    }
+}
+
+impl BoundInstrBuilder for BoundInstrRepr {
+    fn from_parts(
+        opcode: u32,
+        mnemonic: &str,
+        family: Option<&str>,
+        length: u8,
+        pre: Option<(String, String)>,
+        operands: HashMap<String, Value>,
+    ) -> Self {
         Self {
-            memory,
-            fallback,
-            cursor: start_pc & ADDRESS_MASK,
-            consumed: 0,
-            start_pc: start_pc & ADDRESS_MASK,
-        }
-    }
-
-    fn read_u8(&mut self) -> u8 {
-        let absolute = self.cursor & ADDRESS_MASK;
-        self.cursor = (self.cursor + 1) & ADDRESS_MASK;
-        self.consumed += 1;
-        if !self.memory.requires_python(absolute) {
-            if let Some(byte) = self.memory.read_byte(absolute) {
-                return byte;
-            }
-        }
-        self.fallback.read_byte(absolute)
-    }
-
-    fn consumed(&self) -> usize {
-        self.consumed
-    }
-
-    fn page20(&self) -> u32 {
-        self.start_pc & 0xF0000
-    }
-}
-
-const REG_TABLE: [(&str, &str, u8); 8] = [
-    ("A", "r1", 8),
-    ("IL", "r1", 8),
-    ("BA", "r2", 16),
-    ("I", "r2", 16),
-    ("X", "r3", 24),
-    ("Y", "r3", 24),
-    ("U", "r3", 24),
-    ("S", "r3", 24),
-];
-
-struct ExtRegMode {
-    code: u8,
-    name: &'static str,
-    needs_disp: bool,
-    disp_sign: i8,
-}
-
-const EXT_REG_MODES: [ExtRegMode; 5] = [
-    ExtRegMode {
-        code: 0x0,
-        name: "simple",
-        needs_disp: false,
-        disp_sign: 0,
-    },
-    ExtRegMode {
-        code: 0x2,
-        name: "post_inc",
-        needs_disp: false,
-        disp_sign: 0,
-    },
-    ExtRegMode {
-        code: 0x3,
-        name: "pre_dec",
-        needs_disp: false,
-        disp_sign: 0,
-    },
-    ExtRegMode {
-        code: 0x8,
-        name: "offset",
-        needs_disp: true,
-        disp_sign: 1,
-    },
-    ExtRegMode {
-        code: 0xC,
-        name: "offset",
-        needs_disp: true,
-        disp_sign: -1,
-    },
-];
-
-struct ImemMode {
-    code: u8,
-    name: &'static str,
-    needs_disp: bool,
-    disp_sign: i8,
-}
-
-const IMEM_MODES: [ImemMode; 3] = [
-    ImemMode {
-        code: 0x00,
-        name: "simple",
-        needs_disp: false,
-        disp_sign: 0,
-    },
-    ImemMode {
-        code: 0x80,
-        name: "pos",
-        needs_disp: true,
-        disp_sign: 1,
-    },
-    ImemMode {
-        code: 0xC0,
-        name: "neg",
-        needs_disp: true,
-        disp_sign: -1,
-    },
-];
-
-fn encode_imm8(value: u8) -> Value {
-    json!({"kind": "imm8", "value": value})
-}
-
-fn encode_disp8(value: i32) -> Value {
-    json!({"kind": "disp8", "value": value})
-}
-
-fn encode_imm16(lo: u8, hi: u8) -> Value {
-    json!({"kind": "imm16", "lo": lo, "hi": hi})
-}
-
-fn encode_imm24(lo: u8, mid: u8, hi: u8) -> Value {
-    json!({"kind": "imm24", "lo": lo, "mid": mid, "hi": hi})
-}
-
-fn encode_addr16(page20: u32, lo: u8, hi: u8) -> Value {
-    json!({
-        "kind": "addr16_page",
-        "offs16": encode_imm16(lo, hi),
-        "page20": page20,
-    })
-}
-
-fn encode_addr24(lo: u8, mid: u8, hi: u8) -> Value {
-    json!({
-        "kind": "addr24",
-        "imm24": encode_imm24(lo, mid, hi),
-    })
-}
-
-fn encode_regsel(name: &str, group: &str) -> Value {
-    json!({
-        "kind": "regsel",
-        "size_group": group,
-        "name": name,
-    })
-}
-
-fn decode_operands(
-    stream: &mut InstructionStream<'_>,
-    layout: &[LayoutEntry],
-    page20: u32,
-) -> PyResult<HashMap<String, Value>> {
-    let mut operands = HashMap::new();
-    for entry in layout {
-        let value = decode_operand_entry(stream, entry, page20)?;
-        operands.insert(entry.key.clone(), value);
-    }
-    Ok(operands)
-}
-
-fn decode_operand_entry(
-    stream: &mut InstructionStream<'_>,
-    entry: &LayoutEntry,
-    page20: u32,
-) -> PyResult<Value> {
-    match entry.kind.as_str() {
-        "imm8" => Ok(encode_imm8(stream.read_u8())),
-        "addr16_page" => {
-            let lo = stream.read_u8();
-            let hi = stream.read_u8();
-            Ok(encode_addr16(page20, lo, hi))
-        }
-        "addr24" => {
-            let lo = stream.read_u8();
-            let mid = stream.read_u8();
-            let hi = stream.read_u8();
-            Ok(encode_addr24(lo, mid, hi))
-        }
-        "imm24" => {
-            let lo = stream.read_u8();
-            let mid = stream.read_u8();
-            let hi = stream.read_u8();
-            Ok(encode_imm24(lo, mid, hi))
-        }
-        "ext_reg_ptr" => decode_ext_reg_ptr(stream),
-        "imem_ptr" => decode_imem_ptr(stream),
-        "regsel" => decode_regsel(stream, entry),
-        other => Err(PyValueError::new_err(format!(
-            "unsupported layout kind {other}"
-        ))),
-    }
-}
-
-fn decode_regsel(
-    stream: &mut InstructionStream<'_>,
-    entry: &LayoutEntry,
-) -> PyResult<Value> {
-    let allowed = entry.meta.get("allowed_groups").and_then(|value| {
-        value.as_array().map(|items| {
-            items
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-        })
-    });
-    let byte = stream.read_u8();
-    let idx = (byte & 0x07) as usize;
-    let (name, group, _) = REG_TABLE
-        .get(idx)
-        .ok_or_else(|| PyValueError::new_err("unsupported register index"))?;
-    if let Some(groups) = allowed.as_ref() {
-        if !groups.iter().any(|g| g.eq_ignore_ascii_case(group)) {
-            return Err(PyValueError::new_err(format!(
-                "register {name} not allowed for operand"
-            )));
-        }
-    }
-    Ok(encode_regsel(name, group))
-}
-
-fn decode_ext_reg_ptr(stream: &mut InstructionStream<'_>) -> PyResult<Value> {
-    let reg_byte = stream.read_u8();
-    let mode_code = (reg_byte >> 4) & 0x0F;
-    let mode = EXT_REG_MODES
-        .iter()
-        .find(|mode| mode.code == mode_code)
-        .ok_or_else(|| PyValueError::new_err("unsupported ext-reg pointer mode"))?;
-    let idx = (reg_byte & 0x07) as usize;
-    let (name, group, _) = REG_TABLE
-        .get(idx)
-        .ok_or_else(|| PyValueError::new_err("invalid pointer register"))?;
-    if !group.eq_ignore_ascii_case("r3") {
-        return Err(PyValueError::new_err(format!(
-            "pointer register must be r3, got {name}"
-        )));
-    }
-    let mut payload = Map::new();
-    payload.insert("kind".into(), Value::String("ext_reg_ptr".into()));
-    payload.insert("ptr".into(), encode_regsel(name, group));
-    payload.insert("mode".into(), Value::String(mode.name.into()));
-    if mode.needs_disp {
-        let magnitude = stream.read_u8() as i32;
-        let signed = if mode.disp_sign >= 0 {
-            magnitude
-        } else {
-            -magnitude
-        };
-        payload.insert("disp".into(), encode_disp8(signed));
-    }
-    Ok(Value::Object(payload))
-}
-
-fn decode_imem_ptr(stream: &mut InstructionStream<'_>) -> PyResult<Value> {
-    let mode_byte = stream.read_u8();
-    let mode = IMEM_MODES
-        .iter()
-        .find(|entry| entry.code == mode_byte)
-        .ok_or_else(|| PyValueError::new_err("unsupported IMEM pointer mode"))?;
-    let base = stream.read_u8();
-    let mut payload = Map::new();
-    payload.insert("kind".into(), Value::String("imem_ptr".into()));
-    payload.insert("base".into(), encode_imm8(base));
-    payload.insert("mode".into(), Value::String(mode.name.into()));
-    if mode.needs_disp {
-        let magnitude = stream.read_u8() as i32;
-        let signed = if mode.disp_sign >= 0 {
-            magnitude
-        } else {
-            -magnitude
-        };
-        payload.insert("disp".into(), encode_disp8(signed));
-    }
-    Ok(Value::Object(payload))
-}
-
-fn lookup_manifest_entry(
-    opcode: u8,
-    pre: Option<PreTuple>,
-) -> PyResult<&'static ManifestEntry> {
-    let key = OpcodeLookupKey { opcode, pre };
-    OPCODE_LOOKUP
-        .get(&key)
-        .copied()
-        .ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "no manifest entry for opcode 0x{opcode:02X} (pre={pre:?})"
-            ))
-        })
-}
-
-fn decode_bound_from_memory(
-    memory: &mut MemoryImage,
-    fallback: MemoryProxyBus,
-    pc: u32,
-) -> PyResult<(BoundInstrRepr, u8, usize)> {
-    let mut stream = InstructionStream::new(memory, fallback, pc);
-    let mut pending_pre: Option<PreTuple> = None;
-    let mut prefix_guard = 0usize;
-
-    loop {
-        let byte = stream.read_u8();
-        if let Some(pair) = PRE_BY_OPCODE.get(&byte).copied() {
-            pending_pre = Some(pair);
-            prefix_guard += 1;
-            if prefix_guard > MAX_PREFIX_CHAIN {
-                return Err(PyValueError::new_err(
-                    "excessive PRE prefixes before instruction",
-                ));
-            }
-            continue;
-        }
-
-        let entry = lookup_manifest_entry(byte, pending_pre)?;
-        let page20 = stream.page20();
-        let operands = decode_operands(&mut stream, &entry.layout, page20)?;
-        let length = stream.consumed();
-        let bound = BoundInstrRepr {
-            opcode: byte as u32,
-            mnemonic: entry.mnemonic.clone(),
-            family: entry.family.clone(),
-            length: length as u8,
-            pre: entry.pre.clone(),
+            opcode,
+            mnemonic: mnemonic.to_string(),
+            family: family.map(|f| f.to_string()),
+            length,
+            pre: pre.map(|(first, second)| PreInfo { first, second }),
             operands,
-        };
-        return Ok((bound, byte, length));
+        }
     }
+}
+
+impl OpcodeIndexView for generated::opcode_index::OpcodeIndexEntry {
+    fn opcode(&self) -> u8 {
+        self.opcode
+    }
+
+    fn pre(&self) -> Option<(String, String)> {
+        self.pre
+            .map(|pre| (pre.first.to_string(), pre.second.to_string()))
+    }
+
+    fn manifest_index(&self) -> usize {
+        self.manifest_index
+    }
+}
+
+static OPCODE_LOOKUP: Lazy<OpcodeLookup<'static, CachedManifestEntry>> =
+    Lazy::new(|| OpcodeLookup::new(&*MANIFEST, OPCODE_INDEX));
+
+fn eval_manifest_entry<B: rust_scil::bus::Bus>(
+    state: &mut RsState,
+    bus: &mut B,
+    bound: &BoundInstrRepr,
+) -> PyResult<()> {
+    core_eval_manifest_entry(&*MANIFEST, state, bus, bound)
+        .map_err(|e| PyRuntimeError::new_err(e))
 }
 
 fn space_to_str(space: &Space) -> &'static str {
@@ -593,119 +454,55 @@ fn space_to_str(space: &Space) -> &'static str {
     }
 }
 
-fn find_entry(bound: &BoundInstrRepr) -> Option<&'static ManifestEntry> {
-    (*MANIFEST).iter().find(|entry| {
-        entry.opcode == bound.opcode && entry.pre == bound.pre
-    })
-}
-
-fn register_width(name: &str) -> u8 {
-    match name.to_ascii_uppercase().as_str() {
-        "A" | "B" | "IL" | "IH" => 8,
-        "BA" | "I" => 16,
-        "X" | "Y" | "U" | "S" => 24,
-        "F" => 8,
-        "PC" => 20,
-        _ => DEFAULT_REG_WIDTH,
-    }
-}
-
-type PreTuple = (&'static str, &'static str);
-
-#[derive(Hash, Eq, PartialEq, Copy, Clone)]
-struct OpcodeLookupKey {
-    opcode: u8,
-    pre: Option<PreTuple>,
-}
-
-static OPCODE_LOOKUP: Lazy<HashMap<OpcodeLookupKey, &'static ManifestEntry>> =
-    Lazy::new(|| {
-        let mut map = HashMap::new();
-        for entry in OPCODE_INDEX.iter() {
-            let key = OpcodeLookupKey {
-                opcode: entry.opcode,
-                pre: entry.pre.map(|pre| (pre.first, pre.second)),
-            };
-            let manifest_entry = &(*MANIFEST)[entry.manifest_index];
-            map.insert(key, manifest_entry);
-        }
-        map
-    });
-
-const PRE_PREFIXES: &[(u8, PreTuple)] = &[
-    (0x32, ("(n)", "(n)")),
-    (0x30, ("(n)", "(BP+n)")),
-    (0x33, ("(n)", "(PY+n)")),
-    (0x31, ("(n)", "(BP+PY)")),
-    (0x22, ("(BP+n)", "(n)")),
-    (0x23, ("(BP+n)", "(PY+n)")),
-    (0x21, ("(BP+n)", "(BP+PY)")),
-    (0x36, ("(PX+n)", "(n)")),
-    (0x34, ("(PX+n)", "(BP+n)")),
-    (0x37, ("(PX+n)", "(PY+n)")),
-    (0x35, ("(PX+n)", "(BP+PY)")),
-    (0x26, ("(BP+PX)", "(n)")),
-    (0x24, ("(BP+PX)", "(BP+n)")),
-    (0x27, ("(BP+PX)", "(PY+n)")),
-    (0x25, ("(BP+PX)", "(BP+PY)")),
-];
-
-const MAX_PREFIX_CHAIN: usize = 4;
-
-static PRE_BY_OPCODE: Lazy<HashMap<u8, PreTuple>> = Lazy::new(|| {
-    let mut map = HashMap::new();
-    for (opcode, pair) in PRE_PREFIXES.iter() {
-        map.insert(*opcode, *pair);
-    }
-    map
-});
-
-fn patch_binder(
-    template: &Map<String, Value>,
-    operands: &HashMap<String, Value>,
-) -> Map<String, Value> {
-    let mut merged = template.clone();
-    for (key, value) in operands {
-        merged.insert(key.clone(), value.clone());
-    }
-    merged
-}
-
-impl From<&PreInfo> for PreLatch {
-    fn from(info: &PreInfo) -> Self {
-        PreLatch {
-            first: info.first.clone(),
-            second: info.second.clone(),
-        }
-    }
-}
-
-fn eval_manifest_entry<B: rust_scil::bus::Bus>(
-    state: &mut RsState,
-    bus: &mut B,
-    bound: &BoundInstrRepr,
-) -> PyResult<()> {
-    let entry = find_entry(bound).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "no manifest entry for opcode {} pre {:?}",
-            bound.opcode, bound.pre
-        ))
-    })?;
-    let binder_json = patch_binder(&entry.binder, &bound.operands);
-    let binder: Binder = serde_json::from_value(Value::Object(binder_json))
-        .map_err(|e| PyValueError::new_err(format!("binder json: {e}")))?;
-    let instr: Instr = serde_json::from_value(entry.instr.clone())
-        .map_err(|e| PyValueError::new_err(format!("instr json: {e}")))?;
-    let pre = bound.pre.as_ref().map(|info| info.into());
-    eval::step(state, bus, &instr, &binder, pre)
-        .map_err(|e| PyRuntimeError::new_err(format!("{e}")))
-}
-
 #[pyclass]
 struct Runtime {
     state: RsState,
     memory: Py<PyAny>,
     memory_image: MemoryImage,
+    profile: RuntimeProfile,
+    lcd: Option<LcdController>,
+    keyboard: Option<KeyboardMatrix>,
+    cycle_count: u64,
+    instruction_count: u64,
+    timer: TimerContext,
+    perfetto_path: Option<String>,
+    perfetto: Option<PerfettoTracer>,
+}
+
+fn perform_reset_side_effects(memory: &mut MemoryImage, state: &mut RsState) {
+    // IMEM offsets
+    const UCR: u32 = 0xF7;
+    const USR: u32 = 0xF8;
+    const ISR: u32 = 0xFC;
+    const SCR: u32 = 0xFD;
+    const LCC: u32 = 0xFE;
+    const SSR: u32 = 0xFF;
+    const RESET_VEC: u32 = 0xFFFFA;
+
+    // Reset UCR, ISR, SCR to 0
+    memory.write_internal_byte(UCR, 0x00);
+    memory.write_internal_byte(ISR, 0x00);
+    memory.write_internal_byte(SCR, 0x00);
+
+    // Reset LCC bit 7 to 0 (if present)
+    let lcc = memory.read_internal_byte(LCC).unwrap_or(0);
+    memory.write_internal_byte(LCC, lcc & !0x80);
+
+    // USR: clear bits 0-5, set bits 3 and 4
+    let usr = memory.read_internal_byte(USR).unwrap_or(0);
+    let usr_val = (usr & !0x3F) | 0x18;
+    memory.write_internal_byte(USR, usr_val);
+
+    // SSR: clear bit 2
+    let ssr = memory.read_internal_byte(SSR).unwrap_or(0);
+    memory.write_internal_byte(SSR, ssr & !0x04);
+
+    // Read reset vector (24-bit little-endian) from external memory
+    let lo = memory.read_byte(RESET_VEC).unwrap_or(0) as u32;
+    let mid = memory.read_byte(RESET_VEC + 1).unwrap_or(0) as u32;
+    let hi = memory.read_byte(RESET_VEC + 2).unwrap_or(0) as u32;
+    let pc = ((hi << 16) | (mid << 8) | lo) & ADDRESS_MASK;
+    state.set_reg("PC", pc, register_width("PC"));
 }
 
 #[pymethods]
@@ -713,11 +510,29 @@ impl Runtime {
     #[new]
     #[pyo3(signature = (memory, *, reset_on_init = true))]
     fn new(memory: PyObject, reset_on_init: bool) -> PyResult<Self> {
+        let use_rust_lcd = env::var("RUST_PURE_LCD").map(|v| v == "1").unwrap_or(false);
+        let use_rust_keyboard =
+            env::var("RUST_PURE_KEYBOARD").map(|v| v == "1").unwrap_or(false);
+        let timer_in_rust = env::var("RUST_TIMER_IN_RUST")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let perfetto_path = env::var("RUST_PERFETTO_PATH").ok();
         let mut runtime = Self {
             state: RsState::default(),
             memory: memory.into(),
             memory_image: MemoryImage::new(),
+            profile: RuntimeProfile::from_env(),
+            lcd: use_rust_lcd.then(LcdController::new),
+            keyboard: use_rust_keyboard.then(KeyboardMatrix::new),
+            cycle_count: 0,
+            instruction_count: 0,
+            timer: TimerContext::new(timer_in_rust, 500, 5000),
+            perfetto: None,
+            perfetto_path,
         };
+        runtime
+            .memory_image
+            .set_keyboard_bridge(runtime.keyboard.is_some());
         if reset_on_init {
             runtime.power_on_reset();
         }
@@ -726,11 +541,61 @@ impl Runtime {
 
     fn power_on_reset(&mut self) {
         self.state = RsState::default();
+        if let Some(lcd) = self.lcd.as_mut() {
+            lcd.reset();
+        }
+        if let Some(kbd) = self.keyboard.as_mut() {
+            kbd.reset(&mut self.memory_image);
+        }
+        self.timer.reset();
+        perform_reset_side_effects(&mut self.memory_image, &mut self.state);
+        self.cycle_count = 0;
+        self.instruction_count = 0;
     }
 
-    fn load_external_memory(&mut self, snapshot: &PyBytes) -> PyResult<()> {
+    #[pyo3(signature = (path=None))]
+    fn set_perfetto_trace(&mut self, path: Option<&str>) -> PyResult<()> {
+        let resolved = path
+            .map(|p| p.to_string())
+            .or_else(|| self.perfetto_path.clone());
+        self.perfetto = resolved.map(|p| PerfettoTracer::new(PathBuf::from(p)));
+        Ok(())
+    }
+
+    fn flush_perfetto(&mut self) -> PyResult<()> {
+        if let Some(tracer) = self.perfetto.take() {
+            tracer
+                .finish()
+                .map_err(|e| PyRuntimeError::new_err(format!("perfetto finish: {e}")))?;
+        }
+        Ok(())
+    }
+
+    fn load_external_memory(&mut self, snapshot: &Bound<'_, PyBytes>) -> PyResult<()> {
         self.memory_image.load_external(snapshot.as_bytes());
         Ok(())
+    }
+
+    fn load_internal_memory(&mut self, payload: &Bound<'_, PyBytes>) -> PyResult<()> {
+        self.memory_image.load_internal(payload.as_bytes());
+        Ok(())
+    }
+
+    fn export_lcd_snapshot(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        if let Some(lcd) = &self.lcd {
+            let (meta, payload) = lcd.export_snapshot();
+            let meta_str = serde_json::to_string(&meta)
+                .map_err(|e| PyRuntimeError::new_err(format!("lcd meta serialize: {e}")))?;
+            let json_mod = PyModule::import_bound(py, "json")
+                .map_err(|e| PyRuntimeError::new_err(format!("import json: {e}")))?;
+            let meta_py = json_mod
+                .call_method1("loads", (meta_str,))?
+                .into_py(py);
+            let payload_py = PyBytes::new_bound(py, &payload).into_py(py);
+            Ok((meta_py, payload_py))
+        } else {
+            Ok((py.None(), py.None()))
+        }
     }
 
     fn set_python_ranges(&mut self, ranges: Vec<(u32, u32)>) -> PyResult<()> {
@@ -738,32 +603,306 @@ impl Runtime {
         Ok(())
     }
 
+    fn set_readonly_ranges(&mut self, ranges: Vec<(u32, u32)>) -> PyResult<()> {
+        self.memory_image.set_readonly_ranges(ranges);
+        Ok(())
+    }
+
+    fn set_keyboard_bridge(&mut self, enabled: bool) -> PyResult<()> {
+        if enabled {
+            if self.keyboard.is_none() {
+                self.keyboard = Some(KeyboardMatrix::new());
+            }
+            if let Some(kbd) = self.keyboard.as_mut() {
+                kbd.reset(&mut self.memory_image);
+            }
+        } else {
+            self.keyboard = None;
+        }
+        self.memory_image.set_keyboard_bridge(enabled);
+        Ok(())
+    }
+
     fn drain_external_writes(&mut self) -> PyResult<Vec<(u32, u8)>> {
         Ok(self.memory_image.drain_dirty())
     }
 
-    fn execute_instruction(&mut self) -> PyResult<(u8, u8)> {
-        let pc = self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK;
-        let decode_proxy = MemoryProxyBus::new(self.memory.clone());
-        let (bound, opcode, length) =
-            decode_bound_from_memory(&mut self.memory_image, decode_proxy, pc)?;
-        let fallback_bus = MemoryProxyBus::new(self.memory.clone());
-        let mut bus = HybridBus::new(&mut self.memory_image, fallback_bus);
-        eval_manifest_entry(&mut self.state, &mut bus, &bound)?;
-        let current_pc = self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK;
-        if current_pc == pc {
-            let next_pc = (pc + length as u32) & ADDRESS_MASK;
-            self.state
-                .set_reg("PC", next_pc, register_width("PC"));
+    fn drain_internal_writes(&mut self) -> PyResult<Vec<(u32, u8)>> {
+        Ok(self.memory_image.drain_dirty_internal())
+    }
+
+    fn read_external_segment(
+        &self,
+        py: Python<'_>,
+        start: u32,
+        length: usize,
+    ) -> PyResult<Py<PyBytes>> {
+        let start = start as usize;
+        if let Some(slice) = self.memory_image.external_segment(start, length) {
+            Ok(PyBytes::new_bound(py, slice).unbind())
+        } else {
+            Err(PyValueError::new_err("start offset outside external memory"))
         }
-        Ok((opcode, length as u8))
+    }
+
+    fn apply_host_write(&mut self, address: u32, value: u8) -> PyResult<()> {
+        self.memory_image.apply_host_write(address, value);
+        Ok(())
+    }
+
+    #[getter]
+    fn profile_enabled(&self) -> bool {
+        self.profile.enabled
+    }
+
+    #[setter]
+    fn set_profile_enabled(&mut self, value: bool) {
+        self.profile.enabled = value;
+    }
+
+    fn reset_profile_stats(&mut self) {
+        self.profile.reset();
+    }
+
+    fn get_profile_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
+        Ok(self.profile.as_dict(py))
+    }
+
+    fn keyboard_press(&mut self, matrix_code: u8) -> PyResult<()> {
+        if let Some(kbd) = self.keyboard.as_mut() {
+            kbd.press_matrix_code(matrix_code & 0x7F, &mut self.memory_image);
+        }
+        Ok(())
+    }
+
+    fn keyboard_release(&mut self, matrix_code: u8) -> PyResult<()> {
+        if let Some(kbd) = self.keyboard.as_mut() {
+            kbd.release_matrix_code(matrix_code & 0x7F, &mut self.memory_image);
+        }
+        Ok(())
+    }
+
+    fn keyboard_scan_tick(&mut self) -> PyResult<u32> {
+        if let Some(kbd) = self.keyboard.as_mut() {
+            let count = kbd.scan_tick();
+            if count > 0 {
+                kbd.write_fifo_to_memory(&mut self.memory_image);
+            }
+            return Ok(count as u32);
+        }
+        Ok(0)
+    }
+
+    fn keyboard_fifo_snapshot(&self, py: Python<'_>) -> PyResult<PyObject> {
+        if let Some(kbd) = &self.keyboard {
+            let snap = kbd.fifo_snapshot();
+            return Ok(PyBytes::new_bound(py, &snap).into_py(py));
+        }
+        Ok(PyBytes::new_bound(py, &[]).into_py(py))
+    }
+
+    fn keyboard_irq_count(&self) -> PyResult<u32> {
+        Ok(self.keyboard.as_ref().map(|k| k.irq_count()).unwrap_or(0))
+    }
+
+    #[pyo3(signature = (
+        pending,
+        imr,
+        isr,
+        next_mti,
+        next_sti,
+        source=None,
+        in_interrupt=false,
+        interrupt_stack=None,
+        next_interrupt_id=0
+    ))]
+    fn set_interrupt_state(
+        &mut self,
+        pending: bool,
+        imr: u8,
+        isr: u8,
+        next_mti: i32,
+        next_sti: i32,
+        source: Option<String>,
+        in_interrupt: bool,
+        interrupt_stack: Option<Vec<u32>>,
+        next_interrupt_id: u32,
+    ) {
+        self.timer.set_interrupt_state(
+            pending,
+            imr,
+            isr,
+            next_mti,
+            next_sti,
+            source,
+            in_interrupt,
+            interrupt_stack,
+            next_interrupt_id,
+        );
+    }
+
+    fn tick_timers(&mut self) {
+        self.timer
+            .tick_timers(&mut self.memory_image, &mut self.cycle_count);
+    }
+
+    fn execute_instruction(&mut self) -> PyResult<(u8, u8)> {
+        let total_timer = self.profile.timer_start();
+        let mut host = Python::with_gil(|py| PythonHost::new(py, &self.memory));
+        let mut profile_ref = if self.profile.enabled {
+            Some(&mut self.profile)
+        } else {
+            None
+        };
+        let (opcode, length) = execute_step::<BoundInstrRepr, CachedManifestEntry, PythonHost, RuntimeProfile>(
+            &mut self.state,
+            &mut self.memory_image,
+            &mut host,
+            MANIFEST.as_slice(),
+            &OPCODE_LOOKUP,
+            self.keyboard.as_mut().map(|k| k as &mut KeyboardMatrix),
+            self.lcd.as_mut().map(|l| l as &mut LcdController),
+            self.perfetto.as_mut().map(|t| t as &mut PerfettoTracer),
+            profile_ref.as_deref_mut(),
+            self.instruction_count,
+        )
+        .map_err(|e| PyValueError::new_err(format!("decode: {e}")))?;
+        // Run keyboard scan after each instruction to simulate MTI-driven polling
+        if let Some(kbd) = self.keyboard.as_mut() {
+            if kbd.scan_tick() > 0 {
+                kbd.write_fifo_to_memory(&mut self.memory_image);
+            }
+        }
+        self.tick_timers();
+        self.instruction_count = self.instruction_count.wrapping_add(1);
+        self.profile.record_total(total_timer);
+        Ok((opcode, length))
+    }
+
+    fn drain_pending_irq(&mut self) -> PyResult<Option<String>> {
+        Ok(self.timer.drain_pending_irq())
+    }
+
+    fn export_external_memory_full(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        Ok(PyBytes::new_bound(py, self.memory_image.external_slice()).unbind())
+    }
+
+    fn export_internal_memory_full(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        Ok(PyBytes::new_bound(py, self.memory_image.internal_slice()).unbind())
+    }
+
+    fn save_snapshot(&mut self, path: &str) -> PyResult<()> {
+        let (lcd_meta, lcd_payload) = if let Some(lcd) = &self.lcd {
+            let (meta, payload) = lcd.export_snapshot();
+            (Some(meta), payload)
+        } else {
+            (None, Vec::new())
+        };
+
+        let (timer, interrupts) = self.timer.snapshot_info();
+        let metadata = SnapshotMetadata {
+            magic: SNAPSHOT_MAGIC.to_string(),
+            version: SNAPSHOT_VERSION,
+            backend: "rust".to_string(),
+            created: now_timestamp(),
+            instruction_count: self.instruction_count,
+            cycle_count: self.cycle_count,
+            pc: self.state.get_reg("PC", register_width("PC")) & ADDRESS_MASK,
+            timer,
+            interrupts,
+            fallback_ranges: self.memory_image.python_ranges().to_vec(),
+            readonly_ranges: self.memory_image.readonly_ranges().to_vec(),
+            internal_ram: (INTERNAL_RAM_START as u32, INTERNAL_RAM_SIZE as u32),
+            imem: (INTERNAL_MEMORY_START, INTERNAL_SPACE as u32),
+            memory_dump_pc: 0,
+            fast_mode: false,
+            memory_image_size: self.memory_image.external_len(),
+            lcd_payload_size: lcd_payload.len(),
+            lcd: lcd_meta,
+        };
+        let registers = collect_registers(&self.state);
+        let lcd_payload_ref = if lcd_payload.is_empty() {
+            None
+        } else {
+            Some(lcd_payload.as_slice())
+        };
+
+        core_save_snapshot(
+            std::path::Path::new(path),
+            &metadata,
+            &registers,
+            &self.memory_image,
+            lcd_payload_ref,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("snapshot save: {e}")))
+    }
+
+    fn load_snapshot(&mut self, path: &str) -> PyResult<()> {
+        let loaded = core_load_snapshot(std::path::Path::new(path), &mut self.memory_image)
+            .map_err(|e| match e {
+                CoreError::InvalidSnapshot(msg) => PyValueError::new_err(msg),
+                other => PyRuntimeError::new_err(format!("snapshot load: {other}")),
+            })?;
+
+        let SnapshotLoad {
+            metadata,
+            registers,
+            lcd_payload,
+        } = loaded;
+        apply_registers(&mut self.state, &registers);
+
+        if let (Some(meta), Some(payload)) = (metadata.lcd.as_ref(), lcd_payload.as_ref()) {
+            if let Some(lcd) = self.lcd.as_mut() {
+                lcd.load_snapshot(meta, payload)
+                    .map_err(|err| PyRuntimeError::new_err(err))?;
+            }
+        }
+
+        // Hardware reset invariants that are implicit in the Python backend snapshots:
+        // ensure USR reports TXR/TXE ready (bits 3/4 set) even if the snapshot omits them.
+        let usr = self.memory_image.read_internal_byte(0xF8).unwrap_or(0);
+        if usr & 0x18 != 0x18 {
+            self.memory_image.write_internal_byte(0xF8, usr | 0x18);
+        }
+        // Seed IMR with a sane default when snapshots omit it (match Python backend behaviour).
+        let imr = self.memory_image.read_internal_byte(0xFB).unwrap_or(0);
+        if imr == 0 {
+            self.memory_image.write_internal_byte(0xFB, 0xC3);
+        }
+
+        // Timer/IRQ bookkeeping
+        self.instruction_count = metadata.instruction_count;
+        self.cycle_count = metadata.cycle_count;
+        self.timer
+            .apply_snapshot_info(&metadata.timer, &metadata.interrupts);
+        Ok(())
     }
 
     fn execute_bound_repr(&mut self, bound_json: &str) -> PyResult<()> {
         let bound: BoundInstrRepr = serde_json::from_str(bound_json)
             .map_err(|e| PyValueError::new_err(format!("bound json: {e}")))?;
-        let mut bus = MemoryProxyBus::new(self.memory.clone());
-        eval_manifest_entry(&mut self.state, &mut bus, &bound)
+        let mut exec_host = Python::with_gil(|py| PythonHost::new(py, &self.memory));
+        let eval_timer = self.profile.timer_start();
+        let mut profile_ref = if self.profile.enabled {
+            Some(&mut self.profile)
+        } else {
+            None
+        };
+        let mut bus = HybridBus::new(
+            &mut self.memory_image,
+            &mut exec_host,
+            profile_ref.as_deref_mut(),
+            self.lcd.as_mut(),
+            self.keyboard.as_mut(),
+            None,
+            None,
+            self.instruction_count,
+        );
+        let result = eval_manifest_entry(&mut self.state, &mut bus, &bound);
+        if result.is_ok() {
+            self.profile.record_eval(eval_timer);
+        }
+        result
     }
 
     fn read_register(&self, name: &str) -> PyResult<u32> {
@@ -812,7 +951,7 @@ impl Cpu {
     #[new]
     #[pyo3(signature = (memory, *, reset_on_init = true))]
     fn new(py: Python<'_>, memory: PyObject, reset_on_init: bool) -> PyResult<Self> {
-        let bridge_mod = PyModule::import(py, "sc62015.pysc62015._rust_bridge")?;
+        let bridge_mod = PyModule::import_bound(py, "sc62015.pysc62015._rust_bridge")?;
         let bridge_cls = bridge_mod.getattr("BridgeCPU")?;
         let bridge = bridge_cls.call1((memory, reset_on_init))?;
         Ok(Self {
@@ -864,6 +1003,22 @@ impl Cpu {
         Ok(())
     }
 
+    fn save_snapshot(&self, py: Python<'_>, path: &str) -> PyResult<()> {
+        let helper = self.inner.bind(py);
+        if helper.hasattr("save_snapshot")? {
+            helper.call_method1("save_snapshot", (path,))?;
+        }
+        Ok(())
+    }
+
+    fn load_snapshot(&self, py: Python<'_>, path: &str) -> PyResult<()> {
+        let helper = self.inner.bind(py);
+        if helper.hasattr("load_snapshot")? {
+            helper.call_method1("load_snapshot", (path,))?;
+        }
+        Ok(())
+    }
+
     fn snapshot_cpu_registers(&self, py: Python<'_>) -> PyResult<PyObject> {
         self.inner
             .bind(py)
@@ -877,6 +1032,104 @@ impl Cpu {
             .call_method1("load_cpu_snapshot", (snapshot,))?
             .extract::<PyObject>()?;
         Ok(())
+    }
+
+    fn export_lcd_snapshot(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+        self.inner
+            .bind(py)
+            .call_method0("export_lcd_snapshot")?
+            .extract()
+    }
+
+    fn mark_memory_dirty(&self, py: Python<'_>) -> PyResult<()> {
+        let helper = self.inner.bind(py);
+        if helper.hasattr("_memory_synced")? {
+            helper.setattr("_memory_synced", false)?;
+        }
+        Ok(())
+    }
+
+    fn is_memory_synced(&self, py: Python<'_>) -> PyResult<bool> {
+        let helper = self.inner.bind(py);
+        if helper.hasattr("_memory_synced")? {
+            return helper.getattr("_memory_synced")?.extract();
+        }
+        Ok(false)
+    }
+
+    fn notify_host_write(
+        &self,
+        py: Python<'_>,
+        address: u32,
+        value: u8,
+    ) -> PyResult<()> {
+        self.inner
+            .bind(py)
+            .call_method1("notify_host_write", (address, value))?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (
+        pending,
+        imr,
+        isr,
+        next_mti,
+        next_sti,
+        source=None,
+        in_interrupt=false,
+        interrupt_stack=None,
+        next_interrupt_id=0
+    ))]
+    fn set_interrupt_state(
+        &self,
+        py: Python<'_>,
+        pending: bool,
+        imr: u8,
+        isr: u8,
+        next_mti: i32,
+        next_sti: i32,
+        source: Option<&str>,
+        in_interrupt: bool,
+        interrupt_stack: Option<Vec<u32>>,
+        next_interrupt_id: u32,
+    ) -> PyResult<()> {
+        let stack = interrupt_stack.unwrap_or_default();
+        self.inner.bind(py).call_method1(
+            "set_interrupt_state",
+            (
+                pending,
+                imr,
+                isr,
+                next_mti,
+                next_sti,
+                source,
+                in_interrupt,
+                stack,
+                next_interrupt_id,
+            ),
+        )?;
+        Ok(())
+    }
+
+    fn set_runtime_profile_enabled(&self, py: Python<'_>, enabled: bool) -> PyResult<()> {
+        self.inner
+            .bind(py)
+            .call_method1("set_runtime_profile_enabled", (enabled,))?;
+        Ok(())
+    }
+
+    fn reset_runtime_profile_stats(&self, py: Python<'_>) -> PyResult<()> {
+        self.inner
+            .bind(py)
+            .call_method0("reset_runtime_profile_stats")?;
+        Ok(())
+    }
+
+    fn get_runtime_profile_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.inner
+            .bind(py)
+            .call_method0("get_runtime_profile_stats")
+            .map(|obj| obj.into())
     }
 
     fn get_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -926,6 +1179,7 @@ fn is_ready() -> bool {
 
 #[pyfunction(signature = (state_json, instr_json, binder_json, py_bus, pre_json=None))]
 fn scil_step_json(
+    py: Python<'_>,
     state_json: &str,
     instr_json: &str,
     binder_json: &str,
@@ -946,7 +1200,7 @@ fn scil_step_json(
         None => None,
     };
 
-    let mut bus = PyBus::new(py_bus);
+    let mut bus = PyBus::new(py_bus, py);
     eval::step(&mut state, &mut bus, &instr, &binder, pre)
         .map_err(|e| PyRuntimeError::new_err(format!("{e}")))?;
     serde_json::to_string(&state)
@@ -954,12 +1208,17 @@ fn scil_step_json(
 }
 
 #[pyfunction]
-fn execute_bound_repr(state_json: &str, bound_json: &str, py_bus: PyObject) -> PyResult<String> {
+fn execute_bound_repr(
+    py: Python<'_>,
+    state_json: &str,
+    bound_json: &str,
+    py_bus: PyObject,
+) -> PyResult<String> {
     let mut state: RsState = serde_json::from_str(state_json)
         .map_err(|e| PyValueError::new_err(format!("state json: {e}")))?;
     let bound: BoundInstrRepr = serde_json::from_str(bound_json)
         .map_err(|e| PyValueError::new_err(format!("bound json: {e}")))?;
-    let mut bus = PyBus::new(py_bus);
+    let mut bus = PyBus::new(py_bus, py);
     eval_manifest_entry(&mut state, &mut bus, &bound)?;
     serde_json::to_string(&state)
         .map_err(|e| PyRuntimeError::new_err(format!("state serialize: {e}")))
