@@ -25,7 +25,17 @@ fn main() {
         .expect("repo root");
     let script = repo_root.join("tools").join("scil_codegen_rust.py");
     let python = env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let status = Command::new(python)
+
+    // Ensure the repo root is on PYTHONPATH so `sc62015` is importable when running codegen.
+    let mut cmd = Command::new(python);
+    let mut py_path = env::var("PYTHONPATH").unwrap_or_default();
+    if !py_path.is_empty() {
+        py_path.push(':');
+    }
+    py_path.push_str(repo_root.to_string_lossy().as_ref());
+    cmd.env("PYTHONPATH", py_path);
+
+    let status = cmd
         .arg(script)
         .arg("--out-dir")
         .arg(&generated)
