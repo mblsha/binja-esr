@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 import sys
-from typing import Iterable, Tuple
+from typing import Iterable
 
 from binja_test_mocks.eval_llil import Memory
 
