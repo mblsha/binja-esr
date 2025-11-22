@@ -264,6 +264,11 @@ def main() -> None:
         action="store_true",
         help="mutate immediate/offset operands across edge values",
     )
+    parser.add_argument(
+        "--allow-mismatches",
+        action="store_true",
+        help="exit 0 even if mismatches are found (useful for non-gating runs)",
+    )
     args = parser.parse_args()
 
     if "llama" not in available_backends():
@@ -300,7 +305,8 @@ def main() -> None:
                     f"reg_diff={f.reg_diff} writes_diff={f.writes_diff}"
                 )
 
-    raise SystemExit(1 if failures else 0)
+    should_fail = bool(failures) and not args.allow_mismatches
+    raise SystemExit(1 if should_fail else 0)
 
 
 if __name__ == "__main__":
