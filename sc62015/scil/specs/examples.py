@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ..ast import (
     BinOp,
     Expr,
@@ -11,6 +13,7 @@ from ..ast import (
     Goto,
     If,
     Instr,
+    Join24,
     Mem,
     PcRel,
     Reg,
@@ -18,6 +21,7 @@ from ..ast import (
     SetFlag,
     SetReg,
     Tmp,
+    TernOp,
     UnOp,
     LoopIntPtr,
 )
@@ -105,6 +109,18 @@ def jp_paged() -> Instr:
     )
 
 
+def jp_far() -> Instr:
+    addr = Tmp("addr20", 20)
+    return Instr(
+        name="JPF",
+        length=4,
+        semantics=(
+            Fetch("imm20", addr),
+            Goto(addr),
+        ),
+    )
+
+
 def jp_cond(name: str, cond: Cond) -> Instr:
     addr_lo = Tmp("addr16", 16)
     page_hi = Tmp("page_hi", 20)
@@ -169,6 +185,62 @@ def mv_ext_store() -> Instr:
         semantics=(
             Fetch("addr24", addr),
             Store(Mem("ext", addr, 8), Reg("A", 8)),
+        ),
+    )
+
+
+def mv_ext_store_reg(name: str, width: int) -> Instr:
+    addr = Tmp("addr_ptr", 24)
+    return Instr(
+        name=f"MV_[LMN]_{name}",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Store(Mem("ext", addr, width), Reg(name, width)),
+        ),
+    )
+
+
+def mv_imem_from_ext(name: str, width: int) -> Instr:
+    dst = Tmp("dst_off", 8)
+    addr = Tmp("addr24", 24)
+    dst_mem = Mem("int", dst, width)
+    src_mem = Mem("ext", addr, width)
+    return Instr(
+        name=name,
+        length=4,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("addr24", addr),
+            Store(dst_mem, src_mem),
+        ),
+    )
+
+
+def mv_ext_from_imem(name: str, width: int) -> Instr:
+    addr = Tmp("addr24", 24)
+    src = Tmp("src_off", 8)
+    dst_mem = Mem("ext", addr, width)
+    src_mem = Mem("int", src, width)
+    return Instr(
+        name=name,
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Fetch("u8", src),
+            Store(dst_mem, src_mem),
+        ),
+    )
+
+
+def mv_ext_store_reg(name: str, width: int) -> Instr:
+    addr = Tmp("addr_ptr", 24)
+    return Instr(
+        name=f"MV_[LMN]_{name}",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Store(Mem("ext", addr, width), Reg(name, width)),
         ),
     )
 
@@ -247,6 +319,810 @@ def mv_imem_a() -> Instr:
         semantics=(
             Fetch("u8", offset),
             Store(Mem("int", offset, 8), Reg("A", 8)),
+        ),
+    )
+
+
+def test_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    and_expr = BinOp("and", mem, value, 24)
+    cmp_zero = BinOp("eq", and_expr, Const(0, 24), 1)
+    return Instr(
+        name="TEST_(N),N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            SetFlag("Z", cmp_zero),
+        ),
+    )
+
+
+def cmp_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    eq_zero = BinOp("eq", mem, value, 1)
+    cond = Cond(kind="ltu", a=mem, b=value)
+    c_expr = TernOp(
+        op="select",
+        cond=cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="CMP_(M),N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", c_expr),
+        ),
+    )
+
+
+def cmp_emem_const() -> Instr:
+    addr = Tmp("addr24", 24)
+    value = Tmp("imm8", 8)
+    mem = Mem("ext", addr, 8)
+    eq_zero = BinOp("eq", mem, value, 1)
+    cond = Cond(kind="ltu", a=mem, b=value)
+    c_expr = TernOp(
+        op="select",
+        cond=cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="CMP_[LMN],N",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", c_expr),
+        ),
+    )
+
+
+def _cmp_imem_mem(name: str, width: int) -> Instr:
+    dst = Tmp("dst_off", 8)
+    src = Tmp("src_off", 8)
+    dst_val = Mem("int", dst, width)
+    src_val = Mem("int", src, width)
+    diff = BinOp("sub", dst_val, src_val, width)
+    eq_zero = BinOp("eq", diff, Const(0, width), 1)
+    cond = Cond(kind="ltu", a=dst_val, b=src_val)
+    borrow = TernOp(
+        op="select",
+        cond=cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name=name,
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", src),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", borrow),
+        ),
+    )
+
+
+def cmpw_imem_mem() -> Instr:
+    return _cmp_imem_mem("CMPW (m),(n)", 16)
+
+
+def cmpp_imem_mem() -> Instr:
+    return _cmp_imem_mem("CMPP (m),(n)", 24)
+
+
+def cmp_imem_mem() -> Instr:
+    return _cmp_imem_mem("CMP (m),(n)", 8)
+
+
+def cmp_a_imm() -> Instr:
+    value = Tmp("imm8", 8)
+    eq_zero = BinOp("eq", Reg("A", 8), value, 1)
+    cond = Cond(kind="ltu", a=Reg("A", 8), b=value)
+    c_expr = TernOp(
+        op="select",
+        cond=cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="CMP_A_N",
+        length=2,
+        semantics=(
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", c_expr),
+        ),
+    )
+
+
+def cmp_imem_reg() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    eq_zero = BinOp("eq", mem, Reg("A", 8), 1)
+    cond = Cond(kind="ltu", a=mem, b=Reg("A", 8))
+    c_expr = TernOp(
+        op="select",
+        cond=cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="CMP_(M),A",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", c_expr),
+        ),
+    )
+
+
+def mv_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    return Instr(
+        name="MV_(N)_N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            Store(Mem("int", dst, 8), value),
+        ),
+    )
+
+
+def mv_imem_word_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    lo = Tmp("imm8_lo", 8)
+    hi = Tmp("imm8_hi", 8)
+    hi_addr = BinOp("add", dst, Const(1, 8), 8)
+    return Instr(
+        name="MVW_(L),MN",
+        length=4,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", lo),
+            Fetch("u8", hi),
+            Store(Mem("int", dst, 8), lo),
+            Store(Mem("int", hi_addr, 8), hi),
+        ),
+    )
+
+
+def mv_imem_long_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    lo = Tmp("imm8_lo", 8)
+    mid = Tmp("imm8_mid", 8)
+    hi = Tmp("imm8_hi", 8)
+    value = Join24(hi, mid, lo)
+    mem = Mem("int", dst, 24)
+    return Instr(
+        name="MVP_(L),MN",
+        length=5,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", lo),
+            Fetch("u8", mid),
+            Fetch("u8", hi),
+            Store(mem, value),
+        ),
+    )
+
+
+def alu_a_imem(name: str, op: str, flags: tuple[str, ...] = ("Z",)) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    a_reg = Reg("A", 8)
+    result = BinOp(op, a_reg, mem, 8)
+    semantics: list[Any] = [Fetch("u8", dst)]
+    if "Z" in flags:
+        semantics.append(SetFlag("Z", BinOp("eq", result, Const(0, 8), 1)))
+    if "C" in flags:
+        if op == "add":
+            carry_cond = Cond(kind="ltu", a=result, b=a_reg)
+        elif op == "sub":
+            carry_cond = Cond(kind="ltu", a=a_reg, b=mem)
+        else:
+            carry_cond = None
+        if carry_cond is not None:
+            semantics.append(
+                SetFlag(
+                    "C",
+                    TernOp(
+                        op="select",
+                        cond=carry_cond,
+                        t=Const(1, 1),
+                        f=Const(0, 1),
+                        out_size=1,
+                    ),
+                )
+            )
+    semantics.append(SetReg(a_reg, result))
+    return Instr(name=name, length=2, semantics=tuple(semantics))
+
+
+def alu_mem_a(name: str, op: str) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    a_reg = Reg("A", 8)
+    result = BinOp(op, mem, a_reg, 8)
+    zero = BinOp("eq", result, Const(0, 8), 1)
+    if op == "add":
+        carry_cond = Cond(kind="ltu", a=result, b=mem)
+    elif op == "sub":
+        carry_cond = Cond(kind="ltu", a=mem, b=a_reg)
+    else:
+        carry_cond = None
+    carry_stmt: list[Any] = []
+    if carry_cond is not None:
+        carry_stmt.append(
+            SetFlag(
+                "C",
+                TernOp(
+                    op="select",
+                    cond=carry_cond,
+                    t=Const(1, 1),
+                    f=Const(0, 1),
+                    out_size=1,
+                ),
+            )
+        )
+    return Instr(
+        name=name,
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetFlag("Z", zero),
+            *carry_stmt,
+            Store(mem, result),
+        ),
+    )
+
+
+def test_emem_const() -> Instr:
+    addr = Tmp("addr24", 24)
+    value = Tmp("imm8", 8)
+    mem = Mem("ext", addr, 8)
+    and_expr = BinOp("and", mem, value, 8)
+    cmp_zero = BinOp("eq", and_expr, Const(0, 8), 1)
+    return Instr(
+        name="TEST_[LMN],N",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Fetch("u8", value),
+            SetFlag("Z", cmp_zero),
+        ),
+    )
+
+
+def test_imem_reg() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    and_expr = BinOp("and", mem, Reg("A", 8), 8)
+    eq_zero = BinOp("eq", and_expr, Const(0, 8), 1)
+    return Instr(
+        name="TEST_(M),A",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetFlag("Z", eq_zero),
+        ),
+    )
+
+
+def add_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    sum_expr = BinOp("add", mem, value, 8)
+    eq_zero = BinOp("eq", sum_expr, Const(0, 8), 1)
+    carry_cond = Cond(kind="ltu", a=sum_expr, b=mem)
+    carry = TernOp(
+        op="select",
+        cond=carry_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="ADD_(M),N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", carry),
+            Store(mem, sum_expr),
+        ),
+    )
+
+
+def mv_reg_imem(name: str) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    src = Reg("A", 8)  # placeholder; actual register injected via builder via Reg argument
+    instr = Instr(
+        name=name,
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            Store(mem, src),
+        ),
+    )
+    return instr
+
+
+def _with_carry(right: Expr) -> Expr:
+    return BinOp("add", right, Flag("C"), 8)
+
+
+def adc_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    rhs = _with_carry(value)
+    sum_expr = BinOp("add", mem, rhs, 8)
+    eq_zero = BinOp("eq", sum_expr, Const(0, 8), 1)
+    carry_cond = Cond(kind="ltu", a=sum_expr, b=mem)
+    carry = TernOp(
+        op="select",
+        cond=carry_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="ADC_(M),N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", carry),
+            Store(mem, sum_expr),
+        ),
+    )
+
+
+def adc_a_imem() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    rhs = _with_carry(mem)
+    result = BinOp("add", Reg("A", 8), rhs, 8)
+    eq_zero = BinOp("eq", result, Const(0, 8), 1)
+    carry_cond = Cond(kind="ltu", a=result, b=Reg("A", 8))
+    carry = TernOp(
+        op="select",
+        cond=carry_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="ADC_A_(N)",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetReg(Reg("A", 8), result, flags=("Z",)),
+            SetFlag("C", carry),
+        ),
+    )
+
+
+def adc_mem_a() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    rhs = _with_carry(Reg("A", 8))
+    result = BinOp("add", mem, rhs, 8)
+    eq_zero = BinOp("eq", result, Const(0, 8), 1)
+    carry_cond = Cond(kind="ltu", a=result, b=mem)
+    carry = TernOp(
+        op="select",
+        cond=carry_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="ADC_(N),A",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", carry),
+            Store(mem, result),
+        ),
+    )
+
+
+def sbc_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    rhs = _with_carry(value)
+    diff = BinOp("sub", mem, rhs, 8)
+    eq_zero = BinOp("eq", diff, Const(0, 8), 1)
+    borrow_cond = Cond(kind="ltu", a=mem, b=rhs)
+    borrow = TernOp(
+        op="select",
+        cond=borrow_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="SBC_(M),N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", borrow),
+            Store(mem, diff),
+        ),
+    )
+
+
+def sbc_a_imem() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    rhs = _with_carry(mem)
+    result = BinOp("sub", Reg("A", 8), rhs, 8)
+    eq_zero = BinOp("eq", result, Const(0, 8), 1)
+    borrow_cond = Cond(kind="ltu", a=Reg("A", 8), b=rhs)
+    borrow = TernOp(
+        op="select",
+        cond=borrow_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="SBC_A_(N)",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetReg(Reg("A", 8), result, flags=("Z",)),
+            SetFlag("C", borrow),
+        ),
+    )
+
+
+def sbc_mem_a() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    rhs = _with_carry(Reg("A", 8))
+    result = BinOp("sub", mem, rhs, 8)
+    eq_zero = BinOp("eq", result, Const(0, 8), 1)
+    borrow_cond = Cond(kind="ltu", a=mem, b=rhs)
+    borrow = TernOp(
+        op="select",
+        cond=borrow_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="SBC_(N),A",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", borrow),
+            Store(mem, result),
+        ),
+    )
+
+
+def xor_emem_const() -> Instr:
+    addr = Tmp("addr24", 24)
+    value = Tmp("imm8", 8)
+    mem = Mem("ext", addr, 8)
+    xor_expr = BinOp("xor", mem, value, 8)
+    eq_zero = BinOp("eq", xor_expr, Const(0, 8), 1)
+    return Instr(
+        name="XOR_[LMN],N",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Fetch("u8", value),
+            Store(mem, xor_expr),
+            SetFlag("Z", eq_zero),
+        ),
+    )
+
+
+def and_emem_const() -> Instr:
+    addr = Tmp("addr24", 24)
+    value = Tmp("imm8", 8)
+    mem = Mem("ext", addr, 8)
+    and_expr = BinOp("and", mem, value, 8)
+    eq_zero = BinOp("eq", and_expr, Const(0, 8), 1)
+    return Instr(
+        name="AND_[LMN],N",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Fetch("u8", value),
+            Store(mem, and_expr),
+            SetFlag("Z", eq_zero),
+        ),
+    )
+
+
+def or_emem_const() -> Instr:
+    addr = Tmp("addr24", 24)
+    value = Tmp("imm8", 8)
+    mem = Mem("ext", addr, 8)
+    or_expr = BinOp("or", mem, value, 8)
+    eq_zero = BinOp("eq", or_expr, Const(0, 8), 1)
+    return Instr(
+        name="OR_[LMN],N",
+        length=4,
+        semantics=(
+            Fetch("addr24", addr),
+            Fetch("u8", value),
+            Store(mem, or_expr),
+            SetFlag("Z", eq_zero),
+        ),
+    )
+
+
+def xor_a_imem() -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    xor_expr = BinOp("xor", Reg("A", 8), mem, 8)
+    eq_zero = BinOp("eq", xor_expr, Const(0, 8), 1)
+    return Instr(
+        name="XOR_A_(N)",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetReg(Reg("A", 8), xor_expr, flags=("Z",)),
+        ),
+    )
+
+
+def xor_mem_mem() -> Instr:
+    dst = Tmp("dst_off", 8)
+    src = Tmp("src_off", 8)
+    dst_mem = Mem("int", dst, 8)
+    src_mem = Mem("int", src, 8)
+    xor_expr = BinOp("xor", dst_mem, src_mem, 8)
+    eq_zero = BinOp("eq", xor_expr, Const(0, 8), 1)
+    return Instr(
+        name="XOR_(M),(N)",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", src),
+            Store(dst_mem, xor_expr),
+            SetFlag("Z", eq_zero),
+        ),
+    )
+    return Instr(
+        name="SBC_(N),A",
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            Store(mem, result),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", borrow),
+        ),
+    )
+
+
+def sub_imem_const() -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    diff = BinOp("sub", mem, value, 8)
+    eq_zero = BinOp("eq", diff, Const(0, 8), 1)
+    borrow_cond = Cond(kind="ltu", a=mem, b=value)
+    borrow = TernOp(
+        op="select",
+        cond=borrow_cond,
+        t=Const(1, 1),
+        f=Const(0, 1),
+        out_size=1,
+    )
+    return Instr(
+        name="SUB_(M),N",
+        length=3,
+        semantics=(
+            Fetch("u8", dst),
+            Fetch("u8", value),
+            SetFlag("Z", eq_zero),
+            SetFlag("C", borrow),
+            Store(mem, diff),
+        ),
+    )
+
+
+def rc_instr() -> Instr:
+    return Instr(
+        name="RC",
+        length=1,
+        semantics=(SetFlag("C", Const(0, 1)),),
+    )
+
+
+def sc_instr() -> Instr:
+    return Instr(
+        name="SC",
+        length=1,
+        semantics=(SetFlag("C", Const(1, 1)),),
+    )
+
+
+def tcl_instr() -> Instr:
+    return Instr(
+        name="TCL",
+        length=1,
+        semantics=(Effect("tcl", ()),),
+    )
+
+
+def swap_a_instr() -> Instr:
+    val = Reg("A", 8)
+    high = BinOp("and", val, Const(0xF0, 8), 8)
+    low = BinOp("and", val, Const(0x0F, 8), 8)
+    high_shifted = BinOp("shr", high, Const(4, 8), 8)
+    low_shifted = BinOp("shl", low, Const(4, 8), 8)
+    swapped = BinOp("or", high_shifted, low_shifted, 8)
+    return Instr(
+        name="SWAP A",
+        length=1,
+        semantics=(SetReg(Reg("A", 8), swapped),),
+    )
+
+
+def _rot_imem_instr(name: str, op: str) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    result = BinOp(op, mem, Const(1, 8), 8)
+    return Instr(
+        name=name,
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            Store(mem, result),
+        ),
+    )
+
+
+def rotate_a_instr(name: str, op: str) -> Instr:
+    val = Reg("A", 8)
+    result = BinOp(op, val, Const(1, 8), 8)
+    return Instr(
+        name=name,
+        length=1,
+        semantics=(SetReg(Reg("A", 8), result),),
+    )
+
+
+def shift_a_instr(name: str, op: str) -> Instr:
+    # shift only affects A.
+    return rotate_a_instr(name, op)
+
+
+def mv_a_a_instr() -> Instr:
+    return Instr(
+        name="MV A,A",
+        length=1,
+        semantics=(SetReg(Reg("A", 8), Reg("A", 8)),),
+    )
+
+
+def imem_logic_instr(
+    name: str, op: str, flags: tuple[str, ...] = ("Z",)
+) -> Instr:
+    dst = Tmp("dst_off", 8)
+    value = Tmp("imm8", 8)
+    mem = Mem("int", dst, 8)
+    binop = BinOp(op, Mem("int", dst, 8), value, 8)
+    cmp_zero = BinOp("eq", binop, Const(0, 8), 1)
+    semantics: list[Any] = [
+        Fetch("u8", dst),
+        Fetch("u8", value),
+        Store(mem, binop),
+    ]
+    if "Z" in flags:
+        semantics.append(SetFlag("Z", cmp_zero))
+    return Instr(name=name, length=3, semantics=tuple(semantics))
+
+
+def imem_logic_mem(
+    name: str, op: str, flags: tuple[str, ...] = ("Z",)
+) -> Instr:
+    dst = Tmp("dst_off", 8)
+    src = Tmp("src_off", 8)
+    dst_mem = Mem("int", dst, 8)
+    src_mem = Mem("int", src, 8)
+    result = BinOp(op, dst_mem, src_mem, 8)
+    eq_zero = BinOp("eq", result, Const(0, 8), 1)
+    semantics: list[Any] = [
+        Fetch("u8", dst),
+        Fetch("u8", src),
+        Store(dst_mem, result),
+    ]
+    if "Z" in flags:
+        semantics.append(SetFlag("Z", eq_zero))
+    return Instr(name=name, length=3, semantics=tuple(semantics))
+
+
+def imem_logic_reg(name: str, op: str, flags: tuple[str, ...] = ("Z",)) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    result = BinOp(op, Reg("A", 8), mem, 8)
+    instr = Instr(
+        name=name,
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            SetReg(Reg("A", 8), result, flags=flags),
+        ),
+    )
+    return instr
+
+
+def imem_logic_store(
+    name: str, op: str, flags: tuple[str, ...] = ("Z",)
+) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    src = Reg("A", 8)
+    result = BinOp(op, mem, src, 8)
+    semantics: list[Any] = [
+        Fetch("u8", dst),
+        Store(mem, result),
+    ]
+    if flags:
+        flag_exprs: dict[str, Expr] = {
+            "Z": BinOp("eq", result, Const(0, 8), 1),
+        }
+        for flag in flags:
+            if flag not in flag_exprs:
+                raise ValueError(f"Unsupported flag '{flag}' for {name}")
+            semantics.append(SetFlag(flag, flag_exprs[flag]))
+    return Instr(
+        name=name,
+        length=2,
+        semantics=tuple(semantics),
+    )
+
+
+def inc_dec_imem(name: str, op: str) -> Instr:
+    dst = Tmp("dst_off", 8)
+    mem = Mem("int", dst, 8)
+    one = Const(1, 8)
+    result = BinOp(op, mem, one, 8)
+    cmp_zero = BinOp("eq", Mem("int", dst, 8), Const(0, 8), 1)
+    return Instr(
+        name=name,
+        length=2,
+        semantics=(
+            Fetch("u8", dst),
+            Store(mem, result),
+            SetFlag("Z", cmp_zero),
         ),
     )
 

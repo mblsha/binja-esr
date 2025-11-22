@@ -51,6 +51,7 @@ EffectKind = Literal[
     "loop_bcd_sub",
     "decimal_shift",
     "pmdf",
+    "swap_reg",
     "halt",
     "off",
     "reset",

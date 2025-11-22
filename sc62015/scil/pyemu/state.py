@@ -69,6 +69,8 @@ class CPUState:
             if name in _SUBREG_INFO and _SUBREG_INFO[name][0] in regs
         }
         for name, value in regs.items():
+            if name in {"FC", "FZ"}:
+                continue
             if name in skip_subregs:
                 continue
             bits = _BASE_WIDTHS.get(name, 24)
