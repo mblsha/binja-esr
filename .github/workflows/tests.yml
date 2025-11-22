@@ -33,12 +33,18 @@ jobs:
       run: |
         uv sync --extra dev --extra pce500 --extra web
 
-    - name: Build Rust SCIL backend
+    - name: Build Rust LLAMA backend
       env:
         FORCE_BINJA_MOCK: 1
       run: |
         uv pip install maturin
         uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml
+    
+    - name: Run LLAMA/Python parity sweep
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run python tools/llama_parity_sweep.py
 
 
     - name: Run SC62015 tests
