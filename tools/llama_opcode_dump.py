@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from sc62015.pysc62015.instr.opcodes import Opts
 from sc62015.pysc62015.instr.opcode_table import OPCODES

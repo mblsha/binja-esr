@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Helper to run a single LLAMA vs Python parity case.
 
 This stays SCIL/LLIL-free: the Python side uses the existing emulator,

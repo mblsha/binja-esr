@@ -22,7 +22,6 @@ from ..constants import INTERNAL_MEMORY_START
 from .traits import HasWidth
 
 import copy
-from dataclasses import dataclass
 from typing import (
     Optional,
     List,
