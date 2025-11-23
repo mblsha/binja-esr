@@ -73,8 +73,19 @@ impl LlamaPyBus {
 }
 
 impl LlamaBus for LlamaPyBus {
-    fn load(&mut self, addr: u32, _bits: u8) -> u32 {
-        self.read_byte(addr) as u32
+    fn load(&mut self, addr: u32, bits: u8) -> u32 {
+        // Respect the requested width so multi-byte loads match the Python emulator.
+        let bytes = ((bits + 7) / 8).max(1);
+        let mut value = 0u32;
+        for i in 0..bytes {
+            let byte = self.read_byte(addr.wrapping_add(i as u32)) as u32;
+            value |= byte << (8 * i);
+        }
+        if bits == 0 || bits >= 32 {
+            value
+        } else {
+            value & ((1u32 << bits) - 1)
+        }
     }
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {

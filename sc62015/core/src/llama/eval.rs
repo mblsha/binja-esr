@@ -12,6 +12,12 @@ use super::{
 };
 const INTERNAL_MEMORY_START: u32 = 0x100000; // align with Python INTERNAL_MEMORY_START
 const IMEM_IMR_OFFSET: u32 = 0xFB; // IMR offset within internal space (matches Python IMEMRegisters.IMR)
+const IMEM_UCR_OFFSET: u32 = 0xF7;
+const IMEM_USR_OFFSET: u32 = 0xF8;
+const IMEM_ISR_OFFSET: u32 = 0xFC;
+const IMEM_SCR_OFFSET: u32 = 0xFD;
+const IMEM_LCC_OFFSET: u32 = 0xFE;
+const IMEM_SSR_OFFSET: u32 = 0xFF;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
 pub trait LlamaBus {
@@ -57,6 +63,54 @@ struct DecodedOperands {
     transfer: Option<EmemImemTransfer>,
     reg3: Option<RegName>,
     reg_pair: Option<(RegName, RegName, u8)>, // (dst, src, bits)
+}
+
+fn read_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32) -> u8 {
+    bus.load(INTERNAL_MEMORY_START + offset, 8) as u8
+}
+
+fn write_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32, value: u8) {
+    bus.store(INTERNAL_MEMORY_START + offset, 8, value as u32);
+}
+
+fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
+    // Mirror pysc62015.intrinsics._enter_low_power_state: adjust USR/SSR and halt.
+    let mut usr = read_imem_byte(bus, IMEM_USR_OFFSET);
+    usr &= !0x3F;
+    usr |= 0x18;
+    write_imem_byte(bus, IMEM_USR_OFFSET, usr);
+
+    let mut ssr = read_imem_byte(bus, IMEM_SSR_OFFSET);
+    ssr |= 0x04;
+    write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
+
+    state.halt();
+}
+
+fn apply_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
+    // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
+    let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
+    lcc &= !0x80;
+    write_imem_byte(bus, IMEM_LCC_OFFSET, lcc);
+
+    write_imem_byte(bus, IMEM_UCR_OFFSET, 0);
+    write_imem_byte(bus, IMEM_ISR_OFFSET, 0);
+    write_imem_byte(bus, IMEM_SCR_OFFSET, 0);
+
+    let mut usr = read_imem_byte(bus, IMEM_USR_OFFSET);
+    usr &= !0x3F;
+    usr |= 0x18;
+    write_imem_byte(bus, IMEM_USR_OFFSET, usr);
+
+    let mut ssr = read_imem_byte(bus, IMEM_SSR_OFFSET);
+    ssr &= !0x04;
+    write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
+
+    let reset_vector = bus.load(INTERRUPT_VECTOR_ADDR, 8)
+        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
+        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+    state.set_pc(reset_vector & mask_for(RegName::PC));
+    state.set_halted(false);
 }
 
 pub struct LlamaExecutor;
@@ -630,6 +684,16 @@ impl LlamaExecutor {
         bus: &mut B,
     ) -> Result<u8, &'static str> {
         let decoded = self.decode_operands(entry, state, bus)?;
+        if matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
+            let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+            if length == 0 {
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                return Ok(decoded.len);
+            }
+        }
         // Special-case RegPair-only move (e.g., opcode 0xFD)
         if entry.operands.len() == 1 {
             if let Some((dst, src, bits)) = decoded.reg_pair {
@@ -1024,16 +1088,16 @@ impl LlamaExecutor {
                 Ok(len)
             }
             InstrKind::Off => {
+                enter_low_power_state(bus, state);
                 let len = 1;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(len as u32));
                 }
-                state.halt();
                 Ok(len)
             }
             InstrKind::Halt => {
-                state.halt();
+                enter_low_power_state(bus, state);
                 let len = 1;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -1052,6 +1116,16 @@ impl LlamaExecutor {
             {
                 let decoded = self.decode_operands(entry, state, bus)?;
                 let transfer = decoded.transfer.ok_or("missing transfer operand")?;
+                if entry.kind == InstrKind::Mvl {
+                    let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                    if length == 0 {
+                        let start_pc = state.pc();
+                        if state.pc() == start_pc {
+                            state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                        }
+                        return Ok(decoded.len);
+                    }
+                }
                 let value = bus.load(transfer.src_addr, transfer.bits);
                 bus.store(transfer.dst_addr, transfer.bits, value);
                 if let Some((reg, new_val)) = transfer.side_effect {
@@ -1075,6 +1149,14 @@ impl LlamaExecutor {
                             state.set_reg(reg, new_val);
                         }
                     }
+                }
+                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                if length == 0 {
+                    let start_pc = state.pc();
+                    if state.pc() == start_pc {
+                        state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                    }
+                    return Ok(decoded.len);
                 }
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -1122,6 +1204,23 @@ impl LlamaExecutor {
                 } else {
                     return Err("missing operand");
                 }
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                Ok(decoded.len)
+            }
+            InstrKind::Pmdf => {
+                let decoded = self.decode_operands(entry, state, bus)?;
+                let mem = decoded.mem.ok_or("missing mem operand")?;
+                let src_val = match entry.operands.get(1) {
+                    Some(OperandKind::Imm(_)) => decoded.imm.ok_or("missing immediate")?.0,
+                    Some(OperandKind::Reg(RegName::A, _)) => state.get_reg(RegName::A) & 0xFF,
+                    _ => return Err("unsupported PMDF operands"),
+                } & 0xFF;
+                let dst = bus.load(mem.addr, 8) & 0xFF;
+                let res = (dst + src_val) & 0xFF;
+                bus.store(mem.addr, 8, res);
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -1216,10 +1315,7 @@ impl LlamaExecutor {
                 self.execute_mv_generic(entry, state, bus)
             }
             InstrKind::Reset => {
-                state.reset();
-                state.set_pc(0);
-                state.set_reg(RegName::S, INTERNAL_MEMORY_START);
-                state.set_reg(RegName::U, INTERNAL_MEMORY_START);
+                apply_reset(bus, state);
                 Ok(1)
             }
             InstrKind::Pre | InstrKind::Unknown => {
@@ -1250,16 +1346,26 @@ impl LlamaExecutor {
             }
             InstrKind::Ir | InstrKind::Tcl => {
                 if entry.kind == InstrKind::Ir {
-                    // Push PC (24-bit), F, IMR, clear IRM (bit7), and jump to interrupt vector.
-                    let pc = state.pc() & 0x0F_FFFF;
+                    // Push PC (24-bit), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
+                    let pc = state
+                        .pc()
+                        .wrapping_add(Self::estimated_length(entry) as u32)
+                        & mask_for(RegName::PC);
                     Self::push_stack(state, bus, RegName::S, pc, 24);
                     let f = state.get_reg(RegName::F) & 0xFF;
                     Self::push_stack(state, bus, RegName::S, f, 8);
-                    let imr = state.get_reg(RegName::IMR) & 0xFF;
+                    let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+                    let imr = bus.load(imr_addr, 8) & 0xFF;
                     Self::push_stack(state, bus, RegName::S, imr, 8);
-                    // Clear IRM bit
-                    state.set_reg(RegName::IMR, imr & 0x7F);
+                    // Clear IRM bit in IMR (bit 7)
+                    let cleared_imr = imr & 0x7F;
+                    bus.store(imr_addr, 8, cleared_imr);
+                    state.set_reg(RegName::IMR, cleared_imr);
                     state.call_depth_inc();
+                    let vec = bus.load(INTERRUPT_VECTOR_ADDR, 8)
+                        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
+                        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+                    state.set_pc(vec & mask_for(RegName::PC));
                     Ok(Self::estimated_length(entry))
                 } else {
                     let len = Self::estimated_length(entry);
