@@ -41,8 +41,8 @@ impl LlamaState {
         match name {
             RegName::BA => {
                 self.regs.insert(RegName::BA, masked);
-                self.regs.insert(RegName::A, (masked & 0xFF) as u32);
-                self.regs.insert(RegName::B, ((masked >> 8) & 0xFF) as u32);
+                self.regs.insert(RegName::A, masked & 0xFF);
+                self.regs.insert(RegName::B, (masked >> 8) & 0xFF);
             }
             RegName::A => {
                 self.regs.insert(RegName::A, masked);
@@ -58,8 +58,8 @@ impl LlamaState {
             }
             RegName::I => {
                 self.regs.insert(RegName::I, masked);
-                self.regs.insert(RegName::IL, (masked & 0xFF) as u32);
-                self.regs.insert(RegName::IH, ((masked >> 8) & 0xFF) as u32);
+                self.regs.insert(RegName::IL, masked & 0xFF);
+                self.regs.insert(RegName::IH, (masked >> 8) & 0xFF);
             }
             RegName::IL => {
                 self.regs.insert(RegName::IL, masked);

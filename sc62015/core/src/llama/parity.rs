@@ -385,6 +385,7 @@ impl PerfettoTraceWriter {
         inst.finish();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_mem_write(
         &mut self,
         backend: &str,
@@ -469,7 +470,7 @@ impl RecordingBus {
 
     fn load_bits(&self, addr: u32, bits: u8) -> u32 {
         let mut value = 0u32;
-        let bytes = (bits + 7) / 8;
+        let bytes = bits.div_ceil(8);
         for i in 0..bytes {
             let byte = *self.mem.get(&(addr + i as u32)).unwrap_or(&0) as u32;
             value |= byte << (8 * i);
@@ -479,7 +480,7 @@ impl RecordingBus {
     }
 
     fn store_bits(&mut self, addr: u32, bits: u8, value: u32) {
-        let bytes = (bits + 7) / 8;
+        let bytes = bits.div_ceil(8);
         for i in 0..bytes {
             let byte = ((value >> (8 * i)) & 0xFF) as u8;
             self.mem.insert(addr + i as u32, byte);
@@ -579,7 +580,7 @@ pub fn run_parity_once(
                 backend: "python".to_string(),
                 instr_index,
                 pc,
-                opcode: bytes.get(0).copied().unwrap_or(0),
+                opcode: bytes.first().copied().unwrap_or(0),
                 regs: py_snap
                     .regs
                     .iter()

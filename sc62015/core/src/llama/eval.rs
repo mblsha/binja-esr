@@ -131,7 +131,7 @@ impl LlamaExecutor {
         value: u32,
         bits: u8,
     ) {
-        let bytes = (bits + 7) / 8;
+        let bytes = bits.div_ceil(8);
         let mask = mask_for(sp_reg);
         let new_sp = state.get_reg(sp_reg).wrapping_sub(bytes as u32) & mask;
         for i in 0..bytes {
@@ -148,7 +148,7 @@ impl LlamaExecutor {
         sp_reg: RegName,
         bits: u8,
     ) -> u32 {
-        let bytes = (bits + 7) / 8;
+        let bytes = bits.div_ceil(8);
         let mut value = 0u32;
         let mask = mask_for(sp_reg);
         let mut sp = state.get_reg(sp_reg);
@@ -237,7 +237,7 @@ impl LlamaExecutor {
     }
 
     fn read_imm<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
-        let bytes = (bits + 7) / 8;
+        let bytes = bits.div_ceil(8);
         let mut value = 0u32;
         for i in 0..bytes {
             value |= (bus.load(addr + i as u32, 8) & 0xFF) << (8 * i);
@@ -1166,7 +1166,7 @@ impl LlamaExecutor {
             }
             InstrKind::Inc => {
                 let decoded = self.decode_operands(entry, state, bus)?;
-                let op = entry.operands.get(0).ok_or("missing operand")?;
+                let op = entry.operands.first().ok_or("missing operand")?;
                 if let Some(reg) = Self::resolved_reg(op, &decoded) {
                     let bits = match op {
                         OperandKind::Reg(_, b) => *b,
@@ -1189,7 +1189,7 @@ impl LlamaExecutor {
             }
             InstrKind::Dec => {
                 let decoded = self.decode_operands(entry, state, bus)?;
-                let op = entry.operands.get(0).ok_or("missing operand")?;
+                let op = entry.operands.first().ok_or("missing operand")?;
                 if let Some(reg) = Self::resolved_reg(op, &decoded) {
                     let bits = match op {
                         OperandKind::Reg(_, b) => *b,
@@ -1229,7 +1229,7 @@ impl LlamaExecutor {
             }
             InstrKind::Shl | InstrKind::Shr | InstrKind::Rol | InstrKind::Ror => {
                 let decoded = self.decode_operands(entry, state, bus)?;
-                let op = entry.operands.get(0).ok_or("missing operand")?;
+                let op = entry.operands.first().ok_or("missing operand")?;
                 let (val, bits, dest_mem, dest_reg) = if let Some(reg) = Self::resolved_reg(op, &decoded) {
                     let bits = match op {
                         OperandKind::Reg(_, b) => *b,
@@ -1479,9 +1479,9 @@ impl LlamaExecutor {
             }
             InstrKind::PushU | InstrKind::PushS => {
                 let decoded = self.decode_operands(entry, state, bus)?;
-                let reg = Self::operand_reg(entry.operands.get(0).ok_or("missing operand")?)
+                let reg = Self::operand_reg(entry.operands.first().ok_or("missing operand")?)
                     .ok_or("missing source")?;
-                let bits = match entry.operands[0] {
+                let bits = match entry.operands.first().copied().ok_or("missing operand")? {
                     OperandKind::Reg(_, b) => b,
                     OperandKind::RegB | OperandKind::RegIL | OperandKind::RegIMR | OperandKind::RegF => 8,
                     _ => 8,
@@ -1498,9 +1498,9 @@ impl LlamaExecutor {
             }
             InstrKind::PopU | InstrKind::PopS => {
                 let decoded = self.decode_operands(entry, state, bus)?;
-                let reg = Self::operand_reg(entry.operands.get(0).ok_or("missing operand")?)
+                let reg = Self::operand_reg(entry.operands.first().ok_or("missing operand")?)
                     .ok_or("missing destination")?;
-                let bits = match entry.operands[0] {
+                let bits = match entry.operands.first().copied().ok_or("missing operand")? {
                     OperandKind::Reg(_, b) => b,
                     OperandKind::RegB | OperandKind::RegIL | OperandKind::RegIMR | OperandKind::RegF => 8,
                     _ => 8,
@@ -1693,7 +1693,7 @@ mod tests {
     impl LlamaBus for MemBus {
         fn load(&mut self, addr: u32, bits: u8) -> u32 {
             let mut val = 0u32;
-            let bytes = (bits + 7) / 8;
+            let bytes = bits.div_ceil(8);
             for i in 0..bytes {
                 let b = *self.mem.get(addr as usize + i as usize).unwrap_or(&0) as u32;
                 val |= b << (8 * i);
@@ -1702,7 +1702,7 @@ mod tests {
         }
 
         fn store(&mut self, addr: u32, bits: u8, value: u32) {
-            let bytes = (bits + 7) / 8;
+            let bytes = bits.div_ceil(8);
             for i in 0..bytes {
                 if let Some(slot) = self.mem.get_mut(addr as usize + i as usize) {
                     *slot = ((value >> (8 * i)) & 0xFF) as u8;

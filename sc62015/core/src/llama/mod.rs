@@ -20,3 +20,9 @@ impl LlamaRuntime {
         Self
     }
 }
+
+impl Default for LlamaRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
