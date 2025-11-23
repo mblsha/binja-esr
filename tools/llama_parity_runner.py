@@ -35,7 +35,6 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     PerfettoTraceBuilder = None  # type: ignore
     HAVE_PERFETTO = False
-from sc62015.pysc62015.instr import decode
 from sc62015.pysc62015.cpu import CPU
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
 
