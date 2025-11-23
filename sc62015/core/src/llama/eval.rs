@@ -1298,7 +1298,8 @@ impl LlamaExecutor {
             }
             InstrKind::Wait => {
                 state.set_reg(RegName::I, 0);
-                // WAIT leaves flags unchanged in the Python fast-path; only I is cleared.
+                state.set_reg(RegName::FC, 0);
+                state.set_reg(RegName::FZ, 0);
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
