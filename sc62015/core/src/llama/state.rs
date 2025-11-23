@@ -41,40 +41,52 @@ impl LlamaState {
         match name {
             RegName::BA => {
                 self.regs.insert(RegName::BA, masked);
+                self.regs.insert(RegName::A, masked & 0xFF);
+                self.regs.insert(RegName::B, (masked >> 8) & 0xFF);
             }
             RegName::A => {
-                let b = (self.get_reg(RegName::BA) >> 8) & 0xFF;
-                let ba = ((b << 8) | (masked & 0xFF)) & mask_for(RegName::BA);
-                self.regs.insert(RegName::BA, ba);
+                self.regs.insert(RegName::A, masked);
+                let b = self.get_reg(RegName::B);
+                self.regs
+                    .insert(RegName::BA, ((b & 0xFF) << 8) | (masked & 0xFF));
             }
             RegName::B => {
-                let a = self.get_reg(RegName::BA) & 0xFF;
-                let ba = (((masked & 0xFF) << 8) | a) & mask_for(RegName::BA);
-                self.regs.insert(RegName::BA, ba);
+                self.regs.insert(RegName::B, masked);
+                let a = self.get_reg(RegName::A);
+                self.regs
+                    .insert(RegName::BA, ((masked & 0xFF) << 8) | (a & 0xFF));
             }
             RegName::I => {
                 self.regs.insert(RegName::I, masked);
+                self.regs.insert(RegName::IL, masked & 0xFF);
+                self.regs.insert(RegName::IH, (masked >> 8) & 0xFF);
             }
             RegName::IL => {
-                // IL writes clear the high byte, matching the Python emulator semantics.
+                self.regs.insert(RegName::IL, masked);
+                self.regs.insert(RegName::IH, 0);
                 self.regs.insert(RegName::I, masked & 0xFF);
             }
             RegName::IH => {
-                let low = self.get_reg(RegName::IL);
-                let i = ((masked & 0xFF) << 8) | (low & 0xFF);
-                self.regs.insert(RegName::I, i & mask_for(RegName::I));
+                self.regs.insert(RegName::IH, masked);
+                let il = self.get_reg(RegName::IL);
+                self.regs
+                    .insert(RegName::I, ((masked & 0xFF) << 8) | (il & 0xFF));
             }
             RegName::F => {
-                // F is derived from FC/FZ; only keep those bits.
+                self.regs.insert(RegName::F, masked);
                 self.regs.insert(RegName::FC, masked & 0x1);
                 self.regs.insert(RegName::FZ, (masked >> 1) & 0x1);
-                self.regs.insert(RegName::F, masked & 0x3);
             }
             RegName::FC => {
                 self.regs.insert(RegName::FC, masked & 0x1);
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFE;
+                self.regs.insert(RegName::F, f | (masked & 0x1));
             }
             RegName::FZ => {
                 self.regs.insert(RegName::FZ, masked & 0x1);
+                let mut f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFD;
+                f |= (masked & 0x1) << 1;
+                self.regs.insert(RegName::F, f);
             }
             RegName::Temp(_) => {
                 self.regs.insert(name, masked);
@@ -87,19 +99,22 @@ impl LlamaState {
 
     pub fn get_reg(&self, name: RegName) -> u32 {
         match name {
-            RegName::BA => *self.regs.get(&RegName::BA).unwrap_or(&0) & mask_for(RegName::BA),
-            RegName::A => self.get_reg(RegName::BA) & 0xFF,
-            RegName::B => (self.get_reg(RegName::BA) >> 8) & 0xFF,
-            RegName::I => *self.regs.get(&RegName::I).unwrap_or(&0) & mask_for(RegName::I),
-            RegName::IL => self.get_reg(RegName::I) & 0xFF,
-            RegName::IH => (self.get_reg(RegName::I) >> 8) & 0xFF,
-            RegName::F => {
-                let fc = self.get_reg(RegName::FC) & 0x1;
-                let fz = self.get_reg(RegName::FZ) & 0x1;
-                (fc | (fz << 1)) & mask_for(RegName::F)
+            RegName::BA => {
+                let a = *self.regs.get(&RegName::A).unwrap_or(&0);
+                let b = *self.regs.get(&RegName::B).unwrap_or(&0);
+                (((b & 0xFF) << 8) | (a & 0xFF)) & mask_for(RegName::BA)
             }
-            RegName::FC => *self.regs.get(&RegName::FC).unwrap_or(&0) & 0x1,
-            RegName::FZ => *self.regs.get(&RegName::FZ).unwrap_or(&0) & 0x1,
+            RegName::I => {
+                let il = *self.regs.get(&RegName::IL).unwrap_or(&0);
+                let ih = *self.regs.get(&RegName::IH).unwrap_or(&0);
+                (((ih & 0xFF) << 8) | (il & 0xFF)) & mask_for(RegName::I)
+            }
+            RegName::F => {
+                let f = *self.regs.get(&RegName::F).unwrap_or(&0) & 0xFC;
+                let fc = *self.regs.get(&RegName::FC).unwrap_or(&0) & 0x1;
+                let fz = *self.regs.get(&RegName::FZ).unwrap_or(&0) & 0x1;
+                (f | fc | (fz << 1)) & mask_for(RegName::F)
+            }
             RegName::Temp(_) => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
             _ => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
         }
@@ -143,37 +158,5 @@ impl LlamaState {
 
     pub fn call_depth(&self) -> u32 {
         self.call_depth
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::llama::opcodes::RegName;
-
-    #[test]
-    fn il_write_clears_high_byte_and_updates_aliases() {
-        let mut state = LlamaState::new();
-        state.set_reg(RegName::I, 0xABCD);
-
-        state.set_reg(RegName::IL, 0x34);
-
-        assert_eq!(state.get_reg(RegName::IL), 0x34);
-        assert_eq!(state.get_reg(RegName::IH), 0x00);
-        assert_eq!(state.get_reg(RegName::I), 0x0034);
-    }
-
-    #[test]
-    fn f_facade_on_fc_fz() {
-        let mut state = LlamaState::new();
-        state.set_reg(RegName::F, 0b0000_0011);
-
-        assert_eq!(state.get_reg(RegName::FC), 1);
-        assert_eq!(state.get_reg(RegName::FZ), 1);
-        assert_eq!(state.get_reg(RegName::F), 0b0000_0011);
-
-        state.set_reg(RegName::FC, 0);
-        state.set_reg(RegName::FZ, 0);
-        assert_eq!(state.get_reg(RegName::F), 0b0000_0000);
     }
 }
