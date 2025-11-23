@@ -150,11 +150,26 @@ def run_once(payload: str) -> Snapshot:
 
     cpu.execute_instruction(pc)
 
-    regs_out = {}
-    for name in ("A", "B", "BA", "IL", "IH", "I", "X", "Y", "U", "S", "PC", "F", "IMR"):
-        regs_out[name] = cpu.read_register(name)
-    regs_out["FC"] = 1 if cpu.read_flag("C") else 0
-    regs_out["FZ"] = 1 if cpu.read_flag("Z") else 0
+    snap = cpu.snapshot_registers().to_dict()
+    ba = snap.get("ba", 0)
+    i_val = snap.get("i", 0)
+    f_val = snap.get("f", 0)
+    regs_out = {
+        "A": ba & 0xFF,
+        "B": (ba >> 8) & 0xFF,
+        "BA": ba,
+        "IL": i_val & 0xFF,
+        "IH": (i_val >> 8) & 0xFF,
+        "I": i_val,
+        "X": snap.get("x", 0),
+        "Y": snap.get("y", 0),
+        "U": snap.get("u", 0),
+        "S": snap.get("s", 0),
+        "PC": snap.get("pc", 0),
+        "F": f_val,
+        "FC": f_val & 0x1,
+        "FZ": (f_val >> 1) & 0x1,
+    }
 
     perfetto_out: str | None = None
     if HAVE_PERFETTO:
