@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sc62015.pysc62015 import emulator
+from binja_test_mocks.eval_llil import Memory
 from sc62015.pysc62015.constants import (
     ADDRESS_SPACE_SIZE,
     INTERNAL_MEMORY_START,
@@ -55,10 +55,17 @@ class Snapshot:
         )
 
 
-class TrackedMemory(emulator.MemoryImage):
+class TrackedMemory(Memory):
     def __init__(self):
-        super().__init__()
+        self._backing = bytearray(ADDRESS_SPACE_SIZE)
         self._writes: List[Tuple[int, int, int, str]] = []
+        super().__init__(self._read_byte, self._write_byte)
+
+    def _read_byte(self, address: int) -> int:
+        address &= 0xFFFFFF
+        if address >= len(self._backing):
+            return 0
+        return self._backing[address]
 
     def write_byte(self, address: int, value: int) -> None:
         self._writes.append(
@@ -69,7 +76,7 @@ class TrackedMemory(emulator.MemoryImage):
                 self._space_for(address),
             )
         )
-        super().write_byte(address, value)
+        self._write_byte(address, value)
 
     def write_word(self, address: int, value: int) -> None:
         self._writes.append(
@@ -80,7 +87,14 @@ class TrackedMemory(emulator.MemoryImage):
                 self._space_for(address),
             )
         )
-        super().write_word(address, value)
+        self._write_byte(address, value & 0xFF)
+        self._write_byte(address + 1, (value >> 8) & 0xFF)
+
+    def _write_byte(self, address: int, value: int) -> None:
+        address &= 0xFFFFFF
+        if address >= len(self._backing):
+            return
+        self._backing[address] = value & 0xFF
 
     def _space_for(self, address: int) -> str:
         if (
@@ -102,9 +116,8 @@ def run_once(payload: str) -> Snapshot:
     pc = data.get("pc", 0)
 
     mem = TrackedMemory()
-    mem.memory = bytearray(ADDRESS_SPACE_SIZE)
     for offset, b in enumerate(bytes_in):
-        mem.memory[pc + offset] = b
+        mem._backing[pc + offset] = b
 
     cpu = CPU(mem, reset_on_init=False)
     # Seed registers
