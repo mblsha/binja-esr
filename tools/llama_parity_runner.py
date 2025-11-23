@@ -149,8 +149,7 @@ def run_once(payload: str) -> Snapshot:
     )
     cpu.apply_snapshot(snap)
 
-    instr = decode.decode_at(pc, mem)
-    cpu.emulator.evaluate_one(instr)
+    cpu.execute_instruction(pc)
 
     regs_out = {}
     for name in ("A", "B", "BA", "IL", "IH", "I", "X", "Y", "U", "S", "PC", "F", "IMR"):
