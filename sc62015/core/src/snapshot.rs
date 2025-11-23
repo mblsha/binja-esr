@@ -40,7 +40,7 @@ enum RangeSerde {
 }
 
 impl RangeSerde {
-    fn to_tuple(self) -> (u32, u32) {
+    fn into_tuple(self) -> (u32, u32) {
         match self {
             RangeSerde::Tuple(pair) => pair,
             RangeSerde::Array(items) => {
@@ -60,7 +60,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let helper = RangeSerde::deserialize(deserializer)?;
-    Ok(helper.to_tuple())
+    Ok(helper.into_tuple())
 }
 
 pub fn pack_registers(regs: &HashMap<String, u32>) -> Vec<u8> {

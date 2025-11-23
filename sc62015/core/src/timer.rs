@@ -87,6 +87,7 @@ impl TimerContext {
         self.irq_isr = interrupts.isr;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_interrupt_state(
         &mut self,
         pending: bool,

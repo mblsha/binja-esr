@@ -176,7 +176,7 @@ impl LlamaExecutor {
         let mut len = 1u8; // opcode byte
         for op in entry.operands.iter() {
             len = len.saturating_add(match op {
-                OperandKind::Imm(bits) => (*bits + 7) / 8,
+                OperandKind::Imm(bits) => bits.div_ceil(8),
                 OperandKind::IMem(_) | OperandKind::IMemWidth(_) => 1,
                 OperandKind::EMemAddrWidth(_) | OperandKind::EMemAddrWidthOp(_) => 3,
                 OperandKind::EMemReg(_) | OperandKind::EMemIMem(_) => 3,
@@ -186,7 +186,7 @@ impl LlamaExecutor {
                 OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 2,
                 OperandKind::RegIMemOffset(_) => 1,
                 OperandKind::EMemRegModePostPre => 1,
-                OperandKind::RegPair(size) => *size as u8,
+                OperandKind::RegPair(size) => *size,
                 _ => 0,
             });
         }
@@ -482,7 +482,7 @@ impl LlamaExecutor {
                 OperandKind::Imm(bits) => {
                     let val = Self::read_imm(bus, pc + offset, *bits);
                     decoded.imm = Some((val, *bits));
-                    offset += (*bits as u32 + 7) / 8;
+                    offset += (*bits as u32).div_ceil(8);
                 }
                 OperandKind::ImmOffset => {
                     let byte = bus.load(pc + offset, 8) as u8;
@@ -576,7 +576,7 @@ impl LlamaExecutor {
                 }
                 OperandKind::RegIMemOffset(kind) => {
                     let width_bits = Self::width_bits_for_kind(entry.kind);
-                    let width_bytes = (width_bits + 7) / 8;
+                    let width_bytes = width_bits.div_ceil(8);
                     let (ptr_mem, consumed_ptr) =
                         self.decode_ext_reg_ptr(state, bus, pc + offset, width_bytes)?;
                     let imem_addr =
@@ -813,7 +813,7 @@ impl LlamaExecutor {
             match op {
                 OperandKind::Imm(bits) => {
                     imm = Some(Self::read_imm(bus, pc + offset, *bits));
-                    offset += (*bits as u32 + 7) / 8;
+                    offset += (*bits as u32).div_ceil(8);
                 }
                 OperandKind::Reg(RegName::A, _) => {
                     // nothing to fetch
@@ -1650,6 +1650,12 @@ impl LlamaExecutor {
                 Ok(len)
             }
         }
+    }
+}
+
+impl Default for LlamaExecutor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
