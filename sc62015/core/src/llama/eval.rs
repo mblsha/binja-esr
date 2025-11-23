@@ -268,7 +268,7 @@ impl LlamaExecutor {
 
     fn estimated_length(entry: &OpcodeEntry) -> u8 {
         let mut len = 1u8; // opcode byte
-        for op in entry.operands.iter() {
+        for (_operand_index, op) in entry.operands.iter().enumerate() {
             len = len.saturating_add(match op {
                 OperandKind::Imm(bits) => bits.div_ceil(8),
                 OperandKind::IMem(_) | OperandKind::IMemWidth(_) => 1,
@@ -515,8 +515,8 @@ impl LlamaExecutor {
             consumed += 1;
         }
         let width_bits = Self::width_bits_for_kind(entry.kind);
-        let first_addr = imem_addr_for_mode(bus, mode_first, first as u8);
-        let second_addr = imem_addr_for_mode(bus, mode_second, second as u8);
+        let first_addr = imem_addr_for_mode(bus, mode_first, first);
+        let second_addr = imem_addr_for_mode(bus, mode_second, second);
         let (dst_addr, src_addr, dst_is_internal) = if dest_is_internal {
             // MV (m),[(n)] - dst is internal addr=first, ptr lives at second
             let pointer = Self::read_imm(bus, second_addr, 24);
@@ -844,11 +844,9 @@ impl LlamaExecutor {
             if length == 0 {
                 // Apply pointer side-effects even when nothing moves; Python still updates
                 // pre/post addressing registers for MVL with zero length.
-                for mem in [decoded.mem, decoded.mem2] {
-                    if let Some(m) = mem {
-                        if let Some((reg, new_val)) = m.side_effect {
-                            state.set_reg(reg, new_val);
-                        }
+                for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
+                    if let Some((reg, new_val)) = m.side_effect {
+                        state.set_reg(reg, new_val);
                     }
                 }
                 state.set_reg(RegName::FC, prev_fc);
@@ -975,17 +973,15 @@ impl LlamaExecutor {
 
         // Apply any pointer side-effects even if the memory operand was a source.
         let pointer_steps = mvl_length.unwrap_or(1);
-        for mem in [decoded.mem, decoded.mem2] {
-            if let Some(m) = mem {
-                if let Some((reg, new_val)) = m.side_effect {
-                    if Some(reg) != dst_reg {
-                        let curr = state.get_reg(reg);
-                        let mask = mask_for(reg);
-                        let delta = new_val.wrapping_sub(curr) & mask;
-                        let final_val =
-                            curr.wrapping_add(delta.wrapping_mul(pointer_steps) & mask) & mask;
-                        state.set_reg(reg, final_val);
-                    }
+        for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
+            if let Some((reg, new_val)) = m.side_effect {
+                if Some(reg) != dst_reg {
+                    let curr = state.get_reg(reg);
+                    let mask = mask_for(reg);
+                    let delta = new_val.wrapping_sub(curr) & mask;
+                    let final_val =
+                        curr.wrapping_add(delta.wrapping_mul(pointer_steps) & mask) & mask;
+                    state.set_reg(reg, final_val);
                 }
             }
         }
@@ -1279,6 +1275,7 @@ impl LlamaExecutor {
         self.execute_with(opcode, entry, state, bus, None, None, 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_with<B: LlamaBus>(
         &mut self,
         _opcode: u8,
