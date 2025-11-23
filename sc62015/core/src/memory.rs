@@ -92,12 +92,12 @@ impl MemoryImage {
         if Self::is_internal(address) {
             let offset = (address - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
             // Keyboard registers (KOL/KOH/KIL) are local when the bridge is enabled.
-            if matches!(offset, 0xF0 | 0xF1 | 0xF2) && self.keyboard_bridge {
+            if matches!(offset, 0xF0..=0xF2) && self.keyboard_bridge {
                 return false;
             }
             // Keyboard matrix (when not bridged) and E-port input registers require
             // host-side handlers that emulate dynamic hardware state.
-            if matches!(offset, 0xF0 | 0xF1 | 0xF2 | 0xF5 | 0xF6) {
+            if matches!(offset, 0xF0..=0xF2 | 0xF5 | 0xF6) {
                 return true;
             }
             return false;
@@ -249,7 +249,7 @@ impl MemoryImage {
     }
 
     pub fn is_keyboard_offset(offset: u32) -> bool {
-        matches!(offset, 0xF0 | 0xF1 | 0xF2)
+        matches!(offset, 0xF0..=0xF2)
     }
 
     pub fn load_internal_value(&self, address: u32, bits: u8) -> Option<u32> {

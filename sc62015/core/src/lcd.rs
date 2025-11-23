@@ -88,8 +88,8 @@ enum ChipSelect {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReadWrite {
-    WRITE = 0,
-    READ = 1,
+    Write = 0,
+    Read = 1,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,9 +123,9 @@ fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite
     }
     let addr_lo = address & 0xFFF;
     let rw = if (addr_lo & 1) == 0 {
-        ReadWrite::WRITE
+        ReadWrite::Write
     } else {
-        ReadWrite::READ
+        ReadWrite::Read
     };
     let di = if ((addr_lo >> 1) & 1) == 0 {
         DataInstruction::Instruction
@@ -143,7 +143,7 @@ fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite
 
 fn parse_command(address: u32, value: u8) -> Option<LcdCommand> {
     let (cs, di, rw) = decode_access(address)?;
-    if rw != ReadWrite::WRITE {
+    if rw != ReadWrite::Write {
         return None;
     }
 
@@ -322,7 +322,7 @@ impl LcdController {
 
     pub fn read(&self, address: u32) -> u32 {
         if let Some((cs, di, rw)) = decode_access(address) {
-            if rw == ReadWrite::READ {
+            if rw == ReadWrite::Read {
                 return match di {
                     DataInstruction::Instruction => 0xFF,
                     DataInstruction::Data => {
