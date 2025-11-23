@@ -838,16 +838,20 @@ impl LlamaExecutor {
             self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
         let mut mvl_length: Option<u32> = None;
         if matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
-            let length = state.get_reg(RegName::I) & mask_for(RegName::I);
-            if length == 0 {
-                // Apply pointer side-effects even when nothing moves; Python still updates
-                // pre/post addressing registers for MVL with zero length.
-                for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
-                    if let Some((reg, new_val)) = m.side_effect {
-                        state.set_reg(reg, new_val);
+                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                if length == 0 {
+                    // Apply pointer side-effects even when nothing moves; Python still updates
+                    // pre/post addressing registers for MVL with zero length, but only for
+                    // pre-dec modes (new value lower than current).
+                    for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
+                        if let Some((reg, new_val)) = m.side_effect {
+                            let curr = state.get_reg(reg);
+                            if new_val < curr {
+                                state.set_reg(reg, new_val);
+                            }
+                        }
                     }
-                }
-                state.set_reg(RegName::FC, prev_fc);
+                    state.set_reg(RegName::FC, prev_fc);
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
