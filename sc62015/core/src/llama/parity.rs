@@ -673,6 +673,7 @@ mod tests {
     /// Feature-gated integration that exercises the parity path end-to-end for NOP.
     #[cfg(feature = "llama-tests")]
     #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
     fn parity_traces_align_for_nop() {
         // Workspace root is two levels up from this crate.
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
