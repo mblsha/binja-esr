@@ -368,22 +368,28 @@ fn copy_region(
     dest_start_col: usize,
     mirror: bool,
 ) {
-    for row in 0..LCD_DISPLAY_ROWS {
+    for (row, row_buf) in buffer.iter_mut().enumerate().take(LCD_DISPLAY_ROWS) {
         let page = start_page + row / 8;
         let bit = row % 8;
         if mirror {
             for (dest_offset, src_col) in column_range.clone().rev().enumerate() {
                 if let Some(byte) = chip.vram.get(page).and_then(|page| page.get(src_col)) {
-                    buffer[row][dest_start_col + dest_offset] = pixel_on(*byte, bit);
+                    row_buf[dest_start_col + dest_offset] = pixel_on(*byte, bit);
                 }
             }
         } else {
             for (dest_offset, src_col) in column_range.clone().enumerate() {
                 if let Some(byte) = chip.vram.get(page).and_then(|page| page.get(src_col)) {
-                    buffer[row][dest_start_col + dest_offset] = pixel_on(*byte, bit);
+                    row_buf[dest_start_col + dest_offset] = pixel_on(*byte, bit);
                 }
             }
         }
+    }
+}
+
+impl Default for LcdController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
