@@ -842,6 +842,15 @@ impl LlamaExecutor {
         if matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
             let length = state.get_reg(RegName::I) & mask_for(RegName::I);
             if length == 0 {
+                // Apply pointer side-effects even when nothing moves; Python still updates
+                // pre/post addressing registers for MVL with zero length.
+                for mem in [decoded.mem, decoded.mem2] {
+                    if let Some(m) = mem {
+                        if let Some((reg, new_val)) = m.side_effect {
+                            state.set_reg(reg, new_val);
+                        }
+                    }
+                }
                 state.set_reg(RegName::FC, prev_fc);
                 let start_pc = state.pc();
                 if state.pc() == start_pc {

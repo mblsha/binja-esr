@@ -252,7 +252,6 @@ class PCE500Emulator:
             self.cpu = CPU(self.memory, reset_on_init=True, backend="python")
 
         self.memory.set_cpu(self.cpu)
-        backend_name = getattr(self.cpu, "backend", "python")
 
         pure_keyboard_env = os.getenv("RUST_PURE_KEYBOARD")
         if pure_keyboard_env is not None:
