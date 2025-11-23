@@ -1,3 +1,5 @@
+#![allow(clippy::useless_conversion)]
+
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyDict, PyModule};
@@ -75,7 +77,7 @@ impl LlamaPyBus {
 impl LlamaBus for LlamaPyBus {
     fn load(&mut self, addr: u32, bits: u8) -> u32 {
         // Respect the requested width so multi-byte loads match the Python emulator.
-        let bytes = ((bits + 7) / 8).max(1);
+        let bytes = bits.div_ceil(8).max(1);
         let mut value = 0u32;
         for i in 0..bytes {
             let byte = self.read_byte(addr.wrapping_add(i as u32)) as u32;
@@ -101,7 +103,7 @@ impl LlamaBus for LlamaPyBus {
                 self.write_byte(addr.wrapping_add(2), ((value >> 16) & 0xFF) as u8);
             }
             _ => {
-                let bytes = (bits + 7) / 8;
+                let bytes = bits.div_ceil(8);
                 for i in 0..bytes {
                     let byte = ((value >> (8 * i)) & 0xFF) as u8;
                     self.write_byte(addr.wrapping_add(i as u32), byte);
@@ -132,7 +134,7 @@ impl LlamaCpu {
         let mut cpu = Self {
             state: LlamaState::new(),
             executor: LlamaExecutor::new(),
-            memory: memory.into(),
+            memory,
             call_sub_level: 0,
             temps: HashMap::new(),
         };
