@@ -1938,13 +1938,22 @@ mod tests {
         fn with_size(size: usize) -> Self {
             Self { mem: vec![0; size] }
         }
+
+        fn translate(addr: u32) -> usize {
+            if addr >= INTERNAL_MEMORY_START {
+                (addr - INTERNAL_MEMORY_START) as usize
+            } else {
+                addr as usize
+            }
+        }
     }
     impl LlamaBus for MemBus {
         fn load(&mut self, addr: u32, bits: u8) -> u32 {
             let mut val = 0u32;
             let bytes = bits.div_ceil(8);
             for i in 0..bytes {
-                let b = *self.mem.get(addr as usize + i as usize).unwrap_or(&0) as u32;
+                let idx = Self::translate(addr).saturating_add(i as usize);
+                let b = *self.mem.get(idx).unwrap_or(&0) as u32;
                 val |= b << (8 * i);
             }
             val & ((1u32 << bits) - 1)
@@ -1953,7 +1962,8 @@ mod tests {
         fn store(&mut self, addr: u32, bits: u8, value: u32) {
             let bytes = bits.div_ceil(8);
             for i in 0..bytes {
-                if let Some(slot) = self.mem.get_mut(addr as usize + i as usize) {
+                let idx = Self::translate(addr).saturating_add(i as usize);
+                if let Some(slot) = self.mem.get_mut(idx) {
                     *slot = ((value >> (8 * i)) & 0xFF) as u8;
                 }
             }
