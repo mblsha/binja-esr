@@ -63,9 +63,8 @@ impl LlamaState {
             }
             RegName::IL => {
                 self.regs.insert(RegName::IL, masked);
-                let ih = self.get_reg(RegName::IH);
-                self.regs
-                    .insert(RegName::I, ((ih & 0xFF) << 8) | (masked & 0xFF));
+                self.regs.insert(RegName::IH, 0);
+                self.regs.insert(RegName::I, masked & 0xFF);
             }
             RegName::IH => {
                 self.regs.insert(RegName::IH, masked);
