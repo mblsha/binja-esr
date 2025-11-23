@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - optional dependency
     HAVE_PERFETTO = False
 from sc62015.pysc62015.instr import decode
 from sc62015.pysc62015.cpu import CPU
+from sc62015.pysc62015.stepper import CPURegistersSnapshot
 
 
 @dataclass
@@ -120,10 +121,33 @@ def run_once(payload: str) -> Snapshot:
         mem._backing[pc + offset] = b
 
     cpu = CPU(mem, reset_on_init=False)
-    # Seed registers
-    for name, value in regs_in.items():
-        cpu.write_register(name, value)
-    cpu.write_register("PC", pc)
+    # Seed registers via snapshot
+    ba = regs_in.get("BA", 0)
+    a = regs_in.get("A")
+    b = regs_in.get("B")
+    if a is not None or b is not None:
+        ba = ((b or (ba >> 8)) << 8) | (a or (ba & 0xFF))
+    i_val = regs_in.get("I", 0)
+    il = regs_in.get("IL")
+    ih = regs_in.get("IH")
+    if il is not None or ih is not None:
+        i_val = ((ih or (i_val >> 8)) << 8) | (il or (i_val & 0xFF))
+    f_val = regs_in.get("F")
+    if f_val is None:
+        fc = regs_in.get("FC", 0) & 1
+        fz = (regs_in.get("FZ", 0) & 1) << 1
+        f_val = fc | fz
+    snap = CPURegistersSnapshot(
+        pc=pc,
+        ba=ba,
+        i=i_val,
+        x=regs_in.get("X", 0),
+        y=regs_in.get("Y", 0),
+        u=regs_in.get("U", 0),
+        s=regs_in.get("S", 0),
+        f=f_val,
+    )
+    cpu.apply_snapshot(snap)
 
     instr = decode.decode_at(pc, mem)
     cpu.emulator.evaluate_one(instr)
