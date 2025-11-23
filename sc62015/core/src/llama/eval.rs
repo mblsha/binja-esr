@@ -268,7 +268,7 @@ impl LlamaExecutor {
 
     fn estimated_length(entry: &OpcodeEntry) -> u8 {
         let mut len = 1u8; // opcode byte
-        for (_operand_index, op) in entry.operands.iter().enumerate() {
+        for op in entry.operands.iter() {
             len = len.saturating_add(match op {
                 OperandKind::Imm(bits) => bits.div_ceil(8),
                 OperandKind::IMem(_) | OperandKind::IMemWidth(_) => 1,
@@ -561,7 +561,6 @@ impl LlamaExecutor {
         let pc = pc_override.unwrap_or(state.pc());
         let mut offset = 1u32; // opcode consumed
         let mut decoded = DecodedOperands::default();
-        let mut operand_index = 0usize;
         let single_pre = SINGLE_ADDRESSABLE_OPCODES.contains(&entry.opcode);
         // Opcode-specific decoding quirks
         if entry.opcode == 0xE3 {
@@ -584,7 +583,7 @@ impl LlamaExecutor {
             decoded.len = offset as u8;
             return Ok(decoded);
         }
-        for op in entry.operands.iter() {
+        for (operand_index, op) in entry.operands.iter().enumerate() {
             match op {
                 OperandKind::Imm(bits) => {
                     let val = Self::read_imm(bus, pc + offset, *bits);
@@ -785,7 +784,6 @@ impl LlamaExecutor {
                 }
                 _ => {}
             }
-            operand_index += 1;
         }
         decoded.len = offset as u8;
         Ok(decoded)
