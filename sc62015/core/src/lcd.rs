@@ -8,6 +8,14 @@ const LCD_RANGE_HIGH: u32 = 0xA000;
 pub const LCD_DISPLAY_ROWS: usize = 32;
 pub const LCD_DISPLAY_COLS: usize = 240;
 
+// The LCD controller is mirrored at 0x2000 and 0xA000. Bits 0-3 encode
+// R/W, DI, and CS the same way the Python hd61202 decoder does:
+//  bit0: 0=write, 1=read
+//  bit1: 0=instruction, 1=data
+//  bit2-3: chip select (00=both, 01=right/CS2, 10=left/CS1, 11=none)
+const LCD_ADDR_HI_LEFT: u32 = 0x0A000;
+const LCD_ADDR_HI_RIGHT: u32 = 0x02000;
+
 #[derive(Clone, Copy, Default)]
 struct Hd61202State {
     on: bool,
@@ -79,11 +87,11 @@ impl Hd61202Chip {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChipSelect {
+    Left,  // CS1
+    Right, // CS2
     Both,
-    Right,
-    Left,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -117,17 +125,17 @@ struct LcdCommand {
 }
 
 fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite)> {
-    let addr_hi = address & 0xF000;
-    if addr_hi != LCD_RANGE_HIGH && addr_hi != LCD_RANGE_LOW {
+    let addr_hi = address & 0x0F000;
+    if addr_hi != LCD_ADDR_HI_LEFT && addr_hi != LCD_ADDR_HI_RIGHT {
         return None;
     }
-    let addr_lo = address & 0xFFF;
+    let addr_lo = address & 0x0FFF;
     let rw = if (addr_lo & 1) == 0 {
         ReadWrite::Write
     } else {
         ReadWrite::Read
     };
-    let di = if ((addr_lo >> 1) & 1) == 0 {
+    let di = if (addr_lo >> 1) & 1 == 0 {
         DataInstruction::Instruction
     } else {
         DataInstruction::Data
@@ -136,6 +144,7 @@ fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite
         0b00 => ChipSelect::Both,
         0b01 => ChipSelect::Right,
         0b10 => ChipSelect::Left,
+        0b11 => return None,
         _ => return None,
     };
     Some((cs, di, rw))
@@ -176,6 +185,16 @@ pub struct LcdController {
     cs_right_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LcdStats {
+    pub chip_on: [bool; 2],
+    pub instruction_counts: [u32; 2],
+    pub data_write_counts: [u32; 2],
+    pub cs_both_count: u32,
+    pub cs_left_count: u32,
+    pub cs_right_count: u32,
+}
+
 impl LcdController {
     pub fn new() -> Self {
         Self {
@@ -203,16 +222,13 @@ impl LcdController {
 
     pub fn handles(&self, address: u32) -> bool {
         let addr = address & 0x00FF_FFFF;
-        (0x0000_2000..=0x0000_200F).contains(&addr)
-            || (0x0000_A000..=0x0000_AFFF).contains(&addr)
+        (0x0000_2000..=0x0000_200F).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
     }
 
     pub fn write(&mut self, address: u32, value: u8) {
         if let Some(command) = parse_command(address, value) {
             if env::var("RUST_LCD_DEBUG").is_ok() {
-                println!(
-                    "[rust-lcd-device] addr=0x{address:05X} value=0x{value:02X}"
-                );
+                println!("[rust-lcd-device] addr=0x{address:05X} value=0x{value:02X}");
             }
             match command.cs {
                 ChipSelect::Both => self.cs_both_count = self.cs_both_count.wrapping_add(1),
@@ -289,12 +305,23 @@ impl LcdController {
             if let Some(chips) = metadata.get("chips").and_then(|v| v.as_array()) {
                 if let Some(meta) = chips.get(idx) {
                     chip.state.on = meta.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
-                    chip.state.start_line = meta.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    chip.state.start_line =
+                        meta.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                     chip.state.page = meta.get("page").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                    chip.state.y_address = meta.get("y_address").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                    chip.instruction_count = meta.get("instruction_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    chip.data_write_count = meta.get("data_write_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    chip.data_read_count = meta.get("data_read_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    chip.state.y_address =
+                        meta.get("y_address").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    chip.instruction_count = meta
+                        .get("instruction_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    chip.data_write_count = meta
+                        .get("data_write_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    chip.data_read_count = meta
+                        .get("data_read_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
                 }
             }
             let start = idx * LCD_PAGES * LCD_WIDTH;
@@ -358,6 +385,19 @@ impl LcdController {
         }
         buffer
     }
+
+    pub fn stats(&self) -> LcdStats {
+        let mut stats = LcdStats::default();
+        for (idx, chip) in self.chips.iter().enumerate() {
+            stats.chip_on[idx] = chip.state.on;
+            stats.instruction_counts[idx] = chip.instruction_count;
+            stats.data_write_counts[idx] = chip.data_write_count;
+        }
+        stats.cs_both_count = self.cs_both_count;
+        stats.cs_left_count = self.cs_left_count;
+        stats.cs_right_count = self.cs_right_count;
+        stats
+    }
 }
 
 fn copy_region(
@@ -395,5 +435,9 @@ impl Default for LcdController {
 
 fn pixel_on(byte: u8, bit: usize) -> u8 {
     // Match Python helper: return 1 for lit pixels, 0 for off.
-    if ((byte >> bit) & 1) == 0 { 1 } else { 0 }
+    if ((byte >> bit) & 1) == 0 {
+        1
+    } else {
+        0
+    }
 }

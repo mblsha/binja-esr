@@ -6,20 +6,20 @@
 //! for invoking the Python emulator (e.g., via a subprocess) and producing
 //! snapshots to feed into the comparer.
 
+#[cfg(feature = "llama-tests")]
+use crate::{INTERNAL_MEMORY_START, INTERNAL_SPACE};
+#[cfg(feature = "llama-tests")]
+use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "llama-tests")]
 use std::path::Path;
 #[cfg(feature = "llama-tests")]
-use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
-#[cfg(feature = "llama-tests")]
-use std::path::{PathBuf, Path as StdPath};
-#[cfg(feature = "llama-tests")]
-use crate::{INTERNAL_MEMORY_START, INTERNAL_SPACE};
+use std::path::{Path as StdPath, PathBuf};
 
-use super::opcodes::RegName;
-use super::state::LlamaState;
 #[cfg(feature = "llama-tests")]
 use super::eval::{LlamaBus, LlamaExecutor};
+use super::opcodes::RegName;
+use super::state::LlamaState;
 #[cfg(feature = "llama-tests")]
 use std::process::{Command, Output, Stdio};
 
@@ -103,12 +103,7 @@ impl Snapshot {
 /// Compare two snapshots and return a diff if any mismatches are detected.
 pub fn compare_snapshots(lhs: &Snapshot, rhs: &Snapshot) -> Option<ParityDiff> {
     let mut diff = ParityDiff::default();
-    let all_regs: HashSet<_> = lhs
-        .regs
-        .keys()
-        .chain(rhs.regs.keys())
-        .copied()
-        .collect();
+    let all_regs: HashSet<_> = lhs.regs.keys().chain(rhs.regs.keys()).copied().collect();
     for reg in all_regs {
         let l = lhs.regs.get(&reg).copied().unwrap_or(0);
         let r = rhs.regs.get(&reg).copied().unwrap_or(0);
@@ -126,11 +121,7 @@ pub fn compare_snapshots(lhs: &Snapshot, rhs: &Snapshot) -> Option<ParityDiff> {
     for write in &rhs.mem_writes {
         rhs_mem.insert((write.addr, write.bits), write.value);
     }
-    let all_addrs: HashSet<_> = lhs_mem
-        .keys()
-        .chain(rhs_mem.keys())
-        .copied()
-        .collect();
+    let all_addrs: HashSet<_> = lhs_mem.keys().chain(rhs_mem.keys()).copied().collect();
     for key in all_addrs {
         let l = lhs_mem.get(&key).copied().unwrap_or(0);
         let r = rhs_mem.get(&key).copied().unwrap_or(0);
@@ -196,7 +187,9 @@ pub fn run_python_oracle(
     if !regs.is_empty() {
         let mut reg_map = serde_json::Map::new();
         for (reg, value) in regs {
-            let name = format!("{reg:?}").replace("Unknown(\"", "").replace("\")", "");
+            let name = format!("{reg:?}")
+                .replace("Unknown(\"", "")
+                .replace("\")", "");
             reg_map.insert(name, serde_json::json!(*value));
         }
         payload
@@ -234,8 +227,8 @@ pub fn run_python_oracle(
             output.status.code().unwrap_or(-1)
         ));
     }
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("oracle json: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("oracle json: {e}"))?;
     let mut regs_out = HashMap::new();
     if let Some(map) = parsed.get("regs").and_then(|v| v.as_object()) {
         for (name, value) in map {
@@ -253,10 +246,7 @@ pub fn run_python_oracle(
                     let addr = tuple[0].as_u64().unwrap_or(0) as u32;
                     let bits = tuple[1].as_u64().unwrap_or(0) as u8;
                     let value = tuple[2].as_u64().unwrap_or(0) as u32;
-                    let space = tuple
-                        .get(3)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("internal");
+                    let space = tuple.get(3).and_then(|v| v.as_str()).unwrap_or("internal");
                     let space = match space {
                         "internal" => MemorySpace::Internal,
                         "external" => MemorySpace::External,
@@ -313,6 +303,8 @@ pub struct TraceEvent {
     pub pc: u32,
     pub opcode: u8,
     pub regs: HashMap<RegName, u32>,
+    pub mem_imr: u8,
+    pub mem_isr: u8,
     pub mem_writes: Vec<MemWrite>,
 }
 
@@ -321,7 +313,15 @@ pub struct TraceEvent {
 pub fn write_perfetto_trace(events: &[TraceEvent], path: &Path) -> Result<(), String> {
     let mut writer = PerfettoTraceWriter::new(path, 10_000);
     for ev in events {
-        writer.record_instr(&ev.backend, ev.instr_index, ev.pc, ev.opcode, &ev.regs);
+        writer.record_instr(
+            &ev.backend,
+            ev.instr_index,
+            ev.pc,
+            ev.opcode,
+            &ev.regs,
+            ev.mem_imr,
+            ev.mem_isr,
+        );
         for write in &ev.mem_writes {
             writer.record_mem_write(
                 &ev.backend,
@@ -376,6 +376,8 @@ impl PerfettoTraceWriter {
         pc: u32,
         opcode: u8,
         regs: &HashMap<RegName, u32>,
+        mem_imr: u8,
+        mem_isr: u8,
     ) {
         let mut inst = self.builder.add_instant_event(
             self.instr_track,
@@ -387,6 +389,8 @@ impl PerfettoTraceWriter {
             ("pc", AnnotationValue::Pointer(pc as u64)),
             ("opcode", AnnotationValue::UInt(opcode as u64)),
             ("op_index", AnnotationValue::UInt(instr_index)),
+            ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
+            ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
         ]);
         for (reg, value) in regs {
             inst.add_annotation(reg_to_key(*reg), (*value & 0xFF_FFFF) as u64);
@@ -484,7 +488,11 @@ impl RecordingBus {
             let byte = *self.mem.get(&(addr + i as u32)).unwrap_or(&0) as u32;
             value |= byte << (8 * i);
         }
-        let mask = if bits >= 32 { u32::MAX } else { (1u32 << bits) - 1 };
+        let mask = if bits >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << bits) - 1
+        };
         value & mask
     }
 
@@ -573,16 +581,14 @@ pub fn run_parity_once(
 ) -> Result<(Snapshot, Snapshot, PathBuf, PathBuf, Output), String> {
     let (llama_event, llama_snap) = run_llama_step(bytes, regs, pc, instr_index)?;
     let llama_trace = cwd.join("llama_parity.pftrace");
-    write_perfetto_trace(&[llama_event], &llama_trace)
-        .map_err(|e| format!("llama trace: {e}"))?;
+    write_perfetto_trace(&[llama_event], &llama_trace).map_err(|e| format!("llama trace: {e}"))?;
 
     let py_output = run_python_oracle(bytes, regs, pc, Some(cwd))?;
     let py_snap = py_output.snapshot;
     let py_trace = cwd.join("python_parity.pftrace");
     // If the oracle already emitted a trace, prefer that; otherwise serialize our own.
     if let Some(path) = py_output.perfetto_path.as_ref().map(PathBuf::from) {
-        std::fs::copy(&path, &py_trace)
-            .map_err(|e| format!("copy python trace: {e}"))?;
+        std::fs::copy(&path, &py_trace).map_err(|e| format!("copy python trace: {e}"))?;
     } else {
         write_perfetto_trace(
             &[TraceEvent {
@@ -602,7 +608,13 @@ pub fn run_parity_once(
         .map_err(|e| format!("python trace: {e}"))?;
     }
 
-    Ok((llama_snap, py_snap, llama_trace, py_trace, py_output.process_output))
+    Ok((
+        llama_snap,
+        py_snap,
+        llama_trace,
+        py_trace,
+        py_output.process_output,
+    ))
 }
 
 /// Run the bundled compare_perfetto_traces.py script on two traces. Returns the raw process output.
