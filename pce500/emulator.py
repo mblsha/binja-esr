@@ -252,13 +252,12 @@ class PCE500Emulator:
             self.cpu = CPU(self.memory, reset_on_init=True, backend="python")
 
         self.memory.set_cpu(self.cpu)
-        backend_name = getattr(self.cpu, "backend", "python")
 
         pure_keyboard_env = os.getenv("RUST_PURE_KEYBOARD")
         if pure_keyboard_env is not None:
             disable_keyboard_overlay = pure_keyboard_env == "1"
         else:
-            disable_keyboard_overlay = backend_name == "llama"
+            disable_keyboard_overlay = False
         self.memory.set_keyboard_handler(
             self._keyboard_read_handler,
             self._keyboard_write_handler,
@@ -275,7 +274,7 @@ class PCE500Emulator:
         if pure_lcd_env is not None:
             disable_overlay = pure_lcd_env == "1"
         else:
-            disable_overlay = backend_name == "llama"
+            disable_overlay = False
         enable_overlay = not disable_overlay
         self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
         self._llama_pure_lcd = disable_overlay

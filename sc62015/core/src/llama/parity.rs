@@ -180,6 +180,15 @@ pub fn run_python_oracle(
     pc: u32,
     cwd: Option<&Path>,
 ) -> Result<OracleResult, String> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|root| root.join("tools").join("llama_parity_runner.py"))
+        .ok_or("could not resolve llama_parity_runner.py")?;
+    if !script.exists() {
+        return Err(format!("{} not found", script.display()));
+    }
     let mut payload = serde_json::json!({
         "bytes": bytes,
         "pc": pc,
@@ -199,7 +208,7 @@ pub fn run_python_oracle(
     let mut cmd = Command::new("uv");
     cmd.arg("run")
         .arg("python")
-        .arg("tools/llama_parity_runner.py")
+        .arg(script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .env("FORCE_BINJA_MOCK", "1");
@@ -664,6 +673,7 @@ mod tests {
     /// Feature-gated integration that exercises the parity path end-to-end for NOP.
     #[cfg(feature = "llama-tests")]
     #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
     fn parity_traces_align_for_nop() {
         // Workspace root is two levels up from this crate.
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))

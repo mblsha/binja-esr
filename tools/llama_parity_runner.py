@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sc62015.pysc62015 import emulator
+from binja_test_mocks.eval_llil import Memory
 from sc62015.pysc62015.constants import (
     ADDRESS_SPACE_SIZE,
     INTERNAL_MEMORY_START,
@@ -35,8 +35,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     PerfettoTraceBuilder = None  # type: ignore
     HAVE_PERFETTO = False
-from sc62015.pysc62015.instr import decode
 from sc62015.pysc62015.cpu import CPU
+from sc62015.pysc62015.stepper import CPURegistersSnapshot
 
 
 @dataclass
@@ -55,10 +55,17 @@ class Snapshot:
         )
 
 
-class TrackedMemory(emulator.MemoryImage):
+class TrackedMemory(Memory):
     def __init__(self):
-        super().__init__()
+        self._backing = bytearray(ADDRESS_SPACE_SIZE)
         self._writes: List[Tuple[int, int, int, str]] = []
+        super().__init__(self._read_byte, self._write_byte)
+
+    def _read_byte(self, address: int) -> int:
+        address &= 0xFFFFFF
+        if address >= len(self._backing):
+            return 0
+        return self._backing[address]
 
     def write_byte(self, address: int, value: int) -> None:
         self._writes.append(
@@ -69,7 +76,7 @@ class TrackedMemory(emulator.MemoryImage):
                 self._space_for(address),
             )
         )
-        super().write_byte(address, value)
+        self._write_byte(address, value)
 
     def write_word(self, address: int, value: int) -> None:
         self._writes.append(
@@ -80,7 +87,14 @@ class TrackedMemory(emulator.MemoryImage):
                 self._space_for(address),
             )
         )
-        super().write_word(address, value)
+        self._write_byte(address, value & 0xFF)
+        self._write_byte(address + 1, (value >> 8) & 0xFF)
+
+    def _write_byte(self, address: int, value: int) -> None:
+        address &= 0xFFFFFF
+        if address >= len(self._backing):
+            return
+        self._backing[address] = value & 0xFF
 
     def _space_for(self, address: int) -> str:
         if (
@@ -102,24 +116,60 @@ def run_once(payload: str) -> Snapshot:
     pc = data.get("pc", 0)
 
     mem = TrackedMemory()
-    mem.memory = bytearray(ADDRESS_SPACE_SIZE)
     for offset, b in enumerate(bytes_in):
-        mem.memory[pc + offset] = b
+        mem._backing[pc + offset] = b
 
     cpu = CPU(mem, reset_on_init=False)
-    # Seed registers
-    for name, value in regs_in.items():
-        cpu.write_register(name, value)
-    cpu.write_register("PC", pc)
+    # Seed registers via snapshot
+    ba = regs_in.get("BA", 0)
+    a = regs_in.get("A")
+    b = regs_in.get("B")
+    if a is not None or b is not None:
+        ba = ((b or (ba >> 8)) << 8) | (a or (ba & 0xFF))
+    i_val = regs_in.get("I", 0)
+    il = regs_in.get("IL")
+    ih = regs_in.get("IH")
+    if il is not None or ih is not None:
+        i_val = ((ih or (i_val >> 8)) << 8) | (il or (i_val & 0xFF))
+    f_val = regs_in.get("F")
+    if f_val is None:
+        fc = regs_in.get("FC", 0) & 1
+        fz = (regs_in.get("FZ", 0) & 1) << 1
+        f_val = fc | fz
+    snap = CPURegistersSnapshot(
+        pc=pc,
+        ba=ba,
+        i=i_val,
+        x=regs_in.get("X", 0),
+        y=regs_in.get("Y", 0),
+        u=regs_in.get("U", 0),
+        s=regs_in.get("S", 0),
+        f=f_val,
+    )
+    cpu.apply_snapshot(snap)
 
-    instr = decode.decode_at(pc, mem)
-    cpu.emulator.evaluate_one(instr)
+    cpu.execute_instruction(pc)
 
-    regs_out = {}
-    for name in ("A", "B", "BA", "IL", "IH", "I", "X", "Y", "U", "S", "PC", "F", "IMR"):
-        regs_out[name] = cpu.read_register(name)
-    regs_out["FC"] = 1 if cpu.read_flag("C") else 0
-    regs_out["FZ"] = 1 if cpu.read_flag("Z") else 0
+    snap = cpu.snapshot_registers().to_dict()
+    ba = snap.get("ba", 0)
+    i_val = snap.get("i", 0)
+    f_val = snap.get("f", 0)
+    regs_out = {
+        "A": ba & 0xFF,
+        "B": (ba >> 8) & 0xFF,
+        "BA": ba,
+        "IL": i_val & 0xFF,
+        "IH": (i_val >> 8) & 0xFF,
+        "I": i_val,
+        "X": snap.get("x", 0),
+        "Y": snap.get("y", 0),
+        "U": snap.get("u", 0),
+        "S": snap.get("s", 0),
+        "PC": snap.get("pc", 0),
+        "F": f_val,
+        "FC": f_val & 0x1,
+        "FZ": (f_val >> 1) & 0x1,
+    }
 
     perfetto_out: str | None = None
     if HAVE_PERFETTO:
