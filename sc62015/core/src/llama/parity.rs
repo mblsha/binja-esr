@@ -381,6 +381,7 @@ impl PerfettoTraceWriter {
             .saturating_add(substep)) as i64
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_instr(
         &mut self,
         backend: &str,
