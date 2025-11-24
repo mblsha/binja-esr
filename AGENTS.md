@@ -54,3 +54,7 @@
 - Native backend: LLAMA is the only Rust core; SCIL/manifest tooling and tests were removed.
 
 - **LLAMA tracing/parity:** Perfetto traces (binary `retrobus-perfetto`) from Python and LLAMA cores align on instruction-index timestamps; `scripts/compare_perfetto_traces.py` compares them. Nightly smoke lives in `.github/workflows/llama-perfetto-smoke.yml`.
+- **Rust-only runner:** To boot the ROM and view decoded LCD text without Python:
+  - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
+  - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
+  - Default ROM path: `public-src/data/pc-e500.bin` (symlink to your ROM). Ensure it exists or pass `--rom PATH`.
