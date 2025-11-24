@@ -38,6 +38,9 @@ pub struct Snapshot {
     pub mem_writes: Vec<MemWrite>,
 }
 
+const IMEM_IMR_OFFSET: u32 = 0xFB;
+const IMEM_ISR_OFFSET: u32 = 0xFC;
+
 /// Memory space classification for parity traces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemorySpace {
@@ -61,6 +64,15 @@ pub struct MemWrite {
     pub bits: u8,
     pub value: u32,
     pub space: MemorySpace,
+}
+
+fn last_mem_byte(writes: &[MemWrite], addr: u32) -> u8 {
+    writes
+        .iter()
+        .rev()
+        .find(|w| w.addr == addr && w.bits == 8)
+        .map(|w| (w.value & 0xFF) as u8)
+        .unwrap_or(0)
 }
 
 /// Differences detected during parity comparison.
@@ -554,12 +566,17 @@ pub fn run_llama_step(
         regs_out.insert(reg, state.get_reg(reg));
     }
 
+    let mem_imr = bus.load_bits(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8;
+    let mem_isr = bus.load_bits(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET, 8) as u8;
+
     let event = TraceEvent {
         backend: "llama".to_string(),
         instr_index,
         pc,
         opcode,
         regs: regs_out.clone(),
+        mem_imr,
+        mem_isr,
         mem_writes: bus.writes.clone(),
     };
     let snap = Snapshot {
@@ -601,6 +618,14 @@ pub fn run_parity_once(
                     .iter()
                     .filter_map(|(name, val)| reg_from_name(&format!("{name:?}")).zip(Some(*val)))
                     .collect(),
+                mem_imr: last_mem_byte(
+                    &py_snap.mem_writes,
+                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+                ),
+                mem_isr: last_mem_byte(
+                    &py_snap.mem_writes,
+                    INTERNAL_MEMORY_START + IMEM_ISR_OFFSET,
+                ),
                 mem_writes: py_snap.mem_writes.clone(),
             }],
             &py_trace,

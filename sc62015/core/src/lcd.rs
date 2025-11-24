@@ -3,8 +3,6 @@ use std::env;
 
 const LCD_WIDTH: usize = 64;
 const LCD_PAGES: usize = 8;
-const LCD_RANGE_LOW: u32 = 0x2000;
-const LCD_RANGE_HIGH: u32 = 0xA000;
 pub const LCD_DISPLAY_ROWS: usize = 32;
 pub const LCD_DISPLAY_COLS: usize = 240;
 
