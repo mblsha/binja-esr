@@ -33,6 +33,7 @@ impl PerfettoTracer {
             .saturating_add(substep)) as i64
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_regs(
         &mut self,
         instr_index: u64,
