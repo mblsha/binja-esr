@@ -40,15 +40,21 @@ impl PerfettoTracer {
         reg_pc: u32,
         opcode: u8,
         regs: &HashMap<String, u32>,
+        mem_imr: u8,
+        mem_isr: u8,
     ) {
-        let mut ev = self
-            .builder
-            .add_instant_event(self.exec_track, format!("Exec@0x{pc:06X}"), self.ts(instr_index, 0));
+        let mut ev = self.builder.add_instant_event(
+            self.exec_track,
+            format!("Exec@0x{pc:06X}"),
+            self.ts(instr_index, 0),
+        );
         ev.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("pc", AnnotationValue::Pointer(reg_pc as u64)),
             ("opcode", AnnotationValue::UInt(opcode as u64)),
             ("op_index", AnnotationValue::UInt(instr_index)),
+            ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
+            ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
         ]);
         for (name, value) in regs {
             match name.as_str() {

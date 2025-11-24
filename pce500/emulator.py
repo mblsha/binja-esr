@@ -1396,6 +1396,18 @@ class PCE500Emulator:
         op_index = snapshot.get("op_index")
         if isinstance(op_index, int):
             payload["op_index"] = op_index
+        # Include IMR/ISR from internal memory so perfetto comparisons can catch
+        # interrupt masking regressions across backends.
+        try:
+            imr = self.memory.internal_memory.read_byte(0xFB)
+            isr = self.memory.internal_memory.read_byte(0xFC)
+        except Exception:
+            imr = None
+            isr = None
+        if isinstance(imr, int):
+            payload["mem_imr"] = imr & 0xFF
+        if isinstance(isr, int):
+            payload["mem_isr"] = isr & 0xFF
         registers = snapshot.get("registers", {})
         for reg_name, value in registers.items():
             payload[f"reg_{reg_name.lower()}"] = int(value)
