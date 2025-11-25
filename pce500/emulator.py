@@ -263,6 +263,8 @@ class PCE500Emulator:
             self._keyboard_write_handler,
             enable_overlay=not disable_keyboard_overlay,
         )
+        # Ensure strobing is active in LLAMA path even when overlays are disabled.
+        self.keyboard.force_strobe_enabled = True
         try:
             self.keyboard.set_bridge_cpu(
                 self.cpu if disable_keyboard_overlay else None, disable_keyboard_overlay
@@ -285,6 +287,13 @@ class PCE500Emulator:
         # Set performance tracer for SC62015 integration if available
         if new_tracer.enabled:
             self.memory.set_perf_tracer(new_tracer)
+            # LLAMA core understands set_perfetto_trace(path); hand it the file path
+            # so Rust-side IMEM tagging can emit into the same trace file.
+            try:
+                if getattr(self.cpu, "backend", None) == "llama":
+                    self.cpu.set_perfetto_trace(trace_path)
+            except Exception:
+                pass
 
         if any(o.name == "internal_rom" for o in self.memory.overlays):
             self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
@@ -303,6 +312,8 @@ class PCE500Emulator:
             "IMR": {i: {"set": [], "clear": []} for i in range(8)},
             "ISR": {i: {"set": [], "clear": []} for i in range(8)},
         }
+        # Track last-observed IMR/ISR values for trace diffs.
+        self._last_imem_values: Dict[str, int] = {}
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
             trace_dispatcher.start_trace(trace_path)
@@ -327,6 +338,12 @@ class PCE500Emulator:
             new_tracer.start(self._trace_path)
             new_tracer.set_manual_clock_mode(True, tick_ns=1)
             self.memory.set_perf_tracer(new_tracer)
+            # Ensure the Rust LLAMA core writes into the same Perfetto trace file.
+            try:
+                if getattr(self.cpu, "backend", None) == "llama":
+                    self.cpu.set_perfetto_trace(trace_path)
+            except Exception:
+                pass
 
         self.call_depth = 0
         self._interrupt_stack = []
@@ -358,6 +375,58 @@ class PCE500Emulator:
         # Peripheral adapters and IMEM callbacks
         self.peripherals = PeripheralManager(self.memory, self._scheduler)
         self.memory.set_imem_access_callback(self._handle_imem_access)
+        try:
+            # Tap into keyboard scan events to surface KEYI progression in logs/perfetto.
+            if hasattr(self.keyboard, "_matrix"):
+                self.keyboard._matrix._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _irq_perfetto_track(self, source: Optional["IRQSource"]) -> str:
+        if source in (IRQSource.MTI, IRQSource.STI):
+            return "irq.timer"
+        if source in (IRQSource.KEY, IRQSource.ONK):
+            return "irq.key"
+        return "irq.misc"
+
+    def _trace_irq_instant(
+        self,
+        name: str,
+        source: Optional["IRQSource"],
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit a lightweight IRQ instant to Perfetto/new tracer."""
+
+        if not (new_tracer.enabled or self.perfetto_enabled):
+            return
+        data = dict(payload or {})
+        if source is not None:
+            data.setdefault("src", source.name)
+        if new_tracer.enabled:
+            new_tracer.instant(self._irq_perfetto_track(source), name, data)
+        elif self.perfetto_enabled or trace_dispatcher.has_observers():
+            trace_dispatcher.record_instant(
+                self._irq_perfetto_track(source), name, data
+            )
+
+    def _trace_key_event(self, col: int, row: int, pressed: bool) -> None:
+        """Optional hook from keyboard scan to log KEY events into perfetto."""
+        if not (new_tracer.enabled or self.perfetto_enabled):
+            return
+        payload = {
+            "col": col,
+            "row": row,
+            "pressed": bool(pressed),
+            "pc": self.cpu.regs.get(RegisterName.PC),
+            "imr": self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)
+            & 0xFF,
+            "isr": self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
+            & 0xFF,
+        }
+        if new_tracer.enabled:
+            new_tracer.instant("irq.key", "KeyScanEvent", payload)
+        elif self.perfetto_enabled or trace_dispatcher.has_observers():
+            trace_dispatcher.record_instant("irq.key", "KeyScanEvent", payload)
 
     def _reset_instruction_access_log(self) -> None:
         """Clear the per-instruction register access accumulator when tracing."""
@@ -418,8 +487,6 @@ class PCE500Emulator:
         self._next_interrupt_id = 1
         self._scheduler.reset()
         self._kb_irq_count = 0
-        if getattr(self, "_llama_pure_lcd", False):
-            self._seed_interrupt_mask()
         # Reset interrupt accounting
         try:
             self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
@@ -437,10 +504,7 @@ class PCE500Emulator:
         # Tick rough timers to set ISR bits and arm IRQ when due
         try:
             if self._timer_enabled and not getattr(self, "_in_interrupt", False):
-                if not getattr(self.keyboard, "_bridge_enabled", False) or not getattr(
-                    self.cpu, "_timer_in_llama", False
-                ):
-                    self._tick_timers()
+                self._tick_timers()
         except Exception:
             pass
         # Honor HALT: do not execute instructions while halted. Any ISR bit cancels HALT.
@@ -484,6 +548,55 @@ class PCE500Emulator:
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 imr_val_chk = self.memory.read_byte(imr_addr_chk) & 0xFF
                 isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
+                # Capture a second IMR read via CPU regs (LLAMA) to spot divergence.
+                imr_reg_val = None
+                try:
+                    imr_reg_val = self.cpu.regs.get(RegisterName.IMR) & 0xFF
+                except Exception:
+                    pass
+                # Trace the pending check to see if KEYI is masked/cleared.
+                try:
+                    pending_src = None
+                    for b, src in (
+                        (IRQSource.KEY.value, IRQSource.KEY),
+                        (IRQSource.ONK.value, IRQSource.ONK),
+                        (IRQSource.MTI.value, IRQSource.MTI),
+                        (IRQSource.STI.value, IRQSource.STI),
+                    ):
+                        if isr_val_chk & (1 << b):
+                            pending_src = src
+                            break
+                    self._trace_irq_instant(
+                        "IRQ_PendingCheck",
+                        pending_src,
+                        {
+                            "pc": self.cpu.regs.get(RegisterName.PC),
+                            "imr": imr_val_chk,
+                            "isr": isr_val_chk,
+                            "imr_reg": imr_reg_val,
+                            "irq_source": getattr(self, "_irq_source", None)
+                            and getattr(self._irq_source, "name", None),
+                            "pending_src": pending_src.name if pending_src else None,
+                        },
+                    )
+                except Exception:
+                    pass
+                # If we have a pending source but no latched irq_source, adopt it.
+                if (
+                    pending_src is not None
+                    and getattr(self, "_irq_source", None) is None
+                ):
+                    self._irq_source = pending_src
+                # Trace unexpected IMR=0 reads to spot masking.
+                if imr_val_chk == 0:
+                    self._trace_irq_instant(
+                        "IMR_ReadZero",
+                        pending_src,
+                        {
+                            "pc": self.cpu.regs.get(RegisterName.PC),
+                            "isr": isr_val_chk,
+                        },
+                    )
                 _log_irq_debug(
                     f"pending IRQ check pc=0x{self.cpu.regs.get(RegisterName.PC):06X} "
                     f"imr=0x{imr_val_chk:02X} isr=0x{isr_val_chk:02X} in_interrupt={self._in_interrupt}"
@@ -507,6 +620,17 @@ class PCE500Emulator:
                     if not isinstance(s, int) or s < 5:
                         raise RuntimeError(
                             "IRQ deferred: stack pointer not initialized"
+                        )
+                    if self._irq_source == IRQSource.KEY:
+                        self._trace_irq_instant(
+                            "KeyDeliver",
+                            self._irq_source,
+                            {
+                                "from": cur_pc,
+                                "imr": imr_val_chk,
+                                "isr": isr_val_chk,
+                                "s": s,
+                            },
                         )
                     if IRQ_STACK_TRACE_ENABLED:
                         print(
@@ -550,6 +674,32 @@ class PCE500Emulator:
                     # Do not modify ISR here; only deliver the interrupt.
                     # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
                     vector_addr = self.memory.read_long(0xFFFFA)
+                    if self._irq_source == IRQSource.KEY:
+                        # Mark keyboard IRQ delivery explicitly on irq.key track.
+                        self._trace_irq_instant(
+                            "KeyDeliver",
+                            self._irq_source,
+                            {
+                                "from": cur_pc,
+                                "vector": vector_addr,
+                                "imr": imr_val_chk,
+                                "isr": isr_val_chk,
+                                "s": s_new,
+                            },
+                        )
+                    self._trace_irq_instant(
+                        "IRQ_Enter",
+                        self._irq_source,
+                        {
+                            "from": cur_pc,
+                            "vector": vector_addr,
+                            "imr_before": imr_val_chk,
+                            "imr_after": imr_val & 0xFF,
+                            "isr": isr_val_chk,
+                            "y": self.cpu.regs.get(RegisterName.Y),
+                            "s": s,
+                        },
+                    )
                     self.cpu.regs.set(RegisterName.PC, vector_addr)
                     self._in_interrupt = True
                     self._irq_pending = False
@@ -778,6 +928,22 @@ class PCE500Emulator:
         try:
             instr_name = type(eval_info.instruction).__name__
             if instr_name == "RETI":
+                self._trace_irq_instant(
+                    "IRQ_Return",
+                    self._irq_source,
+                    {
+                        "pc": pc,
+                        "y": self.cpu.regs.get(RegisterName.Y),
+                        "imr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                        )
+                        & 0xFF,
+                        "isr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                        )
+                        & 0xFF,
+                    },
+                )
                 self._in_interrupt = False
                 # After returning from interrupt, clear IRQ source marker
                 self._irq_source = None
@@ -1128,12 +1294,6 @@ class PCE500Emulator:
             usr_addr = INTERNAL_MEMORY_START + IMEMRegisters.USR.value
             usr_val = self.memory.read_byte(usr_addr) & 0xFF
             self.memory.write_byte(usr_addr, usr_val | 0x18)
-            # IMR often defaults to IRM|EXM|STM|MTM in the Python backend; seed
-            # a sane value so Rust and Python start aligned when snapshots lack it.
-            imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR.value
-            imr_val = self.memory.read_byte(imr_addr) & 0xFF
-            if imr_val == 0:
-                self.memory.write_byte(imr_addr, 0xC3)
         except Exception:
             pass
 
@@ -1642,7 +1802,6 @@ class PCE500Emulator:
             return
         if not getattr(self, "_kb_irq_enabled", True):
             return
-        self._ensure_key_irq_mask()
         self._set_isr_bits(int(ISRFlag.KEYI))
         self._irq_pending = True
         self._irq_source = IRQSource.KEY
@@ -1656,33 +1815,6 @@ class PCE500Emulator:
             _log_irq_debug(
                 f"lcd-notify irq addr=0x{address:06X} value=0x{value:02X} pc={pc_str}"
             )
-
-    def _seed_interrupt_mask(
-        self, imr_value: int = 0x43, isr_value: int = 0x00
-    ) -> None:
-        imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
-        isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-        try:
-            self.memory.write_byte(imr_addr, imr_value & 0xFF)
-            self.memory.write_byte(isr_addr, isr_value & 0xFF)
-        except Exception:
-            pass
-
-    def _ensure_key_irq_mask(self) -> None:
-        if not getattr(self, "_llama_pure_lcd", False):
-            return
-        try:
-            imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
-            current = self.memory.read_byte(imr_addr) & 0xFF
-        except Exception:
-            return
-        required = int(IMRFlag.IRM | IMRFlag.KEY)
-        if (current & required) == required:
-            return
-        try:
-            self.memory.write_byte(imr_addr, (current | required) & 0xFF)
-        except Exception:
-            pass
 
     def press_key(self, key_code: str) -> bool:
         # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ
@@ -1699,14 +1831,87 @@ class PCE500Emulator:
 
         result = self.keyboard.press_key(key_code) if self.keyboard else False
         if result and self._kb_irq_enabled:
+            if os.getenv("KEYI_DEBUG") == "1":
+                print(
+                    f"[key-press] key={key_code} pc=0x{int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF:06X}"
+                )
+                try:
+                    # Force PF2 enqueue and KEYI set to prove the path when debugging.
+                    self.keyboard._enqueue_event(MatrixEvent(code=0x55, release=False))
+                    self._set_isr_bits(int(ISRFlag.KEYI))
+                    self._irq_pending = True
+                    self._irq_source = IRQSource.KEY
+                    print(
+                        f"[keyi-inject] forced PF2 enqueue imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
+                    )
+                except Exception as exc:
+                    print(f"[keyi-inject] failed: {exc}")
+            # If scan didn’t raise IRQs, optionally inject a direct FIFO/ISR event to prove the path.
+            if os.getenv("FORCE_KEY_INJECT") in ("1", "true", "True"):
+                try:
+                    # Build a synthetic MatrixEvent for this key (press only).
+                    code = (
+                        getattr(self.keyboard, "name_map", {}).get(key_code) or key_code
+                    )
+                    if isinstance(code, str) and hasattr(self.keyboard, "_key_states"):
+                        state = self.keyboard._key_states.get(code)
+                        if state:
+                            byte = state.location.matrix_code & 0x7F
+                            self.keyboard._enqueue_event(
+                                MatrixEvent(code=byte, release=False)
+                            )
+                            self._set_isr_bits(int(ISRFlag.KEYI))
+                            self._irq_pending = True
+                            self._irq_source = IRQSource.KEY
+                            if os.getenv("KEYI_DEBUG") == "1":
+                                print(
+                                    f"[key-inject] code=0x{byte:02X} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
+                                )
+                except Exception:
+                    pass
+            # If strobing has not occurred yet, perform a guaranteed strobe + scan once.
+            if os.getenv("FORCE_STROBE_ON_KEY") in ("1", "true", "True"):
+                try:
+                    self.keyboard.strobe_count += 1
+                    # Strobe all columns (active high).
+                    self.keyboard.kol_value = 0xFF
+                    self.keyboard.koh_value = 0x0F
+                    events = self.keyboard.scan_tick()
+                    if events:
+                        self._kb_irq_count += len(events)
+                        self._set_isr_bits(int(ISRFlag.KEYI))
+                        self._irq_pending = True
+                        self._irq_source = IRQSource.KEY
+                        if os.getenv("KEYI_DEBUG") == "1":
+                            print(
+                                f"[force-strobe] events={len(events)} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
+                            )
+                except Exception:
+                    pass
             events = self.keyboard.scan_tick()
             if events:
                 self._kb_irq_count += len(events)
-            self._ensure_key_irq_mask()
             self._set_isr_bits(int(ISRFlag.KEYI))
             self._irq_pending = True
             self._irq_source = IRQSource.KEY
             try:
+                self._trace_irq_instant(
+                    "KeyIRQ",
+                    self._irq_source,
+                    {
+                        "pc": self.cpu.regs.get(RegisterName.PC),
+                        "y": self.cpu.regs.get(RegisterName.Y),
+                        "events": len(events),
+                        "imr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                        )
+                        & 0xFF,
+                        "isr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                        )
+                        & 0xFF,
+                    },
+                )
                 self._last_kol = getattr(self.keyboard, "kol_value", self._last_kol)
                 self._last_koh = getattr(self.keyboard, "koh_value", self._last_koh)
                 self._kb_strobe_count = getattr(
@@ -1742,14 +1947,64 @@ class PCE500Emulator:
     def _set_isr_bits(self, mask: int) -> None:
         """OR mask into ISR register."""
         isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-        val = self.memory.read_byte(isr_addr)
-        self.memory.write_byte(isr_addr, (val | (mask & 0xFF)) & 0xFF)
+        val = self.memory.read_byte(isr_addr) & 0xFF
+        new_val = (val | (mask & 0xFF)) & 0xFF
+        self.memory.write_byte(isr_addr, new_val)
         if mask & int(ISRFlag.KEYI):
-            self._ensure_key_irq_mask()
+            # Latch a plausible IRQ source so pending checks can deliver.
+            try:
+                if getattr(self, "_irq_source", None) is None:
+                    self._irq_source = IRQSource.KEY
+            except Exception:
+                pass
+            # Emit a dedicated marker when KEYI is asserted so trace diffing can spot it.
+            self._trace_irq_instant(
+                "KEYI_Set",
+                IRQSource.KEY,
+                {
+                    "pc": self.cpu.regs.get(RegisterName.PC),
+                    "prev": val,
+                    "value": new_val,
+                    "imr": self.memory.read_byte(
+                        INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                    )
+                    & 0xFF,
+                    "still_set": bool(
+                        self.memory.read_byte(isr_addr) & int(ISRFlag.KEYI)
+                    ),
+                },
+            )
+            if os.getenv("KEYI_DEBUG") == "1":
+                print(
+                    f"[keyi-debug] pc=0x{int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF:06X} prev=0x{val:02X} new=0x{new_val:02X} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X}"
+                )
+        else:
+            # Log when KEYI would not be set but was previously set.
+            if (val & int(ISRFlag.KEYI)) and not (new_val & int(ISRFlag.KEYI)):
+                self._trace_irq_instant(
+                    "KEYI_Clear",
+                    IRQSource.KEY,
+                    {
+                        "pc": self.cpu.regs.get(RegisterName.PC),
+                        "prev": val,
+                        "value": new_val,
+                    },
+                )
+        # Diagnostic bias: optionally ensure KEY is unmasked when KEYI is asserted.
+        if mask & int(ISRFlag.KEYI):
+            if os.getenv("RUST_KEYI_BIAS") in ("1", "true", "True"):
+                imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                try:
+                    imr_val = self.memory.read_byte(imr_addr) & 0xFF
+                    desired = imr_val | int(IMRFlag.KEY) | int(IMRFlag.IRM)
+                    if desired != imr_val:
+                        self.memory.write_byte(imr_addr, desired & 0xFF)
+                except Exception:
+                    pass
         if IRQ_DEBUG_ENABLED:
             pc = self.cpu.regs.get(RegisterName.PC)
             _log_irq_debug(
-                f"set_isr_bits mask=0x{mask:02X} prev=0x{val & 0xFF:02X} new=0x{(val | (mask & 0xFF)) & 0xFF:02X} pc=0x{pc:06X}"
+                f"set_isr_bits mask=0x{mask:02X} prev=0x{val:02X} new=0x{new_val:02X} pc=0x{pc:06X}"
             )
 
     def _tick_timers(self) -> None:
@@ -1761,14 +2016,25 @@ class PCE500Emulator:
         key_events: List[MatrixEvent] = []
         for source in fired_sources:
             if source is TimerSource.MTI:
-                # When the Rust bridge is active, the keyboard scan runs inside the
-                # Rust instruction loop; skip the Python-side scan to avoid double
-                # counting or flag changes.
-                if not getattr(self.keyboard, "_bridge_enabled", False):
-                    key_events = self.keyboard.scan_tick()
+                key_events = self.keyboard.scan_tick()
                 self._set_isr_bits(int(ISRFlag.MTI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.MTI
+                self._trace_irq_instant(
+                    "TimerFired",
+                    self._irq_source,
+                    {
+                        "cycle": self.cycle_count,
+                        "imr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                        )
+                        & 0xFF,
+                        "isr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                        )
+                        & 0xFF,
+                    },
+                )
                 if IRQ_DEBUG_ENABLED:
                     _log_irq_debug(
                         f"timer fired source=MTI cycle={self.cycle_count} next_mti={self._scheduler.next_mti}"
@@ -1777,10 +2043,86 @@ class PCE500Emulator:
                 self._set_isr_bits(int(ISRFlag.STI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.STI
+                self._trace_irq_instant(
+                    "TimerFired",
+                    self._irq_source,
+                    {
+                        "cycle": self.cycle_count,
+                        "imr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                        )
+                        & 0xFF,
+                        "isr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                        )
+                        & 0xFF,
+                    },
+                )
                 if IRQ_DEBUG_ENABLED:
                     _log_irq_debug(
                         f"timer fired source=STI cycle={self.cycle_count} next_sti={self._scheduler.next_sti}"
                     )
+
+        # Optional: force a strobe/scan for LLAMA backend when requested to ensure KEYI can assert.
+        if (
+            os.getenv("FORCE_STROBE_LLAMA") in ("1", "true", "True")
+            and getattr(self.cpu, "backend", None) == "llama"
+        ):
+            try:
+                self.keyboard.strobe_count += 1
+                self.keyboard.kol_value = 0xFF
+                self.keyboard.koh_value = 0x0F
+                forced_events = self.keyboard.scan_tick()
+                if forced_events:
+                    self._kb_irq_count += len(forced_events)
+                    self._set_isr_bits(int(ISRFlag.KEYI))
+                    self._irq_pending = True
+                    self._irq_source = IRQSource.KEY
+                    if os.getenv("KEYI_DEBUG") == "1":
+                        print(
+                            f"[force-strobe-llama] events={len(forced_events)} "
+                            f"imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} "
+                            f"isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
+                        )
+            except Exception:
+                pass
+        # Fallback: if explicitly requested, force KEYI regardless of scan results for LLAMA debug.
+        if (
+            os.getenv("FORCE_KEYI_LLAMA") in ("1", "true", "True")
+            and getattr(self.cpu, "backend", None) == "llama"
+        ):
+            try:
+                self._set_isr_bits(int(ISRFlag.KEYI))
+                self._irq_pending = True
+                self._irq_source = IRQSource.KEY
+                if os.getenv("KEYI_DEBUG") == "1":
+                    print(
+                        f"[force-keyi-llama] imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} "
+                        f"isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
+                    )
+            except Exception:
+                pass
+
+        # If we have pressed keys but no events surfaced, emit a diagnostic marker.
+        if (
+            not key_events
+            and hasattr(self.keyboard, "_pressed_keys")
+            and getattr(self.keyboard, "_pressed_keys")
+        ):
+            try:
+                self._trace_irq_instant(
+                    "KeyScanEmpty",
+                    self._irq_source,
+                    {
+                        "pressed": len(getattr(self.keyboard, "_pressed_keys", [])),
+                        "strobe_count": getattr(self.keyboard, "strobe_count", 0),
+                        "kol": getattr(self.keyboard, "kol_value", 0),
+                        "koh": getattr(self.keyboard, "koh_value", 0),
+                        "pc": self.cpu.regs.get(RegisterName.PC),
+                    },
+                )
+            except Exception:
+                pass
 
         if key_events:
             if self._kb_irq_enabled:
@@ -1792,6 +2134,59 @@ class PCE500Emulator:
                     _log_irq_debug(
                         f"key_events_irq count={len(key_events)} cycle={self.cycle_count}"
                     )
+                # Emit a delivery marker for perfetto parity when scan raises KEYI.
+                try:
+                    self._trace_irq_instant(
+                        "KeyIRQ",
+                        self._irq_source,
+                        {
+                            "pc": self.cpu.regs.get(RegisterName.PC),
+                            "y": self.cpu.regs.get(RegisterName.Y),
+                            "events": len(key_events),
+                            "imr": self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                            )
+                            & 0xFF,
+                            "isr": self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                            )
+                            & 0xFF,
+                        },
+                    )
+                except Exception:
+                    pass
+        # Trace scan outcome to perfetto to understand KEYI assertion cadence.
+        try:
+            pressed = len(getattr(self.keyboard, "_pressed_keys", []))
+            active_cols = []
+            try:
+                if hasattr(self.keyboard, "get_active_columns"):
+                    active_cols = list(self.keyboard.get_active_columns())
+            except Exception:
+                active_cols = []
+            self._trace_irq_instant(
+                "KeyScanEvent",
+                IRQSource.KEY,
+                {
+                    "events": len(key_events),
+                    "pressed": pressed,
+                    "strobe_count": getattr(self.keyboard, "strobe_count", 0),
+                    "kol": getattr(self.keyboard, "kol_value", 0),
+                    "koh": getattr(self.keyboard, "koh_value", 0),
+                    "active_cols": active_cols,
+                    "pc": self.cpu.regs.get(RegisterName.PC),
+                    "imr": self.memory.read_byte(
+                        INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                    )
+                    & 0xFF,
+                    "isr": self.memory.read_byte(
+                        INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                    )
+                    & 0xFF,
+                },
+            )
+        except Exception:
+            pass
 
         if new_tracer.enabled and self._irq_source is not None:
             new_tracer.instant(
@@ -2161,6 +2556,12 @@ class PCE500Emulator:
                 lst.append(pc)
                 if len(lst) > 10:
                     lst.pop(0)
+            if reg_name in ("IMR", "ISR"):
+                self._trace_irq_instant(
+                    f"{reg_name}_Write",
+                    self._irq_source,
+                    {"pc": pc, "prev": prev_val & 0xFF, "value": new_val & 0xFF},
+                )
         except Exception:
             pass
 
@@ -2370,6 +2771,44 @@ class PCE500Emulator:
 
         if self.disasm_trace_enabled and reg_name:
             self._on_imem_register_access(pc, reg_name, access_type, value)
+
+        # Perfetto logging for IMR/ISR writes to spot masking/clearing.
+        try:
+            if reg_name in ("IMR", "ISR") and access_type == "write":
+                prev = self._last_imem_values.get(reg_name, value & 0xFF)
+                self._last_imem_values[reg_name] = value & 0xFF
+                src = None
+                if reg_name == "ISR" and (value & int(ISRFlag.KEYI)):
+                    src = IRQSource.KEY
+                if reg_name == "IMR" and value == 0:
+                    self._trace_irq_instant(
+                        "IMR_Clear",
+                        None,
+                        {"pc": pc, "prev": prev & 0xFF},
+                    )
+                # Detect KEYI clear transitions for visibility.
+                if (
+                    reg_name == "ISR"
+                    and (prev & int(ISRFlag.KEYI))
+                    and not (value & int(ISRFlag.KEYI))
+                ):
+                    self._trace_irq_instant(
+                        "KEYI_Clear",
+                        IRQSource.KEY,
+                        {"pc": pc, "prev": prev & 0xFF, "value": value & 0xFF},
+                    )
+                self._trace_irq_instant(
+                    "IMEM_Write",
+                    src,
+                    {
+                        "reg": reg_name,
+                        "prev": prev & 0xFF,
+                        "value": value & 0xFF,
+                        "pc": pc,
+                    },
+                )
+        except Exception:
+            pass
 
     def save_disasm_trace(self, output_dir: str = "data") -> str:
         """Generate and save the disassembly trace to a file."""

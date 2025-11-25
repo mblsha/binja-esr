@@ -1,30 +1,34 @@
-pub mod memory;
 pub mod keyboard;
 pub mod lcd;
+pub mod llama;
+pub mod memory;
+pub mod perfetto;
 pub mod snapshot;
 pub mod timer;
-pub mod perfetto;
-pub mod llama;
 
 use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use thiserror::Error;
 
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+pub use llama::state::LlamaState as CpuState;
 pub use memory::{
     MemoryImage, ADDRESS_MASK, EXTERNAL_SPACE, INTERNAL_ADDR_MASK, INTERNAL_MEMORY_START,
     INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
 };
 pub use perfetto::PerfettoTracer;
-pub use timer::TimerContext;
+lazy_static::lazy_static! {
+    pub static ref PERFETTO_TRACER: Mutex<Option<PerfettoTracer>> = Mutex::new(None);
+}
 pub use snapshot::{
     load_snapshot, pack_registers, save_snapshot, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC,
     SNAPSHOT_REGISTER_LAYOUT, SNAPSHOT_VERSION,
 };
-pub use llama::state::LlamaState as CpuState;
+pub use timer::TimerContext;
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 

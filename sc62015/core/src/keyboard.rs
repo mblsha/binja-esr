@@ -41,6 +41,7 @@ pub struct KeyboardMatrix {
     release_threshold: u8,
     repeat_delay: u8,
     repeat_interval: u8,
+    repeat_enabled: bool,
     states: Vec<KeyState>,
     fifo_storage: [u8; FIFO_SIZE],
     fifo_head: usize,
@@ -61,6 +62,7 @@ impl KeyboardMatrix {
             release_threshold: DEFAULT_RELEASE_TICKS,
             repeat_delay: DEFAULT_REPEAT_DELAY,
             repeat_interval: DEFAULT_REPEAT_INTERVAL,
+            repeat_enabled: true,
             states: Vec::new(),
             fifo_storage: [0; FIFO_SIZE],
             fifo_head: 0,
@@ -80,18 +82,26 @@ impl KeyboardMatrix {
         matrix
     }
 
-    fn active_columns(&self) -> Vec<u8> {
+    pub fn active_columns(&self) -> Vec<u8> {
         let mut cols = Vec::new();
         for col in 0..8 {
             let bit = (self.kol >> col) & 1;
-            let active = if self.columns_active_high { bit == 1 } else { bit == 0 };
+            let active = if self.columns_active_high {
+                bit == 1
+            } else {
+                bit == 0
+            };
             if active {
                 cols.push(col);
             }
         }
         for col in 0..3 {
             let bit = (self.koh >> col) & 1;
-            let active = if self.columns_active_high { bit == 1 } else { bit == 0 };
+            let active = if self.columns_active_high {
+                bit == 1
+            } else {
+                bit == 0
+            };
             if active {
                 cols.push(col + 8);
             }
@@ -99,11 +109,12 @@ impl KeyboardMatrix {
         cols
     }
 
-    fn compute_kil(&self, allow_pending: bool) -> u8 {
-        let active = self.active_columns();
+    pub fn compute_kil(&self, allow_pending: bool) -> u8 {
         let mut value = 0u8;
+        let active = self.active_columns();
         for state in &self.states {
-            if !active.contains(&state.location.column) {
+            let col_active = active.contains(&state.location.column);
+            if !col_active && !allow_pending && !state.pressed {
                 continue;
             }
             if state.debounced
@@ -181,6 +192,14 @@ impl KeyboardMatrix {
 
     pub fn irq_count(&self) -> u32 {
         self.irq_count
+    }
+
+    pub fn strobe_count(&self) -> u32 {
+        self.strobe_count
+    }
+
+    pub fn set_repeat_enabled(&mut self, enabled: bool) {
+        self.repeat_enabled = enabled;
     }
 
     pub fn press_matrix_code(&mut self, code: u8, memory: &mut MemoryImage) {
@@ -262,7 +281,7 @@ impl KeyboardMatrix {
                             state.debounced = true;
                             enqueue = Some((state.matrix_code(), false));
                         }
-                    } else {
+                    } else if self.repeat_enabled {
                         state.repeat_ticks = state.repeat_ticks.saturating_sub(1);
                         if state.repeat_ticks == 0 {
                             state.repeat_ticks = self.repeat_interval;

@@ -1,9 +1,10 @@
 use clap::Parser;
+use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
     llama::{
-        eval::{LlamaBus, LlamaExecutor},
+        eval::{power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
         state::LlamaState,
     },
@@ -26,12 +27,14 @@ const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
 const IMEM_IMR_OFFSET: u32 = 0xFB;
 const IMEM_ISR_OFFSET: u32 = 0xFC;
-const IMEM_USR_OFFSET: u32 = 0xF8;
-const IMEM_SSR_OFFSET: u32 = 0xFD;
-const IMEM_LCC_OFFSET: u32 = 0xFE;
-const IMEM_SCR_OFFSET: u32 = 0xFD;
 const IMEM_KOL_OFFSET: u32 = 0xF0;
 const IMEM_KOH_OFFSET: u32 = 0xF1;
+const IMEM_KIL_OFFSET: u32 = 0xF2;
+const FIFO_BASE_ADDR: u32 = 0x00BFC96;
+const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
+const VEC_RANGE_START: u32 = 0x00BFCC6;
+const VEC_RANGE_END: u32 = 0x00BFCCC;
+const HANDLER_JP_Y_PC: u32 = 0x0F2053;
 const ISR_KEYI: u8 = 0x04;
 const ISR_MTI: u8 = 0x01;
 const ISR_STI: u8 = 0x02;
@@ -40,8 +43,68 @@ const IMR_KEY: u8 = 0x04;
 const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
 const PF1_CODE: u8 = 0x56; // col=10, row=6
+const PF2_CODE: u8 = 0x55; // col=10, row=5
+const PF2_MENU_PC: u32 = 0x0F1FBF; // observed Python PC after PF2 menu renders
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
+
+struct IrqPerfetto {
+    builder: PerfettoTraceBuilder,
+    track_timer: TrackId,
+    track_key: TrackId,
+    track_misc: TrackId,
+    path: PathBuf,
+}
+
+impl IrqPerfetto {
+    fn new(path: PathBuf) -> Self {
+        let mut builder = PerfettoTraceBuilder::new("pce500-llama");
+        let track_timer = builder.add_thread("irq.timer");
+        let track_key = builder.add_thread("irq.key");
+        let track_misc = builder.add_thread("irq.misc");
+        Self {
+            builder,
+            track_timer,
+            track_key,
+            track_misc,
+            path,
+        }
+    }
+
+    fn track_for(&self, src: Option<&str>) -> TrackId {
+        match src {
+            Some(s) if s.contains("MTI") || s.contains("STI") => self.track_timer,
+            Some("KEY") | Some("ONK") => self.track_key,
+            Some(s) if s.contains("KEY") => self.track_key,
+            _ => self.track_misc,
+        }
+    }
+
+    fn instant<'a>(
+        &mut self,
+        name: &str,
+        src: Option<&str>,
+        ts: u64,
+        annotations: impl IntoIterator<Item = (&'a str, AnnotationValue)>,
+    ) {
+        let mut ev =
+            self.builder
+                .add_instant_event(self.track_for(src), name.to_string(), ts as i64);
+        if let Some(s) = src {
+            ev.add_annotation("src", s);
+        }
+        for (k, v) in annotations {
+            ev.add_annotation(k, v);
+        }
+        ev.finish();
+    }
+
+    fn finish(self) -> Result<(), String> {
+        self.builder
+            .save(&self.path)
+            .map_err(|e| format!("perfetto save: {e}"))
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -57,9 +120,102 @@ struct Args {
     #[arg(long, value_name = "PATH", default_value_os_t = default_rom_path())]
     rom: PathBuf,
 
-    /// Run until PF1 menu (ignores step limit).
+    /// Run until PF1 menu (ignores steps limit).
     #[arg(long, default_value_t = false)]
     pf1: bool,
+
+    /// Run PF2 (does not clear RAM) instead of PF1; ignored if --pf1 is set.
+    #[arg(long, default_value_t = false, conflicts_with = "pf1")]
+    pf2: bool,
+
+    /// Optional explicit matrix code to auto-press (overrides --pf1/--pf2). Accepts
+    /// 'pf1', 'pf2', decimal, or hex (e.g., 0x56).
+    #[arg(long, value_name = "CODE")]
+    auto_key: Option<String>,
+
+    /// Auto-press after this many executed instructions.
+    #[arg(long, default_value_t = 15_000)]
+    auto_after: u64,
+
+    /// Auto-release after this many additional instructions (if pressed).
+    #[arg(long, default_value_t = 1_000)]
+    auto_release_after: u64,
+
+    /// Decode LCD text and require this substring to appear (can repeat).
+    #[arg(long, value_name = "TEXT")]
+    expect_text: Vec<String>,
+
+    /// Decode LCD text and require ROW:TEXT (row is zero-based, e.g., 0:S2(CARD)).
+    #[arg(long, value_name = "ROW:TEXT")]
+    expect_row: Vec<String>,
+
+    /// Emit perf summary (instr/sec).
+    #[arg(long, default_value_t = false)]
+    perf: bool,
+
+    /// Force LCD write logging (honours --lcd-log-limit).
+    #[arg(long, default_value_t = false)]
+    lcd_log: bool,
+
+    /// Maximum LCD writes to log when tracing is enabled.
+    #[arg(long, value_name = "N")]
+    lcd_log_limit: Option<u32>,
+
+    /// Stop execution when PC matches this address (hex or decimal).
+    #[arg(long, value_name = "ADDR")]
+    stop_pc: Option<String>,
+
+    /// Trace specific PCs (hex or decimal); logs when hit.
+    #[arg(long, value_name = "ADDR", num_args = 1.., value_delimiter = ',')]
+    trace_pc: Vec<String>,
+
+    /// After a traced PC hit, log the next N PCs (helpful to follow IRQ paths).
+    #[arg(long, value_name = "N")]
+    trace_pc_window: Option<u64>,
+
+    /// When tracing PCs, also dump a small register snapshot (A,F,IMR,S,Y).
+    #[arg(long, default_value_t = false)]
+    trace_regs: bool,
+
+    /// Disable timers (MTI/STI) to isolate keyboard IRQ behaviour.
+    #[arg(long, default_value_t = false)]
+    disable_timers: bool,
+
+    /// Dump keyboard stats (strobe count, IRQ count, FIFO) on exit.
+    #[arg(long, default_value_t = false)]
+    debug_keyboard: bool,
+
+    /// Force KOL/KOH strobes each tick (helps auto-key flows when ROM isn't strobing).
+    #[arg(long, default_value_t = false)]
+    force_strobe: bool,
+
+    /// Inject a synthetic KIL read/strobe on auto-key press to simulate ROM polling.
+    #[arg(long, default_value_t = false)]
+    bridge_kil: bool,
+
+    /// Only scan keyboard on timer IRQs (skip per-instruction scans).
+    #[arg(long, default_value_t = false)]
+    scan_on_timer: bool,
+
+    /// If the ROM never reads KIL, perform one synthetic KIL read when KEYI is pending.
+    #[arg(long, default_value_t = false)]
+    force_kil_consume: bool,
+
+    /// Trace IMEM keyboard/IRQ reads/writes (KOL/KOH/KIL/IMR/ISR) with PC context.
+    #[arg(long, default_value_t = false)]
+    trace_kbd: bool,
+
+    /// Bridge PF2 by jumping to the PF2 menu PC after pressing PF2 (diagnostic only).
+    #[arg(long, default_value_t = false)]
+    force_pf2_jump: bool,
+
+    /// Emit a Perfetto trace with IRQ/IMR/ISR events.
+    #[arg(long, default_value_t = false)]
+    perfetto: bool,
+
+    /// Path to write the Perfetto trace.
+    #[arg(long, value_name = "PATH", default_value = "pc-e500.perfetto-trace")]
+    perfetto_path: PathBuf,
 }
 
 fn default_rom_path() -> PathBuf {
@@ -77,14 +233,30 @@ struct StandaloneBus {
     log_lcd_count: u32,
     log_lcd_limit: u32,
     in_interrupt: bool,
+    delivered_irq_count: u32,
+    pending_kil: bool,
+    last_kbd_access: Option<String>,
+    kil_reads: u32,
+    rom_kil_reads: u32,
+    rom_koh_reads: u32,
+    rom_kol_reads: u32,
+    trace_kbd: bool,
+    last_pc: u32,
+    vec_patched: bool,
+    perfetto: Option<IrqPerfetto>,
+    last_irq_src: Option<String>,
 }
 
 impl StandaloneBus {
-    fn new(memory: MemoryImage, lcd: LcdController, timer: TimerContext) -> Self {
-        let log_lcd_limit = env::var("RUST_LCD_TRACE_MAX")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(50);
+    fn new(
+        memory: MemoryImage,
+        lcd: LcdController,
+        timer: TimerContext,
+        log_lcd: bool,
+        log_lcd_limit: u32,
+        trace_kbd: bool,
+        perfetto: Option<IrqPerfetto>,
+    ) -> Self {
         Self {
             memory,
             lcd,
@@ -92,10 +264,22 @@ impl StandaloneBus {
             cycle_count: 0,
             keyboard: KeyboardMatrix::new(),
             lcd_writes: 0,
-            log_lcd: env::var("RUST_LCD_TRACE").is_ok(),
+            log_lcd,
             log_lcd_count: 0,
             log_lcd_limit,
             in_interrupt: false,
+            delivered_irq_count: 0,
+            pending_kil: false,
+            last_kbd_access: None,
+            kil_reads: 0,
+            rom_kil_reads: 0,
+            rom_koh_reads: 0,
+            rom_kol_reads: 0,
+            trace_kbd,
+            last_pc: 0,
+            vec_patched: false,
+            perfetto,
+            last_irq_src: None,
         }
     }
 
@@ -103,10 +287,100 @@ impl StandaloneBus {
         &self.lcd
     }
 
+    fn keyboard_stats(&self) -> (u32, u32, Vec<u8>) {
+        (
+            self.keyboard.strobe_count(),
+            self.keyboard.irq_count(),
+            self.keyboard.fifo_snapshot(),
+        )
+    }
+
+    fn delivered_irq_count(&self) -> u32 {
+        self.delivered_irq_count
+    }
+
+    fn set_pc(&mut self, pc: u32) {
+        self.last_pc = pc & ADDRESS_MASK;
+    }
+
+    fn trace_kbd_access(&self, kind: &str, addr: u32, offset: u32, bits: u8, value: u32) {
+        if !self.trace_kbd {
+            return;
+        }
+        println!(
+            "[kbd-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} bits={bits} value=0x{val:08X}",
+            pc = self.last_pc,
+            addr = addr,
+            offset = offset,
+            bits = bits,
+            val = value & mask_bits(bits),
+        );
+    }
+
+    fn trace_imem_access(&self, kind: &str, addr: u32, bits: u8, value: u32) {
+        if !self.trace_kbd {
+            return;
+        }
+        if !MemoryImage::is_internal(addr) {
+            return;
+        }
+        let offset = addr - INTERNAL_MEMORY_START;
+        println!(
+            "[imem-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} bits={bits} value=0x{val:08X}",
+            pc = self.last_pc,
+            addr = addr,
+            offset = offset,
+            bits = bits,
+            val = value & mask_bits(bits),
+        );
+    }
+
+    fn trace_fifo_access(&self, kind: &str, addr: u32, bits: u8, value: u32) {
+        if !self.trace_kbd {
+            return;
+        }
+        if !(FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
+            return;
+        }
+        println!(
+            "[fifo-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:06X} bits={bits} value=0x{val:08X}",
+            pc = self.last_pc,
+            addr = addr,
+            bits = bits,
+            val = value & mask_bits(bits)
+        );
+    }
+
+    /// Parity: leave vectors to the ROM; no patching.
+    fn maybe_patch_vectors(&mut self) {
+        self.vec_patched = true;
+    }
+
     fn tick_keyboard(&mut self) {
+        // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
         if self.keyboard.scan_tick() > 0 {
             self.keyboard.write_fifo_to_memory(&mut self.memory);
             self.raise_key_irq();
+            self.last_kbd_access = Some("scan".to_string());
+            self.log_irq_event(
+                "KeyScan",
+                Some("KEY"),
+                [
+                    (
+                        "isr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                    (
+                        "imr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                    ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
+                ],
+            );
         }
     }
 
@@ -124,37 +398,86 @@ impl StandaloneBus {
 
     fn release_key(&mut self, code: u8) {
         self.keyboard.release_matrix_code(code, &mut self.memory);
+        self.pending_kil = false;
         self.raise_key_irq();
+    }
+
+    fn log_irq_event<'a>(
+        &mut self,
+        name: &str,
+        src: Option<&str>,
+        annotations: impl IntoIterator<Item = (&'a str, AnnotationValue)>,
+    ) {
+        if let Some(tracer) = self.perfetto.as_mut() {
+            tracer.instant(name, src, self.cycle_count, annotations);
+        }
+    }
+
+    fn log_imem_write(&mut self, offset: u32, prev: u8, new: u8) {
+        if !matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET) {
+            return;
+        }
+        let reg = if offset == IMEM_IMR_OFFSET {
+            "IMR"
+        } else {
+            "ISR"
+        };
+        let mut src_hint: Option<&str> = None;
+        if reg == "ISR" && (new & ISR_KEYI) != 0 {
+            src_hint = Some("KEY");
+        }
+        self.log_irq_event(
+            "IMEM_Write",
+            src_hint,
+            [
+                ("reg", AnnotationValue::Str(reg.to_string())),
+                ("prev", AnnotationValue::UInt(prev as u64)),
+                ("value", AnnotationValue::UInt(new as u64)),
+                ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
+            ],
+        );
+        if reg == "ISR" && (new & ISR_KEYI) != 0 {
+            self.log_irq_event(
+                "KEYI_Set",
+                Some("KEY"),
+                [
+                    ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
+                    ("prev", AnnotationValue::UInt(prev as u64)),
+                    ("value", AnnotationValue::UInt(new as u64)),
+                    (
+                        "imr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                ],
+            );
+        }
     }
 
     fn irq_pending(&mut self) -> bool {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        // Master bit cleared means interrupts enabled.
-        if self.in_interrupt || (imr & IMR_MASTER) != 0 {
+        // Master bit set means interrupts enabled.
+        if self.in_interrupt || (imr & IMR_MASTER) == 0 {
             return false;
         }
-        // Per-bit masks are "mask when set"; deliver only when mask bit is 0.
-        let mut any = false;
-        if (isr & ISR_KEYI != 0) && (imr & IMR_KEY == 0) {
-            any = true;
-        }
-        if (isr & ISR_MTI != 0) && (imr & IMR_MTI == 0) {
-            any = true;
-        }
-        if (isr & ISR_STI != 0) && (imr & IMR_STI == 0) {
-            any = true;
-        }
-        any
+        // Per-bit masks are "enabled when set". Allow nested delivery while in_interrupt for keyboard.
+        ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
+            || (!self.in_interrupt
+                && (((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
+                    || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0))))
     }
 
     fn idle_tick(&mut self) {
+        // Match Python cadence: advance timers and scan keyboard on each timer tick.
         self.timer
             .tick_timers(&mut self.memory, &mut self.cycle_count);
         self.tick_keyboard();
     }
 
     fn deliver_irq(&mut self, state: &mut LlamaState) {
+        // Mirror the IR intrinsic: push PC, F, IMR, clear IRM, jump to vector.
         fn push_stack(
             memory: &mut MemoryImage,
             state: &mut LlamaState,
@@ -179,22 +502,51 @@ impl StandaloneBus {
         let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
         let imr = (self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF) as u8;
         push_stack(&mut self.memory, state, RegName::S, imr as u32, 8);
+        // Clear IRM (bit7) on entry to match Python/IR semantics.
         let cleared_imr = imr & 0x7F;
-        let _ = self.memory.store(imr_addr, 8, u32::from(cleared_imr));
-        state.set_reg(RegName::IMR, cleared_imr as u32);
+        let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
+        state.set_reg(RegName::IMR, u32::from(cleared_imr));
 
+        // Ensure the vector table is patched before reading the vector.
+        self.maybe_patch_vectors();
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
         state.set_pc(vec & ADDRESS_MASK);
         state.set_halted(false);
         self.in_interrupt = true;
-        self.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        let src = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+            Some("KEY")
+        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
+            Some("MTI")
+        } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
+            Some("STI")
+        } else {
+            None
+        };
+        self.last_irq_src = src.map(|s| s.to_string());
+        let src_clone = self.last_irq_src.clone();
+        self.log_irq_event(
+            "IRQ_Enter",
+            src_clone.as_deref(),
+            [
+                ("from", AnnotationValue::Pointer(pc as u64)),
+                (
+                    "vector",
+                    AnnotationValue::Pointer((vec & ADDRESS_MASK) as u64),
+                ),
+                ("imr_before", AnnotationValue::UInt(imr as u64)),
+                ("imr_after", AnnotationValue::UInt(cleared_imr as u64)),
+                ("isr", AnnotationValue::UInt(isr as u64)),
+            ],
+        );
+        self.delivered_irq_count = self.delivered_irq_count.wrapping_add(1);
         if self.log_lcd && self.log_lcd_count < 50 {
             println!(
                 "[irq] delivered: vec=0x{vec:05X} imr=0x{imr:02X} pc_prev=0x{pc:05X}",
                 vec = vec & ADDRESS_MASK,
-                imr = cleared_imr,
+                imr = imr,
                 pc = pc
             );
         }
@@ -207,6 +559,14 @@ impl StandaloneBus {
         let _ = self
             .keyboard
             .handle_write(IMEM_KOH_OFFSET, 0x07, &mut self.memory);
+    }
+
+    fn finish_perfetto(&mut self) {
+        if let Some(tracer) = self.perfetto.take() {
+            if let Err(err) = tracer.finish() {
+                eprintln!("[perfetto] failed to save trace: {err}");
+            }
+        }
     }
 }
 
@@ -224,32 +584,137 @@ impl LlamaBus for StandaloneBus {
         if bits == 0 {
             return 0;
         }
-        self.timer
-            .tick_timers(&mut self.memory, &mut self.cycle_count);
-        self.tick_keyboard();
-        if let Some(byte) = self
-            .keyboard
-            .handle_read(addr.saturating_sub(INTERNAL_MEMORY_START), &mut self.memory)
-        {
-            return byte as u32;
+        let kbd_offset = if MemoryImage::is_internal(addr) {
+            Some(addr - INTERNAL_MEMORY_START)
+        } else {
+            None
+        };
+        if let Some(offset) = kbd_offset {
+            if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
+                match offset {
+                    IMEM_KIL_OFFSET => self.kil_reads = self.kil_reads.saturating_add(1),
+                    IMEM_KOH_OFFSET => self.rom_koh_reads = self.rom_koh_reads.saturating_add(1),
+                    IMEM_KOL_OFFSET => self.rom_kol_reads = self.rom_kol_reads.saturating_add(1),
+                    _ => {}
+                }
+                if offset == IMEM_KIL_OFFSET {
+                    self.pending_kil = false;
+                }
+                if matches!(
+                    offset,
+                    IMEM_KIL_OFFSET
+                        | IMEM_KOL_OFFSET
+                        | IMEM_KOH_OFFSET
+                        | IMEM_IMR_OFFSET
+                        | IMEM_ISR_OFFSET
+                ) {
+                    self.trace_kbd_access("read", addr, offset, bits, byte as u32);
+                }
+                if false {
+                    let val = self.memory.read_internal_byte(offset).unwrap_or(0);
+                    println!(
+                        "[kbd-read] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} value=0x{val:02X} last={last:?}",
+                        pc = self.last_pc,
+                        addr = addr,
+                        offset = offset,
+                        val = val,
+                        last = self.last_kbd_access
+                    );
+                }
+                return byte as u32;
+            } else if matches!(
+                offset,
+                IMEM_KIL_OFFSET
+                    | IMEM_KOL_OFFSET
+                    | IMEM_KOH_OFFSET
+                    | IMEM_IMR_OFFSET
+                    | IMEM_ISR_OFFSET
+            ) && self.trace_kbd
+            {
+                // Trace fallthrough reads (handled by memory, not keyboard).
+                if let Some(val) = self.memory.read_internal_byte(offset) {
+                    self.trace_kbd_access("read-fallthrough", addr, offset, bits, val as u32);
+                }
+            }
         }
+        // LCD overlay ranges
         if self.lcd.handles(addr) {
             return self.lcd.read(addr) & mask_bits(bits);
         }
-        self.memory.load(addr, bits).unwrap_or(0) & mask_bits(bits)
+        if self.trace_kbd && (VEC_RANGE_START..=VEC_RANGE_END).contains(&addr) {
+            println!(
+                "[vec-trace-read] pc=0x{pc:05X} addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
+                pc = self.last_pc,
+                addr = addr,
+                bits = bits,
+                val = self.memory.load(addr, bits).unwrap_or(0) & mask_bits(bits)
+            );
+        }
+        self.memory
+            .load(addr, bits)
+            .map(|val| {
+                if MemoryImage::is_internal(addr) {
+                    self.trace_imem_access("read", addr, bits, val);
+                }
+                if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
+                    self.trace_fifo_access("read", addr, bits, val);
+                }
+                val & mask_bits(bits)
+            })
+            .unwrap_or(0)
     }
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
         let addr = addr & ADDRESS_MASK;
-        self.timer
-            .tick_timers(&mut self.memory, &mut self.cycle_count);
-        self.tick_keyboard();
-        if self.keyboard.handle_write(
-            addr.saturating_sub(INTERNAL_MEMORY_START),
-            value as u8,
-            &mut self.memory,
-        ) {
-            return;
+        let kbd_offset = if MemoryImage::is_internal(addr) {
+            Some(addr - INTERNAL_MEMORY_START)
+        } else {
+            None
+        };
+        let mut imr_isr_prev: Option<(u32, u8)> = None;
+        if MemoryImage::is_internal(addr) {
+            if let Some(offset) = MemoryImage::internal_offset(addr) {
+                if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET) {
+                    if let Some(prev) = self.memory.read_internal_byte(offset) {
+                        imr_isr_prev = Some((offset, prev));
+                    }
+                }
+            }
+        }
+        if let Some(offset) = kbd_offset {
+            if self
+                .keyboard
+                .handle_write(offset, value as u8, &mut self.memory)
+            {
+                if matches!(
+                    offset,
+                    IMEM_KIL_OFFSET
+                        | IMEM_KOL_OFFSET
+                        | IMEM_KOH_OFFSET
+                        | IMEM_IMR_OFFSET
+                        | IMEM_ISR_OFFSET
+                ) {
+                    self.trace_kbd_access("write", addr, offset, bits, value);
+                }
+                if false {
+                    println!(
+                        "[kbd-write] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} value=0x{val:02X} last={last:?}",
+                        pc = self.last_pc,
+                        addr = addr,
+                        offset = offset,
+                        val = value as u8,
+                        last = self.last_kbd_access
+                    );
+                }
+                if let Some((off, prev)) = imr_isr_prev {
+                    if let Some(cur) = self.memory.read_internal_byte(off) {
+                        if cur != prev {
+                            self.log_imem_write(off, prev, cur);
+                        }
+                    }
+                }
+                return;
+            }
         }
         if bits == 8 && self.lcd.handles(addr) {
             self.lcd.write(addr, value as u8);
@@ -265,7 +730,29 @@ impl LlamaBus for StandaloneBus {
             }
             return;
         }
+        if MemoryImage::is_internal(addr) {
+            self.trace_imem_access("write", addr, bits, value);
+        }
+        if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
+            self.trace_fifo_access("write", addr, bits, value);
+        }
+        if self.trace_kbd && (VEC_RANGE_START..=VEC_RANGE_END).contains(&addr) {
+            println!(
+                "[vec-trace-write] pc=0x{pc:05X} addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
+                pc = self.last_pc,
+                addr = addr,
+                bits = bits,
+                val = value & mask_bits(bits)
+            );
+        }
         let _ = self.memory.store(addr, bits, value);
+        if let Some((offset, prev)) = imr_isr_prev {
+            if let Some(cur) = self.memory.read_internal_byte(offset) {
+                if cur != prev {
+                    self.log_imem_write(offset, prev, cur);
+                }
+            }
+        }
     }
 
     fn resolve_emem(&mut self, base: u32) -> u32 {
@@ -316,6 +803,7 @@ fn cell_patterns(
             for dx in 0..GLYPH_WIDTH {
                 let mut column = 0u8;
                 for dy in 0..ROWS_PER_CELL {
+                    // Match Python text decoder: treat 0 as lit pixel when building columns.
                     if buffer[y0 + dy][x0 + dx] == 0 {
                         column |= 1 << dy;
                     }
@@ -351,60 +839,234 @@ fn load_rom(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(data)
 }
 
+fn parse_matrix_code(raw: &str) -> Result<Option<u8>, Box<dyn Error>> {
+    let lowered = raw.trim().to_lowercase();
+    if lowered == "pf1" {
+        return Ok(Some(PF1_CODE));
+    }
+    if lowered == "pf2" {
+        return Ok(Some(PF2_CODE));
+    }
+    if let Some(hex) = lowered.strip_prefix("0x") {
+        let value = u8::from_str_radix(hex, 16)?;
+        return Ok(Some(value));
+    }
+    if let Ok(value) = lowered.parse::<u8>() {
+        return Ok(Some(value));
+    }
+    Err(format!("could not parse matrix code '{raw}'").into())
+}
+
+fn parse_address(raw: &str) -> Result<u32, Box<dyn Error>> {
+    let trimmed = raw.trim();
+    if let Some(hex) = trimmed.strip_prefix("0x") {
+        let value = u32::from_str_radix(hex, 16)?;
+        return Ok(value);
+    }
+    Ok(trimmed.parse::<u32>()?)
+}
+
+fn parse_expected_row(raw: &str) -> Result<(usize, String), String> {
+    let (idx, text) = raw
+        .split_once(':')
+        .ok_or_else(|| format!("expect-row must be ROW:TEXT, got '{raw}'"))?;
+    let row_idx = idx
+        .parse::<usize>()
+        .map_err(|_| format!("could not parse row index in '{raw}'"))?;
+    Ok((row_idx, text.to_string()))
+}
+
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let rom_bytes = load_rom(&args.rom)?;
     let font = FontMap::from_rom(&rom_bytes);
 
+    let log_lcd_env = env::var("RUST_LCD_TRACE").is_ok();
+    let log_lcd = args.lcd_log || log_lcd_env;
+    let log_lcd_limit = args
+        .lcd_log_limit
+        .or_else(|| {
+            env::var("RUST_LCD_TRACE_MAX")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+        })
+        .unwrap_or(50);
+
+    let auto_key = if args.pf1 {
+        Some(PF1_CODE)
+    } else if args.pf2 {
+        Some(PF2_CODE)
+    } else if let Some(raw) = args.auto_key.as_ref() {
+        parse_matrix_code(raw)?
+    } else {
+        None
+    };
+    // Parity: do not auto-strobe; rely on ROM strobes.
+    let trace_kbd = args.trace_kbd;
+
+    let stop_pc = if let Some(pc_str) = args.stop_pc.as_ref() {
+        Some(parse_address(pc_str)?)
+    } else {
+        None
+    };
+    let trace_pcs: Vec<u32> = args
+        .trace_pc
+        .iter()
+        .map(|raw| parse_address(raw))
+        .collect::<Result<_, _>>()?;
+    let mut trace_pc_counts: HashMap<u32, u64> = HashMap::new();
+    let trace_pc_window = args.trace_pc_window.unwrap_or(0);
+    let mut trace_window_active: u64 = 0;
+    let mut trace_window_anchor: Option<u32> = None;
+    let trace_regs = args.trace_regs;
+    let mut last_y_trace: Option<u32> = None;
+
     let mut memory = MemoryImage::new();
     memory.load_external(&rom_bytes);
-    memory.set_keyboard_bridge(true);
-    // Seed IMR/ISR like the Python harness bootstrap so timer/key IRQs can deliver.
-    memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
-    memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
-    // Align USR/SSR defaults with Python intrinsic reset.
-    memory.write_internal_byte(IMEM_USR_OFFSET, 0x18);
-    memory.write_internal_byte(IMEM_SSR_OFFSET, 0x00);
-    memory.write_internal_byte(IMEM_LCC_OFFSET, 0x00);
-    memory.write_internal_byte(IMEM_SCR_OFFSET, 0x00);
+    memory.set_keyboard_bridge(false);
 
+    // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)
+    // unless disabled for debugging.
+    let perfetto = args
+        .perfetto
+        .then(|| IrqPerfetto::new(args.perfetto_path.clone()));
     let mut bus = StandaloneBus::new(
         memory,
         LcdController::new(),
-        TimerContext::new(true, 8192, 8192),
+        if args.disable_timers {
+            TimerContext::new(false, 0, 0)
+        } else {
+            // Match Python cadence: MTI≈500 cycles, STI≈5000 cycles.
+            TimerContext::new(true, 500, 5_000)
+        },
+        log_lcd,
+        log_lcd_limit,
+        trace_kbd,
+        perfetto,
     );
     bus.strobe_all_columns();
+    if auto_key.is_some() {
+        bus.keyboard.set_repeat_enabled(false);
+    }
     let mut state = LlamaState::new();
     let mut executor = LlamaExecutor::new();
+    power_on_reset(&mut bus, &mut state);
     // Align PC with ROM reset vector.
     let reset_vec = (bus.memory.load(ROM_RESET_VECTOR_ADDR, 8).unwrap_or(0))
         | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
         | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
     state.set_pc(reset_vec & ADDRESS_MASK);
+    // Leave IMR at reset defaults; the ROM will initialize vectors/masks.
 
     let start = Instant::now();
     let mut executed: u64 = 0;
-    let auto_press_step: u64 = 15_000;
-    let auto_release_after: u64 = 40_000;
-    let mut pressed_pf1 = false;
+    let auto_press_step: u64 = args.auto_after;
+    let mut auto_release_after: u64 = args.auto_release_after;
+    if args.pf2 && args.auto_release_after == 1_000 {
+        auto_release_after = args.steps;
+    }
+    let mut pressed_key = false;
     let mut release_at: u64 = 0;
-    let max_steps = if args.pf1 { u64::MAX } else { args.steps };
+    let max_steps = args.steps;
     let mut _halted_after_pf1 = false;
-    #[allow(clippy::manual_is_multiple_of)]
     for _ in 0..max_steps {
-        let imr_reg = state.get_reg(RegName::IMR) & 0xFF;
-        if bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) != imr_reg as u8 {
-            bus.memory
-                .write_internal_byte(IMEM_IMR_OFFSET, imr_reg as u8);
+        // Ensure vector table is patched once before executing instructions.
+        if !bus.vec_patched {
+            bus.maybe_patch_vectors();
         }
+        // Drive timers each iteration; keyboard scan occurs on timer cadence inside idle_tick.
         bus.idle_tick();
         if bus.irq_pending() {
             bus.deliver_irq(&mut state);
-            bus.in_interrupt = false;
         } else if state.is_halted() {
             continue;
         }
         let pc = state.pc();
-        if bus.log_lcd && bus.log_lcd_count < 50 && executed % 1000 == 0 {
+        bus.set_pc(pc);
+        if pc == HANDLER_JP_Y_PC {
+            let y = state.get_reg(RegName::Y) & 0xFFFFFF;
+            if last_y_trace != Some(y) {
+                println!(
+                    "[jp-y-trace] pc=0x{pc:05X} y=0x{y:06X} imr=0x{imr:02X} isr=0x{isr:02X}",
+                    pc = pc,
+                    y = y,
+                    imr = bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0),
+                    isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0),
+                );
+                last_y_trace = Some(y);
+            }
+        }
+        if !trace_pcs.is_empty() && trace_pcs.contains(&pc) {
+            let count = trace_pc_counts
+                .entry(pc)
+                .and_modify(|c| *c += 1)
+                .or_insert(1);
+            if *count <= 10 || count.is_multiple_of(1000) {
+                let imr = bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+                let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                if trace_regs {
+                    let a = state.get_reg(RegName::A) & 0xFF;
+                    let f = state.get_reg(RegName::F) & 0xFF;
+                    let s = state.get_reg(RegName::S) & 0xFFFFFF;
+                    let y = state.get_reg(RegName::Y) & 0xFFFFFF;
+                    println!(
+                        "[pc-trace] pc=0x{pc:05X} hits={hits} imr=0x{imr:02X} isr=0x{isr:02X} a=0x{a:02X} f=0x{f:02X} sp=0x{s:06X} y=0x{y:06X}",
+                        pc = pc,
+                        hits = count,
+                        imr = imr,
+                        isr = isr,
+                        a = a,
+                        f = f,
+                        s = s,
+                        y = y
+                    );
+                } else {
+                    println!(
+                        "[pc-trace] pc=0x{pc:05X} hits={hits} imr=0x{imr:02X} isr=0x{isr:02X}",
+                        pc = pc,
+                        hits = count,
+                        imr = imr,
+                        isr = isr
+                    );
+                }
+            }
+            if trace_pc_window > 0 {
+                trace_window_active = trace_pc_window;
+                trace_window_anchor = Some(pc);
+            }
+        } else if trace_window_active > 0 {
+            let imr = bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+            let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+            let anchor = trace_window_anchor
+                .map(|p| format!("0x{p:05X}"))
+                .unwrap_or_else(|| "n/a".to_string());
+            if trace_regs {
+                let a = state.get_reg(RegName::A) & 0xFF;
+                let f = state.get_reg(RegName::F) & 0xFF;
+                let s = state.get_reg(RegName::S) & 0xFFFFFF;
+                let y = state.get_reg(RegName::Y) & 0xFFFFFF;
+                println!(
+                    "[pc-trace-window] anchor={anchor} pc=0x{pc:05X} remaining={} imr=0x{imr:02X} isr=0x{isr:02X} a=0x{a:02X} f=0x{f:02X} sp=0x{s:06X} y=0x{y:06X}",
+                    trace_window_active,
+                    pc = pc,
+                    imr = imr,
+                    isr = isr,
+                    a = a,
+                    f = f,
+                    s = s,
+                    y = y
+                );
+            } else {
+                println!(
+                    "[pc-trace-window] anchor={anchor} pc=0x{pc:05X} remaining={} imr=0x{imr:02X} isr=0x{isr:02X}",
+                    trace_window_active,
+                    pc = pc,
+                    imr = imr,
+                    isr = isr
+                );
+            }
+            trace_window_active = trace_window_active.saturating_sub(1);
+        }
+        if bus.log_lcd && bus.log_lcd_count < 50 && executed.is_multiple_of(1000) {
             let imr = bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
             let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
             println!(
@@ -415,20 +1077,57 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             );
         }
         let opcode = bus.load(pc, 8) as u8;
-        if !pressed_pf1 && executed >= auto_press_step {
-            bus.press_key(PF1_CODE);
-            pressed_pf1 = true;
-            release_at = executed + auto_release_after;
-        } else if pressed_pf1 && executed >= release_at {
-            bus.release_key(PF1_CODE);
-            pressed_pf1 = false;
+        if let Some(code) = auto_key {
+            if !pressed_key && executed >= auto_press_step {
+                bus.press_key(code);
+                if args.force_pf2_jump && code == PF2_CODE {
+                    state.set_pc(PF2_MENU_PC);
+                }
+                // Deliver the key interrupt immediately to avoid the ROM clearing ISR before we service it.
+                if bus.irq_pending() {
+                    bus.deliver_irq(&mut state);
+                }
+                pressed_key = true;
+                release_at = executed + auto_release_after;
+            } else if pressed_key && executed >= release_at {
+                bus.release_key(code);
+                pressed_key = false;
+            }
         }
         match executor.execute(opcode, &mut state, &mut bus) {
             Ok(_) => {
+                if opcode == 0x01 {
+                    // RETI completes interrupt service.
+                    let last_src = bus.last_irq_src.clone();
+                    bus.log_irq_event(
+                        "IRQ_Return",
+                        last_src.as_deref(),
+                        [
+                            ("pc", AnnotationValue::Pointer(state.pc() as u64)),
+                            (
+                                "imr",
+                                AnnotationValue::UInt(
+                                    bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0)
+                                        as u64,
+                                ),
+                            ),
+                            (
+                                "isr",
+                                AnnotationValue::UInt(
+                                    bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0)
+                                        as u64,
+                                ),
+                            ),
+                        ],
+                    );
+                    bus.in_interrupt = false;
+                    bus.last_irq_src = None;
+                }
                 executed += 1;
-                if args.pf1 && state.pc() == 0x0F172F {
-                    _halted_after_pf1 = true;
-                    break;
+                if let Some(stop) = stop_pc {
+                    if state.pc() == stop {
+                        break;
+                    }
                 }
                 if state.is_halted() {
                     continue;
@@ -465,10 +1164,79 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         lcd_stats.cs_right_count
     );
 
+    if args.debug_keyboard {
+        let (strobe_count, irq_count, fifo) = bus.keyboard_stats();
+        let kol = bus
+            .memory
+            .read_internal_byte(IMEM_KOL_OFFSET)
+            .unwrap_or_default();
+        let koh = bus
+            .memory
+            .read_internal_byte(IMEM_KOH_OFFSET)
+            .unwrap_or_default();
+        let kil = bus
+            .memory
+            .read_internal_byte(IMEM_KIL_OFFSET)
+            .unwrap_or_default();
+        println!(
+            "Keyboard: strobe_count={} irq_count={} delivered_irq_count={} kil_reads={} rom_reads(kol/koh/kil)=({}/{}/{}) fifo={:?} KOL=0x{kol:02X} KOH=0x{koh:02X} KIL=0x{kil:02X}",
+            strobe_count,
+            irq_count,
+            bus.delivered_irq_count(),
+            bus.kil_reads,
+            bus.rom_kol_reads,
+            bus.rom_koh_reads,
+            bus.rom_kil_reads,
+            fifo
+        );
+    }
+
     let lcd_lines = decode_lcd_text(bus.lcd(), &font);
     println!("LCD (decoded text):");
-    for line in lcd_lines {
+    for line in &lcd_lines {
         println!("  {}", line);
+    }
+
+    bus.finish_perfetto();
+
+    if args.perf {
+        let instrs_per_sec = if elapsed.as_secs_f64() > 0.0 {
+            (executed as f64) / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        println!(
+            "Perf: {:.2} MIPS ({} instr / {:.3?})",
+            instrs_per_sec / 1_000_000.0,
+            executed,
+            elapsed
+        );
+    }
+
+    let mut failures = Vec::new();
+    for raw in &args.expect_row {
+        match parse_expected_row(raw) {
+            Ok((idx, expected)) => {
+                let actual = lcd_lines.get(idx).cloned().unwrap_or_default();
+                if !actual.contains(&expected) {
+                    failures.push(format!(
+                        "expect-row failed: row {idx} missing substring '{expected}' (got '{actual}')"
+                    ));
+                }
+            }
+            Err(err) => failures.push(err),
+        }
+    }
+    for needle in &args.expect_text {
+        if !lcd_lines.iter().any(|line| line.contains(needle)) {
+            failures.push(format!(
+                "expect-text failed: substring '{needle}' not found in LCD text"
+            ));
+        }
+    }
+    if !failures.is_empty() {
+        eprintln!("FAIL: {}", failures.join(" | "));
+        std::process::exit(1);
     }
 
     Ok(())

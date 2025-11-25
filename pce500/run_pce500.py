@@ -109,9 +109,6 @@ def run_emulator(
                 return
             if not inject(key_code, release=release):
                 return
-            ensure = getattr(emu, "_ensure_key_irq_mask", None)
-            if callable(ensure):
-                ensure()
             emu._set_isr_bits(int(ISRFlag.KEYI))
             emu._irq_pending = True
             emu._irq_source = IRQSource.KEY
@@ -604,6 +601,9 @@ def main(
     save_snapshot: str | Path | None = None,
 ):
     """Example with Perfetto tracing enabled."""
+    # Local import for KEYI_DEBUG injection.
+    from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+
     # Enable performance profiling if requested
     if profile_emulator:
         from pce500.tracing.perfetto_tracing import enable_profiling, tracer
@@ -655,6 +655,24 @@ def main(
         load_snapshot=load_snapshot,
         save_snapshot=save_snapshot,
     ) as emu:
+        if os.getenv("KEYI_DEBUG") == "1":
+            try:
+                # One-shot KEYI set after reset to prove IRQ path.
+                emu._set_isr_bits(int(ISRFlag.KEYI))
+                emu._irq_pending = True
+                emu._irq_source = (
+                    emu._irq_source if getattr(emu, "_irq_source", None) else "KEY"
+                )
+                from pce500.emulator import INTERNAL_MEMORY_START
+
+                imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                print(
+                    f"[key-debug] forced KEYI set imr=0x{emu.memory.read_byte(imr_addr):02X} "
+                    f"isr=0x{emu.memory.read_byte(isr_addr):02X}"
+                )
+            except Exception as exc:
+                print(f"[key-debug] forced PF2 press failed: {exc}")
         # Pass-through secondary scheduling parameters via emulator attributes
         if auto2_press_key and auto2_press_after_steps is not None:
             setattr(emu, "_auto2_key", auto2_press_key)

@@ -45,14 +45,13 @@ const PRE_MODES: &[(u8, AddressingMode, AddressingMode)] = &[
 ];
 
 const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
-    0x10, 0x41, 0x42, 0x43, 0x47, 0x49, 0x4A, 0x4B, 0x51, 0x52, 0x53, 0x55, 0x57,
-    0x59, 0x5A, 0x5B, 0x5D, 0x61, 0x62, 0x63, 0x65, 0x66, 0x67, 0x69, 0x6A, 0x6B,
-    0x6D, 0x6F, 0x71, 0x72, 0x73, 0x77, 0x79, 0x7A, 0x7B, 0x7D, 0x7F, 0x80, 0x81,
-    0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E,
-    0x8F, 0x98, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4,
-    0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB8, 0xB9,
-    0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xC5, 0xCC, 0xCD, 0xD5, 0xD6, 0xD7, 0xDC, 0xE3,
-    0xE5, 0xE7, 0xEB, 0xEC, 0xF5, 0xF7, 0xFC,
+    0x10, 0x41, 0x42, 0x43, 0x47, 0x49, 0x4A, 0x4B, 0x51, 0x52, 0x53, 0x55, 0x57, 0x59, 0x5A, 0x5B,
+    0x5D, 0x61, 0x62, 0x63, 0x65, 0x66, 0x67, 0x69, 0x6A, 0x6B, 0x6D, 0x6F, 0x71, 0x72, 0x73, 0x77,
+    0x79, 0x7A, 0x7B, 0x7D, 0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A,
+    0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x98, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0xA0, 0xA1, 0xA2, 0xA3,
+    0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB8, 0xB9, 0xBA, 0xBB,
+    0xBC, 0xBD, 0xBE, 0xC5, 0xCC, 0xCD, 0xD5, 0xD6, 0xD7, 0xDC, 0xE3, 0xE5, 0xE7, 0xEB, 0xEC, 0xF5,
+    0xF7, 0xFC,
 ];
 
 const INTERNAL_MEMORY_START: u32 = 0x100000; // align with Python INTERNAL_MEMORY_START
@@ -114,11 +113,31 @@ struct DecodedOperands {
 }
 
 fn read_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32) -> u8 {
-    bus.load(INTERNAL_MEMORY_START + offset, 8) as u8
+    let val = bus.load(INTERNAL_MEMORY_START + offset, 8) as u8;
+    // Perfetto/trace hook for IMR reads when available.
+    #[cfg(feature = "llama-tests")]
+    {
+        if offset == IMEM_IMR_OFFSET {
+            if let Ok(env) = std::env::var("TRACE_IMR_READ") {
+                if env == "1" {
+                    eprintln!(
+                        "[imr-read-core] addr=0x{addr:06X} value=0x{val:02X}",
+                        addr = INTERNAL_MEMORY_START + offset
+                    );
+                }
+            }
+        }
+    }
+    val
 }
 
 fn write_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32, value: u8) {
-    bus.store(INTERNAL_MEMORY_START + offset, 8, value as u32);
+    // Ensure IMR writes always retain IRM (bit7) when written via bus.
+    let mut v = value;
+    if offset == IMEM_IMR_OFFSET {
+        v |= 0x80;
+    }
+    bus.store(INTERNAL_MEMORY_START + offset, 8, v as u32);
 }
 
 fn pre_modes_for(opcode: u8) -> Option<PreModes> {
@@ -144,11 +163,7 @@ fn mode_for_operand(pre: Option<&PreModes>, operand_index: usize) -> AddressingM
     }
 }
 
-fn imem_offset_for_mode<B: LlamaBus>(
-    bus: &mut B,
-    mode: AddressingMode,
-    raw: u8,
-) -> u32 {
+fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -> u32 {
     let bp = read_imem_byte(bus, IMEM_BP_OFFSET) as u32;
     let px = read_imem_byte(bus, IMEM_PX_OFFSET) as u32;
     let py = read_imem_byte(bus, IMEM_PY_OFFSET) as u32;
@@ -181,7 +196,8 @@ fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     state.halt();
 }
 
-fn apply_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
+/// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
+pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
     let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
     lcc &= !0x80;
@@ -463,8 +479,7 @@ impl LlamaExecutor {
             consumed += 1;
         }
         let pointer = Self::read_imm(bus, base, 24);
-        let addr = bus
-            .resolve_emem(pointer.wrapping_add(disp as i32 as u32));
+        let addr = bus.resolve_emem(pointer.wrapping_add(disp as i32 as u32));
         let bits = Self::bits_from_bytes(width_bytes);
         Ok((
             MemOperand {
@@ -495,11 +510,12 @@ impl LlamaExecutor {
         dest_is_internal: bool,
     ) -> Result<(EmemImemTransfer, u32), &'static str> {
         let mode_byte = bus.load(pc, 8) as u8;
-        let (needs_offset, sign) = match mode_byte {
+        let top = mode_byte & 0xC0;
+        let (needs_offset, sign) = match top {
             0x00 => (false, 0),
-            0x80 => (true, 1),
+            0x40 | 0x80 => (true, 1), // tolerate stray bits; treat as +offset
             0xC0 => (true, -1),
-            _ => return Err("unsupported EMEM/IMEM offset mode"),
+            _ => (false, 0),
         };
         let first = bus.load(pc + 1, 8) as u8;
         let second = bus.load(pc + 2, 8) as u8;
@@ -520,23 +536,13 @@ impl LlamaExecutor {
         let (dst_addr, src_addr, dst_is_internal) = if dest_is_internal {
             // MV (m),[(n)] - dst is internal addr=first, ptr lives at second
             let pointer = Self::read_imm(bus, second_addr, 24);
-            let ext_addr =
-                bus.resolve_emem(pointer.wrapping_add(disp as u32));
-            (
-                first_addr,
-                ext_addr,
-                true,
-            )
+            let ext_addr = bus.resolve_emem(pointer.wrapping_add(disp as u32));
+            (first_addr, ext_addr, true)
         } else {
             // MV [(n)],(m) - dst is external pointer from first, src is internal second
             let pointer = Self::read_imm(bus, first_addr, 24);
-            let ext_addr =
-                bus.resolve_emem(pointer.wrapping_add(disp as u32));
-            (
-                ext_addr,
-                second_addr,
-                false,
-            )
+            let ext_addr = bus.resolve_emem(pointer.wrapping_add(disp as u32));
+            (ext_addr, second_addr, false)
         };
         Ok((
             EmemImemTransfer {
@@ -569,11 +575,7 @@ impl LlamaExecutor {
             decoded.mem2 = Some(mem_src);
             offset += consumed;
             let raw_imem = bus.load(pc + offset, 8) & 0xFF;
-            let imem_addr = imem_addr_for_mode(
-                bus,
-                mode_for_operand(pre, 0),
-                raw_imem as u8,
-            );
+            let imem_addr = imem_addr_for_mode(bus, mode_for_operand(pre, 0), raw_imem as u8);
             decoded.mem = Some(MemOperand {
                 addr: imem_addr,
                 bits: 8,
@@ -604,11 +606,7 @@ impl LlamaExecutor {
                     };
                     let mode_index = if single_pre { 0 } else { operand_index };
                     *slot = Some(MemOperand {
-                        addr: imem_addr_for_mode(
-                            bus,
-                            mode_for_operand(pre, mode_index),
-                            raw as u8,
-                        ),
+                        addr: imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw as u8),
                         bits: *bits,
                         side_effect: None,
                     });
@@ -624,11 +622,7 @@ impl LlamaExecutor {
                     };
                     let mode_index = if single_pre { 0 } else { operand_index };
                     *slot = Some(MemOperand {
-                        addr: imem_addr_for_mode(
-                            bus,
-                            mode_for_operand(pre, mode_index),
-                            raw as u8,
-                        ),
+                        addr: imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw as u8),
                         bits,
                         side_effect: None,
                     });
@@ -660,8 +654,7 @@ impl LlamaExecutor {
                     offset += consumed;
                 }
                 OperandKind::EMemRegModePostPre => {
-                    let (mem, consumed) =
-                        self.decode_ext_reg_ptr(state, bus, pc + offset, 1)?;
+                    let (mem, consumed) = self.decode_ext_reg_ptr(state, bus, pc + offset, 1)?;
                     if decoded.mem.is_none() {
                         decoded.mem = Some(mem);
                     } else {
@@ -672,8 +665,7 @@ impl LlamaExecutor {
                 OperandKind::EMemIMemWidth(bytes) => {
                     let mode_index = if single_pre { 0 } else { operand_index };
                     let mode = mode_for_operand(pre, mode_index);
-                    let (mem, consumed) =
-                        self.decode_imem_ptr(bus, pc + offset, *bytes, mode)?;
+                    let (mem, consumed) = self.decode_imem_ptr(bus, pc + offset, *bytes, mode)?;
                     if decoded.mem.is_none() {
                         decoded.mem = Some(mem);
                     } else {
@@ -686,8 +678,14 @@ impl LlamaExecutor {
                     let mode_second_index = if single_pre { 0 } else { operand_index + 1 };
                     let mode_first = mode_for_operand(pre, mode_first_index);
                     let mode_second = mode_for_operand(pre, mode_second_index);
-                    let (transfer, consumed) =
-                        self.decode_emem_imem_offset(entry, bus, pc + offset, mode_first, mode_second, true)?;
+                    let (transfer, consumed) = self.decode_emem_imem_offset(
+                        entry,
+                        bus,
+                        pc + offset,
+                        mode_first,
+                        mode_second,
+                        true,
+                    )?;
                     decoded.transfer = Some(transfer);
                     offset += consumed;
                 }
@@ -696,8 +694,14 @@ impl LlamaExecutor {
                     let mode_second_index = if single_pre { 0 } else { operand_index + 1 };
                     let mode_first = mode_for_operand(pre, mode_first_index);
                     let mode_second = mode_for_operand(pre, mode_second_index);
-                    let (transfer, consumed) =
-                        self.decode_emem_imem_offset(entry, bus, pc + offset, mode_first, mode_second, false)?;
+                    let (transfer, consumed) = self.decode_emem_imem_offset(
+                        entry,
+                        bus,
+                        pc + offset,
+                        mode_first,
+                        mode_second,
+                        false,
+                    )?;
                     decoded.transfer = Some(transfer);
                     offset += consumed;
                 }
@@ -706,14 +710,10 @@ impl LlamaExecutor {
                     let width_bytes = width_bits.div_ceil(8);
                     let (ptr_mem, consumed_ptr) =
                         self.decode_ext_reg_ptr(state, bus, pc + offset, width_bytes)?;
-                    let raw_imem =
-                        bus.load(pc + offset + consumed_ptr, 8) & 0xFF;
+                    let raw_imem = bus.load(pc + offset + consumed_ptr, 8) & 0xFF;
                     let mode_index = if single_pre { 0 } else { operand_index };
-                    let imem_addr = imem_addr_for_mode(
-                        bus,
-                        mode_for_operand(pre, mode_index),
-                        raw_imem as u8,
-                    );
+                    let imem_addr =
+                        imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw_imem as u8);
                     offset += consumed_ptr + 1;
                     let transfer = match kind {
                         super::opcodes::RegImemOffsetKind::DestImem => EmemImemTransfer {
@@ -816,9 +816,11 @@ impl LlamaExecutor {
 
     fn resolved_reg(op: &OperandKind, decoded: &DecodedOperands) -> Option<RegName> {
         match op {
-            OperandKind::Reg(_, _) | OperandKind::RegB | OperandKind::RegIL | OperandKind::RegIMR | OperandKind::RegF => {
-                Self::operand_reg(op)
-            }
+            OperandKind::Reg(_, _)
+            | OperandKind::RegB
+            | OperandKind::RegIL
+            | OperandKind::RegIMR
+            | OperandKind::RegF => Self::operand_reg(op),
             OperandKind::Reg3 => decoded.reg3,
             _ => None,
         }
@@ -834,24 +836,23 @@ impl LlamaExecutor {
         prefix_len: u8,
     ) -> Result<u8, &'static str> {
         let prev_fc = state.get_reg(RegName::FC);
-        let decoded =
-            self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+        let decoded = self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
         let mut mvl_length: Option<u32> = None;
         if matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
-                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
-                if length == 0 {
-                    // Apply pointer side-effects even when nothing moves; Python still updates
-                    // pre/post addressing registers for MVL with zero length, but only for
-                    // pre-dec modes (new value lower than current).
-                    for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
-                        if let Some((reg, new_val)) = m.side_effect {
-                            let curr = state.get_reg(reg);
-                            if new_val < curr {
-                                state.set_reg(reg, new_val);
-                            }
+            let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+            if length == 0 {
+                // Apply pointer side-effects even when nothing moves; Python still updates
+                // pre/post addressing registers for MVL with zero length, but only for
+                // pre-dec modes (new value lower than current).
+                for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
+                    if let Some((reg, new_val)) = m.side_effect {
+                        let curr = state.get_reg(reg);
+                        if new_val < curr {
+                            state.set_reg(reg, new_val);
                         }
                     }
-                    state.set_reg(RegName::FC, prev_fc);
+                }
+                state.set_reg(RegName::FC, prev_fc);
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -912,7 +913,10 @@ impl LlamaExecutor {
         if let Some(reg) = src_reg {
             let bits = match src_op {
                 OperandKind::Reg(_, bits) => *bits,
-                OperandKind::RegB | OperandKind::RegIL | OperandKind::RegIMR | OperandKind::RegF => 8,
+                OperandKind::RegB
+                | OperandKind::RegIL
+                | OperandKind::RegIMR
+                | OperandKind::RegF => 8,
                 _ => 8,
             };
             src_val = Some((state.get_reg(reg), bits));
@@ -1115,8 +1119,7 @@ impl LlamaExecutor {
         prefix_len: u8,
     ) -> Result<u8, &'static str> {
         let start_pc = state.pc();
-        let decoded =
-            self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+        let decoded = self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
         let mem = decoded.mem.ok_or("missing mem operand")?;
         let len = decoded.len;
         match entry.kind {
@@ -1158,7 +1161,8 @@ impl LlamaExecutor {
             | InstrKind::Cmp
             | InstrKind::Test => {
                 // Resolve operands based on ordering
-                let lhs_is_mem = matches!(entry.operands[0],
+                let lhs_is_mem = matches!(
+                    entry.operands[0],
                     OperandKind::IMem(_)
                         | OperandKind::IMemWidth(_)
                         | OperandKind::EMemAddrWidth(_)
@@ -1167,15 +1171,22 @@ impl LlamaExecutor {
                         | OperandKind::EMemRegWidthMode(_)
                         | OperandKind::EMemIMemWidth(_)
                 );
-                let rhs_is_mem = entry.operands.get(1).map(|op| matches!(op,
-                    OperandKind::IMem(_)
-                        | OperandKind::IMemWidth(_)
-                        | OperandKind::EMemAddrWidth(_)
-                        | OperandKind::EMemAddrWidthOp(_)
-                        | OperandKind::EMemRegWidth(_)
-                        | OperandKind::EMemRegWidthMode(_)
-                        | OperandKind::EMemIMemWidth(_)
-                )).unwrap_or(false);
+                let rhs_is_mem = entry
+                    .operands
+                    .get(1)
+                    .map(|op| {
+                        matches!(
+                            op,
+                            OperandKind::IMem(_)
+                                | OperandKind::IMemWidth(_)
+                                | OperandKind::EMemAddrWidth(_)
+                                | OperandKind::EMemAddrWidthOp(_)
+                                | OperandKind::EMemRegWidth(_)
+                                | OperandKind::EMemRegWidthMode(_)
+                                | OperandKind::EMemIMemWidth(_)
+                        )
+                    })
+                    .unwrap_or(false);
 
                 let mask = Self::mask_for_width(mem.bits);
                 let lhs_val = if lhs_is_mem {
@@ -1191,9 +1202,10 @@ impl LlamaExecutor {
                         .unwrap_or(0)
                 } else if let Some((imm, _)) = decoded.imm {
                     imm
-                } else if let Some(r) =
-                    Self::resolved_reg(entry.operands.get(1).unwrap_or(&OperandKind::Placeholder), &decoded)
-                {
+                } else if let Some(r) = Self::resolved_reg(
+                    entry.operands.get(1).unwrap_or(&OperandKind::Placeholder),
+                    &decoded,
+                ) {
                     state.get_reg(r)
                 } else {
                     state.get_reg(RegName::A) & mask
@@ -1218,9 +1230,11 @@ impl LlamaExecutor {
                     }
                     InstrKind::Sbc => {
                         let c = state.get_reg(RegName::FC) & 1;
-                        let borrow =
-                            (lhs_val as u64) < (rhs_val as u64 + c as u64);
-                        (lhs_val.wrapping_sub(rhs_val).wrapping_sub(c) & mask, Some(borrow))
+                        let borrow = (lhs_val as u64) < (rhs_val as u64 + c as u64);
+                        (
+                            lhs_val.wrapping_sub(rhs_val).wrapping_sub(c) & mask,
+                            Some(borrow),
+                        )
                     }
                     InstrKind::Cmp => {
                         Self::set_flags_cmp(state, lhs_val & mask, rhs_val & mask, mem.bits);
@@ -1272,7 +1286,15 @@ impl LlamaExecutor {
             let next_pc = state.pc().wrapping_add(1);
             let next_opcode = bus.load(next_pc, 8) as u8;
             let next_entry = self.lookup(next_opcode).ok_or("unknown opcode after PRE")?;
-            return self.execute_with(next_opcode, next_entry, state, bus, Some(&pre_modes), Some(next_pc), 1);
+            return self.execute_with(
+                next_opcode,
+                next_entry,
+                state,
+                bus,
+                Some(&pre_modes),
+                Some(next_pc),
+                1,
+            );
         }
         self.execute_with(opcode, entry, state, bus, None, None, 0)
     }
@@ -1300,6 +1322,7 @@ impl LlamaExecutor {
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
+                // Do not auto-halt; let the host decide when to block.
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -1430,18 +1453,19 @@ impl LlamaExecutor {
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let op = entry.operands.first().ok_or("missing operand")?;
-                let (val, bits, dest_mem, dest_reg) = if let Some(reg) = Self::resolved_reg(op, &decoded) {
-                    let bits = match op {
-                        OperandKind::Reg(_, b) => *b,
-                        OperandKind::Reg3 => 24,
-                        _ => 8,
+                let (val, bits, dest_mem, dest_reg) =
+                    if let Some(reg) = Self::resolved_reg(op, &decoded) {
+                        let bits = match op {
+                            OperandKind::Reg(_, b) => *b,
+                            OperandKind::Reg3 => 24,
+                            _ => 8,
+                        };
+                        (state.get_reg(reg), bits, None, Some(reg))
+                    } else if let Some(mem) = decoded.mem {
+                        (bus.load(mem.addr, mem.bits), mem.bits, Some(mem), None)
+                    } else {
+                        return Err("missing operand");
                     };
-                    (state.get_reg(reg), bits, None, Some(reg))
-                } else if let Some(mem) = decoded.mem {
-                    (bus.load(mem.addr, mem.bits), mem.bits, Some(mem), None)
-                } else {
-                    return Err("missing operand");
-                };
                 let mask = Self::mask_for_width(bits);
                 let res = match entry.kind {
                     InstrKind::Shl => (val << 1) & mask,
@@ -1469,7 +1493,8 @@ impl LlamaExecutor {
             | InstrKind::Xor
             | InstrKind::Adc
             | InstrKind::Sbc => {
-                if entry.operands.len() == 1 && matches!(entry.operands[0], OperandKind::RegPair(_)) {
+                if entry.operands.len() == 1 && matches!(entry.operands[0], OperandKind::RegPair(_))
+                {
                     let decoded =
                         self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                     let (r1, r2, bits) = decoded.reg_pair.ok_or("missing operand")?;
@@ -1514,17 +1539,22 @@ impl LlamaExecutor {
             }
             InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl => {
                 let saved_fc = state.get_reg(RegName::FC);
-                let len = self.execute_mv_generic(entry, state, bus, pre, pc_override, prefix_len)?;
+                let len =
+                    self.execute_mv_generic(entry, state, bus, pre, pc_override, prefix_len)?;
                 state.set_reg(RegName::FC, saved_fc);
                 Ok(len)
             }
             InstrKind::Reset => {
-                apply_reset(bus, state);
+                power_on_reset(bus, state);
                 Ok(1 + prefix_len)
             }
             InstrKind::Pre | InstrKind::Unknown => {
                 let len = prefix_len
-                    + if entry.kind == InstrKind::Pre { 1 } else { Self::estimated_length(entry) };
+                    + if entry.kind == InstrKind::Pre {
+                        1
+                    } else {
+                        Self::estimated_length(entry)
+                    };
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(len as u32));
@@ -1553,10 +1583,7 @@ impl LlamaExecutor {
                 let instr_len = prefix_len + Self::estimated_length(entry);
                 if entry.kind == InstrKind::Ir {
                     // Push PC (24-bit), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
-                    let pc = state
-                        .pc()
-                        .wrapping_add(instr_len as u32)
-                        & mask_for(RegName::PC);
+                    let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
                     Self::push_stack(state, bus, RegName::S, pc, 24);
                     let f = state.get_reg(RegName::F) & 0xFF;
                     Self::push_stack(state, bus, RegName::S, f, 8);
@@ -1586,8 +1613,9 @@ impl LlamaExecutor {
                 // Absolute jump; operand may be 16-bit (low bits) or 20-bit.
                 if !Self::cond_pass(entry, state) {
                     // Condition false: just advance PC
-                    let len =
-                        self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?.len;
+                    let len = self
+                        .decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?
+                        .len;
                     let start_pc = state.pc();
                     if state.pc() == start_pc {
                         state.set_pc(start_pc.wrapping_add(len as u32));
@@ -1616,8 +1644,9 @@ impl LlamaExecutor {
             }
             InstrKind::JpRel => {
                 if !Self::cond_pass(entry, state) {
-                    let len =
-                        self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?.len;
+                    let len = self
+                        .decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?
+                        .len;
                     let start_pc = state.pc();
                     if state.pc() == start_pc {
                         state.set_pc(start_pc.wrapping_add(len as u32));
@@ -1627,10 +1656,7 @@ impl LlamaExecutor {
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let imm_raw = decoded.imm.ok_or("missing relative")?.0 as u8;
-                let imm = if matches!(
-                    entry.opcode,
-                    0x13 | 0x19 | 0x1B | 0x1D | 0x1F
-                ) {
+                let imm = if matches!(entry.opcode, 0x13 | 0x19 | 0x1B | 0x1D | 0x1F) {
                     -(imm_raw as i32)
                 } else if matches!(entry.opcode, 0x12 | 0x18 | 0x1A | 0x1C | 0x1E) {
                     imm_raw as i32
@@ -1695,11 +1721,18 @@ impl LlamaExecutor {
                     .ok_or("missing source")?;
                 let bits = match entry.operands.first().copied().ok_or("missing operand")? {
                     OperandKind::Reg(_, b) => b,
-                    OperandKind::RegB | OperandKind::RegIL | OperandKind::RegIMR | OperandKind::RegF => 8,
+                    OperandKind::RegB
+                    | OperandKind::RegIL
+                    | OperandKind::RegIMR
+                    | OperandKind::RegF => 8,
                     _ => 8,
                 };
                 let value = state.get_reg(reg);
-                let sp_reg = if entry.kind == InstrKind::PushU { RegName::U } else { RegName::S };
+                let sp_reg = if entry.kind == InstrKind::PushU {
+                    RegName::U
+                } else {
+                    RegName::S
+                };
                 Self::push_stack(state, bus, sp_reg, value, bits);
                 if reg == RegName::IMR {
                     let cleared = value & 0x7F;
@@ -1723,10 +1756,17 @@ impl LlamaExecutor {
                 let restore_flags = !matches!(reg, RegName::F | RegName::FC | RegName::FZ);
                 let bits = match entry.operands.first().copied().ok_or("missing operand")? {
                     OperandKind::Reg(_, b) => b,
-                    OperandKind::RegB | OperandKind::RegIL | OperandKind::RegIMR | OperandKind::RegF => 8,
+                    OperandKind::RegB
+                    | OperandKind::RegIL
+                    | OperandKind::RegIMR
+                    | OperandKind::RegF => 8,
                     _ => 8,
                 };
-                let sp_reg = if entry.kind == InstrKind::PopU { RegName::U } else { RegName::S };
+                let sp_reg = if entry.kind == InstrKind::PopU {
+                    RegName::U
+                } else {
+                    RegName::S
+                };
                 let value = Self::pop_stack(state, bus, sp_reg, bits);
                 state.set_reg(reg, value);
                 if reg == RegName::IMR {
@@ -1801,7 +1841,11 @@ impl LlamaExecutor {
                 // Compare wider operands (16/24 bits depending on mnemonic)
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
-                let bits = if entry.kind == InstrKind::Cmpw { 16 } else { 24 };
+                let bits = if entry.kind == InstrKind::Cmpw {
+                    16
+                } else {
+                    24
+                };
                 let mask = Self::mask_for_width(bits);
                 let mut lhs = 0u32;
                 let mut rhs = 0u32;
@@ -1829,9 +1873,10 @@ impl LlamaExecutor {
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 // Swap two memory operands or two registers.
                 if entry.operands.len() >= 2 {
-                    if let (Some(dst_reg), Some(src_reg)) =
-                        (Self::resolved_reg(&entry.operands[0], &decoded), Self::resolved_reg(&entry.operands[1], &decoded))
-                    {
+                    if let (Some(dst_reg), Some(src_reg)) = (
+                        Self::resolved_reg(&entry.operands[0], &decoded),
+                        Self::resolved_reg(&entry.operands[1], &decoded),
+                    ) {
                         let bits = match (&entry.operands[0], &entry.operands[1]) {
                             (OperandKind::Reg(_, b1), _) => *b1,
                             (_, OperandKind::Reg(_, b2)) => *b2,
@@ -1871,7 +1916,9 @@ impl LlamaExecutor {
                         state.set_pc(start_pc.wrapping_add(decoded.len as u32));
                     }
                     Ok(decoded.len)
-                } else if entry.operands.len() == 1 && matches!(entry.operands[0], OperandKind::RegB) {
+                } else if entry.operands.len() == 1
+                    && matches!(entry.operands[0], OperandKind::RegB)
+                {
                     // EX A,B variant (0xDD)
                     let a = state.get_reg(RegName::A);
                     let b = state.get_reg(RegName::B);
@@ -2203,7 +2250,7 @@ mod tests {
         bus.mem[0] = 0x98;
         bus.mem[1] = 0x00; // simple
         bus.mem[2] = 0x10; // IMEM slot containing pointer
-        // pointer at IMEM 0x10 -> 0x000020
+                           // pointer at IMEM 0x10 -> 0x000020
         bus.mem[0x10] = 0x20;
         bus.mem[0x11] = 0x00;
         bus.mem[0x12] = 0x00;

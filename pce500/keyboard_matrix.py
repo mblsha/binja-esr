@@ -218,6 +218,8 @@ class KeyboardMatrix:
         self.strobe_count = 0
         self.column_histogram: List[int] = [0] * 11
         self.irq_count = 0
+        # Optional trace hook for scan events (col, row, pressed)
+        self._trace_hook = None
 
         self._fifo: List[int] = [0x00] * FIFO_SIZE
         self._head = 0
@@ -533,7 +535,15 @@ class KeyboardMatrix:
                     state.press_ticks = self.press_threshold
                     state.release_ticks = 0
                     state.repeat_ticks = self.repeat_delay
-                    events.append(MatrixEvent(code=state.matrix_code, release=False))
+                    evt = MatrixEvent(code=state.matrix_code, release=False)
+                    events.append(evt)
+                    if callable(self._trace_hook):
+                        try:
+                            self._trace_hook(
+                                state.location.column, state.location.row, True
+                            )
+                        except Exception:
+                            pass
             else:
                 state.release_ticks = 0
                 if self.repeat_interval > 0 and self.repeat_delay >= 0:
@@ -556,7 +566,15 @@ class KeyboardMatrix:
                     state.debounced = False
                     state.release_ticks = 0
                     state.repeat_ticks = 0
-                    events.append(MatrixEvent(code=state.matrix_code, release=True))
+                    evt = MatrixEvent(code=state.matrix_code, release=True)
+                    events.append(evt)
+                    if callable(self._trace_hook):
+                        try:
+                            self._trace_hook(
+                                state.location.column, state.location.row, False
+                            )
+                        except Exception:
+                            pass
 
         if not state.pressed and not state.debounced:
             state.repeat_ticks = 0

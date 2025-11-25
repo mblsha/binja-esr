@@ -100,6 +100,10 @@ impl MemoryImage {
             if matches!(offset, 0xF0..=0xF2 | 0xF5 | 0xF6) {
                 return true;
             }
+            // LCD controller overlay addresses (internal remap used by Python)
+            if matches!(offset, 0x00..=0x0F) {
+                return false;
+            }
             return false;
         }
         if address >= EXTERNAL_SPACE as u32 {
@@ -112,9 +116,7 @@ impl MemoryImage {
                 break;
             }
         }
-        if env::var("RUST_ROM_DEBUG").is_ok()
-            && (0x0F2BD0..=0x0F2BD8).contains(&address)
-        {
+        if env::var("RUST_ROM_DEBUG").is_ok() && (0x0F2BD0..=0x0F2BD8).contains(&address) {
             eprintln!(
                 "[rom-debug-route] addr=0x{addr:06X} python_range={range}",
                 addr = address,
@@ -126,8 +128,10 @@ impl MemoryImage {
 
     pub fn read_byte(&self, address: u32) -> Option<u8> {
         if let Some(index) = Self::internal_index(address) {
+            // Optional bridge: allow external-memory writes to mirror into internal for diagnostics.
             return Some(self.internal[index]);
         }
+        // External memory fallback
         self.external.get(address as usize).copied()
     }
 
@@ -144,9 +148,7 @@ impl MemoryImage {
         for offset in 0..bytes {
             value |= (self.external[address as usize + offset] as u32) << (offset * 8);
         }
-        if env::var("RUST_ROM_DEBUG").is_ok()
-            && (0x0F2BD0..=0x0F2BD8).contains(&address)
-        {
+        if env::var("RUST_ROM_DEBUG").is_ok() && (0x0F2BD0..=0x0F2BD8).contains(&address) {
             eprintln!(
                 "[rom-debug-read] addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
                 addr = address,
@@ -154,9 +156,7 @@ impl MemoryImage {
                 val = value & mask_bits(bits),
             );
         }
-        if env::var("RUST_ROM_TRACE").is_ok()
-            && (0x000F_2000..=0x000F_3000).contains(&address)
-        {
+        if env::var("RUST_ROM_TRACE").is_ok() && (0x000F_2000..=0x000F_3000).contains(&address) {
             let mask = mask_bits(bits);
             println!(
                 "[rom-trace] addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
@@ -232,8 +232,8 @@ impl MemoryImage {
     }
 
     pub fn is_internal(address: u32) -> bool {
-        address >= INTERNAL_MEMORY_START
-            && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
+        // Parity: internal space is only mapped at 0x100000+, no low aliasing.
+        address >= INTERNAL_MEMORY_START && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
     }
 
     pub fn internal_index(address: u32) -> Option<usize> {
@@ -262,6 +262,17 @@ impl MemoryImage {
         for offset in 0..bytes {
             value |= (self.internal[index + offset] as u32) << (offset * 8);
         }
+        // Optional debug for IMR reads to diagnose IMR/IRM coherence.
+        if address == INTERNAL_MEMORY_START + 0xFB {
+            if let Ok(env) = std::env::var("IMR_READ_DEBUG") {
+                if env == "1" {
+                    eprintln!(
+                        "[imr-read] addr=0x{address:06X} bits={bits} value=0x{val:02X}",
+                        val = value & mask_bits(bits)
+                    );
+                }
+            }
+        }
         Some(value)
     }
 
@@ -272,13 +283,33 @@ impl MemoryImage {
                 self.internal[index] = value;
                 self.dirty_internal
                     .push((INTERNAL_MEMORY_START + offset, value));
+                // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
+                if offset == 0xFC && (value & 0x04) != 0 {
+                    #[cfg(feature = "llama-tests")]
+                    {
+                        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                            if let Some(tracer) = guard.as_mut() {
+                                tracer.record_keyi_set(INTERNAL_MEMORY_START + offset, value);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
     pub fn read_internal_byte(&self, offset: u32) -> Option<u8> {
         if offset < INTERNAL_SPACE as u32 {
-            Some(self.internal[offset as usize])
+            let val = self.internal[offset as usize];
+            // Optional debug hook: enable IMR read logging with IMR_READ_DEBUG=1.
+            if offset == 0xFB {
+                if let Ok(env) = std::env::var("IMR_READ_DEBUG") {
+                    if env == "1" {
+                        eprintln!("[imr-read] offset=0x{offset:02X} val=0x{val:02X}");
+                    }
+                }
+            }
+            Some(val)
         } else {
             None
         }
@@ -308,7 +339,8 @@ impl MemoryImage {
             let slot = &mut self.internal[index + offset];
             if *slot != byte {
                 *slot = byte;
-                self.dirty_internal.push((address + offset as u32, byte));
+                self.dirty_internal
+                    .push((INTERNAL_MEMORY_START + offset as u32, byte));
             }
         }
         Some(())
@@ -336,8 +368,7 @@ impl MemoryImage {
     }
 
     pub fn internal_ram_slice(&self) -> &[u8] {
-        let end =
-            (INTERNAL_RAM_START + INTERNAL_RAM_SIZE).min(self.external.len());
+        let end = (INTERNAL_RAM_START + INTERNAL_RAM_SIZE).min(self.external.len());
         if INTERNAL_RAM_START >= end {
             &[]
         } else {
