@@ -3,7 +3,7 @@ use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
     llama::{
-        eval::{power_on_reset, LlamaBus, LlamaExecutor},
+        eval::{LlamaBus, LlamaExecutor},
         opcodes::RegName,
         state::LlamaState,
     },
@@ -177,11 +177,11 @@ impl StandaloneBus {
         let f = state.get_reg(RegName::F) & 0xFF;
         push_stack(&mut self.memory, state, RegName::S, f, 8);
         let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
-        let imr = self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF;
-        push_stack(&mut self.memory, state, RegName::S, imr, 8);
+        let imr = (self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF) as u8;
+        push_stack(&mut self.memory, state, RegName::S, imr as u32, 8);
         let cleared_imr = imr & 0x7F;
-        let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
-        state.set_reg(RegName::IMR, cleared_imr);
+        let _ = self.memory.store(imr_addr, 8, u32::from(cleared_imr));
+        state.set_reg(RegName::IMR, cleared_imr as u32);
 
         let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
@@ -375,7 +375,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     bus.strobe_all_columns();
     let mut state = LlamaState::new();
     let mut executor = LlamaExecutor::new();
-    power_on_reset(&mut bus, &mut state);
     // Align PC with ROM reset vector.
     let reset_vec = (bus.memory.load(ROM_RESET_VECTOR_ADDR, 8).unwrap_or(0))
         | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
@@ -390,6 +389,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut release_at: u64 = 0;
     let max_steps = if args.pf1 { u64::MAX } else { args.steps };
     let mut _halted_after_pf1 = false;
+    #[allow(clippy::manual_is_multiple_of)]
     for _ in 0..max_steps {
         let imr_reg = state.get_reg(RegName::IMR) & 0xFF;
         if bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) != imr_reg as u8 {
