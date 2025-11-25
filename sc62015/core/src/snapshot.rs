@@ -55,7 +55,9 @@ impl RangeSerde {
     }
 }
 
-pub(crate) fn deserialize_range<'de, D>(deserializer: D) -> std::result::Result<(u32, u32), D::Error>
+pub(crate) fn deserialize_range<'de, D>(
+    deserializer: D,
+) -> std::result::Result<(u32, u32), D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -160,9 +162,9 @@ pub fn load_snapshot(path: &Path, memory: &mut MemoryImage) -> Result<SnapshotLo
     let metadata = {
         let mut meta_buf = Vec::new();
         {
-            let mut meta_file = archive.by_name("snapshot.json").map_err(|e| {
-                CoreError::InvalidSnapshot(format!("snapshot.json missing: {e}"))
-            })?;
+            let mut meta_file = archive
+                .by_name("snapshot.json")
+                .map_err(|e| CoreError::InvalidSnapshot(format!("snapshot.json missing: {e}")))?;
             meta_file.read_to_end(&mut meta_buf)?;
         }
         let metadata: SnapshotMetadata = serde_json::from_slice(&meta_buf)?;
@@ -176,9 +178,9 @@ pub fn load_snapshot(path: &Path, memory: &mut MemoryImage) -> Result<SnapshotLo
 
     let registers = {
         let mut reg_buf = Vec::new();
-        let mut reg_file = archive.by_name("registers.bin").map_err(|e| {
-            CoreError::InvalidSnapshot(format!("registers.bin missing: {e}"))
-        })?;
+        let mut reg_file = archive
+            .by_name("registers.bin")
+            .map_err(|e| CoreError::InvalidSnapshot(format!("registers.bin missing: {e}")))?;
         reg_file.read_to_end(&mut reg_buf)?;
         unpack_registers(&reg_buf)?
     };

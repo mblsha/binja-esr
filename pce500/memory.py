@@ -148,6 +148,10 @@ class PCE500Memory:
         )
         self._suppress_llama_sync = 0
         self._perf_tracer = None
+        # IMR read diagnostics
+        self._imr_read_zero_count = 0
+        self._imr_read_nonzero_count = 0
+        self._imr_cache_value: Optional[int] = None
 
     def set_imem_access_callback(
         self, callback: Callable[[int, str, str, int], None]
@@ -246,6 +250,42 @@ class PCE500Memory:
             payload,
         )
 
+    def _record_imr_read(self, value: int, effective_pc: Optional[int]) -> None:
+        """Log IMR reads for debugging/perfetto correlation."""
+
+        env = os.getenv("IMR_READ_DEBUG")
+        if env == "1":
+            pc_str = (
+                f"0x{int(effective_pc) & 0xFFFFFF:06X}"
+                if effective_pc is not None
+                else "N/A"
+            )
+            print(f"[imr-read-py] pc={pc_str} imr=0x{int(value) & 0xFF:02X}")
+
+        tracer = getattr(self, "_perf_tracer", None)
+        if tracer is None:
+            return
+
+        try:
+            if (value & 0xFF) == 0:
+                self._imr_read_zero_count += 1
+                tracer.counter("IMR", "IMR_ReadZero", self._imr_read_zero_count)
+            else:
+                self._imr_read_nonzero_count += 1
+                tracer.counter("IMR", "IMR_ReadNonZero", self._imr_read_nonzero_count)
+
+            tracer.instant(
+                "IMR",
+                "IMR_Read",
+                {
+                    "pc": effective_pc & 0xFFFFFF if effective_pc is not None else None,
+                    "value": value & 0xFF,
+                    "zero": int((value & 0xFF) == 0),
+                },
+            )
+        except Exception:
+            pass
+
     def _trace_write_event(
         self,
         perfetto_thread: Optional[str],
@@ -323,6 +363,7 @@ class PCE500Memory:
         # Check for SC62015 internal memory (0x100000-0x1000FF)
         if address >= 0x100000:
             offset = (address - 0x100000) & 0xFF
+            effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
             # Fast path for keyboard overlay
             if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
                 value: int
@@ -340,17 +381,22 @@ class PCE500Memory:
                     value = 0x00
 
                 # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
-                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
                 self._track_imem_access(offset, "read", value, effective_pc)
                 return value
 
             # Normal internal memory access (most common case)
             internal_offset = len(self.external_memory) - 256 + offset
             value = self.external_memory[internal_offset]
+            if offset == IMEMRegisters.IMR:
+                if (
+                    os.getenv("IMR_READ_CACHE") == "1"
+                    and self._imr_cache_value is not None
+                ):
+                    value = int(self._imr_cache_value) & 0xFF
+                # Debug hook: log IMR reads to diagnose IMR/IRM coherence.
+                self._record_imr_read(value, effective_pc)
 
             # Track IMEMRegisters reads
-            # Get PC from CPU if not provided
-            effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
             self._track_imem_access(offset, "read", value, effective_pc)
 
             return value
@@ -457,6 +503,8 @@ class PCE500Memory:
             internal_offset = len(self.external_memory) - 256 + offset
             prev_val = int(self.external_memory[internal_offset])
             self.external_memory[internal_offset] = value
+            if offset == IMEMRegisters.IMR:
+                self._imr_cache_value = value
 
             # Track IMEMRegisters writes
             reg_name = self._track_imem_access(offset, "write", value, effective_pc)
@@ -823,6 +871,9 @@ class PCE500Memory:
         """Reset all RAM to zero."""
         # Reset external memory (including internal memory at the end)
         self.external_memory[:] = bytes(len(self.external_memory))
+        self._imr_read_zero_count = 0
+        self._imr_read_nonzero_count = 0
+        self._imr_cache_value = None
 
         # Reset any writable overlays
         for overlay in self._bus.iter_overlays():

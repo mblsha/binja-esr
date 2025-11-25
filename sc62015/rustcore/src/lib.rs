@@ -10,9 +10,10 @@ use sc62015_core::{
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
     },
-    ADDRESS_MASK,
+    PerfettoTracer, ADDRESS_MASK, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 fn llama_reg_from_name(name: &str) -> Option<LlamaRegName> {
     match name.to_ascii_uppercase().as_str() {
@@ -302,11 +303,23 @@ impl LlamaCpu {
 
     #[pyo3(signature = (path=None))]
     fn set_perfetto_trace(&mut self, path: Option<&str>) -> PyResult<()> {
-        let _ = path;
+        if let Some(p) = path {
+            let tracer = PerfettoTracer::new(PathBuf::from(p));
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                *guard = Some(tracer);
+            }
+        } else if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            *guard = None;
+        }
         Ok(())
     }
 
     fn flush_perfetto(&mut self) -> PyResult<()> {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.take() {
+                let _ = tracer.finish();
+            }
+        }
         Ok(())
     }
 }

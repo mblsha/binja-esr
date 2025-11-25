@@ -17,6 +17,7 @@ lcd_right.png
 *.perfetto-trace
 .claude/
 *.bin
+*.log
 
 # Rust build artifacts
 target/

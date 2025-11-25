@@ -115,4 +115,14 @@ impl PerfettoTracer {
             .save(&self.path)
             .map_err(|e| crate::CoreError::Other(format!("perfetto save: {e}")))
     }
+
+    /// Lightweight instant for IMEM/ISR diagnostics (used by test hooks).
+    pub fn record_keyi_set(&mut self, addr: u32, value: u8) {
+        let mut ev = self
+            .builder
+            .add_instant_event(self.exec_track, "KEYI_Set".to_string(), 0);
+        ev.add_annotation("offset", addr as u64);
+        ev.add_annotation("value", value as u64);
+        ev.finish();
+    }
 }

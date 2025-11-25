@@ -38,9 +38,6 @@ pub struct Snapshot {
     pub mem_writes: Vec<MemWrite>,
 }
 
-const IMEM_IMR_OFFSET: u32 = 0xFB;
-const IMEM_ISR_OFFSET: u32 = 0xFC;
-
 /// Memory space classification for parity traces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemorySpace {
@@ -64,15 +61,6 @@ pub struct MemWrite {
     pub bits: u8,
     pub value: u32,
     pub space: MemorySpace,
-}
-
-fn last_mem_byte(writes: &[MemWrite], addr: u32) -> u8 {
-    writes
-        .iter()
-        .rev()
-        .find(|w| w.addr == addr && w.bits == 8)
-        .map(|w| (w.value & 0xFF) as u8)
-        .unwrap_or(0)
 }
 
 /// Differences detected during parity comparison.
@@ -566,9 +554,9 @@ pub fn run_llama_step(
     for reg in state_snapshot_regs() {
         regs_out.insert(reg, state.get_reg(reg));
     }
-
-    let mem_imr = bus.load_bits(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8;
-    let mem_isr = bus.load_bits(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET, 8) as u8;
+    let mem_imr = state.get_reg(RegName::IMR) as u8;
+    // ISR is not represented as a register; capture what the bus saw (default 0).
+    let mem_isr = bus.load_bits(INTERNAL_MEMORY_START + 0xFC, 8) as u8;
 
     let event = TraceEvent {
         backend: "llama".to_string(),
@@ -619,14 +607,9 @@ pub fn run_parity_once(
                     .iter()
                     .filter_map(|(name, val)| reg_from_name(&format!("{name:?}")).zip(Some(*val)))
                     .collect(),
-                mem_imr: last_mem_byte(
-                    &py_snap.mem_writes,
-                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
-                ),
-                mem_isr: last_mem_byte(
-                    &py_snap.mem_writes,
-                    INTERNAL_MEMORY_START + IMEM_ISR_OFFSET,
-                ),
+                mem_imr: *py_snap.regs.get(&RegName::IMR).unwrap_or(&0) as u8,
+                // Python snapshots don’t expose ISR directly; default to 0.
+                mem_isr: 0,
                 mem_writes: py_snap.mem_writes.clone(),
             }],
             &py_trace,
