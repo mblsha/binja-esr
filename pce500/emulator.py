@@ -578,15 +578,21 @@ class PCE500Emulator:
         # Emit a focused diagnostic instant around the IRQ stub split to understand
         # branch/return flow differences (e.g., PC≈0xF205C → 0xF1769 vs 0xF1FB5).
         if new_tracer.enabled and (
-            0x0F205C <= pc <= 0x0F2064 or 0x0F1760 <= pc <= 0x0F2070 or 0x0F1FB0 <= pc <= 0x0F1FC0
+            0x0F205C <= pc <= 0x0F2064
+            or 0x0F1760 <= pc <= 0x0F2070
+            or 0x0F1FB0 <= pc <= 0x0F1FC0
         ):
             try:
                 imr_probe_diag = (
-                    self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, cpu_pc=pc)
+                    self.memory.read_byte(
+                        INTERNAL_MEMORY_START + IMEMRegisters.IMR, cpu_pc=pc
+                    )
                     & 0xFF
                 )
                 isr_probe_diag = (
-                    self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, cpu_pc=pc)
+                    self.memory.read_byte(
+                        INTERNAL_MEMORY_START + IMEMRegisters.ISR, cpu_pc=pc
+                    )
                     & 0xFF
                 )
             except Exception:
@@ -609,7 +615,8 @@ class PCE500Emulator:
                 try:
                     base = s_reg & 0xFFFFF
                     stack_bytes = [
-                        self.memory.read_byte(base + idx, cpu_pc=pc) & 0xFF for idx in range(5)
+                        self.memory.read_byte(base + idx, cpu_pc=pc) & 0xFF
+                        for idx in range(5)
                     ]
                 except Exception:
                     stack_bytes = None
@@ -686,9 +693,12 @@ class PCE500Emulator:
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 imr_val_chk = self.memory.read_byte(imr_addr_chk, cpu_pc=pc) & 0xFF
                 isr_val_chk = self.memory.read_byte(isr_addr_chk, cpu_pc=pc) & 0xFF
-                kil_val_chk = self.memory.read_byte(
-                    INTERNAL_MEMORY_START + IMEMRegisters.KIL, cpu_pc=pc
-                ) & 0xFF
+                kil_val_chk = (
+                    self.memory.read_byte(
+                        INTERNAL_MEMORY_START + IMEMRegisters.KIL, cpu_pc=pc
+                    )
+                    & 0xFF
+                )
                 # Capture a second IMR read via CPU regs (LLAMA) to spot divergence.
                 imr_reg_val = None
                 try:
@@ -1515,8 +1525,12 @@ class PCE500Emulator:
             except ValueError:
                 timer_scale = 1.0
         if timer_scale != 1.0 and getattr(self.cpu, "backend", None) == "llama":
-            self._timer_mti_period = max(1, int(MTI_PERIOD_CYCLES_DEFAULT * timer_scale))
-            self._timer_sti_period = max(1, int(STI_PERIOD_CYCLES_DEFAULT * timer_scale))
+            self._timer_mti_period = max(
+                1, int(MTI_PERIOD_CYCLES_DEFAULT * timer_scale)
+            )
+            self._timer_sti_period = max(
+                1, int(STI_PERIOD_CYCLES_DEFAULT * timer_scale)
+            )
 
         # Capture persisted next-fire offsets before resetting the scheduler. Using
         # locals avoids losing the snapshot values when reset() recomputes based on

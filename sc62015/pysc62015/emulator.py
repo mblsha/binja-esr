@@ -412,7 +412,9 @@ class Emulator:
                             "KIO",
                             "read@KIL",
                             {
-                                "pc": pc_val & 0xFFFFFF if isinstance(pc_val, int) else None,
+                                "pc": pc_val & 0xFFFFFF
+                                if isinstance(pc_val, int)
+                                else None,
                                 "offset": IMEMRegisters.KIL,
                                 "value": val & 0xFF,
                             },
@@ -447,7 +449,9 @@ class Emulator:
                             "KIO",
                             f"read@0x{addr - INTERNAL_MEMORY_START:02X}",
                             {
-                                "pc": pc_val & 0xFFFFFF if isinstance(pc_val, int) else None,
+                                "pc": pc_val & 0xFFFFFF
+                                if isinstance(pc_val, int)
+                                else None,
                                 "offset": addr - INTERNAL_MEMORY_START,
                                 "value": val & 0xFF,
                             },

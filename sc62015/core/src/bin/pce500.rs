@@ -1,5 +1,7 @@
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
+#[cfg(feature = "llama-tests")]
+use sc62015_core::PERFETTO_TRACER;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
@@ -462,11 +464,11 @@ impl StandaloneBus {
         if self.in_interrupt || (imr & IMR_MASTER) == 0 {
             #[cfg(feature = "llama-tests")]
             {
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
-                        tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_IMR_OFFSET as u8, imr);
-                        tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_ISR_OFFSET as u8, isr);
-                        tracer.record_kio_read(Some(self.cpu.get_pc()), 0xEF, 0);
+                        tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
+                        tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
+                        tracer.record_kio_read(Some(self.last_pc), 0xEF, 0);
                     }
                 }
             }
@@ -480,26 +482,22 @@ impl StandaloneBus {
         // Trace pending decision for visibility (Perfetto + console).
         #[cfg(feature = "llama-tests")]
         {
-            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
-                    tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_IMR_OFFSET as u8, imr);
-                    tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_ISR_OFFSET as u8, isr);
-                    tracer.record_kio_read(Some(self.cpu.get_pc()), 0xEE, pending as u8);
+                    tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
+                    tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
+                    tracer.record_kio_read(Some(self.last_pc), 0xEE, pending as u8);
                     // Encode src mask: bit0=KEY, bit1=MTI, bit2=STI
                     let mask = (((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0)) as u8)
                         | ((((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0)) as u8) << 1)
                         | ((((isr & ISR_STI != 0) && (imr & IMR_STI != 0)) as u8) << 2);
-                    tracer.record_kio_read(Some(self.cpu.get_pc()), 0xED, mask);
+                    tracer.record_kio_read(Some(self.last_pc), 0xED, mask);
                 }
             }
             if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
                 println!(
                     "[irq-pending] pc=0x{:05X} imr=0x{:02X} isr=0x{:02X} pending={} in_irq={}",
-                    self.cpu.get_pc(),
-                    imr,
-                    isr,
-                    pending,
-                    self.in_interrupt
+                    self.last_pc, imr, isr, pending, self.in_interrupt
                 );
             }
         }
@@ -514,8 +512,9 @@ impl StandaloneBus {
     }
 
     #[cfg(feature = "llama-tests")]
+    #[allow(dead_code)]
     fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
-        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
                 tracer.record_kio_read(Some(pc), offset, value);
             }
@@ -525,7 +524,7 @@ impl StandaloneBus {
     fn log_irq_delivery(&mut self, src: Option<&str>, vec: u32, imr: u8, isr: u8, pc: u32) {
         #[cfg(feature = "llama-tests")]
         {
-            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
                     tracer.record_kio_read(Some(pc), IMEM_IMR_OFFSET as u8, imr);
                     tracer.record_kio_read(Some(pc), IMEM_ISR_OFFSET as u8, isr);
@@ -672,9 +671,9 @@ impl LlamaBus for StandaloneBus {
                     // Emit perfetto event for KIL read with PC/value.
                     #[cfg(feature = "llama-tests")]
                     {
-                        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                             if let Some(tracer) = guard.as_mut() {
-                                tracer.record_kio_read(self.last_pc, offset as u8, byte);
+                                tracer.record_kio_read(Some(self.last_pc), offset as u8, byte);
                             }
                         }
                     }

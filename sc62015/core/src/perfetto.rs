@@ -1,5 +1,5 @@
 use crate::Result;
-use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
+pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -127,7 +127,7 @@ impl PerfettoTracer {
 
     /// IMR read diagnostics: log each read and keep running zero/non-zero counters.
     pub fn record_imr_read(&mut self, pc: Option<u32>, value: u8) {
-        let zero = (value & 0xFF) == 0;
+        let zero = value == 0;
         if zero {
             self.imr_read_zero = self.imr_read_zero.saturating_add(1);
         } else {
@@ -144,8 +144,21 @@ impl PerfettoTracer {
         }
         ev.add_annotation("value", value as u64);
         ev.add_annotation("zero", zero as u64);
-        ev.add_annotation("count_zero", self.imr_read_zero as u64);
-        ev.add_annotation("count_nonzero", self.imr_read_nonzero as u64);
+        ev.add_annotation("count_zero", self.imr_read_zero);
+        ev.add_annotation("count_nonzero", self.imr_read_nonzero);
+        ev.finish();
+    }
+
+    /// IMEM effective address diagnostics to align with Python tracing.
+    pub fn record_imem_addr(&mut self, mode: &str, base: u32, bp: u32, px: u32, py: u32) {
+        let mut ev =
+            self.builder
+                .add_instant_event(self.exec_track, "IMEM_EffectiveAddr".to_string(), 0);
+        ev.add_annotation("mode", mode.to_string());
+        ev.add_annotation("base", base as u64);
+        ev.add_annotation("bp", bp as u64);
+        ev.add_annotation("px", px as u64);
+        ev.add_annotation("py", py as u64);
         ev.finish();
     }
 

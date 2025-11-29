@@ -192,18 +192,15 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
 
     // Optional perfetto emit when the builder is available (llama-tests builds).
     #[cfg(feature = "llama-tests")]
-    {
-        use crate::perfetto::{PerfettoTraceBuilder, TrackId};
-
-        if let Some(tracer) = PerfettoTraceBuilder::try_get() {
-            let track = TrackId::from_str("IMEM");
-            let mut ann = std::collections::BTreeMap::new();
-            ann.insert("mode", format!("{:?}", mode).into());
-            ann.insert("base", base.into());
-            ann.insert("bp", bp.into());
-            ann.insert("px", px.into());
-            ann.insert("py", py.into());
-            tracer.instant(track, "IMEM_EffectiveAddr", ann);
+    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+        if let Some(tracer) = guard.as_mut() {
+            tracer.record_imem_addr(
+                &format!("{mode:?}"),
+                base & 0xFF,
+                bp & 0xFF,
+                px & 0xFF,
+                py & 0xFF,
+            );
         }
     }
 }

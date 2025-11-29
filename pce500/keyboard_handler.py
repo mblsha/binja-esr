@@ -107,7 +107,12 @@ class PCE500KeyboardHandler:
             pc = None
             try:
                 from sc62015.pysc62015.emulator import RegisterName
-                pc = self._memory.cpu.regs.get(RegisterName.PC) if self._memory and getattr(self._memory, "cpu", None) else None
+
+                pc = (
+                    self._memory.cpu.regs.get(RegisterName.PC)
+                    if self._memory and getattr(self._memory, "cpu", None)
+                    else None
+                )
             except Exception:
                 pc = None
             self._matrix.trace_kio("read_kil", pc=pc)

@@ -374,7 +374,9 @@ class PCE500Memory:
                             int(
                                 self._keyboard_overlay.read_handler(
                                     address,
-                                    effective_pc if effective_pc is not None else cpu_pc,
+                                    effective_pc
+                                    if effective_pc is not None
+                                    else cpu_pc,
                                 )
                             )
                             & 0xFF
@@ -425,7 +427,9 @@ class PCE500Memory:
                                 "KIO",
                                 "read@KIO",
                                 {
-                                    "pc": pc_val & 0xFFFFFF if pc_val is not None else None,
+                                    "pc": pc_val & 0xFFFFFF
+                                    if pc_val is not None
+                                    else None,
                                     "value": value,
                                     "offset": offset,
                                 },
