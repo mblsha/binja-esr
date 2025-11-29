@@ -16,6 +16,7 @@ from .keyboard_matrix import (
     MatrixEvent,
 )
 from .memory import INTERNAL_MEMORY_START
+from .tracing import trace_dispatcher
 
 # Keyboard IMEM register offsets (relative to internal RAM base).
 KOL = 0xF0
@@ -90,14 +91,51 @@ class PCE500KeyboardHandler:
     def handle_register_read(self, register: int) -> int | None:
         reg = register & 0xFF
         if reg == KOL:
-            return self._last_kol
+            val = self._last_kol
+            self._matrix.trace_kio("read_kol")
+            return val
         if reg == KOH:
-            return self._last_koh
+            val = self._last_koh
+            self._matrix.trace_kio("read_koh")
+            return val
         if reg == KIL:
             if not self._scan_enabled or self._ksd_masked():
                 return 0x00
             self.scan_tick()
             self._last_kil = self._matrix.peek_kil()
+            # Emit KIL read with a best-effort PC from CPU regs.
+            pc = None
+            try:
+                from sc62015.pysc62015.emulator import RegisterName
+                pc = self._memory.cpu.regs.get(RegisterName.PC) if self._memory and getattr(self._memory, "cpu", None) else None
+            except Exception:
+                pc = None
+            self._matrix.trace_kio("read_kil", pc=pc)
+            # Perfetto/dispatcher logging of KIL read (ensure visibility even if hooks bypassed)
+            try:
+                tracer = getattr(self._memory, "_perf_tracer", None)
+                if tracer is not None and hasattr(tracer, "instant"):
+                    tracer.instant(
+                        "KIO",
+                        "read@KIL",
+                        {
+                            "pc": pc & 0xFFFFFF if pc is not None else None,
+                            "value": self._last_kil & 0xFF,
+                            "offset": reg,
+                        },
+                    )
+                # Legacy dispatcher for completeness
+                trace_dispatcher.record_instant(
+                    "KIO",
+                    "read@KIL",
+                    {
+                        "pc": f"0x{pc & 0xFFFFFF:06X}" if pc is not None else "N/A",
+                        "value": f"0x{self._last_kil & 0xFF:02X}",
+                        "offset": f"0x{reg:02X}",
+                    },
+                )
+            except Exception:
+                pass
             return self._last_kil
         return None
 
@@ -106,10 +144,12 @@ class PCE500KeyboardHandler:
         if reg == KOL:
             self._matrix.write_kol(value & 0xFF)
             self._last_kol = self._matrix.kol
+            self._matrix.trace_kio("write_kol")
             return True
         if reg == KOH:
             self._matrix.write_koh(value & 0x0F)
             self._last_koh = self._matrix.koh
+            self._matrix.trace_kio("write_koh")
             return True
         if reg == KIL:
             # KIL is read-only in hardware; ignore writes.

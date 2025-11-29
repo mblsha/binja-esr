@@ -175,7 +175,37 @@ fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8)
         AddressingMode::BpPx => bp.wrapping_add(px),
         AddressingMode::BpPy => bp.wrapping_add(py),
     };
+    trace_imem_addr(mode, base, bp, px, py);
     base & 0xFF
+}
+
+/// Emit the effective IMEM address and the raw registers used for BpPx/BpPy modes.
+/// Fires when perfetto is active or TRACE_IMEM_ADDR=1 is set.
+fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
+    // Debug-print when explicitly requested via env to avoid overwhelming logs.
+    if matches!(std::env::var("TRACE_IMEM_ADDR").as_deref(), Ok("1")) {
+        eprintln!(
+            "[imem-addr] mode={:?} base=0x{base:02X} bp=0x{bp:02X} px=0x{px:02X} py=0x{py:02X}",
+            mode
+        );
+    }
+
+    // Optional perfetto emit when the builder is available (llama-tests builds).
+    #[cfg(feature = "llama-tests")]
+    {
+        use crate::perfetto::{PerfettoTraceBuilder, TrackId};
+
+        if let Some(tracer) = PerfettoTraceBuilder::try_get() {
+            let track = TrackId::from_str("IMEM");
+            let mut ann = std::collections::BTreeMap::new();
+            ann.insert("mode", format!("{:?}", mode).into());
+            ann.insert("base", base.into());
+            ann.insert("bp", bp.into());
+            ann.insert("px", px.into());
+            ann.insert("py", py.into());
+            tracer.instant(track, "IMEM_EffectiveAddr", ann);
+        }
+    }
 }
 
 fn imem_addr_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -> u32 {
@@ -711,7 +741,7 @@ impl LlamaExecutor {
                     let (ptr_mem, consumed_ptr) =
                         self.decode_ext_reg_ptr(state, bus, pc + offset, width_bytes)?;
                     let raw_imem = bus.load(pc + offset + consumed_ptr, 8) & 0xFF;
-                    let mode_index = if single_pre { 0 } else { operand_index };
+                    let mode_index = if single_pre { 0 } else { operand_index + 1 };
                     let imem_addr =
                         imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw_imem as u8);
                     offset += consumed_ptr + 1;
@@ -1467,19 +1497,39 @@ impl LlamaExecutor {
                         return Err("missing operand");
                     };
                 let mask = Self::mask_for_width(bits);
-                let res = match entry.kind {
-                    InstrKind::Shl => (val << 1) & mask,
-                    InstrKind::Shr => (val >> 1) & mask,
-                    InstrKind::Rol => ((val << 1) | (val >> (bits as u32 - 1))) & mask,
-                    InstrKind::Ror => ((val >> 1) | ((val & 1) << (bits as u32 - 1))) & mask,
-                    _ => val,
+                let carry_in = state.get_reg(RegName::FC) & 1;
+                let (res, carry_out) = match entry.kind {
+                    // SHL/SHR are rotate-through-carry; ROL/ROR ignore incoming carry.
+                    InstrKind::Shl => (
+                        ((val << 1) | carry_in) & mask,
+                        ((val >> (bits.saturating_sub(1) as u32)) & 1) != 0,
+                    ),
+                    InstrKind::Shr => (
+                        ((val >> 1) | (carry_in << (bits.saturating_sub(1) as u32))) & mask,
+                        (val & 1) != 0,
+                    ),
+                    InstrKind::Rol => (
+                        ((val << 1) | (val >> (bits as u32 - 1))) & mask,
+                        ((val >> (bits.saturating_sub(1) as u32)) & 1) != 0,
+                    ),
+                    InstrKind::Ror => (
+                        ((val >> 1) | ((val & 1) << (bits as u32 - 1))) & mask,
+                        (val & 1) != 0,
+                    ),
+                    _ => (val, false),
                 };
                 if let Some(reg) = dest_reg {
-                    state.set_reg(reg, res);
+                    state.set_reg(reg, res & mask);
                 } else if let Some(mem) = dest_mem {
-                    bus.store(mem.addr, bits, res);
+                    bus.store(mem.addr, bits, res & mask);
                 }
-                state.set_reg(RegName::FZ, if res == 0 { 1 } else { 0 });
+                let carry_flag = match entry.kind {
+                    InstrKind::Shl | InstrKind::Shr => carry_out,
+                    InstrKind::Rol => ((val >> (bits.saturating_sub(1) as u32)) & 1) != 0,
+                    InstrKind::Ror => (val & 1) != 0,
+                    _ => false,
+                };
+                Self::set_flags_for_result(state, res & mask, Some(carry_flag));
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -1702,16 +1752,44 @@ impl LlamaExecutor {
                 Ok(1)
             }
             InstrKind::RetI => {
-                // Stack layout: IMR (1), F(1), 24-bit PC
-                let imr = Self::pop_stack(state, bus, RegName::S, 8);
-                let f = Self::pop_stack(state, bus, RegName::S, 8);
-                let ret = Self::pop_stack(state, bus, RegName::S, 24);
-                state.set_reg(RegName::IMR, imr);
+                // Stack layout: IMR (1), F(1), 24-bit PC. Mirror Python exactly.
+                let mask_s = mask_for(RegName::S);
+                let mut sp = state.get_reg(RegName::S) & mask_s;
+                let sp_before = sp;
+                let trace_reti = std::env::var("TRACE_RETI").is_ok();
+                let imr = bus.load(sp, 8) & 0xFF;
+                sp = sp.wrapping_add(1) & mask_s;
+                let f = bus.load(sp, 8) & 0xFF;
+                sp = sp.wrapping_add(1) & mask_s;
+                let mut ret = 0u32;
+                for i in 0..3 {
+                    let byte = bus.load(sp.wrapping_add(i) & mask_s, 8) & 0xFF;
+                    ret |= byte << (8 * i);
+                }
+                sp = sp.wrapping_add(3) & mask_s;
+                state.set_reg(RegName::S, sp);
+                let imr_restored = imr | 0x80; // IMR restore keeps IRM set.
+                state.set_reg(RegName::IMR, imr_restored);
                 state.set_reg(RegName::F, f);
                 state.set_pc(ret & 0xFFFFF);
                 state.call_depth_dec();
+                if trace_reti {
+                    eprintln!(
+                        "[reti] sp_before=0x{sp_before:06X} imr=0x{imr:02X} f=0x{f:02X} ret=0x{ret:06X} sp_after=0x{sp:06X} imr_restored=0x{imr_restored:02X}",
+                        sp_before = sp_before,
+                        imr = imr,
+                        f = f,
+                        ret = ret & 0xFFFFF,
+                        sp = sp,
+                        imr_restored = imr_restored,
+                    );
+                }
                 // Python RETI writes IMR back into IMEM for parity/traces.
-                bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, imr);
+                bus.store(
+                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+                    8,
+                    imr_restored & 0xFF,
+                );
                 Ok(1 + prefix_len)
             }
             InstrKind::PushU | InstrKind::PushS => {
@@ -1802,21 +1880,42 @@ impl LlamaExecutor {
                         (_, OperandKind::IMem(bits)) => *bits,
                         _ => 8,
                     };
-                    lhs = if let Some(r) = Self::resolved_reg(op1, &decoded) {
+                    let op_is_mem = |op: &OperandKind| {
+                        matches!(
+                            op,
+                            OperandKind::IMem(_)
+                                | OperandKind::IMemWidth(_)
+                                | OperandKind::EMemAddrWidth(_)
+                                | OperandKind::EMemAddrWidthOp(_)
+                                | OperandKind::EMemRegWidth(_)
+                                | OperandKind::EMemRegWidthMode(_)
+                                | OperandKind::EMemIMemWidth(_)
+                        )
+                    };
+                    let op_is_imm = |op: &OperandKind| {
+                        matches!(op, OperandKind::Imm(_) | OperandKind::ImmOffset)
+                    };
+
+                    lhs = if op_is_mem(op1) {
+                        let mem = decoded.mem.ok_or("missing mem operand")?;
+                        bus.load(mem.addr, mem.bits)
+                    } else if op_is_imm(op1) {
+                        decoded.imm.ok_or("missing immediate")?.0
+                    } else if let Some(r) = Self::resolved_reg(op1, &decoded) {
                         state.get_reg(r)
-                    } else if let Some(mem) = decoded.mem {
-                        bus.load(mem.addr, bits)
                     } else {
                         decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
-                    rhs = if let Some(r) = Self::resolved_reg(op2, &decoded) {
+
+                    rhs = if op_is_mem(op2) {
+                        let mem = decoded.mem2.or(decoded.mem).ok_or("missing mem operand")?;
+                        bus.load(mem.addr, mem.bits)
+                    } else if op_is_imm(op2) {
+                        decoded.imm.ok_or("missing immediate")?.0
+                    } else if let Some(r) = Self::resolved_reg(op2, &decoded) {
                         state.get_reg(r)
-                    } else if let Some((imm, _)) = decoded.imm {
-                        imm
-                    } else if let Some(mem) = decoded.mem {
-                        bus.load(mem.addr, bits)
                     } else {
-                        0
+                        decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
                 } else {
                     return Err("unsupported operand pattern");

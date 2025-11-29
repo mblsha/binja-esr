@@ -272,6 +272,11 @@ impl MemoryImage {
                     );
                 }
             }
+            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_imr_read(None, value as u8);
+                }
+            }
         }
         Some(value)
     }
@@ -308,6 +313,19 @@ impl MemoryImage {
                         eprintln!("[imr-read] offset=0x{offset:02X} val=0x{val:02X}");
                     }
                 }
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_imr_read(None, val);
+                    }
+                }
+            }
+            if offset == 0xF2 {
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_kio_read(None, offset as u8, val);
+                    }
+                }
+                eprintln!("[kil-read-rust] offset=0x{offset:02X} val=0x{val:02X}");
             }
             Some(val)
         } else {

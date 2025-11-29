@@ -8,8 +8,12 @@ pub struct PerfettoTracer {
     builder: PerfettoTraceBuilder,
     exec_track: TrackId,
     mem_track: TrackId,
+    imr_track: TrackId,
     units_per_instr: u64,
     path: PathBuf,
+    imr_seq: u64,
+    imr_read_zero: u64,
+    imr_read_nonzero: u64,
 }
 
 impl PerfettoTracer {
@@ -18,12 +22,17 @@ impl PerfettoTracer {
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
         let exec_track = builder.add_thread("InstructionTrace");
         let mem_track = builder.add_thread("MemoryWrites");
+        let imr_track = builder.add_thread("IMR");
         Self {
             builder,
             exec_track,
             mem_track,
+            imr_track,
             units_per_instr: 10_000,
             path,
+            imr_seq: 0,
+            imr_read_zero: 0,
+            imr_read_nonzero: 0,
         }
     }
 
@@ -116,12 +125,49 @@ impl PerfettoTracer {
             .map_err(|e| crate::CoreError::Other(format!("perfetto save: {e}")))
     }
 
+    /// IMR read diagnostics: log each read and keep running zero/non-zero counters.
+    pub fn record_imr_read(&mut self, pc: Option<u32>, value: u8) {
+        let zero = (value & 0xFF) == 0;
+        if zero {
+            self.imr_read_zero = self.imr_read_zero.saturating_add(1);
+        } else {
+            self.imr_read_nonzero = self.imr_read_nonzero.saturating_add(1);
+        }
+        let ts = self.imr_seq;
+        self.imr_seq = self.imr_seq.saturating_add(1);
+
+        let mut ev =
+            self.builder
+                .add_instant_event(self.imr_track, "IMR_Read".to_string(), ts as i64);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", pc_val as u64);
+        }
+        ev.add_annotation("value", value as u64);
+        ev.add_annotation("zero", zero as u64);
+        ev.add_annotation("count_zero", self.imr_read_zero as u64);
+        ev.add_annotation("count_nonzero", self.imr_read_nonzero as u64);
+        ev.finish();
+    }
+
     /// Lightweight instant for IMEM/ISR diagnostics (used by test hooks).
     pub fn record_keyi_set(&mut self, addr: u32, value: u8) {
         let mut ev = self
             .builder
             .add_instant_event(self.exec_track, "KEYI_Set".to_string(), 0);
         ev.add_annotation("offset", addr as u64);
+        ev.add_annotation("value", value as u64);
+        ev.finish();
+    }
+
+    /// Generic KIO read hook for KOL/KOH/KIL visibility.
+    pub fn record_kio_read(&mut self, pc: Option<u32>, offset: u8, value: u8) {
+        let mut ev = self
+            .builder
+            .add_instant_event(self.exec_track, "read@KIO".to_string(), 0);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", pc_val as u64);
+        }
+        ev.add_annotation("offset", offset as u64);
         ev.add_annotation("value", value as u64);
         ev.finish();
     }

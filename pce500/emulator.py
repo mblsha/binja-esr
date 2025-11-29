@@ -292,6 +292,11 @@ class PCE500Emulator:
             try:
                 if getattr(self.cpu, "backend", None) == "llama":
                     self.cpu.set_perfetto_trace(trace_path)
+                    # Also mirror into the Rust static tracer for KIO logging.
+                    impl = self.cpu.unwrap()
+                    setter = getattr(impl, "set_perfetto_trace", None)
+                    if callable(setter):
+                        setter(trace_path)
             except Exception:
                 pass
 
@@ -314,14 +319,27 @@ class PCE500Emulator:
         }
         # Track last-observed IMR/ISR values for trace diffs.
         self._last_imem_values: Dict[str, int] = {}
+        rust_trace_path = str(trace_path)
+        if enable_new_tracing:
+            rust_trace_path = f"{rust_trace_path}.rust"
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
             trace_dispatcher.start_trace(trace_path)
+            try:
+                trace_dispatcher.register(new_tracer)
+            except Exception:
+                pass
+            if not new_tracer.enabled:
+                try:
+                    new_tracer.start(trace_path)
+                    self._new_trace_enabled = True
+                except Exception:
+                    pass
             self.lcd.set_perfetto_enabled(True)
             self.memory.set_perfetto_enabled(True)
             if getattr(self.cpu, "backend", None) == "llama":
                 try:
-                    self.cpu.set_perfetto_trace(trace_path)
+                    self.cpu.set_perfetto_trace(rust_trace_path)
                 except Exception:
                     pass
         elif trace_dispatcher.has_observers():
@@ -330,6 +348,7 @@ class PCE500Emulator:
         # New tracing system
         self._new_trace_enabled = enable_new_tracing
         self._trace_path = trace_path
+        self._rust_trace_path = rust_trace_path
         self._trace_instr_count = 0
         self._trace_units_per_instruction = self._TRACE_UNITS_PER_INSTRUCTION
         self._trace_substep = 0
@@ -341,7 +360,7 @@ class PCE500Emulator:
             # Ensure the Rust LLAMA core writes into the same Perfetto trace file.
             try:
                 if getattr(self.cpu, "backend", None) == "llama":
-                    self.cpu.set_perfetto_trace(trace_path)
+                    self.cpu.set_perfetto_trace(self._rust_trace_path)
             except Exception:
                 pass
 
@@ -364,9 +383,15 @@ class PCE500Emulator:
         self._irq_pending = False
         self._in_interrupt = False
         self._kb_irq_count = 0
+        timer_scale = 1.0
+        if backend == "llama":
+            try:
+                timer_scale = float(os.getenv("LLAMA_TIMER_SCALE", "1.0"))
+            except ValueError:
+                timer_scale = 1.0
         self._scheduler = TimerScheduler(
-            mti_period=MTI_PERIOD_CYCLES_DEFAULT,
-            sti_period=STI_PERIOD_CYCLES_DEFAULT,
+            mti_period=max(1, int(MTI_PERIOD_CYCLES_DEFAULT * timer_scale)),
+            sti_period=max(1, int(STI_PERIOD_CYCLES_DEFAULT * timer_scale)),
         )
         self._irq_source: Optional["IRQSource"] = None
         # Fast mode: minimize step() overhead to run many instructions
@@ -379,6 +404,17 @@ class PCE500Emulator:
             # Tap into keyboard scan events to surface KEYI progression in logs/perfetto.
             if hasattr(self.keyboard, "_matrix"):
                 self.keyboard._matrix._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
+                # Also route handler-level hook so KIO reads/writes can be logged with PC.
+                self.keyboard._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
+                # Pass perfetto tracer down to matrix so trace_kio can emit directly.
+                try:
+                    if new_tracer.enabled:
+                        self.keyboard._matrix._perf_tracer = new_tracer  # type: ignore[attr-defined]
+                    elif self.perfetto_enabled or trace_dispatcher.has_observers():
+                        # Use the dispatcher as a tracer proxy for legacy perfetto mode.
+                        self.keyboard._matrix._perf_tracer = trace_dispatcher  # type: ignore[attr-defined]
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -501,6 +537,7 @@ class PCE500Emulator:
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
         trace_snapshot: Optional[Dict[str, Any]] = None
+        pc = self.cpu.regs.get(RegisterName.PC)
         # Tick rough timers to set ISR bits and arm IRQ when due
         try:
             if self._timer_enabled and not getattr(self, "_in_interrupt", False):
@@ -538,6 +575,107 @@ class PCE500Emulator:
                     return True
         except Exception:
             pass
+        # Emit a focused diagnostic instant around the IRQ stub split to understand
+        # branch/return flow differences (e.g., PC≈0xF205C → 0xF1769 vs 0xF1FB5).
+        if new_tracer.enabled and (
+            0x0F205C <= pc <= 0x0F2064 or 0x0F1760 <= pc <= 0x0F2070 or 0x0F1FB0 <= pc <= 0x0F1FC0
+        ):
+            try:
+                imr_probe_diag = (
+                    self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, cpu_pc=pc)
+                    & 0xFF
+                )
+                isr_probe_diag = (
+                    self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, cpu_pc=pc)
+                    & 0xFF
+                )
+            except Exception:
+                imr_probe_diag = None
+                isr_probe_diag = None
+            try:
+                opcode_diag = self.memory.read_byte(pc & 0xFFFFF, cpu_pc=pc) & 0xFF
+            except Exception:
+                opcode_diag = None
+            try:
+                s_reg = self.cpu.regs.get(RegisterName.S) & 0xFFFFFF
+                u_reg = self.cpu.regs.get(RegisterName.U) & 0xFFFFFF
+                f_reg = self.cpu.regs.get(RegisterName.F) & 0xFF
+                fc_reg = getattr(self.cpu.regs, "get_fc", lambda: None)()
+                fz_reg = getattr(self.cpu.regs, "get_fz", lambda: None)()
+            except Exception:
+                s_reg = u_reg = f_reg = fc_reg = fz_reg = None
+            stack_bytes = None
+            if s_reg is not None:
+                try:
+                    base = s_reg & 0xFFFFF
+                    stack_bytes = [
+                        self.memory.read_byte(base + idx, cpu_pc=pc) & 0xFF for idx in range(5)
+                    ]
+                except Exception:
+                    stack_bytes = None
+            new_tracer.instant(
+                "diag.stub",
+                "StubWindow",
+                {
+                    "pc": pc,
+                    "opcode": opcode_diag,
+                    "s": s_reg,
+                    "u": u_reg,
+                    "f": f_reg,
+                    "fc": fc_reg,
+                    "fz": fz_reg,
+                    "imr": imr_probe_diag,
+                    "isr": isr_probe_diag,
+                    "stack0": stack_bytes,
+                },
+            )
+
+        # Always surface IMR/ISR snapshot each step to Perfetto to observe dispatcher state.
+        try:
+            imr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+            isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+            pc_for_irq = pc
+            imr_probe = self.memory.read_byte(imr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+            isr_probe = self.memory.read_byte(isr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+            pending_src = None
+            for b, src in (
+                (IRQSource.KEY.value, IRQSource.KEY),
+                (IRQSource.ONK.value, IRQSource.ONK),
+                (IRQSource.MTI.value, IRQSource.MTI),
+                (IRQSource.STI.value, IRQSource.STI),
+            ):
+                if isr_probe & (1 << b):
+                    pending_src = src
+                    break
+            if not getattr(self, "_irq_pending", False):
+                if (imr_probe & int(IMRFlag.IRM)) != 0 and (imr_probe & isr_probe) != 0:
+                    self._irq_pending = True
+                    if pending_src is not None:
+                        self._irq_source = pending_src
+                    self._trace_irq_instant(
+                        "IRQ_PendingArm",
+                        pending_src,
+                        {
+                            "pc": pc_for_irq,
+                            "imr": imr_probe,
+                            "isr": isr_probe,
+                            "pending_src": pending_src.name if pending_src else None,
+                        },
+                    )
+            self._trace_irq_instant(
+                "IRQ_Check",
+                pending_src,
+                {
+                    "pc": pc_for_irq,
+                    "imr": imr_probe,
+                    "isr": isr_probe,
+                    "pending_flag": bool(getattr(self, "_irq_pending", False)),
+                    "in_interrupt": bool(getattr(self, "_in_interrupt", False)),
+                    "pending_src": pending_src.name if pending_src else None,
+                },
+            )
+        except Exception:
+            pass
         # Check for pending synthetic interrupt before executing next instruction
         if getattr(self, "_irq_pending", False) and not getattr(
             self, "_in_interrupt", False
@@ -546,8 +684,11 @@ class PCE500Emulator:
                 # Respect IMR/ISR masks: deliver only if IRM=1 and (IMR & ISR)!=0
                 imr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.IMR
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                imr_val_chk = self.memory.read_byte(imr_addr_chk) & 0xFF
-                isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
+                imr_val_chk = self.memory.read_byte(imr_addr_chk, cpu_pc=pc) & 0xFF
+                isr_val_chk = self.memory.read_byte(isr_addr_chk, cpu_pc=pc) & 0xFF
+                kil_val_chk = self.memory.read_byte(
+                    INTERNAL_MEMORY_START + IMEMRegisters.KIL, cpu_pc=pc
+                ) & 0xFF
                 # Capture a second IMR read via CPU regs (LLAMA) to spot divergence.
                 imr_reg_val = None
                 try:
@@ -573,6 +714,7 @@ class PCE500Emulator:
                             "pc": self.cpu.regs.get(RegisterName.PC),
                             "imr": imr_val_chk,
                             "isr": isr_val_chk,
+                            "kil": kil_val_chk,
                             "imr_reg": imr_reg_val,
                             "irq_source": getattr(self, "_irq_source", None)
                             and getattr(self._irq_source, "name", None),
@@ -582,11 +724,14 @@ class PCE500Emulator:
                 except Exception:
                     pass
                 # If we have a pending source but no latched irq_source, adopt it.
-                if (
-                    pending_src is not None
-                    and getattr(self, "_irq_source", None) is None
-                ):
-                    self._irq_source = pending_src
+                # Prefer a newly pending KEY/ONK over an existing latched source so keyboard IRQs are not starved by timers.
+                if pending_src is not None:
+                    if getattr(self, "_irq_source", None) is None:
+                        self._irq_source = pending_src
+                    elif pending_src in (IRQSource.KEY, IRQSource.ONK) and getattr(
+                        self, "_irq_source", None
+                    ) not in (IRQSource.KEY, IRQSource.ONK):
+                        self._irq_source = pending_src
                 # Trace unexpected IMR=0 reads to spot masking.
                 if imr_val_chk == 0:
                     self._trace_irq_instant(
@@ -1362,8 +1507,34 @@ class PCE500Emulator:
         self._timer_sti_period = int(
             timer_info.get("sti_period", self._timer_sti_period)
         )
-        self._timer_next_mti = int(timer_info.get("next_mti", self._timer_next_mti))
-        self._timer_next_sti = int(timer_info.get("next_sti", self._timer_next_sti))
+        # If requested, rescale timers for LLAMA backend regardless of snapshot metadata.
+        timer_scale = 1.0
+        if getattr(self.cpu, "backend", None) == "llama":
+            try:
+                timer_scale = float(os.getenv("LLAMA_TIMER_SCALE", "1.0"))
+            except ValueError:
+                timer_scale = 1.0
+        if timer_scale != 1.0 and getattr(self.cpu, "backend", None) == "llama":
+            self._timer_mti_period = max(1, int(MTI_PERIOD_CYCLES_DEFAULT * timer_scale))
+            self._timer_sti_period = max(1, int(STI_PERIOD_CYCLES_DEFAULT * timer_scale))
+
+        # Capture persisted next-fire offsets before resetting the scheduler. Using
+        # locals avoids losing the snapshot values when reset() recomputes based on
+        # the current cycle count.
+        next_mti = int(
+            timer_info.get("next_mti", self.cycle_count + self._timer_mti_period)
+        )
+        next_sti = int(
+            timer_info.get("next_sti", self.cycle_count + self._timer_sti_period)
+        )
+        # Keep scheduler in sync with restored/scaled periods.
+        self._scheduler.mti_period = int(self._timer_mti_period)
+        self._scheduler.sti_period = int(self._timer_sti_period)
+        self._scheduler.reset(cycle_base=self.cycle_count)
+        # Restore persisted next-fire offsets so cadence matches the snapshot.
+        self._scheduler.next_mti = next_mti
+        self._scheduler.next_sti = next_sti
+        self._scheduler.enabled = bool(self._timer_enabled)
 
         interrupts = metadata.get("interrupts", {})
         self._irq_pending = bool(interrupts.get("pending", False))
@@ -1450,6 +1621,11 @@ class PCE500Emulator:
             print(f"Stopping new tracing, saved to {self._trace_path}")
             new_tracer.set_manual_clock_mode(False)
             new_tracer.stop()
+        try:
+            if hasattr(self.cpu, "flush_perfetto"):
+                self.cpu.flush_perfetto()
+        except Exception:
+            pass
         self._new_trace_enabled = False
 
     def start_tracing(self, path: Optional[str] = None) -> None:
@@ -1562,8 +1738,19 @@ class PCE500Emulator:
             imr = self.memory.internal_memory.read_byte(0xFB)
             isr = self.memory.internal_memory.read_byte(0xFC)
         except Exception:
-            imr = None
-            isr = None
+            # Fall back to routed reads so InstructionTrace always carries IMR/ISR.
+            try:
+                imr = self.memory.read_byte(
+                    INTERNAL_MEMORY_START + IMEMRegisters.IMR, cpu_pc=pc
+                )
+            except Exception:
+                imr = None
+            try:
+                isr = self.memory.read_byte(
+                    INTERNAL_MEMORY_START + IMEMRegisters.ISR, cpu_pc=pc
+                )
+            except Exception:
+                isr = None
         if isinstance(imr, int):
             payload["mem_imr"] = imr & 0xFF
         if isinstance(isr, int):

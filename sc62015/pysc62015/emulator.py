@@ -1,4 +1,4 @@
-from typing import Dict, Set, Optional, Any, cast, Tuple
+from typing import Dict, Set, Optional, Any, cast, Tuple, Callable
 import enum
 import os
 from dataclasses import dataclass
@@ -398,9 +398,66 @@ class Emulator:
         if reset_on_init:
             self.power_on_reset()
 
-    def decode_instruction(self, address: int) -> Instruction:
+    def decode_instruction(self, address: int, read_fn=None) -> Instruction:
+        # Allow an override fetch function (used for KIO tracing); default to memory.read_byte.
         def fecher(offset: int) -> int:
-            return self.memory.read_byte(address + offset)
+            addr = address + offset
+            if addr == INTERNAL_MEMORY_START + IMEMRegisters.KIL:
+                pc_val = self.regs.get(RegisterName.PC)
+                val = self.memory.read_byte(addr)
+                try:
+                    tracer = getattr(self.memory, "_perf_tracer", None)
+                    if tracer is not None and hasattr(tracer, "instant"):
+                        tracer.instant(
+                            "KIO",
+                            "read@KIL",
+                            {
+                                "pc": pc_val & 0xFFFFFF if isinstance(pc_val, int) else None,
+                                "offset": IMEMRegisters.KIL,
+                                "value": val & 0xFF,
+                            },
+                        )
+                except Exception:
+                    pass
+                try:
+                    from pce500.tracing import trace_dispatcher
+
+                    trace_dispatcher.record_instant(
+                        "KIO",
+                        "read@KIL",
+                        {
+                            "pc": f"0x{pc_val & 0xFFFFFF:06X}"
+                            if isinstance(pc_val, int)
+                            else "N/A",
+                            "offset": f"0x{IMEMRegisters.KIL:02X}",
+                            "value": f"0x{val & 0xFF:02X}",
+                        },
+                    )
+                except Exception:
+                    pass
+                return val
+            # Generic IMEM read hook: always emit a KIO event for internal addresses.
+            if addr >= INTERNAL_MEMORY_START:
+                pc_val = self.regs.get(RegisterName.PC)
+                val = self.memory.read_byte(addr)
+                try:
+                    tracer = getattr(self.memory, "_perf_tracer", None)
+                    if tracer is not None and hasattr(tracer, "instant"):
+                        tracer.instant(
+                            "KIO",
+                            f"read@0x{addr - INTERNAL_MEMORY_START:02X}",
+                            {
+                                "pc": pc_val & 0xFFFFFF if isinstance(pc_val, int) else None,
+                                "offset": addr - INTERNAL_MEMORY_START,
+                                "value": val & 0xFF,
+                            },
+                        )
+                except Exception:
+                    pass
+                return val
+            if read_fn is not None:
+                return read_fn(addr)
+            return self.memory.read_byte(addr)
 
         # Use cached decoder if available for better performance
         if USE_CACHED_DECODER:
@@ -424,7 +481,9 @@ class Emulator:
         else:
             return self._execute_instruction_impl(address)
 
-    def _execute_instruction_impl(self, address: int) -> InstructionEvalInfo:
+    def _execute_instruction_impl(
+        self, address: int, read_fn: Optional[Callable[[int], int]] = None
+    ) -> InstructionEvalInfo:
         # Track PC history for tracing
         pc_value = address & PC_MASK
         if _should_trace_lcd(pc_value):
@@ -439,8 +498,14 @@ class Emulator:
         instr = self.decode_instruction(address)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
 
+        # Provide a unified byte reader to honor any injected read_fn.
+        def _read_byte_fn(addr: int) -> int:
+            if read_fn is not None:
+                return read_fn(addr)
+            return self.memory.read_byte(addr)
+
         # Track call stack depth based on opcode
-        opcode = self.memory.read_byte(address)
+        opcode = _read_byte_fn(address)
 
         # Monitor specific opcodes for call stack tracking
         call_stack_delta = CALL_STACK_EFFECTS.get(opcode)

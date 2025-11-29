@@ -460,13 +460,50 @@ impl StandaloneBus {
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         // Master bit set means interrupts enabled.
         if self.in_interrupt || (imr & IMR_MASTER) == 0 {
+            #[cfg(feature = "llama-tests")]
+            {
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_IMR_OFFSET as u8, imr);
+                        tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_ISR_OFFSET as u8, isr);
+                        tracer.record_kio_read(Some(self.cpu.get_pc()), 0xEF, 0);
+                    }
+                }
+            }
             return false;
         }
         // Per-bit masks are "enabled when set". Allow nested delivery while in_interrupt for keyboard.
-        ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
+        let pending = ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
             || (!self.in_interrupt
                 && (((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
-                    || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0))))
+                    || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0))));
+        // Trace pending decision for visibility (Perfetto + console).
+        #[cfg(feature = "llama-tests")]
+        {
+            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_IMR_OFFSET as u8, imr);
+                    tracer.record_kio_read(Some(self.cpu.get_pc()), IMEM_ISR_OFFSET as u8, isr);
+                    tracer.record_kio_read(Some(self.cpu.get_pc()), 0xEE, pending as u8);
+                    // Encode src mask: bit0=KEY, bit1=MTI, bit2=STI
+                    let mask = (((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0)) as u8)
+                        | ((((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0)) as u8) << 1)
+                        | ((((isr & ISR_STI != 0) && (imr & IMR_STI != 0)) as u8) << 2);
+                    tracer.record_kio_read(Some(self.cpu.get_pc()), 0xED, mask);
+                }
+            }
+            if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
+                println!(
+                    "[irq-pending] pc=0x{:05X} imr=0x{:02X} isr=0x{:02X} pending={} in_irq={}",
+                    self.cpu.get_pc(),
+                    imr,
+                    isr,
+                    pending,
+                    self.in_interrupt
+                );
+            }
+        }
+        pending
     }
 
     fn idle_tick(&mut self) {
@@ -474,6 +511,38 @@ impl StandaloneBus {
         self.timer
             .tick_timers(&mut self.memory, &mut self.cycle_count);
         self.tick_keyboard();
+    }
+
+    #[cfg(feature = "llama-tests")]
+    fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
+        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                tracer.record_kio_read(Some(pc), offset, value);
+            }
+        }
+    }
+
+    fn log_irq_delivery(&mut self, src: Option<&str>, vec: u32, imr: u8, isr: u8, pc: u32) {
+        #[cfg(feature = "llama-tests")]
+        {
+            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_kio_read(Some(pc), IMEM_IMR_OFFSET as u8, imr);
+                    tracer.record_kio_read(Some(pc), IMEM_ISR_OFFSET as u8, isr);
+                    tracer.record_kio_read(Some(pc), 0xFF, (vec & 0xFF) as u8);
+                }
+            }
+        }
+        if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
+            println!(
+                "[irq-deliver] pc=0x{pc:05X} src={src:?} vec=0x{vec:05X} imr=0x{imr:02X} isr=0x{isr:02X}",
+                pc = pc,
+                src = src,
+                vec = vec & ADDRESS_MASK,
+                imr = imr,
+                isr = isr
+            );
+        }
     }
 
     fn deliver_irq(&mut self, state: &mut LlamaState) {
@@ -527,6 +596,7 @@ impl StandaloneBus {
         };
         self.last_irq_src = src.map(|s| s.to_string());
         let src_clone = self.last_irq_src.clone();
+        self.log_irq_delivery(src_clone.as_deref(), vec, imr, isr, pc);
         self.log_irq_event(
             "IRQ_Enter",
             src_clone.as_deref(),
@@ -599,6 +669,19 @@ impl LlamaBus for StandaloneBus {
                 }
                 if offset == IMEM_KIL_OFFSET {
                     self.pending_kil = false;
+                    // Emit perfetto event for KIL read with PC/value.
+                    #[cfg(feature = "llama-tests")]
+                    {
+                        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                            if let Some(tracer) = guard.as_mut() {
+                                tracer.record_kio_read(self.last_pc, offset as u8, byte);
+                            }
+                        }
+                    }
+                    println!(
+                        "[kil-read-llama] pc=0x{:06X} val=0x{:02X}",
+                        self.last_pc, byte
+                    );
                 }
                 if matches!(
                     offset,
@@ -1077,6 +1160,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             );
         }
         let opcode = bus.load(pc, 8) as u8;
+        // Simulate WAIT timing like the Python emulator: if the opcode is WAIT (0xEF),
+        // advance timers/keyboard scans for I cycles so timer-driven scans are not starved.
+        let wait_cycles = if opcode == 0xEF {
+            (state.get_reg(RegName::I) & 0xFFFF) as usize
+        } else {
+            0
+        };
         if let Some(code) = auto_key {
             if !pressed_key && executed >= auto_press_step {
                 bus.press_key(code);
@@ -1122,6 +1212,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     );
                     bus.in_interrupt = false;
                     bus.last_irq_src = None;
+                }
+                if wait_cycles > 0 {
+                    for _ in 0..wait_cycles {
+                        bus.idle_tick();
+                    }
                 }
                 executed += 1;
                 if let Some(stop) = stop_pc {
