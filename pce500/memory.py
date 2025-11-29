@@ -459,7 +459,11 @@ class PCE500Memory:
                             "offset": f"0x{offset:02X}",
                         },
                     )
-                    if offset == IMEMRegisters.KIL:
+                    if offset == IMEMRegisters.KIL and os.getenv("KIL_READ_DEBUG") in (
+                        "1",
+                        "true",
+                        "True",
+                    ):
                         try:
                             pc_log = (
                                 f"0x{effective_pc & 0xFFFFFF:06X}"
@@ -536,7 +540,11 @@ class PCE500Memory:
                     },
                 )
                 # Log explicitly when KIL is read to capture PC/value even if tracer is absent.
-                if offset == IMEMRegisters.KIL:
+                if offset == IMEMRegisters.KIL and os.getenv("KIL_READ_DEBUG") in (
+                    "1",
+                    "true",
+                    "True",
+                ):
                     try:
                         pc_log = (
                             f"0x{effective_pc & 0xFFFFFF:06X}"
