@@ -170,6 +170,14 @@ class PCE500Emulator:
         lcd_trace_file: Optional[str] = None,
         lcd_trace_event_limit: int = 50000,
     ):
+        # Avoid leaking a previously-enabled perfetto tracer into runs that do not
+        # request tracing.
+        if not (perfetto_trace or enable_new_tracing) and new_tracer.enabled:
+            try:
+                new_tracer.safe_stop()
+            except Exception:
+                pass
+
         self.instruction_count = 0
         self.memory_read_count = 0
         self.memory_write_count = 0
@@ -325,10 +333,6 @@ class PCE500Emulator:
         self.perfetto_enabled = perfetto_trace
         if self.perfetto_enabled:
             trace_dispatcher.start_trace(trace_path)
-            try:
-                trace_dispatcher.register(new_tracer)
-            except Exception:
-                pass
             if not new_tracer.enabled:
                 try:
                     new_tracer.start(trace_path)
@@ -342,7 +346,7 @@ class PCE500Emulator:
                     self.cpu.set_perfetto_trace(rust_trace_path)
                 except Exception:
                     pass
-        elif trace_dispatcher.has_observers():
+        elif len(list(trace_dispatcher.observers())) > 1:
             trace_dispatcher.start_trace(trace_path)
 
         # New tracing system
@@ -383,6 +387,7 @@ class PCE500Emulator:
         self._irq_pending = False
         self._in_interrupt = False
         self._kb_irq_count = 0
+        self._key_irq_latched = False
         timer_scale = 1.0
         if backend == "llama":
             try:
@@ -523,6 +528,7 @@ class PCE500Emulator:
         self._next_interrupt_id = 1
         self._scheduler.reset()
         self._kb_irq_count = 0
+        self._key_irq_latched = False
         # Reset interrupt accounting
         try:
             self.irq_counts.update({"total": 0, "KEY": 0, "MTI": 0, "STI": 0})
@@ -756,9 +762,16 @@ class PCE500Emulator:
                     f"pending IRQ check pc=0x{self.cpu.regs.get(RegisterName.PC):06X} "
                     f"imr=0x{imr_val_chk:02X} isr=0x{isr_val_chk:02X} in_interrupt={self._in_interrupt}"
                 )
-                if (imr_val_chk & int(IMRFlag.IRM)) == 0 or (
-                    imr_val_chk & isr_val_chk
-                ) == 0:
+                irm_enabled = (imr_val_chk & int(IMRFlag.IRM)) != 0
+                # If a level-triggered KEY/ONK request is pending while IRM is
+                # still masked, treat IRM as enabled so the event is not lost
+                # before the ROM flips IMR into its runtime state.
+                if not irm_enabled and (
+                    isr_val_chk & (int(ISRFlag.KEYI) | int(ISRFlag.ONKI))
+                ):
+                    irm_enabled = True
+
+                if not irm_enabled or (imr_val_chk & isr_val_chk) == 0:
                     # Keep pending; CPU continues executing normal flow
                     _log_irq_debug(
                         f"IRQ masked; pending retained (IMR=0x{imr_val_chk:02X} ISR=0x{isr_val_chk:02X})"
@@ -1099,6 +1112,17 @@ class PCE500Emulator:
                         & 0xFF,
                     },
                 )
+                # Clear the delivered ISR bit now that the handler has observed it.
+                try:
+                    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                    isr_val = self.memory.read_byte(isr_addr)
+                    if isinstance(self._irq_source, IRQSource):
+                        isr_mask = ~(1 << int(self._irq_source.value)) & 0xFF
+                        self.memory.write_byte(isr_addr, isr_val & isr_mask)
+                        if self._irq_source == IRQSource.KEY:
+                            self._key_irq_latched = False
+                except Exception:
+                    pass
                 self._in_interrupt = False
                 # After returning from interrupt, clear IRQ source marker
                 self._irq_source = None
@@ -2004,6 +2028,7 @@ class PCE500Emulator:
         if not getattr(self, "_kb_irq_enabled", True):
             return
         self._set_isr_bits(int(ISRFlag.KEYI))
+        self._key_irq_latched = True
         self._irq_pending = True
         self._irq_source = IRQSource.KEY
         try:
@@ -2032,6 +2057,7 @@ class PCE500Emulator:
 
         result = self.keyboard.press_key(key_code) if self.keyboard else False
         if result and self._kb_irq_enabled:
+            self._key_irq_latched = True
             if os.getenv("KEYI_DEBUG") == "1":
                 print(
                     f"[key-press] key={key_code} pc=0x{int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF:06X}"
@@ -2094,7 +2120,8 @@ class PCE500Emulator:
                 self._kb_irq_count += len(events)
             self._set_isr_bits(int(ISRFlag.KEYI))
             self._irq_pending = True
-            self._irq_source = IRQSource.KEY
+            if not getattr(self, "_in_interrupt", False):
+                self._irq_source = IRQSource.KEY
             try:
                 self._trace_irq_instant(
                     "KeyIRQ",
@@ -2154,7 +2181,9 @@ class PCE500Emulator:
         if mask & int(ISRFlag.KEYI):
             # Latch a plausible IRQ source so pending checks can deliver.
             try:
-                if getattr(self, "_irq_source", None) is None:
+                if getattr(self, "_irq_source", None) is None and not getattr(
+                    self, "_in_interrupt", False
+                ):
                     self._irq_source = IRQSource.KEY
             except Exception:
                 pass
@@ -2210,6 +2239,23 @@ class PCE500Emulator:
 
     def _tick_timers(self) -> None:
         """Rough timer emulation: set ISR bits periodically and arm IRQ."""
+        # If a KEY/ONK request was latched but firmware cleared ISR before the
+        # interrupt could fire, reassert the status so it is not dropped.
+        if self._key_irq_latched:
+            try:
+                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                isr_val = self.memory.read_byte(isr_addr) & 0xFF
+                if (isr_val & int(ISRFlag.KEYI)) == 0:
+                    self._set_isr_bits(int(ISRFlag.KEYI))
+                    self._irq_pending = True
+                    if getattr(self, "_irq_source", None) not in (
+                        IRQSource.KEY,
+                        IRQSource.ONK,
+                    ):
+                        self._irq_source = IRQSource.KEY
+            except Exception:
+                pass
+
         fired_sources = tuple(self._scheduler.advance(self.cycle_count))
         if not fired_sources:
             return
@@ -2327,6 +2373,7 @@ class PCE500Emulator:
 
         if key_events:
             if self._kb_irq_enabled:
+                self._key_irq_latched = True
                 self._set_isr_bits(int(ISRFlag.KEYI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.KEY
@@ -2767,6 +2814,7 @@ class PCE500Emulator:
             pass
 
     def release_key(self, key_code: str):
+        self._key_irq_latched = False
         if self.keyboard:
             self.keyboard.release_key(key_code)
         if new_tracer.enabled:
