@@ -104,10 +104,10 @@ impl LlamaBus for LlamaPyBus {
                     }
                     // Mirror into Python's dispatcher so the main Perfetto trace sees KIO reads.
                     Python::with_gil(|py| {
-                        let _ = self.memory.bind(py).call_method1(
-                            "trace_kio_from_rust",
-                            (offset as u32, byte as u32, self.pc),
-                        );
+                        let _ = self
+                            .memory
+                            .bind(py)
+                            .call_method1("trace_kio_from_rust", (offset, byte, self.pc));
                     });
                     eprintln!(
                         "[kio-read-pybus] pc=0x{pc:06X} offset=0x{offset:02X} value=0x{val:02X} tracer={tracer}",
@@ -226,7 +226,7 @@ fn trace_loads() -> bool {
     *LOADS.get_or_init(|| {
         std::env::var("TRACE_ADDRS_LOAD")
             .ok()
-            .map_or(false, |v| v != "0")
+            .is_some_and(|v| v != "0")
     })
 }
 
@@ -255,9 +255,9 @@ impl LlamaCpu {
         // Push PC, F, IMR
         let sp = self.state.get_reg(LlamaRegName::S);
         let mut new_sp = sp.wrapping_sub(3) & sc62015_core::ADDRESS_MASK;
-        bus.store(new_sp, 8, (pc & 0xFF) as u32);
-        bus.store(new_sp + 1, 8, ((pc >> 8) & 0xFF) as u32);
-        bus.store(new_sp + 2, 8, ((pc >> 16) & 0xFF) as u32);
+        bus.store(new_sp, 8, pc & 0xFF);
+        bus.store(new_sp + 1, 8, (pc >> 8) & 0xFF);
+        bus.store(new_sp + 2, 8, (pc >> 16) & 0xFF);
         self.state.set_reg(LlamaRegName::S, new_sp);
         let f = self.state.get_reg(LlamaRegName::F) & 0xFF;
         new_sp = self.state.get_reg(LlamaRegName::S).wrapping_sub(1) & sc62015_core::ADDRESS_MASK;
@@ -486,9 +486,9 @@ impl LlamaCpu {
             let sp = self.state.get_reg(LlamaRegName::S);
             let pc_val = pc & sc62015_core::ADDRESS_MASK;
             let mut new_sp = sp.wrapping_sub(3) & sc62015_core::ADDRESS_MASK;
-            bus.store(new_sp, 8, (pc_val & 0xFF) as u32);
-            bus.store(new_sp + 1, 8, ((pc_val >> 8) & 0xFF) as u32);
-            bus.store(new_sp + 2, 8, ((pc_val >> 16) & 0xFF) as u32);
+            bus.store(new_sp, 8, pc_val & 0xFF);
+            bus.store(new_sp + 1, 8, (pc_val >> 8) & 0xFF);
+            bus.store(new_sp + 2, 8, (pc_val >> 16) & 0xFF);
             self.state.set_reg(LlamaRegName::S, new_sp);
             let f = self.state.get_reg(LlamaRegName::F) & 0xFF;
             new_sp =
