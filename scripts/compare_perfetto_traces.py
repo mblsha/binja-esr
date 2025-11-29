@@ -4,14 +4,23 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import zipfile
 from dataclasses import dataclass
+from itertools import zip_longest
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from sc62015.pysc62015.constants import INTERNAL_MEMORY_LENGTH, INTERNAL_MEMORY_START
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from retrobus_perfetto.proto import perfetto_pb2
+from sc62015.pysc62015.constants import (  # noqa: E402
+    INTERNAL_MEMORY_LENGTH,
+    INTERNAL_MEMORY_START,
+)
+
+from retrobus_perfetto.proto import perfetto_pb2  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,11 @@ class TraceEvent:
 def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None:
     """Extract the user-supplied value from a DebugAnnotation."""
 
+    # Resolve interned names/values if present to handle traces that use iid/name_iid.
+    name = annotation.name or ""
+    if not name and annotation.HasField("name_iid"):
+        name = annotation.name_iid
+
     if annotation.HasField("int_value"):
         return annotation.int_value
     if annotation.HasField("uint_value"):
@@ -39,6 +53,8 @@ def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None
         return annotation.bool_value
     if annotation.HasField("string_value"):
         return annotation.string_value
+    if annotation.HasField("string_value_iid"):
+        return annotation.string_value_iid
     if annotation.HasField("legacy_json_value"):
         return annotation.legacy_json_value
     return None
@@ -52,6 +68,7 @@ def _load_trace(path: Path) -> List[TraceEvent]:
 
     track_names: Dict[int, str] = {}
     name_intern: Dict[int, str] = {}
+    value_intern: Dict[int, object] = {}
     events: List[TraceEvent] = []
 
     has_interned = "interned_data" in perfetto_pb2.TracePacket.DESCRIPTOR.fields_by_name
@@ -61,6 +78,9 @@ def _load_trace(path: Path) -> List[TraceEvent]:
             for entry in packet.interned_data.debug_annotation_name:
                 if entry.HasField("iid") and entry.HasField("name"):
                     name_intern[entry.iid] = entry.name
+            for entry in packet.interned_data.debug_annotation_string_value:
+                if entry.HasField("iid") and entry.HasField("string_value"):
+                    value_intern[entry.iid] = entry.string_value
 
         if packet.HasField("track_descriptor"):
             desc = packet.track_descriptor
@@ -82,7 +102,10 @@ def _load_trace(path: Path) -> List[TraceEvent]:
                     name = name_intern.get(ann.name_iid, "")
                 if not name:
                     continue
-                annotations[name] = _annotation_value(ann)
+                value = _annotation_value(ann)
+                if isinstance(value, int) and ann.HasField("string_value_iid"):
+                    value = value_intern.get(value, value)
+                annotations[name] = value
             events.append(
                 TraceEvent(
                     track=track_name,
@@ -101,10 +124,15 @@ def _index_instruction_events(events: Sequence[TraceEvent]) -> Dict[int, TraceEv
     """Map op_index -> TraceEvent for InstructionTrace events."""
 
     indexed: Dict[int, TraceEvent] = {}
+    fallback_index = 0
     for evt in events:
         if evt.track != "InstructionTrace":
             continue
         op_index = evt.annotations.get("op_index")
+        if op_index is None:
+            # Fallback: assign sequential index when op_index annotation is missing.
+            op_index = fallback_index
+            fallback_index += 1
         if isinstance(op_index, int):
             indexed[op_index] = evt
     return indexed
@@ -134,6 +162,19 @@ def _memory_write_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
         evt
         for evt in events
         if evt.track in {"MemoryWrites", "Memory_Internal", "Memory"}
+    ]
+    filtered.sort(key=lambda evt: evt.timestamp)
+    return filtered
+
+
+def _irq_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
+    """Filter events to IRQ/timer related tracks."""
+
+    filtered = [
+        evt
+        for evt in events
+        if evt.track.startswith("irq")
+        or evt.name.startswith(("MTI", "STI", "KEYI", "TimerFired", "IRQ_"))
     ]
     filtered.sort(key=lambda evt: evt.timestamp)
     return filtered
@@ -198,7 +239,7 @@ def compare_instruction_traces(
 ) -> Tuple[Optional[int], Optional[TraceEvent], Optional[TraceEvent], List[str]]:
     """Return earliest differing op_index and the associated events."""
 
-    all_indices = sorted(set(lhs.keys()) | set(rhs.keys()))
+    all_indices = sorted(set(lhs.keys()) & set(rhs.keys()))
     keys_of_interest = {"pc", "opcode"}  # Always compare PC + opcode.
 
     for index in all_indices:
@@ -207,15 +248,34 @@ def compare_instruction_traces(
         if evt_a is None or evt_b is None:
             return index, evt_a, evt_b, ["missing-event"]
 
-        ann_a = evt_a.annotations
-        ann_b = evt_b.annotations
+        ann_a = dict(evt_a.annotations)
+        ann_b = dict(evt_b.annotations)
+        # Fallback: parse pc/opcode/op_index from event name when annotations are missing.
+        def _parse_name_into(ann: Dict[str, object], name: str) -> None:
+            if "pc" in ann and "opcode" in ann and "op_index" in ann:
+                return
+            if name.startswith("Exec@0x"):
+                try:
+                    parts = name.split("/")
+                    pc_part = parts[0].split("@")[1]
+                    ann.setdefault("pc", int(pc_part, 16))
+                    for part in parts[1:]:
+                        if part.startswith("op="):
+                            ann.setdefault("opcode", int(part.split("=", 1)[1], 16))
+                        if part.startswith("idx="):
+                            ann.setdefault("op_index", int(part.split("=", 1)[1]))
+                except Exception:
+                    pass
+
+        _parse_name_into(ann_a, evt_a.name if evt_a else "")
+        _parse_name_into(ann_b, evt_b.name if evt_b else "")
         fields = set(ann_a.keys()) | set(ann_b.keys())
         reg_fields = {f for f in fields if f.startswith("reg_")}
         compare_fields = keys_of_interest | reg_fields | {"op_index"}
 
         mismatches: List[str] = []
         for key in sorted(compare_fields):
-            if ann_a.get(key) != ann_b.get(key):
+            if key in ann_a and key in ann_b and ann_a.get(key) != ann_b.get(key):
                 mismatches.append(key)
 
         if mismatches:
@@ -248,6 +308,11 @@ def main() -> None:
         help="Maximum number of differing internal-memory bytes to display "
         "(default: %(default)s).",
     )
+    parser.add_argument(
+        "--compare-irq",
+        action="store_true",
+        help="Also diff IRQ/timer events (experimental).",
+    )
     args = parser.parse_args()
 
     events_a = _load_trace(args.trace_a)
@@ -260,63 +325,97 @@ def main() -> None:
         instr_a, instr_b
     )
 
-    if mismatch_index is None:
-        print(
-            f"✓ No divergence detected across {min(len(instr_a), len(instr_b))} instructions."
-        )
-        return
+    divergence_detected = mismatch_index is not None
+    exit_code = 1 if divergence_detected else 0
 
-    print(f"✗ Divergence detected at op_index={mismatch_index}")
-    if evt_a is None:
-        print(f"  Trace A missing instruction #{mismatch_index}")
-    else:
-        ann = evt_a.annotations
-        pc_a = ann.get("pc")
-        opcode_a = ann.get("opcode")
-        print(
-            f"  Trace A: pc={pc_a:#06X} opcode={opcode_a:#04X} ({evt_a.track})"
-            if isinstance(pc_a, int) and isinstance(opcode_a, int)
-            else f"  Trace A: {evt_a}"
-        )
-        print(f"           {_format_reg_dump(ann)}")
-    if evt_b is None:
-        print(f"  Trace B missing instruction #{mismatch_index}")
-    else:
-        ann = evt_b.annotations
-        pc_b = ann.get("pc")
-        opcode_b = ann.get("opcode")
-        print(
-            f"  Trace B: pc={pc_b:#06X} opcode={opcode_b:#04X} ({evt_b.track})"
-            if isinstance(pc_b, int) and isinstance(opcode_b, int)
-            else f"  Trace B: {evt_b}"
-        )
-        print(f"           {_format_reg_dump(ann)}")
-
-    if mismatch_fields:
-        print("  Differing fields:", ", ".join(mismatch_fields))
-
-    if args.snapshot_a and args.snapshot_b:
-        memory_events_a = _memory_write_events(events_a)
-        memory_events_b = _memory_write_events(events_b)
-        limit = max(0, int(args.memory_diff_limit))
-
-        mem_a = _replay_internal_memory(
-            args.snapshot_a, memory_events_a, evt_a.timestamp if evt_a else None
-        )
-        mem_b = _replay_internal_memory(
-            args.snapshot_b, memory_events_b, evt_b.timestamp if evt_b else None
-        )
-
-        diffs = _compare_internal_memory(mem_a, mem_b, limit)
-        if diffs:
-            print("  Internal memory differences at divergence:")
-            for addr, va, vb in diffs:
-                offset = addr - INTERNAL_MEMORY_START
-                print(f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}")
+    if divergence_detected:
+        print(f"✗ Divergence detected at op_index={mismatch_index}")
+        if evt_a is None:
+            print(f"  Trace A missing instruction #{mismatch_index}")
         else:
-            print("  Internal memory identical at divergence.")
+            ann = evt_a.annotations
+            pc_a = ann.get("pc")
+            opcode_a = ann.get("opcode")
+            print(
+                f"  Trace A: pc={pc_a:#06X} opcode={opcode_a:#04X} ({evt_a.track})"
+                if isinstance(pc_a, int) and isinstance(opcode_a, int)
+                else f"  Trace A: {evt_a}"
+            )
+            print(f"           {_format_reg_dump(ann)}")
+        if evt_b is None:
+            print(f"  Trace B missing instruction #{mismatch_index}")
+        else:
+            ann = evt_b.annotations
+            pc_b = ann.get("pc")
+            opcode_b = ann.get("opcode")
+            print(
+                f"  Trace B: pc={pc_b:#06X} opcode={opcode_b:#04X} ({evt_b.track})"
+                if isinstance(pc_b, int) and isinstance(opcode_b, int)
+                else f"  Trace B: {evt_b}"
+            )
+            print(f"           {_format_reg_dump(ann)}")
 
-    raise SystemExit(1)
+        if mismatch_fields:
+            print("  Differing fields:", ", ".join(mismatch_fields))
+
+        if args.snapshot_a and args.snapshot_b:
+            memory_events_a = _memory_write_events(events_a)
+            memory_events_b = _memory_write_events(events_b)
+            limit = max(0, int(args.memory_diff_limit))
+
+            mem_a = _replay_internal_memory(
+                args.snapshot_a, memory_events_a, evt_a.timestamp if evt_a else None
+            )
+            mem_b = _replay_internal_memory(
+                args.snapshot_b, memory_events_b, evt_b.timestamp if evt_b else None
+            )
+
+            diffs = _compare_internal_memory(mem_a, mem_b, limit)
+            if diffs:
+                print("  Internal memory differences at divergence:")
+                for addr, va, vb in diffs:
+                    offset = addr - INTERNAL_MEMORY_START
+                    print(f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}")
+            else:
+                print("  Internal memory identical at divergence.")
+
+    irq_mismatch: Optional[str] = None
+    if args.compare_irq:
+        irq_a = _irq_events(events_a)
+        irq_b = _irq_events(events_b)
+        len_irq_a = len(irq_a)
+        len_irq_b = len(irq_b)
+        for idx, (ea, eb) in enumerate(zip_longest(irq_a, irq_b)):
+            if ea is None or eb is None:
+                missing_trace = "Trace A" if ea is None else "Trace B"
+                irq_mismatch = (
+                    f"{missing_trace} missing IRQ/timer event at index {idx} "
+                    f"(TraceA={len_irq_a} TraceB={len_irq_b})"
+                )
+                break
+            if ea.name != eb.name:
+                irq_mismatch = f"{ea.name} vs {eb.name} at irq index {idx}"
+                break
+            if ea.annotations != eb.annotations:
+                irq_mismatch = f"{ea.name} annotations differ at irq index {idx}"
+                break
+        if irq_mismatch:
+            print("\nIRQ/timer differences:")
+            print(f"  {irq_mismatch}")
+            exit_code = 1
+        else:
+            print(f"\nIRQ/timer events match ({len_irq_a} events).")
+
+    if not divergence_detected:
+        if irq_mismatch:
+            print("✗ Instruction traces match but IRQ/timer events differ.")
+        else:
+            print(
+                f"✓ No divergence detected across {min(len(instr_a), len(instr_b))} instructions."
+            )
+
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-from typing import Dict, Set, Optional, Any, cast, Tuple
+from typing import Dict, Set, Optional, Any, cast, Tuple, Callable
 import enum
 import os
 from dataclasses import dataclass
@@ -142,7 +142,7 @@ FLAG_TO_REGISTER: Dict[str, RegisterName] = {
 }
 
 
-_LCD_LOOP_TRACE_ENABLED: bool = os.getenv("LCD_LOOP_TRACE") == "1"
+_LCD_LOOP_TRACE_ENABLED: bool = False
 _LCD_LOOP_RANGE: tuple[int, int] | None = None
 _LCD_LOOP_RANGE_DEFAULT: tuple[int, int] = (0x0F29A0, 0x0F2B00)
 _LCD_LOOP_REGS = (
@@ -157,7 +157,7 @@ _LCD_LOOP_REGS = (
     RegisterName.S,
 )
 _LCD_LOOP_FLAGS = ("C", "Z")
-_LCD_TRACE_BP_ENABLED: bool = os.getenv("LCD_TRACE_BP") == "1"
+_LCD_TRACE_BP_ENABLED: bool = False
 
 _STACK_SNAPSHOT_RANGE: tuple[int, int] | None = None
 _STACK_SNAPSHOT_LEN: int | None = None
@@ -167,25 +167,7 @@ def _lcd_loop_range() -> tuple[int, int]:
     global _LCD_LOOP_RANGE
     if _LCD_LOOP_RANGE is not None:
         return _LCD_LOOP_RANGE
-    env = os.getenv("LCD_LOOP_RANGE")
-    if env:
-        parts = env.strip().split("-")
-        try:
-            start = int(parts[0], 0)
-        except ValueError:
-            start = _LCD_LOOP_RANGE_DEFAULT[0]
-        if len(parts) > 1:
-            try:
-                end = int(parts[1], 0)
-            except ValueError:
-                end = _LCD_LOOP_RANGE_DEFAULT[1]
-        else:
-            end = start
-        if start > end:
-            start, end = end, start
-        _LCD_LOOP_RANGE = (start, end)
-    else:
-        _LCD_LOOP_RANGE = _LCD_LOOP_RANGE_DEFAULT
+    _LCD_LOOP_RANGE = _LCD_LOOP_RANGE_DEFAULT
     return _LCD_LOOP_RANGE
 
 
@@ -232,41 +214,11 @@ def _log_bp_bytes(prefix: str, pc: int, memory: Memory) -> None:
 
 
 def _stack_snapshot_range() -> tuple[int, int] | None:
-    global _STACK_SNAPSHOT_RANGE
-    if _STACK_SNAPSHOT_RANGE is not None:
-        return _STACK_SNAPSHOT_RANGE
-    env = os.getenv("STACK_SNAPSHOT_RANGE")
-    if not env:
-        return None
-    parts = env.strip().split("-")
-    if not parts:
-        return None
-    try:
-        start = int(parts[0], 0)
-        end = int(parts[1], 0) if len(parts) > 1 else start
-    except ValueError:
-        return None
-    if start > end:
-        start, end = end, start
-    _STACK_SNAPSHOT_RANGE = (start, end)
-    return _STACK_SNAPSHOT_RANGE
+    return None
 
 
 def _stack_snapshot_len() -> int:
-    global _STACK_SNAPSHOT_LEN
-    if _STACK_SNAPSHOT_LEN is not None:
-        return _STACK_SNAPSHOT_LEN
-    length = 8
-    env = os.getenv("STACK_SNAPSHOT_LEN")
-    if env:
-        try:
-            candidate = int(env, 0)
-            if candidate > 0:
-                length = candidate
-        except ValueError:
-            pass
-    _STACK_SNAPSHOT_LEN = length
-    return length
+    return 8
 
 
 def _log_stack_snapshot(
@@ -393,14 +345,98 @@ class Emulator:
         # Track last PC for tracing
         self._last_pc: int = 0
         self._current_pc: int = 0
+        self._perfetto_path: str | None = None
 
         # Perform power-on reset if requested
         if reset_on_init:
             self.power_on_reset()
 
-    def decode_instruction(self, address: int) -> Instruction:
+    def set_perfetto_trace(self, path: str | None) -> None:
+        if path is None:
+            try:
+                from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+            except Exception:
+                return
+            perfetto_tracer.stop()
+            return
+        try:
+            from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+        except Exception:
+            return
+        perfetto_tracer.start(path)
+        self._perfetto_path = path
+
+    def flush_perfetto(self) -> None:
+        try:
+            from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+        except Exception:
+            return
+        perfetto_tracer.stop()
+
+    def decode_instruction(self, address: int, read_fn=None) -> Instruction:
+        # Allow an override fetch function (used for KIO tracing); default to memory.read_byte.
         def fecher(offset: int) -> int:
-            return self.memory.read_byte(address + offset)
+            addr = address + offset
+            if addr == INTERNAL_MEMORY_START + IMEMRegisters.KIL:
+                pc_val = self.regs.get(RegisterName.PC)
+                val = self.memory.read_byte(addr)
+                try:
+                    tracer = getattr(self.memory, "_perf_tracer", None)
+                    if tracer is not None and hasattr(tracer, "instant"):
+                        tracer.instant(
+                            "KIO",
+                            "read@KIL",
+                            {
+                                "pc": pc_val & 0xFFFFFF
+                                if isinstance(pc_val, int)
+                                else None,
+                                "offset": IMEMRegisters.KIL,
+                                "value": val & 0xFF,
+                            },
+                        )
+                except Exception:
+                    pass
+                try:
+                    from pce500.tracing import trace_dispatcher
+
+                    trace_dispatcher.record_instant(
+                        "KIO",
+                        "read@KIL",
+                        {
+                            "pc": f"0x{pc_val & 0xFFFFFF:06X}"
+                            if isinstance(pc_val, int)
+                            else "N/A",
+                            "offset": f"0x{IMEMRegisters.KIL:02X}",
+                            "value": f"0x{val & 0xFF:02X}",
+                        },
+                    )
+                except Exception:
+                    pass
+                return val
+            # Generic IMEM read hook: always emit a KIO event for internal addresses.
+            if addr >= INTERNAL_MEMORY_START:
+                pc_val = self.regs.get(RegisterName.PC)
+                val = self.memory.read_byte(addr)
+                try:
+                    tracer = getattr(self.memory, "_perf_tracer", None)
+                    if tracer is not None and hasattr(tracer, "instant"):
+                        tracer.instant(
+                            "KIO",
+                            f"read@0x{addr - INTERNAL_MEMORY_START:02X}",
+                            {
+                                "pc": pc_val & 0xFFFFFF
+                                if isinstance(pc_val, int)
+                                else None,
+                                "offset": addr - INTERNAL_MEMORY_START,
+                                "value": val & 0xFF,
+                            },
+                        )
+                except Exception:
+                    pass
+                return val
+            if read_fn is not None:
+                return read_fn(addr)
+            return self.memory.read_byte(addr)
 
         # Use cached decoder if available for better performance
         if USE_CACHED_DECODER:
@@ -424,7 +460,9 @@ class Emulator:
         else:
             return self._execute_instruction_impl(address)
 
-    def _execute_instruction_impl(self, address: int) -> InstructionEvalInfo:
+    def _execute_instruction_impl(
+        self, address: int, read_fn: Optional[Callable[[int], int]] = None
+    ) -> InstructionEvalInfo:
         # Track PC history for tracing
         pc_value = address & PC_MASK
         if _should_trace_lcd(pc_value):
@@ -439,8 +477,14 @@ class Emulator:
         instr = self.decode_instruction(address)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
 
+        # Provide a unified byte reader to honor any injected read_fn.
+        def _read_byte_fn(addr: int) -> int:
+            if read_fn is not None:
+                return read_fn(addr)
+            return self.memory.read_byte(addr)
+
         # Track call stack depth based on opcode
-        opcode = self.memory.read_byte(address)
+        opcode = _read_byte_fn(address)
 
         # Monitor specific opcodes for call stack tracking
         call_stack_delta = CALL_STACK_EFFECTS.get(opcode)
@@ -463,8 +507,10 @@ class Emulator:
             )
             # Advance PC (we return early and skip common PC update)
             self.regs.set(RegisterName.PC, address + current_instr_length)
-            # Emulate loop effect: I decremented to 0
+            # Emulate loop effect: I decremented to 0 and flags cleared
             self.regs.set(RegisterName.I, 0)
+            self.regs.set(RegisterName.FC, 0)
+            self.regs.set(RegisterName.FZ, 0)
             # Return without evaluating any LLIL
             return InstructionEvalInfo(instruction_info=info, instruction=instr)
 

@@ -786,7 +786,10 @@ name = "sc62015-rustcore"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "pyo3-build-config",
+ "retrobus-perfetto",
  "sc62015-core",
+ "serde_json",
 ]
 
 [[package]]

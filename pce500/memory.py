@@ -10,6 +10,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .tracing import trace_dispatcher
 from .tracing.perfetto_tracing import perf_trace
+from .tracing.perfetto_tracing import tracer as perfetto_tracer
 from .memory_bus import MemoryBus, MemoryOverlay
 
 # Import constants for accessing internal memory registers
@@ -19,8 +20,8 @@ IMEM_ACCESS_HISTORY_LIMIT = 10
 IMEM_OFFSET_TO_NAME: Dict[int, str] = {
     reg.value: name for name, reg in IMEMRegisters.__members__.items()
 }
-IMEM_TRACE_ALL = os.getenv("IMEM_TRACE_ALL") == "1"
-IMEM_TRACE_REG = os.getenv("IMEM_TRACE_REG") or ""
+IMEM_TRACE_ALL = False
+IMEM_TRACE_REG = ""
 
 
 def _is_lcd_region(address: int) -> bool:
@@ -30,22 +31,8 @@ def _is_lcd_region(address: int) -> bool:
 def _trace_lcd_write(
     memory: "PCE500Memory", address: int, value: int, cpu_pc: Optional[int]
 ) -> None:
-    if not os.getenv("LCD_WRITE_TRACE"):
+    if _is_lcd_region(address):
         return
-    if not _is_lcd_region(address):
-        return
-    pc = cpu_pc
-    if pc is None and memory is not None:
-        pc = memory._get_current_pc()
-    if pc is None and memory.cpu is not None:
-        try:
-            from sc62015.pysc62015.emulator import RegisterName
-
-            pc = memory.cpu.regs.get(RegisterName.PC)
-        except Exception:
-            pass
-    pc_str = f"0x{pc:06X}" if pc is not None else "N/A"
-    print(f"[LCD TRACE] addr=0x{address:06X} val=0x{value:02X} pc={pc_str}")
 
 
 def _lcd_write_wrapper(
@@ -57,7 +44,7 @@ def _lcd_write_wrapper(
 ) -> None:
     handler(address, value, cpu_pc)
     _trace_lcd_write(memory, address, value, cpu_pc)
-    if os.getenv("LCD_WRITE_TRACE"):
+    if False:
         pc_str = f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
         print(f"[LCD TRACE HANDLER] addr=0x{address:06X} val=0x{value:02X} pc={pc_str}")
 
@@ -66,44 +53,13 @@ _STACK_TRACE_RANGES: Optional[List[Tuple[int, int]]] = None
 
 
 def _stack_trace_ranges() -> List[Tuple[int, int]]:
-    global _STACK_TRACE_RANGES
-    if _STACK_TRACE_RANGES is not None:
-        return _STACK_TRACE_RANGES
-    raw = os.getenv("STACK_TRACE_ADDRS", "").strip()
-    ranges: List[Tuple[int, int]] = []
-    if raw:
-        for part in raw.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            if "-" in part:
-                start_str, end_str = part.split("-", 1)
-            else:
-                start_str = end_str = part
-            try:
-                start = int(start_str, 0) & 0xFFFFFF
-                end = int(end_str, 0) & 0xFFFFFF
-            except ValueError:
-                continue
-            if start > end:
-                start, end = end, start
-            ranges.append((start, end))
-    _STACK_TRACE_RANGES = ranges
-    return ranges
+    return []
 
 
 def _trace_stack_write(
     address: int, value: int, cpu_pc: Optional[int], *, label: str = "stack-trace"
 ) -> None:
-    ranges = _stack_trace_ranges()
-    if not ranges:
-        return
-    addr24 = address & 0xFFFFFF
-    for start, end in ranges:
-        if start <= addr24 <= end:
-            pc_str = f"0x{cpu_pc:06X}" if cpu_pc is not None else "N/A"
-            print(f"[{label}] addr=0x{addr24:06X} val=0x{value:02X} pc={pc_str}")
-            break
+    _ = (address, value, cpu_pc, label)
 
 
 class PCE500Memory:
@@ -253,15 +209,6 @@ class PCE500Memory:
     def _record_imr_read(self, value: int, effective_pc: Optional[int]) -> None:
         """Log IMR reads for debugging/perfetto correlation."""
 
-        env = os.getenv("IMR_READ_DEBUG")
-        if env == "1":
-            pc_str = (
-                f"0x{int(effective_pc) & 0xFFFFFF:06X}"
-                if effective_pc is not None
-                else "N/A"
-            )
-            print(f"[imr-read-py] pc={pc_str} imr=0x{int(value) & 0xFF:02X}")
-
         tracer = getattr(self, "_perf_tracer", None)
         if tracer is None:
             return
@@ -316,20 +263,11 @@ class PCE500Memory:
         emulator = getattr(self, "_emulator", None)
         facade_cpu = getattr(emulator, "cpu", None) if emulator else None
         cpu = facade_cpu or getattr(self, "cpu", None)
-        debug = os.getenv("LLAMA_HOST_WRITE_TRACE") == "1"
         if cpu is None or getattr(cpu, "backend", None) != "llama":
-            if debug:
-                print("[llama-host-sync] skipped (no LLAMA backend)")
             return
         if self._suppress_llama_sync > 0:
-            if debug:
-                print("[llama-host-sync] suppressed")
             return
         if cpu_pc is not None:
-            if debug:
-                print(
-                    f"[llama-host-sync] skipped (cpu_pc=0x{int(cpu_pc) & 0xFFFFFF:06X})"
-                )
             return
         backend_impl = cpu.unwrap() if hasattr(cpu, "unwrap") else cpu
         notifier = getattr(backend_impl, "notify_host_write", None) or getattr(
@@ -337,10 +275,6 @@ class PCE500Memory:
         )
         if notifier is None:
             return
-        if debug:
-            print(
-                f"[llama-host-sync] addr=0x{address & 0xFFFFFF:06X} value=0x{value & 0xFF:02X}"
-            )
         try:
             notifier(address & 0xFFFFFF, value & 0xFF)
         except Exception:
@@ -366,11 +300,27 @@ class PCE500Memory:
             effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
             # Fast path for keyboard overlay
             if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
-                value: int
+                value: int = 0
+                effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
                 if self._keyboard_overlay.read_handler:
-                    value = (
-                        int(self._keyboard_overlay.read_handler(address, cpu_pc)) & 0xFF
-                    )
+                    try:
+                        value = (
+                            int(
+                                self._keyboard_overlay.read_handler(
+                                    address,
+                                    effective_pc
+                                    if effective_pc is not None
+                                    else cpu_pc,
+                                )
+                            )
+                            & 0xFF
+                        )
+                    except TypeError:
+                        # Some handlers only accept (address); retry without pc
+                        value = int(self._keyboard_overlay.read_handler(address)) & 0xFF
+                    # Optional override for KIL to force a test value (diagnostic).
+                    if offset == IMEMRegisters.KIL:
+                        pass
                 elif self._keyboard_overlay.data:
                     overlay_offset = address - self._keyboard_overlay.start
                     if overlay_offset < len(self._keyboard_overlay.data):
@@ -382,19 +332,130 @@ class PCE500Memory:
 
                 # Track IMEMRegisters reads (ensure disasm trace sees KOL/KOH/KIL)
                 self._track_imem_access(offset, "read", value, effective_pc)
+                if offset in (IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL):
+                    tracer = getattr(self, "_perf_tracer", None)
+                    if tracer is not None:
+                        pc_val = (
+                            effective_pc
+                            if effective_pc is not None
+                            else self._get_current_pc()
+                        )
+                        tracer.instant(
+                            "KIO",
+                            f"read@{IMEM_OFFSET_TO_NAME.get(offset, f'0x{offset:02X}')}",
+                            {
+                                "pc": pc_val & 0xFFFFFF if pc_val is not None else None,
+                                "value": value,
+                                "offset": offset,
+                            },
+                        )
+                    # Emit a generic KIO read marker to match LLAMA perfetto naming.
+                    try:
+                        if tracer is not None:
+                            tracer.instant(
+                                "KIO",
+                                "read@KIO",
+                                {
+                                    "pc": pc_val & 0xFFFFFF
+                                    if pc_val is not None
+                                    else None,
+                                    "value": value,
+                                    "offset": offset,
+                                },
+                            )
+                    except Exception:
+                        pass
+                    # Also emit via dispatcher in case tracer is absent
+                    trace_dispatcher.record_instant(
+                        "KIO",
+                        f"read@{IMEM_OFFSET_TO_NAME.get(offset, f'0x{offset:02X}')}",
+                        {
+                            "pc": f"0x{effective_pc & 0xFFFFFF:06X}"
+                            if effective_pc is not None
+                            else "N/A",
+                            "value": f"0x{value & 0xFF:02X}",
+                            "offset": f"0x{offset:02X}",
+                        },
+                    )
+                    trace_dispatcher.record_instant(
+                        "KIO",
+                        "read@KIO",
+                        {
+                            "pc": f"0x{effective_pc & 0xFFFFFF:06X}"
+                            if effective_pc is not None
+                            else "N/A",
+                            "value": f"0x{value & 0xFF:02X}",
+                            "offset": f"0x{offset:02X}",
+                        },
+                    )
+                    if offset == IMEMRegisters.KIL:
+                        pass
                 return value
 
             # Normal internal memory access (most common case)
             internal_offset = len(self.external_memory) - 256 + offset
             value = self.external_memory[internal_offset]
             if offset == IMEMRegisters.IMR:
-                if (
-                    os.getenv("IMR_READ_CACHE") == "1"
-                    and self._imr_cache_value is not None
-                ):
+                if False and self._imr_cache_value is not None:
                     value = int(self._imr_cache_value) & 0xFF
                 # Debug hook: log IMR reads to diagnose IMR/IRM coherence.
                 self._record_imr_read(value, effective_pc)
+            elif offset in (IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL):
+                tracer = getattr(self, "_perf_tracer", None)
+                if tracer is not None:
+                    pc_val = (
+                        effective_pc
+                        if effective_pc is not None
+                        else self._get_current_pc()
+                    )
+                    tracer.instant(
+                        "KIO",
+                        f"read@{IMEM_OFFSET_TO_NAME.get(offset, f'0x{offset:02X}')}",
+                        {
+                            "pc": pc_val & 0xFFFFFF if pc_val is not None else None,
+                            "value": value,
+                            "offset": offset,
+                        },
+                    )
+                    # Emit a generic KIO read marker to align with LLAMA trace naming.
+                    try:
+                        tracer.instant(
+                            "KIO",
+                            "read@KIO",
+                            {
+                                "pc": pc_val & 0xFFFFFF if pc_val is not None else None,
+                                "value": value,
+                                "offset": offset,
+                            },
+                        )
+                    except Exception:
+                        pass
+                # Also emit via dispatcher in case matrix hooks are bypassed.
+                trace_dispatcher.record_instant(
+                    "KIO",
+                    f"read@{IMEM_OFFSET_TO_NAME.get(offset, f'0x{offset:02X}')}",
+                    {
+                        "pc": f"0x{effective_pc & 0xFFFFFF:06X}"
+                        if effective_pc is not None
+                        else "N/A",
+                        "value": f"0x{value & 0xFF:02X}",
+                        "offset": f"0x{offset:02X}",
+                    },
+                )
+                trace_dispatcher.record_instant(
+                    "KIO",
+                    "read@KIO",
+                    {
+                        "pc": f"0x{effective_pc & 0xFFFFFF:06X}"
+                        if effective_pc is not None
+                        else "N/A",
+                        "value": f"0x{value & 0xFF:02X}",
+                        "offset": f"0x{offset:02X}",
+                    },
+                )
+                # Log explicitly when KIL is read to capture PC/value even if tracer is absent.
+                if offset == IMEMRegisters.KIL:
+                    pass
 
             # Track IMEMRegisters reads
             self._track_imem_access(offset, "read", value, effective_pc)
@@ -429,11 +490,7 @@ class PCE500Memory:
         address &= 0xFFFFFF  # 24-bit address space
         value &= 0xFF
         effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
-        if (
-            os.getenv("EXT_TRACE_PC") == "1"
-            and 0x0BFC60 <= address <= 0x0BFC7F
-            and effective_pc is not None
-        ):
+        if False and 0x0BFC60 <= address <= 0x0BFC7F and effective_pc is not None:
             print(
                 f"[ext-write] pc=0x{effective_pc:06X} addr=0x{address:06X} value=0x{value:02X}"
             )
@@ -711,10 +768,6 @@ class PCE500Memory:
         self._suppress_llama_sync += 1
         try:
             for address, value in writes:
-                if os.getenv("LLAMA_INTERNAL_WRITE_TRACE") == "1":
-                    print(
-                        f"[llama-internal-apply] addr=0x{address:06X} value=0x{value:02X}"
-                    )
                 self.write_byte(address & 0xFFFFFF, value & 0xFF)
         finally:
             self._suppress_llama_sync = max(0, self._suppress_llama_sync - 1)
@@ -979,3 +1032,92 @@ class PCE500Memory:
     def set_perf_tracer(self, tracer) -> None:
         """Set performance tracer for SC62015 emulator integration."""
         self._perf_tracer = tracer
+
+    def trace_kio_from_rust(
+        self, offset: int, value: int, pc: Optional[int] = None
+    ) -> None:
+        """Mirror LLAMA-side KIO reads into the main Perfetto trace."""
+
+        tracer = getattr(self, "_perf_tracer", None)
+        if tracer is None:
+            return
+        payload: Dict[str, Any] = {
+            "offset": offset & 0xFF,
+            "value": value & 0xFF,
+        }
+        eff_pc = pc
+        if eff_pc is None and self.cpu is not None:
+            try:
+                from sc62015.pysc62015.emulator import RegisterName
+
+                eff_pc = self.cpu.regs.get(RegisterName.PC)
+            except Exception:
+                pass
+        if eff_pc is not None:
+            payload["pc"] = eff_pc & 0xFFFFFF
+        emulator = getattr(self, "_emulator", None)
+        if emulator is not None:
+            op_index = getattr(emulator, "_active_trace_instruction", None)
+            if op_index is not None:
+                payload["op_index"] = op_index
+            if getattr(emulator, "_new_trace_enabled", False) and hasattr(
+                emulator, "_next_memory_trace_units"
+            ):
+                units = emulator._next_memory_trace_units()
+                setter = getattr(tracer, "set_manual_clock_units", None)
+                if units is not None and callable(setter):
+                    setter(units)
+        try:
+            if hasattr(tracer, "instant"):
+                tracer.instant("KIO", "read@KIO", payload)
+            elif hasattr(tracer, "record_instant"):
+                tracer.record_instant("KIO", "read@KIO", payload)
+        except Exception:
+            pass
+
+    def trace_irq_from_rust(
+        self, name: str, payload: Dict[str, Any], track: str = "irq.key"
+    ) -> None:
+        """Mirror LLAMA-side IRQ events into the main Perfetto trace."""
+
+        # Also forward to the rustcore helper so both tracers stay aligned.
+        try:
+            from _sc62015_rustcore import record_irq_event as rust_irq_event
+        except Exception:
+            rust_irq_event = None
+
+        tracer = getattr(self, "_perf_tracer", None)
+        if tracer is None:
+            return
+        data: Dict[str, Any] = dict(payload)
+        if "pc" not in data and self.cpu is not None:
+            try:
+                from sc62015.pysc62015.emulator import RegisterName
+
+                data["pc"] = self.cpu.regs.get(RegisterName.PC) & 0xFFFFFF
+            except Exception:
+                pass
+        emulator = getattr(self, "_emulator", None)
+        if emulator is not None:
+            op_index = getattr(emulator, "_active_trace_instruction", None)
+            if op_index is not None:
+                data["op_index"] = op_index
+            if getattr(emulator, "_new_trace_enabled", False) and hasattr(
+                emulator, "_next_memory_trace_units"
+            ):
+                units = emulator._next_memory_trace_units()
+                setter = getattr(tracer, "set_manual_clock_units", None)
+                if units is not None and callable(setter):
+                    setter(units)
+        try:
+            if hasattr(tracer, "instant"):
+                tracer.instant(track, name, data)
+            elif hasattr(tracer, "record_instant"):
+                tracer.record_instant(track, name, data)
+            if rust_irq_event is not None and perfetto_tracer.enabled:
+                rust_payload = {
+                    k: int(v) if v is not None else 0 for k, v in data.items()
+                }
+                rust_irq_event(name, rust_payload)
+        except Exception:
+            pass

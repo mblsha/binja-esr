@@ -117,7 +117,7 @@ class MemoryBus:
             if not overlay.contains(address):
                 continue
 
-            if os.getenv("LCD_WRITE_TRACE"):
+            if False:
                 print(f"[bus] overlay {overlay.name} handling addr=0x{address:05X}")
 
             handled, previous = self._write_to_overlay(overlay, address, value, cpu_pc)

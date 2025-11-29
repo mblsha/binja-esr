@@ -2,6 +2,7 @@
 //!
 //! Holds register values keyed by `RegName`. This will grow to mirror the
 //! Python emulator’s masking/aliasing rules once the evaluator lands.
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
 use std::collections::HashMap;
 
@@ -25,6 +26,8 @@ pub struct LlamaState {
     regs: HashMap<RegName, u32>,
     halted: bool,
     call_depth: u32,
+    call_sub_level: u32,
+    call_page_stack: Vec<u32>,
 }
 
 impl LlamaState {
@@ -33,6 +36,8 @@ impl LlamaState {
             regs: HashMap::new(),
             halted: false,
             call_depth: 0,
+            call_sub_level: 0,
+            call_page_stack: Vec::new(),
         }
     }
 
@@ -56,8 +61,10 @@ impl LlamaState {
                 self.regs.insert(RegName::I, masked);
             }
             RegName::IL => {
-                // IL writes clear the high byte, matching the Python emulator semantics.
-                self.regs.insert(RegName::I, masked & 0xFF);
+                // Parity: writing IL updates low byte and preserves existing IH.
+                let high = (self.get_reg(RegName::I) >> 8) & 0xFF;
+                let i = ((high << 8) | (masked & 0xFF)) & mask_for(RegName::I);
+                self.regs.insert(RegName::I, i);
             }
             RegName::IH => {
                 let low = self.get_reg(RegName::IL);
@@ -65,16 +72,24 @@ impl LlamaState {
                 self.regs.insert(RegName::I, i & mask_for(RegName::I));
             }
             RegName::F => {
-                // F is derived from FC/FZ; only keep those bits.
+                // Preserve full F byte; sync FC/FZ aliases from bits 0/1.
+                self.regs.insert(RegName::F, masked & mask_for(RegName::F));
                 self.regs.insert(RegName::FC, masked & 0x1);
                 self.regs.insert(RegName::FZ, (masked >> 1) & 0x1);
-                self.regs.insert(RegName::F, masked & 0x3);
             }
             RegName::FC => {
-                self.regs.insert(RegName::FC, masked & 0x1);
+                let bit = masked & 0x1;
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let new_f = (f & !0x1) | bit;
+                self.regs.insert(RegName::F, new_f);
+                self.regs.insert(RegName::FC, bit);
             }
             RegName::FZ => {
-                self.regs.insert(RegName::FZ, masked & 0x1);
+                let bit = masked & 0x1;
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let new_f = (f & !0x2) | (bit << 1);
+                self.regs.insert(RegName::F, new_f);
+                self.regs.insert(RegName::FZ, bit);
             }
             RegName::Temp(_) => {
                 self.regs.insert(name, masked);
@@ -94,12 +109,24 @@ impl LlamaState {
             RegName::IL => self.get_reg(RegName::I) & 0xFF,
             RegName::IH => (self.get_reg(RegName::I) >> 8) & 0xFF,
             RegName::F => {
-                let fc = self.get_reg(RegName::FC) & 0x1;
-                let fz = self.get_reg(RegName::FZ) & 0x1;
-                (fc | (fz << 1)) & mask_for(RegName::F)
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let fc = self.regs.get(&RegName::FC).copied().unwrap_or(raw & 0x1) & 0x1;
+                let fz = self
+                    .regs
+                    .get(&RegName::FZ)
+                    .copied()
+                    .unwrap_or((raw >> 1) & 0x1)
+                    & 0x1;
+                (raw & !0x3) | fc | (fz << 1)
             }
-            RegName::FC => *self.regs.get(&RegName::FC).unwrap_or(&0) & 0x1,
-            RegName::FZ => *self.regs.get(&RegName::FZ).unwrap_or(&0) & 0x1,
+            RegName::FC => {
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                *self.regs.get(&RegName::FC).unwrap_or(&raw) & 0x1
+            }
+            RegName::FZ => {
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                (*self.regs.get(&RegName::FZ).unwrap_or(&((raw >> 1) & 0x1))) & 0x1
+            }
             RegName::Temp(_) => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
             _ => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
         }
@@ -129,20 +156,60 @@ impl LlamaState {
         self.regs.clear();
         self.halted = false;
         self.call_depth = 0;
+        self.call_sub_level = 0;
+        self.call_page_stack.clear();
     }
 
     pub fn call_depth_inc(&mut self) {
         self.call_depth = self.call_depth.saturating_add(1);
+        self.call_sub_level = self.call_sub_level.saturating_add(1);
     }
 
     pub fn call_depth_dec(&mut self) {
         if self.call_depth > 0 {
             self.call_depth -= 1;
         }
+        if self.call_sub_level > 0 {
+            self.call_sub_level -= 1;
+        }
     }
 
     pub fn call_depth(&self) -> u32 {
         self.call_depth
+    }
+
+    pub fn call_sub_level(&self) -> u32 {
+        self.call_sub_level
+    }
+
+    pub fn set_call_sub_level(&mut self, value: u32) {
+        self.call_sub_level = value;
+    }
+
+    /// Drop any saved call-page context (used for 16-bit CALL/RET page reconstruction).
+    pub fn clear_call_page_stack(&mut self) {
+        self.call_page_stack.clear();
+    }
+
+    /// Track the 20-bit page of near CALL sites so RET can reconstruct the full return PC.
+    pub fn push_call_page(&mut self, page: u32) {
+        self.call_page_stack.push(page & 0xFF_0000);
+    }
+
+    pub fn pop_call_page(&mut self) -> Option<u32> {
+        self.call_page_stack.pop()
+    }
+
+    /// Peek the most recent call page without popping; helps RET when stack was manipulated.
+    pub fn peek_call_page(&self) -> Option<u32> {
+        self.call_page_stack.last().copied()
+    }
+
+    /// Clear call-depth bookkeeping used only for tracing/metrics; does not alter registers.
+    pub fn reset_call_metrics(&mut self) {
+        self.call_depth = 0;
+        self.call_sub_level = 0;
+        self.call_page_stack.clear();
     }
 }
 
@@ -152,28 +219,63 @@ mod tests {
     use crate::llama::opcodes::RegName;
 
     #[test]
-    fn il_write_clears_high_byte_and_updates_aliases() {
+    fn il_write_preserves_high_byte_and_updates_aliases() {
         let mut state = LlamaState::new();
         state.set_reg(RegName::I, 0xABCD);
 
         state.set_reg(RegName::IL, 0x34);
 
         assert_eq!(state.get_reg(RegName::IL), 0x34);
-        assert_eq!(state.get_reg(RegName::IH), 0x00);
-        assert_eq!(state.get_reg(RegName::I), 0x0034);
+        assert_eq!(state.get_reg(RegName::IH), 0xAB);
+        assert_eq!(state.get_reg(RegName::I), 0xAB34);
     }
 
     #[test]
     fn f_facade_on_fc_fz() {
         let mut state = LlamaState::new();
-        state.set_reg(RegName::F, 0b0000_0011);
+        state.set_reg(RegName::F, 0b1010_0011);
 
         assert_eq!(state.get_reg(RegName::FC), 1);
         assert_eq!(state.get_reg(RegName::FZ), 1);
-        assert_eq!(state.get_reg(RegName::F), 0b0000_0011);
+        assert_eq!(state.get_reg(RegName::F), 0b1010_0011);
 
         state.set_reg(RegName::FC, 0);
         state.set_reg(RegName::FZ, 0);
-        assert_eq!(state.get_reg(RegName::F), 0b0000_0000);
+        assert_eq!(state.get_reg(RegName::F), 0b1010_0000);
+    }
+
+    #[test]
+    fn fc_fz_updates_preserve_upper_bits() {
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::F, 0b1111_1111);
+        state.set_reg(RegName::FC, 0);
+        state.set_reg(RegName::FZ, 1);
+
+        assert_eq!(state.get_reg(RegName::F), 0b1111_1110);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 1);
+    }
+
+    #[test]
+    fn call_sub_level_is_cumulative() {
+        let mut state = LlamaState::new();
+        state.call_depth_inc();
+        state.call_depth_inc();
+        assert_eq!(state.call_depth(), 2);
+        assert_eq!(state.call_sub_level(), 2);
+        state.call_depth_dec();
+        // Python parity: call_sub_level tracks current depth and should decrement on returns.
+        assert_eq!(state.call_depth(), 1);
+        assert_eq!(state.call_sub_level(), 1);
+    }
+
+    #[test]
+    fn call_page_stack_tracks_pages() {
+        let mut state = LlamaState::new();
+        state.push_call_page(0x120000);
+        state.push_call_page(0xAB0000);
+        assert_eq!(state.pop_call_page(), Some(0xAB0000));
+        assert_eq!(state.pop_call_page(), Some(0x120000));
+        assert_eq!(state.pop_call_page(), None);
     }
 }
