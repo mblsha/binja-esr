@@ -544,6 +544,29 @@ class PCE500Emulator:
     def step(self) -> bool:
         trace_snapshot: Optional[Dict[str, Any]] = None
         pc = self.cpu.regs.get(RegisterName.PC)
+        # If we appear to be stuck in an interrupt even though IRM is enabled
+        # again, drop the stale in-progress marker so pending IRQs (e.g., KEYI
+        # latched while IMR was masked) can be delivered.
+        if getattr(self, "_in_interrupt", False):
+            try:
+                imr_addr_recover = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                imr_val_recover = self.memory.read_byte(imr_addr_recover) & 0xFF
+                if imr_val_recover & int(IMRFlag.IRM):
+                    isr_val_recover = (
+                        self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                        )
+                        & 0xFF
+                    )
+                    active_bit = 0
+                    if isinstance(getattr(self, "_irq_source", None), IRQSource):
+                        active_bit = 1 << int(self._irq_source.value)
+                    if active_bit == 0 or not (isr_val_recover & active_bit):
+                        self._in_interrupt = False
+                        if not getattr(self, "_irq_pending", False):
+                            self._irq_source = None
+            except Exception:
+                pass
         # Reassert latched KEY/ONK interrupts even when timers are disabled so
         # firmware ISR clearing does not drop pending keyboard events.
         if self._key_irq_latched and not getattr(self, "_in_interrupt", False):
