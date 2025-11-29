@@ -553,9 +553,7 @@ class PCE500Emulator:
                 imr_val_recover = self.memory.read_byte(imr_addr_recover) & 0xFF
                 if imr_val_recover & int(IMRFlag.IRM):
                     isr_val_recover = (
-                        self.memory.read_byte(
-                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                        )
+                        self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
                         & 0xFF
                     )
                     active_bit = 0
