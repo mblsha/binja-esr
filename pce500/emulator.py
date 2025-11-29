@@ -544,6 +544,22 @@ class PCE500Emulator:
     def step(self) -> bool:
         trace_snapshot: Optional[Dict[str, Any]] = None
         pc = self.cpu.regs.get(RegisterName.PC)
+        # Reassert latched KEY/ONK interrupts even when timers are disabled so
+        # firmware ISR clearing does not drop pending keyboard events.
+        if self._key_irq_latched and not getattr(self, "_in_interrupt", False):
+            try:
+                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                isr_val = self.memory.read_byte(isr_addr) & 0xFF
+                if (isr_val & int(ISRFlag.KEYI)) == 0:
+                    self._set_isr_bits(int(ISRFlag.KEYI))
+                    self._irq_pending = True
+                    if getattr(self, "_irq_source", None) not in (
+                        IRQSource.KEY,
+                        IRQSource.ONK,
+                    ):
+                        self._irq_source = IRQSource.KEY
+            except Exception:
+                pass
         # Tick rough timers to set ISR bits and arm IRQ when due
         try:
             if self._timer_enabled and not getattr(self, "_in_interrupt", False):
@@ -2239,23 +2255,6 @@ class PCE500Emulator:
 
     def _tick_timers(self) -> None:
         """Rough timer emulation: set ISR bits periodically and arm IRQ."""
-        # If a KEY/ONK request was latched but firmware cleared ISR before the
-        # interrupt could fire, reassert the status so it is not dropped.
-        if self._key_irq_latched:
-            try:
-                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                isr_val = self.memory.read_byte(isr_addr) & 0xFF
-                if (isr_val & int(ISRFlag.KEYI)) == 0:
-                    self._set_isr_bits(int(ISRFlag.KEYI))
-                    self._irq_pending = True
-                    if getattr(self, "_irq_source", None) not in (
-                        IRQSource.KEY,
-                        IRQSource.ONK,
-                    ):
-                        self._irq_source = IRQSource.KEY
-            except Exception:
-                pass
-
         fired_sources = tuple(self._scheduler.advance(self.cycle_count))
         if not fired_sources:
             return
