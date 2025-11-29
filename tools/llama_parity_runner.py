@@ -114,10 +114,13 @@ def run_once(payload: str) -> Snapshot:
     bytes_in = bytes(data["bytes"])
     regs_in: Dict[str, int] = data.get("regs", {})
     pc = data.get("pc", 0)
+    mem_seed = data.get("mem", [])
 
     mem = TrackedMemory()
     for offset, b in enumerate(bytes_in):
         mem._backing[pc + offset] = b
+    for addr, val in mem_seed:
+        mem._backing[addr & 0xFFFFFF] = val & 0xFF
 
     cpu = CPU(mem, reset_on_init=False)
     # Seed registers via snapshot
@@ -183,30 +186,29 @@ def run_once(payload: str) -> Snapshot:
         ts = 0
         ev = builder.add_instant_event(instr_track, f"Exec@0x{pc:06X}", ts)
         ev.add_annotations(
-            [
-                ("backend", "python"),
-                ("pc", pc),
-                ("opcode", bytes_in[0] if bytes_in else 0),
-                ("op_index", 0),
-            ]
+            {
+                "backend": "python",
+                "pc": pc,
+                "opcode": bytes_in[0] if bytes_in else 0,
+                "op_index": 0,
+            }
         )
-        for name, value in regs_out.items():
-            ev.add_annotation(f"reg_{name.lower()}", value & 0xFF_FFFF)
-        ev.finish()
+        ev.add_annotations(
+            {f"reg_{name.lower()}": value & 0xFF_FFFF for name, value in regs_out.items()}
+        )
         for addr, bits, value, space in mem.writes():
             mev = builder.add_instant_event(mem_track, f"Write@0x{addr:06X}", ts + 1)
             mev.add_annotations(
-                [
-                    ("backend", "python"),
-                    ("pc", pc),
-                    ("address", addr),
-                    ("value", value & 0xFF_FFFF),
-                    ("size", bits),
-                    ("op_index", 0),
-                    ("space", space),
-                ]
+                {
+                    "backend": "python",
+                    "pc": pc,
+                    "address": addr,
+                    "value": value & 0xFF_FFFF,
+                    "size": bits,
+                    "op_index": 0,
+                    "space": space,
+                }
             )
-            mev.finish()
         out_path = Path("python_parity.pftrace")
         builder.save(out_path)
         perfetto_out = str(out_path)

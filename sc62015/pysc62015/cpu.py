@@ -106,6 +106,7 @@ class CPU:
         *,
         reset_on_init: bool = True,
         backend: Optional[str] = None,
+        timer_scale: float | None = None,
     ) -> None:
         backend_name, rust_module = select_backend(backend)
 
@@ -119,7 +120,10 @@ class CPU:
         else:
             assert rust_module is not None
             rust_cpu_cls = getattr(rust_module, "LlamaCPU")
-            self._impl = rust_cpu_cls(memory=memory, reset_on_init=reset_on_init)
+            scale = 1.0 if timer_scale is None else float(timer_scale)
+            self._impl = rust_cpu_cls(
+                memory=memory, reset_on_init=reset_on_init, timer_scale=scale
+            )
             self.regs = _RustRegisterProxy(self._impl)
             self.state = _RustStateProxy(self._impl)
             self._legacy_decoder = legacy

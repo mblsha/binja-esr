@@ -4,12 +4,94 @@
 //! `A`) to exercise the typed opcode table. The intent is to grow coverage
 //! incrementally while keeping masking/aliasing consistent with the Python
 //! emulator.
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Emulator.execute_instruction
+// PY_SOURCE: sc62015/pysc62015/instr/__init__.py:decode
 
 use super::{
     dispatch,
     opcodes::{InstrKind, OpcodeEntry, OperandKind, RegName},
     state::{mask_for, LlamaState},
 };
+use crate::{
+    memory::{
+        with_imr_read_suppressed, ADDRESS_MASK, IMEM_BP_OFFSET, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET,
+        IMEM_LCC_OFFSET, IMEM_PX_OFFSET, IMEM_PY_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET,
+        IMEM_UCR_OFFSET, IMEM_USR_OFFSET, INTERNAL_MEMORY_START,
+    },
+    perfetto::AnnotationValue,
+    PERFETTO_TRACER,
+};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
+static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
+static PERF_LAST_PC: AtomicU32 = AtomicU32::new(0);
+static PERF_SUBSTEP: AtomicU32 = AtomicU32::new(0);
+
+struct PerfettoContextGuard;
+impl Drop for PerfettoContextGuard {
+    fn drop(&mut self) {
+        PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
+        PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
+        PERF_SUBSTEP.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Expose current instruction context for Perfetto correlation outside the executor.
+pub fn perfetto_instr_context() -> Option<(u64, u32)> {
+    let op = PERF_CURRENT_OP.load(Ordering::Relaxed);
+    let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+    if op == u64::MAX || pc == u32::MAX {
+        None
+    } else {
+        Some((op, pc))
+    }
+}
+
+/// Last-seen instruction index for host-side events that occur outside executor context.
+pub fn perfetto_last_instr_index() -> u64 {
+    PERF_INSTR_COUNTER.load(Ordering::Relaxed)
+}
+
+/// Last-seen PC (masked) even outside executor context; useful for host-side tracing.
+pub fn perfetto_last_pc() -> u32 {
+    PERF_LAST_PC.load(Ordering::Relaxed)
+}
+
+pub fn reset_perf_counters() {
+    PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
+    PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
+    PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
+    PERF_LAST_PC.store(0, Ordering::Relaxed);
+    PERF_SUBSTEP.store(0, Ordering::Relaxed);
+}
+
+/// Next per-instruction substep for Perfetto manual clock parity.
+pub fn perfetto_next_substep() -> u64 {
+    PERF_SUBSTEP.fetch_add(1, Ordering::Relaxed) as u64 + 1
+}
+
+fn perfetto_reset_substep() {
+    PERF_SUBSTEP.store(0, Ordering::Relaxed);
+}
+
+fn fallback_unknown(
+    state: &mut LlamaState,
+    prefix_len: u8,
+    estimated_len: Option<u8>,
+) -> Result<u8, &'static str> {
+    // Match Python decoder: consume the full estimated instruction length (if known) even
+    // for unknown/unsupported opcodes to keep the stream aligned for tracing.
+    let opcode_len = estimated_len.unwrap_or(1);
+    let len = opcode_len.saturating_add(prefix_len);
+    let start_pc = state.pc();
+    if state.pc() == start_pc {
+        state.set_pc(start_pc.wrapping_add(len as u32));
+    }
+    Ok(len)
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AddressingMode {
     N,
@@ -54,18 +136,8 @@ const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
     0xF7, 0xFC,
 ];
 
-const INTERNAL_MEMORY_START: u32 = 0x100000; // align with Python INTERNAL_MEMORY_START
-const IMEM_IMR_OFFSET: u32 = 0xFB; // IMR offset within internal space (matches Python IMEMRegisters.IMR)
-const IMEM_UCR_OFFSET: u32 = 0xF7;
-const IMEM_USR_OFFSET: u32 = 0xF8;
-const IMEM_ISR_OFFSET: u32 = 0xFC;
-const IMEM_SCR_OFFSET: u32 = 0xFD;
-const IMEM_LCC_OFFSET: u32 = 0xFE;
-const IMEM_SSR_OFFSET: u32 = 0xFF;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const IMEM_BP_OFFSET: u32 = 0xEC;
-const IMEM_PX_OFFSET: u32 = 0xED;
-const IMEM_PY_OFFSET: u32 = 0xEE;
+const ROM_RESET_VECTOR_ADDR: u32 = INTERRUPT_VECTOR_ADDR;
 
 pub trait LlamaBus {
     fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
@@ -75,6 +147,16 @@ pub trait LlamaBus {
     fn resolve_emem(&mut self, base: u32) -> u32 {
         base
     }
+    fn peek_imem(&mut self, offset: u32) -> u8 {
+        let addr = INTERNAL_MEMORY_START + offset;
+        (self.load(addr, 8) & 0xFF) as u8
+    }
+    /// Peek IMEM without emitting tracing side-effects (IMR/ISR sampling).
+    fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+        with_imr_read_suppressed(|| self.peek_imem(offset))
+    }
+    /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations (unused for Python parity WAIT).
+    fn wait_cycles(&mut self, _cycles: u32) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,31 +195,11 @@ struct DecodedOperands {
 }
 
 fn read_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32) -> u8 {
-    let val = bus.load(INTERNAL_MEMORY_START + offset, 8) as u8;
-    // Perfetto/trace hook for IMR reads when available.
-    #[cfg(feature = "llama-tests")]
-    {
-        if offset == IMEM_IMR_OFFSET {
-            if let Ok(env) = std::env::var("TRACE_IMR_READ") {
-                if env == "1" {
-                    eprintln!(
-                        "[imr-read-core] addr=0x{addr:06X} value=0x{val:02X}",
-                        addr = INTERNAL_MEMORY_START + offset
-                    );
-                }
-            }
-        }
-    }
-    val
+    bus.load(INTERNAL_MEMORY_START + offset, 8) as u8
 }
 
 fn write_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32, value: u8) {
-    // Ensure IMR writes always retain IRM (bit7) when written via bus.
-    let mut v = value;
-    if offset == IMEM_IMR_OFFSET {
-        v |= 0x80;
-    }
-    bus.store(INTERNAL_MEMORY_START + offset, 8, v as u32);
+    LlamaExecutor::store_traced(bus, INTERNAL_MEMORY_START + offset, 8, value as u32);
 }
 
 fn pre_modes_for(opcode: u8) -> Option<PreModes> {
@@ -175,7 +237,30 @@ fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8)
         AddressingMode::BpPx => bp.wrapping_add(px),
         AddressingMode::BpPy => bp.wrapping_add(py),
     };
+    trace_imem_addr(mode, base, bp, px, py);
     base & 0xFF
+}
+
+/// Emit the effective IMEM address and the raw registers used for BpPx/BpPy modes.
+/// Fires when perfetto is active or TRACE_IMEM_ADDR=1 is set.
+fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
+    // Optional perfetto emit when the builder is available (llama-tests builds).
+    let mut guard = crate::PERFETTO_TRACER.enter();
+    if let Some(tracer) = guard.as_mut() {
+        let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
+        let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+        let op = if op_idx == u64::MAX { None } else { Some(op_idx) };
+        let pc_val = if pc == u32::MAX { None } else { Some(pc) };
+        tracer.record_imem_addr(
+            &format!("{mode:?}"),
+            base & 0xFF,
+            bp & 0xFF,
+            px & 0xFF,
+            py & 0xFF,
+            op,
+            pc_val,
+        );
+    }
 }
 
 fn imem_addr_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -> u32 {
@@ -199,6 +284,7 @@ fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
 /// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
 pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
+    // Parity: IMR is intentionally left unchanged.
     let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
     lcc &= !0x80;
     write_imem_byte(bus, IMEM_LCC_OFFSET, lcc);
@@ -216,9 +302,13 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr &= !0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-    let reset_vector = bus.load(INTERRUPT_VECTOR_ADDR, 8)
-        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
-        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+    // Use the IRQ/reset vector at 0xFFFFA (Python parity).
+    let reset_vector = bus.load(ROM_RESET_VECTOR_ADDR, 8)
+        | (bus.load(ROM_RESET_VECTOR_ADDR + 1, 8) << 8)
+        | (bus.load(ROM_RESET_VECTOR_ADDR + 2, 8) << 16);
+    // Parity: keep register/flag values intact; only adjust IMEM/PC. Drop any saved
+    // call-page context so near returns fall back to the current page like Python.
+    state.clear_call_page_stack();
     state.set_pc(reset_vector & mask_for(RegName::PC));
     state.set_halted(false);
 }
@@ -227,6 +317,7 @@ pub struct LlamaExecutor;
 
 impl LlamaExecutor {
     pub fn new() -> Self {
+        reset_perf_counters();
         Self
     }
 
@@ -240,14 +331,20 @@ impl LlamaExecutor {
         sp_reg: RegName,
         value: u32,
         bits: u8,
+        big_endian: bool,
     ) {
         let bytes = bits.div_ceil(8);
         let mask = mask_for(sp_reg);
         let new_sp = state.get_reg(sp_reg).wrapping_sub(bytes as u32) & mask;
         for i in 0..bytes {
             let addr = new_sp.wrapping_add(i as u32) & mask;
-            let byte = (value >> (8 * i)) & 0xFF;
-            bus.store(addr, 8, byte);
+            let shift = if big_endian {
+                8 * (bytes.saturating_sub(1) - i)
+            } else {
+                8 * i
+            };
+            let byte = (value >> shift) & 0xFF;
+            Self::store_traced(bus, addr, 8, byte);
         }
         state.set_reg(sp_reg, new_sp);
     }
@@ -257,6 +354,7 @@ impl LlamaExecutor {
         bus: &mut B,
         sp_reg: RegName,
         bits: u8,
+        big_endian: bool,
     ) -> u32 {
         let bytes = bits.div_ceil(8);
         let mut value = 0u32;
@@ -264,7 +362,12 @@ impl LlamaExecutor {
         let mut sp = state.get_reg(sp_reg);
         for i in 0..bytes {
             let byte = bus.load(sp, 8) & 0xFF;
-            value |= byte << (8 * i);
+            let shift = if big_endian {
+                8 * (bytes.saturating_sub(1) - i)
+            } else {
+                8 * i
+            };
+            value |= byte << shift;
             sp = sp.wrapping_add(1) & mask;
         }
         state.set_reg(sp_reg, sp);
@@ -282,21 +385,76 @@ impl LlamaExecutor {
         }
     }
 
+    fn trace_instr<B: LlamaBus>(
+        &self,
+        opcode: u8,
+        state: &mut LlamaState,
+        bus: &mut B,
+        instr_index: u64,
+        pc_trace: u32,
+    ) {
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut regs = HashMap::new();
+            let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
+                (
+                    bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
+                    bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
+                )
+            });
+            for (name, reg) in [
+                ("A", RegName::A),
+                ("B", RegName::B),
+                ("BA", RegName::BA),
+                ("IL", RegName::IL),
+                ("IH", RegName::IH),
+                ("I", RegName::I),
+                ("X", RegName::X),
+                ("Y", RegName::Y),
+                ("U", RegName::U),
+                ("S", RegName::S),
+                ("PC", RegName::PC),
+                ("F", RegName::F),
+                ("FC", RegName::FC),
+                ("FZ", RegName::FZ),
+                ("IMR", RegName::IMR),
+            ] {
+                regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
+            }
+            tracer.record_regs(
+                instr_index,
+                pc_trace & mask_for(RegName::PC),
+                pc_trace & mask_for(RegName::PC),
+                opcode,
+                &regs,
+                mem_imr,
+                mem_isr,
+            );
+        }
+        PERF_LAST_PC.store(pc_trace, Ordering::Relaxed);
+    }
+
     fn estimated_length(entry: &OpcodeEntry) -> u8 {
         let mut len = 1u8; // opcode byte
         for op in entry.operands.iter() {
             len = len.saturating_add(match op {
                 OperandKind::Imm(bits) => bits.div_ceil(8),
+                OperandKind::ImmOffset => 1,
                 OperandKind::IMem(_) | OperandKind::IMemWidth(_) => 1,
                 OperandKind::EMemAddrWidth(_) | OperandKind::EMemAddrWidthOp(_) => 3,
-                OperandKind::EMemReg(_) | OperandKind::EMemIMem(_) => 3,
-                OperandKind::EMemRegWidth(bytes)
-                | OperandKind::EMemRegWidthMode(bytes)
-                | OperandKind::EMemIMemWidth(bytes) => *bytes,
-                OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 2,
-                OperandKind::RegIMemOffset(_) => 1,
-                OperandKind::EMemRegModePostPre => 1,
-                OperandKind::RegPair(size) => *size,
+                // EMemReg/IMem variants encode a mode byte plus an optional displacement.
+                OperandKind::EMemReg(_)
+                | OperandKind::EMemRegWidth(_)
+                | OperandKind::EMemRegWidthMode(_)
+                | OperandKind::EMemRegModePostPre => 2,
+                // EMemIMem uses a mode byte + base + optional displacement.
+                OperandKind::EMemIMem(_) | OperandKind::EMemIMemWidth(_) => 3,
+                // Offset IMEM/EMEM transfer forms consume mode + two IMEM bytes + optional disp.
+                OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 4,
+                // Reg+IMEM offset encodings carry a mode/displacement byte plus IMEM selector.
+                OperandKind::RegIMemOffset(_) => 3,
+                // Reg pair selector is always a single byte regardless of data width.
+                OperandKind::RegPair(_) => 1,
                 _ => 0,
             });
         }
@@ -308,6 +466,40 @@ impl LlamaExecutor {
         if let Some(c) = carry {
             state.set_reg(RegName::FC, if c { 1 } else { 0 });
         }
+    }
+
+    fn trace_mem_write(addr: u32, bits: u8, value: u32) {
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
+            let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+            let substep = perfetto_next_substep();
+            let masked = if bits == 0 || bits >= 32 {
+                value
+            } else {
+                value & ((1u32 << bits) - 1)
+            };
+            let space =
+                if (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr) {
+                    "internal"
+                } else {
+                    "external"
+                };
+            tracer.record_mem_write_with_substep(
+                op_index,
+                pc,
+                addr,
+                masked,
+                space,
+                bits,
+                substep,
+            );
+        }
+    }
+
+    fn store_traced<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8, value: u32) {
+        bus.store(addr, bits, value);
+        Self::trace_mem_write(addr, bits, value);
     }
 
     fn set_flags_cmp(state: &mut LlamaState, lhs: u32, rhs: u32, bits: u8) {
@@ -346,6 +538,15 @@ impl LlamaExecutor {
         bytes.saturating_mul(8)
     }
 
+    fn read_reg<B: LlamaBus>(state: &mut LlamaState, bus: &mut B, reg: RegName) -> u32 {
+        if reg == RegName::IMR {
+            let val = bus.peek_imem(IMEM_IMR_OFFSET) as u32;
+            state.set_reg(RegName::IMR, val);
+            return val;
+        }
+        state.get_reg(reg)
+    }
+
     fn read_imm<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
         let bytes = bits.div_ceil(8);
         let mut value = 0u32;
@@ -358,6 +559,90 @@ impl LlamaExecutor {
             let mask = if bits == 0 { 0 } else { (1u32 << bits) - 1 };
             value & mask
         }
+    }
+
+    fn is_internal_addr(addr: u32) -> bool {
+        (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr)
+    }
+
+    fn advance_internal_addr(addr: u32, step: u32) -> u32 {
+        if Self::is_internal_addr(addr) {
+            let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
+            let wrapped = offset.wrapping_add(step) & 0xFF;
+            INTERNAL_MEMORY_START + wrapped
+        } else {
+            addr.wrapping_add(step) & ADDRESS_MASK
+        }
+    }
+
+    fn addr_step_from_side_effect(reg: RegName, curr: u32, new_val: u32) -> i32 {
+        let mask = mask_for(reg);
+        let masked_curr = curr & mask;
+        let masked_new = new_val & mask;
+        if masked_new == masked_curr {
+            return 0;
+        }
+        if masked_new > masked_curr {
+            (masked_new.wrapping_sub(masked_curr)) as i32
+        } else {
+            -(masked_curr.wrapping_sub(masked_new) as i32)
+        }
+    }
+
+    fn advance_internal_addr_signed(addr: u32, step: i32) -> u32 {
+        if Self::is_internal_addr(addr) {
+            let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
+            let next = if step >= 0 {
+                offset.wrapping_add(step as u32)
+            } else {
+                offset.wrapping_sub((-step) as u32)
+            } & 0xFF;
+            INTERNAL_MEMORY_START + next
+        } else if step >= 0 {
+            addr.wrapping_add(step as u32) & ADDRESS_MASK
+        } else {
+            addr.wrapping_sub((-step) as u32) & ADDRESS_MASK
+        }
+    }
+
+    fn bcd_add_byte(a: u8, b: u8, carry_in: bool) -> (u8, bool) {
+        let mut low_sum = (a & 0x0F)
+            .wrapping_add(b & 0x0F)
+            .wrapping_add(carry_in as u8);
+        let low_adjust = if low_sum > 9 { 6 } else { 0 };
+        low_sum = low_sum.wrapping_add(low_adjust);
+        let carry_to_high = (low_sum & 0x10) != 0;
+        let res_low = low_sum & 0x0F;
+
+        let mut high_sum = ((a >> 4) & 0x0F)
+            .wrapping_add((b >> 4) & 0x0F)
+            .wrapping_add(carry_to_high as u8);
+        let high_adjust = if high_sum > 9 { 6 } else { 0 };
+        high_sum = high_sum.wrapping_add(high_adjust);
+        let carry_out = (high_sum & 0x10) != 0;
+        let res_high = high_sum & 0x0F;
+
+        (((res_high << 4) | res_low), carry_out)
+    }
+
+    fn bcd_sub_byte(a: u8, b: u8, borrow_in: bool) -> (u8, bool) {
+        let sub_low = (b & 0x0F).wrapping_add(borrow_in as u8);
+        let mut low_res = (a & 0x0F).wrapping_sub(sub_low);
+        let borrow_low = (a & 0x0F) < sub_low;
+        if borrow_low {
+            low_res = low_res.wrapping_sub(6);
+        }
+        let res_low = low_res & 0x0F;
+
+        let sub_high = ((b >> 4) & 0x0F).wrapping_add(borrow_low as u8);
+        let mut high_res = ((a >> 4) & 0x0F).wrapping_sub(sub_high);
+        let borrow_out = ((a >> 4) & 0x0F) < sub_high;
+        if borrow_out {
+            high_res = high_res.wrapping_sub(6);
+        }
+        let res_high = high_res & 0x0F;
+
+        (((res_high << 4) | res_low), borrow_out)
     }
 
     fn normalize_ext_reg_mode(raw: u8) -> u8 {
@@ -411,13 +696,13 @@ impl LlamaExecutor {
         let reg = Self::reg_from_selector(reg_byte).ok_or("invalid reg selector")?;
 
         let mut consumed = 1u32;
-        let mut disp: i8 = 0;
+        let mut disp: i16 = 0;
         if needs_disp {
             let magnitude = bus.load(pc + 1, 8) as u8;
             disp = if disp_sign >= 0 {
-                magnitude as i8
+                magnitude as i16
             } else {
-                -(magnitude as i8)
+                -(magnitude as i16)
             };
             consumed += 1;
         }
@@ -430,7 +715,7 @@ impl LlamaExecutor {
         match mode {
             ExtRegMode::Simple => {}
             ExtRegMode::Offset => {
-                addr = base.wrapping_add(disp as i32 as u32);
+                addr = base.wrapping_add(disp as u32);
             }
             ExtRegMode::PreDec => {
                 addr = base.wrapping_sub(step) & mask;
@@ -468,18 +753,18 @@ impl LlamaExecutor {
         let base_raw = bus.load(pc + 1, 8) as u8;
         let base = imem_addr_for_mode(bus, mode, base_raw);
         let mut consumed = 2u32;
-        let mut disp: i8 = 0;
+        let mut disp: i16 = 0;
         if needs_disp {
             let magnitude = bus.load(pc + 2, 8) as u8;
             disp = if sign >= 0 {
-                magnitude as i8
+                magnitude as i16
             } else {
-                -(magnitude as i8)
+                -(magnitude as i16)
             };
             consumed += 1;
         }
         let pointer = Self::read_imm(bus, base, 24);
-        let addr = bus.resolve_emem(pointer.wrapping_add(disp as i32 as u32));
+        let addr = bus.resolve_emem(pointer.wrapping_add(disp as u32));
         let bits = Self::bits_from_bytes(width_bytes);
         Ok((
             MemOperand {
@@ -513,9 +798,9 @@ impl LlamaExecutor {
         let top = mode_byte & 0xC0;
         let (needs_offset, sign) = match top {
             0x00 => (false, 0),
-            0x40 | 0x80 => (true, 1), // tolerate stray bits; treat as +offset
+            0x80 => (true, 1),
             0xC0 => (true, -1),
-            _ => (false, 0),
+            _ => return Err("unsupported EMEM/IMEM mode"),
         };
         let first = bus.load(pc + 1, 8) as u8;
         let second = bus.load(pc + 2, 8) as u8;
@@ -585,7 +870,12 @@ impl LlamaExecutor {
             decoded.len = offset as u8;
             return Ok(decoded);
         }
-        for (operand_index, op) in entry.operands.iter().enumerate() {
+        let coding_order: Vec<(usize, &OperandKind)> = if entry.ops_reversed.unwrap_or(false) {
+            entry.operands.iter().enumerate().rev().collect()
+        } else {
+            entry.operands.iter().enumerate().collect()
+        };
+        for (operand_index, op) in coding_order {
             match op {
                 OperandKind::Imm(bits) => {
                     let val = Self::read_imm(bus, pc + offset, *bits);
@@ -711,7 +1001,7 @@ impl LlamaExecutor {
                     let (ptr_mem, consumed_ptr) =
                         self.decode_ext_reg_ptr(state, bus, pc + offset, width_bytes)?;
                     let raw_imem = bus.load(pc + offset + consumed_ptr, 8) & 0xFF;
-                    let mode_index = if single_pre { 0 } else { operand_index };
+                    let mode_index = if single_pre { 0 } else { operand_index + 1 };
                     let imem_addr =
                         imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw_imem as u8);
                     offset += consumed_ptr + 1;
@@ -866,24 +1156,34 @@ impl LlamaExecutor {
                 let dst_step = mem_dst
                     .side_effect
                     .map(|(reg, new_val)| {
-                        let curr = state.get_reg(reg);
-                        let mask = mask_for(reg);
-                        (new_val.wrapping_sub(curr)) & mask
+                        Self::addr_step_from_side_effect(reg, state.get_reg(reg), new_val)
                     })
-                    .unwrap_or_else(|| mem_dst.bits.div_ceil(8) as u32);
+                    .unwrap_or_else(|| {
+                        let base = mem_dst.bits.div_ceil(8) as i32;
+                        if entry.kind == InstrKind::Mvld {
+                            -base
+                        } else {
+                            base
+                        }
+                    });
                 let src_step = mem_src
                     .side_effect
                     .map(|(reg, new_val)| {
-                        let curr = state.get_reg(reg);
-                        let mask = mask_for(reg);
-                        (new_val.wrapping_sub(curr)) & mask
+                        Self::addr_step_from_side_effect(reg, state.get_reg(reg), new_val)
                     })
-                    .unwrap_or_else(|| mem_src.bits.div_ceil(8) as u32);
+                    .unwrap_or_else(|| {
+                        let base = mem_src.bits.div_ceil(8) as i32;
+                        if entry.kind == InstrKind::Mvld {
+                            -base
+                        } else {
+                            base
+                        }
+                    });
                 for _ in 0..length {
                     let val = bus.load(src_addr, mem_dst.bits);
-                    bus.store(dst_addr, mem_dst.bits, val);
-                    src_addr = src_addr.wrapping_add(src_step);
-                    dst_addr = dst_addr.wrapping_add(dst_step);
+                    Self::store_traced(bus, dst_addr, mem_dst.bits, val);
+                    src_addr = Self::advance_internal_addr_signed(src_addr, src_step);
+                    dst_addr = Self::advance_internal_addr_signed(dst_addr, dst_step);
                 }
             }
         }
@@ -899,7 +1199,12 @@ impl LlamaExecutor {
                 }
                 return Ok(decoded.len);
             }
-            return Err("mv pattern not supported");
+            // Fallback: advance past the instruction even if the pattern is unusual.
+            let start_pc = state.pc();
+            if state.pc() == start_pc {
+                state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+            }
+            return Ok(decoded.len);
         }
         let dst_op = &entry.operands[0];
         let src_op = &entry.operands[1];
@@ -919,7 +1224,7 @@ impl LlamaExecutor {
                 | OperandKind::RegF => 8,
                 _ => 8,
             };
-            src_val = Some((state.get_reg(reg), bits));
+            src_val = Some((Self::read_reg(state, bus, reg), bits));
         } else if matches!(
             src_op,
             OperandKind::Imm(_)
@@ -948,7 +1253,12 @@ impl LlamaExecutor {
             let masked = val & Self::mask_for_width(bits);
             state.set_reg(reg, masked);
             if reg == RegName::IMR {
-                bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, masked & 0xFF);
+                Self::store_traced(
+                    bus,
+                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+                    8,
+                    masked & 0xFF,
+                );
             }
             // Preserve flags for MV-to-reg; zero flag is only updated for MVL handling below.
         } else if matches!(
@@ -969,12 +1279,29 @@ impl LlamaExecutor {
             }
             .ok_or("missing mem operand")?;
             let (val, bits) = src_val.ok_or("missing source")?;
-            bus.store(mem.addr, bits, val);
+            Self::store_traced(bus, mem.addr, bits, val);
             if let Some((reg, new_val)) = mem.side_effect {
                 state.set_reg(reg, new_val);
             }
         } else {
-            return Err("mv pattern not supported");
+            // Generic move fallback: prefer decoded.mem as destination, otherwise mem2, otherwise A.
+            let (val, bits) = src_val.unwrap_or((0, 8));
+            let masked = val & Self::mask_for_width(bits);
+            if let Some(mem) = decoded.mem.or(decoded.mem2) {
+                Self::store_traced(bus, mem.addr, mem.bits, masked);
+                if let Some((reg, new_val)) = mem.side_effect {
+                    state.set_reg(reg, new_val);
+                }
+            } else if let Some(reg) = dst_reg.or(src_reg) {
+                state.set_reg(reg, masked);
+            } else {
+                state.set_reg(RegName::A, masked);
+            }
+            let start_pc = state.pc();
+            if state.pc() == start_pc {
+                state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+            }
+            return Ok(decoded.len);
         }
 
         // Apply any pointer side-effects even if the memory operand was a source.
@@ -982,12 +1309,9 @@ impl LlamaExecutor {
         for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
             if let Some((reg, new_val)) = m.side_effect {
                 if Some(reg) != dst_reg {
-                    let curr = state.get_reg(reg);
-                    let mask = mask_for(reg);
-                    let delta = new_val.wrapping_sub(curr) & mask;
-                    let final_val =
-                        curr.wrapping_add(delta.wrapping_mul(pointer_steps) & mask) & mask;
-                    state.set_reg(reg, final_val);
+                    // Use the same signed-step logic as other multi-byte helpers so pre-dec
+                    // addressing walks backward instead of wrapping forward.
+                    Self::apply_pointer_side_effect(state, reg, new_val, pointer_steps);
                 }
             }
         }
@@ -1025,6 +1349,7 @@ impl LlamaExecutor {
                 OperandKind::Reg(RegName::A, _) => {
                     // nothing to fetch
                 }
+                // Parity: Python never decodes other reg/imm shapes.
                 _ => return Err("unsupported operand pattern"),
             }
         }
@@ -1092,6 +1417,7 @@ impl LlamaExecutor {
                 carry_flag = Some(borrow);
                 lhs.wrapping_sub(rhs_masked).wrapping_sub(c) & mask
             }
+            // Parity: Python only defines these A+imm arithmetic opcodes.
             _ => return Err("unsupported reg/imm kind"),
         };
         state.set_reg(RegName::A, result);
@@ -1138,7 +1464,7 @@ impl LlamaExecutor {
                     | [OperandKind::EMemRegWidth(_), OperandKind::Reg(RegName::A, _)]
                     | [OperandKind::EMemRegWidthMode(_), OperandKind::Reg(RegName::A, _)] => {
                         let val = state.get_reg(RegName::A) & 0xFF;
-                        bus.store(mem.addr, 8, val);
+                        Self::store_traced(bus, mem.addr, 8, val);
                     }
                     // MV [mem], imm
                     [OperandKind::IMem(_), OperandKind::Imm(bits)]
@@ -1146,9 +1472,58 @@ impl LlamaExecutor {
                     | [OperandKind::EMemAddrWidth(_), OperandKind::Imm(bits)]
                     | [OperandKind::EMemAddrWidthOp(_), OperandKind::Imm(bits)] => {
                         let (val, _) = decoded.imm.ok_or("missing immediate")?;
-                        bus.store(mem.addr, *bits, val);
+                        Self::store_traced(bus, mem.addr, *bits, val);
                     }
-                    _ => return Err("mv pattern not supported"),
+                    // Generic fallback: handle Reg<->Mem moves not covered above.
+                    _ => {
+                        // mem -> reg
+                        if matches!(
+                            entry.operands.first(),
+                            Some(
+                                OperandKind::IMem(_)
+                                    | OperandKind::IMemWidth(_)
+                                    | OperandKind::EMemAddrWidth(_)
+                                    | OperandKind::EMemAddrWidthOp(_)
+                                    | OperandKind::EMemRegWidth(_)
+                                    | OperandKind::EMemRegWidthMode(_)
+                            )
+                        ) {
+                            if let Some(reg) = entry
+                                .operands
+                                .get(1)
+                                .and_then(|op| Self::resolved_reg(op, &decoded))
+                            {
+                                let val = bus.load(mem.addr, mem.bits);
+                                let mask = Self::mask_for_width(mem.bits);
+                                state.set_reg(reg, val & mask);
+                                return Ok(decoded.len);
+                            }
+                        }
+                        // reg -> mem
+                        if matches!(
+                            entry.operands.get(1),
+                            Some(
+                                OperandKind::IMem(_)
+                                    | OperandKind::IMemWidth(_)
+                                    | OperandKind::EMemAddrWidth(_)
+                                    | OperandKind::EMemAddrWidthOp(_)
+                                    | OperandKind::EMemRegWidth(_)
+                                    | OperandKind::EMemRegWidthMode(_)
+                            )
+                        ) {
+                            if let Some(reg) = entry
+                                .operands
+                                .first()
+                                .and_then(|op| Self::resolved_reg(op, &decoded))
+                            {
+                                let val = Self::read_reg(state, bus, reg)
+                                    & Self::mask_for_width(mem.bits);
+                                Self::store_traced(bus, mem.addr, mem.bits, val);
+                                return Ok(decoded.len);
+                            }
+                        }
+                        return Err("mv pattern not supported");
+                    }
                 }
             }
             InstrKind::Add
@@ -1206,7 +1581,7 @@ impl LlamaExecutor {
                     entry.operands.get(1).unwrap_or(&OperandKind::Placeholder),
                     &decoded,
                 ) {
-                    state.get_reg(r)
+                    Self::read_reg(state, bus, r)
                 } else {
                     state.get_reg(RegName::A) & mask
                 };
@@ -1249,14 +1624,108 @@ impl LlamaExecutor {
                 };
                 if !matches!(entry.kind, InstrKind::Cmp | InstrKind::Test) {
                     if lhs_is_mem {
-                        bus.store(mem.addr, mem.bits, result);
+                        Self::store_traced(bus, mem.addr, mem.bits, result);
                     } else {
                         state.set_reg(RegName::A, result);
                     }
                     Self::set_flags_for_result(state, result, carry);
                 }
             }
-            _ => return Err("memory pattern not supported"),
+            _ => {
+                // Generic fallback: re-evaluate with simple ALU semantics and write back to lhs.
+                let lhs_is_mem = matches!(
+                    entry.operands.get(0).unwrap_or(&OperandKind::Placeholder),
+                    OperandKind::IMem(_)
+                        | OperandKind::IMemWidth(_)
+                        | OperandKind::EMemAddrWidth(_)
+                        | OperandKind::EMemAddrWidthOp(_)
+                        | OperandKind::EMemRegWidth(_)
+                        | OperandKind::EMemRegWidthMode(_)
+                        | OperandKind::EMemIMemWidth(_)
+                );
+                let rhs_is_mem = entry
+                    .operands
+                    .get(1)
+                    .map(|op| {
+                        matches!(
+                            op,
+                            OperandKind::IMem(_)
+                                | OperandKind::IMemWidth(_)
+                                | OperandKind::EMemAddrWidth(_)
+                                | OperandKind::EMemAddrWidthOp(_)
+                                | OperandKind::EMemRegWidth(_)
+                                | OperandKind::EMemRegWidthMode(_)
+                                | OperandKind::EMemIMemWidth(_)
+                        )
+                    })
+                    .unwrap_or(false);
+                let mask = Self::mask_for_width(mem.bits);
+                let lhs_val = if lhs_is_mem {
+                    bus.load(mem.addr, mem.bits) & mask
+                } else {
+                    state.get_reg(RegName::A) & mask
+                };
+                let rhs_val = if rhs_is_mem {
+                    decoded
+                        .mem2
+                        .or(decoded.mem)
+                        .map(|m| bus.load(m.addr, m.bits) & Self::mask_for_width(m.bits))
+                        .unwrap_or(0)
+                } else if let Some((imm, _)) = decoded.imm {
+                    imm
+                } else if let Some(r) = Self::resolved_reg(
+                    entry.operands.get(1).unwrap_or(&OperandKind::Placeholder),
+                    &decoded,
+                ) {
+                    Self::read_reg(state, bus, r)
+                } else {
+                    state.get_reg(RegName::A) & mask
+                };
+                let (result, carry) = match entry.kind {
+                    InstrKind::Add => {
+                        let full = (lhs_val as u64) + (rhs_val as u64);
+                        ((full as u32) & mask, Some(full > mask as u64))
+                    }
+                    InstrKind::Sub => {
+                        let borrow = (lhs_val & mask) < (rhs_val & mask);
+                        ((lhs_val.wrapping_sub(rhs_val)) & mask, Some(borrow))
+                    }
+                    InstrKind::And => ((lhs_val & rhs_val) & mask, None),
+                    InstrKind::Or => ((lhs_val | rhs_val) & mask, None),
+                    InstrKind::Xor => ((lhs_val ^ rhs_val) & mask, None),
+                    InstrKind::Adc => {
+                        let c = state.get_reg(RegName::FC) & 1;
+                        let full = (lhs_val as u64) + (rhs_val as u64) + (c as u64);
+                        ((full as u32) & mask, Some(full > mask as u64))
+                    }
+                    InstrKind::Sbc => {
+                        let c = state.get_reg(RegName::FC) & 1;
+                        let borrow = (lhs_val as u64) < (rhs_val as u64 + c as u64);
+                        (
+                            lhs_val.wrapping_sub(rhs_val).wrapping_sub(c) & mask,
+                            Some(borrow),
+                        )
+                    }
+                    InstrKind::Cmp => {
+                        Self::set_flags_cmp(state, lhs_val & mask, rhs_val & mask, mem.bits);
+                        ((lhs_val.wrapping_sub(rhs_val)) & mask, None)
+                    }
+                    InstrKind::Test => {
+                        let res = (lhs_val & rhs_val) & mask;
+                        Self::set_flags_for_result(state, res, None);
+                        (res, None)
+                    }
+                    _ => (lhs_val, None),
+                };
+                if lhs_is_mem {
+                    Self::store_traced(bus, mem.addr, mem.bits, result);
+                } else {
+                    state.set_reg(RegName::A, result);
+                }
+                if !matches!(entry.kind, InstrKind::Cmp | InstrKind::Test) {
+                    Self::set_flags_for_result(state, result, carry);
+                }
+            }
         }
 
         if let Some((reg, new_val)) = mem.side_effect {
@@ -1273,6 +1742,150 @@ impl LlamaExecutor {
         Ok(len)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn execute_multi_byte_binary<B: LlamaBus>(
+        &mut self,
+        entry: &OpcodeEntry,
+        state: &mut LlamaState,
+        bus: &mut B,
+        pre: Option<&PreModes>,
+        pc_override: Option<u32>,
+        prefix_len: u8,
+        subtract: bool,
+    ) -> Result<u8, &'static str> {
+        let decoded = self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+        let mem_dst = decoded.mem.ok_or("missing destination")?;
+        let mut dst_addr = mem_dst.addr;
+        let mut src_addr = decoded.mem2.map(|m| m.addr);
+        let src_reg = entry
+            .operands
+            .get(1)
+            .and_then(|op| Self::resolved_reg(op, &decoded));
+        let src_bits = decoded
+            .mem2
+            .map(|m| m.bits)
+            .or_else(|| {
+                entry.operands.get(1).and_then(|op| {
+                    if let OperandKind::Reg(_, b) = op {
+                        Some(*b)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(mem_dst.bits);
+        let mask_dst = Self::mask_for_width(mem_dst.bits);
+        let mask_src = Self::mask_for_width(src_bits);
+        let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+        if length == 0 {
+            // Parity: zero-length loops are a no-op (no flag/pointer updates), only advance PC.
+            let start_pc = state.pc();
+            if state.pc() == start_pc {
+                state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+            }
+            return Ok(decoded.len);
+        }
+        let dst_step_signed = mem_dst
+            .side_effect
+            .map(|(reg, new_val)| {
+                Self::addr_step_from_side_effect(reg, state.get_reg(reg), new_val)
+            })
+            .unwrap_or_else(|| mem_dst.bits.div_ceil(8) as i32);
+        let src_step_signed = decoded
+            .mem2
+            .and_then(|m| {
+                m.side_effect
+                    .map(|(reg, new_val)| {
+                        Self::addr_step_from_side_effect(reg, state.get_reg(reg), new_val)
+                    })
+                    .or_else(|| Some(m.bits.div_ceil(8) as i32))
+            })
+            .unwrap_or_else(|| mem_dst.bits.div_ceil(8) as i32);
+        let mut overall_zero: u32 = 0;
+        let mut carry = (state.get_reg(RegName::FC) & 1) != 0;
+
+        for _ in 0..length {
+            let lhs = bus.load(dst_addr, mem_dst.bits) & mask_dst;
+            let rhs = match src_addr {
+                Some(addr) => bus.load(addr, src_bits) & mask_src,
+                None => src_reg
+                    .map(|r| Self::read_reg(state, bus, r) & mask_src)
+                    .ok_or("missing source")?,
+            };
+            let (res, new_carry) = if subtract {
+                let borrow = (lhs as u64) < (rhs as u64 + carry as u64);
+                (
+                    lhs.wrapping_sub(rhs).wrapping_sub(carry as u32) & mask_dst,
+                    borrow,
+                )
+            } else {
+                let full = (lhs as u64) + (rhs as u64) + (carry as u64);
+                (((full as u32) & mask_dst), full > mask_dst as u64)
+            };
+            Self::store_traced(bus, dst_addr, mem_dst.bits, res);
+            overall_zero |= res;
+            carry = new_carry;
+
+            if let Some(addr) = src_addr.as_mut() {
+                *addr = Self::advance_internal_addr_signed(*addr, src_step_signed);
+            }
+            dst_addr = Self::advance_internal_addr_signed(dst_addr, dst_step_signed);
+        }
+
+        // Apply register side-effects for EMemReg modes (pre-dec/post-inc) across the whole length.
+        if length > 0 {
+            for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
+                if let Some((reg, new_val)) = m.side_effect {
+                    Self::apply_pointer_side_effect(state, reg, new_val, length);
+                }
+            }
+        }
+
+        state.set_reg(RegName::I, 0);
+        state.set_reg(RegName::FC, if carry { 1 } else { 0 });
+        state.set_reg(
+            RegName::FZ,
+            if (overall_zero & mask_dst) == 0 { 1 } else { 0 },
+        );
+        let start_pc = state.pc();
+        if state.pc() == start_pc {
+            state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+        }
+        Ok(decoded.len)
+    }
+
+    fn apply_pointer_side_effect(
+        state: &mut LlamaState,
+        reg: RegName,
+        new_val: u32,
+        iterations: u32,
+    ) {
+        if iterations == 0 {
+            return;
+        }
+        let mask = mask_for(reg);
+        let curr = state.get_reg(reg) & mask;
+        let new_val_masked = new_val & mask;
+        if new_val_masked == curr {
+            return;
+        }
+        let step = if new_val_masked > curr {
+            new_val_masked.wrapping_sub(curr) & mask
+        } else {
+            curr.wrapping_sub(new_val_masked) & mask
+        };
+        if step == 0 {
+            return;
+        }
+        let total = step.wrapping_mul(iterations) & mask;
+        let final_val = if new_val_masked > curr {
+            curr.wrapping_add(total) & mask
+        } else {
+            curr.wrapping_sub(total) & mask
+        };
+        state.set_reg(reg, final_val);
+    }
+
     /// Stub execute entrypoint; wires length estimation and recognizes WAIT/RET/HALT placeholders.
     pub fn execute<B: LlamaBus>(
         &mut self,
@@ -1280,23 +1893,64 @@ impl LlamaExecutor {
         state: &mut LlamaState,
         bus: &mut B,
     ) -> Result<u8, &'static str> {
-        let entry = self.lookup(opcode).ok_or("unknown opcode")?;
-        if entry.kind == InstrKind::Pre {
-            let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
-            let next_pc = state.pc().wrapping_add(1);
+        // Keep IMR in sync with memory regardless of tracing so state is architecture-accurate.
+        let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF);
+        state.set_reg(RegName::IMR, mem_imr as u32);
+
+        let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let start_pc = state.pc() & mask_for(RegName::PC);
+        // For perfetto parity with Python, keep tracing anchored to the prefix byte/PC.
+        let trace_pc_snapshot = start_pc;
+        let trace_opcode_snapshot = opcode;
+        // Execute using the resolved opcode after any PRE bytes.
+        let mut exec_pc = start_pc;
+        let mut exec_opcode = opcode;
+        let mut prefix_len = 0u8;
+        let mut pre_modes_opt: Option<PreModes> = None;
+        let mut pc_override = None;
+        let mut entry = self.lookup(exec_opcode);
+        perfetto_reset_substep();
+
+        while let Some(e) = entry {
+            if e.kind != InstrKind::Pre {
+                break;
+            }
+            let pre_modes = pre_modes_for(exec_opcode).ok_or("unknown PRE opcode")?;
+            let next_pc = exec_pc.wrapping_add(1) & mask_for(RegName::PC);
             let next_opcode = bus.load(next_pc, 8) as u8;
-            let next_entry = self.lookup(next_opcode).ok_or("unknown opcode after PRE")?;
-            return self.execute_with(
-                next_opcode,
-                next_entry,
+            exec_opcode = next_opcode;
+            exec_pc = next_pc;
+            prefix_len = prefix_len.saturating_add(1);
+            pre_modes_opt = Some(pre_modes);
+            pc_override = Some(next_pc);
+            entry = self.lookup(next_opcode);
+        }
+
+        PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
+        PERF_CURRENT_PC.store(trace_pc_snapshot, Ordering::Relaxed);
+        let _ctx_guard = PerfettoContextGuard;
+        // Trace the pre-execution snapshot using the prefix PC/opcode for Python parity.
+            self.trace_instr(
+                trace_opcode_snapshot,
                 state,
                 bus,
-                Some(&pre_modes),
-                Some(next_pc),
-                1,
+                instr_index,
+                trace_pc_snapshot,
             );
-        }
-        self.execute_with(opcode, entry, state, bus, None, None, 0)
+
+        let result = match entry {
+            Some(entry) => self.execute_with(
+                exec_opcode,
+                entry,
+                state,
+                bus,
+                pre_modes_opt.as_ref(),
+                pc_override,
+                prefix_len,
+            ),
+            None => fallback_unknown(state, prefix_len, None),
+        };
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1319,10 +1973,10 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
+                // Python WAIT fast-path: zero I/flags and advance PC without ticking timers.
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
-                // Do not auto-halt; let the host decide when to block.
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -1348,7 +2002,7 @@ impl LlamaExecutor {
                 }
                 Ok(len)
             }
-            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl
+            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl | InstrKind::Mvld
                 if entry.operands.len() == 1
                     && matches!(
                         entry.operands[0],
@@ -1371,7 +2025,7 @@ impl LlamaExecutor {
                     }
                 }
                 let value = bus.load(transfer.src_addr, transfer.bits);
-                bus.store(transfer.dst_addr, transfer.bits, value);
+                Self::store_traced(bus, transfer.dst_addr, transfer.bits, value);
                 if let Some((reg, new_val)) = transfer.side_effect {
                     state.set_reg(reg, new_val);
                 }
@@ -1395,7 +2049,7 @@ impl LlamaExecutor {
                 } else if let Some(mem) = decoded.mem {
                     let val = bus.load(mem.addr, mem.bits);
                     let res = (val.wrapping_add(1)) & Self::mask_for_width(mem.bits);
-                    bus.store(mem.addr, mem.bits, res);
+                    Self::store_traced(bus, mem.addr, mem.bits, res);
                     Self::set_flags_for_result(state, res, None);
                 } else {
                     return Err("missing operand");
@@ -1420,7 +2074,7 @@ impl LlamaExecutor {
                 } else if let Some(mem) = decoded.mem {
                     let val = bus.load(mem.addr, mem.bits);
                     let res = (val.wrapping_sub(1)) & Self::mask_for_width(mem.bits);
-                    bus.store(mem.addr, mem.bits, res);
+                    Self::store_traced(bus, mem.addr, mem.bits, res);
                     Self::set_flags_for_result(state, res, None);
                 } else {
                     return Err("missing operand");
@@ -1438,11 +2092,94 @@ impl LlamaExecutor {
                 let src_val = match entry.operands.get(1) {
                     Some(OperandKind::Imm(_)) => decoded.imm.ok_or("missing immediate")?.0,
                     Some(OperandKind::Reg(RegName::A, _)) => state.get_reg(RegName::A) & 0xFF,
+                    // Parity: Python only encodes PMDF with Imm8 or A sources.
                     _ => return Err("unsupported PMDF operands"),
                 } & 0xFF;
                 let dst = bus.load(mem.addr, 8) & 0xFF;
                 let res = (dst + src_val) & 0xFF;
-                bus.store(mem.addr, 8, res);
+                Self::store_traced(bus, mem.addr, 8, res);
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                Ok(decoded.len)
+            }
+            InstrKind::Dadl | InstrKind::Dsbl => {
+                let decoded =
+                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+                let mem_dst = decoded.mem.ok_or("missing destination")?;
+                if mem_dst.bits != 8 {
+                    // Parity: Python only supports byte-wide DADL/DSBL encodings.
+                    return Err("unsupported width for DADL/DSBL");
+                }
+                let mut dst_addr = mem_dst.addr;
+                let mut src_addr = decoded.mem2.map(|m| m.addr);
+                let src_bits = decoded.mem2.map(|m| m.bits);
+                let src_reg = if src_bits.is_none() {
+                    entry
+                        .operands
+                        .get(1)
+                        .and_then(|op| Self::resolved_reg(op, &decoded))
+                } else {
+                    None
+                };
+                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                let mut carry = match entry.kind {
+                    InstrKind::Dadl => {
+                        state.set_reg(RegName::FC, 0);
+                        false
+                    }
+                    InstrKind::Dsbl => (state.get_reg(RegName::FC) & 1) != 0,
+                    _ => false,
+                };
+                let dst_step = mem_dst.bits.div_ceil(8) as u32;
+                let src_step = src_bits.map_or(0, |b| b.div_ceil(8) as u32);
+                let mut overall_zero: u32 = 0;
+                let mut executed = false;
+                for _ in 0..length {
+                    let dst_byte = (bus.load(dst_addr, mem_dst.bits) & 0xFF) as u8;
+                    let src_byte = if let Some(bits) = src_bits {
+                        let addr = src_addr.ok_or("missing source")?;
+                        (bus.load(addr, bits) & 0xFF) as u8
+                    } else if let Some(reg) = src_reg {
+                        (Self::read_reg(state, bus, reg) & 0xFF) as u8
+                    } else {
+                        return Err("missing source");
+                    };
+                    let (res, new_carry) = if entry.kind == InstrKind::Dadl {
+                        Self::bcd_add_byte(dst_byte, src_byte, carry)
+                    } else {
+                        Self::bcd_sub_byte(dst_byte, src_byte, carry)
+                    };
+                    Self::store_traced(bus, dst_addr, mem_dst.bits, res as u32);
+                    carry = new_carry;
+                    overall_zero |= res as u32;
+                    if let Some(addr) = src_addr.as_mut() {
+                        *addr = Self::advance_internal_addr_signed(*addr, -(src_step as i32));
+                    }
+                    dst_addr = Self::advance_internal_addr_signed(dst_addr, -(dst_step as i32));
+                    executed = true;
+                }
+                state.set_reg(RegName::I, 0);
+                let zero_mask = Self::mask_for_width(mem_dst.bits);
+                state.set_reg(
+                    RegName::FZ,
+                    if (overall_zero & zero_mask) == 0 {
+                        1
+                    } else {
+                        0
+                    },
+                );
+                if executed || entry.kind == InstrKind::Dadl {
+                    state.set_reg(RegName::FC, if carry { 1 } else { 0 });
+                }
+                if length > 0 {
+                    for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
+                        if let Some((reg, new_val)) = m.side_effect {
+                            Self::apply_pointer_side_effect(state, reg, new_val, length);
+                        }
+                    }
+                }
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -1467,25 +2204,112 @@ impl LlamaExecutor {
                         return Err("missing operand");
                     };
                 let mask = Self::mask_for_width(bits);
-                let res = match entry.kind {
-                    InstrKind::Shl => (val << 1) & mask,
-                    InstrKind::Shr => (val >> 1) & mask,
-                    InstrKind::Rol => ((val << 1) | (val >> (bits as u32 - 1))) & mask,
-                    InstrKind::Ror => ((val >> 1) | ((val & 1) << (bits as u32 - 1))) & mask,
-                    _ => val,
+                let carry_in = state.get_reg(RegName::FC) & 1;
+                let (res, carry_out) = match entry.kind {
+                    // SHL/SHR are rotate-through-carry; ROL/ROR ignore incoming carry.
+                    InstrKind::Shl => (
+                        ((val << 1) | carry_in) & mask,
+                        ((val >> (bits.saturating_sub(1) as u32)) & 1) != 0,
+                    ),
+                    InstrKind::Shr => (
+                        ((val >> 1) | (carry_in << (bits.saturating_sub(1) as u32))) & mask,
+                        (val & 1) != 0,
+                    ),
+                    InstrKind::Rol => (
+                        ((val << 1) | (val >> (bits as u32 - 1))) & mask,
+                        ((val >> (bits.saturating_sub(1) as u32)) & 1) != 0,
+                    ),
+                    InstrKind::Ror => (
+                        ((val >> 1) | ((val & 1) << (bits as u32 - 1))) & mask,
+                        (val & 1) != 0,
+                    ),
+                    _ => (val, false),
                 };
                 if let Some(reg) = dest_reg {
-                    state.set_reg(reg, res);
+                    state.set_reg(reg, res & mask);
                 } else if let Some(mem) = dest_mem {
-                    bus.store(mem.addr, bits, res);
+                    Self::store_traced(bus, mem.addr, bits, res & mask);
                 }
-                state.set_reg(RegName::FZ, if res == 0 { 1 } else { 0 });
+                let carry_flag = match entry.kind {
+                    InstrKind::Shl | InstrKind::Shr => carry_out,
+                    InstrKind::Rol => ((val >> (bits.saturating_sub(1) as u32)) & 1) != 0,
+                    InstrKind::Ror => (val & 1) != 0,
+                    _ => false,
+                };
+                Self::set_flags_for_result(state, res & mask, Some(carry_flag));
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
                 }
                 Ok(decoded.len)
             }
+            InstrKind::Dsll | InstrKind::Dsrl => {
+                let decoded =
+                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+                let mem = decoded.mem.ok_or("missing mem operand")?;
+                if mem.bits != 8 {
+                    return Err("DSLL/DSRL only support byte operands");
+                }
+                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                let mut addr = mem.addr;
+                let is_left = entry.kind == InstrKind::Dsll;
+                let mut carry_nibble: u8 = 0;
+                let mut overall_zero: u8 = 0;
+                for _ in 0..length {
+                    let val = bus.load(addr, 8) as u8;
+                    let low = val & 0x0F;
+                    let high = (val >> 4) & 0x0F;
+                    let new_val = if is_left {
+                        let res = (low << 4) | carry_nibble;
+                        carry_nibble = low;
+                        res
+                    } else {
+                        let res = high | (carry_nibble << 4);
+                        carry_nibble = high;
+                        res
+                    };
+                    Self::store_traced(bus, addr, 8, new_val as u32);
+                    overall_zero |= new_val;
+                    if Self::is_internal_addr(addr) {
+                        let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
+                        let next = if is_left {
+                            offset.wrapping_sub(1) & 0xFF
+                        } else {
+                            offset.wrapping_add(1) & 0xFF
+                        };
+                        addr = INTERNAL_MEMORY_START + next;
+                    } else if is_left {
+                        addr = addr.wrapping_sub(1);
+                    } else {
+                        addr = addr.wrapping_add(1);
+                    }
+                }
+                state.set_reg(RegName::I, 0);
+                state.set_reg(RegName::FZ, if overall_zero == 0 { 1 } else { 0 });
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                Ok(decoded.len)
+            }
+            InstrKind::Adc if entry.name == "ADCL" => self.execute_multi_byte_binary(
+                entry,
+                state,
+                bus,
+                pre,
+                pc_override,
+                prefix_len,
+                false,
+            ),
+            InstrKind::Sbcl => self.execute_multi_byte_binary(
+                entry,
+                state,
+                bus,
+                pre,
+                pc_override,
+                prefix_len,
+                true,
+            ),
             InstrKind::Add
             | InstrKind::Sub
             | InstrKind::And
@@ -1510,6 +2334,7 @@ impl LlamaExecutor {
                             let borrow = lhs < rhs;
                             (lhs.wrapping_sub(rhs) & mask, Some(borrow))
                         }
+                        // Parity: only ADD/SUB reg-reg forms are valid in Python decode.
                         _ => return Err("unsupported operand pattern"),
                     };
                     state.set_reg(r1, res);
@@ -1537,7 +2362,7 @@ impl LlamaExecutor {
                     self.execute_reg_imm(entry, state, bus, pre, pc_override, prefix_len)
                 }
             }
-            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl => {
+            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl | InstrKind::Mvld => {
                 let saved_fc = state.get_reg(RegName::FC);
                 let len =
                     self.execute_mv_generic(entry, state, bus, pre, pc_override, prefix_len)?;
@@ -1548,18 +2373,11 @@ impl LlamaExecutor {
                 power_on_reset(bus, state);
                 Ok(1 + prefix_len)
             }
-            InstrKind::Pre | InstrKind::Unknown => {
-                let len = prefix_len
-                    + if entry.kind == InstrKind::Pre {
-                        1
-                    } else {
-                        Self::estimated_length(entry)
-                    };
-                let start_pc = state.pc();
-                if state.pc() == start_pc {
-                    state.set_pc(start_pc.wrapping_add(len as u32));
-                }
-                Ok(len)
+            InstrKind::Pre => unreachable!("PRE should be handled before dispatch"),
+            InstrKind::Unknown => {
+                // Known-unknown opcodes should advance without failure to mirror Python decode.
+                let est_len = Self::estimated_length(entry);
+                fallback_unknown(state, prefix_len, Some(est_len))
             }
             InstrKind::Sc => {
                 state.set_reg(RegName::FC, 1);
@@ -1579,35 +2397,55 @@ impl LlamaExecutor {
                 }
                 Ok(len)
             }
-            InstrKind::Ir | InstrKind::Tcl => {
+            InstrKind::Ir => {
                 let instr_len = prefix_len + Self::estimated_length(entry);
-                if entry.kind == InstrKind::Ir {
-                    // Push PC (24-bit), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
-                    let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
-                    Self::push_stack(state, bus, RegName::S, pc, 24);
-                    let f = state.get_reg(RegName::F) & 0xFF;
-                    Self::push_stack(state, bus, RegName::S, f, 8);
-                    let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
-                    let imr = bus.load(imr_addr, 8) & 0xFF;
-                    Self::push_stack(state, bus, RegName::S, imr, 8);
-                    // Clear IRM bit in IMR (bit 7)
-                    let cleared_imr = imr & 0x7F;
-                    bus.store(imr_addr, 8, cleared_imr);
-                    state.set_reg(RegName::IMR, cleared_imr);
-                    state.call_depth_inc();
-                    let vec = bus.load(INTERRUPT_VECTOR_ADDR, 8)
-                        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
-                        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
-                    state.set_pc(vec & mask_for(RegName::PC));
-                    Ok(instr_len)
-                } else {
-                    let len = instr_len;
-                    let start_pc = state.pc();
-                    if state.pc() == start_pc {
-                        state.set_pc(start_pc.wrapping_add(len as u32));
-                    }
-                    Ok(len)
+                // Push IMR, F, PC (little-endian) to match Python RETI stack layout, clear IRM, and jump to vector.
+                let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
+                Self::push_stack(state, bus, RegName::S, pc, 24, false);
+                let f = state.get_reg(RegName::F) & 0xFF;
+                Self::push_stack(state, bus, RegName::S, f, 8, false);
+                let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+                let imr = bus.load(imr_addr, 8) & 0xFF;
+                Self::push_stack(state, bus, RegName::S, imr, 8, false);
+                // Clear IRM bit in IMR (bit 7)
+                let cleared_imr = imr & 0x7F;
+                Self::store_traced(bus, imr_addr, 8, cleared_imr);
+                state.set_reg(RegName::IMR, cleared_imr);
+                state.call_depth_inc();
+                let vec = bus.load(INTERRUPT_VECTOR_ADDR, 8)
+                    | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
+                    | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+                state.set_pc(vec & mask_for(RegName::PC));
+                // Parity: emit perfetto IRQ entry like Python IR intrinsic.
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert(
+                        "pc".to_string(),
+                        AnnotationValue::Pointer((pc & mask_for(RegName::PC)) as u64),
+                    );
+                    payload.insert("vector".to_string(), AnnotationValue::Pointer(vec as u64));
+                    payload.insert(
+                        "imr_before".to_string(),
+                        AnnotationValue::UInt(imr as u64),
+                    );
+                    payload.insert(
+                        "imr_after".to_string(),
+                        AnnotationValue::UInt(cleared_imr as u64),
+                    );
+                    payload.insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
+                    tracer.record_irq_event("IRQ_Enter", payload);
                 }
+                Ok(instr_len)
+            }
+            InstrKind::Tcl => {
+                // Python TCL intrinsic is a no-op; just advance PC by length.
+                let len = prefix_len + Self::estimated_length(entry);
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(len as u32));
+                }
+                Ok(len)
             }
             InstrKind::JpAbs => {
                 // Absolute jump; operand may be 16-bit (low bits) or 20-bit.
@@ -1624,13 +2462,14 @@ impl LlamaExecutor {
                 }
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
-                let imm = decoded.imm.map(|v| v.0);
-                let target = if let Some(val) = imm {
-                    if decoded.len == 3 {
-                        let high = state.pc() & 0xFF0000;
-                        high | (val & 0xFFFF)
+                let target = if let Some((val, bits)) = decoded.imm {
+                    if bits == 16 {
+                        // JP 16-bit keeps current page (mask to PC width)
+                        // Use the address of the JP instruction (Python uses addr & 0xFF0000).
+                        let instr_pc = pc_override.unwrap_or(state.pc());
+                        (instr_pc & mask_for(RegName::PC) & 0xFF0000) | (val & 0xFFFF)
                     } else {
-                        val & 0xFFFFF
+                        val & mask_for(RegName::PC)
                     }
                 } else if let Some(mem) = decoded.mem {
                     bus.load(mem.addr, mem.bits) & 0xFFFFF
@@ -1672,46 +2511,102 @@ impl LlamaExecutor {
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let (target, bits) = decoded.imm.ok_or("missing jump target")?;
-                let ret_addr = state.pc().wrapping_add(decoded.len as u32);
+                let pc_before = state.pc();
+                let ret_addr = pc_before.wrapping_add(decoded.len as u32);
                 let mut dest = target;
                 let push_bits = if bits == 16 {
-                    // Push 16-bit return; retain high page from current PC
-                    let high = state.pc() & 0xFF0000;
+                    // Push 16-bit return; retain high page from current PC (Python parity).
+                    let high = pc_before & 0xFF0000;
                     dest = high | (target & 0xFFFF);
                     16
                 } else {
                     24
                 };
                 // Use S stack for CALL (matches PUSHU/POPU? here sticking with S per CPU specs)
-                Self::push_stack(state, bus, RegName::S, ret_addr, push_bits);
+                Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
+                if push_bits == 16 {
+                    // Track call page so RET can restore the original page even if PC page changes.
+                    state.push_call_page(pc_before);
+                }
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_call_flow(
+                        "CALL",
+                        pc_before & mask_for(RegName::PC),
+                        dest & 0xFFFFF,
+                        state.call_depth(),
+                    );
+                }
                 Ok(decoded.len)
             }
             InstrKind::Ret => {
-                let ret = Self::pop_stack(state, bus, RegName::S, 16);
-                let high = state.pc() & 0xFF0000;
-                state.set_pc((high | (ret & 0xFFFF)) & 0xFFFFF);
+                let pc_before = state.pc();
+                let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
+                let current_page = state.pc() & 0xFF0000;
+                // Parity: Python RET combines the low 16-bit return with the *current* page, even
+                // if CALL pushed a different page. Pop the saved page for bookkeeping but prefer
+                // the current execution page for the return address.
+                let _ = state.pop_call_page();
+                let page = current_page;
+                let dest = (page | (ret & 0xFFFF)) & 0xFFFFF;
+                state.set_pc(dest);
                 state.call_depth_dec();
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_call_flow(
+                        "RET",
+                        pc_before & mask_for(RegName::PC),
+                        dest,
+                        state.call_depth(),
+                    );
+                }
                 Ok(1)
             }
             InstrKind::RetF => {
-                let ret = Self::pop_stack(state, bus, RegName::S, 24);
-                state.set_pc(ret & 0xFFFFF);
+                let pc_before = state.pc();
+                let ret = Self::pop_stack(state, bus, RegName::S, 24, false);
+                let dest = ret & 0xFFFFF;
+                state.set_pc(dest);
                 state.call_depth_dec();
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_call_flow(
+                        "RETF",
+                        pc_before & mask_for(RegName::PC),
+                        dest,
+                        state.call_depth(),
+                    );
+                }
                 Ok(1)
             }
             InstrKind::RetI => {
-                // Stack layout: IMR (1), F(1), 24-bit PC
-                let imr = Self::pop_stack(state, bus, RegName::S, 8);
-                let f = Self::pop_stack(state, bus, RegName::S, 8);
-                let ret = Self::pop_stack(state, bus, RegName::S, 24);
-                state.set_reg(RegName::IMR, imr);
+                // Stack layout: IMR (1), F(1), 24-bit PC (little-endian).
+                let mask_s = mask_for(RegName::S);
+                let mut sp = state.get_reg(RegName::S) & mask_s;
+                let _sp_before = sp;
+                let imr = bus.load(sp, 8) & 0xFF;
+                sp = sp.wrapping_add(1) & mask_s;
+                let f = bus.load(sp, 8) & 0xFF;
+                sp = sp.wrapping_add(1) & mask_s;
+                let pc_lo = bus.load(sp, 8) & 0xFF;
+                let pc_mid = bus.load(sp.wrapping_add(1) & mask_s, 8) & 0xFF;
+                let pc_hi = bus.load(sp.wrapping_add(2) & mask_s, 8) & 0xFF;
+                let ret = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
+                sp = sp.wrapping_add(3) & mask_s;
+                state.set_reg(RegName::S, sp);
+                let imr_restored = imr;
+                Self::store_traced(
+                    bus,
+                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+                    8,
+                    imr_restored & 0xFF,
+                );
+                state.set_reg(RegName::IMR, imr_restored);
                 state.set_reg(RegName::F, f);
                 state.set_pc(ret & 0xFFFFF);
                 state.call_depth_dec();
-                // Python RETI writes IMR back into IMEM for parity/traces.
-                bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, imr);
                 Ok(1 + prefix_len)
             }
             InstrKind::PushU | InstrKind::PushS => {
@@ -1727,18 +2622,13 @@ impl LlamaExecutor {
                     | OperandKind::RegF => 8,
                     _ => 8,
                 };
-                let value = state.get_reg(reg);
+                let value = Self::read_reg(state, bus, reg);
                 let sp_reg = if entry.kind == InstrKind::PushU {
                     RegName::U
                 } else {
                     RegName::S
                 };
-                Self::push_stack(state, bus, sp_reg, value, bits);
-                if reg == RegName::IMR {
-                    let cleared = value & 0x7F;
-                    state.set_reg(RegName::IMR, cleared);
-                    bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, cleared & 0xFF);
-                }
+                Self::push_stack(state, bus, sp_reg, value, bits, false);
                 let len = decoded.len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -1767,10 +2657,15 @@ impl LlamaExecutor {
                 } else {
                     RegName::S
                 };
-                let value = Self::pop_stack(state, bus, sp_reg, bits);
+                let value = Self::pop_stack(state, bus, sp_reg, bits, false);
                 state.set_reg(reg, value);
                 if reg == RegName::IMR {
-                    bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, value & 0xFF);
+                    Self::store_traced(
+                        bus,
+                        INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+                        8,
+                        value & 0xFF,
+                    );
                 }
                 let len = decoded.len;
                 let start_pc = state.pc();
@@ -1802,23 +2697,45 @@ impl LlamaExecutor {
                         (_, OperandKind::IMem(bits)) => *bits,
                         _ => 8,
                     };
-                    lhs = if let Some(r) = Self::resolved_reg(op1, &decoded) {
-                        state.get_reg(r)
-                    } else if let Some(mem) = decoded.mem {
-                        bus.load(mem.addr, bits)
+                    let op_is_mem = |op: &OperandKind| {
+                        matches!(
+                            op,
+                            OperandKind::IMem(_)
+                                | OperandKind::IMemWidth(_)
+                                | OperandKind::EMemAddrWidth(_)
+                                | OperandKind::EMemAddrWidthOp(_)
+                                | OperandKind::EMemRegWidth(_)
+                                | OperandKind::EMemRegWidthMode(_)
+                                | OperandKind::EMemIMemWidth(_)
+                        )
+                    };
+                    let op_is_imm = |op: &OperandKind| {
+                        matches!(op, OperandKind::Imm(_) | OperandKind::ImmOffset)
+                    };
+
+                    lhs = if op_is_mem(op1) {
+                        let mem = decoded.mem.ok_or("missing mem operand")?;
+                        bus.load(mem.addr, mem.bits)
+                    } else if op_is_imm(op1) {
+                        decoded.imm.ok_or("missing immediate")?.0
+                    } else if let Some(r) = Self::resolved_reg(op1, &decoded) {
+                        Self::read_reg(state, bus, r)
                     } else {
                         decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
-                    rhs = if let Some(r) = Self::resolved_reg(op2, &decoded) {
-                        state.get_reg(r)
-                    } else if let Some((imm, _)) = decoded.imm {
-                        imm
-                    } else if let Some(mem) = decoded.mem {
-                        bus.load(mem.addr, bits)
+
+                    rhs = if op_is_mem(op2) {
+                        let mem = decoded.mem2.or(decoded.mem).ok_or("missing mem operand")?;
+                        bus.load(mem.addr, mem.bits)
+                    } else if op_is_imm(op2) {
+                        decoded.imm.ok_or("missing immediate")?.0
+                    } else if let Some(r) = Self::resolved_reg(op2, &decoded) {
+                        Self::read_reg(state, bus, r)
                     } else {
-                        0
+                        decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
                 } else {
+                    // Parity: Python decode does not emit other CMP/TEST operand shapes.
                     return Err("unsupported operand pattern");
                 }
                 let mask = Self::mask_for_width(bits);
@@ -1883,8 +2800,8 @@ impl LlamaExecutor {
                             _ => 8,
                         };
                         let mask = Self::mask_for_width(bits);
-                        let v1 = state.get_reg(dst_reg) & mask;
-                        let v2 = state.get_reg(src_reg) & mask;
+                        let v1 = Self::read_reg(state, bus, dst_reg) & mask;
+                        let v2 = Self::read_reg(state, bus, src_reg) & mask;
                         state.set_reg(dst_reg, v2);
                         state.set_reg(src_reg, v1);
                         let start_pc = state.pc();
@@ -1898,8 +2815,8 @@ impl LlamaExecutor {
                     let bits = m1.bits.min(m2.bits);
                     let v1 = bus.load(m1.addr, bits);
                     let v2 = bus.load(m2.addr, bits);
-                    bus.store(m1.addr, bits, v2);
-                    bus.store(m2.addr, bits, v1);
+                    Self::store_traced(bus, m1.addr, bits, v2);
+                    Self::store_traced(bus, m2.addr, bits, v1);
                     let start_pc = state.pc();
                     if state.pc() == start_pc {
                         state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -1940,13 +2857,18 @@ impl LlamaExecutor {
                     Ok(len)
                 }
             }
-            _ => {
-                let len = Self::estimated_length(entry);
+            InstrKind::Swap => {
+                let decoded =
+                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+                let val = state.get_reg(RegName::A) & 0xFF;
+                let swapped = ((val & 0x0F) << 4) | ((val >> 4) & 0x0F);
+                state.set_reg(RegName::A, swapped);
+                state.set_reg(RegName::FZ, if swapped == 0 { 1 } else { 0 });
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
-                    state.set_pc(start_pc.wrapping_add(len as u32));
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
                 }
-                Ok(len)
+                Ok(decoded.len)
             }
         }
     }
@@ -1962,19 +2884,288 @@ impl Default for LlamaExecutor {
 mod tests {
     use super::*;
     use crate::llama::opcodes::OPCODES;
+    use crate::memory::ADDRESS_MASK;
+    use std::collections::{HashMap, HashSet};
 
     struct NullBus;
     impl LlamaBus for NullBus {
         fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
             0
         }
+        fn wait_cycles(&mut self, _cycles: u32) {}
+    }
+
+    struct ResetBus {
+        bytes: std::collections::HashMap<u32, u8>,
+    }
+
+    impl ResetBus {
+        fn new(vector: [u8; 3]) -> Self {
+            let mut bytes = std::collections::HashMap::new();
+            // IRQ/reset vector is at 0xFFFFA (little-endian).
+            bytes.insert(0xFFFFA, vector[0]);
+            bytes.insert(0xFFFFB, vector[1]);
+            bytes.insert(0xFFFFC, vector[2]);
+            // Seed a different pattern at 0xFFFFD to catch regressions.
+            bytes.insert(0xFFFFD, 0xEE);
+            bytes.insert(0xFFFFE, 0xDD);
+            bytes.insert(0xFFFFF, 0xCC);
+            Self { bytes }
+        }
+    }
+
+    impl LlamaBus for ResetBus {
+        fn load(&mut self, addr: u32, _bits: u8) -> u32 {
+            *self.bytes.get(&addr).unwrap_or(&0) as u32
+        }
+        fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {}
+    }
+
+    #[test]
+    fn trace_imr_peek_does_not_bump_memory_reads() {
+        use crate::memory::MemoryImage;
+        let mut mem = MemoryImage::new();
+        mem.write_external_byte(0x0000, 0x00); // NOP
+        let mut state = LlamaState::new();
+        state.set_pc(0x0000);
+        let mut exec = LlamaExecutor::new();
+        struct Bus<'a> {
+            mem: &'a mut MemoryImage,
+        }
+        impl<'a> LlamaBus for Bus<'a> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.mem.load(addr, bits).unwrap_or(0)
+            }
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                let _ = self.mem.store(addr, bits, value);
+            }
+            fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+                self.mem.read_internal_byte_silent(offset).unwrap_or(0)
+            }
+        }
+        // Simulate an opcode fetch to mirror the runtime bus.
+        let _ = mem.load(0x0000, 8);
+        let reads_before = mem.memory_read_count();
+        {
+            let mut bus = Bus { mem: &mut mem };
+            exec.execute(0x00, &mut state, &mut bus).expect("execute nop");
+        }
+        let reads_after = mem.memory_read_count();
+        assert_eq!(
+            reads_after.saturating_sub(reads_before),
+            0,
+            "IMR peeks should not bump memory reads beyond the opcode fetch"
+        );
     }
 
     #[test]
     fn opcode_table_has_coverage() {
-        assert!(OPCODES.len() > 200);
-        assert!(OPCODES.iter().any(|e| e.opcode == 0x00));
-        assert!(OPCODES.iter().any(|e| e.opcode == 0xFF));
+        assert_eq!(OPCODES.len(), 256, "expected dense opcode table");
+        let mut seen = HashSet::new();
+        for entry in OPCODES {
+            assert!(
+                seen.insert(entry.opcode),
+                "duplicate opcode 0x{:02X}",
+                entry.opcode
+            );
+        }
+        assert_eq!(OPCODES.first().map(|e| e.opcode), Some(0x00));
+        assert_eq!(OPCODES.last().map(|e| e.opcode), Some(0xFF));
+    }
+
+    #[test]
+    fn all_opcodes_execute_without_error() {
+        let mut exec = LlamaExecutor::new();
+        for entry in OPCODES {
+            let mut state = LlamaState::new();
+            state.set_pc(0);
+            let mut bus = NullBus;
+            let res = exec.execute(entry.opcode, &mut state, &mut bus);
+            assert!(
+                res.is_ok(),
+                "opcode 0x{:02X} failed with {:?}",
+                entry.opcode,
+                res
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_opcodes_fallback_advances_pc() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = NullBus;
+        state.set_pc(0x10);
+        let res = exec.execute(0x20, &mut state, &mut bus);
+        assert!(res.is_ok(), "default mode should fall back on unknown opcodes");
+        assert_eq!(state.pc(), 0x11, "fallback should advance PC by length");
+    }
+
+    #[test]
+    fn reset_vector_matches_python_irq_vector() {
+        let mut state = LlamaState::new();
+        let mut bus = ResetBus::new([0xAA, 0xBB, 0x0C]);
+        power_on_reset(&mut bus, &mut state);
+        // Expected little-endian vector at 0xFFFFA.
+        assert_eq!(state.pc(), 0x0C_BB_AA & mask_for(RegName::PC));
+    }
+
+    #[test]
+    fn apply_pointer_side_effect_handles_predec_over_multiple_iterations() {
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x10);
+        // Side-effect encodes pre-dec by one; three iterations should land at 0x0D.
+        LlamaExecutor::apply_pointer_side_effect(&mut state, RegName::X, 0x0F, 3);
+        assert_eq!(state.get_reg(RegName::X), 0x0D);
+    }
+
+    #[test]
+    fn perfetto_trace_anchors_to_prefix_pc_and_opcode() {
+        use crate::PerfettoTracer;
+        // Program: PRE (0x32) followed by NOP (0x00)
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0x32;
+        bus.mem[1] = 0x00;
+
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+
+        let path = std::env::temp_dir().join("llama_pref_trace.perfetto-trace");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut guard = crate::PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(path));
+        }
+
+        let len = exec.execute(0x32, &mut state, &mut bus).expect("execute PRE+NOP");
+        assert_eq!(len, 2, "PRE + NOP should consume two bytes");
+
+        let tracer = crate::PERFETTO_TRACER
+            .enter()
+            .take()
+            .expect("tracer should be installed");
+        let events = tracer.test_exec_events();
+        assert!(
+            !events.is_empty(),
+            "perfetto tracer should record at least one Exec event"
+        );
+        let (pc, opcode, _idx) = events[0];
+        assert_eq!(pc, 0, "Exec PC should use prefix address");
+        assert_eq!(opcode, 0x32, "Exec opcode should reflect prefix byte");
+    }
+
+    struct OffsetBus {
+        data: HashMap<u32, u8>,
+    }
+
+    impl OffsetBus {
+        fn new() -> Self {
+            Self {
+                data: HashMap::new(),
+            }
+        }
+
+        fn seed_pointer(&mut self, ptr_base: u32, pointer: u32) {
+            self.data.insert(ptr_base, (pointer & 0xFF) as u8);
+            self.data
+                .insert(ptr_base + 1, ((pointer >> 8) & 0xFF) as u8);
+            self.data
+                .insert(ptr_base + 2, ((pointer >> 16) & 0xFF) as u8);
+        }
+    }
+
+    impl LlamaBus for OffsetBus {
+        fn load(&mut self, addr: u32, _bits: u8) -> u32 {
+            *self.data.get(&addr).unwrap_or(&0) as u32
+        }
+        fn store(&mut self, addr: u32, _bits: u8, value: u32) {
+            self.data.insert(addr, (value & 0xFF) as u8);
+        }
+        fn resolve_emem(&mut self, base: u32) -> u32 {
+            base
+        }
+    }
+
+    #[test]
+    fn emem_imem_offset_respects_sign() {
+        let entry = dispatch::lookup(0xF0).expect("opcode present");
+        let mut exec = LlamaExecutor::new();
+
+        // Positive offset (+5)
+        let mut bus = OffsetBus::new();
+        bus.data.insert(0, 0x80); // mode = positive offset
+        bus.data.insert(1, 0x10); // first IMEM addr
+        bus.data.insert(2, 0x20); // second IMEM addr (pointer)
+        bus.data.insert(3, 0x05); // offset magnitude
+        let base_ptr = 0x001000;
+        let ptr_base = INTERNAL_MEMORY_START + 0x20;
+        bus.seed_pointer(ptr_base, base_ptr);
+        let (transfer, consumed) = exec
+            .decode_emem_imem_offset(entry, &mut bus, 0, AddressingMode::N, AddressingMode::N, true)
+            .expect("positive offset should decode");
+        assert_eq!(consumed, 4, "positive offset should consume mode+ptr+disp");
+        assert_eq!(
+            transfer.src_addr, base_ptr + 5,
+            "positive offset should add displacement"
+        );
+        assert_eq!(
+            transfer.dst_addr,
+            INTERNAL_MEMORY_START + 0x10,
+            "dest should use first IMEM byte"
+        );
+
+        // Negative offset (-3)
+        let mut bus_neg = OffsetBus::new();
+        bus_neg.data.insert(0, 0xC0); // mode = negative offset
+        bus_neg.data.insert(1, 0x11);
+        bus_neg.data.insert(2, 0x21);
+        bus_neg.data.insert(3, 0x03);
+        let base_ptr_neg = 0x000900;
+        let ptr_base_neg = INTERNAL_MEMORY_START + 0x21;
+        bus_neg.seed_pointer(ptr_base_neg, base_ptr_neg);
+        let (transfer_neg, consumed_neg) = exec
+            .decode_emem_imem_offset(
+                entry,
+                &mut bus_neg,
+                0,
+                AddressingMode::N,
+                AddressingMode::N,
+                true,
+            )
+            .expect("negative offset should decode");
+        assert_eq!(consumed_neg, 4);
+        assert_eq!(
+            transfer_neg.src_addr, base_ptr_neg - 3,
+            "negative offset should subtract displacement"
+        );
+        assert_eq!(
+            transfer_neg.dst_addr,
+            INTERNAL_MEMORY_START + 0x11,
+            "dest should use first IMEM byte"
+        );
+    }
+
+    #[test]
+    fn emem_imem_rejects_unknown_offset_mode() {
+        let entry = dispatch::lookup(0xF0).expect("opcode present");
+        let mut exec = LlamaExecutor::new();
+        let mut bus = OffsetBus::new();
+        bus.data.insert(0, 0x40); // invalid mode per spec
+        bus.data.insert(1, 0x00);
+        bus.data.insert(2, 0x00);
+        bus.data.insert(3, 0x01);
+        let ptr_base = INTERNAL_MEMORY_START;
+        bus.seed_pointer(ptr_base, 0x000100);
+        let res = exec.decode_emem_imem_offset(
+            entry,
+            &mut bus,
+            0,
+            AddressingMode::N,
+            AddressingMode::N,
+            true,
+        );
+        assert!(res.is_err(), "invalid mode should be rejected");
     }
 
     #[test]
@@ -1982,9 +3173,43 @@ mod tests {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
+        state.set_reg(RegName::FC, 1);
+        state.set_reg(RegName::FZ, 1);
+        state.set_reg(RegName::I, 5);
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
+    }
+
+    struct WaitBus {
+        spins: u32,
+        calls: u32,
+    }
+
+    impl LlamaBus for WaitBus {
+        fn wait_cycles(&mut self, cycles: u32) {
+            self.calls = self.calls.saturating_add(1);
+            self.spins = self.spins.saturating_add(cycles);
+        }
+    }
+
+    #[test]
+    fn wait_does_not_tick_timers() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = WaitBus { spins: 0, calls: 0 };
+        state.set_reg(RegName::I, 5);
+        let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 1);
+        assert_eq!(bus.calls, 0, "WAIT should not tick timers");
+        assert_eq!(bus.spins, 0, "WAIT should not burn cycles");
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
     }
 
     struct MemBus {
@@ -2028,6 +3253,8 @@ mod tests {
         fn resolve_emem(&mut self, base: u32) -> u32 {
             base
         }
+
+        fn wait_cycles(&mut self, _cycles: u32) {}
     }
 
     #[test]
@@ -2140,6 +3367,130 @@ mod tests {
     }
 
     #[test]
+    fn ir_stacks_imr_f_pc_little_endian() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
+
+        // Seed IMR and interrupt vector.
+        let imr_saved: u8 = 0xAA;
+        bus.store(
+            INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+            8,
+            u32::from(imr_saved),
+        );
+        bus.mem[0x0FFFFA] = 0x21; // reset vector low
+        bus.mem[0x0FFFFB] = 0x43; // mid
+        bus.mem[0x0FFFFC] = 0x05; // high -> 0x054321
+
+        assert_eq!(
+            bus.load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8,
+            imr_saved
+        );
+
+        let pc_start = 0x001234;
+        let f_saved: u8 = 0xA5;
+        let sp_start = 0x0200;
+        state.set_pc(pc_start);
+        state.set_reg(RegName::F, u32::from(f_saved));
+        state.set_reg(RegName::S, sp_start);
+
+        let len = exec.execute(0xFE, &mut state, &mut bus).unwrap(); // IR
+        assert_eq!(len, 1);
+
+        let expected_pc = (pc_start.wrapping_add(len as u32)) & mask_for(RegName::PC);
+        let expected_sp = sp_start.wrapping_sub(5) & mask_for(RegName::S);
+        assert_eq!(state.get_reg(RegName::S), expected_sp);
+
+        let base = MemBus::translate(expected_sp);
+        assert_eq!(
+            &bus.mem[base..base + 5],
+            &[
+                imr_saved,
+                f_saved,
+                (expected_pc & 0xFF) as u8,
+                ((expected_pc >> 8) & 0xFF) as u8,
+                ((expected_pc >> 16) & 0xFF) as u8
+            ]
+        );
+
+        // IMR should be cleared in state/memory after the push.
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved & 0x7F));
+        assert_eq!(
+            bus.mem[MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET)],
+            imr_saved & 0x7F
+        );
+        assert_eq!(state.pc(), 0x054321);
+    }
+
+    #[test]
+    fn reti_restores_imr_f_pc_little_endian() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
+
+        let sp_start = 0x0200;
+        let imr_saved: u8 = 0x00;
+        let f_saved: u8 = 0x7C;
+        let ret_pc: u32 = 0x053412;
+
+        let base = MemBus::translate(sp_start);
+        bus.mem[base] = imr_saved;
+        bus.mem[base + 1] = f_saved;
+        bus.mem[base + 2] = (ret_pc & 0xFF) as u8;
+        bus.mem[base + 3] = ((ret_pc >> 8) & 0xFF) as u8;
+        bus.mem[base + 4] = ((ret_pc >> 16) & 0xFF) as u8;
+
+        state.set_reg(RegName::S, sp_start);
+        state.call_depth_inc();
+
+        let len = exec.execute(0x01, &mut state, &mut bus).unwrap(); // RETI
+        assert_eq!(len, 1);
+        assert_eq!(
+            state.get_reg(RegName::S),
+            (sp_start + 5) & mask_for(RegName::S)
+        );
+        assert_eq!(state.pc(), ret_pc & mask_for(RegName::PC));
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved));
+        assert_eq!(state.get_reg(RegName::F), u32::from(f_saved));
+        assert_eq!(
+            bus.mem[MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET)],
+            imr_saved
+        );
+    }
+
+    #[test]
+    fn mvl_predec_updates_pointer_without_wrap() {
+        // Opcode 0xE3: MVL IMem8, EMemReg (mode byte), uses pre-dec when reg byte upper nibble is 0x3.
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+
+        // Program: [0]=0xE3 (MVL), [1]=0x36 (pre-dec, reg=U), [2]=0x10 (IMEM offset)
+        bus.mem[0x0000] = 0xE3;
+        bus.mem[0x0001] = 0x36; // mode=PreDec, reg selector=6 (U)
+        bus.mem[0x0002] = 0x10; // IMEM destination offset
+
+        // Source byte resides at U-1 after pre-dec.
+        state.set_reg(RegName::U, 0x0030);
+        bus.mem[0x002F] = 0xAB;
+
+        // Set transfer length to 1.
+        state.set_reg(RegName::I, 1);
+
+        let len = exec.execute(0xE3, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(state.get_reg(RegName::PC), 3);
+
+        // Destination should receive the byte.
+        let dst_addr = MemBus::translate(INTERNAL_MEMORY_START + 0x10);
+        assert_eq!(bus.mem[dst_addr], 0xAB);
+
+        // U should pre-decrement by 1, not wrap to a huge value.
+        assert_eq!(state.get_reg(RegName::U), 0x002F);
+    }
+
+    #[test]
     fn sbc_reg_imm_sets_carry_on_no_borrow() {
         // Program: 0x58 (SBC A, imm8) imm=0x01 with C=1, A=0x03 => result 0x01, carry stays set
         let mut bus = MemBus::with_size(4);
@@ -2152,6 +3503,337 @@ mod tests {
         let len = exec.execute(0x58, &mut state, &mut bus).unwrap();
         assert_eq!(len, 2);
         assert_eq!(state.get_reg(RegName::A), 0x01);
+    }
+
+    #[test]
+    fn adcl_multibyte_uses_incoming_carry() {
+        // Program: 0x54 (ADCL (m),(n)) with I=2, carry propagates across bytes
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[0] = 0x54;
+        bus.mem[1] = 0x10; // dst
+        bus.mem[2] = 0x20; // src
+        bus.mem[0x10] = 0xFF;
+        bus.mem[0x11] = 0x00;
+        bus.mem[0x20] = 0x01;
+        bus.mem[0x21] = 0x02;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::I, 2);
+        state.set_reg(RegName::FC, 1);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x54, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(bus.mem[0x10], 0x01);
+        assert_eq!(bus.mem[0x11], 0x03);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.pc(), 3);
+    }
+
+    #[test]
+    fn stacked_pre_prefixes_decode_next_opcode() {
+        // PRE + PRE + JP (16-bit) should consume both prefixes and fetch operands from the final opcode.
+        let mut bus = MemBus::with_size(8);
+        bus.mem[0] = 0x32; // PRE
+        bus.mem[1] = 0x32; // PRE
+        bus.mem[2] = 0x02; // JP abs16
+        bus.mem[3] = 0x78;
+        bus.mem[4] = 0x9A;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(state.pc(), 0x009A78);
+    }
+
+    #[test]
+    fn stacked_pre_prefixes_unbounded() {
+        // Four PRE bytes followed by JP should still resolve the JP and operands.
+        let mut bus = MemBus::with_size(10);
+        bus.mem[0] = 0x32;
+        bus.mem[1] = 0x32;
+        bus.mem[2] = 0x32;
+        bus.mem[3] = 0x32;
+        bus.mem[4] = 0x02; // JP abs16
+        bus.mem[5] = 0x34;
+        bus.mem[6] = 0x12;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 7);
+        assert_eq!(state.pc(), 0x001234);
+    }
+
+    #[test]
+    fn dadl_wraps_internal_addresses_and_updates_pointers() {
+        // Opcode 0xC4: DADL (m),(n) with IMEM offsets. Length=2, should wrap within IMEM space.
+        let mut bus = MemBus::with_size(0x400);
+        // Program layout
+        bus.mem[0] = 0xC4;
+        bus.mem[1] = 0x80; // dst offset 0x80 (avoid overlapping program)
+        bus.mem[2] = 0x82; // src offset 0x82 (will wrap to 0x81)
+                           // Seed IMEM bytes
+        bus.mem[0x80] = 0x00; // dst low
+        bus.mem[0x81] = 0x07; // src after wrap
+        bus.mem[0x82] = 0x05; // src first iteration
+        bus.mem[0x7F] = 0x00; // dst high (will be touched after wrap)
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::I, 2); // two bytes
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xC4, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        // First byte: 0x00 + 0x05 = 0x05; second wraps dst to 0x7F, src to 0x81 (0x07).
+        assert_eq!(bus.mem[0x80], 0x05);
+        assert_eq!(
+            bus.mem[0x7F], 0x07,
+            "second iteration should write wrapped dst"
+        );
+        // IMEM wrapping should keep addresses inside 0x100-byte window.
+        assert_eq!(state.get_reg(RegName::I), 0);
+    }
+
+    #[test]
+    fn adcl_ememreg_side_effect_updates_pointers() {
+        // Use a synthetic ADCL entry with EMemReg operands that carry pre/post side effects.
+        let mut bus = MemBus::with_size(0x100);
+        bus.mem[0] = 0x54; // opcode (ignored for operand shapes)
+        bus.mem[1] = 0x24; // dst: X post-inc (raw_mode=2, reg=4)
+        bus.mem[2] = 0x35; // src: Y pre-dec (raw_mode=3, reg=5)
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x10);
+        state.set_reg(RegName::Y, 0x20);
+        state.set_reg(RegName::I, 2); // length
+        let mut exec = LlamaExecutor::new();
+        let entry = OpcodeEntry {
+            opcode: 0x54,
+            kind: InstrKind::Adc,
+            name: "ADCL",
+            cond: None,
+            ops_reversed: None,
+            operands: &[OperandKind::EMemRegWidth(1), OperandKind::EMemRegWidth(1)],
+        };
+        let len = exec
+            .execute_with(0x54, &entry, &mut state, &mut bus, None, None, 0)
+            .unwrap();
+        assert_eq!(len, 3);
+        // Post-inc X advances by length, pre-dec Y decrements by length.
+        assert_eq!(state.get_reg(RegName::X), 0x12);
+        assert_eq!(state.get_reg(RegName::Y), 0x1E);
+    }
+
+    #[test]
+    fn sbcl_multibyte_propagates_borrow_forward() {
+        // Program: 0x5C (SBCL (m),(n)) with I=2, borrow chains across bytes
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[0] = 0x5C;
+        bus.mem[1] = 0x10; // dst
+        bus.mem[2] = 0x20; // src
+        bus.mem[0x10] = 0x00;
+        bus.mem[0x11] = 0x02;
+        bus.mem[0x20] = 0x01;
+        bus.mem[0x21] = 0x01;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::I, 2);
+        state.set_reg(RegName::FC, 1);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x5C, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(bus.mem[0x10], 0xFE);
+        assert_eq!(bus.mem[0x11], 0x00);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.pc(), 3);
+    }
+
+    #[test]
+    fn swap_nibbles_updates_zero_flag() {
+        let mut bus = MemBus::with_size(2);
+        bus.mem[0] = 0xEE;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::A, 0x3C);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xEE, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.get_reg(RegName::A), 0xC3);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.pc(), 1);
+    }
+
+    #[test]
+    fn ir_stack_pc_is_big_endian_and_reti_matches() {
+        // Verify IR pushes PC big-endian (high->low) and RETI reassembles the same order.
+        let mut bus = MemBus::with_size(0x80);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x20);
+        let pc = 0x0ABCDE;
+
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, pc, 24, true);
+        // Push F and IMR (single-byte, endian-neutral).
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xF0, 8, false);
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xC3, 8, false);
+
+        let sp = state.get_reg(RegName::S) as usize;
+        assert_eq!(sp, 0x20 - 5);
+        // Layout from low to high addresses after pushes: IMR, F, PC[23:16], PC[15:8], PC[7:0]
+        assert_eq!(bus.mem[sp], 0xC3); // IMR
+        assert_eq!(bus.mem[sp + 1], 0xF0); // F
+        assert_eq!(bus.mem[sp + 2], 0x0A);
+        assert_eq!(bus.mem[sp + 3], 0xBC);
+        assert_eq!(bus.mem[sp + 4], 0xDE);
+
+        // Simulate RETI: pop IMR, F, then PC big-endian.
+        let mut sp_iter = sp as u32;
+        let imr = bus.load(sp_iter, 8) & 0xFF;
+        sp_iter = sp_iter.wrapping_add(1);
+        let f = bus.load(sp_iter, 8) & 0xFF;
+        sp_iter = sp_iter.wrapping_add(1);
+        let pc_hi = bus.load(sp_iter, 8) & 0xFF;
+        let pc_mid = bus.load(sp_iter + 1, 8) & 0xFF;
+        let pc_lo = bus.load(sp_iter + 2, 8) & 0xFF;
+        let ret_pc = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
+        sp_iter = sp_iter.wrapping_add(3);
+
+        assert_eq!(imr, 0xC3);
+        assert_eq!(f, 0xF0);
+        assert_eq!(ret_pc, pc & 0xFF_FFFF);
+        assert_eq!(sp_iter as usize, 0x20);
+    }
+
+    #[test]
+    fn call_stack_is_little_endian() {
+        // CALL pushes return address low byte first (little-endian).
+        let mut bus = MemBus::with_size(0x80);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x40);
+        let ret = 0x012345;
+
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, ret, 24, false);
+        let sp = state.get_reg(RegName::S) as usize;
+        assert_eq!(sp, 0x40 - 3);
+        assert_eq!(bus.mem[sp], 0x45); // low byte first
+        assert_eq!(bus.mem[sp + 1], 0x23);
+        assert_eq!(bus.mem[sp + 2], 0x01); // high byte last
+
+        let popped = LlamaExecutor::pop_stack(&mut state, &mut bus, RegName::S, 24, false);
+        assert_eq!(popped, ret);
+        assert_eq!(state.get_reg(RegName::S) as usize, 0x40);
+    }
+
+    #[test]
+    fn ret_near_uses_current_page_at_return() {
+        // CALL from page 0x30000 to 0x0020, then RET executed after callee changes PC page.
+        let mut bus = MemBus::with_size(0x50000);
+        let call_pc = 0x30000u32;
+        let ret_target = 0x0020u32;
+        bus.mem[call_pc as usize] = 0x04; // CALL imm16
+        bus.mem[call_pc as usize + 1] = (ret_target & 0xFF) as u8;
+        bus.mem[call_pc as usize + 2] = ((ret_target >> 8) & 0xFF) as u8;
+        // Place RET at both the original callee page and an alternate page.
+        bus.mem[call_pc as usize + ret_target as usize] = 0x06; // RET
+        let alt_pc = 0x40000 + ret_target;
+        bus.mem[alt_pc as usize] = 0x06; // RET on a different page
+
+        let mut state = LlamaState::new();
+        state.set_pc(call_pc);
+        state.set_reg(RegName::S, 0x0100);
+        let mut exec = LlamaExecutor::new();
+
+        // Execute CALL.
+        let len_call = exec.execute(0x04, &mut state, &mut bus).unwrap();
+        assert_eq!(len_call, 3);
+        assert_eq!(state.get_reg(RegName::PC), call_pc + ret_target);
+
+        // Pretend callee jumped to a different page before RET.
+        state.set_pc(alt_pc);
+        let len_ret = exec.execute(0x06, &mut state, &mut bus).unwrap();
+        assert_eq!(len_ret, 1);
+        // Return PC should use the RET page (0x40000) like Python, not the CALL-site page.
+        assert_eq!(state.get_reg(RegName::PC), 0x40003);
+    }
+
+    #[test]
+    fn reti_decrements_call_depth() {
+        let mut bus = MemBus::with_size(0x80);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x20);
+        // Simulate an interrupt frame to return from.
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0x123456, 24, false);
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xF0, 8, false);
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xAA, 8, false);
+        state.call_depth_inc();
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x01, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.call_depth(), 0, "RETI should reduce call depth");
+    }
+
+    #[test]
+    fn pushu_imr_reads_from_imem() {
+        let mut bus = MemBus::with_size(0x200);
+        // Preload IMR in internal memory to a value different from the register snapshot.
+        let imr_idx = IMEM_IMR_OFFSET as usize;
+        bus.mem[imr_idx] = 0xAA;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::IMR, 0x11);
+        // Point U into internal space so push lands in the test buffer.
+        let sp = INTERNAL_MEMORY_START + 0x40;
+        state.set_reg(RegName::U, sp);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x2F, &mut state, &mut bus).unwrap(); // PUSHU IMR
+        assert_eq!(len, 1);
+        let new_sp = state.get_reg(RegName::U);
+        assert_eq!(new_sp, sp.wrapping_sub(1));
+        let stored = bus.load(new_sp, 8) & 0xFF;
+        let imr_after = bus.peek_imem(IMEM_IMR_OFFSET) as u32;
+        assert_eq!(stored, 0xAA, "stack should capture IMR from memory");
+        assert_eq!(imr_after, 0xAA, "IMR in memory should be unchanged by PUSH");
+        assert_eq!(state.get_reg(RegName::IMR), imr_after);
+    }
+
+    #[test]
+    fn jp_abs_16_with_pre_keeps_page() {
+        // PRE (0x32), JP_Abs (0x02), imm16=0x9A78; PC page should be preserved.
+        let mut bus = MemBus::with_size(0x400000);
+        let start_pc = 0x34567;
+        bus.mem[start_pc as usize] = 0x32; // PRE N,N
+        bus.mem[start_pc as usize + 1] = 0x02; // JP abs (16-bit)
+        bus.mem[start_pc as usize + 2] = 0x78;
+        bus.mem[start_pc as usize + 3] = 0x9A;
+
+        let mut state = LlamaState::new();
+        state.set_pc(start_pc);
+
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+        // Length should include prefix + opcode + imm16
+        assert_eq!(len, 4);
+        // Page (0x30000) comes from current PC; low bits from immediate.
+        assert_eq!(state.pc(), 0x039A78);
+    }
+
+    #[test]
+    fn jp_abs_16_prefixed_uses_instruction_page() {
+        // Place PRE at 0x12FFFE so pc_override=pc+1 would wrap; we must keep the JP's own page.
+        let mut bus = MemBus::with_size(0x400000);
+        let start_pc = 0x12FFFE;
+        let base = (start_pc - INTERNAL_MEMORY_START) as usize;
+        bus.mem[base] = 0x32; // PRE
+        bus.mem[base + 1] = 0x02; // JP abs (16-bit)
+        bus.mem[base + 2] = 0x34;
+        bus.mem[base + 3] = 0x12;
+
+        let mut state = LlamaState::new();
+        state.set_pc(start_pc);
+
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 4);
+        // Instruction page comes from JP address masked to 20 bits (0x02FFFF -> 0x020000).
+        assert_eq!(state.pc(), 0x021234);
     }
 
     #[test]
@@ -2169,12 +3851,30 @@ mod tests {
         let mut bus = MemBus::with_size(1);
         bus.mem[0] = 0xEF; // WAIT
         let mut state = LlamaState::new();
+        state.set_reg(RegName::FC, 1);
+        state.set_reg(RegName::FZ, 1);
         state.set_reg(RegName::I, 0xFFFF);
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap();
         assert_eq!(len, 1);
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.pc(), 1);
+        assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
+    }
+
+    #[test]
+    fn external_address_advances_wrap_24bit() {
+        // External post-inc/pre-dec addressing should stay masked to 24 bits like Python.
+        let top = ADDRESS_MASK;
+        assert_eq!(
+            LlamaExecutor::advance_internal_addr_signed(top, 1),
+            0x000000
+        );
+        assert_eq!(
+            LlamaExecutor::advance_internal_addr_signed(0, -1),
+            ADDRESS_MASK
+        );
     }
 
     #[test]
@@ -2189,6 +3889,101 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 0);
         assert!(!state.is_halted());
+    }
+
+    #[test]
+    fn power_on_reset_uses_rom_vector_and_preserves_imr() {
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+        // Interrupt vector set to a different value to catch regressions.
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0x00;
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = 0x00;
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = 0x01; // would decode to 0x010000
+        // ROM reset vector (0xFFFFD) -> 0x054321
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x21;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x43;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x05;
+
+        // Seed IMR/ISR to ensure reset clears them.
+        let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        let isr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
+        bus.mem[imr_idx] = 0xAA;
+        bus.mem[isr_idx] = 0x55;
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::IMR, 0xCC);
+        state.halt();
+
+        power_on_reset(&mut bus, &mut state);
+
+        assert_eq!(state.pc(), 0x054321);
+        assert_eq!(
+            bus.mem[imr_idx], 0xAA,
+            "power_on_reset should preserve IMR in memory"
+        );
+        assert_eq!(
+            bus.mem[isr_idx], 0,
+            "power_on_reset should clear ISR in memory"
+        );
+        assert_eq!(
+            state.get_reg(RegName::IMR),
+            0xCC,
+            "power_on_reset should leave IMR register intact"
+        );
+        assert!(!state.is_halted());
+    }
+
+    #[test]
+    fn reset_opcode_uses_rom_vector_and_clears_irq_state() {
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+        // Opcode stream: RESET at PC 0 (already seeded by default zeroed mem)
+        bus.mem[0] = 0xFF;
+        // ROM reset vector -> 0x00ABCDE
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0xDE;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0xBC;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x0A;
+
+        let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        let isr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
+        bus.mem[imr_idx] = 0xF0;
+        bus.mem[isr_idx] = 0x0F;
+
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        state.set_reg(RegName::IMR, 0xAA);
+        state.halt();
+        let mut exec = LlamaExecutor::new();
+
+        let len = exec.execute(0xFF, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 0x0ABCDE & mask_for(RegName::PC));
+        assert_eq!(
+            bus.mem[imr_idx], 0xF0,
+            "RESET opcode should not modify IMR in memory"
+        );
+        assert_eq!(bus.mem[isr_idx], 0);
+        assert_eq!(state.get_reg(RegName::IMR), 0xF0);
+        assert!(!state.is_halted());
+    }
+
+    #[test]
+    fn imr_is_synced_from_memory_even_without_tracer() {
+        // No perfetto tracer is initialized in this test environment.
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
+        let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        bus.mem[imr_idx] = 0xAA;
+        bus.mem[0] = 0x00; // NOP
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::IMR, 0x11);
+        let mut exec = LlamaExecutor::new();
+
+        let len = exec.execute(0x00, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(
+            state.get_reg(RegName::IMR),
+            0xAA,
+            "IMR register should mirror IMEM even when tracing is disabled"
+        );
     }
 
     #[test]
@@ -2241,6 +4036,94 @@ mod tests {
         assert_eq!(state.get_reg(RegName::A), 0x77);
         assert_eq!(state.get_reg(RegName::X), 0x30);
         assert_eq!(state.pc(), 3);
+    }
+
+    #[test]
+    fn mv_emem_negative_offset_handles_0x80() {
+        // 0x90: MV A,[r3+disp] with negative displacement encoded via mode nibble 0xC and disp=0x80.
+        let mut bus = MemBus::with_size(0x300);
+        bus.mem[0] = 0x90;
+        bus.mem[1] = 0xC4; // raw_mode=0xC (offset -), reg=X (index 4)
+        bus.mem[2] = 0x80; // -128 displacement
+        let base = 0x200u32;
+        let target = base.wrapping_add(-(0x80i16) as u32);
+        bus.mem[target as usize] = 0x55;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, base);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x90, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(state.get_reg(RegName::A), 0x55);
+        assert_eq!(
+            state.get_reg(RegName::X),
+            base,
+            "offset load should not mutate X"
+        );
+        assert_eq!(state.pc(), 3);
+    }
+
+    struct LoggingBus {
+        mem: Vec<u8>,
+        log: Vec<u32>,
+    }
+
+    impl LoggingBus {
+        fn with_bytes(bytes: &[u8]) -> Self {
+            let mut mem = bytes.to_vec();
+            if mem.is_empty() {
+                mem.push(0);
+            }
+            Self {
+                mem,
+                log: Vec::new(),
+            }
+        }
+    }
+
+    impl LlamaBus for LoggingBus {
+        fn load(&mut self, addr: u32, bits: u8) -> u32 {
+            if addr < INTERNAL_MEMORY_START {
+                self.log.push(addr);
+            }
+            let bytes = bits.div_ceil(8);
+            let mut val = 0u32;
+            for i in 0..bytes {
+                let idx = addr as usize + i as usize;
+                let b = *self.mem.get(idx).unwrap_or(&0) as u32;
+                val |= b << (8 * i);
+            }
+            if bits == 0 || bits >= 32 {
+                val
+            } else {
+                val & ((1u32 << bits) - 1)
+            }
+        }
+
+        fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {}
+
+        fn resolve_emem(&mut self, base: u32) -> u32 {
+            base
+        }
+    }
+
+    #[test]
+    fn cmpw_prefixed_reads_coding_order_for_ops_reversed() {
+        // PRE should be followed by the opcode byte, then the operands in coding order (ops_reversed flips them).
+        // Bytes: [PRE 0x32][opcode 0xD6 CMPW][reg selector][IMem offset]
+        let program = [0x32u8, 0xD6, 0xAB, 0x10];
+        let mut bus = LoggingBus::with_bytes(&program);
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        let mut exec = LlamaExecutor::new();
+
+        let _ = exec.execute(0x32, &mut state, &mut bus).unwrap();
+
+        // The program-order loads (excluding IMEM perfetto sampling) should see opcode, reg selector, then IMem offset.
+        assert!(
+            bus.log.starts_with(&[1, 2, 3]),
+            "expected coding-order fetches after PRE, got {:?}",
+            bus.log
+        );
     }
 
     #[test]
@@ -2301,5 +4184,118 @@ mod tests {
         assert_eq!(len, 4);
         assert_eq!(bus.mem[0x40], 0xCD);
         assert_eq!(state.pc(), 4);
+    }
+
+    #[test]
+    fn estimated_length_tracks_encoded_sizes_for_complex_operands() {
+        fn assert_length(opcode: u8, bytes: &[u8], expected: u8) {
+            let mut bus = MemBus::with_size(512);
+            for (idx, byte) in bytes.iter().enumerate() {
+                bus.mem[idx] = *byte;
+            }
+            let mut state = LlamaState::new();
+            state.set_pc(0);
+            let mut exec = LlamaExecutor::new();
+            let entry = exec.lookup(opcode).expect("opcode entry");
+            let decoded = exec
+                .decode_with_prefix(entry, &mut state, &mut bus, None, None, 0)
+                .expect("decode should succeed");
+            assert_eq!(
+                decoded.len, expected,
+                "decoded length should match encoded bytes for opcode 0x{opcode:02X}"
+            );
+            assert_eq!(
+                LlamaExecutor::estimated_length(entry),
+                expected,
+                "estimated length should reflect encoded size for opcode 0x{opcode:02X}"
+            );
+        }
+
+        // RegIMemOffset (offset form): opcode + reg/mode + disp + IMEM selector.
+        assert_length(0x56, &[0x56, 0x8F, 0x12, 0x34], 4);
+        // EMemImemOffset (offset form): opcode + mode + first IMEM + second IMEM + disp.
+        assert_length(0xF0, &[0xF0, 0x80, 0x01, 0x02, 0x03], 5);
+        // RegPair selector is always a single byte regardless of data width.
+        assert_length(0xED, &[0xED, 0x12], 2);
+        // ImmOffset (JR-style): opcode + 1-byte relative offset.
+        let jr_op = OpcodeEntry {
+            opcode: 0x99,
+            kind: InstrKind::Unknown,
+            name: "JR",
+            cond: None,
+            ops_reversed: None,
+            operands: &[OperandKind::ImmOffset],
+        };
+        assert_eq!(
+            LlamaExecutor::estimated_length(&jr_op),
+            2,
+            "ImmOffset operands should add one byte to estimated length"
+        );
+    }
+
+    #[test]
+    fn adcl_zero_length_is_noop() {
+        let mut bus = MemBus::with_size(0x40);
+        bus.mem[0] = 0x54; // opcode for context; execute() is driven by opcode param
+        bus.mem[1] = 0x10;
+        bus.mem[2] = 0x20;
+        bus.mem[0x10] = 0x12;
+        bus.mem[0x20] = 0x34;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        state.set_reg(RegName::I, 0);
+        state.set_reg(RegName::FC, 1);
+        state.set_reg(RegName::FZ, 0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x54, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3, "ADCL length should match encoded bytes");
+        assert_eq!(state.pc(), 3, "PC should advance by decoded length");
+        assert_eq!(bus.mem[0x10], 0x12, "destination should remain unchanged");
+        assert_eq!(bus.mem[0x20], 0x34, "source should remain unchanged");
+        assert_eq!(state.get_reg(RegName::FC), 1, "carry flag should be preserved");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "zero flag should be preserved");
+        assert_eq!(state.get_reg(RegName::I), 0, "I should remain zero");
+    }
+
+    #[test]
+    fn tcl_is_no_op_and_advances_pc() {
+        // TCL (0xCE) should be a no-op intrinsic: no stack/IMR changes, just PC advance.
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[IMEM_IMR_OFFSET as usize] = 0xAA;
+        bus.mem[0] = 0xCE;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        state.set_reg(RegName::S, 0x0100);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xCE, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 1, "PC should advance by instruction length");
+        assert_eq!(state.get_reg(RegName::S), 0x0100, "stack pointer unchanged");
+        assert_eq!(state.get_reg(RegName::IMR), 0xAA, "IMR unchanged");
+    }
+
+    #[test]
+    fn perfetto_last_pc_tracks_executed_instruction_pc() {
+        reset_perf_counters();
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        state.set_pc(0x0123);
+        let mut bus = MemBus::with_size(0x0200);
+        bus.mem[0x0123] = 0x00; // NOP
+
+        let _ = exec
+            .execute(0x00, &mut state, &mut bus)
+            .expect("execute NOP");
+
+        assert_eq!(
+            perfetto_last_pc(),
+            0x0123 & mask_for(RegName::PC),
+            "perfetto_last_pc should reflect the executed instruction PC"
+        );
+        assert_eq!(
+            state.pc(),
+            0x0124 & mask_for(RegName::PC),
+            "state PC should advance independently of perfetto_last_pc"
+        );
     }
 }

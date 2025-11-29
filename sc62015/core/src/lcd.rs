@@ -1,5 +1,11 @@
+// PY_SOURCE: pce500/display/hd61202.py:HD61202
+// PY_SOURCE: pce500/display/controller_wrapper.py:HD61202Controller
+
+use crate::{
+    llama::eval::{perfetto_instr_context, perfetto_last_pc},
+    PERFETTO_TRACER,
+};
 use serde_json::{json, Value};
-use std::env;
 
 const LCD_WIDTH: usize = 64;
 const LCD_PAGES: usize = 8;
@@ -18,12 +24,19 @@ pub const LCD_DISPLAY_COLS: usize = 240;
 const LCD_ADDR_HI_LEFT: u32 = 0x0A000;
 const LCD_ADDR_HI_RIGHT: u32 = 0x02000;
 
+/// Map an internal LCD overlay offset (0x00-0x0F) to the standard controller address space.
+/// Parity: Python exposes the controller via an IMEM remap; treat it like the 0x2000 mirror.
+pub fn overlay_addr(offset: u32) -> u32 {
+    LCD_ADDR_HI_RIGHT + (offset & 0x0FFF)
+}
+
 #[derive(Clone, Copy, Default)]
 struct Hd61202State {
     on: bool,
     start_line: u8,
     page: u8,
     y_address: u8,
+    busy: bool,
 }
 
 struct Hd61202Chip {
@@ -49,6 +62,7 @@ impl Default for Hd61202Chip {
 impl Hd61202Chip {
     fn write_instruction(&mut self, instr: LcdInstruction, data: u8) {
         self.instruction_count = self.instruction_count.wrapping_add(1);
+        self.state.busy = true;
         match instr {
             LcdInstruction::OnOff => {
                 self.state.on = (data & 1) != 0;
@@ -71,11 +85,15 @@ impl Hd61202Chip {
         let y = (self.state.y_address as usize) % LCD_WIDTH;
         self.vram[page][y] = data;
         self.state.y_address = ((self.state.y_address as usize + 1) % LCD_WIDTH) as u8;
+        self.state.busy = true;
     }
 
     #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
-        0xFF
+        // Python HD61202 always reports ready; only ON flag is surfaced.
+        let on = if self.state.on { 0x40 } else { 0x00 };
+        self.state.busy = false;
+        on
     }
 
     #[allow(dead_code)]
@@ -128,10 +146,11 @@ struct LcdCommand {
 
 fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite)> {
     let addr_hi = address & 0x0F000;
+    // Parity: tolerate accesses anywhere in the mirrored window by folding to the low nibble.
+    let addr_lo = address & 0x000F;
     if addr_hi != LCD_ADDR_HI_LEFT && addr_hi != LCD_ADDR_HI_RIGHT {
         return None;
     }
-    let addr_lo = address & 0x0FFF;
     let rw = if (addr_lo & 1) == 0 {
         ReadWrite::Write
     } else {
@@ -153,11 +172,7 @@ fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite
 }
 
 fn parse_command(address: u32, value: u8) -> Option<LcdCommand> {
-    let (cs, di, rw) = decode_access(address)?;
-    if rw != ReadWrite::Write {
-        return None;
-    }
-
+    let (cs, di, _rw) = decode_access(address)?;
     let kind = if di == DataInstruction::Instruction {
         let instr = match value >> 6 {
             0b00 => LcdInstruction::OnOff,
@@ -185,6 +200,7 @@ pub struct LcdController {
     cs_both_count: u32,
     cs_left_count: u32,
     cs_right_count: u32,
+    last_status: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -204,6 +220,7 @@ impl LcdController {
             cs_both_count: 0,
             cs_left_count: 0,
             cs_right_count: 0,
+            last_status: None,
         }
     }
 
@@ -212,6 +229,7 @@ impl LcdController {
         self.cs_both_count = 0;
         self.cs_left_count = 0;
         self.cs_right_count = 0;
+        self.last_status = None;
     }
 
     fn chip_indices(cs: ChipSelect) -> &'static [usize] {
@@ -224,14 +242,14 @@ impl LcdController {
 
     pub fn handles(&self, address: u32) -> bool {
         let addr = address & 0x00FF_FFFF;
-        (0x0000_2000..=0x0000_200F).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
+        (0x0000_2000..=0x0000_2FFF).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
     }
 
     pub fn write(&mut self, address: u32, value: u8) {
         if let Some(command) = parse_command(address, value) {
-            if env::var("RUST_LCD_DEBUG").is_ok() {
-                println!("[rust-lcd-device] addr=0x{address:05X} value=0x{value:02X}");
-            }
+            let ctx = perfetto_instr_context();
+            let op_index = ctx.map(|(idx, _)| idx);
+            let pc = ctx.map(|(_, pc)| pc).or(Some(perfetto_last_pc()));
             match command.cs {
                 ChipSelect::Both => self.cs_both_count = self.cs_both_count.wrapping_add(1),
                 ChipSelect::Left => self.cs_left_count = self.cs_left_count.wrapping_add(1),
@@ -240,11 +258,60 @@ impl LcdController {
             for idx in Self::chip_indices(command.cs) {
                 let chip = &mut self.chips[*idx];
                 match command.kind {
-                    CommandKind::Instruction(instr, data) => chip.write_instruction(instr, data),
-                    CommandKind::Data(data) => chip.write_data(data),
+                    CommandKind::Instruction(instr, data) => {
+                        let column_snapshot = chip.state.y_address;
+                        chip.write_instruction(instr, data);
+                        let name = match instr {
+                            LcdInstruction::OnOff => "LCD_ON_OFF",
+                            LcdInstruction::StartLine => "LCD_START_LINE",
+                            LcdInstruction::SetPage => "LCD_SET_PAGE",
+                            LcdInstruction::SetYAddress => "LCD_SET_Y_ADDRESS",
+                        };
+                        let mut guard = PERFETTO_TRACER.enter();
+                        if let Some(tracer) = guard.as_mut() {
+                            tracer.record_lcd_event(
+                                name,
+                                address & 0x00FF_FFFF,
+                                data,
+                                *idx,
+                                chip.state.page,
+                                column_snapshot,
+                                pc,
+                                op_index,
+                            );
+                        }
+                    }
+                    CommandKind::Data(data) => {
+                        let page_before = chip.state.page;
+                        let column_before = chip.state.y_address;
+                        chip.write_data(data);
+                        let column = (column_before as usize % LCD_WIDTH) as u8;
+                        let mut guard = PERFETTO_TRACER.enter();
+                        if let Some(tracer) = guard.as_mut() {
+                            tracer.record_lcd_event(
+                                "VRAM_Write",
+                                address & 0x00FF_FFFF,
+                                data,
+                                *idx,
+                                page_before,
+                                column,
+                                pc,
+                                op_index,
+                            );
+                        }
+                    }
                 }
             }
         }
+    }
+
+    pub fn read(&mut self, address: u32) -> Option<u8> {
+        let (_cs, _di, rw) = decode_access(address)?;
+        if rw != ReadWrite::Read {
+            return None;
+        }
+        // Parity: Python controller wrapper always returns 0xFF and does not update counters/state.
+        Some(0xFF)
     }
 
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
@@ -349,20 +416,11 @@ impl LcdController {
         Ok(())
     }
 
-    pub fn read(&self, address: u32) -> u32 {
-        if let Some((cs, di, rw)) = decode_access(address) {
+    pub fn read_placeholder(&self, address: u32) -> u32 {
+        if let Some((_cs, _di, rw)) = decode_access(address) {
             if rw == ReadWrite::Read {
-                return match di {
-                    DataInstruction::Instruction => 0xFF,
-                    DataInstruction::Data => {
-                        let target = match cs {
-                            ChipSelect::Left => 0,
-                            ChipSelect::Right => 1,
-                            ChipSelect::Both => 0,
-                        };
-                        self.chips[target].state.y_address as u32
-                    }
-                };
+                // Mirror Python wrapper: reads are not emulated; always return 0xFF.
+                return 0xFF;
             }
         }
         0
@@ -375,16 +433,10 @@ impl LcdController {
         let mut buffer = [[0u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
         let left = &self.chips[0];
         let right = &self.chips[1];
-        if right.state.on {
-            copy_region(&mut buffer, right, 0, 0..64, 0, false);
-        }
-        if left.state.on {
-            copy_region(&mut buffer, left, 0, 0..56, 64, false);
-            copy_region(&mut buffer, left, 4, 0..56, 120, true);
-        }
-        if right.state.on {
-            copy_region(&mut buffer, right, 4, 0..64, 176, true);
-        }
+        copy_region(&mut buffer, right, 0, 0..64, 0, false);
+        copy_region(&mut buffer, left, 0, 0..56, 64, false);
+        copy_region(&mut buffer, left, 4, 0..56, 120, true);
+        copy_region(&mut buffer, right, 4, 0..64, 176, true);
         buffer
     }
 
@@ -436,10 +488,81 @@ impl Default for LcdController {
 }
 
 fn pixel_on(byte: u8, bit: usize) -> u8 {
-    // Match Python helper: return 1 for lit pixels, 0 for off.
-    if ((byte >> bit) & 1) == 0 {
-        1
-    } else {
-        0
+    // Match Python helper: pixels are lit when the stored bit is 0.
+    if ((byte >> bit) & 1) == 0 { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_read_returns_on_flag_and_clears_busy() {
+        let mut chip = Hd61202Chip::default();
+        chip.state.on = true;
+        chip.state.busy = true;
+        let status = chip.read_status();
+        assert_eq!(status & 0x40, 0x40);
+        assert!(!chip.state.busy);
+    }
+
+    #[test]
+    fn status_read_when_off_reports_ready_zero() {
+        let mut chip = Hd61202Chip::default();
+        chip.state.on = false;
+        chip.state.busy = true;
+        let status = chip.read_status();
+        assert_eq!(status, 0x00);
+        assert!(!chip.state.busy);
+    }
+
+    #[test]
+    fn data_read_advances_y_address() {
+        let mut chip = Hd61202Chip::default();
+        chip.state.page = 0;
+        chip.state.y_address = 0;
+        chip.vram[0][0] = 0xAA;
+        chip.vram[0][1] = 0xBB;
+        let first = chip.read_data();
+        let second = chip.read_data();
+        assert_eq!(first, 0xAA);
+        assert_eq!(second, 0xBB);
+        assert_eq!(chip.state.y_address, 2);
+    }
+
+    #[test]
+    fn pixel_on_matches_python_polarity() {
+        // Parity with Python: cleared bits are lit, set bits are off.
+        assert_eq!(super::pixel_on(0b0000_0001, 0), 0);
+        assert_eq!(super::pixel_on(0b0000_0000, 0), 1);
+        assert_eq!(super::pixel_on(0b1000_0000, 7), 0);
+        assert_eq!(super::pixel_on(0b0111_1111, 7), 1);
+    }
+
+    #[test]
+    fn handles_mirrors_match_python() {
+        let mut lcd = LcdController::new();
+        assert!(lcd.handles(0x2000));
+        assert!(lcd.handles(0x200F));
+        assert!(lcd.handles(0x2010), "low mirror spans 0x2000-0x2FFF like Python");
+        assert!(lcd.handles(0xA000));
+        assert!(lcd.handles(0xAFFF));
+
+        // Write ON instruction to right chip via the high mirror (CS=Right).
+        lcd.write(0xA004, 0x3F);
+        assert!(lcd.chips[1].state.on);
+    }
+
+    #[test]
+    fn high_offset_addresses_map_to_low_nibble() {
+        // Addresses like 0x2100 should decode the same as 0x2000 mirror.
+        let mut lcd = LcdController::new();
+        // Set Y address to 0 via high offset instruction address (bit1=0 => instruction).
+        lcd.write(0x2100, 0x40); // SetYAddress=0
+        // Write data using high offset data address (bit1=1).
+        lcd.write(0x2102, 0xAA);
+        // Verify write landed in VRAM for both chips at y=0 page 0.
+        assert_eq!(lcd.chips[0].vram[0][0], 0xAA);
+        assert_eq!(lcd.chips[1].vram[0][0], 0xAA);
     }
 }

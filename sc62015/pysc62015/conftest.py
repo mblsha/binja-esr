@@ -6,7 +6,13 @@ from typing import List
 
 import pytest
 
-from sc62015.pysc62015 import available_backends
+try:
+    from sc62015.pysc62015 import available_backends
+
+    _IMPORT_ERROR = None
+except Exception as exc:  # pragma: no cover - handles optional deps (binja_test_mocks)
+    available_backends = lambda: ()
+    _IMPORT_ERROR = exc
 
 _VALID_BACKENDS = {"python", "llama"}
 
@@ -39,6 +45,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.fixture(scope="session")
 def available_cpu_backends() -> tuple[str, ...]:
+    if _IMPORT_ERROR is not None:
+        pytest.skip(f"SC62015 backends unavailable: {_IMPORT_ERROR}")
     return available_backends()
 
 
@@ -52,6 +60,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 def cpu_backend(
     request: pytest.FixtureRequest, available_cpu_backends: tuple[str, ...]
 ) -> str:
+    if _IMPORT_ERROR is not None:
+        pytest.skip(f"SC62015 backends unavailable: {_IMPORT_ERROR}")
     backend = request.param
     if backend not in available_cpu_backends:
         pytest.skip(f"CPU backend '{backend}' not available in this runtime")
