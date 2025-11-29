@@ -1781,12 +1781,6 @@ impl LlamaExecutor {
                         imr_restored = imr_restored,
                     );
                 }
-                // Python RETI writes IMR back into IMEM for parity/traces.
-                bus.store(
-                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
-                    8,
-                    imr_restored & 0xFF,
-                );
                 Ok(1 + prefix_len)
             }
             InstrKind::PushU | InstrKind::PushS => {
