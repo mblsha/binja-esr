@@ -350,19 +350,10 @@ impl LcdController {
     }
 
     pub fn read(&self, address: u32) -> u32 {
-        if let Some((cs, di, rw)) = decode_access(address) {
+        if let Some((_cs, _di, rw)) = decode_access(address) {
             if rw == ReadWrite::Read {
-                return match di {
-                    DataInstruction::Instruction => 0xFF,
-                    DataInstruction::Data => {
-                        let target = match cs {
-                            ChipSelect::Left => 0,
-                            ChipSelect::Right => 1,
-                            ChipSelect::Both => 0,
-                        };
-                        self.chips[target].state.y_address as u32
-                    }
-                };
+                // Mirror Python wrapper: reads are not emulated; always return 0xFF.
+                return 0xFF;
             }
         }
         0

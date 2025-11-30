@@ -232,16 +232,26 @@ impl MemoryImage {
     }
 
     pub fn is_internal(address: u32) -> bool {
-        // Parity: internal space is only mapped at 0x100000+, no low aliasing.
-        address >= INTERNAL_MEMORY_START && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
+        let is_main = address >= INTERNAL_MEMORY_START
+            && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32;
+        let is_alias = address >= (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32)
+            && address < EXTERNAL_SPACE as u32;
+        is_main || is_alias
     }
 
     pub fn internal_index(address: u32) -> Option<usize> {
-        if Self::is_internal(address) {
-            Some((address - INTERNAL_MEMORY_START) as usize)
-        } else {
-            None
+        if address >= INTERNAL_MEMORY_START
+            && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
+        {
+            return Some((address - INTERNAL_MEMORY_START) as usize);
         }
+        if address >= (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32)
+            && address < EXTERNAL_SPACE as u32
+        {
+            let offset = address - (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32);
+            return Some(offset as usize);
+        }
+        None
     }
 
     pub fn internal_offset(address: u32) -> Option<u32> {

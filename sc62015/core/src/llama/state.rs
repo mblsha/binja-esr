@@ -56,8 +56,9 @@ impl LlamaState {
                 self.regs.insert(RegName::I, masked);
             }
             RegName::IL => {
-                // IL writes clear the high byte, matching the Python emulator semantics.
-                self.regs.insert(RegName::I, masked & 0xFF);
+                // Preserve IH; only replace the low byte for parity with Python registers.
+                let high = self.get_reg(RegName::I) & 0xFF00;
+                self.regs.insert(RegName::I, high | (masked & 0xFF));
             }
             RegName::IH => {
                 let low = self.get_reg(RegName::IL);

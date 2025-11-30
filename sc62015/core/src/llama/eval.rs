@@ -397,7 +397,9 @@ impl LlamaExecutor {
     }
 
     fn bcd_add_byte(a: u8, b: u8, carry_in: bool) -> (u8, bool) {
-        let mut low_sum = (a & 0x0F).wrapping_add(b & 0x0F).wrapping_add(carry_in as u8);
+        let mut low_sum = (a & 0x0F)
+            .wrapping_add(b & 0x0F)
+            .wrapping_add(carry_in as u8);
         let low_adjust = if low_sum > 9 { 6 } else { 0 };
         low_sum = low_sum.wrapping_add(low_adjust);
         let carry_to_high = (low_sum & 0x10) != 0;
@@ -938,12 +940,11 @@ impl LlamaExecutor {
                 let mut dst_addr = mem_dst.addr;
                 let mut src_addr = mem_src.addr;
                 let wrap_internal = matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld);
-                let dst_wrap = wrap_internal
-                    && mem_dst.bits == 8
-                    && Self::is_internal_addr(mem_dst.addr);
-                let src_wrap = wrap_internal
-                    && mem_src.bits == 8
-                    && Self::is_internal_addr(mem_src.addr);
+                let dst_wrap =
+                    wrap_internal && mem_dst.bits == 8 && Self::is_internal_addr(mem_dst.addr);
+                let src_wrap =
+                    wrap_internal && mem_src.bits == 8 && Self::is_internal_addr(mem_src.addr);
+                let is_decrement = entry.kind == InstrKind::Mvld;
                 let dst_step = mem_dst
                     .side_effect
                     .map(|(reg, new_val)| {
@@ -963,16 +964,23 @@ impl LlamaExecutor {
                 for _ in 0..length {
                     let val = bus.load(src_addr, mem_dst.bits);
                     bus.store(dst_addr, mem_dst.bits, val);
-                    src_addr = if src_wrap {
-                        Self::advance_internal_addr(src_addr, src_step)
-                    } else {
-                        src_addr.wrapping_add(src_step)
+                    let advance = |addr: u32, step: u32, wrap: bool| {
+                        if wrap {
+                            let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
+                            let next = if is_decrement {
+                                offset.wrapping_sub(step) & 0xFF
+                            } else {
+                                offset.wrapping_add(step) & 0xFF
+                            };
+                            INTERNAL_MEMORY_START + next
+                        } else if is_decrement {
+                            addr.wrapping_sub(step)
+                        } else {
+                            addr.wrapping_add(step)
+                        }
                     };
-                    dst_addr = if dst_wrap {
-                        Self::advance_internal_addr(dst_addr, dst_step)
-                    } else {
-                        dst_addr.wrapping_add(dst_step)
-                    };
+                    src_addr = advance(src_addr, src_step, src_wrap);
+                    dst_addr = advance(dst_addr, dst_step, dst_wrap);
                 }
             }
         }
@@ -1437,7 +1445,7 @@ impl LlamaExecutor {
                 }
                 Ok(len)
             }
-            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl
+            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl | InstrKind::Mvld
                 if entry.operands.len() == 1
                     && matches!(
                         entry.operands[0],
@@ -1597,7 +1605,11 @@ impl LlamaExecutor {
                 let zero_mask = Self::mask_for_width(mem_dst.bits);
                 state.set_reg(
                     RegName::FZ,
-                    if (overall_zero & zero_mask) == 0 { 1 } else { 0 },
+                    if (overall_zero & zero_mask) == 0 {
+                        1
+                    } else {
+                        0
+                    },
                 );
                 if executed || entry.kind == InstrKind::Dadl {
                     state.set_reg(RegName::FC, if carry { 1 } else { 0 });
@@ -1665,6 +1677,55 @@ impl LlamaExecutor {
                 }
                 Ok(decoded.len)
             }
+            InstrKind::Dsll | InstrKind::Dsrl => {
+                let decoded =
+                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+                let mem = decoded.mem.ok_or("missing mem operand")?;
+                if mem.bits != 8 {
+                    return Err("DSLL/DSRL only support byte operands");
+                }
+                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                let mut addr = mem.addr;
+                let is_left = entry.kind == InstrKind::Dsll;
+                let mut carry_nibble: u8 = 0;
+                let mut overall_zero: u8 = 0;
+                for _ in 0..length {
+                    let val = bus.load(addr, 8) as u8;
+                    let low = val & 0x0F;
+                    let high = (val >> 4) & 0x0F;
+                    let new_val = if is_left {
+                        let res = (low << 4) | carry_nibble;
+                        carry_nibble = low;
+                        res
+                    } else {
+                        let res = high | (carry_nibble << 4);
+                        carry_nibble = high;
+                        res
+                    };
+                    bus.store(addr, 8, new_val as u32);
+                    overall_zero |= new_val;
+                    if Self::is_internal_addr(addr) {
+                        let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
+                        let next = if is_left {
+                            offset.wrapping_sub(1) & 0xFF
+                        } else {
+                            offset.wrapping_add(1) & 0xFF
+                        };
+                        addr = INTERNAL_MEMORY_START + next;
+                    } else if is_left {
+                        addr = addr.wrapping_sub(1);
+                    } else {
+                        addr = addr.wrapping_add(1);
+                    }
+                }
+                state.set_reg(RegName::I, 0);
+                state.set_reg(RegName::FZ, if overall_zero == 0 { 1 } else { 0 });
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                Ok(decoded.len)
+            }
             InstrKind::Add
             | InstrKind::Sub
             | InstrKind::And
@@ -1716,7 +1777,7 @@ impl LlamaExecutor {
                     self.execute_reg_imm(entry, state, bus, pre, pc_override, prefix_len)
                 }
             }
-            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl => {
+            InstrKind::Mv | InstrKind::Mvw | InstrKind::Mvp | InstrKind::Mvl | InstrKind::Mvld => {
                 let saved_fc = state.get_reg(RegName::FC);
                 let len =
                     self.execute_mv_generic(entry, state, bus, pre, pc_override, prefix_len)?;

@@ -247,6 +247,7 @@ struct StandaloneBus {
     vec_patched: bool,
     perfetto: Option<IrqPerfetto>,
     last_irq_src: Option<String>,
+    active_irq_mask: u8,
 }
 
 impl StandaloneBus {
@@ -282,6 +283,7 @@ impl StandaloneBus {
             vec_patched: false,
             perfetto,
             last_irq_src: None,
+            active_irq_mask: 0,
         }
     }
 
@@ -584,16 +586,17 @@ impl StandaloneBus {
         state.set_pc(vec & ADDRESS_MASK);
         state.set_halted(false);
         self.in_interrupt = true;
-        let src = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
-            Some("KEY")
+        let (src, mask) = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+            (Some("KEY"), ISR_KEYI)
         } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
-            Some("MTI")
+            (Some("MTI"), ISR_MTI)
         } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
-            Some("STI")
+            (Some("STI"), ISR_STI)
         } else {
-            None
+            (None, 0)
         };
         self.last_irq_src = src.map(|s| s.to_string());
+        self.active_irq_mask = mask;
         let src_clone = self.last_irq_src.clone();
         self.log_irq_delivery(src_clone.as_deref(), vec, imr, isr, pc);
         self.log_irq_event(
@@ -1209,8 +1212,19 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             ),
                         ],
                     );
+                    // Clear the ISR bit that triggered this interrupt (parity with Python emulator).
+                    if bus.active_irq_mask != 0 {
+                        if let Some(cur_isr) = bus.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                            let new_isr = cur_isr & !bus.active_irq_mask;
+                            bus.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+                        }
+                        if bus.active_irq_mask == ISR_KEYI {
+                            bus.pending_kil = false;
+                        }
+                    }
                     bus.in_interrupt = false;
                     bus.last_irq_src = None;
+                    bus.active_irq_mask = 0;
                 }
                 if wait_cycles > 0 {
                     for _ in 0..wait_cycles {
