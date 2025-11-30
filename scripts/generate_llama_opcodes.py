@@ -9,7 +9,6 @@ detect drift. The script emits Rust `OpcodeEntry` initializers grouped by opcode
 from __future__ import annotations
 
 import importlib
-import inspect
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +21,36 @@ def _import_opcode_table():
     sys.path.insert(0, str(REPO_ROOT))
     mod = importlib.import_module("sc62015.pysc62015.instr.opcode_table")
     return mod
+
+
+def _width_bytes(obj: Any) -> int | None:
+    width = getattr(obj, "width_bits", None)
+    if width is not None:
+        # width_bits is expressed in bits; convert to bytes.
+        return int(width) // 8
+    width_attr = getattr(obj, "width", None)
+    if callable(width_attr):
+        try:
+            return int(width_attr())
+        except Exception:
+            pass
+    elif width_attr is not None:
+        return int(width_attr)
+    for attr in ["_width", "width_bytes"]:
+        val = getattr(obj, attr, None)
+        if val is not None:
+            return int(val)
+    return None
+
+
+def _width_bits(obj: Any, default: int = 8) -> int:
+    width = getattr(obj, "width_bits", None)
+    if width is not None:
+        return int(width)
+    width_bytes = _width_bytes(obj)
+    if width_bytes is not None:
+        return int(width_bytes) * 8
+    return default
 
 
 @dataclass
@@ -40,8 +69,8 @@ def _map_operand(op: Any) -> RustOperand:
     name = op.__class__.__name__
     if name == "Reg":
         reg = op.reg
-        width = getattr(op, "width_bits", None) or 8
-        return RustOperand("Reg", [f"RegName::{reg}", str(width)])
+        width_bits = _width_bits(op)
+        return RustOperand("Reg", [f"RegName::{reg}", str(width_bits)])
     if name == "RegIL":
         return RustOperand("RegIL", [])
     if name == "RegIMR":
@@ -69,15 +98,23 @@ def _map_operand(op: Any) -> RustOperand:
     if name == "IMemWidth":
         return RustOperand("IMemWidth", [str(getattr(op, "width_bytes", 0))])
     if name == "EMemAddr":
-        width_bits = getattr(op, "width_bits", None) or getattr(op, "_width", 0) * 8
-        return RustOperand("EMemAddr", [str(width_bits)])
+        width_bytes = _width_bytes(op)
+        if width_bytes is None:
+            raise ValueError("EMemAddr missing width")
+        return RustOperand("EMemAddrWidth", [str(width_bytes)])
     if name == "EMemAddrWidth":
         return RustOperand("EMemAddrWidth", [str(getattr(op, "width_bytes", 0))])
     if name == "EMemAddrWidthOp":
         return RustOperand("EMemAddrWidthOp", [str(getattr(op, "width_bytes", 0))])
     if name == "EMemReg":
-        width_bits = getattr(op, "width_bits", None) or getattr(op, "width", 0) * 8
-        return RustOperand("EMemReg", [str(width_bits)])
+        width_bytes = _width_bytes(op)
+        if width_bytes is None:
+            raise ValueError("EMemReg missing width")
+        allowed_modes = getattr(op, "allowed_modes", None) or []
+        allowed = {getattr(m, "name", m) for m in allowed_modes}
+        if allowed == {"POST_INC", "PRE_DEC"}:
+            return RustOperand("EMemRegModePostPre", [])
+        return RustOperand("EMemRegWidth", [str(width_bytes)])
     if name == "EMemRegMode":
         return RustOperand("EMemRegModePostPre", [])
     if name == "EMemRegWidth":
@@ -85,8 +122,10 @@ def _map_operand(op: Any) -> RustOperand:
     if name == "EMemRegWidthMode":
         return RustOperand("EMemRegWidthMode", [str(getattr(op, "width_bytes", 0))])
     if name == "EMemIMem":
-        width_bits = getattr(op, "width_bits", None) or getattr(op, "_width", 0) * 8
-        return RustOperand("EMemIMem", [str(width_bits)])
+        width_bytes = _width_bytes(op)
+        if width_bytes is None:
+            raise ValueError("EMemIMem missing width")
+        return RustOperand("EMemIMemWidth", [str(width_bytes)])
     if name == "EMemIMemWidth":
         return RustOperand("EMemIMemWidth", [str(getattr(op, "width_bytes", 0))])
     if name == "RegIMemOffset":
