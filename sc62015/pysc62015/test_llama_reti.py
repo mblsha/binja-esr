@@ -15,7 +15,9 @@ class MemoryWithRaw(Memory):
     _raw: bytearray
 
 
-def _make_memory(imr: int, f: int, ret_bytes: tuple[int, int, int], sp: int) -> MemoryWithRaw:
+def _make_memory(
+    imr: int, f: int, ret_bytes: tuple[int, int, int], sp: int
+) -> MemoryWithRaw:
     raw = bytearray(ADDRESS_SPACE_SIZE)
     raw[0] = 0x01  # RETI opcode
     raw[sp] = imr & 0xFF
