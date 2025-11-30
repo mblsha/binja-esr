@@ -132,7 +132,7 @@ pub struct OpcodeEntry {
 
 /// Synced from sc62015/pysc62015/instr/opcode_table.py via
 /// `uv run python scripts/generate_llama_opcodes.py`.
-pub static OPCODES: &[OpcodeEntry] = &[
+pub static OPCODES: [OpcodeEntry; 256] = [
     OpcodeEntry {
         opcode: 0x00,
         kind: InstrKind::Nop,

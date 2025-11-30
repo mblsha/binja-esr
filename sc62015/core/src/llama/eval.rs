@@ -1498,9 +1498,8 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
+                // WAIT is an idle loop that drains I to zero; Python fast-path sets I:=0 and advances PC.
                 state.set_reg(RegName::I, 0);
-                state.set_reg(RegName::FC, 0);
-                state.set_reg(RegName::FZ, 0);
                 // Do not auto-halt; let the host decide when to block.
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
@@ -1888,19 +1887,8 @@ impl LlamaExecutor {
                 power_on_reset(bus, state);
                 Ok(1 + prefix_len)
             }
-            InstrKind::Pre | InstrKind::Unknown => {
-                let len = prefix_len
-                    + if entry.kind == InstrKind::Pre {
-                        1
-                    } else {
-                        Self::estimated_length(entry)
-                    };
-                let start_pc = state.pc();
-                if state.pc() == start_pc {
-                    state.set_pc(start_pc.wrapping_add(len as u32));
-                }
-                Ok(len)
-            }
+            InstrKind::Pre => unreachable!("PRE should be handled before dispatch"),
+            InstrKind::Unknown => Err("unknown opcode"),
             InstrKind::Sc => {
                 state.set_reg(RegName::FC, 1);
                 let len = prefix_len + Self::estimated_length(entry);
@@ -2363,6 +2351,7 @@ impl Default for LlamaExecutor {
 mod tests {
     use super::*;
     use crate::llama::opcodes::OPCODES;
+    use std::collections::HashSet;
 
     struct NullBus;
     impl LlamaBus for NullBus {
@@ -2373,9 +2362,44 @@ mod tests {
 
     #[test]
     fn opcode_table_has_coverage() {
-        assert!(OPCODES.len() > 200);
-        assert!(OPCODES.iter().any(|e| e.opcode == 0x00));
-        assert!(OPCODES.iter().any(|e| e.opcode == 0xFF));
+        assert_eq!(OPCODES.len(), 256, "expected dense opcode table");
+        let mut seen = HashSet::new();
+        for entry in OPCODES {
+            assert!(seen.insert(entry.opcode), "duplicate opcode 0x{:02X}", entry.opcode);
+        }
+        assert_eq!(OPCODES.first().map(|e| e.opcode), Some(0x00));
+        assert_eq!(OPCODES.last().map(|e| e.opcode), Some(0xFF));
+    }
+
+    #[test]
+    fn all_opcodes_execute_without_error() {
+        let mut exec = LlamaExecutor::new();
+        for entry in OPCODES {
+            if entry.kind == InstrKind::Unknown {
+                continue;
+            }
+            let mut state = LlamaState::new();
+            state.set_pc(0);
+            let mut bus = NullBus;
+            let res = exec.execute(entry.opcode, &mut state, &mut bus);
+            assert!(
+                res.is_ok(),
+                "opcode 0x{:02X} failed with {:?}",
+                entry.opcode,
+                res
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_opcodes_error() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = NullBus;
+        let res = exec.execute(0x20, &mut state, &mut bus);
+        assert!(res.is_err());
+        let res = exec.execute(0xBF, &mut state, &mut bus);
+        assert!(res.is_err());
     }
 
     #[test]
@@ -2383,9 +2407,16 @@ mod tests {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
+        state.set_reg(RegName::FC, 1);
+        state.set_reg(RegName::FZ, 1);
+        state.set_reg(RegName::I, 5);
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
+        assert_eq!(state.get_reg(RegName::I), 0);
+        // Flags unchanged by WAIT
+        assert_eq!(state.get_reg(RegName::FC), 1);
+        assert_eq!(state.get_reg(RegName::FZ), 1);
     }
 
     struct MemBus {

@@ -7,5 +7,8 @@
 use super::opcodes::{OpcodeEntry, OPCODES};
 
 pub fn lookup(opcode: u8) -> Option<&'static OpcodeEntry> {
-    OPCODES.iter().find(|entry| entry.opcode == opcode)
+    OPCODES.get(opcode as usize).map(|entry| {
+        debug_assert_eq!(entry.opcode, opcode);
+        entry
+    })
 }
