@@ -199,4 +199,34 @@ mod tests {
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01);
     }
+
+    #[test]
+    fn snapshot_absolute_targets_match_python_semantics() {
+        // Simulate a Python snapshot with absolute next_mti/next_sti values.
+        let mut timer = TimerContext::new(true, 20, 30);
+        timer.apply_snapshot_info(
+            &crate::TimerInfo {
+                enabled: true,
+                mti_period: 20,
+                sti_period: 30,
+                next_mti: 150,
+                next_sti: 200,
+            },
+            &InterruptInfo::default(),
+        );
+        let mut mem = MemoryImage::new();
+        let mut cycles = 100u64; // current cycle when snapshot applied
+
+        // Advance to just before first fire
+        while cycles < 149 {
+            timer.tick_timers(&mut mem, &mut cycles);
+            assert!(!timer.irq_pending);
+        }
+        // Fire MTI at cycle 150, then next target moves to 170.
+        timer.tick_timers(&mut mem, &mut cycles);
+        assert!(timer.irq_pending);
+        assert!(timer.next_mti > 150);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x01, 0x01);
+    }
 }
