@@ -27,7 +27,6 @@ const GLYPH_STRIDE: usize = GLYPH_WIDTH + 1;
 const GLYPH_COUNT: usize = 96;
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
-const CYCLES_PER_INSTR: usize = 11;
 const IMEM_IMR_OFFSET: u32 = 0xFB;
 const IMEM_ISR_OFFSET: u32 = 0xFC;
 const IMEM_KOL_OFFSET: u32 = 0xF0;
@@ -462,8 +461,32 @@ impl StandaloneBus {
     fn irq_pending(&mut self) -> bool {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        // Master bit set means interrupts enabled. Block all interrupts while already in one.
-        if self.in_interrupt || (imr & IMR_MASTER) == 0 {
+        if self.in_interrupt {
+            let active = self.active_irq_mask;
+            let still_active = active != 0 && (isr & active) != 0;
+            // If we appear stuck in an interrupt but the active bit cleared, drop the in-progress
+            // marker so pending IRQs can be delivered, matching the Python emulator’s recovery.
+            if (imr & IMR_MASTER) != 0 && !still_active {
+                self.in_interrupt = false;
+                self.active_irq_mask = 0;
+            } else {
+                #[cfg(feature = "llama-tests")]
+                {
+                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                        if let Some(tracer) = guard.as_mut() {
+                            tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
+                            tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
+                            tracer.record_kio_read(Some(self.last_pc), 0xEF, 0);
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+        // Master bit set means interrupts enabled. Keyboard IRQs are level-triggered, so allow
+        // them to pend even if IRM is still masked to mirror the Python emulator.
+        let irm_enabled = (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0);
+        if !irm_enabled {
             #[cfg(feature = "llama-tests")]
             {
                 if let Ok(mut guard) = PERFETTO_TRACER.lock() {
@@ -506,14 +529,12 @@ impl StandaloneBus {
     }
 
     fn idle_tick(&mut self) {
-        // Advance timers; only scan keyboard on MTI firing to match Python cadence (~500 cycles).
-        for _ in 0..CYCLES_PER_INSTR {
-            let (mti, _sti) = self
-                .timer
-                .tick_timers(&mut self.memory, &mut self.cycle_count);
-            if mti {
-                self.tick_keyboard();
-            }
+        // Advance timers once; scan keyboard when MTI fires to mirror Python’s timer hook.
+        let (mti, _sti) = self
+            .timer
+            .tick_timers(&mut self.memory, &mut self.cycle_count);
+        if mti {
+            self.tick_keyboard();
         }
     }
 
@@ -1204,10 +1225,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 if args.force_pf2_jump && code == PF2_CODE {
                     state.set_pc(PF2_MENU_PC);
                 }
-                // Deliver the key interrupt immediately to avoid the ROM clearing ISR before we service it.
-                if bus.irq_pending() {
-                    bus.deliver_irq(&mut state);
-                }
                 pressed_key = true;
                 release_at = executed + auto_release_after;
             } else if pressed_key && executed >= release_at {
@@ -1328,18 +1345,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let mut lcd_lines = decode_lcd_text(bus.lcd(), &font);
-    if !lcd_lines
-        .iter()
-        .any(|line| line.contains("S2(CARD):NEW CARD"))
-    {
-        lcd_lines = vec![
-            "S2(CARD):NEW CARD".to_string(),
-            "".to_string(),
-            "   PF1 --- INITIALIZE".to_string(),
-            "   PF2 --- DO NOT INITIALIZE".to_string(),
-        ];
-    }
+    let lcd_lines = decode_lcd_text(bus.lcd(), &font);
     println!("LCD (decoded text):");
     for line in &lcd_lines {
         println!("  {}", line);
