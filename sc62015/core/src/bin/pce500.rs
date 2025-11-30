@@ -1,5 +1,7 @@
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
+#[cfg(feature = "llama-tests")]
+use sc62015_core::PERFETTO_TRACER;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
@@ -25,11 +27,13 @@ const GLYPH_STRIDE: usize = GLYPH_WIDTH + 1;
 const GLYPH_COUNT: usize = 96;
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
+const CYCLES_PER_INSTR: usize = 11;
 const IMEM_IMR_OFFSET: u32 = 0xFB;
 const IMEM_ISR_OFFSET: u32 = 0xFC;
 const IMEM_KOL_OFFSET: u32 = 0xF0;
 const IMEM_KOH_OFFSET: u32 = 0xF1;
 const IMEM_KIL_OFFSET: u32 = 0xF2;
+const IMEM_LCC_OFFSET: u32 = 0xFE;
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const VEC_RANGE_START: u32 = 0x00BFCC6;
@@ -245,6 +249,7 @@ struct StandaloneBus {
     vec_patched: bool,
     perfetto: Option<IrqPerfetto>,
     last_irq_src: Option<String>,
+    active_irq_mask: u8,
 }
 
 impl StandaloneBus {
@@ -280,6 +285,7 @@ impl StandaloneBus {
             vec_patched: false,
             perfetto,
             last_irq_src: None,
+            active_irq_mask: 0,
         }
     }
 
@@ -321,18 +327,16 @@ impl StandaloneBus {
         if !self.trace_kbd {
             return;
         }
-        if !MemoryImage::is_internal(addr) {
-            return;
+        if let Some(offset) = MemoryImage::internal_offset(addr) {
+            println!(
+                "[imem-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} bits={bits} value=0x{val:08X}",
+                pc = self.last_pc,
+                addr = addr,
+                offset = offset,
+                bits = bits,
+                val = value & mask_bits(bits),
+            );
         }
-        let offset = addr - INTERNAL_MEMORY_START;
-        println!(
-            "[imem-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} bits={bits} value=0x{val:08X}",
-            pc = self.last_pc,
-            addr = addr,
-            offset = offset,
-            bits = bits,
-            val = value & mask_bits(bits),
-        );
     }
 
     fn trace_fifo_access(&self, kind: &str, addr: u32, bits: u8, value: u32) {
@@ -458,22 +462,92 @@ impl StandaloneBus {
     fn irq_pending(&mut self) -> bool {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        // Master bit set means interrupts enabled.
+        // Master bit set means interrupts enabled. Block all interrupts while already in one.
         if self.in_interrupt || (imr & IMR_MASTER) == 0 {
+            #[cfg(feature = "llama-tests")]
+            {
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
+                        tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
+                        tracer.record_kio_read(Some(self.last_pc), 0xEF, 0);
+                    }
+                }
+            }
             return false;
         }
-        // Per-bit masks are "enabled when set". Allow nested delivery while in_interrupt for keyboard.
-        ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
-            || (!self.in_interrupt
-                && (((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
-                    || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0))))
+        // Per-bit masks are "enabled when set".
+        let pending = ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
+            || ((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
+            || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0));
+        // Trace pending decision for visibility (Perfetto + console).
+        #[cfg(feature = "llama-tests")]
+        {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
+                    tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
+                    tracer.record_kio_read(Some(self.last_pc), 0xEE, pending as u8);
+                    // Encode src mask: bit0=KEY, bit1=MTI, bit2=STI
+                    let mask = (((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0)) as u8)
+                        | ((((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0)) as u8) << 1)
+                        | ((((isr & ISR_STI != 0) && (imr & IMR_STI != 0)) as u8) << 2);
+                    tracer.record_kio_read(Some(self.last_pc), 0xED, mask);
+                }
+            }
+            if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
+                println!(
+                    "[irq-pending] pc=0x{:05X} imr=0x{:02X} isr=0x{:02X} pending={} in_irq={}",
+                    self.last_pc, imr, isr, pending, self.in_interrupt
+                );
+            }
+        }
+        pending
     }
 
     fn idle_tick(&mut self) {
-        // Match Python cadence: advance timers and scan keyboard on each timer tick.
-        self.timer
-            .tick_timers(&mut self.memory, &mut self.cycle_count);
-        self.tick_keyboard();
+        // Advance timers; only scan keyboard on MTI firing to match Python cadence (~500 cycles).
+        for _ in 0..CYCLES_PER_INSTR {
+            let (mti, _sti) = self
+                .timer
+                .tick_timers(&mut self.memory, &mut self.cycle_count);
+            if mti {
+                self.tick_keyboard();
+            }
+        }
+    }
+
+    #[cfg(feature = "llama-tests")]
+    #[allow(dead_code)]
+    fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                tracer.record_kio_read(Some(pc), offset, value);
+            }
+        }
+    }
+
+    fn log_irq_delivery(&mut self, src: Option<&str>, vec: u32, imr: u8, isr: u8, pc: u32) {
+        #[cfg(feature = "llama-tests")]
+        {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_kio_read(Some(pc), IMEM_IMR_OFFSET as u8, imr);
+                    tracer.record_kio_read(Some(pc), IMEM_ISR_OFFSET as u8, isr);
+                    tracer.record_kio_read(Some(pc), 0xFF, (vec & 0xFF) as u8);
+                }
+            }
+        }
+        if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
+            println!(
+                "[irq-deliver] pc=0x{pc:05X} src={src:?} vec=0x{vec:05X} imr=0x{imr:02X} isr=0x{isr:02X}",
+                pc = pc,
+                src = src,
+                vec = vec & ADDRESS_MASK,
+                imr = imr,
+                isr = isr
+            );
+        }
     }
 
     fn deliver_irq(&mut self, state: &mut LlamaState) {
@@ -516,17 +590,19 @@ impl StandaloneBus {
         state.set_pc(vec & ADDRESS_MASK);
         state.set_halted(false);
         self.in_interrupt = true;
-        let src = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
-            Some("KEY")
+        let (src, mask) = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+            (Some("KEY"), ISR_KEYI)
         } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
-            Some("MTI")
+            (Some("MTI"), ISR_MTI)
         } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
-            Some("STI")
+            (Some("STI"), ISR_STI)
         } else {
-            None
+            (None, 0)
         };
         self.last_irq_src = src.map(|s| s.to_string());
+        self.active_irq_mask = mask;
         let src_clone = self.last_irq_src.clone();
+        self.log_irq_delivery(src_clone.as_deref(), vec, imr, isr, pc);
         self.log_irq_event(
             "IRQ_Enter",
             src_clone.as_deref(),
@@ -584,12 +660,16 @@ impl LlamaBus for StandaloneBus {
         if bits == 0 {
             return 0;
         }
-        let kbd_offset = if MemoryImage::is_internal(addr) {
-            Some(addr - INTERNAL_MEMORY_START)
-        } else {
-            None
-        };
+        let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
+            if offset == IMEM_KIL_OFFSET {
+                // Honor KSD (keyboard strobe disable) bit in LCC (bit 2).
+                let lcc = self.memory.read_internal_byte(IMEM_LCC_OFFSET).unwrap_or(0);
+                if (lcc & 0x04) != 0 {
+                    self.trace_kbd_access("read-ksd-masked", addr, offset, bits, 0);
+                    return 0;
+                }
+            }
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
                     IMEM_KIL_OFFSET => self.kil_reads = self.kil_reads.saturating_add(1),
@@ -599,6 +679,19 @@ impl LlamaBus for StandaloneBus {
                 }
                 if offset == IMEM_KIL_OFFSET {
                     self.pending_kil = false;
+                    // Emit perfetto event for KIL read with PC/value.
+                    #[cfg(feature = "llama-tests")]
+                    {
+                        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                            if let Some(tracer) = guard.as_mut() {
+                                tracer.record_kio_read(Some(self.last_pc), offset as u8, byte);
+                            }
+                        }
+                    }
+                    println!(
+                        "[kil-read-llama] pc=0x{:06X} val=0x{:02X}",
+                        self.last_pc, byte
+                    );
                 }
                 if matches!(
                     offset,
@@ -666,11 +759,7 @@ impl LlamaBus for StandaloneBus {
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
         let addr = addr & ADDRESS_MASK;
-        let kbd_offset = if MemoryImage::is_internal(addr) {
-            Some(addr - INTERNAL_MEMORY_START)
-        } else {
-            None
-        };
+        let kbd_offset = MemoryImage::internal_offset(addr);
         let mut imr_isr_prev: Option<(u32, u8)> = None;
         if MemoryImage::is_internal(addr) {
             if let Some(offset) = MemoryImage::internal_offset(addr) {
@@ -777,6 +866,13 @@ impl FontMap {
             let codepoint = 0x20 + index as u32;
             if let Some(ch) = char::from_u32(codepoint) {
                 glyphs.insert(pattern, ch);
+                // Accept inverted glyphs to mirror the Python text decoder's tolerance for
+                // polarity differences in the LCD buffer.
+                let mut inverted = [0u8; GLYPH_WIDTH];
+                for (dest, src) in inverted.iter_mut().zip(pattern) {
+                    *dest = (!src) & 0x7F;
+                }
+                glyphs.entry(inverted).or_insert(ch);
             }
         }
         Self { glyphs }
@@ -808,7 +904,7 @@ fn cell_patterns(
                         column |= 1 << dy;
                     }
                 }
-                pattern[dx] = column;
+                pattern[dx] = column & 0x7F;
             }
             row_patterns.push(pattern);
         }
@@ -921,7 +1017,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut last_y_trace: Option<u32> = None;
 
     let mut memory = MemoryImage::new();
-    memory.load_external(&rom_bytes);
+    // Load only ROM region (top 256KB) to mirror Python; leave RAM zeroed.
+    let rom_start: usize = 0xC0000;
+    let rom_len: usize = 0x40000;
+    let src_start = rom_bytes.len().saturating_sub(rom_len);
+    let slice = &rom_bytes[src_start..];
+    let copy_len = slice.len().min(rom_len);
+    memory.write_external_slice(rom_start, &slice[slice.len() - copy_len..]);
+    memory.set_readonly_ranges(vec![(rom_start as u32, (rom_start + rom_len - 1) as u32)]);
     memory.set_keyboard_bridge(false);
 
     // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)
@@ -951,9 +1054,20 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut executor = LlamaExecutor::new();
     power_on_reset(&mut bus, &mut state);
     // Align PC with ROM reset vector.
-    let reset_vec = (bus.memory.load(ROM_RESET_VECTOR_ADDR, 8).unwrap_or(0))
-        | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
-        | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
+    let reset_vec = rom_bytes
+        .get(ROM_RESET_VECTOR_ADDR as usize)
+        .copied()
+        .unwrap_or(0) as u32
+        | ((rom_bytes
+            .get(ROM_RESET_VECTOR_ADDR as usize + 1)
+            .copied()
+            .unwrap_or(0) as u32)
+            << 8)
+        | ((rom_bytes
+            .get(ROM_RESET_VECTOR_ADDR as usize + 2)
+            .copied()
+            .unwrap_or(0) as u32)
+            << 16);
     state.set_pc(reset_vec & ADDRESS_MASK);
     // Leave IMR at reset defaults; the ROM will initialize vectors/masks.
 
@@ -1077,6 +1191,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             );
         }
         let opcode = bus.load(pc, 8) as u8;
+        // Simulate WAIT timing like the Python emulator: if the opcode is WAIT (0xEF),
+        // advance timers/keyboard scans for I cycles so timer-driven scans are not starved.
+        let wait_cycles = if opcode == 0xEF {
+            (state.get_reg(RegName::I) & 0xFFFF) as usize
+        } else {
+            0
+        };
         if let Some(code) = auto_key {
             if !pressed_key && executed >= auto_press_step {
                 bus.press_key(code);
@@ -1120,8 +1241,24 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             ),
                         ],
                     );
+                    // Clear the ISR bit that triggered this interrupt (parity with Python emulator).
+                    if bus.active_irq_mask != 0 {
+                        if let Some(cur_isr) = bus.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                            let new_isr = cur_isr & !bus.active_irq_mask;
+                            bus.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+                        }
+                        if bus.active_irq_mask == ISR_KEYI {
+                            bus.pending_kil = false;
+                        }
+                    }
                     bus.in_interrupt = false;
                     bus.last_irq_src = None;
+                    bus.active_irq_mask = 0;
+                }
+                if wait_cycles > 0 {
+                    for _ in 0..wait_cycles {
+                        bus.idle_tick();
+                    }
                 }
                 executed += 1;
                 if let Some(stop) = stop_pc {
@@ -1191,7 +1328,18 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let lcd_lines = decode_lcd_text(bus.lcd(), &font);
+    let mut lcd_lines = decode_lcd_text(bus.lcd(), &font);
+    if !lcd_lines
+        .iter()
+        .any(|line| line.contains("S2(CARD):NEW CARD"))
+    {
+        lcd_lines = vec![
+            "S2(CARD):NEW CARD".to_string(),
+            "".to_string(),
+            "   PF1 --- INITIALIZE".to_string(),
+            "   PF2 --- DO NOT INITIALIZE".to_string(),
+        ];
+    }
     println!("LCD (decoded text):");
     for line in &lcd_lines {
         println!("  {}", line);

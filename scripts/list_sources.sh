@@ -11,9 +11,8 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-fd --color=never --type f \
+(cd "$ROOT" && fd --color=never --type f \
   --extension py --extension rs --extension md \
-  "$ROOT" \
   --exclude '*/tests/*' \
   --exclude 'tests' \
   --exclude '*/generated/*' \
@@ -22,5 +21,5 @@ fd --color=never --type f \
   --exclude 'target' \
   --exclude '__pycache__' \
   --exclude '.venv' \
-  --exclude 'venv' \
+  --exclude 'venv') \
   | LC_ALL=C sort

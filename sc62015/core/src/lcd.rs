@@ -350,19 +350,10 @@ impl LcdController {
     }
 
     pub fn read(&self, address: u32) -> u32 {
-        if let Some((cs, di, rw)) = decode_access(address) {
+        if let Some((_cs, _di, rw)) = decode_access(address) {
             if rw == ReadWrite::Read {
-                return match di {
-                    DataInstruction::Instruction => 0xFF,
-                    DataInstruction::Data => {
-                        let target = match cs {
-                            ChipSelect::Left => 0,
-                            ChipSelect::Right => 1,
-                            ChipSelect::Both => 0,
-                        };
-                        self.chips[target].state.y_address as u32
-                    }
-                };
+                // Mirror Python wrapper: reads are not emulated; always return 0xFF.
+                return 0xFF;
             }
         }
         0
@@ -375,16 +366,10 @@ impl LcdController {
         let mut buffer = [[0u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
         let left = &self.chips[0];
         let right = &self.chips[1];
-        if right.state.on {
-            copy_region(&mut buffer, right, 0, 0..64, 0, false);
-        }
-        if left.state.on {
-            copy_region(&mut buffer, left, 0, 0..56, 64, false);
-            copy_region(&mut buffer, left, 4, 0..56, 120, true);
-        }
-        if right.state.on {
-            copy_region(&mut buffer, right, 4, 0..64, 176, true);
-        }
+        copy_region(&mut buffer, right, 0, 0..64, 0, false);
+        copy_region(&mut buffer, left, 0, 0..56, 64, false);
+        copy_region(&mut buffer, left, 4, 0..56, 120, true);
+        copy_region(&mut buffer, right, 4, 0..64, 176, true);
         buffer
     }
 
