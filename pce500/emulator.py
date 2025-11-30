@@ -331,14 +331,9 @@ class PCE500Emulator:
         if enable_new_tracing:
             rust_trace_path = f"{rust_trace_path}.rust"
         self.perfetto_enabled = perfetto_trace
+        self._new_trace_enabled = perfetto_trace and enable_new_tracing
         if self.perfetto_enabled:
             trace_dispatcher.start_trace(trace_path)
-            if not new_tracer.enabled:
-                try:
-                    new_tracer.start(trace_path)
-                    self._new_trace_enabled = True
-                except Exception:
-                    pass
             self.lcd.set_perfetto_enabled(True)
             self.memory.set_perfetto_enabled(True)
             if getattr(self.cpu, "backend", None) == "llama":
@@ -350,7 +345,6 @@ class PCE500Emulator:
             trace_dispatcher.start_trace(trace_path)
 
         # New tracing system
-        self._new_trace_enabled = enable_new_tracing
         self._trace_path = trace_path
         self._rust_trace_path = rust_trace_path
         self._trace_instr_count = 0
@@ -358,7 +352,8 @@ class PCE500Emulator:
         self._trace_substep = 0
         self._active_trace_instruction: Optional[int] = None
         if self._new_trace_enabled:
-            new_tracer.start(self._trace_path)
+            if not new_tracer.enabled:
+                new_tracer.start(self._trace_path)
             new_tracer.set_manual_clock_mode(True, tick_ns=1)
             self.memory.set_perf_tracer(new_tracer)
             # Ensure the Rust LLAMA core writes into the same Perfetto trace file.
