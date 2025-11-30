@@ -462,7 +462,7 @@ impl StandaloneBus {
     fn irq_pending(&mut self) -> bool {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        // Master bit set means interrupts enabled.
+        // Master bit set means interrupts enabled. Block all interrupts while already in one.
         if self.in_interrupt || (imr & IMR_MASTER) == 0 {
             #[cfg(feature = "llama-tests")]
             {
@@ -476,11 +476,10 @@ impl StandaloneBus {
             }
             return false;
         }
-        // Per-bit masks are "enabled when set". Allow nested delivery while in_interrupt for keyboard.
+        // Per-bit masks are "enabled when set".
         let pending = ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
-            || (!self.in_interrupt
-                && (((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
-                    || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0))));
+            || ((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
+            || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0));
         // Trace pending decision for visibility (Perfetto + console).
         #[cfg(feature = "llama-tests")]
         {
