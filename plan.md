@@ -217,7 +217,11 @@ Tracked gaps between the Rust LLAMA core and the Python emulator, with TODOs to 
    - Gap: Missing continuous auditing for newly introduced Rust/Python behavioural drift.
     - Actions: Establish a recurring, thorough audit checklist/runbook to scan for divergence (opcodes, IMEM/EMEM side effects, IRQ paths, snapshots, perfetto outputs); automate where possible and track findings in CI reports.
 
+11) **Parity test harness coverage**
+   - Gap: Only a handful of llama-tests parity cases exist (core ops, wait, simple mem swaps). Broader opcode/memory parity is missing and not yet in CI.
+   - Actions: Expand cross-backend parity cases (mem arithmetic ADD/SUB/ADC/SBC/PMDF, EX/EXL reg/mem variants, DADL/DSBL/DSLL/DSRL edge cases), seed IMEM/EMEM as needed, and wire llama-tests parity (incl. Perfetto comparison) into CI as a lower-priority guardrail.
+
 ## Next Steps
 - Prioritize gaps 1, 3, 4, 5 for instruction/IRQ correctness; follow with 2, 6, 7, 8, 9 for fidelity and tooling.
-- Add automated parity tests for each gap; wire into CI (nightly smoke + unit parity).
+- Add automated parity tests for each gap; wire into CI (nightly smoke + unit parity). Broader parity harness work (item 11) can follow the core correctness items.
 - Extract IRQ pending/delivery logic in `pce500/emulator.py` into reusable helper(s) with a test-only hook to force delivery, then add deterministic MTI/KEYI stack/PC delivery tests for Python and LLAMA backends.
