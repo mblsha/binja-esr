@@ -27,6 +27,7 @@ struct Hd61202State {
     start_line: u8,
     page: u8,
     y_address: u8,
+    busy: bool,
 }
 
 struct Hd61202Chip {
@@ -52,6 +53,7 @@ impl Default for Hd61202Chip {
 impl Hd61202Chip {
     fn write_instruction(&mut self, instr: LcdInstruction, data: u8) {
         self.instruction_count = self.instruction_count.wrapping_add(1);
+        self.state.busy = true;
         match instr {
             LcdInstruction::OnOff => {
                 self.state.on = (data & 1) != 0;
@@ -74,12 +76,17 @@ impl Hd61202Chip {
         let y = (self.state.y_address as usize) % LCD_WIDTH;
         self.vram[page][y] = data;
         self.state.y_address = ((self.state.y_address as usize + 1) % LCD_WIDTH) as u8;
+        self.state.busy = true;
     }
 
     #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
-        // Busy flag not modelled; keep parity with Python placeholder.
-        0xFF
+        let busy = if self.state.busy { 0x80 } else { 0x00 };
+        // Match Python placeholder: high bits set when busy, keep ON flag in bit 5.
+        let on = if self.state.on { 0x20 } else { 0x00 };
+        // Clear busy after reporting once.
+        self.state.busy = false;
+        0x1F | busy | on
     }
 
     #[allow(dead_code)]
@@ -189,6 +196,7 @@ pub struct LcdController {
     cs_both_count: u32,
     cs_left_count: u32,
     cs_right_count: u32,
+    last_status: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -208,6 +216,7 @@ impl LcdController {
             cs_both_count: 0,
             cs_left_count: 0,
             cs_right_count: 0,
+            last_status: None,
         }
     }
 
@@ -216,6 +225,7 @@ impl LcdController {
         self.cs_both_count = 0;
         self.cs_left_count = 0;
         self.cs_right_count = 0;
+        self.last_status = None;
     }
 
     fn chip_indices(cs: ChipSelect) -> &'static [usize] {
@@ -252,12 +262,29 @@ impl LcdController {
     }
 
     pub fn read(&mut self, address: u32) -> Option<u8> {
-        let (_cs, _di, rw) = decode_access(address)?;
+        let (cs, di, rw) = decode_access(address)?;
         if rw != ReadWrite::Read {
             return None;
         }
-        // Parity: Python HD61202Controller read paths are stubbed to 0xFF.
-        Some(0xFF)
+        // Parity: status reads surface busy/on flags; data reads return VRAM.
+        let value = match di {
+            DataInstruction::Instruction => {
+                let mut status = 0xFF;
+                for idx in Self::chip_indices(cs) {
+                    status &= self.chips[*idx].read_status();
+                }
+                status
+            }
+            DataInstruction::Data => {
+                let mut data = 0xFF;
+                for idx in Self::chip_indices(cs) {
+                    data &= self.chips[*idx].read_data();
+                }
+                data
+            }
+        };
+        self.last_status = Some(value);
+        Some(value)
     }
 
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {

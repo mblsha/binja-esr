@@ -44,7 +44,14 @@ jobs:
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        uv run python tools/llama_parity_sweep.py
+        uv run python tools/llama_parity_sweep.py --emit-traces --trace-prefix trace_ref
+        uv run python scripts/compare_perfetto_traces.py trace_ref_python.trace trace_ref_llama.trace
+
+    - name: Run contract harness parity tests
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run pytest sc62015/pysc62015/test_contract_harness.py -v
 
 
     - name: Run SC62015 tests

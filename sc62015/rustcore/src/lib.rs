@@ -4,9 +4,10 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyAnyMethods, PyDict, PyModule};
+use pyo3::types::{PyAny, PyAnyMethods, PyBytes, PyDict, PyModule};
 use pyo3::Bound;
 use sc62015_core::{
+    lcd::{LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
     keyboard::KeyboardMatrix,
     llama::{
         eval::{LlamaBus, LlamaExecutor},
@@ -14,6 +15,7 @@ use sc62015_core::{
         state::LlamaState,
     },
     memory::MemoryImage,
+    timer::TimerContext,
     PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
@@ -53,6 +55,288 @@ fn llama_flag_from_name(name: &str) -> Option<LlamaRegName> {
         "C" | "FC" => Some(LlamaRegName::FC),
         "Z" | "FZ" => Some(LlamaRegName::FZ),
         _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct ContractEvent {
+    kind: &'static str,
+    address: u32,
+    value: u8,
+    pc: Option<u32>,
+    detail: Option<u8>,
+}
+
+#[derive(Clone)]
+struct LcdShadow {
+    page: u8,
+    y: u8,
+    on: bool,
+    start_line: u8,
+    vram: [[u8; 64]; 8],
+}
+
+impl LcdShadow {
+    fn new() -> Self {
+        Self {
+            page: 0,
+            y: 0,
+            on: true,
+            start_line: 0,
+            vram: [[0; 64]; 8],
+        }
+    }
+
+    fn reset(&mut self) {
+        self.page = 0;
+        self.y = 0;
+        self.on = true;
+        self.start_line = 0;
+        self.vram = [[0; 64]; 8];
+    }
+
+    fn apply_instruction(&mut self, instr: u8, data: u8) {
+        match instr {
+            0b00 => {
+                // On/Off
+                self.on = (data & 1) != 0;
+            }
+            0b01 => {
+                // Set Y address
+                self.y = data & 0b0011_1111;
+            }
+            0b10 => {
+                // Set Page
+                self.page = data & 0b0000_0111;
+            }
+            0b11 => {
+                // Start line (ignore)
+                self.start_line = data & 0b0011_1111;
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_data(&mut self, value: u8) {
+        let page = (self.page as usize) % 8;
+        let y = (self.y as usize) % 64;
+        self.vram[page][y] = value;
+        self.y = ((self.y as usize + 1) % 64) as u8;
+    }
+
+    fn flatten(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 * 64);
+        for page in 0..8 {
+            out.extend_from_slice(&self.vram[page]);
+        }
+        out
+    }
+}
+
+fn event_to_dict(py: Python<'_>, evt: &ContractEvent) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("kind", evt.kind)?;
+    dict.set_item("address", evt.address)?;
+    dict.set_item("value", evt.value)?;
+    if let Some(detail) = evt.detail {
+        dict.set_item("detail", detail)?;
+    }
+    if let Some(pc) = evt.pc {
+        dict.set_item("pc", pc)?;
+    } else {
+        dict.set_item("pc", py.None())?;
+    }
+    Ok(dict.into_py(py))
+}
+
+fn is_lcd_addr(addr: u32) -> bool {
+    (0x2000..=0x200F).contains(&(addr & ADDRESS_MASK))
+        || (0xA000..=0xAFFF).contains(&(addr & ADDRESS_MASK))
+}
+
+#[pyclass(name = "LlamaContractBus")]
+struct LlamaContractBus {
+    memory: MemoryImage,
+    events: Vec<ContractEvent>,
+    timer: TimerContext,
+    cycles: u64,
+    last_lcd_status: Option<u8>,
+    lcd_log: Vec<(u32, u8)>,
+    lcd_shadow: [LcdShadow; 2],
+}
+
+#[pymethods]
+impl LlamaContractBus {
+    #[new]
+    fn new() -> Self {
+        Self {
+            memory: MemoryImage::new(),
+            events: Vec::new(),
+            timer: TimerContext::new(true, 0, 0),
+            cycles: 0,
+            last_lcd_status: None,
+            lcd_log: Vec::new(),
+            lcd_shadow: [LcdShadow::new(), LcdShadow::new()],
+        }
+    }
+
+    fn load_external(&mut self, blob: &[u8]) {
+        self.memory.load_external(blob);
+        self.events.clear();
+    }
+
+    fn load_internal(&mut self, blob: &[u8]) {
+        self.memory.load_internal(blob);
+        self.events.clear();
+    }
+
+    #[pyo3(signature = (mti_period, sti_period, *, enabled = true))]
+    fn configure_timer(&mut self, mti_period: i32, sti_period: i32, enabled: bool) {
+        self.timer.enabled = enabled;
+        self.timer.mti_period = mti_period.max(0) as u64;
+        self.timer.sti_period = sti_period.max(0) as u64;
+        self.timer.reset(self.cycles);
+    }
+
+    #[pyo3(signature = (steps = 1))]
+    fn tick_timers(&mut self, steps: u32) {
+        for _ in 0..steps {
+            // Keep timer IMR/ISR mirrors in sync with current memory before ticking.
+            if let Some(imr) = self.memory.read_internal_byte(0xFB) {
+                self.timer.irq_imr = imr;
+            }
+            if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                self.timer.irq_isr = isr;
+            }
+            let (mti, sti) = self.timer.tick_timers(&mut self.memory, &mut self.cycles);
+            if mti || sti {
+                let mut value = 0u8;
+                if mti {
+                    value |= 0x01;
+                }
+                if sti {
+                    value |= 0x02;
+                }
+                self.events.push(ContractEvent {
+                    kind: "timer",
+                    address: INTERNAL_MEMORY_START + 0xFC,
+                    value,
+                    pc: None,
+                    detail: None,
+                });
+            }
+            if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                self.timer.irq_isr = isr;
+            }
+        }
+    }
+
+    #[pyo3(signature = (address, pc=None))]
+    fn read_byte(&mut self, address: u32, pc: Option<u32>) -> PyResult<u8> {
+        let value = self.memory.read_byte(address).unwrap_or(0);
+        if is_lcd_addr(address) && (address & 0x3) == 0x1 {
+            self.last_lcd_status = Some(value);
+        }
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: address & ADDRESS_MASK,
+            value,
+            pc: pc.map(|v| v & ADDRESS_MASK),
+            detail: None,
+        });
+        Ok(value)
+    }
+
+    #[pyo3(signature = (address, value, pc=None))]
+    fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
+        let _ = self.memory.store(address, 8, value as u32);
+        if is_lcd_addr(address) {
+            self.lcd_log.push((address & ADDRESS_MASK, value));
+            let addr_lo = address & 0x0FFF;
+            let rw = addr_lo & 1;
+            if rw == 0 {
+                let di = (addr_lo >> 1) & 1;
+                let cs_bits = (addr_lo >> 2) & 0b11;
+                let targets: &[usize] = match cs_bits {
+                    0b00 => &[0, 1],
+                    0b01 => &[1],
+                    0b10 => &[0],
+                    _ => &[],
+                };
+                if di == 0 {
+                    let instr = value >> 6;
+                    let data = value & 0b0011_1111;
+                    for idx in targets {
+                        if let Some(shadow) = self.lcd_shadow.get_mut(*idx) {
+                            shadow.apply_instruction(instr, data);
+                        }
+                    }
+                } else {
+                    for idx in targets {
+                        if let Some(shadow) = self.lcd_shadow.get_mut(*idx) {
+                            shadow.apply_data(value);
+                        }
+                    }
+                }
+            }
+        }
+        self.events.push(ContractEvent {
+            kind: "write",
+            address: address & ADDRESS_MASK,
+            value,
+            pc: pc.map(|v| v & ADDRESS_MASK),
+            detail: None,
+        });
+        Ok(())
+    }
+
+    fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
+        let dict = PyDict::new_bound(py);
+        dict.set_item("internal", PyBytes::new_bound(py, self.memory.internal_slice()))?;
+        dict.set_item("external", PyBytes::new_bound(py, self.memory.external_slice()))?;
+        dict.set_item("external_len", self.memory.external_len())?;
+        // Surface IMR/ISR for contract assertions.
+        let internal = self.memory.internal_slice();
+        let imr = *internal.get(0xFB).unwrap_or(&0);
+        let isr = *internal.get(0xFC).unwrap_or(&0);
+        dict.set_item("imr", imr)?;
+        dict.set_item("isr", isr)?;
+        // Capture LCD-facing events without draining the event log.
+        let mut seq: Vec<PyObject> = Vec::new();
+        for evt in self.events.iter().filter(|e| is_lcd_addr(e.address)) {
+            let e = event_to_dict(py, evt)?;
+            seq.push(e);
+        }
+        dict.set_item("lcd_events", seq)?;
+        if let Some(status) = self.last_lcd_status {
+            dict.set_item("lcd_status", status)?;
+        }
+        let lcd_log: Vec<PyObject> = self
+            .lcd_log
+            .iter()
+            .map(|(addr, val)| {
+                let entry = PyDict::new_bound(py);
+                let _ = entry.set_item("address", *addr);
+                let _ = entry.set_item("value", *val);
+                entry.into_py(py)
+            })
+            .collect();
+        dict.set_item("lcd_log", lcd_log)?;
+        // Expose a simple VRAM snapshot derived from shadowed writes.
+        let mut merged = Vec::new();
+        merged.extend_from_slice(&self.lcd_shadow[0].flatten());
+        merged.extend_from_slice(&self.lcd_shadow[1].flatten());
+        dict.set_item("lcd_vram", PyBytes::new_bound(py, &merged))?;
+        dict.set_item("lcd_meta", "chips=2,pages=8,width=64")?;
+        Ok(dict.into_py(py))
+    }
+
+    fn drain_events<'py>(&mut self, py: Python<'py>) -> PyResult<Vec<PyObject>> {
+        let mut drained = Vec::with_capacity(self.events.len());
+        for evt in self.events.drain(..) {
+            drained.push(event_to_dict(py, &evt)?);
+        }
+        Ok(drained)
     }
 }
 
@@ -566,6 +850,7 @@ impl LlamaCpu {
         }
         Ok(())
     }
+
 }
 
 impl LlamaCpu {
@@ -607,6 +892,7 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
     m.add("HAS_CPU_IMPLEMENTATION", false)?;
     m.add("HAS_LLAMA_IMPLEMENTATION", true)?;
     m.add_class::<LlamaCpu>()?;
+    m.add_class::<LlamaContractBus>()?;
     m.add("record_irq_event", pyo3::wrap_pyfunction!(record_irq_event_py, m)?)?;
     Ok(())
 }

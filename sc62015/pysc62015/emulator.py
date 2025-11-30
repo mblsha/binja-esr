@@ -393,10 +393,33 @@ class Emulator:
         # Track last PC for tracing
         self._last_pc: int = 0
         self._current_pc: int = 0
+        self._perfetto_path: str | None = None
 
         # Perform power-on reset if requested
         if reset_on_init:
             self.power_on_reset()
+
+    def set_perfetto_trace(self, path: str | None) -> None:
+        if path is None:
+            try:
+                from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+            except Exception:
+                return
+            perfetto_tracer.stop()
+            return
+        try:
+            from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+        except Exception:
+            return
+        perfetto_tracer.start(path)
+        self._perfetto_path = path
+
+    def flush_perfetto(self) -> None:
+        try:
+            from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+        except Exception:
+            return
+        perfetto_tracer.stop()
 
     def decode_instruction(self, address: int, read_fn=None) -> Instruction:
         # Allow an override fetch function (used for KIO tracing); default to memory.read_byte.

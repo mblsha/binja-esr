@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from sc62015.pysc62015.constants import INTERNAL_MEMORY_LENGTH, INTERNAL_MEMORY_START
 
 from retrobus_perfetto.proto import perfetto_pb2
@@ -139,6 +146,19 @@ def _memory_write_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
     return filtered
 
 
+def _irq_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
+    """Filter events to IRQ/timer related tracks."""
+
+    filtered = [
+        evt
+        for evt in events
+        if evt.track.startswith("irq")
+        or evt.name.startswith(("MTI", "STI", "KEYI", "TimerFired", "IRQ_"))
+    ]
+    filtered.sort(key=lambda evt: evt.timestamp)
+    return filtered
+
+
 def _load_snapshot_internal(path: Path) -> bytearray:
     with zipfile.ZipFile(path, "r") as zf:
         blob = zf.read("internal_ram.bin")
@@ -248,6 +268,11 @@ def main() -> None:
         help="Maximum number of differing internal-memory bytes to display "
         "(default: %(default)s).",
     )
+    parser.add_argument(
+        "--compare-irq",
+        action="store_true",
+        help="Also diff IRQ/timer events (experimental).",
+    )
     args = parser.parse_args()
 
     events_a = _load_trace(args.trace_a)
@@ -317,6 +342,23 @@ def main() -> None:
             print("  Internal memory identical at divergence.")
 
     raise SystemExit(1)
+
+    if args.compare_irq:
+        irq_a = _irq_events(events_a)
+        irq_b = _irq_events(events_b)
+        mismatch = None
+        for idx, (ea, eb) in enumerate(zip(irq_a, irq_b)):
+            if ea.name != eb.name:
+                mismatch = f"{ea.name} vs {eb.name} at irq index {idx}"
+                break
+            if ea.annotations != eb.annotations:
+                mismatch = f"{ea.name} annotations differ at irq index {idx}"
+                break
+        if mismatch:
+            print("\nIRQ/timer differences:")
+            print(f"  {mismatch}")
+        else:
+            print("\nIRQ/timer events match up to min length.")
 
 
 if __name__ == "__main__":

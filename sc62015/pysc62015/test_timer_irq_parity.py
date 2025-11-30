@@ -5,10 +5,9 @@ from __future__ import annotations
 import pytest
 
 from sc62015.pysc62015 import CPU, RegisterName, available_backends
-from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
-
-
-@pytest.mark.skipif("llama" not in available_backends(), reason="LLAMA backend not available")
+from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START, ISRFlag
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from pce500.emulator import PCE500Emulator
 @pytest.mark.parametrize("backend", ("python", "llama"))
 def test_timer_irq_sets_isr_and_traces(backend: str) -> None:
     # Minimal memory; scheduler lives in Python emulator, but LLAMA backend should still mirror IRQ writes.
@@ -61,3 +60,54 @@ def test_timer_irq_sets_isr_and_traces(backend: str) -> None:
     assert mem.read_byte(isr_addr) & 0x01 == 0x01
     if backend == "llama":
         assert mem.irq_traces != []
+
+
+def test_timer_irq_cadence_matches_between_backends(monkeypatch) -> None:
+    backends = ("python", "llama")
+    results = {}
+
+    import _sc62015_rustcore as rustcore
+
+    for backend in backends:
+        captured: list[tuple[str, dict[str, int]]] = []
+
+        def fake_irq(name: str, payload: dict[str, int]) -> None:
+            captured.append((name, dict(payload)))
+
+        monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
+        orig_irq = rustcore.record_irq_event
+        rustcore.record_irq_event = fake_irq  # type: ignore[assignment]
+        try:
+            emu = PCE500Emulator(
+                trace_enabled=False,
+                perfetto_trace=False,
+                enable_new_tracing=False,
+                keyboard_columns_active_high=True,
+            )
+            # Enable MTI/STI/KEYI in IMR
+            imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+            emu.memory.write_byte(imr_addr, 0x07)
+            # Short timer periods for deterministic cadence
+            emu._scheduler.mti_period = 1  # type: ignore[attr-defined]
+            emu._scheduler.sti_period = 1  # type: ignore[attr-defined]
+            # Run a few ticks to generate MTI/STI, then assert KEYI via ISR bit.
+            for _ in range(3):
+                emu._tick_timers()
+            emu._set_isr_bits(int(ISRFlag.KEYI))
+            # Snapshot ISR/IMR after events
+            isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+            results[backend] = {
+                "irq_events": captured.copy(),
+                "imr": emu.memory.read_byte(imr_addr - 1) & 0xFF,
+                "isr": emu.memory.read_byte(isr_addr) & 0xFF,
+            }
+        finally:
+            rustcore.record_irq_event = orig_irq  # type: ignore[assignment]
+            monkeypatch.delenv("SC62015_CPU_BACKEND", raising=False)
+
+    assert results["python"]["imr"] == results["llama"]["imr"]
+    assert results["python"]["isr"] == results["llama"]["isr"]
+    # Event sequences should match by name order (payloads may differ in pc but should exist).
+    python_names = [name for name, _ in results["python"]["irq_events"]]
+    llama_names = [name for name, _ in results["llama"]["irq_events"]]
+    assert python_names == llama_names
