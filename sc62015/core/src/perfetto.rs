@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub struct PerfettoTracer {
     builder: PerfettoTraceBuilder,
     exec_track: TrackId,
+    timeline_track: TrackId,
     mem_track: TrackId,
     imr_track: TrackId,
     units_per_instr: u64,
@@ -21,11 +22,14 @@ impl PerfettoTracer {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
         let exec_track = builder.add_thread("InstructionTrace");
+        // Optional visual parity: emit a parallel Execution track like the Python tracer does.
+        let timeline_track = builder.add_thread("Execution");
         let mem_track = builder.add_thread("MemoryWrites");
         let imr_track = builder.add_thread("IMR");
         Self {
             builder,
             exec_track,
+            timeline_track,
             mem_track,
             imr_track,
             units_per_instr: 10_000,
@@ -53,45 +57,62 @@ impl PerfettoTracer {
         mem_imr: u8,
         mem_isr: u8,
     ) {
-        let mut ev = self.builder.add_instant_event(
-            self.exec_track,
-            format!("Exec@0x{pc:06X}"),
-            self.ts(instr_index, 0),
-        );
-        ev.add_annotations([
-            ("backend", AnnotationValue::Str("rust".to_string())),
-            ("pc", AnnotationValue::Pointer(reg_pc as u64)),
-            ("opcode", AnnotationValue::UInt(opcode as u64)),
-            ("op_index", AnnotationValue::UInt(instr_index)),
-            ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
-            ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
-        ]);
-        for (name, value) in regs {
-            match name.as_str() {
-                "BA" => {
-                    let ba = *value & 0xFFFF;
-                    ev.add_annotation("reg_BA", ba as u64);
-                    ev.add_annotation("reg_A", (ba & 0xFF) as u64);
-                    ev.add_annotation("reg_B", ((ba >> 8) & 0xFF) as u64);
-                }
-                "I" => {
-                    ev.add_annotation("reg_i", (*value & 0xFFFF) as u64);
-                }
-                "F" => {
-                    let f = *value & 0xFF;
-                    ev.add_annotation("reg_f", f as u64);
-                    ev.add_annotation("flag_c", f & 0x01);
-                    ev.add_annotation("flag_z", (f >> 1) & 0x01);
-                }
-                _ => {
-                    ev.add_annotation(
-                        format!("reg_{}", name.to_ascii_lowercase()),
-                        (*value & 0xFF_FFFF) as u64,
-                    );
+        {
+            let mut ev = self.builder.add_instant_event(
+                self.exec_track,
+                format!("Exec@0x{pc:06X}"),
+                self.ts(instr_index, 0),
+            );
+            ev.add_annotations([
+                ("backend", AnnotationValue::Str("rust".to_string())),
+                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
+                ("opcode", AnnotationValue::UInt(opcode as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+                ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
+                ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
+            ]);
+            for (name, value) in regs {
+                match name.as_str() {
+                    "BA" => {
+                        let ba = *value & 0xFFFF;
+                        ev.add_annotation("reg_BA", ba as u64);
+                        ev.add_annotation("reg_A", (ba & 0xFF) as u64);
+                        ev.add_annotation("reg_B", ((ba >> 8) & 0xFF) as u64);
+                    }
+                    "I" => {
+                        ev.add_annotation("reg_i", (*value & 0xFFFF) as u64);
+                    }
+                    "F" => {
+                        let f = *value & 0xFF;
+                        ev.add_annotation("reg_f", f as u64);
+                        ev.add_annotation("flag_c", f & 0x01);
+                        ev.add_annotation("flag_z", (f >> 1) & 0x01);
+                    }
+                    _ => {
+                        ev.add_annotation(
+                            format!("reg_{}", name.to_ascii_lowercase()),
+                            (*value & 0xFF_FFFF) as u64,
+                        );
+                    }
                 }
             }
+            ev.finish();
         }
-        ev.finish();
+
+        // Duplicate on the Execution track for UI parity with Python traces.
+        {
+            let mut exec = self.builder.add_instant_event(
+                self.timeline_track,
+                "Execution".to_string(),
+                self.ts(instr_index, 0),
+            );
+            exec.add_annotations([
+                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
+                ("opcode", AnnotationValue::UInt(opcode as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+            ]);
+            exec.finish();
+        }
     }
 
     pub fn record_mem_write(
