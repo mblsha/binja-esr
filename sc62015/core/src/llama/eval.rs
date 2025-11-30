@@ -132,12 +132,7 @@ fn read_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32) -> u8 {
 }
 
 fn write_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32, value: u8) {
-    // Ensure IMR writes always retain IRM (bit7) when written via bus.
-    let mut v = value;
-    if offset == IMEM_IMR_OFFSET {
-        v |= 0x80;
-    }
-    bus.store(INTERNAL_MEMORY_START + offset, 8, v as u32);
+    bus.store(INTERNAL_MEMORY_START + offset, 8, value as u32);
 }
 
 fn pre_modes_for(opcode: u8) -> Option<PreModes> {
@@ -1902,7 +1897,7 @@ impl LlamaExecutor {
                 }
                 sp = sp.wrapping_add(3) & mask_s;
                 state.set_reg(RegName::S, sp);
-                let imr_restored = imr | 0x80; // IMR restore keeps IRM set.
+                let imr_restored = imr;
                 state.set_reg(RegName::IMR, imr_restored);
                 state.set_reg(RegName::F, f);
                 state.set_pc(ret & 0xFFFFF);
