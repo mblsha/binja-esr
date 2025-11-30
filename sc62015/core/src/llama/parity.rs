@@ -749,4 +749,64 @@ mod tests {
             panic!("parity mismatch: {:?}", diff);
         }
     }
+
+    /// Helper to run a single-instruction parity check and panic on mismatch.
+    #[cfg(feature = "llama-tests")]
+    fn assert_parity(bytes: &[u8], regs: &[(RegName, u32)], workdir: &Path) {
+        let (llama_snap, py_snap, _llama_trace, _py_trace, compare_output) =
+            run_parity_once(bytes, regs, 0, 0, workdir).expect("parity run");
+        assert!(
+            compare_output.status.success(),
+            "python oracle failed: {}",
+            String::from_utf8_lossy(&compare_output.stdout)
+        );
+        if let Some(diff) = compare_snapshots(&llama_snap, &py_snap) {
+            panic!("parity mismatch: {:?}", diff);
+        }
+    }
+
+    /// ADD A, imm8 parity check.
+    #[cfg(feature = "llama-tests")]
+    #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
+    fn parity_add_a_imm() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let workdir = root.join("target").join("llama-parity-add-imm");
+        let _ = fs::create_dir_all(&workdir);
+        // Opcode 0x40: ADD A, #imm8
+        assert_parity(&[0x40, 0x05], &[(RegName::A, 1)], &workdir);
+    }
+
+    /// EX A,B parity check.
+    #[cfg(feature = "llama-tests")]
+    #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
+    fn parity_ex_ab() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let workdir = root.join("target").join("llama-parity-ex-ab");
+        let _ = fs::create_dir_all(&workdir);
+        // Opcode 0xDD: EX A,B
+        assert_parity(&[0xDD], &[(RegName::A, 0x12), (RegName::B, 0x34)], &workdir);
+    }
+
+    /// SWAP nibbles parity check.
+    #[cfg(feature = "llama-tests")]
+    #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
+    fn parity_swap_nibbles() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let workdir = root.join("target").join("llama-parity-swap");
+        let _ = fs::create_dir_all(&workdir);
+        // Opcode 0xEE: SWAP
+        assert_parity(&[0xEE], &[(RegName::A, 0xA5)], &workdir);
+    }
 }
