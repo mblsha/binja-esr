@@ -180,6 +180,7 @@ Tracked gaps between the Rust LLAMA core and the Python emulator, with TODOs to 
         operands: &[],
     },
 ```
+   - Status: Table is complete (256 entries) and all valid opcodes execute; remaining "unsupported" branches are guardrails for invalid encodings that Python never produces (e.g., bad addressing modes, non-byte DADL/DSBL, EX/EXL odd shapes). Focus can shift to parity tests and behaviour, not new opcode handlers.
 
 2) **Flag register fidelity**
    - Gap: `LlamaState` truncates `F` to FC/FZ; Python keeps full 8-bit `F`.
