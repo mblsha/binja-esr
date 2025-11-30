@@ -105,6 +105,26 @@ def test_reti_clears_isr_bit_python() -> None:
     assert imr_after == 0x84
 
 
+@pytest.mark.parametrize("backend", ["python", "llama"])
+def test_kil_respects_ksd(backend: str) -> None:
+    if backend == "llama" and "llama" not in available_backends():
+        pytest.skip("LLAMA backend not available")
+
+    with _backend(backend if backend != "python" else None):
+        emu = Emulator()
+
+    mem = emu.memory
+
+    # Strobe a column and press a key by setting latch directly
+    mem.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOL, 0x01)
+    mem.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOH, 0x00)
+    mem.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC, 0x04)  # KSD bit set
+
+    # KIL should be masked to 0 when KSD is set
+    kil_val = emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.KIL)
+    assert kil_val == 0x00
+
+
 def test_reti_clears_isr_bit_llama() -> None:
     if "llama" not in available_backends():
         pytest.skip("LLAMA backend not available")
