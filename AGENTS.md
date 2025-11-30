@@ -59,7 +59,10 @@
 - Binary Ninja: Not required for dev; mocks auto‑load via `FORCE_BINJA_MOCK=1` or `binja-test-mocks`.
 - Native backend: LLAMA is the only Rust core; SCIL/manifest tooling and tests were removed.
 
+- LLAMA is expected to be present in this workspace; do not skip tests on missing LLAMA. If a test checks `available_backends()`, prefer failing loudly instead of skipping.
+
 - **LLAMA tracing/parity:** Perfetto traces (binary `retrobus-perfetto`) from Python and LLAMA cores align on instruction-index timestamps; `scripts/compare_perfetto_traces.py` compares them. Nightly smoke lives in `.github/workflows/llama-perfetto-smoke.yml`.
+- **CI coverage (Perfetto included):** All guardrails must run in CI—lint, type checks, pytest suites, parity harnesses, and Perfetto comparison jobs. Ensure Perfetto trace comparison (`scripts/compare_perfetto_traces.py` or the smoke workflow) is wired into CI and kept green.
 - **Rust-only runner:** To boot the ROM and view decoded LCD text without Python:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
