@@ -326,18 +326,16 @@ impl StandaloneBus {
         if !self.trace_kbd {
             return;
         }
-        if !MemoryImage::is_internal(addr) {
-            return;
+        if let Some(offset) = MemoryImage::internal_offset(addr) {
+            println!(
+                "[imem-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} bits={bits} value=0x{val:08X}",
+                pc = self.last_pc,
+                addr = addr,
+                offset = offset,
+                bits = bits,
+                val = value & mask_bits(bits),
+            );
         }
-        let offset = addr - INTERNAL_MEMORY_START;
-        println!(
-            "[imem-trace-{kind}] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} bits={bits} value=0x{val:08X}",
-            pc = self.last_pc,
-            addr = addr,
-            offset = offset,
-            bits = bits,
-            val = value & mask_bits(bits),
-        );
     }
 
     fn trace_fifo_access(&self, kind: &str, addr: u32, bits: u8, value: u32) {
@@ -659,11 +657,7 @@ impl LlamaBus for StandaloneBus {
         if bits == 0 {
             return 0;
         }
-        let kbd_offset = if MemoryImage::is_internal(addr) {
-            Some(addr - INTERNAL_MEMORY_START)
-        } else {
-            None
-        };
+        let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
             if offset == IMEM_KIL_OFFSET {
                 // Honor KSD (keyboard strobe disable) bit in LCC (bit 2).
@@ -762,11 +756,7 @@ impl LlamaBus for StandaloneBus {
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
         let addr = addr & ADDRESS_MASK;
-        let kbd_offset = if MemoryImage::is_internal(addr) {
-            Some(addr - INTERNAL_MEMORY_START)
-        } else {
-            None
-        };
+        let kbd_offset = MemoryImage::internal_offset(addr);
         let mut imr_isr_prev: Option<(u32, u8)> = None;
         if MemoryImage::is_internal(addr) {
             if let Some(offset) = MemoryImage::internal_offset(addr) {
