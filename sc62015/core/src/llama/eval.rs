@@ -2329,14 +2329,6 @@ impl LlamaExecutor {
                 }
                 Ok(decoded.len)
             }
-            _ => {
-                let len = Self::estimated_length(entry);
-                let start_pc = state.pc();
-                if state.pc() == start_pc {
-                    state.set_pc(start_pc.wrapping_add(len as u32));
-                }
-                Ok(len)
-            }
         }
     }
 }

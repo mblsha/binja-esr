@@ -725,4 +725,28 @@ mod tests {
             String::from_utf8_lossy(&compare_output.stdout)
         );
     }
+
+    /// Feature-gated parity check for WAIT semantics: drains I to zero and leaves flags untouched.
+    #[cfg(feature = "llama-tests")]
+    #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
+    fn parity_wait_matches_python() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let workdir = root.join("target").join("llama-parity-wait");
+        let _ = fs::create_dir_all(&workdir);
+        let regs = &[(RegName::I, 5), (RegName::FC, 1), (RegName::FZ, 1)];
+        let (llama_snap, py_snap, _llama_trace, _py_trace, compare_output) =
+            run_parity_once(&[0xEF], regs, 0, 0, &workdir).expect("parity run");
+        assert!(
+            compare_output.status.success(),
+            "python oracle failed: {}",
+            String::from_utf8_lossy(&compare_output.stdout)
+        );
+        if let Some(diff) = compare_snapshots(&llama_snap, &py_snap) {
+            panic!("parity mismatch: {:?}", diff);
+        }
+    }
 }
