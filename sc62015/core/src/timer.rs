@@ -238,4 +238,5 @@ mod tests {
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01);
     }
+
 }
