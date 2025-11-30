@@ -13,7 +13,7 @@ Tracked gaps between the Rust LLAMA core and the Python emulator, with TODOs to 
 
 3) **Memory model & overlays**
    - Gap: `MemoryImage` lacks 24-bit wrap, overlay bus, and dynamic handlers (KIO, E-port, LCD overlay, perfetto hooks).
-   - Actions: Implement masking/ wrapping; mirror Python overlay dispatch; add parity tests for KIO, LCD overlay, external range bounds. ✅ 24-bit wrapping and python-range masking done with tests; basic KIO/E-port/LCD stubs added. 🔜 Expose LLAMA backend through Python overlay hooks (keyboard/LCD/E-port) so parity tests can exercise stubs vs. Python.
+   - Actions: Implement masking/ wrapping; mirror Python overlay dispatch; add parity tests for KIO, LCD overlay, external range bounds. ✅ 24-bit wrapping and python-range masking done with tests; basic KIO/E-port/LCD stubs added. 🔜 Expose LLAMA backend through Python overlay hooks (keyboard/LCD/E-port) so parity tests can exercise stubs vs. Python. This likely needs PyO3 bridge changes to route the Rust bus into Python’s overlay callbacks without bypassing observers/perfetto.
 
 4) **Timers & IRQ cadence**
    - Gap: `TimerContext` sets ISR bits only; no IMR gating, keyboard scan integration, or dispatcher parity.
