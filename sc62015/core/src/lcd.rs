@@ -366,16 +366,10 @@ impl LcdController {
         let mut buffer = [[0u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
         let left = &self.chips[0];
         let right = &self.chips[1];
-        if right.state.on {
-            copy_region(&mut buffer, right, 0, 0..64, 0, false);
-        }
-        if left.state.on {
-            copy_region(&mut buffer, left, 0, 0..56, 64, false);
-            copy_region(&mut buffer, left, 4, 0..56, 120, true);
-        }
-        if right.state.on {
-            copy_region(&mut buffer, right, 4, 0..64, 176, true);
-        }
+        copy_region(&mut buffer, right, 0, 0..64, 0, false);
+        copy_region(&mut buffer, left, 0, 0..56, 64, false);
+        copy_region(&mut buffer, left, 4, 0..56, 120, true);
+        copy_region(&mut buffer, right, 4, 0..64, 176, true);
         buffer
     }
 

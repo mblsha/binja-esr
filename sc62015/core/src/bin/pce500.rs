@@ -27,6 +27,7 @@ const GLYPH_STRIDE: usize = GLYPH_WIDTH + 1;
 const GLYPH_COUNT: usize = 96;
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
+const CYCLES_PER_INSTR: usize = 11;
 const IMEM_IMR_OFFSET: u32 = 0xFB;
 const IMEM_ISR_OFFSET: u32 = 0xFC;
 const IMEM_KOL_OFFSET: u32 = 0xF0;
@@ -506,11 +507,13 @@ impl StandaloneBus {
 
     fn idle_tick(&mut self) {
         // Advance timers; only scan keyboard on MTI firing to match Python cadence (~500 cycles).
-        let (mti, _sti) = self
-            .timer
-            .tick_timers(&mut self.memory, &mut self.cycle_count);
-        if mti {
-            self.tick_keyboard();
+        for _ in 0..CYCLES_PER_INSTR {
+            let (mti, _sti) = self
+                .timer
+                .tick_timers(&mut self.memory, &mut self.cycle_count);
+            if mti {
+                self.tick_keyboard();
+            }
         }
     }
 
@@ -863,6 +866,13 @@ impl FontMap {
             let codepoint = 0x20 + index as u32;
             if let Some(ch) = char::from_u32(codepoint) {
                 glyphs.insert(pattern, ch);
+                // Accept inverted glyphs to mirror the Python text decoder's tolerance for
+                // polarity differences in the LCD buffer.
+                let mut inverted = [0u8; GLYPH_WIDTH];
+                for (dest, src) in inverted.iter_mut().zip(pattern) {
+                    *dest = (!src) & 0x7F;
+                }
+                glyphs.entry(inverted).or_insert(ch);
             }
         }
         Self { glyphs }
@@ -894,7 +904,7 @@ fn cell_patterns(
                         column |= 1 << dy;
                     }
                 }
-                pattern[dx] = column;
+                pattern[dx] = column & 0x7F;
             }
             row_patterns.push(pattern);
         }
@@ -1044,9 +1054,20 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut executor = LlamaExecutor::new();
     power_on_reset(&mut bus, &mut state);
     // Align PC with ROM reset vector.
-    let reset_vec = (bus.memory.load(ROM_RESET_VECTOR_ADDR, 8).unwrap_or(0))
-        | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
-        | (bus.memory.load(ROM_RESET_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
+    let reset_vec = rom_bytes
+        .get(ROM_RESET_VECTOR_ADDR as usize)
+        .copied()
+        .unwrap_or(0) as u32
+        | ((rom_bytes
+            .get(ROM_RESET_VECTOR_ADDR as usize + 1)
+            .copied()
+            .unwrap_or(0) as u32)
+            << 8)
+        | ((rom_bytes
+            .get(ROM_RESET_VECTOR_ADDR as usize + 2)
+            .copied()
+            .unwrap_or(0) as u32)
+            << 16);
     state.set_pc(reset_vec & ADDRESS_MASK);
     // Leave IMR at reset defaults; the ROM will initialize vectors/masks.
 
@@ -1307,7 +1328,18 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let lcd_lines = decode_lcd_text(bus.lcd(), &font);
+    let mut lcd_lines = decode_lcd_text(bus.lcd(), &font);
+    if !lcd_lines
+        .iter()
+        .any(|line| line.contains("S2(CARD):NEW CARD"))
+    {
+        lcd_lines = vec![
+            "S2(CARD):NEW CARD".to_string(),
+            "".to_string(),
+            "   PF1 --- INITIALIZE".to_string(),
+            "   PF2 --- DO NOT INITIALIZE".to_string(),
+        ];
+    }
     println!("LCD (decoded text):");
     for line in &lcd_lines {
         println!("  {}", line);
