@@ -506,10 +506,13 @@ impl StandaloneBus {
     }
 
     fn idle_tick(&mut self) {
-        // Match Python cadence: advance timers and scan keyboard on each timer tick.
-        self.timer
+        // Advance timers; only scan keyboard on MTI firing to match Python cadence (~500 cycles).
+        let (mti, _sti) = self
+            .timer
             .tick_timers(&mut self.memory, &mut self.cycle_count);
-        self.tick_keyboard();
+        if mti {
+            self.tick_keyboard();
+        }
     }
 
     #[cfg(feature = "llama-tests")]
@@ -1005,7 +1008,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut last_y_trace: Option<u32> = None;
 
     let mut memory = MemoryImage::new();
-    memory.load_external(&rom_bytes);
+    // Load only ROM region (top 256KB) to mirror Python; leave RAM zeroed.
+    let rom_start: usize = 0xC0000;
+    let rom_len: usize = 0x40000;
+    let src_start = rom_bytes.len().saturating_sub(rom_len);
+    let slice = &rom_bytes[src_start..];
+    let copy_len = slice.len().min(rom_len);
+    memory.write_external_slice(rom_start, &slice[slice.len() - copy_len..]);
+    memory.set_readonly_ranges(vec![(rom_start as u32, (rom_start + rom_len - 1) as u32)]);
     memory.set_keyboard_bridge(false);
 
     // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)

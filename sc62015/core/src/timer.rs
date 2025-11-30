@@ -119,10 +119,10 @@ impl TimerContext {
         self.next_interrupt_id = next_interrupt_id;
     }
 
-    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: &mut u64) {
+    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: &mut u64) -> (bool, bool) {
         *cycle_count = cycle_count.wrapping_add(1);
         if !self.enabled {
-            return;
+            return (false, false);
         }
 
         let mut fired_mti = false;
@@ -163,6 +163,7 @@ impl TimerContext {
                 Some("STI".to_string())
             };
         }
+        (fired_mti, fired_sti)
     }
 
     pub fn drain_pending_irq(&mut self) -> Option<String> {
