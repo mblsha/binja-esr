@@ -33,6 +33,12 @@
 - Prefer type hints; Pyright in basic mode.
 - Files/modules: lowercase_with_underscores; tests named `test_*.py`.
 
+## Rust/Python Parity Notes
+- The Rust emulator implementation is derived from the Python sources; annotate each Rust source file with the Python module/class/function it mirrors to aid audits, and keep those references up to date when code moves.
+- Annotations must be machine-parseable: add one or more `// PY_SOURCE: sc62015/pysc62015/<module>.py[:<object>]` comment lines near the top of every Rust source file that trace back to the Python implementation.
+- Verify annotations with `uv run python scripts/check_rust_py_parity_annotations.py`.
+- LLAMA must maintain feature-for-feature, bug-for-bug, and quirk-for-quirk parity with the Python emulator, with gaps covered by automatic tests (parity harnesses, regression tests, and nightly smoke traces).
+
 ## Testing Guidelines
 - Framework: `pytest` (see `pytest.ini` collects under `sc62015`).
 - Coverage: ≥80% (project and patch). CI enforces lint, type check, tests.

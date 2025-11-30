@@ -1,3 +1,5 @@
+// PY_SOURCE: pce500/memory.py:PCE500Memory
+
 use crate::{CoreError, Result};
 use std::env;
 
@@ -8,6 +10,10 @@ pub const EXTERNAL_SPACE: usize = 0x100000;
 pub const INTERNAL_SPACE: usize = 0x100;
 pub const INTERNAL_RAM_START: usize = 0xB8000;
 pub const INTERNAL_RAM_SIZE: usize = 0x8000;
+
+fn canonical_address(address: u32) -> u32 {
+    address & ADDRESS_MASK
+}
 
 #[derive(Clone)]
 pub struct MemoryImage {
@@ -89,6 +95,7 @@ impl MemoryImage {
     }
 
     pub fn requires_python(&self, address: u32) -> bool {
+        let address = canonical_address(address);
         if Self::is_internal(address) {
             let offset = (address - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
             // Keyboard registers (KOL/KOH/KIL) are local when the bridge is enabled.
@@ -106,9 +113,6 @@ impl MemoryImage {
             }
             return false;
         }
-        if address >= EXTERNAL_SPACE as u32 {
-            return true;
-        }
         let mut in_python_range = false;
         for (start, end) in &self.python_ranges {
             if address >= *start && address <= *end {
@@ -123,30 +127,30 @@ impl MemoryImage {
                 range = in_python_range
             );
         }
-        in_python_range
+        in_python_range || address >= EXTERNAL_SPACE as u32
     }
 
     pub fn read_byte(&self, address: u32) -> Option<u8> {
+        let address = canonical_address(address);
         if let Some(index) = Self::internal_index(address) {
             // Optional bridge: allow external-memory writes to mirror into internal for diagnostics.
             return Some(self.internal[index]);
         }
-        // External memory fallback
-        self.external.get(address as usize).copied()
+        // External memory fallback with wrap
+        let idx = (address as usize) & (EXTERNAL_SPACE - 1);
+        self.external.get(idx).copied()
     }
 
     pub fn load(&self, address: u32, bits: u8) -> Option<u32> {
+        let address = canonical_address(address);
         if let Some(value) = self.load_internal_value(address, bits) {
             return Some(value);
         }
         let bytes = (bits / 8).max(1) as usize;
-        let end = address as usize + bytes;
-        if end > self.external.len() {
-            return None;
-        }
         let mut value = 0u32;
         for offset in 0..bytes {
-            value |= (self.external[address as usize + offset] as u32) << (offset * 8);
+            let idx = (address as usize + offset) & (EXTERNAL_SPACE - 1);
+            value |= (self.external[idx] as u32) << (offset * 8);
         }
         if env::var("RUST_ROM_DEBUG").is_ok() && (0x0F2BD0..=0x0F2BD8).contains(&address) {
             eprintln!(
@@ -169,20 +173,17 @@ impl MemoryImage {
     }
 
     pub fn store(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
+        let address = canonical_address(address);
         if self.store_internal_value(address, bits, value).is_some() {
             return Some(());
         }
         let bytes = (bits / 8).max(1) as usize;
-        let end = address as usize + bytes;
-        if end > self.external.len() {
-            return None;
-        }
         if self.is_read_only_range(address, bytes as u32) {
             return Some(());
         }
         for offset in 0..bytes {
             let byte = ((value >> (offset * 8)) & 0xFF) as u8;
-            let slot = &mut self.external[address as usize + offset];
+            let slot = &mut self.external[(address as usize + offset) & (EXTERNAL_SPACE - 1)];
             if *slot != byte {
                 *slot = byte;
                 self.dirty.push((address + offset as u32, byte));
@@ -196,6 +197,7 @@ impl MemoryImage {
     }
 
     pub fn apply_host_write(&mut self, address: u32, value: u8) {
+        let address = canonical_address(address);
         if let Some(index) = Self::internal_index(address) {
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
@@ -211,10 +213,8 @@ impl MemoryImage {
     }
 
     pub fn write_external_byte(&mut self, address: u32, value: u8) {
-        if address >= EXTERNAL_SPACE as u32 {
-            return;
-        }
-        let idx = address as usize;
+        let address = canonical_address(address);
+        let idx = (address as usize) & (EXTERNAL_SPACE - 1);
         if self.external[idx] != value {
             self.external[idx] = value;
             self.dirty.push((address, value));
@@ -232,6 +232,7 @@ impl MemoryImage {
     }
 
     pub fn is_internal(address: u32) -> bool {
+        let address = canonical_address(address);
         let is_main = address >= INTERNAL_MEMORY_START
             && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32;
         let is_alias = address >= (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32)
@@ -240,6 +241,7 @@ impl MemoryImage {
     }
 
     pub fn internal_index(address: u32) -> Option<usize> {
+        let address = canonical_address(address);
         if address >= INTERNAL_MEMORY_START
             && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
         {
@@ -347,6 +349,7 @@ impl MemoryImage {
         if len == 0 {
             return false;
         }
+        let start = canonical_address(start);
         let end = start.saturating_add(len.saturating_sub(1));
         for (range_start, range_end) in &self.readonly_ranges {
             if start <= *range_end && end >= *range_start {
@@ -449,5 +452,34 @@ fn mask_bits(bits: u8) -> u32 {
         0
     } else {
         (1u32 << bits) - 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_access_wraps_24bit() {
+        let mut mem = MemoryImage::new();
+        let addr = (EXTERNAL_SPACE as u32) + 0x10;
+        assert_eq!(mem.store(addr, 8, 0xAA), Some(()));
+        assert_eq!(mem.load(addr & ADDRESS_MASK, 8), Some(0xAA));
+        assert_eq!(mem.load(addr, 8), Some(0xAA));
+    }
+
+    #[test]
+    fn internal_index_masks_address() {
+        let base = INTERNAL_MEMORY_START;
+        assert_eq!(MemoryImage::internal_index(base), Some(0));
+        assert_eq!(MemoryImage::internal_index(base | 0xFF00_0000), Some(0));
+    }
+
+    #[test]
+    fn requires_python_masks_address() {
+        let mut mem = MemoryImage::new();
+        mem.set_python_ranges(vec![(0x1000, 0x1FFF)]);
+        assert!(mem.requires_python(0x0010_0100));
+        assert!(mem.requires_python(0x1010_0100));
     }
 }

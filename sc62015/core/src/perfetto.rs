@@ -1,3 +1,5 @@
+// PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
+
 use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;

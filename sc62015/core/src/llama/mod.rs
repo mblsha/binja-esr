@@ -3,6 +3,8 @@
 //! LLAMA is now the sole Rust CPU core; the SCIL/manifest interpreter path has
 //! been removed. These modules hold the opcode table, evaluator, and supporting
 //! state/parity helpers used by the PyO3 wrapper.
+// PY_SOURCE: sc62015/pysc62015/cpu.py:CPU
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Emulator
 
 #![allow(dead_code)]
 

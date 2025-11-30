@@ -1,3 +1,6 @@
+// PY_SOURCE: sc62015/pysc62015/emulator.py:RegisterName
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
+
 pub mod keyboard;
 pub mod lcd;
 pub mod llama;

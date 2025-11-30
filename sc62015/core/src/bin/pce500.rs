@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/run_pce500.py
+// PY_SOURCE: pce500/cli.py
+
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 #[cfg(feature = "llama-tests")]
@@ -361,9 +364,11 @@ impl StandaloneBus {
 
     fn tick_keyboard(&mut self) {
         // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
-        if self.keyboard.scan_tick() > 0 {
+        let events = self.keyboard.scan_tick();
+        if events > 0 {
             self.keyboard.write_fifo_to_memory(&mut self.memory);
             self.raise_key_irq();
+            self.pending_kil = true;
             self.last_kbd_access = Some("scan".to_string());
             self.log_irq_event(
                 "KeyScan",
@@ -397,6 +402,7 @@ impl StandaloneBus {
     fn press_key(&mut self, code: u8) {
         self.keyboard.press_matrix_code(code, &mut self.memory);
         self.raise_key_irq();
+        self.pending_kil = true;
     }
 
     fn release_key(&mut self, code: u8) {
@@ -503,6 +509,10 @@ impl StandaloneBus {
         let pending = ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
             || ((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
             || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0));
+        // If IMR masks everything, remember pending ISRs so we can restore on RETI.
+        if !pending && isr != 0 && self.active_irq_mask == 0 {
+            self.last_irq_src = Some("masked".to_string());
+        }
         // Trace pending decision for visibility (Perfetto + console).
         #[cfg(feature = "llama-tests")]
         {
@@ -530,11 +540,18 @@ impl StandaloneBus {
 
     fn idle_tick(&mut self) {
         // Advance timers once; scan keyboard when MTI fires to mirror Python’s timer hook.
-        let (mti, _sti) = self
-            .timer
-            .tick_timers(&mut self.memory, &mut self.cycle_count);
+        let (mti, sti) = self.timer.tick_timers(&mut self.memory, &mut self.cycle_count);
         if mti {
             self.tick_keyboard();
+        }
+        if sti && self.keyboard.fifo_len() > 0 {
+            // Parity: surface timer-driven keyboard IRQs when events are pending.
+            if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                if (cur & ISR_KEYI) == 0 {
+                    self.memory
+                        .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
+                }
+            }
         }
     }
 
@@ -691,6 +708,11 @@ impl LlamaBus for StandaloneBus {
                     return 0;
                 }
             }
+            // E-port inputs (PEI1/PEI2) are host-driven in Python; return 0 when not bridged.
+            if matches!(offset, 0xF5 | 0xF6) {
+                self.trace_kbd_access("read-eport", addr, offset, bits, 0);
+                return 0;
+            }
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
                     IMEM_KIL_OFFSET => self.kil_reads = self.kil_reads.saturating_add(1),
@@ -700,6 +722,15 @@ impl LlamaBus for StandaloneBus {
                 }
                 if offset == IMEM_KIL_OFFSET {
                     self.pending_kil = false;
+                    // Parity: assert KEYI when FIFO has pending events on read.
+                    if self.keyboard.fifo_len() > 0 {
+                        if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                            if (cur & ISR_KEYI) == 0 {
+                                self.memory
+                                    .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
+                            }
+                        }
+                    }
                     // Emit perfetto event for KIL read with PC/value.
                     #[cfg(feature = "llama-tests")]
                     {
@@ -751,10 +782,6 @@ impl LlamaBus for StandaloneBus {
                 }
             }
         }
-        // LCD overlay ranges
-        if self.lcd.handles(addr) {
-            return self.lcd.read(addr) & mask_bits(bits);
-        }
         if self.trace_kbd && (VEC_RANGE_START..=VEC_RANGE_END).contains(&addr) {
             println!(
                 "[vec-trace-read] pc=0x{pc:05X} addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
@@ -769,6 +796,11 @@ impl LlamaBus for StandaloneBus {
             .map(|val| {
                 if MemoryImage::is_internal(addr) {
                     self.trace_imem_access("read", addr, bits, val);
+                } else if bits == 8 && self.lcd.handles(addr) {
+                    if let Some(byte) = self.lcd.read(addr) {
+                        return byte as u32;
+                    }
+                    return self.lcd.read_placeholder(addr);
                 }
                 if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
                     self.trace_fifo_access("read", addr, bits, val);
@@ -792,10 +824,27 @@ impl LlamaBus for StandaloneBus {
             }
         }
         if let Some(offset) = kbd_offset {
+            if matches!(offset, 0xF5 | 0xF6) {
+                // Ignore writes to host-driven E-port inputs for parity.
+                self.trace_kbd_access("write-eport", addr, offset, bits, value);
+                return;
+            }
             if self
                 .keyboard
                 .handle_write(offset, value as u8, &mut self.memory)
             {
+                // Parity: KIO writes can enqueue events; assert KEYI if FIFO has entries.
+                if (offset == IMEM_KOL_OFFSET || offset == IMEM_KOH_OFFSET)
+                    && self.keyboard.fifo_len() > 0
+                {
+                    if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                        if (cur & ISR_KEYI) == 0 {
+                            self.memory
+                                .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
+                        }
+                    }
+                    self.pending_kil = true;
+                }
                 if matches!(
                     offset,
                     IMEM_KIL_OFFSET
@@ -826,17 +875,19 @@ impl LlamaBus for StandaloneBus {
                 return;
             }
         }
-        if bits == 8 && self.lcd.handles(addr) {
-            self.lcd.write(addr, value as u8);
-            self.lcd_writes = self.lcd_writes.saturating_add(1);
-            if self.log_lcd && self.log_lcd_count < self.log_lcd_limit {
-                println!(
-                    "[lcd-write] addr=0x{addr:05X} value=0x{val:02X} count={cnt}",
-                    addr = addr,
-                    val = value as u8,
-                    cnt = self.lcd_writes
-                );
-                self.log_lcd_count += 1;
+        if self.lcd.handles(addr) {
+            if bits == 8 {
+                self.lcd.write(addr, value as u8);
+                self.lcd_writes = self.lcd_writes.saturating_add(1);
+                if self.log_lcd && self.log_lcd_count < self.log_lcd_limit {
+                    println!(
+                        "[lcd-write] addr=0x{addr:05X} value=0x{val:02X} count={cnt}",
+                        addr = addr,
+                        val = value as u8,
+                        cnt = self.lcd_writes
+                    );
+                    self.log_lcd_count += 1;
+                }
             }
             return;
         }

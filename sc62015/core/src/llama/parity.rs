@@ -5,6 +5,7 @@
 //! `compare_snapshots` provides the diffing layer; the caller is responsible
 //! for invoking the Python emulator (e.g., via a subprocess) and producing
 //! snapshots to feed into the comparer.
+// PY_SOURCE: tools/llama_parity_runner.py
 
 #[cfg(feature = "llama-tests")]
 use crate::{INTERNAL_MEMORY_START, INTERNAL_SPACE};

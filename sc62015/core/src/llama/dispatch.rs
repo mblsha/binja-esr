@@ -1,3 +1,4 @@
+// PY_SOURCE: sc62015/pysc62015/instr/opcode_table.py
 //! Dispatch helpers for LLAMA.
 //!
 //! This is a thin wrapper over the static opcode table to allow lookups by

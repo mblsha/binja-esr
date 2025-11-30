@@ -2,6 +2,7 @@
 //!
 //! Holds register values keyed by `RegName`. This will grow to mirror the
 //! Python emulator’s masking/aliasing rules once the evaluator lands.
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
 use std::collections::HashMap;
 
@@ -66,16 +67,24 @@ impl LlamaState {
                 self.regs.insert(RegName::I, i & mask_for(RegName::I));
             }
             RegName::F => {
-                // F is derived from FC/FZ; only keep those bits.
+                // Preserve full F byte; sync FC/FZ aliases from bits 0/1.
+                self.regs.insert(RegName::F, masked & mask_for(RegName::F));
                 self.regs.insert(RegName::FC, masked & 0x1);
                 self.regs.insert(RegName::FZ, (masked >> 1) & 0x1);
-                self.regs.insert(RegName::F, masked & 0x3);
             }
             RegName::FC => {
-                self.regs.insert(RegName::FC, masked & 0x1);
+                let bit = masked & 0x1;
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let new_f = (f & !0x1) | bit;
+                self.regs.insert(RegName::F, new_f);
+                self.regs.insert(RegName::FC, bit);
             }
             RegName::FZ => {
-                self.regs.insert(RegName::FZ, masked & 0x1);
+                let bit = masked & 0x1;
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let new_f = (f & !0x2) | (bit << 1);
+                self.regs.insert(RegName::F, new_f);
+                self.regs.insert(RegName::FZ, bit);
             }
             RegName::Temp(_) => {
                 self.regs.insert(name, masked);
@@ -95,12 +104,19 @@ impl LlamaState {
             RegName::IL => self.get_reg(RegName::I) & 0xFF,
             RegName::IH => (self.get_reg(RegName::I) >> 8) & 0xFF,
             RegName::F => {
-                let fc = self.get_reg(RegName::FC) & 0x1;
-                let fz = self.get_reg(RegName::FZ) & 0x1;
-                (fc | (fz << 1)) & mask_for(RegName::F)
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let fc = self.regs.get(&RegName::FC).copied().unwrap_or(raw & 0x1) & 0x1;
+                let fz = self.regs.get(&RegName::FZ).copied().unwrap_or((raw >> 1) & 0x1) & 0x1;
+                (raw & !0x3) | fc | (fz << 1)
             }
-            RegName::FC => *self.regs.get(&RegName::FC).unwrap_or(&0) & 0x1,
-            RegName::FZ => *self.regs.get(&RegName::FZ).unwrap_or(&0) & 0x1,
+            RegName::FC => {
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                *self.regs.get(&RegName::FC).unwrap_or(&raw) & 0x1
+            }
+            RegName::FZ => {
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                (*self.regs.get(&RegName::FZ).unwrap_or(&((raw >> 1) & 0x1))) & 0x1
+            }
             RegName::Temp(_) => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
             _ => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
         }
@@ -167,14 +183,26 @@ mod tests {
     #[test]
     fn f_facade_on_fc_fz() {
         let mut state = LlamaState::new();
-        state.set_reg(RegName::F, 0b0000_0011);
+        state.set_reg(RegName::F, 0b1010_0011);
 
         assert_eq!(state.get_reg(RegName::FC), 1);
         assert_eq!(state.get_reg(RegName::FZ), 1);
-        assert_eq!(state.get_reg(RegName::F), 0b0000_0011);
+        assert_eq!(state.get_reg(RegName::F), 0b1010_0011);
 
         state.set_reg(RegName::FC, 0);
         state.set_reg(RegName::FZ, 0);
-        assert_eq!(state.get_reg(RegName::F), 0b0000_0000);
+        assert_eq!(state.get_reg(RegName::F), 0b1010_0000);
+    }
+
+    #[test]
+    fn fc_fz_updates_preserve_upper_bits() {
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::F, 0b1111_1111);
+        state.set_reg(RegName::FC, 0);
+        state.set_reg(RegName::FZ, 1);
+
+        assert_eq!(state.get_reg(RegName::F), 0b1111_1110);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 1);
     }
 }

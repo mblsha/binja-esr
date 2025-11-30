@@ -1,3 +1,5 @@
+// PY_SOURCE: pce500/keyboard_matrix.py:KeyboardMatrix
+
 use crate::memory::MemoryImage;
 
 const FIFO_SIZE: usize = 8;
@@ -198,6 +200,10 @@ impl KeyboardMatrix {
         self.strobe_count
     }
 
+    pub fn fifo_len(&self) -> usize {
+        self.fifo_count
+    }
+
     pub fn set_repeat_enabled(&mut self, enabled: bool) {
         self.repeat_enabled = enabled;
     }
@@ -233,11 +239,14 @@ impl KeyboardMatrix {
             0xF0 => Some(self.kol),
             0xF1 => Some(self.koh),
             0xF2 => {
-                if self.scan_tick() > 0 {
+                let events = self.scan_tick();
+                if events > 0 {
                     self.write_fifo_to_memory(memory);
                 }
                 Some(self.kil_latch)
             }
+            // E-port input registers are host-driven; return 0 for parity.
+            0xF5 | 0xF6 => Some(0),
             _ => None,
         }
     }
@@ -249,6 +258,11 @@ impl KeyboardMatrix {
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
                 memory.write_internal_byte(offset, value);
+                // Parity: KOL write triggers a scan tick in Python to surface events promptly.
+                let events = self.scan_tick();
+                if events > 0 {
+                    self.write_fifo_to_memory(memory);
+                }
                 true
             }
             0xF1 => {
@@ -256,12 +270,18 @@ impl KeyboardMatrix {
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
                 memory.write_internal_byte(offset, self.koh);
+                let events = self.scan_tick();
+                if events > 0 {
+                    self.write_fifo_to_memory(memory);
+                }
                 true
             }
             0xF2 => {
                 memory.write_internal_byte(offset, self.kil_latch);
                 true
             }
+            // Ignore writes to host-driven E-port inputs.
+            0xF5 | 0xF6 => true,
             _ => false,
         }
     }

@@ -4,6 +4,8 @@
 //! `A`) to exercise the typed opcode table. The intent is to grow coverage
 //! incrementally while keeping masking/aliasing consistent with the Python
 //! emulator.
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Emulator.execute_instruction
+// PY_SOURCE: sc62015/pysc62015/instr/__init__.py:decode
 
 use super::{
     dispatch,

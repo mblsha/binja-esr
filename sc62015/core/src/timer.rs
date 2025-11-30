@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/scheduler.py:TimerScheduler
+// PY_SOURCE: pce500/emulator.py:PCE500Emulator._tick_timers
+
 use crate::memory::MemoryImage;
 use crate::{InterruptInfo, TimerInfo};
 
@@ -17,6 +20,7 @@ pub struct TimerContext {
     pub in_interrupt: bool,
     pub interrupt_stack: Vec<u32>,
     pub next_interrupt_id: u32,
+    pub last_fired: Option<String>,
 }
 
 impl TimerContext {
@@ -34,6 +38,7 @@ impl TimerContext {
             in_interrupt: false,
             interrupt_stack: Vec::new(),
             next_interrupt_id: 0,
+            last_fired: None,
         };
         ctx.reset(0);
         ctx
@@ -93,6 +98,7 @@ impl TimerContext {
         self.next_interrupt_id = interrupts.next_id;
         self.irq_imr = interrupts.imr;
         self.irq_isr = interrupts.isr;
+        self.last_fired = None;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -117,6 +123,7 @@ impl TimerContext {
         self.in_interrupt = in_interrupt;
         self.interrupt_stack = interrupt_stack.unwrap_or_default();
         self.next_interrupt_id = next_interrupt_id;
+        self.last_fired = None;
     }
 
     pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: &mut u64) -> (bool, bool) {
@@ -162,6 +169,7 @@ impl TimerContext {
             } else {
                 Some("STI".to_string())
             };
+            self.last_fired = self.irq_source.clone();
         }
         (fired_mti, fired_sti)
     }

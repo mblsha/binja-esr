@@ -1,3 +1,5 @@
+// PY_SOURCE: sc62015/pysc62015/cpu.py:CPU
+// PY_SOURCE: sc62015/pysc62015/emulator.py:Emulator
 #![allow(clippy::useless_conversion)]
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};

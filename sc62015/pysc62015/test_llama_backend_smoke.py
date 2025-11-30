@@ -111,3 +111,26 @@ def test_llama_wait_clears_i_and_flags() -> None:
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.PC) == 0x0001
+
+
+@pytest.mark.parametrize("backend", ("python", "llama"))
+def test_f_register_preserves_upper_bits(backend: str) -> None:
+    memory = _make_memory(0x00)  # no opcode needed
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.F, 0xAA)
+
+    assert cpu.regs.get(RegisterName.F) == 0xAA
+    assert cpu.regs.get(RegisterName.FC) == 0x00
+    assert cpu.regs.get(RegisterName.FZ) == 0x01
+
+
+@pytest.mark.parametrize("backend", ("python", "llama"))
+def test_fc_fz_updates_do_not_clobber_f_upper_bits(backend: str) -> None:
+    memory = _make_memory(0x00)  # no opcode needed
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.F, 0xAA)  # 0b1010_1010
+
+    cpu.regs.set(RegisterName.FC, 0)  # lower bit -> 0
+    cpu.regs.set(RegisterName.FZ, 1)  # bit1 -> 1
+
+    assert cpu.regs.get(RegisterName.F) == 0xAA  # upper bits unchanged

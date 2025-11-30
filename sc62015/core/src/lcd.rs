@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/display/hd61202.py:HD61202
+// PY_SOURCE: pce500/display/controller_wrapper.py:HD61202Controller
+
 use serde_json::{json, Value};
 use std::env;
 
@@ -75,6 +78,7 @@ impl Hd61202Chip {
 
     #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
+        // Busy flag not modelled; keep parity with Python placeholder.
         0xFF
     }
 
@@ -247,6 +251,15 @@ impl LcdController {
         }
     }
 
+    pub fn read(&mut self, address: u32) -> Option<u8> {
+        let (_cs, _di, rw) = decode_access(address)?;
+        if rw != ReadWrite::Read {
+            return None;
+        }
+        // Parity: Python HD61202Controller read paths are stubbed to 0xFF.
+        Some(0xFF)
+    }
+
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
         let mut meta = json!({
             "chip_count": self.chips.len(),
@@ -349,7 +362,7 @@ impl LcdController {
         Ok(())
     }
 
-    pub fn read(&self, address: u32) -> u32 {
+    pub fn read_placeholder(&self, address: u32) -> u32 {
         if let Some((_cs, _di, rw)) = decode_access(address) {
             if rw == ReadWrite::Read {
                 // Mirror Python wrapper: reads are not emulated; always return 0xFF.
