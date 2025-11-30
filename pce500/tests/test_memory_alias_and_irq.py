@@ -1,17 +1,16 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import os
+
 import pytest
 
 from binja_test_mocks.eval_llil import Memory
-
+from pce500.emulator import PCE500Emulator as Emulator, IRQSource
+from pce500.memory import PCE500Memory as PyMemory
+from sc62015.pysc62015 import RegisterName, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
-from pce500.memory import PCE500Memory as PyMemory
-import os
-from contextlib import contextmanager
-
-from pce500.emulator import PCE500Emulator as Emulator, IRQSource
-from sc62015.pysc62015 import RegisterName, available_backends
 
 
 def _make_raw() -> bytearray:
@@ -54,7 +53,9 @@ def _make_llama_memory(raw: bytearray):
     return mem
 
 
-@pytest.mark.parametrize("alias_base", [ADDRESS_SPACE_SIZE - 0x100, INTERNAL_MEMORY_START])
+@pytest.mark.parametrize(
+    "alias_base", [ADDRESS_SPACE_SIZE - 0x100, INTERNAL_MEMORY_START]
+)
 def test_internal_memory_alias_writes(alias_base: int) -> None:
     raw = _make_raw()
     py_mem = _make_py_memory(raw)

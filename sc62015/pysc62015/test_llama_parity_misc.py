@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from binja_test_mocks.eval_llil import Memory
@@ -9,7 +11,11 @@ from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_STAR
 from sc62015.pysc62015.test_emulator import compute_expected_dsll
 
 
-def _make_memory(raw: bytearray) -> Memory:
+class MemoryWithRaw(Memory):
+    _raw: bytearray
+
+
+def _make_memory(raw: bytearray) -> MemoryWithRaw:
     def read(addr: int) -> int:
         if addr < 0 or addr >= len(raw):
             raise IndexError(f"Read address {addr:#x} out of bounds")
@@ -22,7 +28,7 @@ def _make_memory(raw: bytearray) -> Memory:
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
-    return memory
+    return cast(MemoryWithRaw, memory)
 
 
 def _run(cpu: CPU, addr: int = 0) -> None:

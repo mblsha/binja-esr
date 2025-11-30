@@ -413,7 +413,7 @@ impl LlamaExecutor {
         let carry_out = (high_sum & 0x10) != 0;
         let res_high = high_sum & 0x0F;
 
-        (((res_high << 4) | res_low) as u8, carry_out)
+        (((res_high << 4) | res_low), carry_out)
     }
 
     fn bcd_sub_byte(a: u8, b: u8, borrow_in: bool) -> (u8, bool) {
@@ -433,7 +433,7 @@ impl LlamaExecutor {
         }
         let res_high = high_res & 0x0F;
 
-        (((res_high << 4) | res_low) as u8, borrow_out)
+        (((res_high << 4) | res_low), borrow_out)
     }
 
     fn normalize_ext_reg_mode(raw: u8) -> u8 {

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from binja_test_mocks.eval_llil import Memory
@@ -9,7 +11,11 @@ from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_STAR
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 
-def _make_memory(imr: int, f: int, ret_bytes: tuple[int, int, int], sp: int) -> Memory:
+class MemoryWithRaw(Memory):
+    _raw: bytearray
+
+
+def _make_memory(imr: int, f: int, ret_bytes: tuple[int, int, int], sp: int) -> MemoryWithRaw:
     raw = bytearray(ADDRESS_SPACE_SIZE)
     raw[0] = 0x01  # RETI opcode
     raw[sp] = imr & 0xFF
@@ -30,7 +36,7 @@ def _make_memory(imr: int, f: int, ret_bytes: tuple[int, int, int], sp: int) -> 
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
-    return memory
+    return cast(MemoryWithRaw, memory)
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])

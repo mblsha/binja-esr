@@ -189,7 +189,7 @@ mod tests {
         // Run up to but not including the target
         for _ in 0..49 {
             timer.tick_timers(&mut mem, &mut cycles);
-            assert_eq!(timer.irq_pending, false);
+            assert!(!timer.irq_pending);
         }
         assert_eq!(cycles, 49);
         // The 50th tick should fire MTI and roll the target forward.

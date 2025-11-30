@@ -153,15 +153,15 @@ mod tests {
     use crate::llama::opcodes::RegName;
 
     #[test]
-    fn il_write_clears_high_byte_and_updates_aliases() {
+    fn il_write_preserves_high_byte_and_updates_aliases() {
         let mut state = LlamaState::new();
         state.set_reg(RegName::I, 0xABCD);
 
         state.set_reg(RegName::IL, 0x34);
 
         assert_eq!(state.get_reg(RegName::IL), 0x34);
-        assert_eq!(state.get_reg(RegName::IH), 0x00);
-        assert_eq!(state.get_reg(RegName::I), 0x0034);
+        assert_eq!(state.get_reg(RegName::IH), 0xAB);
+        assert_eq!(state.get_reg(RegName::I), 0xAB34);
     }
 
     #[test]

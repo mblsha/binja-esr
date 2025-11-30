@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from pce500.display.controller_wrapper import HD61202Controller
 from binja_test_mocks.eval_llil import Memory
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
