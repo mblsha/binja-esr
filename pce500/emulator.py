@@ -307,6 +307,16 @@ class PCE500Emulator:
                         setter(trace_path)
             except Exception:
                 pass
+            # Seed a Rust-side IRQ event to mark tracing start for cadence parity.
+            try:
+                from _sc62015_rustcore import record_irq_event as rust_irq_event
+
+                rust_irq_event(
+                    "Trace_Start",
+                    {"pc": int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF},
+                )
+            except Exception:
+                pass
 
         if any(o.name == "internal_rom" for o in self.memory.overlays):
             self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
@@ -444,6 +454,20 @@ class PCE500Emulator:
             trace_dispatcher.record_instant(
                 self._irq_perfetto_track(source), name, data
             )
+        try:
+            from _sc62015_rustcore import record_irq_event as rust_irq_event
+
+            rust_payload = {k: int(v) if v is not None else 0 for k, v in data.items()}
+            rust_irq_event(name, rust_payload)
+        except Exception:
+            pass
+        try:
+            from _sc62015_rustcore import record_irq_event as rust_irq_event
+
+            rust_payload = {k: int(v) if v is not None else 0 for k, v in data.items()}
+            rust_irq_event(name, rust_payload)
+        except Exception:
+            pass
 
     def _trace_key_event(self, col: int, row: int, pressed: bool) -> None:
         """Optional hook from keyboard scan to log KEY events into perfetto."""

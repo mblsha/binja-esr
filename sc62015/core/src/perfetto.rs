@@ -207,4 +207,15 @@ impl PerfettoTracer {
         ev.add_annotation("value", value as u64);
         ev.finish();
     }
+
+    /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
+    pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, u64>) {
+        let mut ev = self
+            .builder
+            .add_instant_event(self.exec_track, name.to_string(), 0);
+        for (k, v) in payload {
+            ev.add_annotation(k, v);
+        }
+        ev.finish();
+    }
 }

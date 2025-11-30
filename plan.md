@@ -191,7 +191,7 @@ Tracked gaps between the Rust LLAMA core and the Python emulator, with TODOs to 
 
 4) **Timers & IRQ cadence**
    - Gap: `TimerContext` sets ISR bits only; no IMR gating, keyboard scan integration, or dispatcher parity.
-   - Actions: Align with `PCE500Emulator._tick_timers`; integrate IMR, scan-triggered KEYI, perfetto hooks; add cadence tests (MTI/STI/KEYI). ✅ Timer tick now drives keyboard scans and KEYI when events present; further IMR/dispatcher parity still needed. 🔜 Surface LLAMA backend through Python timer/dispatcher to add cross-backend cadence tests.
+   - Actions: Align with `PCE500Emulator._tick_timers`; integrate IMR, scan-triggered KEYI, perfetto hooks; add cadence tests (MTI/STI/KEYI). ✅ Timer tick now drives keyboard scans and KEYI when events present; further IMR/dispatcher parity still needed. ✅ LLAMA bus now reports IMR/ISR writes into Python `trace_irq_from_rust`; 🔜 emit timer/IRQ entry/exit payloads and add cross-backend cadence tests via Python dispatcher.
 
 5) **Keyboard IRQs and FIFO**
    - Gap: KeyboardMatrix never asserts KEYI/IMR; `pending_kil` not set; no IRQ delivery on debounce/repeat.
@@ -220,3 +220,4 @@ Tracked gaps between the Rust LLAMA core and the Python emulator, with TODOs to 
 ## Next Steps
 - Prioritize gaps 1, 3, 4, 5 for instruction/IRQ correctness; follow with 2, 6, 7, 8, 9 for fidelity and tooling.
 - Add automated parity tests for each gap; wire into CI (nightly smoke + unit parity).
+- Extract IRQ pending/delivery logic in `pce500/emulator.py` into reusable helper(s) with a test-only hook to force delivery, then add deterministic MTI/KEYI stack/PC delivery tests for Python and LLAMA backends.

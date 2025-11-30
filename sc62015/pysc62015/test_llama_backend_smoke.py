@@ -183,3 +183,141 @@ def test_llama_lcd_hook_invoked_on_write() -> None:
     cpu.execute_instruction(0x0000)
 
     assert mem.calls == [(0x2000, 0xCD, 0x0000)]
+
+
+class _MemoryRecordingPc:
+    def __init__(self) -> None:
+        self._raw = bytearray(ADDRESS_SPACE_SIZE)
+        self.calls: list[tuple[str, int, int | None]] = []
+
+    def read_byte(self, addr: int, cpu_pc: int | None = None) -> int:
+        self.calls.append(("read", addr & 0xFFFFFF, cpu_pc))
+        return self._raw[addr & 0xFFFFFF]
+
+    def write_byte(self, addr: int, value: int, cpu_pc: int | None = None) -> None:
+        self.calls.append(("write", addr & 0xFFFFFF, cpu_pc))
+        self._raw[addr & 0xFFFFFF] = value & 0xFF
+
+
+def test_llama_passes_pc_to_memory_reads_and_writes() -> None:
+    mem = _MemoryRecordingPc()
+    # MV [0x00020],A
+    mem._raw[0] = 0xA8
+    mem._raw[1] = 0x20
+    mem._raw[2] = 0x00
+    mem._raw[3] = 0x00
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+    cpu.regs.set(RegisterName.A, 0xCD)
+
+    cpu.execute_instruction(0x0000)
+
+    assert ("write", 0x20, 0) in mem.calls
+    pc_values = {pc for _, _, pc in mem.calls if pc is not None}
+    assert pc_values == {0}
+
+
+class _MemoryWithKioTrace:
+    def __init__(self) -> None:
+        self._raw = bytearray(ADDRESS_SPACE_SIZE)
+        self.kio_traces: list[tuple[int, int, int | None]] = []
+        self.irq_traces: list[tuple[str, dict[str, int | None]]] = []
+
+    def trace_kio_from_rust(self, offset: int, value: int, pc: int | None = None) -> None:
+        self.kio_traces.append((offset & 0xFF, value & 0xFF, pc))
+
+    def trace_irq_from_rust(self, name: str, payload: dict[str, int | None]) -> None:
+        self.irq_traces.append((name, dict(payload)))
+
+    def read_byte(self, addr: int, cpu_pc: int | None = None) -> int:
+        return self._raw[addr & 0xFFFFFF]
+
+    def write_byte(self, addr: int, value: int, cpu_pc: int | None = None) -> None:
+        self._raw[addr & 0xFFFFFF] = value & 0xFF
+
+
+def test_llama_kio_write_traces_into_python_bus() -> None:
+    mem = _MemoryWithKioTrace()
+    # MV (KOL),A with immediate offset 0xF0
+    mem._raw[0] = 0xA0  # MV (n),A
+    mem._raw[1] = 0xF0  # KOL offset
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+    cpu.regs.set(RegisterName.A, 0x12)
+
+    cpu.execute_instruction(0x0000)
+
+    assert (0xF0, 0x12, 0) in mem.kio_traces
+    assert mem._raw[(0x100000 + 0xF0) & 0xFFFFFF] == 0x12
+
+
+def test_llama_imr_write_traces_irq_payload() -> None:
+    mem = _MemoryWithKioTrace()
+    # MV (IMR),#0xAA using IMem8 immediate
+    mem._raw[0] = 0xCC  # MV IMem8,imm8
+    mem._raw[1] = 0xFB  # IMR offset
+    mem._raw[2] = 0xAA
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+
+    cpu.execute_instruction(0x0000)
+
+    assert any(name == "IMR_Write" for name, _ in mem.irq_traces)
+    assert mem._raw[(0x100000 + 0xFB) & 0xFFFFFF] == 0xAA
+
+
+def test_llama_isr_write_traces_irq_payload() -> None:
+    mem = _MemoryWithKioTrace()
+    # MV (ISR),#0x55 using IMem8 immediate
+    mem._raw[0] = 0xCC  # MV IMem8,imm8
+    mem._raw[1] = 0xFC  # ISR offset
+    mem._raw[2] = 0x55
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+
+    cpu.execute_instruction(0x0000)
+
+    assert any(name == "ISR_Write" for name, _ in mem.irq_traces)
+    assert mem._raw[(0x100000 + 0xFC) & 0xFFFFFF] == 0x55
+
+
+def test_llama_ir_traces_irq_enter() -> None:
+    mem = _MemoryWithKioTrace()
+    # IR opcode at 0x00, vector at 0xFFFFA = 0x12345
+    mem._raw[0] = 0xFE
+    mem._raw[0xFFFFA] = 0x45
+    mem._raw[0xFFFFB] = 0x23
+    mem._raw[0xFFFFC] = 0x01
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+    cpu.regs.set(RegisterName.S, 0x0020)  # scratch stack space
+    cpu.regs.set(RegisterName.F, 0x10)
+
+    cpu.execute_instruction(0x0000)
+
+    assert any(name == "IRQ_Enter" for name, _ in mem.irq_traces)
+    entry = next(payload for name, payload in mem.irq_traces if name == "IRQ_Enter")
+    assert entry["pc"] == 0
+    assert entry["vector"] == 0x12345
+
+
+def test_llama_reti_traces_irq_exit() -> None:
+    mem = _MemoryWithKioTrace()
+    # RETI opcode with stack frame IMR,F,PC bytes
+    mem._raw[0] = 0x01
+    # stack frame at 0x30
+    mem._raw[0x30] = 0xAA  # IMR
+    mem._raw[0x31] = 0xBB  # F
+    mem._raw[0x32] = 0x11
+    mem._raw[0x33] = 0x22
+    mem._raw[0x34] = 0x33
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+    cpu.regs.set(RegisterName.S, 0x0030)
+
+    cpu.execute_instruction(0x0000)
+
+    assert any(name == "IRQ_Exit" for name, _ in mem.irq_traces)
+    exit_payload = next(payload for name, payload in mem.irq_traces if name == "IRQ_Exit")
+    assert exit_payload["pc"] == 0
+    assert exit_payload["ret"] == 0x032211

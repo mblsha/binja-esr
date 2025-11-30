@@ -2,7 +2,7 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Emulator
 #![allow(clippy::useless_conversion)]
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyDict, PyModule};
 use pyo3::Bound;
@@ -23,6 +23,9 @@ use std::sync::OnceLock;
 const IMEM_KOL_OFFSET: u32 = 0xF0;
 const IMEM_KOH_OFFSET: u32 = 0xF1;
 const IMEM_KIL_OFFSET: u32 = 0xF2;
+const IMEM_IMR_OFFSET: u32 = 0xFB;
+const IMEM_ISR_OFFSET: u32 = 0xFC;
+const IMEM_SCR_OFFSET: u32 = 0xFD;
 
 fn llama_reg_from_name(name: &str) -> Option<LlamaRegName> {
     match name.to_ascii_uppercase().as_str() {
@@ -79,25 +82,49 @@ impl LlamaPyBus {
     }
 
     fn read_byte(&self, addr: u32) -> u8 {
-        Python::with_gil(|py| {
-            self.memory
-                .bind(py)
-                .call_method1("read_byte", (addr,))
-                .and_then(|obj| obj.extract::<u8>())
-                .unwrap_or(0)
-        })
+        Python::with_gil(|py| self.read_byte_with_gil(py, addr))
+    }
+
+    fn read_byte_with_gil(&self, py: Python<'_>, addr: u32) -> u8 {
+        let bound = self.memory.bind(py);
+        let addr = addr & ADDRESS_MASK;
+        match bound.call_method1("read_byte", (addr, self.pc)) {
+            Ok(obj) => obj.extract::<u8>().unwrap_or(0),
+            Err(err) => {
+                if err.is_instance_of::<PyTypeError>(py) {
+                    bound
+                        .call_method1("read_byte", (addr,))
+                        .and_then(|obj| obj.extract::<u8>())
+                        .unwrap_or(0)
+                } else {
+                    0
+                }
+            }
+        }
     }
 
     fn write_byte(&self, addr: u32, value: u8) {
-        Python::with_gil(|py| {
-            let bound = self.memory.bind(py);
-            let _ = bound.call_method1("write_byte", (addr, value));
-            if Self::is_lcd_addr(addr) {
-                if let Some(hook) = &self.lcd_hook {
-                    let _ = hook.call1(py, (addr, value, self.pc));
+        Python::with_gil(|py| self.write_byte_with_gil(py, addr, value));
+    }
+
+    fn write_byte_with_gil(&self, py: Python<'_>, addr: u32, value: u8) {
+        let bound = self.memory.bind(py);
+        let addr = addr & ADDRESS_MASK;
+        let _ = match bound.call_method1("write_byte", (addr, value, self.pc)) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if err.is_instance_of::<PyTypeError>(py) {
+                    bound.call_method1("write_byte", (addr, value)).map(|_| ())
+                } else {
+                    Ok(())
                 }
             }
-        });
+        };
+        if Self::is_lcd_addr(addr) {
+            if let Some(hook) = &self.lcd_hook {
+                let _ = hook.call1(py, (addr, value, self.pc));
+            }
+        }
     }
 }
 
@@ -154,6 +181,44 @@ impl LlamaBus for LlamaPyBus {
     }
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
+        // Mirror KIO writes into the Python tracer so overlays see LLAMA traffic.
+        let absolute = addr & ADDRESS_MASK;
+        if absolute >= INTERNAL_MEMORY_START {
+            let offset = absolute - INTERNAL_MEMORY_START;
+            if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
+                Python::with_gil(|py| {
+                    let _ = self.memory.bind(py).call_method1(
+                        "trace_kio_from_rust",
+                        (offset, value & 0xFF, self.pc),
+                    );
+                });
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_kio_read(Some(self.pc), offset as u8, value as u8);
+                    }
+                }
+            } else if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET | IMEM_SCR_OFFSET) {
+                // Mirror IRQ register writes into Python tracer for parity runs.
+                Python::with_gil(|py| {
+                    let payload = PyDict::new_bound(py);
+                    let _ = payload.set_item("offset", offset & 0xFF);
+                    let _ = payload.set_item("value", value & 0xFF);
+                    let _ = payload.set_item("pc", self.pc & ADDRESS_MASK);
+                    let _ = self.memory.bind(py).call_method1(
+                        "trace_irq_from_rust",
+                        (
+                            match offset {
+                                IMEM_IMR_OFFSET => "IMR_Write",
+                                IMEM_ISR_OFFSET => "ISR_Write",
+                                IMEM_SCR_OFFSET => "SCR_Write",
+                                _ => "IRQ_Write",
+                            },
+                            payload,
+                        ),
+                    );
+                });
+            }
+        }
         match bits {
             0 | 8 => self.write_byte(addr, value as u8),
             16 => {
@@ -293,19 +358,42 @@ impl LlamaCpu {
     }
 
     fn execute_instruction(&mut self, py: Python<'_>, address: u32) -> PyResult<(u8, u8)> {
-        let opcode = self
-            .memory
-            .bind(py)
-            .call_method1("read_byte", (address,))
-            .and_then(|obj| obj.extract::<u8>())
-            .unwrap_or(0);
         self.state.set_pc(address & ADDRESS_MASK);
-        let mut bus = LlamaPyBus::new(py, &self.memory, self.state.get_reg(LlamaRegName::PC));
+        let entry_pc = self.state.get_reg(LlamaRegName::PC);
+        let mut bus = LlamaPyBus::new(py, &self.memory, entry_pc);
+        let opcode = bus.read_byte(entry_pc & ADDRESS_MASK);
         let len = self
             .executor
             .execute(opcode, &mut self.state, &mut bus)
             .map_err(|e| PyRuntimeError::new_err(format!("llama execute: {e}")))?;
         self.call_sub_level = self.state.call_depth();
+        if opcode == 0xFE {
+            // IR: interrupt entry
+            let (imr, isr) = self.read_irq_registers(py, &bus);
+            self.emit_irq_trace(
+                py,
+                "IRQ_Enter",
+                HashMap::from([
+                    ("pc", entry_pc & ADDRESS_MASK),
+                    ("vector", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
+                    ("imr", imr as u32),
+                    ("isr", isr as u32),
+                ]),
+            );
+        } else if opcode == 0x01 {
+            // RETI: interrupt exit
+            let (imr, isr) = self.read_irq_registers(py, &bus);
+            self.emit_irq_trace(
+                py,
+                "IRQ_Exit",
+                HashMap::from([
+                    ("pc", entry_pc & ADDRESS_MASK),
+                    ("ret", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
+                    ("imr", imr as u32),
+                    ("isr", isr as u32),
+                ]),
+            );
+        }
         Ok((opcode, len))
     }
 
@@ -481,6 +569,28 @@ impl LlamaCpu {
 }
 
 impl LlamaCpu {
+    fn emit_irq_trace(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        payload: HashMap<&'static str, u32>,
+    ) {
+        let dict = PyDict::new_bound(py);
+        for (k, v) in payload {
+            let _ = dict.set_item(k, v);
+        }
+        let _ = self
+            .memory
+            .bind(py)
+            .call_method1("trace_irq_from_rust", (name, dict));
+    }
+
+    fn read_irq_registers(&self, py: Python<'_>, bus: &LlamaPyBus) -> (u8, u8) {
+        let imr = bus.read_byte_with_gil(py, INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        let isr = bus.read_byte_with_gil(py, INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
+        (imr, isr)
+    }
+
     fn sync_mirror(&mut self, py: Python<'_>) {
         let bound = self.memory.bind(py);
         for (addr, value) in self.mirror.drain_dirty_internal() {
@@ -497,5 +607,17 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
     m.add("HAS_CPU_IMPLEMENTATION", false)?;
     m.add("HAS_LLAMA_IMPLEMENTATION", true)?;
     m.add_class::<LlamaCpu>()?;
+    m.add("record_irq_event", pyo3::wrap_pyfunction!(record_irq_event_py, m)?)?;
+    Ok(())
+}
+
+/// Helper to emit an IRQ event from Python into the Rust tracer when available.
+#[pyfunction]
+fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
+    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Some(tracer) = guard.as_mut() {
+            tracer.record_irq_event(name, payload);
+        }
+    }
     Ok(())
 }

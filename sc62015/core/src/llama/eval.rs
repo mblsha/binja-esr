@@ -1372,6 +1372,86 @@ impl LlamaExecutor {
         Ok(len)
     }
 
+    fn execute_multi_byte_binary<B: LlamaBus>(
+        &mut self,
+        entry: &OpcodeEntry,
+        state: &mut LlamaState,
+        bus: &mut B,
+        pre: Option<&PreModes>,
+        pc_override: Option<u32>,
+        prefix_len: u8,
+        subtract: bool,
+    ) -> Result<u8, &'static str> {
+        let decoded = self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+        let mem_dst = decoded.mem.ok_or("missing destination")?;
+        let mut dst_addr = mem_dst.addr;
+        let mut src_addr = decoded.mem2.map(|m| m.addr);
+        let src_reg = entry
+            .operands
+            .get(1)
+            .and_then(|op| Self::resolved_reg(op, &decoded));
+        let src_bits = decoded
+            .mem2
+            .map(|m| m.bits)
+            .or_else(|| {
+                entry
+                    .operands
+                    .get(1)
+                    .and_then(|op| if let OperandKind::Reg(_, b) = op { Some(*b) } else { None })
+            })
+            .unwrap_or(mem_dst.bits);
+        let mask_dst = Self::mask_for_width(mem_dst.bits);
+        let mask_src = Self::mask_for_width(src_bits);
+        let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+        let dst_step = mem_dst.bits.div_ceil(8) as u32;
+        let src_step = decoded
+            .mem2
+            .map(|m| m.bits.div_ceil(8) as u32)
+            .unwrap_or(0);
+        let mut overall_zero: u32 = 0;
+        let mut carry = (state.get_reg(RegName::FC) & 1) != 0;
+
+        for _ in 0..length {
+            let lhs = bus.load(dst_addr, mem_dst.bits) & mask_dst;
+            let rhs = match src_addr {
+                Some(addr) => bus.load(addr, src_bits) & mask_src,
+                None => src_reg
+                    .map(|r| state.get_reg(r) & mask_src)
+                    .ok_or("missing source")?,
+            };
+            let (res, new_carry) = if subtract {
+                let borrow = (lhs as u64) < (rhs as u64 + carry as u64);
+                (
+                    lhs.wrapping_sub(rhs).wrapping_sub(carry as u32) & mask_dst,
+                    borrow,
+                )
+            } else {
+                let full = (lhs as u64) + (rhs as u64) + (carry as u64);
+                (((full as u32) & mask_dst), full > mask_dst as u64)
+            };
+            bus.store(dst_addr, mem_dst.bits, res);
+            overall_zero |= res;
+            carry = new_carry;
+
+            if let Some(addr) = src_addr.as_mut() {
+                *addr = Self::advance_internal_addr(*addr, src_step);
+            }
+            dst_addr = Self::advance_internal_addr(dst_addr, dst_step);
+        }
+
+        state.set_reg(RegName::I, 0);
+        state.set_reg(RegName::FC, if carry { 1 } else { 0 });
+        state.set_reg(
+            RegName::FZ,
+            if (overall_zero & mask_dst) == 0 { 1 } else { 0 },
+        );
+        let start_pc = state.pc();
+        if state.pc() == start_pc {
+            state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+        }
+        Ok(decoded.len)
+    }
+
     /// Stub execute entrypoint; wires length estimation and recognizes WAIT/RET/HALT placeholders.
     pub fn execute<B: LlamaBus>(
         &mut self,
@@ -1728,6 +1808,24 @@ impl LlamaExecutor {
                 }
                 Ok(decoded.len)
             }
+            InstrKind::Adc if entry.name == "ADCL" => self.execute_multi_byte_binary(
+                entry,
+                state,
+                bus,
+                pre,
+                pc_override,
+                prefix_len,
+                false,
+            ),
+            InstrKind::Sbcl => self.execute_multi_byte_binary(
+                entry,
+                state,
+                bus,
+                pre,
+                pc_override,
+                prefix_len,
+                true,
+            ),
             InstrKind::Add
             | InstrKind::Sub
             | InstrKind::And
@@ -2230,6 +2328,19 @@ impl LlamaExecutor {
                     Ok(len)
                 }
             }
+            InstrKind::Swap => {
+                let decoded =
+                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+                let val = state.get_reg(RegName::A) & 0xFF;
+                let swapped = ((val & 0x0F) << 4) | ((val >> 4) & 0x0F);
+                state.set_reg(RegName::A, swapped);
+                state.set_reg(RegName::FZ, if swapped == 0 { 1 } else { 0 });
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                Ok(decoded.len)
+            }
             _ => {
                 let len = Self::estimated_length(entry);
                 let start_pc = state.pc();
@@ -2442,6 +2553,70 @@ mod tests {
         let len = exec.execute(0x58, &mut state, &mut bus).unwrap();
         assert_eq!(len, 2);
         assert_eq!(state.get_reg(RegName::A), 0x01);
+    }
+
+    #[test]
+    fn adcl_multibyte_uses_incoming_carry() {
+        // Program: 0x54 (ADCL (m),(n)) with I=2, carry propagates across bytes
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[0] = 0x54;
+        bus.mem[1] = 0x10; // dst
+        bus.mem[2] = 0x20; // src
+        bus.mem[0x10] = 0xFF;
+        bus.mem[0x11] = 0x00;
+        bus.mem[0x20] = 0x01;
+        bus.mem[0x21] = 0x02;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::I, 2);
+        state.set_reg(RegName::FC, 1);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x54, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(bus.mem[0x10], 0x01);
+        assert_eq!(bus.mem[0x11], 0x03);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.pc(), 3);
+    }
+
+    #[test]
+    fn sbcl_multibyte_propagates_borrow_forward() {
+        // Program: 0x5C (SBCL (m),(n)) with I=2, borrow chains across bytes
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[0] = 0x5C;
+        bus.mem[1] = 0x10; // dst
+        bus.mem[2] = 0x20; // src
+        bus.mem[0x10] = 0x00;
+        bus.mem[0x11] = 0x02;
+        bus.mem[0x20] = 0x01;
+        bus.mem[0x21] = 0x01;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::I, 2);
+        state.set_reg(RegName::FC, 1);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x5C, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(bus.mem[0x10], 0xFE);
+        assert_eq!(bus.mem[0x11], 0x00);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.pc(), 3);
+    }
+
+    #[test]
+    fn swap_nibbles_updates_zero_flag() {
+        let mut bus = MemBus::with_size(2);
+        bus.mem[0] = 0xEE;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::A, 0x3C);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xEE, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.get_reg(RegName::A), 0xC3);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.pc(), 1);
     }
 
     #[test]

@@ -10,6 +10,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from .tracing import trace_dispatcher
 from .tracing.perfetto_tracing import perf_trace
+from .tracing.perfetto_tracing import tracer as perfetto_tracer
 from .memory_bus import MemoryBus, MemoryOverlay
 
 # Import constants for accessing internal memory registers
@@ -1186,6 +1187,12 @@ class PCE500Memory:
     ) -> None:
         """Mirror LLAMA-side IRQ events into the main Perfetto trace."""
 
+        # Also forward to the rustcore helper so both tracers stay aligned.
+        try:
+            from _sc62015_rustcore import record_irq_event as rust_irq_event
+        except Exception:
+            rust_irq_event = None
+
         tracer = getattr(self, "_perf_tracer", None)
         if tracer is None:
             return
@@ -1214,5 +1221,10 @@ class PCE500Memory:
                 tracer.instant(track, name, data)
             elif hasattr(tracer, "record_instant"):
                 tracer.record_instant(track, name, data)
+            if rust_irq_event is not None and perfetto_tracer.enabled:
+                rust_payload = {
+                    k: int(v) if v is not None else 0 for k, v in data.items()
+                }
+                rust_irq_event(name, rust_payload)
         except Exception:
             pass

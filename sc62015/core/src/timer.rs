@@ -3,6 +3,7 @@
 
 use crate::memory::MemoryImage;
 use crate::{InterruptInfo, TimerInfo};
+use crate::PERFETTO_TRACER;
 
 const ISR_OFFSET: u32 = 0xFC;
 
@@ -170,6 +171,7 @@ impl TimerContext {
                 Some("STI".to_string())
             };
             self.last_fired = self.irq_source.clone();
+            self.emit_irq_trace(fired_mti, fired_sti, memory);
         }
         (fired_mti, fired_sti)
     }
@@ -180,6 +182,33 @@ impl TimerContext {
         }
         self.irq_pending = false;
         self.irq_source.take()
+    }
+
+    fn emit_irq_trace(&self, fired_mti: bool, fired_sti: bool, memory: &MemoryImage) {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = Vec::new();
+                if fired_mti {
+                    payload.push(("mti", 1u32));
+                }
+                if fired_sti {
+                    payload.push(("sti", 1u32));
+                }
+                payload.push(("isr", self.irq_isr as u32));
+                payload.push(("imr", self.irq_imr as u32));
+                // Include ISR snapshot if available.
+                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                    payload.push(("isr_mem", isr as u32));
+                }
+                tracer.record_irq_event(
+                    "Timer",
+                    payload
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v as u64))
+                        .collect(),
+                );
+            }
+        }
     }
 }
 
