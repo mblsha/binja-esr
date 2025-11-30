@@ -387,6 +387,58 @@ impl LlamaExecutor {
         }
     }
 
+    fn is_internal_addr(addr: u32) -> bool {
+        (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr)
+    }
+
+    fn advance_internal_addr(addr: u32, step: u32) -> u32 {
+        if Self::is_internal_addr(addr) {
+            let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
+            let wrapped = offset.wrapping_add(step) & 0xFF;
+            INTERNAL_MEMORY_START + wrapped
+        } else {
+            addr.wrapping_add(step)
+        }
+    }
+
+    fn bcd_add_byte(a: u8, b: u8, carry_in: bool) -> (u8, bool) {
+        let mut low_sum = (a & 0x0F).wrapping_add(b & 0x0F).wrapping_add(carry_in as u8);
+        let low_adjust = if low_sum > 9 { 6 } else { 0 };
+        low_sum = low_sum.wrapping_add(low_adjust);
+        let carry_to_high = (low_sum & 0x10) != 0;
+        let res_low = low_sum & 0x0F;
+
+        let mut high_sum = ((a >> 4) & 0x0F)
+            .wrapping_add((b >> 4) & 0x0F)
+            .wrapping_add(carry_to_high as u8);
+        let high_adjust = if high_sum > 9 { 6 } else { 0 };
+        high_sum = high_sum.wrapping_add(high_adjust);
+        let carry_out = (high_sum & 0x10) != 0;
+        let res_high = high_sum & 0x0F;
+
+        (((res_high << 4) | res_low) as u8, carry_out)
+    }
+
+    fn bcd_sub_byte(a: u8, b: u8, borrow_in: bool) -> (u8, bool) {
+        let sub_low = (b & 0x0F).wrapping_add(borrow_in as u8);
+        let mut low_res = (a & 0x0F).wrapping_sub(sub_low);
+        let borrow_low = (a & 0x0F) < sub_low;
+        if borrow_low {
+            low_res = low_res.wrapping_sub(6);
+        }
+        let res_low = low_res & 0x0F;
+
+        let sub_high = ((b >> 4) & 0x0F).wrapping_add(borrow_low as u8);
+        let mut high_res = ((a >> 4) & 0x0F).wrapping_sub(sub_high);
+        let borrow_out = ((a >> 4) & 0x0F) < sub_high;
+        if borrow_out {
+            high_res = high_res.wrapping_sub(6);
+        }
+        let res_high = high_res & 0x0F;
+
+        (((res_high << 4) | res_low) as u8, borrow_out)
+    }
+
     fn normalize_ext_reg_mode(raw: u8) -> u8 {
         if raw & 0x8 != 0 {
             if raw & 0x4 != 0 {
@@ -890,6 +942,13 @@ impl LlamaExecutor {
             if let (Some(mem_dst), Some(mem_src)) = (decoded.mem, decoded.mem2) {
                 let mut dst_addr = mem_dst.addr;
                 let mut src_addr = mem_src.addr;
+                let wrap_internal = matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld);
+                let dst_wrap = wrap_internal
+                    && mem_dst.bits == 8
+                    && Self::is_internal_addr(mem_dst.addr);
+                let src_wrap = wrap_internal
+                    && mem_src.bits == 8
+                    && Self::is_internal_addr(mem_src.addr);
                 let dst_step = mem_dst
                     .side_effect
                     .map(|(reg, new_val)| {
@@ -909,8 +968,16 @@ impl LlamaExecutor {
                 for _ in 0..length {
                     let val = bus.load(src_addr, mem_dst.bits);
                     bus.store(dst_addr, mem_dst.bits, val);
-                    src_addr = src_addr.wrapping_add(src_step);
-                    dst_addr = dst_addr.wrapping_add(dst_step);
+                    src_addr = if src_wrap {
+                        Self::advance_internal_addr(src_addr, src_step)
+                    } else {
+                        src_addr.wrapping_add(src_step)
+                    };
+                    dst_addr = if dst_wrap {
+                        Self::advance_internal_addr(dst_addr, dst_step)
+                    } else {
+                        dst_addr.wrapping_add(dst_step)
+                    };
                 }
             }
         }
@@ -1470,6 +1537,76 @@ impl LlamaExecutor {
                 let dst = bus.load(mem.addr, 8) & 0xFF;
                 let res = (dst + src_val) & 0xFF;
                 bus.store(mem.addr, 8, res);
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                }
+                Ok(decoded.len)
+            }
+            InstrKind::Dadl | InstrKind::Dsbl => {
+                let decoded =
+                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+                let mem_dst = decoded.mem.ok_or("missing destination")?;
+                if mem_dst.bits != 8 {
+                    return Err("unsupported width for DADL/DSBL");
+                }
+                let mut dst_addr = mem_dst.addr;
+                let mut src_addr = decoded.mem2.map(|m| m.addr);
+                let src_bits = decoded.mem2.map(|m| m.bits);
+                let src_reg = if src_bits.is_none() {
+                    entry
+                        .operands
+                        .get(1)
+                        .and_then(|op| Self::resolved_reg(op, &decoded))
+                } else {
+                    None
+                };
+                let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+                let mut carry = match entry.kind {
+                    InstrKind::Dadl => {
+                        state.set_reg(RegName::FC, 0);
+                        false
+                    }
+                    InstrKind::Dsbl => (state.get_reg(RegName::FC) & 1) != 0,
+                    _ => false,
+                };
+                let dst_step = mem_dst.bits.div_ceil(8) as u32;
+                let src_step = src_bits.map_or(0, |b| b.div_ceil(8) as u32);
+                let mut overall_zero: u32 = 0;
+                let mut executed = false;
+                for _ in 0..length {
+                    let dst_byte = (bus.load(dst_addr, mem_dst.bits) & 0xFF) as u8;
+                    let src_byte = if let Some(bits) = src_bits {
+                        let addr = src_addr.ok_or("missing source")?;
+                        (bus.load(addr, bits) & 0xFF) as u8
+                    } else if let Some(reg) = src_reg {
+                        (state.get_reg(reg) & 0xFF) as u8
+                    } else {
+                        return Err("missing source");
+                    };
+                    let (res, new_carry) = if entry.kind == InstrKind::Dadl {
+                        Self::bcd_add_byte(dst_byte, src_byte, carry)
+                    } else {
+                        Self::bcd_sub_byte(dst_byte, src_byte, carry)
+                    };
+                    bus.store(dst_addr, mem_dst.bits, res as u32);
+                    carry = new_carry;
+                    overall_zero |= res as u32;
+                    if let Some(addr) = src_addr.as_mut() {
+                        *addr = addr.wrapping_sub(src_step);
+                    }
+                    dst_addr = dst_addr.wrapping_sub(dst_step);
+                    executed = true;
+                }
+                state.set_reg(RegName::I, 0);
+                let zero_mask = Self::mask_for_width(mem_dst.bits);
+                state.set_reg(
+                    RegName::FZ,
+                    if (overall_zero & zero_mask) == 0 { 1 } else { 0 },
+                );
+                if executed || entry.kind == InstrKind::Dadl {
+                    state.set_reg(RegName::FC, if carry { 1 } else { 0 });
+                }
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
