@@ -171,6 +171,7 @@ pub fn run_python_oracle(
     regs: &[(RegName, u32)],
     pc: u32,
     cwd: Option<&Path>,
+    mem: Option<&[(u32, u8)]>,
 ) -> Result<OracleResult, String> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = manifest_dir
@@ -197,6 +198,16 @@ pub fn run_python_oracle(
             .as_object_mut()
             .expect("payload map")
             .insert("regs".to_string(), serde_json::Value::Object(reg_map));
+    }
+    if let Some(mem_seed) = mem {
+        let arr = mem_seed
+            .iter()
+            .map(|(addr, val)| serde_json::json!([addr, val]))
+            .collect::<Vec<_>>();
+        payload
+            .as_object_mut()
+            .expect("payload map")
+            .insert("mem".to_string(), serde_json::Value::Array(arr));
     }
     // Prefer uv to ensure binja_test_mocks is installed in the virtualenv.
     let mut cmd = Command::new("uv");
@@ -535,12 +546,16 @@ pub fn run_llama_step(
     regs: &[(RegName, u32)],
     pc: u32,
     instr_index: u64,
+    mem: &[(u32, u8)],
 ) -> Result<(TraceEvent, Snapshot), String> {
     if bytes.is_empty() {
         return Err("no opcode bytes provided".into());
     }
     let mut bus = RecordingBus::default();
     bus.preload(pc, bytes);
+    for (addr, val) in mem {
+        bus.mem.insert(*addr & 0xFF_FFFF, *val);
+    }
     let mut state = LlamaState::new();
     state.set_pc(pc);
     for (reg, value) in regs {
@@ -585,12 +600,14 @@ pub fn run_parity_once(
     pc: u32,
     instr_index: u64,
     cwd: &StdPath,
+    mem: &[(u32, u8)],
 ) -> Result<(Snapshot, Snapshot, PathBuf, PathBuf, Output), String> {
-    let (llama_event, llama_snap) = run_llama_step(bytes, regs, pc, instr_index)?;
+    let (llama_event, llama_snap) = run_llama_step(bytes, regs, pc, instr_index, mem)?;
     let llama_trace = cwd.join("llama_parity.pftrace");
     write_perfetto_trace(&[llama_event], &llama_trace).map_err(|e| format!("llama trace: {e}"))?;
 
-    let py_output = run_python_oracle(bytes, regs, pc, Some(cwd))?;
+    let py_output = run_python_oracle(bytes, regs, pc, Some(cwd), Some(mem))
+        .map_err(|e| e.to_string())?;
     let py_snap = py_output.snapshot;
     let py_trace = cwd.join("python_parity.pftrace");
     // If the oracle already emitted a trace, prefer that; otherwise serialize our own.
@@ -652,6 +669,8 @@ pub fn compare_traces(trace_a: &Path, trace_b: &Path) -> Result<Output, String> 
 mod tests {
     use super::*;
     #[cfg(feature = "llama-tests")]
+    use crate::INTERNAL_MEMORY_START;
+    #[cfg(feature = "llama-tests")]
     use std::{env, fs};
 
     #[test]
@@ -707,7 +726,7 @@ mod tests {
         let bytes = [0x00u8]; // NOP
         let regs: &[(RegName, u32)] = &[];
         let (llama_snap, py_snap, llama_trace, py_trace, compare_output) =
-            run_parity_once(&bytes, regs, 0, 0, &workdir).expect("parity run");
+            run_parity_once(&bytes, regs, 0, 0, &workdir, &[]).expect("parity run");
         assert!(llama_snap.mem_writes.is_empty());
         assert!(py_snap.mem_writes.is_empty());
         // Compare traces with the helper script.
@@ -738,23 +757,24 @@ mod tests {
         let workdir = root.join("target").join("llama-parity-wait");
         let _ = fs::create_dir_all(&workdir);
         let regs = &[(RegName::I, 5), (RegName::FC, 1), (RegName::FZ, 1)];
-        let (llama_snap, py_snap, _llama_trace, _py_trace, compare_output) =
-            run_parity_once(&[0xEF], regs, 0, 0, &workdir).expect("parity run");
-        assert!(
-            compare_output.status.success(),
-            "python oracle failed: {}",
-            String::from_utf8_lossy(&compare_output.stdout)
-        );
-        if let Some(diff) = compare_snapshots(&llama_snap, &py_snap) {
-            panic!("parity mismatch: {:?}", diff);
-        }
+        assert_parity_mem(&[0xEF], regs, &[], &workdir);
     }
 
     /// Helper to run a single-instruction parity check and panic on mismatch.
     #[cfg(feature = "llama-tests")]
     fn assert_parity(bytes: &[u8], regs: &[(RegName, u32)], workdir: &Path) {
+        assert_parity_mem(bytes, regs, &[], workdir);
+    }
+
+    #[cfg(feature = "llama-tests")]
+    fn assert_parity_mem(
+        bytes: &[u8],
+        regs: &[(RegName, u32)],
+        mem: &[(u32, u8)],
+        workdir: &Path,
+    ) {
         let (llama_snap, py_snap, _llama_trace, _py_trace, compare_output) =
-            run_parity_once(bytes, regs, 0, 0, workdir).expect("parity run");
+            run_parity_once(bytes, regs, 0, 0, workdir, mem).expect("parity run");
         assert!(
             compare_output.status.success(),
             "python oracle failed: {}",
@@ -808,5 +828,42 @@ mod tests {
         let _ = fs::create_dir_all(&workdir);
         // Opcode 0xEE: SWAP
         assert_parity(&[0xEE], &[(RegName::A, 0xA5)], &workdir);
+    }
+
+    /// ADD A, [IMem8] parity check (0x42, offset 0x10, mem=0x05).
+    #[cfg(feature = "llama-tests")]
+    #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
+    fn parity_add_a_imem() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let workdir = root.join("target").join("llama-parity-add-imem");
+        let _ = fs::create_dir_all(&workdir);
+        let offset = 0x10u32;
+        let mem = &[(INTERNAL_MEMORY_START + offset, 0x05)];
+        assert_parity_mem(&[0x42, offset as u8], &[(RegName::A, 1)], mem, &workdir);
+    }
+
+    /// EX [IMem8], [IMem8] parity check (0xC0).
+    #[cfg(feature = "llama-tests")]
+    #[test]
+    #[ignore = "Requires python perfetto tooling; skip in CI"]
+    fn parity_ex_mem_mem() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let workdir = root.join("target").join("llama-parity-ex-mem");
+        let _ = fs::create_dir_all(&workdir);
+        let off1 = 0x20u32;
+        let off2 = 0x21u32;
+        let mem = &[
+            (INTERNAL_MEMORY_START + off1, 0x11),
+            (INTERNAL_MEMORY_START + off2, 0x22),
+        ];
+        // Opcode 0xC0: EX [IMem8],[IMem8] with two offsets following.
+        assert_parity_mem(&[0xC0, off1 as u8, off2 as u8], &[], mem, &workdir);
     }
 }
