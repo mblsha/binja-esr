@@ -1959,6 +1959,7 @@ impl LlamaExecutor {
                 sp = sp.wrapping_add(3) & mask_s;
                 state.set_reg(RegName::S, sp);
                 let imr_restored = imr;
+                bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, imr_restored & 0xFF);
                 state.set_reg(RegName::IMR, imr_restored);
                 state.set_reg(RegName::F, f);
                 state.set_pc(ret & 0xFFFFF);

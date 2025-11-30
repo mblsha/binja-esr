@@ -101,6 +101,8 @@ def test_reti_clears_isr_bit_python() -> None:
 
     isr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
     assert isr_after & 0x04 == 0
+    imr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)
+    assert imr_after == 0x84
 
 
 def test_reti_clears_isr_bit_llama() -> None:
@@ -133,3 +135,5 @@ def test_reti_clears_isr_bit_llama() -> None:
 
     isr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
     assert isr_after & 0x04 == 0
+    imr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)
+    assert imr_after == 0x84
