@@ -11,6 +11,7 @@ import pytest
 
 from sc62015.pysc62015 import CPU, RegisterName, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
+from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from binja_test_mocks.eval_llil import Memory
 
 
@@ -134,3 +135,51 @@ def test_fc_fz_updates_do_not_clobber_f_upper_bits(backend: str) -> None:
     cpu.regs.set(RegisterName.FZ, 1)  # bit1 -> 1
 
     assert cpu.regs.get(RegisterName.F) == 0xAA  # upper bits unchanged
+
+
+def test_llama_keyboard_bridge_updates_fifo_and_kil() -> None:
+    memory = _make_memory(0x00)
+    cpu = CPU(memory, reset_on_init=True, backend="llama")
+
+    # Press matrix code 0 (row 0, col 0), then release it to populate FIFO.
+    assert cpu.keyboard_press_matrix_code(0x00)
+    kil_addr = (0x100000 + IMEMRegisters.KIL) & 0xFFFFFF
+    assert memory._raw[kil_addr] == 0x01
+    fifo_base = 0x00BFC96
+    assert memory._raw[fifo_base] == 0x00
+
+    assert cpu.keyboard_release_matrix_code(0x00)
+    assert memory._raw[kil_addr] == 0x00
+    assert memory._raw[fifo_base + 1] == 0x80
+
+
+class _MemoryWithLcdHook:
+    def __init__(self) -> None:
+        self._raw = bytearray(ADDRESS_SPACE_SIZE)
+        self.calls: list[tuple[int, int, int]] = []
+        self._llama_lcd_write = self._hook
+
+    def _hook(self, addr: int, val: int, pc: int) -> None:
+        self.calls.append((addr & 0xFFFFFF, val & 0xFF, pc & 0xFFFFFF))
+
+    def read_byte(self, addr: int) -> int:
+        return self._raw[addr & 0xFFFFFF]
+
+    def write_byte(self, addr: int, value: int) -> None:
+        self._raw[addr & 0xFFFFFF] = value & 0xFF
+
+
+def test_llama_lcd_hook_invoked_on_write() -> None:
+    mem = _MemoryWithLcdHook()
+    # MV [0x2000],A
+    mem.write_byte(0, 0xA8)
+    mem.write_byte(1, 0x00)
+    mem.write_byte(2, 0x20)
+    mem.write_byte(3, 0x00)
+    cpu = CPU(mem, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.PC, 0x0000)
+    cpu.regs.set(RegisterName.A, 0xCD)
+
+    cpu.execute_instruction(0x0000)
+
+    assert mem.calls == [(0x2000, 0xCD, 0x0000)]

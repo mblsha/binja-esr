@@ -217,6 +217,7 @@ impl KeyboardMatrix {
             state.repeat_ticks = self.repeat_delay;
             self.kil_latch = self.compute_kil(true);
             self.enqueue_event(code, false);
+            memory.write_internal_byte(0xF2, self.kil_latch);
             self.write_fifo_to_memory(memory);
         }
     }
@@ -230,6 +231,7 @@ impl KeyboardMatrix {
             state.repeat_ticks = 0;
             self.kil_latch = self.compute_kil(false);
             self.enqueue_event(code, true);
+            memory.write_internal_byte(0xF2, self.kil_latch);
             self.write_fifo_to_memory(memory);
         }
     }

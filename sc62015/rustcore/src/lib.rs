@@ -7,11 +7,13 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyDict, PyModule};
 use pyo3::Bound;
 use sc62015_core::{
+    keyboard::KeyboardMatrix,
     llama::{
         eval::{LlamaBus, LlamaExecutor},
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
     },
+    memory::MemoryImage,
     PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
@@ -54,14 +56,26 @@ fn llama_flag_from_name(name: &str) -> Option<LlamaRegName> {
 struct LlamaPyBus {
     memory: Py<PyAny>,
     pc: u32,
+    lcd_hook: Option<Py<PyAny>>,
 }
 
 impl LlamaPyBus {
     fn new(py: Python<'_>, memory: &Py<PyAny>, pc: u32) -> Self {
+        // Optional LCD hook used when Python overlays are disabled (pure LLAMA LCD path).
+        let lcd_hook = memory
+            .getattr(py, "_llama_lcd_write")
+            .ok()
+            .and_then(|obj| obj.extract::<Py<PyAny>>(py).ok());
         Self {
             memory: memory.clone_ref(py),
             pc,
+            lcd_hook,
         }
+    }
+
+    fn is_lcd_addr(addr: u32) -> bool {
+        (0x2000..=0x200F).contains(&(addr & ADDRESS_MASK))
+            || (0xA000..=0xAFFF).contains(&(addr & ADDRESS_MASK))
     }
 
     fn read_byte(&self, addr: u32) -> u8 {
@@ -76,10 +90,13 @@ impl LlamaPyBus {
 
     fn write_byte(&self, addr: u32, value: u8) {
         Python::with_gil(|py| {
-            let _ = self
-                .memory
-                .bind(py)
-                .call_method1("write_byte", (addr, value));
+            let bound = self.memory.bind(py);
+            let _ = bound.call_method1("write_byte", (addr, value));
+            if Self::is_lcd_addr(addr) {
+                if let Some(hook) = &self.lcd_hook {
+                    let _ = hook.call1(py, (addr, value, self.pc));
+                }
+            }
         });
     }
 }
@@ -239,6 +256,8 @@ struct LlamaCpu {
     memory: Py<PyAny>,
     call_sub_level: u32,
     temps: HashMap<u32, u32>,
+    mirror: MemoryImage,
+    keyboard: KeyboardMatrix,
 }
 
 #[pymethods]
@@ -252,6 +271,8 @@ impl LlamaCpu {
             memory,
             call_sub_level: 0,
             temps: HashMap::new(),
+            mirror: MemoryImage::new(),
+            keyboard: KeyboardMatrix::new(),
         };
         if reset_on_init {
             cpu.power_on_reset()?;
@@ -265,6 +286,9 @@ impl LlamaCpu {
         self.state.set_halted(false);
         self.call_sub_level = 0;
         self.temps.clear();
+        self.mirror = MemoryImage::new();
+        self.keyboard.reset(&mut self.mirror);
+        Python::with_gil(|py| self.sync_mirror(py));
         Ok(())
     }
 
@@ -383,6 +407,22 @@ impl LlamaCpu {
         Ok(())
     }
 
+    fn keyboard_press_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
+        let fifo_before = self.keyboard.fifo_len();
+        self.keyboard
+            .press_matrix_code(code & 0x7F, &mut self.mirror);
+        self.sync_mirror(py);
+        Ok(self.keyboard.fifo_len() != fifo_before)
+    }
+
+    fn keyboard_release_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
+        let fifo_before = self.keyboard.fifo_len();
+        self.keyboard
+            .release_matrix_code(code & 0x7F, &mut self.mirror);
+        self.sync_mirror(py);
+        Ok(self.keyboard.fifo_len() != fifo_before)
+    }
+
     fn notify_host_write(&self, py: Python<'_>, address: u32, value: u8) -> PyResult<()> {
         let bound = self.memory.bind(py);
         let _ = bound.call_method1("write_byte", (address, value));
@@ -437,6 +477,18 @@ impl LlamaCpu {
             }
         }
         Ok(())
+    }
+}
+
+impl LlamaCpu {
+    fn sync_mirror(&mut self, py: Python<'_>) {
+        let bound = self.memory.bind(py);
+        for (addr, value) in self.mirror.drain_dirty_internal() {
+            let _ = bound.call_method1("write_byte", (addr, value));
+        }
+        for (addr, value) in self.mirror.drain_dirty() {
+            let _ = bound.call_method1("write_byte", (addr, value));
+        }
     }
 }
 
