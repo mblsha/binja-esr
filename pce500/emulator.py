@@ -2846,7 +2846,6 @@ class PCE500Emulator:
             pass
 
     def release_key(self, key_code: str):
-        self._key_irq_latched = False
         if self.keyboard:
             self.keyboard.release_key(key_code)
         if new_tracer.enabled:
