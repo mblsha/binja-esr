@@ -1,9 +1,11 @@
 // PY_SOURCE: pce500/keyboard_matrix.py:KeyboardMatrix
 
 use crate::memory::MemoryImage;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 const FIFO_SIZE: usize = 8;
+const COLUMN_COUNT: usize = 11; // 8 from KOL, 3 from KOH
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
@@ -34,6 +36,106 @@ impl KeyState {
     }
 }
 
+// Matrix layout (row-major) copied from the Python keyboard map.
+const KEY_NAMES: [Option<&str>; 88] = [
+    // row 0
+    Some("KEY_TRIANGLE_UP_DOWN"),
+    Some("KEY_W"),
+    Some("KEY_R"),
+    Some("KEY_Y"),
+    Some("KEY_I"),
+    Some("KEY_RCL"),
+    Some("KEY_STO"),
+    Some("KEY_C_CE"),
+    Some("KEY_UP_DOWN"),
+    Some("KEY_RPAREN"),
+    Some("KEY_P"),
+    // row 1
+    Some("KEY_Q"),
+    Some("KEY_E"),
+    Some("KEY_T"),
+    Some("KEY_U"),
+    Some("KEY_O"),
+    Some("KEY_HYP"),
+    Some("KEY_SIN"),
+    Some("KEY_COS"),
+    Some("KEY_TAN"),
+    Some("KEY_FSE"),
+    Some("KEY_2NDF"),
+    // row 2
+    Some("KEY_MENU"),
+    Some("KEY_S"),
+    Some("KEY_F"),
+    Some("KEY_H"),
+    Some("KEY_K"),
+    Some("KEY_TO_HEX"),
+    Some("KEY_TO_DEG"),
+    Some("KEY_LN"),
+    Some("KEY_LOG"),
+    Some("KEY_1_X"),
+    Some("KEY_F5"),
+    // row 3
+    Some("KEY_A"),
+    Some("KEY_D"),
+    Some("KEY_G"),
+    Some("KEY_J"),
+    Some("KEY_L"),
+    Some("KEY_EXP"),
+    Some("KEY_Y_X"),
+    Some("KEY_SQRT"),
+    Some("KEY_X2"),
+    Some("KEY_LPAREN"),
+    Some("KEY_F4"),
+    // row 4
+    Some("KEY_BASIC"),
+    Some("KEY_X"),
+    Some("KEY_V"),
+    Some("KEY_N"),
+    Some("KEY_COMMA"),
+    Some("KEY_7"),
+    Some("KEY_8"),
+    Some("KEY_9"),
+    Some("KEY_DIVIDE"),
+    Some("KEY_DELETE"),
+    Some("KEY_F3"),
+    // row 5
+    Some("KEY_Z"),
+    Some("KEY_C"),
+    Some("KEY_B"),
+    Some("KEY_M"),
+    Some("KEY_SEMICOLON"),
+    Some("KEY_4"),
+    Some("KEY_5"),
+    Some("KEY_6"),
+    Some("KEY_MULTIPLY"),
+    Some("KEY_BACKSPACE"),
+    Some("KEY_F2"),
+    // row 6
+    Some("KEY_SHIFT"),
+    Some("KEY_CAPS"),
+    Some("KEY_SPACE"),
+    Some("KEY_UP"),
+    Some("KEY_RIGHT"),
+    Some("KEY_1"),
+    Some("KEY_2"),
+    Some("KEY_3"),
+    Some("KEY_MINUS"),
+    Some("KEY_INSERT"),
+    Some("KEY_F1"),
+    // row 7
+    Some("KEY_CTRL"),
+    Some("KEY_ANS"),
+    Some("KEY_DOWN"),
+    Some("KEY_DOWN_TRIANGLE"),
+    Some("KEY_LEFT"),
+    Some("KEY_0"),
+    Some("KEY_PLUSMINUS"),
+    Some("KEY_PERIOD"),
+    Some("KEY_PLUS"),
+    Some("KEY_EQUALS"),
+    None,
+];
+
 #[derive(Default)]
 pub struct KeyboardMatrix {
     kol: u8,
@@ -45,6 +147,7 @@ pub struct KeyboardMatrix {
     repeat_delay: u8,
     repeat_interval: u8,
     repeat_enabled: bool,
+    scan_enabled: bool,
     states: Vec<KeyState>,
     fifo_storage: [u8; FIFO_SIZE],
     fifo_head: usize,
@@ -52,18 +155,39 @@ pub struct KeyboardMatrix {
     fifo_count: usize,
     strobe_count: u32,
     irq_count: u32,
+    column_histogram: [u32; COLUMN_COUNT],
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KeyboardSnapshot {
     pub kol: u8,
     pub koh: u8,
-    pub kil: u8,
+    pub kil_latch: u8,
     pub fifo_len: usize,
     pub fifo: Vec<u8>,
+    pub head: usize,
+    pub tail: usize,
     pub irq_count: u32,
     pub strobe_count: u32,
     pub active_columns: Vec<u8>,
+    pub pressed_keys: Vec<String>,
+    pub key_states: HashMap<String, KeyStateSnapshot>,
+    pub column_histogram: Vec<u32>,
+    pub press_threshold: u8,
+    pub release_threshold: u8,
+    pub repeat_delay: u8,
+    pub repeat_interval: u8,
+    pub columns_active_high: bool,
+    pub scan_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyStateSnapshot {
+    pub pressed: bool,
+    pub debounced: bool,
+    pub press_ticks: u8,
+    pub release_ticks: u8,
+    pub repeat_ticks: u8,
 }
 
 impl KeyboardMatrix {
@@ -78,6 +202,7 @@ impl KeyboardMatrix {
             repeat_delay: DEFAULT_REPEAT_DELAY,
             repeat_interval: DEFAULT_REPEAT_INTERVAL,
             repeat_enabled: true,
+            scan_enabled: true,
             states: Vec::new(),
             fifo_storage: [0; FIFO_SIZE],
             fifo_head: 0,
@@ -85,6 +210,7 @@ impl KeyboardMatrix {
             fifo_count: 0,
             strobe_count: 0,
             irq_count: 0,
+            column_histogram: [0; COLUMN_COUNT],
         };
         for matrix_code in 0..(11 * 8) {
             let column = (matrix_code >> 3) as u8;
@@ -185,6 +311,8 @@ impl KeyboardMatrix {
         self.fifo_count = 0;
         self.strobe_count = 0;
         self.irq_count = 0;
+        self.column_histogram = [0; COLUMN_COUNT];
+        self.scan_enabled = true;
         for state in &mut self.states {
             state.pressed = false;
             state.debounced = false;
@@ -205,6 +333,12 @@ impl KeyboardMatrix {
         snapshot
     }
 
+    fn key_name_for(matrix_code: u8) -> Option<&'static str> {
+        KEY_NAMES
+            .get(matrix_code as usize)
+            .and_then(|entry| *entry)
+    }
+
     pub fn irq_count(&self) -> u32 {
         self.irq_count
     }
@@ -218,15 +352,45 @@ impl KeyboardMatrix {
     }
 
     pub fn snapshot_state(&self) -> KeyboardSnapshot {
+        let mut key_states: HashMap<String, KeyStateSnapshot> = HashMap::new();
+        let mut pressed_keys: Vec<String> = Vec::new();
+        for (idx, state) in self.states.iter().enumerate() {
+            if let Some(name) = Self::key_name_for(idx as u8) {
+                if state.pressed {
+                    pressed_keys.push(name.to_string());
+                }
+                key_states.insert(
+                    name.to_string(),
+                    KeyStateSnapshot {
+                        pressed: state.pressed,
+                        debounced: state.debounced,
+                        press_ticks: state.press_ticks,
+                        release_ticks: state.release_ticks,
+                        repeat_ticks: state.repeat_ticks,
+                    },
+                );
+            }
+        }
         KeyboardSnapshot {
             kol: self.kol,
             koh: self.koh,
-            kil: self.kil_latch,
+            kil_latch: self.kil_latch,
             fifo_len: self.fifo_count,
-            fifo: self.fifo_snapshot(),
+            fifo: self.fifo_storage.to_vec(),
+            head: self.fifo_head,
+            tail: self.fifo_tail,
             irq_count: self.irq_count,
             strobe_count: self.strobe_count,
             active_columns: self.active_columns(),
+            pressed_keys,
+            key_states,
+            column_histogram: self.column_histogram.to_vec(),
+            press_threshold: self.press_threshold,
+            release_threshold: self.release_threshold,
+            repeat_delay: self.repeat_delay,
+            repeat_interval: self.repeat_interval,
+            columns_active_high: self.columns_active_high,
+            scan_enabled: self.scan_enabled,
         }
     }
 
@@ -317,7 +481,16 @@ impl KeyboardMatrix {
     }
 
     pub fn scan_tick(&mut self) -> usize {
+        if !self.scan_enabled {
+            return 0;
+        }
         let active = self.active_columns();
+        for col in &active {
+            if (*col as usize) < self.column_histogram.len() {
+                self.column_histogram[*col as usize] =
+                    self.column_histogram[*col as usize].wrapping_add(1);
+            }
+        }
         let mut events = 0usize;
         for idx in 0..self.states.len() {
             let mut enqueue: Option<(u8, bool)> = None;
