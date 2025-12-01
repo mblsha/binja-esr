@@ -74,6 +74,7 @@ def test_timer_irq_cadence_matches_between_backends(monkeypatch) -> None:
     results = {}
 
     import _sc62015_rustcore as rustcore
+
     rustcore = cast(Any, rustcore)
 
     for backend in backends:

@@ -480,7 +480,11 @@ class PCE500Emulator:
     ) -> bool:
         """Log KIO accesses (KOL/KOH/KIL) with best-effort PC/op index."""
 
-        if not (new_tracer.enabled or self.perfetto_enabled or trace_dispatcher.has_observers()):
+        if not (
+            new_tracer.enabled
+            or self.perfetto_enabled
+            or trace_dispatcher.has_observers()
+        ):
             return False
 
         eff_pc = pc
