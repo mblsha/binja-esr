@@ -90,3 +90,33 @@ def test_scan_disable_suppresses_events():
     events = matrix.scan_tick()
     assert events == []
     assert matrix.fifo_snapshot() == []
+
+
+def test_trace_kio_uses_separate_hook():
+    matrix = KeyboardMatrix(press_threshold=1, release_threshold=1)
+    scan_calls = []
+    loc = KEY_LOCATIONS["KEY_Q"]
+    matrix._trace_hook = lambda col, row, pressed: scan_calls.append(
+        (col, row, pressed)
+    )
+    kio_calls = []
+
+    def kio_hook(name, kol, koh, kil, pc=None):
+        kio_calls.append((name, kol, koh, kil, pc))
+        return True
+
+    matrix._kio_trace_hook = kio_hook
+
+    matrix.write_kol(0x01)
+    matrix.press_key("KEY_Q")
+    matrix.scan_tick()
+    assert scan_calls == [(loc.column, loc.row, True)]
+
+    expected_kil = matrix._compute_kil()
+    matrix.trace_kio("read_kil", pc=0x123456)
+
+    assert kio_calls == [
+        ("read_kil", matrix.kol & 0xFF, matrix.koh & 0x0F, expected_kil, 0x123456)
+    ]
+    # KIO tracing should not reuse the scan hook signature.
+    assert scan_calls == [(loc.column, loc.row, True)]

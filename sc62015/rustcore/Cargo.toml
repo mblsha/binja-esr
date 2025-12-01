@@ -12,3 +12,4 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.22.2", features = ["extension-module"] }
 sc62015-core = { path = "../core" }
+serde_json = "1.0"

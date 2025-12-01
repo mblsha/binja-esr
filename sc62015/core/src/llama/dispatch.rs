@@ -1,3 +1,4 @@
+// PY_SOURCE: sc62015/pysc62015/instr/opcode_table.py
 //! Dispatch helpers for LLAMA.
 //!
 //! This is a thin wrapper over the static opcode table to allow lookups by
@@ -6,5 +7,7 @@
 use super::opcodes::{OpcodeEntry, OPCODES};
 
 pub fn lookup(opcode: u8) -> Option<&'static OpcodeEntry> {
-    OPCODES.iter().find(|entry| entry.opcode == opcode)
+    OPCODES
+        .get(opcode as usize)
+        .inspect(|entry| debug_assert_eq!(entry.opcode, opcode))
 }

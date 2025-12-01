@@ -114,10 +114,13 @@ def run_once(payload: str) -> Snapshot:
     bytes_in = bytes(data["bytes"])
     regs_in: Dict[str, int] = data.get("regs", {})
     pc = data.get("pc", 0)
+    mem_seed = data.get("mem", [])
 
     mem = TrackedMemory()
     for offset, b in enumerate(bytes_in):
         mem._backing[pc + offset] = b
+    for addr, val in mem_seed:
+        mem._backing[addr & 0xFFFFFF] = val & 0xFF
 
     cpu = CPU(mem, reset_on_init=False)
     # Seed registers via snapshot

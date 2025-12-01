@@ -1,4 +1,8 @@
+// PY_SOURCE: pce500/scheduler.py:TimerScheduler
+// PY_SOURCE: pce500/emulator.py:PCE500Emulator._tick_timers
+
 use crate::memory::MemoryImage;
+use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
 
 const ISR_OFFSET: u32 = 0xFC;
@@ -6,10 +10,10 @@ const ISR_OFFSET: u32 = 0xFC;
 #[derive(Clone, Debug)]
 pub struct TimerContext {
     pub enabled: bool,
-    pub mti_period: i32,
-    pub sti_period: i32,
-    pub next_mti_cycles: i32,
-    pub next_sti_cycles: i32,
+    pub mti_period: u64,
+    pub sti_period: u64,
+    pub next_mti: u64,
+    pub next_sti: u64,
     pub irq_pending: bool,
     pub irq_source: Option<String>,
     pub irq_imr: u8,
@@ -17,16 +21,17 @@ pub struct TimerContext {
     pub in_interrupt: bool,
     pub interrupt_stack: Vec<u32>,
     pub next_interrupt_id: u32,
+    pub last_fired: Option<String>,
 }
 
 impl TimerContext {
     pub fn new(enabled: bool, mti_period: i32, sti_period: i32) -> Self {
         let mut ctx = Self {
             enabled,
-            mti_period,
-            sti_period,
-            next_mti_cycles: 0,
-            next_sti_cycles: 0,
+            mti_period: mti_period.max(0) as u64,
+            sti_period: sti_period.max(0) as u64,
+            next_mti: 0,
+            next_sti: 0,
             irq_pending: false,
             irq_source: None,
             irq_imr: 0,
@@ -34,18 +39,27 @@ impl TimerContext {
             in_interrupt: false,
             interrupt_stack: Vec::new(),
             next_interrupt_id: 0,
+            last_fired: None,
         };
-        ctx.reset();
+        ctx.reset(0);
         ctx
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, current_cycle: u64) {
         self.irq_pending = false;
         self.irq_source = None;
         self.irq_imr = 0;
         self.irq_isr = 0;
-        self.next_mti_cycles = if self.enabled { self.mti_period } else { 0 };
-        self.next_sti_cycles = if self.enabled { self.sti_period } else { 0 };
+        self.next_mti = if self.enabled && self.mti_period > 0 {
+            current_cycle.wrapping_add(self.mti_period)
+        } else {
+            0
+        };
+        self.next_sti = if self.enabled && self.sti_period > 0 {
+            current_cycle.wrapping_add(self.sti_period)
+        } else {
+            0
+        };
         self.in_interrupt = false;
         self.interrupt_stack.clear();
         self.next_interrupt_id = 0;
@@ -54,10 +68,10 @@ impl TimerContext {
     pub fn snapshot_info(&self) -> (TimerInfo, InterruptInfo) {
         let timer = TimerInfo {
             enabled: self.enabled,
-            mti_period: self.mti_period,
-            sti_period: self.sti_period,
-            next_mti: self.next_mti_cycles,
-            next_sti: self.next_sti_cycles,
+            mti_period: self.mti_period.min(i32::MAX as u64) as i32,
+            sti_period: self.sti_period.min(i32::MAX as u64) as i32,
+            next_mti: self.next_mti.min(i32::MAX as u64) as i32,
+            next_sti: self.next_sti.min(i32::MAX as u64) as i32,
         };
         let interrupts = InterruptInfo {
             pending: self.irq_pending,
@@ -67,16 +81,19 @@ impl TimerContext {
             next_id: self.next_interrupt_id,
             imr: self.irq_imr,
             isr: self.irq_isr,
+            irq_counts: None,
+            last_irq: None,
+            irq_bit_watch: None,
         };
         (timer, interrupts)
     }
 
     pub fn apply_snapshot_info(&mut self, timer: &TimerInfo, interrupts: &InterruptInfo) {
         self.enabled = timer.enabled;
-        self.mti_period = timer.mti_period;
-        self.sti_period = timer.sti_period;
-        self.next_mti_cycles = timer.next_mti;
-        self.next_sti_cycles = timer.next_sti;
+        self.mti_period = timer.mti_period.max(0) as u64;
+        self.sti_period = timer.sti_period.max(0) as u64;
+        self.next_mti = timer.next_mti.max(0) as u64;
+        self.next_sti = timer.next_sti.max(0) as u64;
 
         self.irq_pending = interrupts.pending;
         self.in_interrupt = interrupts.in_interrupt;
@@ -85,6 +102,7 @@ impl TimerContext {
         self.next_interrupt_id = interrupts.next_id;
         self.irq_imr = interrupts.imr;
         self.irq_isr = interrupts.isr;
+        self.last_fired = None;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -104,34 +122,33 @@ impl TimerContext {
         self.irq_source = source;
         self.irq_imr = imr;
         self.irq_isr = isr;
-        self.next_mti_cycles = next_mti;
-        self.next_sti_cycles = next_sti;
+        self.next_mti = next_mti.max(0) as u64;
+        self.next_sti = next_sti.max(0) as u64;
         self.in_interrupt = in_interrupt;
         self.interrupt_stack = interrupt_stack.unwrap_or_default();
         self.next_interrupt_id = next_interrupt_id;
+        self.last_fired = None;
     }
 
-    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: &mut u64) {
-        if !self.enabled {
-            return;
-        }
+    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: &mut u64) -> (bool, bool) {
         *cycle_count = cycle_count.wrapping_add(1);
+        if !self.enabled {
+            return (false, false);
+        }
 
         let mut fired_mti = false;
         let mut fired_sti = false;
 
-        if self.mti_period > 0 {
-            self.next_mti_cycles -= 1;
-            if self.next_mti_cycles <= 0 {
-                fired_mti = true;
-                self.next_mti_cycles = self.mti_period;
+        if self.mti_period > 0 && *cycle_count >= self.next_mti {
+            fired_mti = true;
+            while *cycle_count >= self.next_mti {
+                self.next_mti = self.next_mti.wrapping_add(self.mti_period);
             }
         }
-        if self.sti_period > 0 {
-            self.next_sti_cycles -= 1;
-            if self.next_sti_cycles <= 0 {
-                fired_sti = true;
-                self.next_sti_cycles = self.sti_period;
+        if self.sti_period > 0 && *cycle_count >= self.next_sti {
+            fired_sti = true;
+            while *cycle_count >= self.next_sti {
+                self.next_sti = self.next_sti.wrapping_add(self.sti_period);
             }
         }
 
@@ -156,7 +173,10 @@ impl TimerContext {
             } else {
                 Some("STI".to_string())
             };
+            self.last_fired = self.irq_source.clone();
+            self.emit_irq_trace(fired_mti, fired_sti, memory);
         }
+        (fired_mti, fired_sti)
     }
 
     pub fn drain_pending_irq(&mut self) -> Option<String> {
@@ -165,5 +185,89 @@ impl TimerContext {
         }
         self.irq_pending = false;
         self.irq_source.take()
+    }
+
+    fn emit_irq_trace(&self, fired_mti: bool, fired_sti: bool, memory: &MemoryImage) {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = Vec::new();
+                if fired_mti {
+                    payload.push(("mti", 1u32));
+                }
+                if fired_sti {
+                    payload.push(("sti", 1u32));
+                }
+                payload.push(("isr", self.irq_isr as u32));
+                payload.push(("imr", self.irq_imr as u32));
+                // Include ISR snapshot if available.
+                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                    payload.push(("isr_mem", isr as u32));
+                }
+                tracer.record_irq_event(
+                    "Timer",
+                    payload
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v as u64))
+                        .collect(),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timers_use_absolute_targets() {
+        let mut timer = TimerContext::new(true, 10, 0);
+        let mut mem = MemoryImage::new();
+        timer.next_mti = 50;
+        timer.next_sti = 0;
+        let mut cycles = 0u64;
+        // Run up to but not including the target
+        for _ in 0..49 {
+            timer.tick_timers(&mut mem, &mut cycles);
+            assert!(!timer.irq_pending);
+        }
+        assert_eq!(cycles, 49);
+        // The 50th tick should fire MTI and roll the target forward.
+        timer.tick_timers(&mut mem, &mut cycles);
+        assert_eq!(cycles, 50);
+        assert!(timer.irq_pending);
+        assert!(timer.next_mti > 50);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x01, 0x01);
+    }
+
+    #[test]
+    fn snapshot_absolute_targets_match_python_semantics() {
+        // Simulate a Python snapshot with absolute next_mti/next_sti values.
+        let mut timer = TimerContext::new(true, 20, 30);
+        timer.apply_snapshot_info(
+            &crate::TimerInfo {
+                enabled: true,
+                mti_period: 20,
+                sti_period: 30,
+                next_mti: 150,
+                next_sti: 200,
+            },
+            &InterruptInfo::default(),
+        );
+        let mut mem = MemoryImage::new();
+        let mut cycles = 100u64; // current cycle when snapshot applied
+
+        // Advance to just before first fire
+        while cycles < 149 {
+            timer.tick_timers(&mut mem, &mut cycles);
+            assert!(!timer.irq_pending);
+        }
+        // Fire MTI at cycle 150, then next target moves to 170.
+        timer.tick_timers(&mut mem, &mut cycles);
+        assert!(timer.irq_pending);
+        assert!(timer.next_mti > 150);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x01, 0x01);
     }
 }

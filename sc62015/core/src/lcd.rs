@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/display/hd61202.py:HD61202
+// PY_SOURCE: pce500/display/controller_wrapper.py:HD61202Controller
+
 use serde_json::{json, Value};
 use std::env;
 
@@ -24,6 +27,7 @@ struct Hd61202State {
     start_line: u8,
     page: u8,
     y_address: u8,
+    busy: bool,
 }
 
 struct Hd61202Chip {
@@ -49,6 +53,7 @@ impl Default for Hd61202Chip {
 impl Hd61202Chip {
     fn write_instruction(&mut self, instr: LcdInstruction, data: u8) {
         self.instruction_count = self.instruction_count.wrapping_add(1);
+        self.state.busy = true;
         match instr {
             LcdInstruction::OnOff => {
                 self.state.on = (data & 1) != 0;
@@ -71,11 +76,17 @@ impl Hd61202Chip {
         let y = (self.state.y_address as usize) % LCD_WIDTH;
         self.vram[page][y] = data;
         self.state.y_address = ((self.state.y_address as usize + 1) % LCD_WIDTH) as u8;
+        self.state.busy = true;
     }
 
     #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
-        0xFF
+        let busy = if self.state.busy { 0x80 } else { 0x00 };
+        // Match Python placeholder: high bits set when busy, keep ON flag in bit 5.
+        let on = if self.state.on { 0x20 } else { 0x00 };
+        // Clear busy after reporting once.
+        self.state.busy = false;
+        0x1F | busy | on
     }
 
     #[allow(dead_code)]
@@ -185,6 +196,7 @@ pub struct LcdController {
     cs_both_count: u32,
     cs_left_count: u32,
     cs_right_count: u32,
+    last_status: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -204,6 +216,7 @@ impl LcdController {
             cs_both_count: 0,
             cs_left_count: 0,
             cs_right_count: 0,
+            last_status: None,
         }
     }
 
@@ -212,6 +225,7 @@ impl LcdController {
         self.cs_both_count = 0;
         self.cs_left_count = 0;
         self.cs_right_count = 0;
+        self.last_status = None;
     }
 
     fn chip_indices(cs: ChipSelect) -> &'static [usize] {
@@ -245,6 +259,18 @@ impl LcdController {
                 }
             }
         }
+    }
+
+    pub fn read(&mut self, address: u32) -> Option<u8> {
+        let (_, _, rw) = decode_access(address)?;
+        if rw != ReadWrite::Read {
+            return None;
+        }
+        // Parity with Python HD61202Controller: reads are stubbed to 0xFF until
+        // the read path is implemented in Rust.
+        let value = 0xFF;
+        self.last_status = Some(value);
+        Some(value)
     }
 
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
@@ -349,20 +375,11 @@ impl LcdController {
         Ok(())
     }
 
-    pub fn read(&self, address: u32) -> u32 {
-        if let Some((cs, di, rw)) = decode_access(address) {
+    pub fn read_placeholder(&self, address: u32) -> u32 {
+        if let Some((_cs, _di, rw)) = decode_access(address) {
             if rw == ReadWrite::Read {
-                return match di {
-                    DataInstruction::Instruction => 0xFF,
-                    DataInstruction::Data => {
-                        let target = match cs {
-                            ChipSelect::Left => 0,
-                            ChipSelect::Right => 1,
-                            ChipSelect::Both => 0,
-                        };
-                        self.chips[target].state.y_address as u32
-                    }
-                };
+                // Mirror Python wrapper: reads are not emulated; always return 0xFF.
+                return 0xFF;
             }
         }
         0
@@ -375,16 +392,10 @@ impl LcdController {
         let mut buffer = [[0u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
         let left = &self.chips[0];
         let right = &self.chips[1];
-        if right.state.on {
-            copy_region(&mut buffer, right, 0, 0..64, 0, false);
-        }
-        if left.state.on {
-            copy_region(&mut buffer, left, 0, 0..56, 64, false);
-            copy_region(&mut buffer, left, 4, 0..56, 120, true);
-        }
-        if right.state.on {
-            copy_region(&mut buffer, right, 4, 0..64, 176, true);
-        }
+        copy_region(&mut buffer, right, 0, 0..64, 0, false);
+        copy_region(&mut buffer, left, 0, 0..56, 64, false);
+        copy_region(&mut buffer, left, 4, 0..56, 120, true);
+        copy_region(&mut buffer, right, 4, 0..64, 176, true);
         buffer
     }
 

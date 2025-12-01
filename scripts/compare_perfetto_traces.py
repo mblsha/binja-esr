@@ -4,14 +4,23 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import zipfile
 from dataclasses import dataclass
+from itertools import zip_longest
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from sc62015.pysc62015.constants import INTERNAL_MEMORY_LENGTH, INTERNAL_MEMORY_START
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from retrobus_perfetto.proto import perfetto_pb2
+from sc62015.pysc62015.constants import (  # noqa: E402
+    INTERNAL_MEMORY_LENGTH,
+    INTERNAL_MEMORY_START,
+)
+
+from retrobus_perfetto.proto import perfetto_pb2  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,19 @@ def _memory_write_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
     return filtered
 
 
+def _irq_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
+    """Filter events to IRQ/timer related tracks."""
+
+    filtered = [
+        evt
+        for evt in events
+        if evt.track.startswith("irq")
+        or evt.name.startswith(("MTI", "STI", "KEYI", "TimerFired", "IRQ_"))
+    ]
+    filtered.sort(key=lambda evt: evt.timestamp)
+    return filtered
+
+
 def _load_snapshot_internal(path: Path) -> bytearray:
     with zipfile.ZipFile(path, "r") as zf:
         blob = zf.read("internal_ram.bin")
@@ -248,6 +270,11 @@ def main() -> None:
         help="Maximum number of differing internal-memory bytes to display "
         "(default: %(default)s).",
     )
+    parser.add_argument(
+        "--compare-irq",
+        action="store_true",
+        help="Also diff IRQ/timer events (experimental).",
+    )
     args = parser.parse_args()
 
     events_a = _load_trace(args.trace_a)
@@ -260,63 +287,97 @@ def main() -> None:
         instr_a, instr_b
     )
 
-    if mismatch_index is None:
-        print(
-            f"✓ No divergence detected across {min(len(instr_a), len(instr_b))} instructions."
-        )
-        return
+    divergence_detected = mismatch_index is not None
+    exit_code = 1 if divergence_detected else 0
 
-    print(f"✗ Divergence detected at op_index={mismatch_index}")
-    if evt_a is None:
-        print(f"  Trace A missing instruction #{mismatch_index}")
-    else:
-        ann = evt_a.annotations
-        pc_a = ann.get("pc")
-        opcode_a = ann.get("opcode")
-        print(
-            f"  Trace A: pc={pc_a:#06X} opcode={opcode_a:#04X} ({evt_a.track})"
-            if isinstance(pc_a, int) and isinstance(opcode_a, int)
-            else f"  Trace A: {evt_a}"
-        )
-        print(f"           {_format_reg_dump(ann)}")
-    if evt_b is None:
-        print(f"  Trace B missing instruction #{mismatch_index}")
-    else:
-        ann = evt_b.annotations
-        pc_b = ann.get("pc")
-        opcode_b = ann.get("opcode")
-        print(
-            f"  Trace B: pc={pc_b:#06X} opcode={opcode_b:#04X} ({evt_b.track})"
-            if isinstance(pc_b, int) and isinstance(opcode_b, int)
-            else f"  Trace B: {evt_b}"
-        )
-        print(f"           {_format_reg_dump(ann)}")
-
-    if mismatch_fields:
-        print("  Differing fields:", ", ".join(mismatch_fields))
-
-    if args.snapshot_a and args.snapshot_b:
-        memory_events_a = _memory_write_events(events_a)
-        memory_events_b = _memory_write_events(events_b)
-        limit = max(0, int(args.memory_diff_limit))
-
-        mem_a = _replay_internal_memory(
-            args.snapshot_a, memory_events_a, evt_a.timestamp if evt_a else None
-        )
-        mem_b = _replay_internal_memory(
-            args.snapshot_b, memory_events_b, evt_b.timestamp if evt_b else None
-        )
-
-        diffs = _compare_internal_memory(mem_a, mem_b, limit)
-        if diffs:
-            print("  Internal memory differences at divergence:")
-            for addr, va, vb in diffs:
-                offset = addr - INTERNAL_MEMORY_START
-                print(f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}")
+    if divergence_detected:
+        print(f"✗ Divergence detected at op_index={mismatch_index}")
+        if evt_a is None:
+            print(f"  Trace A missing instruction #{mismatch_index}")
         else:
-            print("  Internal memory identical at divergence.")
+            ann = evt_a.annotations
+            pc_a = ann.get("pc")
+            opcode_a = ann.get("opcode")
+            print(
+                f"  Trace A: pc={pc_a:#06X} opcode={opcode_a:#04X} ({evt_a.track})"
+                if isinstance(pc_a, int) and isinstance(opcode_a, int)
+                else f"  Trace A: {evt_a}"
+            )
+            print(f"           {_format_reg_dump(ann)}")
+        if evt_b is None:
+            print(f"  Trace B missing instruction #{mismatch_index}")
+        else:
+            ann = evt_b.annotations
+            pc_b = ann.get("pc")
+            opcode_b = ann.get("opcode")
+            print(
+                f"  Trace B: pc={pc_b:#06X} opcode={opcode_b:#04X} ({evt_b.track})"
+                if isinstance(pc_b, int) and isinstance(opcode_b, int)
+                else f"  Trace B: {evt_b}"
+            )
+            print(f"           {_format_reg_dump(ann)}")
 
-    raise SystemExit(1)
+        if mismatch_fields:
+            print("  Differing fields:", ", ".join(mismatch_fields))
+
+        if args.snapshot_a and args.snapshot_b:
+            memory_events_a = _memory_write_events(events_a)
+            memory_events_b = _memory_write_events(events_b)
+            limit = max(0, int(args.memory_diff_limit))
+
+            mem_a = _replay_internal_memory(
+                args.snapshot_a, memory_events_a, evt_a.timestamp if evt_a else None
+            )
+            mem_b = _replay_internal_memory(
+                args.snapshot_b, memory_events_b, evt_b.timestamp if evt_b else None
+            )
+
+            diffs = _compare_internal_memory(mem_a, mem_b, limit)
+            if diffs:
+                print("  Internal memory differences at divergence:")
+                for addr, va, vb in diffs:
+                    offset = addr - INTERNAL_MEMORY_START
+                    print(f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}")
+            else:
+                print("  Internal memory identical at divergence.")
+
+    irq_mismatch: Optional[str] = None
+    if args.compare_irq:
+        irq_a = _irq_events(events_a)
+        irq_b = _irq_events(events_b)
+        len_irq_a = len(irq_a)
+        len_irq_b = len(irq_b)
+        for idx, (ea, eb) in enumerate(zip_longest(irq_a, irq_b)):
+            if ea is None or eb is None:
+                missing_trace = "Trace A" if ea is None else "Trace B"
+                irq_mismatch = (
+                    f"{missing_trace} missing IRQ/timer event at index {idx} "
+                    f"(TraceA={len_irq_a} TraceB={len_irq_b})"
+                )
+                break
+            if ea.name != eb.name:
+                irq_mismatch = f"{ea.name} vs {eb.name} at irq index {idx}"
+                break
+            if ea.annotations != eb.annotations:
+                irq_mismatch = f"{ea.name} annotations differ at irq index {idx}"
+                break
+        if irq_mismatch:
+            print("\nIRQ/timer differences:")
+            print(f"  {irq_mismatch}")
+            exit_code = 1
+        else:
+            print(f"\nIRQ/timer events match ({len_irq_a} events).")
+
+    if not divergence_detected:
+        if irq_mismatch:
+            print("✗ Instruction traces match but IRQ/timer events differ.")
+        else:
+            print(
+                f"✓ No divergence detected across {min(len(instr_a), len(instr_b))} instructions."
+            )
+
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

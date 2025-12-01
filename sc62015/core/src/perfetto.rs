@@ -1,5 +1,7 @@
+// PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
+
 use crate::Result;
-use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
+pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -7,9 +9,14 @@ use std::path::PathBuf;
 pub struct PerfettoTracer {
     builder: PerfettoTraceBuilder,
     exec_track: TrackId,
+    timeline_track: TrackId,
     mem_track: TrackId,
+    imr_track: TrackId,
     units_per_instr: u64,
     path: PathBuf,
+    imr_seq: u64,
+    imr_read_zero: u64,
+    imr_read_nonzero: u64,
 }
 
 impl PerfettoTracer {
@@ -17,13 +24,21 @@ impl PerfettoTracer {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
         let exec_track = builder.add_thread("InstructionTrace");
+        // Optional visual parity: emit a parallel Execution track like the Python tracer does.
+        let timeline_track = builder.add_thread("Execution");
         let mem_track = builder.add_thread("MemoryWrites");
+        let imr_track = builder.add_thread("IMR");
         Self {
             builder,
             exec_track,
+            timeline_track,
             mem_track,
+            imr_track,
             units_per_instr: 10_000,
             path,
+            imr_seq: 0,
+            imr_read_zero: 0,
+            imr_read_nonzero: 0,
         }
     }
 
@@ -44,45 +59,62 @@ impl PerfettoTracer {
         mem_imr: u8,
         mem_isr: u8,
     ) {
-        let mut ev = self.builder.add_instant_event(
-            self.exec_track,
-            format!("Exec@0x{pc:06X}"),
-            self.ts(instr_index, 0),
-        );
-        ev.add_annotations([
-            ("backend", AnnotationValue::Str("rust".to_string())),
-            ("pc", AnnotationValue::Pointer(reg_pc as u64)),
-            ("opcode", AnnotationValue::UInt(opcode as u64)),
-            ("op_index", AnnotationValue::UInt(instr_index)),
-            ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
-            ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
-        ]);
-        for (name, value) in regs {
-            match name.as_str() {
-                "BA" => {
-                    let ba = *value & 0xFFFF;
-                    ev.add_annotation("reg_BA", ba as u64);
-                    ev.add_annotation("reg_A", (ba & 0xFF) as u64);
-                    ev.add_annotation("reg_B", ((ba >> 8) & 0xFF) as u64);
-                }
-                "I" => {
-                    ev.add_annotation("reg_i", (*value & 0xFFFF) as u64);
-                }
-                "F" => {
-                    let f = *value & 0xFF;
-                    ev.add_annotation("reg_f", f as u64);
-                    ev.add_annotation("flag_c", f & 0x01);
-                    ev.add_annotation("flag_z", (f >> 1) & 0x01);
-                }
-                _ => {
-                    ev.add_annotation(
-                        format!("reg_{}", name.to_ascii_lowercase()),
-                        (*value & 0xFF_FFFF) as u64,
-                    );
+        {
+            let mut ev = self.builder.add_instant_event(
+                self.exec_track,
+                format!("Exec@0x{pc:06X}"),
+                self.ts(instr_index, 0),
+            );
+            ev.add_annotations([
+                ("backend", AnnotationValue::Str("rust".to_string())),
+                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
+                ("opcode", AnnotationValue::UInt(opcode as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+                ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
+                ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
+            ]);
+            for (name, value) in regs {
+                match name.as_str() {
+                    "BA" => {
+                        let ba = *value & 0xFFFF;
+                        ev.add_annotation("reg_BA", ba as u64);
+                        ev.add_annotation("reg_A", (ba & 0xFF) as u64);
+                        ev.add_annotation("reg_B", ((ba >> 8) & 0xFF) as u64);
+                    }
+                    "I" => {
+                        ev.add_annotation("reg_i", (*value & 0xFFFF) as u64);
+                    }
+                    "F" => {
+                        let f = *value & 0xFF;
+                        ev.add_annotation("reg_f", f as u64);
+                        ev.add_annotation("flag_c", f & 0x01);
+                        ev.add_annotation("flag_z", (f >> 1) & 0x01);
+                    }
+                    _ => {
+                        ev.add_annotation(
+                            format!("reg_{}", name.to_ascii_lowercase()),
+                            (*value & 0xFF_FFFF) as u64,
+                        );
+                    }
                 }
             }
+            ev.finish();
         }
-        ev.finish();
+
+        // Duplicate on the Execution track for UI parity with Python traces.
+        {
+            let mut exec = self.builder.add_instant_event(
+                self.timeline_track,
+                "Execution".to_string(),
+                self.ts(instr_index, 0),
+            );
+            exec.add_annotations([
+                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
+                ("opcode", AnnotationValue::UInt(opcode as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+            ]);
+            exec.finish();
+        }
     }
 
     pub fn record_mem_write(
@@ -116,6 +148,43 @@ impl PerfettoTracer {
             .map_err(|e| crate::CoreError::Other(format!("perfetto save: {e}")))
     }
 
+    /// IMR read diagnostics: log each read and keep running zero/non-zero counters.
+    pub fn record_imr_read(&mut self, pc: Option<u32>, value: u8) {
+        let zero = value == 0;
+        if zero {
+            self.imr_read_zero = self.imr_read_zero.saturating_add(1);
+        } else {
+            self.imr_read_nonzero = self.imr_read_nonzero.saturating_add(1);
+        }
+        let ts = self.imr_seq;
+        self.imr_seq = self.imr_seq.saturating_add(1);
+
+        let mut ev =
+            self.builder
+                .add_instant_event(self.imr_track, "IMR_Read".to_string(), ts as i64);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", pc_val as u64);
+        }
+        ev.add_annotation("value", value as u64);
+        ev.add_annotation("zero", zero as u64);
+        ev.add_annotation("count_zero", self.imr_read_zero);
+        ev.add_annotation("count_nonzero", self.imr_read_nonzero);
+        ev.finish();
+    }
+
+    /// IMEM effective address diagnostics to align with Python tracing.
+    pub fn record_imem_addr(&mut self, mode: &str, base: u32, bp: u32, px: u32, py: u32) {
+        let mut ev =
+            self.builder
+                .add_instant_event(self.exec_track, "IMEM_EffectiveAddr".to_string(), 0);
+        ev.add_annotation("mode", mode.to_string());
+        ev.add_annotation("base", base as u64);
+        ev.add_annotation("bp", bp as u64);
+        ev.add_annotation("px", px as u64);
+        ev.add_annotation("py", py as u64);
+        ev.finish();
+    }
+
     /// Lightweight instant for IMEM/ISR diagnostics (used by test hooks).
     pub fn record_keyi_set(&mut self, addr: u32, value: u8) {
         let mut ev = self
@@ -123,6 +192,30 @@ impl PerfettoTracer {
             .add_instant_event(self.exec_track, "KEYI_Set".to_string(), 0);
         ev.add_annotation("offset", addr as u64);
         ev.add_annotation("value", value as u64);
+        ev.finish();
+    }
+
+    /// Generic KIO read hook for KOL/KOH/KIL visibility.
+    pub fn record_kio_read(&mut self, pc: Option<u32>, offset: u8, value: u8) {
+        let mut ev = self
+            .builder
+            .add_instant_event(self.exec_track, "read@KIO".to_string(), 0);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", pc_val as u64);
+        }
+        ev.add_annotation("offset", offset as u64);
+        ev.add_annotation("value", value as u64);
+        ev.finish();
+    }
+
+    /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
+    pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, u64>) {
+        let mut ev = self
+            .builder
+            .add_instant_event(self.exec_track, name.to_string(), 0);
+        for (k, v) in payload {
+            ev.add_annotation(k, v);
+        }
         ev.finish();
     }
 }

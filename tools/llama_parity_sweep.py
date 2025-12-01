@@ -174,6 +174,39 @@ def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
     return None
 
 
+def emit_perfetto_traces(prefix: Path) -> None:
+    """Emit Perfetto traces for a small deterministic program on both backends."""
+
+    from sc62015.pysc62015 import CPU
+    from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
+
+    # Small deterministic sequence: NOP + simple writes (avoid unimplemented LLIL).
+    program = bytes([0x00, 0x00, 0x00, 0x00])
+
+    def _run_trace(backend: str, path: Path) -> None:
+        perfetto_tracer.stop()
+        perfetto_tracer.start(str(path))
+        mem = _make_memory(program, pc=0)
+        cpu = CPU(mem, reset_on_init=False, backend=backend)
+        for idx in range(len(program)):
+            pc = cpu.regs.get(RegisterName.PC) if hasattr(cpu, "regs") else 0
+            opcode = mem.read_byte(pc)
+            perfetto_tracer.instant(
+                "InstructionTrace",
+                "Instruction",
+                {"pc": pc & 0xFFFFFF, "opcode": opcode & 0xFF, "op_index": idx},
+            )
+            cpu.execute_instruction(pc)
+        perfetto_tracer.stop()
+
+    from sc62015.pysc62015.emulator import RegisterName
+
+    py_path = prefix.with_name(f"{prefix.name}_python.trace")
+    ll_path = prefix.with_name(f"{prefix.name}_llama.trace")
+    _run_trace("python", py_path)
+    _run_trace("llama", ll_path)
+
+
 def _edge_values_for(op: Operand) -> list[int] | None:
     if isinstance(op, ImmOffset):
         # ImmOffset.value stores the magnitude; sign is fixed on the instance.
@@ -273,6 +306,16 @@ def main() -> None:
         action="store_true",
         help="exit 0 even if mismatches are found (useful for non-gating runs)",
     )
+    parser.add_argument(
+        "--emit-traces",
+        action="store_true",
+        help="Emit Perfetto traces for a small deterministic program (Python and LLAMA).",
+    )
+    parser.add_argument(
+        "--trace-prefix",
+        default="trace_ref",
+        help="Prefix for emitted trace files when --emit-traces is used.",
+    )
     args = parser.parse_args()
 
     if "llama" not in available_backends():
@@ -308,6 +351,9 @@ def main() -> None:
                     f"py_err={f.python_error} llama_err={f.llama_error} "
                     f"reg_diff={f.reg_diff} writes_diff={f.writes_diff}"
                 )
+
+    if args.emit_traces:
+        emit_perfetto_traces(Path(args.trace_prefix))
 
     should_fail = bool(failures) and not args.allow_mismatches
     raise SystemExit(1 if should_fail else 0)

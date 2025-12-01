@@ -66,7 +66,7 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
     # Poll OCR endpoint every 500ms until non-empty and stable for ~1s (best effort)
     last_txt = None
     last_change = time.time()
-    timeout_end = min(time.time() + 10.0, deadline)
+    timeout_end = min(time.time() + 4.0, deadline)
     while time.time() < timeout_end:
         ocr = _get_json(client, "/api/v1/ocr")
         if ocr.get("ok"):
@@ -95,8 +95,8 @@ def test_web_keyboard_triggers_key_interrupt() -> None:
             int(IMRFlag.IRM | IMRFlag.KEYM),
         )
 
-    # Wait up to 5s for KEY IRQ count to increase (bounded by total deadline)
-    end = min(time.time() + 5.0, deadline)
+    # Wait up to 2s for KEY IRQ count to increase (bounded by total deadline)
+    end = min(time.time() + 2.0, deadline)
     delivered = False
     while time.time() < end:
         s = _get_json(client, "/api/v1/state")

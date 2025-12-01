@@ -220,6 +220,8 @@ class KeyboardMatrix:
         self.irq_count = 0
         # Optional trace hook for scan events (col, row, pressed)
         self._trace_hook = None
+        # Optional hook for KIO instrumentation (name, kol, koh, kil, pc)
+        self._kio_trace_hook = None
 
         self._fifo: List[int] = [0x00] * FIFO_SIZE
         self._head = 0
@@ -282,12 +284,45 @@ class KeyboardMatrix:
             self._update_column_histogram()
         self._kil_latch = self._compute_kil()
 
-    def read_kil(self) -> int:
+    def read_kil(self, pc: int | None = None) -> int:
         self._kil_latch = self._compute_kil()
+        self.trace_kio("read_kil", pc=pc)
         return self._kil_latch
 
-    def peek_kil(self) -> int:
-        return self._compute_kil(allow_pending=True)
+    def trace_kio(self, name: str, pc: int | None = None) -> None:
+        """Optional hook to log KIO accesses with current KOL/KOH/KIL."""
+        kol = self.kol & 0xFF
+        koh = self.koh & 0x0F
+        kil = self._compute_kil()
+        handled = False
+        hook = getattr(self, "_kio_trace_hook", None)
+        if callable(hook):
+            try:
+                handled = bool(hook(name, kol, koh, kil, pc=pc))
+            except Exception:
+                pass
+        # Emit perfetto instant if tracer is present via the hook pattern
+        tracer = getattr(self, "_perf_tracer", None)
+        if tracer is not None and not handled:
+            payload = {
+                "kol": kol,
+                "koh": koh,
+                "kil": kil,
+            }
+            if pc is not None:
+                payload["pc"] = pc & 0xFFFFFF
+            try:
+                if hasattr(tracer, "instant"):
+                    tracer.instant("KIO", name, payload)
+                elif hasattr(tracer, "record_instant"):
+                    tracer.record_instant("KIO", name, payload)
+            except Exception:
+                pass
+
+    def peek_kil(self, pc: int | None = None) -> int:
+        val = self._compute_kil(allow_pending=True)
+        self.trace_kio("peek_kil", pc=pc)
+        return val
 
     def get_active_columns(self) -> List[int]:
         return list(self._active_columns())

@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/emulator.py:save_snapshot
+// PY_SOURCE: pce500/emulator.py:load_snapshot
+
 use crate::memory::{
     MemoryImage, INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
 };
