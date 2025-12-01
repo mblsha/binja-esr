@@ -26,16 +26,6 @@ def _seed_state(emu: PCE500Emulator) -> None:
     # Prime counters/metadata that should round-trip through .pcsnap.
     emu.call_depth = _CALL_DEPTH
     emu.cpu.regs.call_sub_level = _CALL_SUB_LEVEL
-    emu.memory_read_count = _MEM_READS
-    emu.memory_write_count = _MEM_WRITES
-    if getattr(emu.cpu, "backend", "python") == "llama":
-        impl = emu.cpu.unwrap()
-        try:
-            impl.memory_reads = _MEM_READS
-            impl.memory_writes = _MEM_WRITES
-        except Exception:
-            pass
-
     # Seed keyboard metrics and sync into snapshot metadata.
     emu._kb_irq_count = _KB_IRQ_COUNT
     emu._kb_strobe_count = _KB_STROBE_COUNT
@@ -49,6 +39,17 @@ def _seed_state(emu: PCE500Emulator) -> None:
     # Seed LCD payload by issuing a couple of writes into the overlay window.
     emu.memory.write_byte(0x2000, 0x3F)  # instruction
     emu.memory.write_byte(0x2002, 0xAB)  # data
+
+    # Snapshot counters after all synthetic writes above.
+    emu.memory_read_count = _MEM_READS
+    emu.memory_write_count = _MEM_WRITES
+    if getattr(emu.cpu, "backend", "python") == "llama":
+        impl = emu.cpu.unwrap()
+        try:
+            impl.memory_reads = _MEM_READS
+            impl.memory_writes = _MEM_WRITES
+        except Exception:
+            pass
 
     # Touch a few registers to ensure state is non-zero.
     emu.cpu.regs.set(RegisterName.Y, 0x1234)
