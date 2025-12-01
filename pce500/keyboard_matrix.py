@@ -220,6 +220,8 @@ class KeyboardMatrix:
         self.irq_count = 0
         # Optional trace hook for scan events (col, row, pressed)
         self._trace_hook = None
+        # Optional hook for KIO instrumentation (name, kol, koh, kil, pc)
+        self._kio_trace_hook = None
 
         self._fifo: List[int] = [0x00] * FIFO_SIZE
         self._head = 0
@@ -289,19 +291,23 @@ class KeyboardMatrix:
 
     def trace_kio(self, name: str, pc: int | None = None) -> None:
         """Optional hook to log KIO accesses with current KOL/KOH/KIL."""
-        hook = getattr(self, "_trace_hook", None)
+        kol = self.kol & 0xFF
+        koh = self.koh & 0x0F
+        kil = self._compute_kil()
+        handled = False
+        hook = getattr(self, "_kio_trace_hook", None)
         if callable(hook):
             try:
-                hook(name, self.kol & 0xFF, self.koh & 0x0F, self._compute_kil(), pc=pc)
+                handled = bool(hook(name, kol, koh, kil, pc=pc))
             except Exception:
                 pass
         # Emit perfetto instant if tracer is present via the hook pattern
         tracer = getattr(self, "_perf_tracer", None)
-        if tracer is not None:
+        if tracer is not None and not handled:
             payload = {
-                "kol": self.kol & 0xFF,
-                "koh": self.koh & 0x0F,
-                "kil": self._compute_kil(),
+                "kol": kol,
+                "koh": koh,
+                "kil": kil,
             }
             if pc is not None:
                 payload["pc"] = pc & 0xFFFFFF

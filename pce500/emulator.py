@@ -413,16 +413,17 @@ class PCE500Emulator:
         try:
             # Tap into keyboard scan events to surface KEYI progression in logs/perfetto.
             if hasattr(self.keyboard, "_matrix"):
-                self.keyboard._matrix._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
-                # Also route handler-level hook so KIO reads/writes can be logged with PC.
-                self.keyboard._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
+                matrix = self.keyboard._matrix  # type: ignore[attr-defined]
+                matrix._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
+                # Dedicated hook for KIO reads/writes so we can capture PC/op index.
+                matrix._kio_trace_hook = self._trace_kio_access  # type: ignore[attr-defined]
                 # Pass perfetto tracer down to matrix so trace_kio can emit directly.
                 try:
                     if new_tracer.enabled:
-                        self.keyboard._matrix._perf_tracer = new_tracer  # type: ignore[attr-defined]
+                        matrix._perf_tracer = new_tracer  # type: ignore[attr-defined]
                     elif self.perfetto_enabled or trace_dispatcher.has_observers():
                         # Use the dispatcher as a tracer proxy for legacy perfetto mode.
-                        self.keyboard._matrix._perf_tracer = trace_dispatcher  # type: ignore[attr-defined]
+                        matrix._perf_tracer = trace_dispatcher  # type: ignore[attr-defined]
                 except Exception:
                     pass
         except Exception:
@@ -473,6 +474,46 @@ class PCE500Emulator:
             rust_irq_event(name, rust_payload)
         except Exception:
             pass
+
+    def _trace_kio_access(
+        self, name: str, kol: int, koh: int, kil: int, *, pc: Optional[int] = None
+    ) -> bool:
+        """Log KIO accesses (KOL/KOH/KIL) with best-effort PC/op index."""
+
+        if not (new_tracer.enabled or self.perfetto_enabled or trace_dispatcher.has_observers()):
+            return False
+
+        eff_pc = pc
+        if eff_pc is None:
+            try:
+                eff_pc = self.cpu.regs.get(RegisterName.PC)
+            except Exception:
+                eff_pc = None
+
+        payload: Dict[str, Any] = {
+            "kol": kol & 0xFF,
+            "koh": koh & 0x0F,
+            "kil": kil & 0xFF,
+        }
+        if eff_pc is not None:
+            payload["pc"] = eff_pc & 0xFFFFFF
+        op_index = getattr(self, "_active_trace_instruction", None)
+        if op_index is not None:
+            payload["op_index"] = op_index
+
+        try:
+            if new_tracer.enabled:
+                if getattr(self, "_new_trace_enabled", False):
+                    units = self._next_memory_trace_units()
+                    setter = getattr(new_tracer, "set_manual_clock_units", None)
+                    if units is not None and callable(setter):
+                        setter(units)
+                new_tracer.instant("KIO", name, payload)
+            else:
+                trace_dispatcher.record_instant("KIO", name, payload)
+        except Exception:
+            return False
+        return True
 
     def _trace_key_event(self, col: int, row: int, pressed: bool) -> None:
         """Optional hook from keyboard scan to log KEY events into perfetto."""
