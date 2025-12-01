@@ -540,7 +540,9 @@ impl StandaloneBus {
 
     fn idle_tick(&mut self) {
         // Advance timers once; scan keyboard when MTI fires to mirror Python’s timer hook.
-        let (mti, sti) = self.timer.tick_timers(&mut self.memory, &mut self.cycle_count);
+        let (mti, sti) = self
+            .timer
+            .tick_timers(&mut self.memory, &mut self.cycle_count);
         if mti {
             self.tick_keyboard();
         }

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional, Protocol, Sequence
 
 from pce500.memory import PCE500Memory
+from pce500.keyboard_handler import PCE500KeyboardHandler
 from pce500.display.hd61202 import HD61202, parse_command, ChipSelect
 
 try:
@@ -101,6 +102,16 @@ class PythonContractBackend:
         self._timer = TimerScheduler(mti_period=0, sti_period=0, enabled=True)
         self._cycles = 0
         self._lcd_chips = (HD61202(), HD61202())
+        # Minimal keyboard handler to mirror KIO behaviour for contract tests.
+        self._keyboard = PCE500KeyboardHandler(self.memory)
+
+        def _kb_read(addr: int, pc: Optional[int]) -> int:
+            return int(self._keyboard.handle_register_read(addr))
+
+        def _kb_write(addr: int, val: int, pc: Optional[int]) -> None:
+            self._keyboard.handle_register_write(addr, val)
+
+        self.memory.set_keyboard_handler(_kb_read, _kb_write, enable_overlay=True)
 
     def load_memory(
         self, *, external: Optional[bytes] = None, internal: Optional[bytes] = None
@@ -114,6 +125,10 @@ class PythonContractBackend:
             self.memory.external_memory[start : start + limit] = internal[:limit]
         for chip in self._lcd_chips:
             chip.reset()
+        try:
+            self._keyboard.release_all_keys()
+        except Exception:
+            pass
 
     def read(self, address: int, pc: Optional[int] = None) -> int:
         value = int(self.memory.read_byte(address, pc)) & 0xFF
@@ -322,6 +337,18 @@ class RustContractBackend:
                 "lcd_status": lcd_status,
             },
         )
+
+    def set_python_ranges(self, ranges: list[tuple[int, int]]) -> None:
+        self._impl.set_python_ranges(ranges)
+
+    def set_readonly_ranges(self, ranges: list[tuple[int, int]]) -> None:
+        self._impl.set_readonly_ranges(ranges)
+
+    def set_keyboard_bridge(self, enabled: bool) -> None:
+        self._impl.set_keyboard_bridge(bool(enabled))
+
+    def requires_python(self, address: int) -> bool:
+        return bool(self._impl.requires_python(address))
 
     def configure_timer(
         self, mti_period: int, sti_period: int, *, enabled: bool = True

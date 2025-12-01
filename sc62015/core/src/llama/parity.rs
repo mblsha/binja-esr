@@ -606,8 +606,8 @@ pub fn run_parity_once(
     let llama_trace = cwd.join("llama_parity.pftrace");
     write_perfetto_trace(&[llama_event], &llama_trace).map_err(|e| format!("llama trace: {e}"))?;
 
-    let py_output = run_python_oracle(bytes, regs, pc, Some(cwd), Some(mem))
-        .map_err(|e| e.to_string())?;
+    let py_output =
+        run_python_oracle(bytes, regs, pc, Some(cwd), Some(mem)).map_err(|e| e.to_string())?;
     let py_snap = py_output.snapshot;
     let py_trace = cwd.join("python_parity.pftrace");
     // If the oracle already emitted a trace, prefer that; otherwise serialize our own.
@@ -767,12 +767,7 @@ mod tests {
     }
 
     #[cfg(feature = "llama-tests")]
-    fn assert_parity_mem(
-        bytes: &[u8],
-        regs: &[(RegName, u32)],
-        mem: &[(u32, u8)],
-        workdir: &Path,
-    ) {
+    fn assert_parity_mem(bytes: &[u8], regs: &[(RegName, u32)], mem: &[(u32, u8)], workdir: &Path) {
         let (llama_snap, py_snap, _llama_trace, _py_trace, compare_output) =
             run_parity_once(bytes, regs, 0, 0, workdir, mem).expect("parity run");
         assert!(

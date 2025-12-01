@@ -2,8 +2,8 @@
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator._tick_timers
 
 use crate::memory::MemoryImage;
-use crate::{InterruptInfo, TimerInfo};
 use crate::PERFETTO_TRACER;
+use crate::{InterruptInfo, TimerInfo};
 
 const ISR_OFFSET: u32 = 0xFC;
 
@@ -81,6 +81,9 @@ impl TimerContext {
             next_id: self.next_interrupt_id,
             imr: self.irq_imr,
             isr: self.irq_isr,
+            irq_counts: None,
+            last_irq: None,
+            irq_bit_watch: None,
         };
         (timer, interrupts)
     }
@@ -267,5 +270,4 @@ mod tests {
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01);
     }
-
 }

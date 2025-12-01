@@ -787,6 +787,7 @@ version = "0.1.0"
 dependencies = [
  "pyo3",
  "sc62015-core",
+ "serde_json",
 ]
 
 [[package]]

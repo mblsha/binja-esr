@@ -457,7 +457,19 @@ class PCE500Emulator:
         try:
             from _sc62015_rustcore import record_irq_event as rust_irq_event
 
-            rust_payload = {k: int(v) if v is not None else 0 for k, v in data.items()}
+            rust_payload = {}
+            for key, value in data.items():
+                try:
+                    if value is None:
+                        rust_payload[key] = 0
+                    elif isinstance(value, bool):
+                        rust_payload[key] = int(value)
+                    elif isinstance(value, (int, float)):
+                        rust_payload[key] = int(value)
+                    elif isinstance(value, str):
+                        rust_payload[key] = int(value, 0)
+                except (TypeError, ValueError):
+                    continue
             rust_irq_event(name, rust_payload)
         except Exception:
             pass
@@ -1017,7 +1029,8 @@ class PCE500Emulator:
             except Exception:
                 pass
 
-            if getattr(self, "fast_mode", False):
+            fast_mode = getattr(self, "fast_mode", False)
+            if fast_mode:
                 # Minimal execution path for speed
                 pc_before = pc
 
@@ -1040,7 +1053,11 @@ class PCE500Emulator:
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
-                if new_tracer.enabled:
+                if self._new_trace_enabled:
+                    # In fast mode, still emit full execution instants when new tracing is enabled
+                    # so Perfetto/trace consumers stay aligned.
+                    self._trace_execution(pc_before, opcode)
+                elif new_tracer.enabled:
                     new_tracer.instant(
                         "Execution",
                         f"Exec@0x{pc_before:06X}",
@@ -1052,7 +1069,6 @@ class PCE500Emulator:
                         f"Exec@0x{pc_before:06X}",
                         {"pc": f"0x{pc_before:06X}"},
                     )
-                # Emit lightweight Exec@ events for new tracer even in fast mode
             else:
                 # Decode instruction first to get opcode name for tracing
                 instr = self.cpu.decode_instruction(pc)
@@ -1135,11 +1151,6 @@ class PCE500Emulator:
                     "CPU", "Error", {"error": str(e), "pc": f"0x{pc:06X}"}
                 )
             raise
-        # Always emit an Execution instant when the new tracer is enabled so the
-        # Perfetto stream has one Exec@ per instruction regardless of legacy
-        # dispatcher state.
-        if self._new_trace_enabled and new_tracer.enabled and opcode is not None:
-            self._trace_execution(pc, opcode)
         self._emit_instruction_trace_event(trace_snapshot)
         # Detect end of interrupt roughly by RETI opcode name
         try:

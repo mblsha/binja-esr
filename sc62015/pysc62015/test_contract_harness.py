@@ -274,6 +274,57 @@ def test_imr_isr_toggle_parity():
     assert py_int[0xFC] == rs_int[0xFC] == 0xF0
 
 
+def test_keyboard_kio_parity():
+    py_backend, rust_backend = _init_backends()
+    vectors = [
+        AccessVector("write", 0x100000 + 0xF0, 0xFF, pc=0x0C1000),  # KOL
+        AccessVector("write", 0x100000 + 0xF1, 0x07, pc=0x0C1002),  # KOH
+        AccessVector("read", 0x100000 + 0xF0, pc=0x0C1010),  # KOL readback
+        AccessVector("read", 0x100000 + 0xF1, pc=0x0C1012),  # KOH readback
+        AccessVector("read", 0x100000 + 0xF2, pc=0x0C1014),  # KIL (no keys pressed)
+    ]
+
+    runs = run_dual(vectors, python_backend=py_backend, rust_backend=rust_backend)
+    py_run = runs["python"]
+    rs_run = runs["llama"]
+
+    py_events = [(e.kind, e.address, e.value) for e in py_run.events]
+    rs_events = [(e.kind, e.address, e.value) for e in rs_run.events]
+    assert py_events == rs_events
+
+    py_int = py_run.snapshot.internal
+    rs_int = rs_run.snapshot.internal
+    # KIO writes hit the overlay but do not persist into internal RAM; parity only matters across backends.
+    assert py_int[0xF0] == rs_int[0xF0] == 0xAA
+    assert py_int[0xF1] == rs_int[0xF1] == 0xAA
+    assert py_int[0xF2] == rs_int[0xF2] == 0xAA
+
+
+def test_keyboard_irq_delivery_parity():
+    py_backend, rust_backend = _init_backends()
+    # Enable KEYI in IMR.
+    for backend in (py_backend, rust_backend):
+        backend.write(0x100000 + 0xFB, 0x04, pc=0x0D0000)
+        backend.write(0x100000 + 0xFC, 0x00, pc=0x0D0002)
+
+    # Simulate a key press by strobing KOL/KOH; both backends should set KIL. KEYI assertion
+    # requires an actual matrix event; keep expectation limited to matching ISR/KIL snapshots.
+    vectors = [
+        AccessVector("write", 0x100000 + 0xF0, 0x01, pc=0x0D0010),
+        AccessVector("write", 0x100000 + 0xF1, 0x00, pc=0x0D0012),
+        AccessVector("read", 0x100000 + 0xF2, pc=0x0D0014),
+    ]
+    runs = run_dual(vectors, python_backend=py_backend, rust_backend=rust_backend)
+    py_run = runs["python"]
+    rs_run = runs["llama"]
+
+    py_int = py_run.snapshot.internal
+    rs_int = rs_run.snapshot.internal
+    assert py_int[0xF2] == rs_int[0xF2]
+    # ISR parity (KEYI bit) should match across backends even if not set.
+    assert (py_int[0xFC] & 0x04) == (rs_int[0xFC] & 0x04)
+
+
 def test_ex_memory_and_dsbl_seeds_parity():
     py_backend, rust_backend = _init_backends()
     vectors = [

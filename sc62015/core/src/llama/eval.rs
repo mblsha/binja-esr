@@ -1395,20 +1395,20 @@ impl LlamaExecutor {
             .mem2
             .map(|m| m.bits)
             .or_else(|| {
-                entry
-                    .operands
-                    .get(1)
-                    .and_then(|op| if let OperandKind::Reg(_, b) = op { Some(*b) } else { None })
+                entry.operands.get(1).and_then(|op| {
+                    if let OperandKind::Reg(_, b) = op {
+                        Some(*b)
+                    } else {
+                        None
+                    }
+                })
             })
             .unwrap_or(mem_dst.bits);
         let mask_dst = Self::mask_for_width(mem_dst.bits);
         let mask_src = Self::mask_for_width(src_bits);
         let length = state.get_reg(RegName::I) & mask_for(RegName::I);
         let dst_step = mem_dst.bits.div_ceil(8) as u32;
-        let src_step = decoded
-            .mem2
-            .map(|m| m.bits.div_ceil(8) as u32)
-            .unwrap_or(0);
+        let src_step = decoded.mem2.map(|m| m.bits.div_ceil(8) as u32).unwrap_or(0);
         let mut overall_zero: u32 = 0;
         let mut carry = (state.get_reg(RegName::FC) & 1) != 0;
 
@@ -2360,7 +2360,11 @@ mod tests {
         assert_eq!(OPCODES.len(), 256, "expected dense opcode table");
         let mut seen = HashSet::new();
         for entry in OPCODES {
-            assert!(seen.insert(entry.opcode), "duplicate opcode 0x{:02X}", entry.opcode);
+            assert!(
+                seen.insert(entry.opcode),
+                "duplicate opcode 0x{:02X}",
+                entry.opcode
+            );
         }
         assert_eq!(OPCODES.first().map(|e| e.opcode), Some(0x00));
         assert_eq!(OPCODES.last().map(|e| e.opcode), Some(0xFF));

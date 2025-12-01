@@ -7,6 +7,7 @@ import argparse
 import sys
 import zipfile
 from dataclasses import dataclass
+from itertools import zip_longest
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -344,7 +345,16 @@ def main() -> None:
     if args.compare_irq:
         irq_a = _irq_events(events_a)
         irq_b = _irq_events(events_b)
-        for idx, (ea, eb) in enumerate(zip(irq_a, irq_b)):
+        len_irq_a = len(irq_a)
+        len_irq_b = len(irq_b)
+        for idx, (ea, eb) in enumerate(zip_longest(irq_a, irq_b)):
+            if ea is None or eb is None:
+                missing_trace = "Trace A" if ea is None else "Trace B"
+                irq_mismatch = (
+                    f"{missing_trace} missing IRQ/timer event at index {idx} "
+                    f"(TraceA={len_irq_a} TraceB={len_irq_b})"
+                )
+                break
             if ea.name != eb.name:
                 irq_mismatch = f"{ea.name} vs {eb.name} at irq index {idx}"
                 break
@@ -356,7 +366,7 @@ def main() -> None:
             print(f"  {irq_mismatch}")
             exit_code = 1
         else:
-            print("\nIRQ/timer events match up to min length.")
+            print(f"\nIRQ/timer events match ({len_irq_a} events).")
 
     if not divergence_detected:
         if irq_mismatch:

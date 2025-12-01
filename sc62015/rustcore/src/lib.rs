@@ -4,7 +4,7 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyAnyMethods, PyBytes, PyDict, PyModule};
+use pyo3::types::{PyAny, PyAnyMethods, PyBytes, PyDict, PyModule, PyTuple};
 use pyo3::Bound;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
@@ -14,9 +14,12 @@ use sc62015_core::{
         state::LlamaState,
     },
     memory::MemoryImage,
+    snapshot::save_snapshot,
     timer::TimerContext,
-    PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
+    PerfettoTracer, SnapshotMetadata, ADDRESS_MASK, EXTERNAL_SPACE, INTERNAL_MEMORY_START,
+    PERFETTO_TRACER,
 };
+use serde_json::{json, to_value, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -133,6 +136,83 @@ impl LcdShadow {
     }
 }
 
+fn capture_lcd_snapshot(
+    py: Python<'_>,
+    memory: &Bound<PyAny>,
+) -> PyResult<Option<(JsonValue, Vec<u8>)>> {
+    let controller = match memory.getattr("_lcd_controller") {
+        Ok(ctrl) => ctrl,
+        Err(_) => return Ok(None),
+    };
+    if controller.is_none() {
+        return Ok(None);
+    }
+    let snapshot = match controller.call_method0("get_snapshot") {
+        Ok(snap) => snap,
+        Err(_) => return Ok(None),
+    };
+    let chips: Vec<PyObject> = snapshot
+        .getattr("chips")?
+        .extract()
+        .map_err(|e| PyRuntimeError::new_err(format!("lcd snapshot chips: {e}")))?;
+    if chips.is_empty() {
+        return Ok(None);
+    }
+
+    let mut meta_chips = Vec::with_capacity(chips.len());
+    let mut payload: Vec<u8> = Vec::new();
+    let mut pages = 0usize;
+    let mut width = 0usize;
+    for chip_obj in &chips {
+        let chip = chip_obj.bind(py);
+        let on: bool = chip.getattr("on")?.extract()?;
+        let start_line: u8 = chip.getattr("start_line")?.extract()?;
+        let page: u8 = chip.getattr("page")?.extract()?;
+        let y_address: u8 = chip.getattr("y_address")?.extract()?;
+        let vram: Vec<Vec<u8>> = chip.getattr("vram")?.extract()?;
+        pages = vram.len();
+        width = vram.get(0).map(|row| row.len()).unwrap_or(0);
+        for page_rows in &vram {
+            for byte in page_rows {
+                payload.push(*byte);
+            }
+        }
+        let instr_count: u32 = chip.getattr("instruction_count")?.extract()?;
+        let data_write_count: u32 = chip.getattr("data_write_count")?.extract()?;
+        meta_chips.push(json!({
+            "on": on,
+            "start_line": start_line,
+            "page": page,
+            "y_address": y_address,
+            "instruction_count": instr_count,
+            "data_write_count": data_write_count,
+            "data_read_count": 0,
+        }));
+    }
+    let cs_both = controller
+        .getattr("cs_both_count")
+        .and_then(|v| v.extract::<u32>())
+        .unwrap_or(0);
+    let cs_left = controller
+        .getattr("cs_left_count")
+        .and_then(|v| v.extract::<u32>())
+        .unwrap_or(0);
+    let cs_right = controller
+        .getattr("cs_right_count")
+        .and_then(|v| v.extract::<u32>())
+        .unwrap_or(0);
+    let meta = json!({
+        "chip_count": chips.len(),
+        "pages": pages,
+        "width": width,
+        "chips": meta_chips,
+        "cs_both_count": cs_both,
+        "cs_left_count": cs_left,
+        "cs_right_count": cs_right,
+    });
+    Ok(Some((meta, payload)))
+}
+
 fn event_to_dict(py: Python<'_>, evt: &ContractEvent) -> PyResult<PyObject> {
     let dict = PyDict::new_bound(py);
     dict.set_item("kind", evt.kind)?;
@@ -163,13 +243,14 @@ struct LlamaContractBus {
     last_lcd_status: Option<u8>,
     lcd_log: Vec<(u32, u8)>,
     lcd_shadow: [LcdShadow; 2],
+    keyboard: KeyboardMatrix,
 }
 
 #[pymethods]
 impl LlamaContractBus {
     #[new]
     fn new() -> Self {
-        Self {
+        let mut bus = Self {
             memory: MemoryImage::new(),
             events: Vec::new(),
             timer: TimerContext::new(true, 0, 0),
@@ -177,7 +258,10 @@ impl LlamaContractBus {
             last_lcd_status: None,
             lcd_log: Vec::new(),
             lcd_shadow: [LcdShadow::new(), LcdShadow::new()],
-        }
+            keyboard: KeyboardMatrix::new(),
+        };
+        bus.keyboard.reset(&mut bus.memory);
+        bus
     }
 
     fn load_external(&mut self, blob: &[u8]) {
@@ -188,6 +272,22 @@ impl LlamaContractBus {
     fn load_internal(&mut self, blob: &[u8]) {
         self.memory.load_internal(blob);
         self.events.clear();
+    }
+
+    fn set_python_ranges(&mut self, ranges: Vec<(u32, u32)>) {
+        self.memory.set_python_ranges(ranges);
+    }
+
+    fn set_readonly_ranges(&mut self, ranges: Vec<(u32, u32)>) {
+        self.memory.set_readonly_ranges(ranges);
+    }
+
+    fn set_keyboard_bridge(&mut self, enabled: bool) {
+        self.memory.set_keyboard_bridge(enabled);
+    }
+
+    fn requires_python(&self, address: u32) -> bool {
+        self.memory.requires_python(address)
     }
 
     #[pyo3(signature = (mti_period, sti_period, *, enabled = true))]
@@ -233,13 +333,28 @@ impl LlamaContractBus {
 
     #[pyo3(signature = (address, pc=None))]
     fn read_byte(&mut self, address: u32, pc: Option<u32>) -> PyResult<u8> {
-        let value = self.memory.read_byte(address).unwrap_or(0);
+        let addr = address & ADDRESS_MASK;
+        if addr >= INTERNAL_MEMORY_START {
+            if let Some(offset) = addr.checked_sub(INTERNAL_MEMORY_START) {
+                if let Some(value) = self.keyboard.handle_read(offset, &mut self.memory) {
+                    self.events.push(ContractEvent {
+                        kind: "read",
+                        address: addr,
+                        value,
+                        pc: pc.map(|v| v & ADDRESS_MASK),
+                        detail: None,
+                    });
+                    return Ok(value);
+                }
+            }
+        }
+        let value = self.memory.read_byte(addr).unwrap_or(0);
         if is_lcd_addr(address) && (address & 0x3) == 0x1 {
             self.last_lcd_status = Some(value);
         }
         self.events.push(ContractEvent {
             kind: "read",
-            address: address & ADDRESS_MASK,
+            address: addr,
             value,
             pc: pc.map(|v| v & ADDRESS_MASK),
             detail: None,
@@ -249,8 +364,23 @@ impl LlamaContractBus {
 
     #[pyo3(signature = (address, value, pc=None))]
     fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
-        let _ = self.memory.store(address, 8, value as u32);
-        if is_lcd_addr(address) {
+        let addr = address & ADDRESS_MASK;
+        if addr >= INTERNAL_MEMORY_START {
+            if let Some(offset) = addr.checked_sub(INTERNAL_MEMORY_START) {
+                if self.keyboard.handle_write(offset, value, &mut self.memory) {
+                    self.events.push(ContractEvent {
+                        kind: "write",
+                        address: addr,
+                        value,
+                        pc: pc.map(|v| v & ADDRESS_MASK),
+                        detail: None,
+                    });
+                    return Ok(());
+                }
+            }
+        }
+        let _ = self.memory.store(addr, 8, value as u32);
+        if is_lcd_addr(addr) {
             self.lcd_log.push((address & ADDRESS_MASK, value));
             let addr_lo = address & 0x0FFF;
             let rw = addr_lo & 1;
@@ -292,8 +422,14 @@ impl LlamaContractBus {
 
     fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
         let dict = PyDict::new_bound(py);
-        dict.set_item("internal", PyBytes::new_bound(py, self.memory.internal_slice()))?;
-        dict.set_item("external", PyBytes::new_bound(py, self.memory.external_slice()))?;
+        dict.set_item(
+            "internal",
+            PyBytes::new_bound(py, self.memory.internal_slice()),
+        )?;
+        dict.set_item(
+            "external",
+            PyBytes::new_bound(py, self.memory.external_slice()),
+        )?;
         dict.set_item("external_len", self.memory.external_len())?;
         // Surface IMR/ISR for contract assertions.
         let internal = self.memory.internal_slice();
@@ -344,6 +480,8 @@ struct LlamaPyBus {
     memory: Py<PyAny>,
     pc: u32,
     lcd_hook: Option<Py<PyAny>>,
+    memory_reads: u64,
+    memory_writes: u64,
 }
 
 impl LlamaPyBus {
@@ -357,6 +495,8 @@ impl LlamaPyBus {
             memory: memory.clone_ref(py),
             pc,
             lcd_hook,
+            memory_reads: 0,
+            memory_writes: 0,
         }
     }
 
@@ -365,14 +505,14 @@ impl LlamaPyBus {
             || (0xA000..=0xAFFF).contains(&(addr & ADDRESS_MASK))
     }
 
-    fn read_byte(&self, addr: u32) -> u8 {
+    fn read_byte(&mut self, addr: u32) -> u8 {
         Python::with_gil(|py| self.read_byte_with_gil(py, addr))
     }
 
-    fn read_byte_with_gil(&self, py: Python<'_>, addr: u32) -> u8 {
+    fn read_byte_with_gil(&mut self, py: Python<'_>, addr: u32) -> u8 {
         let bound = self.memory.bind(py);
         let addr = addr & ADDRESS_MASK;
-        match bound.call_method1("read_byte", (addr, self.pc)) {
+        let value = match bound.call_method1("read_byte", (addr, self.pc)) {
             Ok(obj) => obj.extract::<u8>().unwrap_or(0),
             Err(err) => {
                 if err.is_instance_of::<PyTypeError>(py) {
@@ -384,14 +524,17 @@ impl LlamaPyBus {
                     0
                 }
             }
-        }
+        };
+        // Count one logical read per byte.
+        self.memory_reads += 1;
+        value
     }
 
-    fn write_byte(&self, addr: u32, value: u8) {
+    fn write_byte(&mut self, addr: u32, value: u8) {
         Python::with_gil(|py| self.write_byte_with_gil(py, addr, value));
     }
 
-    fn write_byte_with_gil(&self, py: Python<'_>, addr: u32, value: u8) {
+    fn write_byte_with_gil(&mut self, py: Python<'_>, addr: u32, value: u8) {
         let bound = self.memory.bind(py);
         let addr = addr & ADDRESS_MASK;
         let _ = match bound.call_method1("write_byte", (addr, value, self.pc)) {
@@ -404,6 +547,8 @@ impl LlamaPyBus {
                 }
             }
         };
+        // Count one logical write per byte.
+        self.memory_writes += 1;
         if Self::is_lcd_addr(addr) {
             if let Some(hook) = &self.lcd_hook {
                 let _ = hook.call1(py, (addr, value, self.pc));
@@ -471,10 +616,10 @@ impl LlamaBus for LlamaPyBus {
             let offset = absolute - INTERNAL_MEMORY_START;
             if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
                 Python::with_gil(|py| {
-                    let _ = self.memory.bind(py).call_method1(
-                        "trace_kio_from_rust",
-                        (offset, value & 0xFF, self.pc),
-                    );
+                    let _ = self
+                        .memory
+                        .bind(py)
+                        .call_method1("trace_kio_from_rust", (offset, value & 0xFF, self.pc));
                 });
                 if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
@@ -607,6 +752,9 @@ struct LlamaCpu {
     temps: HashMap<u32, u32>,
     mirror: MemoryImage,
     keyboard: KeyboardMatrix,
+    memory_synced: bool,
+    memory_reads: u64,
+    memory_writes: u64,
 }
 
 #[pymethods]
@@ -622,6 +770,9 @@ impl LlamaCpu {
             temps: HashMap::new(),
             mirror: MemoryImage::new(),
             keyboard: KeyboardMatrix::new(),
+            memory_synced: false,
+            memory_reads: 0,
+            memory_writes: 0,
         };
         if reset_on_init {
             cpu.power_on_reset()?;
@@ -637,6 +788,9 @@ impl LlamaCpu {
         self.temps.clear();
         self.mirror = MemoryImage::new();
         self.keyboard.reset(&mut self.mirror);
+        self.memory_synced = true;
+        self.memory_reads = 0;
+        self.memory_writes = 0;
         Python::with_gil(|py| self.sync_mirror(py));
         Ok(())
     }
@@ -650,23 +804,28 @@ impl LlamaCpu {
             .executor
             .execute(opcode, &mut self.state, &mut bus)
             .map_err(|e| PyRuntimeError::new_err(format!("llama execute: {e}")))?;
+        self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
+        self.memory_writes = self.memory_writes.saturating_add(bus.memory_writes);
         self.call_sub_level = self.state.call_depth();
         if opcode == 0xFE {
             // IR: interrupt entry
-            let (imr, isr) = self.read_irq_registers(py, &bus);
+            let (imr, isr) = self.read_irq_registers(py, &mut bus);
             self.emit_irq_trace(
                 py,
                 "IRQ_Enter",
                 HashMap::from([
                     ("pc", entry_pc & ADDRESS_MASK),
-                    ("vector", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
+                    (
+                        "vector",
+                        self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
+                    ),
                     ("imr", imr as u32),
                     ("isr", isr as u32),
                 ]),
             );
         } else if opcode == 0x01 {
             // RETI: interrupt exit
-            let (imr, isr) = self.read_irq_registers(py, &bus);
+            let (imr, isr) = self.read_irq_registers(py, &mut bus);
             self.emit_irq_trace(
                 py,
                 "IRQ_Exit",
@@ -795,6 +954,167 @@ impl LlamaCpu {
         Ok(self.keyboard.fifo_len() != fifo_before)
     }
 
+    fn is_memory_synced(&self) -> bool {
+        self.memory_synced
+    }
+
+    fn mark_memory_dirty(&mut self) {
+        self.memory_synced = false;
+    }
+
+    fn _initialise_rust_memory(&mut self, py: Python<'_>) -> PyResult<()> {
+        let bound = self.memory.bind(py);
+        let exported = bound
+            .call_method0("export_flat_memory")
+            .map_err(|e| PyRuntimeError::new_err(format!("export_flat_memory: {e}")))?;
+        let exported = exported.downcast::<PyTuple>()?;
+        if exported.len() < 3 {
+            return Err(PyRuntimeError::new_err(
+                "export_flat_memory returned an unexpected shape",
+            ));
+        }
+        let flat_item = exported.get_item(0)?;
+        let flat_bytes = flat_item
+            .downcast::<PyBytes>()
+            .map_err(|e| PyRuntimeError::new_err(format!("flattened memory: {e}")))?
+            .as_bytes()
+            .to_vec();
+        let fallback_ranges: Vec<(u32, u32)> = exported
+            .get_item(1)?
+            .extract()
+            .map_err(|e| PyRuntimeError::new_err(format!("fallback ranges: {e}")))?;
+        let readonly_ranges: Vec<(u32, u32)> = exported
+            .get_item(2)?
+            .extract()
+            .map_err(|e| PyRuntimeError::new_err(format!("readonly ranges: {e}")))?;
+
+        self.mirror = MemoryImage::new();
+        if flat_bytes.len() == EXTERNAL_SPACE {
+            let _ = self.mirror.copy_external_from(&flat_bytes);
+        }
+        if let Ok(imem_obj) = bound.call_method0("get_internal_memory_bytes") {
+            if let Ok(imem_bytes) = imem_obj.downcast::<PyBytes>() {
+                self.mirror.load_internal(imem_bytes.as_bytes());
+            }
+        }
+        self.mirror.set_python_ranges(fallback_ranges);
+        self.mirror.set_readonly_ranges(readonly_ranges);
+        self.memory_synced = true;
+        Ok(())
+    }
+
+    fn save_snapshot(&mut self, py: Python<'_>, path: &str) -> PyResult<()> {
+        let bound = self.memory.bind(py);
+        let exported = bound
+            .call_method0("export_flat_memory")
+            .map_err(|e| PyRuntimeError::new_err(format!("export_flat_memory: {e}")))?;
+        let exported = exported.downcast::<PyTuple>()?;
+        if exported.len() < 3 {
+            return Err(PyRuntimeError::new_err(
+                "export_flat_memory returned an unexpected shape",
+            ));
+        }
+
+        let flat_item = exported.get_item(0)?;
+        let flat_bytes = flat_item
+            .downcast::<PyBytes>()
+            .map_err(|e| PyRuntimeError::new_err(format!("flattened memory: {e}")))?
+            .as_bytes()
+            .to_vec();
+        let fallback_ranges: Vec<(u32, u32)> = exported
+            .get_item(1)?
+            .extract()
+            .map_err(|e| PyRuntimeError::new_err(format!("fallback ranges: {e}")))?;
+        let readonly_ranges: Vec<(u32, u32)> = exported
+            .get_item(2)?
+            .extract()
+            .map_err(|e| PyRuntimeError::new_err(format!("readonly ranges: {e}")))?;
+
+        let imem_obj = bound
+            .call_method0("get_internal_memory_bytes")
+            .map_err(|e| PyRuntimeError::new_err(format!("get_internal_memory_bytes: {e}")))?;
+        let imem_bytes = imem_obj
+            .downcast::<PyBytes>()
+            .map_err(|e| PyRuntimeError::new_err(format!("imem bytes: {e}")))?
+            .as_bytes()
+            .to_vec();
+
+        let mut image = MemoryImage::new();
+        if flat_bytes.len() != EXTERNAL_SPACE {
+            return Err(PyRuntimeError::new_err(format!(
+                "flattened memory length mismatch (got {}, expected {})",
+                flat_bytes.len(),
+                EXTERNAL_SPACE
+            )));
+        }
+        image
+            .copy_external_from(&flat_bytes)
+            .map_err(|e| PyRuntimeError::new_err(format!("copy external: {e}")))?;
+        image.load_internal(&imem_bytes);
+        image.set_python_ranges(fallback_ranges.clone());
+        image.set_readonly_ranges(readonly_ranges.clone());
+
+        let mut metadata = SnapshotMetadata::default();
+        metadata.backend = "llama".to_string();
+        metadata.pc = self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK;
+        metadata.memory_image_size = image.external_len();
+        metadata.fallback_ranges = fallback_ranges;
+        metadata.readonly_ranges = readonly_ranges;
+        metadata.memory_dump_pc = 0;
+        if let Some(imr) = image.read_internal_byte(IMEM_IMR_OFFSET) {
+            metadata.interrupts.imr = imr;
+        }
+        if let Some(isr) = image.read_internal_byte(IMEM_ISR_OFFSET) {
+            metadata.interrupts.isr = isr;
+        }
+
+        // Mirror interrupt scheduler state where available.
+        metadata.interrupts.pending = false;
+        metadata.interrupts.in_interrupt = false;
+        metadata.interrupts.source = None;
+        metadata.interrupts.stack = Vec::new();
+        metadata.interrupts.next_id = 0;
+        metadata.memory_reads = self.memory_reads;
+        metadata.memory_writes = self.memory_writes;
+        metadata.call_depth = self.call_sub_level;
+        metadata.call_sub_level = self.call_sub_level;
+        metadata.temps = self
+            .temps
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect();
+        let kb_state = self.keyboard.snapshot_state();
+        metadata.keyboard = to_value(&kb_state).ok();
+        metadata.kb_metrics = Some(json!({
+            "irq_count": kb_state.irq_count,
+            "strobe_count": kb_state.strobe_count,
+            "column_hist": Vec::<u32>::new(),
+            "last_cols": kb_state.active_columns,
+            "last_kol": kb_state.kol,
+            "last_koh": kb_state.koh,
+            "kil_reads": 0,
+            "kb_irq_enabled": true,
+        }));
+
+        let (lcd_meta, lcd_payload) = match capture_lcd_snapshot(py, &bound) {
+            Ok(Some(pair)) => (Some(pair.0), Some(pair.1)),
+            _ => (None, None),
+        };
+        metadata.lcd = lcd_meta;
+        metadata.lcd_payload_size = lcd_payload.as_ref().map(|v| v.len()).unwrap_or(0);
+
+        let regs = sc62015_core::collect_registers(&self.state);
+        save_snapshot(
+            std::path::Path::new(path),
+            &metadata,
+            &regs,
+            &image,
+            lcd_payload.as_deref(),
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("save_snapshot: {e}")))?;
+        Ok(())
+    }
+
     fn notify_host_write(&self, py: Python<'_>, address: u32, value: u8) -> PyResult<()> {
         let bound = self.memory.bind(py);
         let _ = bound.call_method1("write_byte", (address, value));
@@ -850,16 +1170,10 @@ impl LlamaCpu {
         }
         Ok(())
     }
-
 }
 
 impl LlamaCpu {
-    fn emit_irq_trace(
-        &self,
-        py: Python<'_>,
-        name: &str,
-        payload: HashMap<&'static str, u32>,
-    ) {
+    fn emit_irq_trace(&self, py: Python<'_>, name: &str, payload: HashMap<&'static str, u32>) {
         let dict = PyDict::new_bound(py);
         for (k, v) in payload {
             let _ = dict.set_item(k, v);
@@ -870,7 +1184,7 @@ impl LlamaCpu {
             .call_method1("trace_irq_from_rust", (name, dict));
     }
 
-    fn read_irq_registers(&self, py: Python<'_>, bus: &LlamaPyBus) -> (u8, u8) {
+    fn read_irq_registers(&self, py: Python<'_>, bus: &mut LlamaPyBus) -> (u8, u8) {
         let imr = bus.read_byte_with_gil(py, INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
         let isr = bus.read_byte_with_gil(py, INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
         (imr, isr)
@@ -893,7 +1207,10 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
     m.add("HAS_LLAMA_IMPLEMENTATION", true)?;
     m.add_class::<LlamaCpu>()?;
     m.add_class::<LlamaContractBus>()?;
-    m.add("record_irq_event", pyo3::wrap_pyfunction!(record_irq_event_py, m)?)?;
+    m.add(
+        "record_irq_event",
+        pyo3::wrap_pyfunction!(record_irq_event_py, m)?,
+    )?;
     Ok(())
 }
 

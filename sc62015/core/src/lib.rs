@@ -79,6 +79,12 @@ pub struct InterruptInfo {
     pub imr: u8,
     #[serde(default)]
     pub isr: u8,
+    #[serde(default)]
+    pub irq_counts: Option<serde_json::Value>,
+    #[serde(default)]
+    pub last_irq: Option<serde_json::Value>,
+    #[serde(default)]
+    pub irq_bit_watch: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,9 +95,23 @@ pub struct SnapshotMetadata {
     pub created: String,
     pub instruction_count: u64,
     pub cycle_count: u64,
+    #[serde(default)]
+    pub memory_reads: u64,
+    #[serde(default)]
+    pub memory_writes: u64,
     pub pc: u32,
+    #[serde(default)]
+    pub call_depth: u32,
+    #[serde(default)]
+    pub call_sub_level: u32,
+    #[serde(default)]
+    pub temps: HashMap<String, u32>,
     pub timer: TimerInfo,
     pub interrupts: InterruptInfo,
+    #[serde(default)]
+    pub keyboard: Option<serde_json::Value>,
+    #[serde(default)]
+    pub kb_metrics: Option<serde_json::Value>,
     #[serde(default)]
     pub fallback_ranges: Vec<(u32, u32)>,
     #[serde(default)]
@@ -116,9 +136,16 @@ impl Default for SnapshotMetadata {
             created: now_timestamp(),
             instruction_count: 0,
             cycle_count: 0,
+            memory_reads: 0,
+            memory_writes: 0,
             pc: 0,
+            call_depth: 0,
+            call_sub_level: 0,
+            temps: HashMap::new(),
             timer: TimerInfo::default(),
             interrupts: InterruptInfo::default(),
+            keyboard: None,
+            kb_metrics: None,
             fallback_ranges: Vec::new(),
             readonly_ranges: Vec::new(),
             internal_ram: (INTERNAL_RAM_START as u32, INTERNAL_RAM_SIZE as u32),

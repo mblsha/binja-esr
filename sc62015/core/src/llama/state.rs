@@ -106,7 +106,12 @@ impl LlamaState {
             RegName::F => {
                 let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
                 let fc = self.regs.get(&RegName::FC).copied().unwrap_or(raw & 0x1) & 0x1;
-                let fz = self.regs.get(&RegName::FZ).copied().unwrap_or((raw >> 1) & 0x1) & 0x1;
+                let fz = self
+                    .regs
+                    .get(&RegName::FZ)
+                    .copied()
+                    .unwrap_or((raw >> 1) & 0x1)
+                    & 0x1;
                 (raw & !0x3) | fc | (fz << 1)
             }
             RegName::FC => {
