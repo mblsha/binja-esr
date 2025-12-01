@@ -1372,6 +1372,7 @@ impl LlamaExecutor {
         Ok(len)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_multi_byte_binary<B: LlamaBus>(
         &mut self,
         entry: &OpcodeEntry,
