@@ -235,7 +235,7 @@ class RustContractBackend:
     def __init__(self) -> None:
         if rustcore is None or not hasattr(rustcore, "LlamaContractBus"):
             raise RuntimeError("LlamaContractBus is unavailable (build rustcore first)")
-        self._impl = rustcore.LlamaContractBus()
+        self._impl = rustcore.LlamaContractBus()  # type: ignore[attr-defined]
 
     def load_memory(
         self, *, external: Optional[bytes] = None, internal: Optional[bytes] = None

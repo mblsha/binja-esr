@@ -7,6 +7,8 @@ updates. Skip when the LLAMA backend is unavailable.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from sc62015.pysc62015 import CPU, RegisterName, available_backends
@@ -138,7 +140,7 @@ def test_fc_fz_updates_do_not_clobber_f_upper_bits(backend: str) -> None:
 
 
 def test_llama_keyboard_bridge_updates_fifo_and_kil() -> None:
-    memory = _make_memory(0x00)
+    memory = cast(Any, _make_memory(0x00))
     cpu = CPU(memory, reset_on_init=True, backend="llama")
 
     # Press matrix code 0 (row 0, col 0), then release it to populate FIFO.

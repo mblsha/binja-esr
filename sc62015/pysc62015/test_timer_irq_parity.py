@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any, cast
 
 from sc62015.pysc62015 import CPU, RegisterName
 from sc62015.pysc62015.constants import (
@@ -73,6 +74,7 @@ def test_timer_irq_cadence_matches_between_backends(monkeypatch) -> None:
     results = {}
 
     import _sc62015_rustcore as rustcore
+    rustcore = cast(Any, rustcore)
 
     for backend in backends:
         captured: list[tuple[str, dict[str, int]]] = []
