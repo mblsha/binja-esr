@@ -171,7 +171,7 @@ fn capture_lcd_snapshot(
         let y_address: u8 = chip.getattr("y_address")?.extract()?;
         let vram: Vec<Vec<u8>> = chip.getattr("vram")?.extract()?;
         pages = vram.len();
-        width = vram.get(0).map(|row| row.len()).unwrap_or(0);
+        width = vram.first().map(|row| row.len()).unwrap_or(0);
         for page_rows in &vram {
             for byte in page_rows {
                 payload.push(*byte);
@@ -1054,13 +1054,37 @@ impl LlamaCpu {
         image.set_python_ranges(fallback_ranges.clone());
         image.set_readonly_ranges(readonly_ranges.clone());
 
-        let mut metadata = SnapshotMetadata::default();
-        metadata.backend = "llama".to_string();
-        metadata.pc = self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK;
-        metadata.memory_image_size = image.external_len();
-        metadata.fallback_ranges = fallback_ranges;
-        metadata.readonly_ranges = readonly_ranges;
-        metadata.memory_dump_pc = 0;
+        let temps = self
+            .temps
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect();
+        let kb_state = self.keyboard.snapshot_state();
+        let mut metadata = SnapshotMetadata {
+            backend: "llama".to_string(),
+            pc: self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
+            memory_image_size: image.external_len(),
+            fallback_ranges,
+            readonly_ranges,
+            memory_dump_pc: 0,
+            memory_reads: self.memory_reads,
+            memory_writes: self.memory_writes,
+            call_depth: self.call_sub_level,
+            call_sub_level: self.call_sub_level,
+            temps,
+            keyboard: to_value(&kb_state).ok(),
+            kb_metrics: Some(json!({
+                "irq_count": kb_state.irq_count,
+                "strobe_count": kb_state.strobe_count,
+                "column_hist": Vec::<u32>::new(),
+                "last_cols": kb_state.active_columns,
+                "last_kol": kb_state.kol,
+                "last_koh": kb_state.koh,
+                "kil_reads": 0,
+                "kb_irq_enabled": true,
+            })),
+            ..SnapshotMetadata::default()
+        };
         if let Some(imr) = image.read_internal_byte(IMEM_IMR_OFFSET) {
             metadata.interrupts.imr = imr;
         }
@@ -1074,29 +1098,8 @@ impl LlamaCpu {
         metadata.interrupts.source = None;
         metadata.interrupts.stack = Vec::new();
         metadata.interrupts.next_id = 0;
-        metadata.memory_reads = self.memory_reads;
-        metadata.memory_writes = self.memory_writes;
-        metadata.call_depth = self.call_sub_level;
-        metadata.call_sub_level = self.call_sub_level;
-        metadata.temps = self
-            .temps
-            .iter()
-            .map(|(k, v)| (k.to_string(), *v))
-            .collect();
-        let kb_state = self.keyboard.snapshot_state();
-        metadata.keyboard = to_value(&kb_state).ok();
-        metadata.kb_metrics = Some(json!({
-            "irq_count": kb_state.irq_count,
-            "strobe_count": kb_state.strobe_count,
-            "column_hist": Vec::<u32>::new(),
-            "last_cols": kb_state.active_columns,
-            "last_kol": kb_state.kol,
-            "last_koh": kb_state.koh,
-            "kil_reads": 0,
-            "kb_irq_enabled": true,
-        }));
 
-        let (lcd_meta, lcd_payload) = match capture_lcd_snapshot(py, &bound) {
+        let (lcd_meta, lcd_payload) = match capture_lcd_snapshot(py, bound) {
             Ok(Some(pair)) => (Some(pair.0), Some(pair.1)),
             _ => (None, None),
         };
