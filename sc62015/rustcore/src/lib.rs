@@ -7,7 +7,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyBytes, PyDict, PyModule};
 use pyo3::Bound;
 use sc62015_core::{
-    lcd::{LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
     keyboard::KeyboardMatrix,
     llama::{
         eval::{LlamaBus, LlamaExecutor},
@@ -87,6 +86,7 @@ impl LcdShadow {
         }
     }
 
+    #[allow(dead_code)]
     fn reset(&mut self) {
         self.page = 0;
         self.y = 0;
