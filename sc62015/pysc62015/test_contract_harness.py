@@ -14,7 +14,9 @@ def _init_backends():
     py_backend = PythonContractBackend()
     try:
         rust_backend = RustContractBackend()
-    except RuntimeError as exc:  # pragma: no cover - exercised in CI when rustcore exists
+    except (
+        RuntimeError
+    ) as exc:  # pragma: no cover - exercised in CI when rustcore exists
         pytest.skip(str(exc))
 
     # Preload external/internal blobs so reads have deterministic seeds.
@@ -133,7 +135,9 @@ def test_timer_keyi_parity():
     assert py_snap.isr & 0x03 == 0x03
 
     py_events = [(e.kind, e.address, e.value, e.pc) for e in py_backend.drain_events()]
-    rs_events = [(e.kind, e.address, e.value, e.pc) for e in rust_backend.drain_events()]
+    rs_events = [
+        (e.kind, e.address, e.value, e.pc) for e in rust_backend.drain_events()
+    ]
     assert py_events == rs_events
 
 
@@ -236,7 +240,9 @@ def test_imr_isr_cadence_parity():
     vectors = [
         AccessVector("write", 0x100000 + 0xFB, 0x00, pc=0x090000),
         AccessVector("write", 0x100000 + 0xFC, 0x00, pc=0x090002),
-        AccessVector("write", 0x100000 + 0xFB, 0x07, pc=0x090010),  # enable MTI/STI/KEYI
+        AccessVector(
+            "write", 0x100000 + 0xFB, 0x07, pc=0x090010
+        ),  # enable MTI/STI/KEYI
         AccessVector("write", 0x100000 + 0xFC, 0x05, pc=0x090012),  # set ISR bits
         AccessVector("read", 0x100000 + 0xFB, pc=0x090020),
         AccessVector("read", 0x100000 + 0xFC, pc=0x090022),
@@ -336,14 +342,22 @@ def test_lcd_status_and_data_parity():
         AccessVector("write", 0xA003, 0x34, pc=0x040012),  # Data write
         AccessVector("write", 0x2000, 0x82, pc=0x040014),  # Set page=2 (both)
         AccessVector("write", 0x2000, 0x41, pc=0x040016),  # Set Y=0x01
-        AccessVector("write", 0x2002, 0xAA, pc=0x040018),  # Data write (left chip page2,y1)
-        AccessVector("write", 0x2004, 0xBB, pc=0x04001A),  # Data write (right chip page2,y2)
+        AccessVector(
+            "write", 0x2002, 0xAA, pc=0x040018
+        ),  # Data write (left chip page2,y1)
+        AccessVector(
+            "write", 0x2004, 0xBB, pc=0x04001A
+        ),  # Data write (right chip page2,y2)
         AccessVector("write", 0x2000, 0x7E, pc=0x04001C),  # Set Y near wrap (0x3E)
         AccessVector("write", 0x2002, 0xCC, pc=0x04001E),  # Data write at y=0x3E
-        AccessVector("write", 0x2002, 0xDD, pc=0x04001F),  # Data write at y=0x3F -> wraps to 0
+        AccessVector(
+            "write", 0x2002, 0xDD, pc=0x04001F
+        ),  # Data write at y=0x3F -> wraps to 0
         AccessVector("read", 0x2001, pc=0x040020),  # Status/busy read
         AccessVector("read", 0xA001, pc=0x040022),  # Status/busy read
-        AccessVector("read", 0x2002, pc=0x040030),  # Data readback (mirrors written byte)
+        AccessVector(
+            "read", 0x2002, pc=0x040030
+        ),  # Data readback (mirrors written byte)
         AccessVector("read", 0xA003, pc=0x040032),
     ]
 

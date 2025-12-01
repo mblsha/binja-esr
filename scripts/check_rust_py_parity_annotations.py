@@ -30,7 +30,9 @@ def iter_rust_files() -> list[Path]:
 
 def collect_annotations(rust_file: Path) -> list[tuple[int, str, str]]:
     annotations: list[tuple[int, str, str]] = []
-    for idx, line in enumerate(rust_file.read_text(encoding="utf-8").splitlines(), start=1):
+    for idx, line in enumerate(
+        rust_file.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         match = PY_SOURCE_RE.match(line.strip())
         if match:
             rel_path = match.group("path")
@@ -45,7 +47,9 @@ def validate_annotation_paths(
     issues: list[str] = []
     for lineno, rel_path, _symbol in annotations:
         if Path(rel_path).is_absolute():
-            issues.append(f"{rust_file}:{lineno}: PY_SOURCE path must be relative to repo root")
+            issues.append(
+                f"{rust_file}:{lineno}: PY_SOURCE path must be relative to repo root"
+            )
             continue
 
         py_path = (REPO_ROOT / rel_path).resolve()

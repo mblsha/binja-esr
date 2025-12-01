@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from sc62015.pysc62015 import CPU, RegisterName, available_backends
-from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START, ISRFlag
+from sc62015.pysc62015 import CPU, RegisterName
+from sc62015.pysc62015.constants import (
+    ADDRESS_SPACE_SIZE,
+    INTERNAL_MEMORY_START,
+    ISRFlag,
+)
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from pce500.emulator import PCE500Emulator
+
+
 @pytest.mark.parametrize("backend", ("python", "llama"))
 def test_timer_irq_sets_isr_and_traces(backend: str) -> None:
     # Minimal memory; scheduler lives in Python emulator, but LLAMA backend should still mirror IRQ writes.

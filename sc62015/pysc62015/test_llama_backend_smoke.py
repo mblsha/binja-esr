@@ -223,7 +223,9 @@ class _MemoryWithKioTrace:
         self.kio_traces: list[tuple[int, int, int | None]] = []
         self.irq_traces: list[tuple[str, dict[str, int | None]]] = []
 
-    def trace_kio_from_rust(self, offset: int, value: int, pc: int | None = None) -> None:
+    def trace_kio_from_rust(
+        self, offset: int, value: int, pc: int | None = None
+    ) -> None:
         self.kio_traces.append((offset & 0xFF, value & 0xFF, pc))
 
     def trace_irq_from_rust(self, name: str, payload: dict[str, int | None]) -> None:
@@ -318,6 +320,8 @@ def test_llama_reti_traces_irq_exit() -> None:
     cpu.execute_instruction(0x0000)
 
     assert any(name == "IRQ_Exit" for name, _ in mem.irq_traces)
-    exit_payload = next(payload for name, payload in mem.irq_traces if name == "IRQ_Exit")
+    exit_payload = next(
+        payload for name, payload in mem.irq_traces if name == "IRQ_Exit"
+    )
     assert exit_payload["pc"] == 0
     assert exit_payload["ret"] == 0x032211

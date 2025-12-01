@@ -80,7 +80,9 @@ def _map_operand(op: Any) -> RustOperand:
     if name == "Reg3":
         return RustOperand("Reg3", [])
     if name == "RegPair":
-        return RustOperand("RegPair", [str(getattr(op, "size", getattr(op, "size_bytes", 0)))])
+        return RustOperand(
+            "RegPair", [str(getattr(op, "size", getattr(op, "size_bytes", 0)))]
+        )
     if name == "Imm8":
         return RustOperand("Imm", ["8"])
     if name == "Imm16":
@@ -149,7 +151,7 @@ def _map_operand(op: Any) -> RustOperand:
     if name == "Placeholder":
         return RustOperand("Placeholder", [])
     if name == "UnknownOperand":
-        return RustOperand("Unknown", [f"\"{op.name}\""])
+        return RustOperand("Unknown", [f'"{op.name}"'])
     if name == "RegB":
         return RustOperand("RegB", [])
     raise ValueError(f"Unsupported operand type: {name}")
@@ -213,7 +215,10 @@ def _opcode_entry(opcode: int, entry: Any) -> str:
 
 def main() -> int:
     mod = _import_opcode_table()
-    entries = [_opcode_entry(op, val) for op, val in sorted(_iter_opcodes(mod), key=lambda p: p[0])]
+    entries = [
+        _opcode_entry(op, val)
+        for op, val in sorted(_iter_opcodes(mod), key=lambda p: p[0])
+    ]
     for entry in entries:
         print(entry)
     return 0

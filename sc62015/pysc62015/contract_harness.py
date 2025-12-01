@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional, Protocol, Sequence
 
 from pce500.memory import PCE500Memory
-from pce500.display.hd61202 import HD61202, parse_command, ChipSelect, Instruction
+from pce500.display.hd61202 import HD61202, parse_command, ChipSelect
 
 try:
     import _sc62015_rustcore as rustcore
@@ -85,11 +85,9 @@ class ContractBackend(Protocol):
 
     def configure_timer(
         self, mti_period: int, sti_period: int, *, enabled: bool = True
-    ) -> None:
-        ...  # pragma: no cover
+    ) -> None: ...  # pragma: no cover
 
-    def tick_timers(self, steps: int = 1) -> None:
-        ...  # pragma: no cover
+    def tick_timers(self, steps: int = 1) -> None: ...  # pragma: no cover
 
 
 class PythonContractBackend:
@@ -189,7 +187,12 @@ class PythonContractBackend:
             lcd_log=lcd_log,
             lcd_vram=bytes(lcd_vram),
             lcd_meta="chips=2,pages=8,width=64",
-            metadata={"backend": "python", "imr": imr, "isr": isr, "lcd_status": status},
+            metadata={
+                "backend": "python",
+                "imr": imr,
+                "isr": isr,
+                "lcd_status": status,
+            },
         )
 
     def configure_timer(

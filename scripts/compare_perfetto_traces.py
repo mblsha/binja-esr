@@ -4,21 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import sys
-from pathlib import Path
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sc62015.pysc62015.constants import INTERNAL_MEMORY_LENGTH, INTERNAL_MEMORY_START
+from sc62015.pysc62015.constants import (  # noqa: E402
+    INTERNAL_MEMORY_LENGTH,
+    INTERNAL_MEMORY_START,
+)
 
-from retrobus_perfetto.proto import perfetto_pb2
+from retrobus_perfetto.proto import perfetto_pb2  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -335,9 +336,7 @@ def main() -> None:
                 print("  Internal memory differences at divergence:")
                 for addr, va, vb in diffs:
                     offset = addr - INTERNAL_MEMORY_START
-                    print(
-                        f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}"
-                    )
+                    print(f"    (0x{offset:02X}) TraceA=0x{va:02X} TraceB=0x{vb:02X}")
             else:
                 print("  Internal memory identical at divergence.")
 
