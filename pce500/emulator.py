@@ -394,7 +394,7 @@ class PCE500Emulator:
         self._kb_irq_count = 0
         self._key_irq_latched = False
         timer_scale = 1.0
-        if backend == "llama":
+        if getattr(self.cpu, "backend", None) == "llama":
             try:
                 timer_scale = float(os.getenv("LLAMA_TIMER_SCALE", "1.0"))
             except ValueError:
