@@ -1499,8 +1499,10 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // WAIT is an idle loop that drains I to zero; Python fast-path sets I:=0 and advances PC.
+                // WAIT is an idle loop that drains I to zero and clears FC/FZ; match the Python fast-path.
                 state.set_reg(RegName::I, 0);
+                state.set_reg(RegName::FC, 0);
+                state.set_reg(RegName::FZ, 0);
                 // Do not auto-halt; let the host decide when to block.
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
@@ -2407,9 +2409,8 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
         assert_eq!(state.get_reg(RegName::I), 0);
-        // Flags unchanged by WAIT
-        assert_eq!(state.get_reg(RegName::FC), 1);
-        assert_eq!(state.get_reg(RegName::FZ), 1);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
     }
 
     struct MemBus {

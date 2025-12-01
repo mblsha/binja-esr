@@ -555,8 +555,10 @@ class Emulator:
             )
             # Advance PC (we return early and skip common PC update)
             self.regs.set(RegisterName.PC, address + current_instr_length)
-            # Emulate loop effect: I decremented to 0
+            # Emulate loop effect: I decremented to 0 and flags cleared
             self.regs.set(RegisterName.I, 0)
+            self.regs.set(RegisterName.FC, 0)
+            self.regs.set(RegisterName.FZ, 0)
             # Return without evaluating any LLIL
             return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
