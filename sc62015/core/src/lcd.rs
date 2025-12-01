@@ -262,27 +262,13 @@ impl LcdController {
     }
 
     pub fn read(&mut self, address: u32) -> Option<u8> {
-        let (cs, di, rw) = decode_access(address)?;
+        let (_, _, rw) = decode_access(address)?;
         if rw != ReadWrite::Read {
             return None;
         }
-        // Parity: status reads surface busy/on flags; data reads return VRAM.
-        let value = match di {
-            DataInstruction::Instruction => {
-                let mut status = 0xFF;
-                for idx in Self::chip_indices(cs) {
-                    status &= self.chips[*idx].read_status();
-                }
-                status
-            }
-            DataInstruction::Data => {
-                let mut data = 0xFF;
-                for idx in Self::chip_indices(cs) {
-                    data &= self.chips[*idx].read_data();
-                }
-                data
-            }
-        };
+        // Parity with Python HD61202Controller: reads are stubbed to 0xFF until
+        // the read path is implemented in Rust.
+        let value = 0xFF;
         self.last_status = Some(value);
         Some(value)
     }
