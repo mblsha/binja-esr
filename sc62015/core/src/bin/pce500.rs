@@ -392,8 +392,10 @@ impl StandaloneBus {
         let events = self.keyboard.scan_tick();
         if events > 0 {
             self.keyboard.write_fifo_to_memory(&mut self.memory);
-            self.raise_key_irq();
-            self.pending_kil = true;
+            self.pending_kil = self.keyboard.fifo_len() > 0;
+            if self.pending_kil {
+                self.raise_key_irq();
+            }
             self.last_kbd_access = Some("scan".to_string());
             self.log_irq_event(
                 "KeyScan",
@@ -426,14 +428,10 @@ impl StandaloneBus {
 
     fn press_key(&mut self, code: u8) {
         self.keyboard.press_matrix_code(code, &mut self.memory);
-        self.raise_key_irq();
-        self.pending_kil = true;
     }
 
     fn release_key(&mut self, code: u8) {
         self.keyboard.release_matrix_code(code, &mut self.memory);
-        self.pending_kil = false;
-        self.raise_key_irq();
     }
 
     fn log_irq_event<'a>(
@@ -490,8 +488,18 @@ impl StandaloneBus {
     }
 
     fn irq_pending(&mut self) -> bool {
-        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+        // Parity: if KEYI events are latched (FIFO pending) but ISR was cleared while masked,
+        // reassert KEYI so the level-triggered IRQ is not lost.
+        if self.pending_kil && self.keyboard.fifo_len() > 0 && (isr & ISR_KEYI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_KEYI);
+            isr |= ISR_KEYI;
+        }
+        if self.keyboard.fifo_len() == 0 {
+            self.pending_kil = false;
+        }
         if self.in_interrupt {
             let active = self.active_irq_mask;
             let still_active = active != 0 && (isr & active) != 0;
@@ -756,16 +764,6 @@ impl LlamaBus for StandaloneBus {
                     _ => {}
                 }
                 if offset == IMEM_KIL_OFFSET {
-                    self.pending_kil = false;
-                    // Parity: assert KEYI when FIFO has pending events on read.
-                    if self.keyboard.fifo_len() > 0 {
-                        if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                            if (cur & ISR_KEYI) == 0 {
-                                self.memory
-                                    .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
-                            }
-                        }
-                    }
                     // Emit perfetto event for KIL read with PC/value.
                     #[cfg(feature = "llama-tests")]
                     {
@@ -775,10 +773,12 @@ impl LlamaBus for StandaloneBus {
                             }
                         }
                     }
-                    println!(
-                        "[kil-read-llama] pc=0x{:06X} val=0x{:02X}",
-                        self.last_pc, byte
-                    );
+                    if std::env::var("KIL_READ_DEBUG").as_deref() == Ok("1") {
+                        println!(
+                            "[kil-read-llama] pc=0x{:06X} val=0x{:02X}",
+                            self.last_pc, byte
+                        );
+                    }
                 }
                 if matches!(
                     offset,
@@ -868,18 +868,6 @@ impl LlamaBus for StandaloneBus {
                 .keyboard
                 .handle_write(offset, value as u8, &mut self.memory)
             {
-                // Parity: KIO writes can enqueue events; assert KEYI if FIFO has entries.
-                if (offset == IMEM_KOL_OFFSET || offset == IMEM_KOH_OFFSET)
-                    && self.keyboard.fifo_len() > 0
-                {
-                    if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                        if (cur & ISR_KEYI) == 0 {
-                            self.memory
-                                .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
-                        }
-                    }
-                    self.pending_kil = true;
-                }
                 if matches!(
                     offset,
                     IMEM_KIL_OFFSET
@@ -956,6 +944,10 @@ impl LlamaBus for StandaloneBus {
 
     fn resolve_emem(&mut self, base: u32) -> u32 {
         base & ADDRESS_MASK
+    }
+
+    fn peek_imem(&mut self, offset: u32) -> u8 {
+        self.memory.read_internal_byte(offset).unwrap_or(0)
     }
 }
 

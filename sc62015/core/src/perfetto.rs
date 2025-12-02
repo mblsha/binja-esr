@@ -12,11 +12,15 @@ pub struct PerfettoTracer {
     timeline_track: TrackId,
     mem_track: TrackId,
     imr_track: TrackId,
+    irq_timer_track: TrackId,
+    irq_key_track: TrackId,
+    irq_misc_track: TrackId,
     units_per_instr: u64,
     path: PathBuf,
     imr_seq: u64,
     imr_read_zero: u64,
     imr_read_nonzero: u64,
+    irq_seq: u64,
 }
 
 impl PerfettoTracer {
@@ -28,17 +32,25 @@ impl PerfettoTracer {
         let timeline_track = builder.add_thread("Execution");
         let mem_track = builder.add_thread("MemoryWrites");
         let imr_track = builder.add_thread("IMR");
+        // Align IRQ tracks with Python tracer.
+        let irq_timer_track = builder.add_thread("irq.timer");
+        let irq_key_track = builder.add_thread("irq.key");
+        let irq_misc_track = builder.add_thread("irq.misc");
         Self {
             builder,
             exec_track,
             timeline_track,
             mem_track,
             imr_track,
+            irq_timer_track,
+            irq_key_track,
+            irq_misc_track,
             units_per_instr: 10_000,
             path,
             imr_seq: 0,
             imr_read_zero: 0,
             imr_read_nonzero: 0,
+            irq_seq: 0,
         }
     }
 
@@ -201,9 +213,16 @@ impl PerfettoTracer {
 
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
     pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, u64>) {
+        let ts = self.irq_seq as i64;
+        self.irq_seq = self.irq_seq.saturating_add(1);
+        let track = match name {
+            "TimerFired" | "Timer" | "MTI" | "STI" => self.irq_timer_track,
+            "KEYI_Set" | "KeyScan" | "KEYI" | "KeyDeliver" => self.irq_key_track,
+            _ => self.irq_misc_track,
+        };
         let mut ev = self
             .builder
-            .add_instant_event(self.exec_track, name.to_string(), 0);
+            .add_instant_event(track, name.to_string(), ts);
         for (k, v) in payload {
             ev.add_annotation(k, v);
         }

@@ -90,6 +90,10 @@ pub trait LlamaBus {
     fn resolve_emem(&mut self, base: u32) -> u32 {
         base
     }
+    fn peek_imem(&mut self, offset: u32) -> u8 {
+        let addr = INTERNAL_MEMORY_START + offset;
+        (self.load(addr, 8) & 0xFF) as u8
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,8 +364,9 @@ impl LlamaExecutor {
                 ] {
                     regs.insert(name.to_string(), state.get_reg(reg));
                 }
-                let mem_imr = bus.load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8;
-                let mem_isr = bus.load(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET, 8) as u8;
+                // Parity: sample IMR/ISR without triggering device-side effects.
+                let mem_imr = bus.peek_imem(IMEM_IMR_OFFSET);
+                let mem_isr = bus.peek_imem(IMEM_ISR_OFFSET);
                 tracer.record_regs(
                     instr_index,
                     pc_trace,
@@ -2054,9 +2059,9 @@ impl LlamaExecutor {
             InstrKind::Ir | InstrKind::Tcl => {
                 let instr_len = prefix_len + Self::estimated_length(entry);
         if entry.kind == InstrKind::Ir {
-            // Push PC (24-bit), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
+            // Push PC (24-bit, big-endian), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
             let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
-            Self::push_stack(state, bus, RegName::S, pc, 24, false);
+            Self::push_stack(state, bus, RegName::S, pc, 24, true);
             let f = state.get_reg(RegName::F) & 0xFF;
             Self::push_stack(state, bus, RegName::S, f, 8, false);
             let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
@@ -2183,12 +2188,10 @@ impl LlamaExecutor {
         sp = sp.wrapping_add(1) & mask_s;
         let f = bus.load(sp, 8) & 0xFF;
         sp = sp.wrapping_add(1) & mask_s;
-        let mut ret = 0u32;
-        for i in 0..3 {
-            let byte = bus.load(sp.wrapping_add(i) & mask_s, 8) & 0xFF;
-            let shift = 8 * i;
-            ret |= byte << shift;
-        }
+        let pc_hi = bus.load(sp, 8) & 0xFF;
+        let pc_mid = bus.load(sp.wrapping_add(1) & mask_s, 8) & 0xFF;
+        let pc_lo = bus.load(sp.wrapping_add(2) & mask_s, 8) & 0xFF;
+        let ret = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
         sp = sp.wrapping_add(3) & mask_s;
         state.set_reg(RegName::S, sp);
         let imr_restored = imr;
@@ -2825,7 +2828,7 @@ mod tests {
 
     #[test]
     fn ir_stack_pc_is_big_endian_and_reti_matches() {
-        // Verify IR pushes PC little-endian (low->high) and RETI reassembles the same order.
+        // Verify IR pushes PC big-endian (high->low) and RETI reassembles the same order.
         let mut bus = MemBus::with_size(0x80);
         let mut state = LlamaState::new();
         state.set_reg(RegName::S, 0x20);
@@ -2845,18 +2848,16 @@ mod tests {
         assert_eq!(bus.mem[sp + 3], 0xBC);
         assert_eq!(bus.mem[sp + 4], 0xDE);
 
-        // Simulate RETI: pop IMR, F, then PC little-endian.
+        // Simulate RETI: pop IMR, F, then PC big-endian.
         let mut sp_iter = sp as u32;
         let imr = bus.load(sp_iter, 8) & 0xFF;
         sp_iter = sp_iter.wrapping_add(1);
         let f = bus.load(sp_iter, 8) & 0xFF;
         sp_iter = sp_iter.wrapping_add(1);
-        let mut ret_pc = 0u32;
-        for i in 0..3 {
-            let byte = bus.load(sp_iter + i, 8) & 0xFF;
-            let shift = 8 * i;
-            ret_pc |= byte << shift;
-        }
+        let pc_hi = bus.load(sp_iter, 8) & 0xFF;
+        let pc_mid = bus.load(sp_iter + 1, 8) & 0xFF;
+        let pc_lo = bus.load(sp_iter + 2, 8) & 0xFF;
+        let ret_pc = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
         sp_iter = sp_iter.wrapping_add(3);
 
         assert_eq!(imr, 0xC3);

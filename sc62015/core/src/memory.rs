@@ -327,7 +327,11 @@ impl MemoryImage {
                         tracer.record_kio_read(None, offset as u8, val);
                     }
                 }
-                eprintln!("[kil-read-rust] offset=0x{offset:02X} val=0x{val:02X}");
+                if let Ok(env) = std::env::var("KIL_READ_DEBUG") {
+                    if env == "1" {
+                        eprintln!("[kil-read-rust] offset=0x{offset:02X} val=0x{val:02X}");
+                    }
+                }
             }
             Some(val)
         } else {

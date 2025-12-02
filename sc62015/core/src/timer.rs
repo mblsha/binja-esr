@@ -209,8 +209,9 @@ impl TimerContext {
                 if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                     payload.push(("isr_mem", isr as u32));
                 }
+                // Align event naming with Python tracer ("TimerFired").
                 tracer.record_irq_event(
-                    "Timer",
+                    "TimerFired",
                     payload
                         .into_iter()
                         .map(|(k, v)| (k.to_string(), v as u64))

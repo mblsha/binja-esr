@@ -358,6 +358,16 @@ impl KeyboardMatrix {
         self.strobe_count
     }
 
+    fn bump_column_histogram(&mut self) {
+        let active = self.active_columns();
+        for col in &active {
+            if (*col as usize) < self.column_histogram.len() {
+                self.column_histogram[*col as usize] =
+                    self.column_histogram[*col as usize].wrapping_add(1);
+            }
+        }
+    }
+
     pub fn fifo_len(&self) -> usize {
         self.fifo_count
     }
@@ -412,14 +422,13 @@ impl KeyboardMatrix {
     pub fn press_matrix_code(&mut self, code: u8, memory: &mut MemoryImage) {
         if let Some(state) = self.states.get_mut(code as usize) {
             state.pressed = true;
-            state.debounced = true;
-            state.press_ticks = self.press_threshold;
+            state.debounced = false;
+            state.press_ticks = 0;
             state.release_ticks = 0;
             state.repeat_ticks = self.repeat_delay;
             self.kil_latch = self.compute_kil(true);
-            self.enqueue_event(code, false);
+            // Parity: defer event enqueue/KEYI to timer-driven scan_tick.
             memory.write_internal_byte(0xF2, self.kil_latch);
-            self.write_fifo_to_memory(memory);
         }
     }
 
@@ -431,31 +440,17 @@ impl KeyboardMatrix {
             state.release_ticks = 0;
             state.repeat_ticks = 0;
             self.kil_latch = self.compute_kil(false);
-            self.enqueue_event(code, true);
             memory.write_internal_byte(0xF2, self.kil_latch);
-            self.write_fifo_to_memory(memory);
+            // Parity: defer event enqueue/KEYI to timer-driven scan_tick.
         }
     }
 
-    pub fn handle_read(&mut self, offset: u32, memory: &mut MemoryImage) -> Option<u8> {
+    pub fn handle_read(&mut self, offset: u32, _memory: &mut MemoryImage) -> Option<u8> {
         match offset {
             0xF0 => Some(self.kol),
             0xF1 => Some(self.koh),
             0xF2 => {
-                let events = self.scan_tick();
-                if events > 0 {
-                    self.write_fifo_to_memory(memory);
-                    // Assert KEYI in ISR when events are queued.
-                    if let Some(isr) = memory.read_internal_byte(0xFC) {
-                        memory.write_internal_byte(0xFC, isr | 0x04);
-                    }
-                } else if self.keyi_latch && self.fifo_count > 0 {
-                    if let Some(isr) = memory.read_internal_byte(0xFC) {
-                        if (isr & 0x04) == 0 {
-                            memory.write_internal_byte(0xFC, isr | 0x04);
-                        }
-                    }
-                }
+                self.kil_latch = self.compute_kil(false);
                 Some(self.kil_latch)
             }
             // E-port input registers are host-driven; return 0 for parity.
@@ -470,27 +465,14 @@ impl KeyboardMatrix {
                 self.kol = value;
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
-                // Parity: KOL write triggers a scan tick in Python to surface events promptly.
-                let events = self.scan_tick();
-                if events > 0 {
-                    self.write_fifo_to_memory(memory);
-                    if let Some(isr) = memory.read_internal_byte(0xFC) {
-                        memory.write_internal_byte(0xFC, isr | 0x04);
-                    }
-                }
+                self.bump_column_histogram();
                 true
             }
             0xF1 => {
                 self.koh = value & 0x0F;
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
-                let events = self.scan_tick();
-                if events > 0 {
-                    self.write_fifo_to_memory(memory);
-                    if let Some(isr) = memory.read_internal_byte(0xFC) {
-                        memory.write_internal_byte(0xFC, isr | 0x04);
-                    }
-                }
+                self.bump_column_histogram();
                 true
             }
             0xF2 => {
@@ -508,12 +490,6 @@ impl KeyboardMatrix {
             return 0;
         }
         let active = self.active_columns();
-        for col in &active {
-            if (*col as usize) < self.column_histogram.len() {
-                self.column_histogram[*col as usize] =
-                    self.column_histogram[*col as usize].wrapping_add(1);
-            }
-        }
         let mut events = 0usize;
         for idx in 0..self.states.len() {
             let mut enqueue: Option<(u8, bool)> = None;
