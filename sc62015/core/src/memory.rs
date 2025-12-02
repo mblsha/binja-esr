@@ -233,11 +233,7 @@ impl MemoryImage {
 
     pub fn is_internal(address: u32) -> bool {
         let address = canonical_address(address);
-        let is_main = address >= INTERNAL_MEMORY_START
-            && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32;
-        let is_alias = address >= (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32)
-            && address < EXTERNAL_SPACE as u32;
-        is_main || is_alias
+        address >= INTERNAL_MEMORY_START && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
     }
 
     pub fn internal_index(address: u32) -> Option<usize> {
@@ -246,12 +242,6 @@ impl MemoryImage {
             && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
         {
             return Some((address - INTERNAL_MEMORY_START) as usize);
-        }
-        if address >= (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32)
-            && address < EXTERNAL_SPACE as u32
-        {
-            let offset = address - (EXTERNAL_SPACE as u32 - INTERNAL_SPACE as u32);
-            return Some(offset as usize);
         }
         None
     }
@@ -481,5 +471,20 @@ mod tests {
         mem.set_python_ranges(vec![(0x1000, 0x1FFF)]);
         assert!(mem.requires_python(0x0010_0100));
         assert!(mem.requires_python(0x1010_0100));
+    }
+
+    #[test]
+    fn external_reset_vector_is_not_aliased() {
+        let mut mem = MemoryImage::new();
+        // Populate the ROM reset vector region (0x0FFFFA-0x0FFFFC) in external space.
+        mem.write_external_byte(0x0FFFFA, 0x11);
+        mem.write_external_byte(0x0FFFFB, 0x22);
+        mem.write_external_byte(0x0FFFFC, 0x33);
+
+        assert!(!MemoryImage::is_internal(0x0FFFFA));
+        assert_eq!(MemoryImage::internal_index(0x0FFFFA), None);
+        assert_eq!(mem.load(0x0FFFFA, 8), Some(0x11));
+        assert_eq!(mem.load(0x0FFFFB, 8), Some(0x22));
+        assert_eq!(mem.load(0x0FFFFC, 8), Some(0x33));
     }
 }

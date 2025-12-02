@@ -2,6 +2,32 @@
 
 Tracked gaps between the Rust LLAMA core and the Python emulator. Guiding approach: shared contract tests in Python that drive both backends (Python bus + Rust via PyO3 shim) with identical vectors, while keeping the Rust core runnable without Python.
 
+## New Parity Regressions To Fix (must add Python↔Rust parity tests for each)
+
+1) **EMemReg side effects in ADCL/SBCL loops** ✅  
+   - Finding: `sc62015/core/src/llama/eval.rs:1386-1441` walked dst/src addresses manually and ignored `side_effect` updates from EMemReg modes, so pre/post-inc/dec pointers and reg offsets never wrote back; register-indirect block adds/subs diverged from Python.
+   - Fix: Applied pre/post inc/dec side effects across multi-byte iterations; added unit test (`adcl_ememreg_side_effect_updates_pointers`) to cover register deltas. `sc62015/core/src/llama/eval.rs`, tests in same file.
+
+2) **Perfetto fidelity** ✅  
+   - Finding: `sc62015/core/src/perfetto.rs:120-141` masked mem-write values to 8 bits; main LLAMA run loop `sc62015/core/src/bin/pce500.rs:1070-1333` emitted only IRQ events.
+   - Fix: Mem writes now mask to operand width; standalone runner emits per-instruction register + mem events (with instruction index) when `--perfetto` is enabled. Files: `sc62015/core/src/perfetto.rs`, `sc62015/core/src/bin/pce500.rs`.
+
+3) **Timer cadence drift** ✅  
+   - Finding: `sc62015/core/src/timer.rs:27-156` previously advanced cycles internally; runner ticked once per instruction.
+   - Fix: `tick_timers` now takes absolute cycle; runner advances cycles explicitly (including WAIT) and ticks timers accordingly. Files: `sc62015/core/src/timer.rs`, `sc62015/core/src/bin/pce500.rs`.
+
+4) **LCD status/data reads** ✅  
+   - Finding: `sc62015/core/src/lcd.rs:264-274` stubbed reads to 0xFF.
+   - Fix: Implemented ON/status reads and data reads with Y increment; added unit tests for status and data. File: `sc62015/core/src/lcd.rs`, tests in same file.
+
+5) **Keyboard KEYI latch** ✅  
+   - Finding: `sc62015/core/src/keyboard.rs:236-311` did not latch/reassert KEYI with pending FIFO after ISR clear.
+   - Fix: Added KEYI latch, reassert on FIFO writes/reads when pending; unit test `keyi_reasserts_when_isr_cleared_with_pending_fifo` in `core/tests/keyboard.rs`.
+
+6) **Snapshot call/temps parity** ✅  
+   - Finding: `sc62015/core/src/lib.rs:235-316` omitted call state/temps.
+   - Fix: Snapshots now persist call_depth, call_sub_level, and TEMP0..TEMP13; unit test `snapshot_roundtrip_preserves_call_and_temps` covers round-trip. File: `sc62015/core/src/lib.rs`.
+
 ## Gaps & Actions
 
 1) **Opcode coverage**
@@ -49,3 +75,18 @@ Tracked gaps between the Rust LLAMA core and the Python emulator. Guiding approa
 
 ## Next Steps
 - All parity gaps are closed and enforced by the pytest suite (contract harness, snapshots, perfetto smoke). Keep CI running the full suite and refresh reference traces/tests only when behaviour intentionally changes.
+
+## Manual audit 2025-02-17
+
+- sc62015/core/src/memory.rs:234-256 treats the top 0x100 bytes of external space (0x0FFF00–0x0FFFFF) as an internal-memory alias. The reset/interrupt vector at 0x0FFFFA therefore resolves to the zeroed IMEM buffer instead of ROM. power_on_reset (and IR/RETI) will jump to 0x000000 on Rust while Python reads the ROM vector, so boot/IRQ paths and perfetto traces diverge immediately.
+- sc62015/core/src/llama/eval.rs:1992-2001 infers 16‑ vs 20‑bit absolute jumps from decoded.len == 3. With a PRE prefix (or any extra prefix bytes), a 16‑bit JP is misclassified as 20‑bit and consumes garbage for the high byte, sending PC to the wrong page versus Python’s operand‑width driven decode.
+- sc62015/core/src/lcd.rs:451-457 inverts pixels: pixel_on returns 1 when the bit is clear even though the comment says “lit pixels”. The Python HD61202 helper treats a set bit as on, so Rust LCD buffers and decoded text are flipped, affecting UI parity and perfetto snapshots.
+- Perfetto parity gap: LLAMA execution never emits InstructionTrace/MemoryWrites events or IMR/ISR annotations (no PERFETTO_TRACER hooks in sc62015/core/src/llama/eval.rs; trace hooks are feature-gated test code). Python’s emulator logs every step, so traces from Rust cores will be empty/misaligned even when tracing is enabled.
+- sc62015/core/src/timer.rs:31-105 keeps mirror fields (irq_imr, irq_isr, irq_pending) that aren’t updated from the IMEM writes in tick_timers. Snapshots and perfetto IRQ payloads therefore report zeros even when ISR bits were set, diverging from Python’s _tick_timers which samples real IMR/ISR values for IRQ state and tracing.
+
+### Remediations
+- Fix the internal-alias logic (drop aliasing or gate it) and re-read vectors from ROM. ✅
+- Key in operand-width for JP absolute (don’t rely on total length) and add PRE coverage tests. ✅
+- Flip pixel_on to treat set bits as lit and verify against Python display decoding. ✅
+- Wire LLAMA execute path to PERFETTO_TRACER (instr/mem/imr/isr), mirroring Python payloads. ✅
+- Keep timer snapshot/trace fields in sync with IMEM-backed IMR/ISR to match Python IRQ reporting. ✅

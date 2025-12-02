@@ -81,12 +81,10 @@ impl Hd61202Chip {
 
     #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
-        let busy = if self.state.busy { 0x80 } else { 0x00 };
-        // Match Python placeholder: high bits set when busy, keep ON flag in bit 5.
-        let on = if self.state.on { 0x20 } else { 0x00 };
-        // Clear busy after reporting once.
+        // Python HD61202 always reports ready; only ON flag is surfaced.
+        let on = if self.state.on { 0x40 } else { 0x00 };
         self.state.busy = false;
-        0x1F | busy | on
+        on
     }
 
     #[allow(dead_code)]
@@ -160,15 +158,11 @@ fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite
         0b11 => return None,
         _ => return None,
     };
-    Some((cs, di, rw))
+        Some((cs, di, rw))
 }
 
 fn parse_command(address: u32, value: u8) -> Option<LcdCommand> {
-    let (cs, di, rw) = decode_access(address)?;
-    if rw != ReadWrite::Write {
-        return None;
-    }
-
+    let (cs, di, _rw) = decode_access(address)?;
     let kind = if di == DataInstruction::Instruction {
         let instr = match value >> 6 {
             0b00 => LcdInstruction::OnOff,
@@ -262,13 +256,21 @@ impl LcdController {
     }
 
     pub fn read(&mut self, address: u32) -> Option<u8> {
-        let (_, _, rw) = decode_access(address)?;
+        let (cs, di, rw) = decode_access(address)?;
         if rw != ReadWrite::Read {
             return None;
         }
-        // Parity with Python HD61202Controller: reads are stubbed to 0xFF until
-        // the read path is implemented in Rust.
-        let value = 0xFF;
+        let idxs = match cs {
+            ChipSelect::Both => [0usize, 1usize],
+            ChipSelect::Left => [0usize, 0usize],
+            ChipSelect::Right => [1usize, 1usize],
+        };
+        let primary = idxs[0];
+        let chip = &mut self.chips[primary];
+        let value = match di {
+            DataInstruction::Instruction => chip.read_status(),
+            DataInstruction::Data => chip.read_data(),
+        };
         self.last_status = Some(value);
         Some(value)
     }
@@ -448,9 +450,43 @@ impl Default for LcdController {
 
 fn pixel_on(byte: u8, bit: usize) -> u8 {
     // Match Python helper: return 1 for lit pixels, 0 for off.
-    if ((byte >> bit) & 1) == 0 {
-        1
-    } else {
-        0
+    ((byte >> bit) & 1) as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_read_returns_on_flag_and_clears_busy() {
+        let mut chip = Hd61202Chip::default();
+        chip.state.on = true;
+        chip.state.busy = true;
+        let status = chip.read_status();
+        assert_eq!(status & 0x40, 0x40);
+        assert!(!chip.state.busy);
+    }
+
+    #[test]
+    fn data_read_advances_y_address() {
+        let mut chip = Hd61202Chip::default();
+        chip.state.page = 0;
+        chip.state.y_address = 0;
+        chip.vram[0][0] = 0xAA;
+        chip.vram[0][1] = 0xBB;
+        let first = chip.read_data();
+        let second = chip.read_data();
+        assert_eq!(first, 0xAA);
+        assert_eq!(second, 0xBB);
+        assert_eq!(chip.state.y_address, 2);
+    }
+
+    #[test]
+    fn pixel_on_matches_bit_set_semantics() {
+        // Bit set -> lit (1); bit clear -> off (0)
+        assert_eq!(super::pixel_on(0b0000_0001, 0), 1);
+        assert_eq!(super::pixel_on(0b0000_0000, 0), 0);
+        assert_eq!(super::pixel_on(0b1000_0000, 7), 1);
+        assert_eq!(super::pixel_on(0b0111_1111, 7), 0);
     }
 }

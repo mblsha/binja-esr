@@ -130,8 +130,7 @@ impl TimerContext {
         self.last_fired = None;
     }
 
-    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: &mut u64) -> (bool, bool) {
-        *cycle_count = cycle_count.wrapping_add(1);
+    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: u64) -> (bool, bool) {
         if !self.enabled {
             return (false, false);
         }
@@ -139,15 +138,15 @@ impl TimerContext {
         let mut fired_mti = false;
         let mut fired_sti = false;
 
-        if self.mti_period > 0 && *cycle_count >= self.next_mti {
+        if self.mti_period > 0 && cycle_count >= self.next_mti {
             fired_mti = true;
-            while *cycle_count >= self.next_mti {
+            while cycle_count >= self.next_mti {
                 self.next_mti = self.next_mti.wrapping_add(self.mti_period);
             }
         }
-        if self.sti_period > 0 && *cycle_count >= self.next_sti {
+        if self.sti_period > 0 && cycle_count >= self.next_sti {
             fired_sti = true;
-            while *cycle_count >= self.next_sti {
+            while cycle_count >= self.next_sti {
                 self.next_sti = self.next_sti.wrapping_add(self.sti_period);
             }
         }
@@ -174,6 +173,13 @@ impl TimerContext {
                 Some("STI".to_string())
             };
             self.last_fired = self.irq_source.clone();
+            // Keep mirror fields in sync with the actual IMEM values for snapshots/tracing parity.
+            self.irq_imr = memory
+                .read_internal_byte(0xFB)
+                .unwrap_or(self.irq_imr);
+            self.irq_isr = memory
+                .read_internal_byte(ISR_OFFSET)
+                .unwrap_or(self.irq_isr);
             self.emit_irq_trace(fired_mti, fired_sti, memory);
         }
         (fired_mti, fired_sti)
@@ -228,13 +234,14 @@ mod tests {
         let mut cycles = 0u64;
         // Run up to but not including the target
         for _ in 0..49 {
-            timer.tick_timers(&mut mem, &mut cycles);
+            timer.tick_timers(&mut mem, cycles);
+            cycles += 1;
             assert!(!timer.irq_pending);
         }
         assert_eq!(cycles, 49);
         // The 50th tick should fire MTI and roll the target forward.
-        timer.tick_timers(&mut mem, &mut cycles);
-        assert_eq!(cycles, 50);
+        cycles = 50;
+        timer.tick_timers(&mut mem, cycles);
         assert!(timer.irq_pending);
         assert!(timer.next_mti > 50);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
@@ -260,14 +267,28 @@ mod tests {
 
         // Advance to just before first fire
         while cycles < 149 {
-            timer.tick_timers(&mut mem, &mut cycles);
+            timer.tick_timers(&mut mem, cycles);
+            cycles += 1;
             assert!(!timer.irq_pending);
         }
         // Fire MTI at cycle 150, then next target moves to 170.
-        timer.tick_timers(&mut mem, &mut cycles);
+        cycles = 150;
+        timer.tick_timers(&mut mem, cycles);
         assert!(timer.irq_pending);
         assert!(timer.next_mti > 150);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01);
+    }
+
+    #[test]
+    fn tick_timers_updates_irq_mirrors() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        // Preload IMR so mirror should reflect it.
+        mem.write_internal_byte(0xFB, 0xAA);
+        // First tick should fire MTI and update ISR/IMR mirrors.
+        timer.tick_timers(&mut mem, 1);
+        assert_eq!(timer.irq_imr, 0xAA);
+        assert_eq!(timer.irq_isr & 0x01, 0x01);
     }
 }
