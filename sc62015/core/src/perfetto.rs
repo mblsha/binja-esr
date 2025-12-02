@@ -135,6 +135,7 @@ impl PerfettoTracer {
             self.ts(instr_index, 1),
         );
         ev.add_annotations([
+            ("backend", AnnotationValue::Str("rust".to_string())),
             ("pc", AnnotationValue::Pointer(pc as u64)),
             ("address", AnnotationValue::Pointer(addr as u64)),
             ("value", AnnotationValue::UInt(masked_value as u64)),

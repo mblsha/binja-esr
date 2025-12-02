@@ -392,7 +392,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
     OpcodeEntry {
         opcode: 0x20,
         kind: InstrKind::Unknown,
-        name: "UnknownInstruction",
+        name: "UNK_20",
         cond: None,
         ops_reversed: None,
         operands: &[],
@@ -1778,7 +1778,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
     OpcodeEntry {
         opcode: 0xBF,
         kind: InstrKind::Unknown,
-        name: "UnknownInstruction",
+        name: "UNK_BF",
         cond: None,
         ops_reversed: None,
         operands: &[],

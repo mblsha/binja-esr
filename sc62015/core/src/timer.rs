@@ -185,6 +185,49 @@ impl TimerContext {
         (fired_mti, fired_sti)
     }
 
+    /// Tick timers and optionally run a keyboard scan when MTI fires, mirroring Python's _tick_timers.
+    /// Returns (mti, sti, key_events).
+    pub fn tick_timers_with_keyboard<F>(
+        &mut self,
+        memory: &mut MemoryImage,
+        cycle_count: u64,
+        mut keyboard_scan: F,
+    ) -> (bool, bool, usize)
+    where
+        F: FnMut(&mut MemoryImage) -> (usize, bool),
+    {
+        let (mti, sti) = self.tick_timers(memory, cycle_count);
+        let mut key_events = 0usize;
+        let mut fifo_nonempty = false;
+        if mti {
+            let (events, fifo_has_data) = keyboard_scan(memory);
+            key_events = events;
+            fifo_nonempty = fifo_has_data;
+            if key_events > 0 {
+                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                    if (isr & 0x04) == 0 {
+                        memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
+                    }
+                }
+            } else if fifo_nonempty {
+                // Python sets KEYI on MTI even if FIFO already had data.
+                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                    if (isr & 0x04) == 0 {
+                        memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
+                    }
+                }
+            }
+        }
+        if sti && (key_events == 0 && fifo_nonempty) {
+            if let Some(cur) = memory.read_internal_byte(ISR_OFFSET) {
+                if (cur & 0x04) == 0 {
+                    memory.write_internal_byte(ISR_OFFSET, cur | 0x04);
+                }
+            }
+        }
+        (mti, sti, key_events)
+    }
+
     pub fn drain_pending_irq(&mut self) -> Option<String> {
         if !self.irq_pending {
             return None;
@@ -291,5 +334,29 @@ mod tests {
         timer.tick_timers(&mut mem, 1);
         assert_eq!(timer.irq_imr, 0xAA);
         assert_eq!(timer.irq_isr & 0x01, 0x01);
+    }
+
+    #[test]
+    fn tick_timers_with_keyboard_sets_keyi() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        // Simulate keyboard scan emitting one event.
+        let (_, _, events) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true));
+        assert_eq!(events, 1);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x04, 0x04, "KEYI bit should be set on MTI with events");
+    }
+
+    #[test]
+    fn tick_timers_with_keyboard_sets_keyi_when_fifo_already_populated() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        // No new events, but FIFO already has data -> KEYI should still assert on MTI.
+        let (_mti, _sti, events) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true));
+        assert_eq!(events, 0);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x04, 0x04, "KEYI should assert when FIFO non-empty on MTI");
     }
 }

@@ -59,9 +59,8 @@ impl LlamaState {
                 self.regs.insert(RegName::I, masked);
             }
             RegName::IL => {
-                // Preserve IH; only replace the low byte for parity with Python registers.
-                let high = self.get_reg(RegName::I) & 0xFF00;
-                self.regs.insert(RegName::I, high | (masked & 0xFF));
+                // Parity: writing IL clears IH (RegIL.lift_assign in Python zeros high byte).
+                self.regs.insert(RegName::I, masked & 0xFF);
             }
             RegName::IH => {
                 let low = self.get_reg(RegName::IL);
@@ -187,15 +186,15 @@ mod tests {
     use crate::llama::opcodes::RegName;
 
     #[test]
-    fn il_write_preserves_high_byte_and_updates_aliases() {
+    fn il_write_clears_high_byte_and_updates_aliases() {
         let mut state = LlamaState::new();
         state.set_reg(RegName::I, 0xABCD);
 
         state.set_reg(RegName::IL, 0x34);
 
         assert_eq!(state.get_reg(RegName::IL), 0x34);
-        assert_eq!(state.get_reg(RegName::IH), 0xAB);
-        assert_eq!(state.get_reg(RegName::I), 0xAB34);
+        assert_eq!(state.get_reg(RegName::IH), 0x00);
+        assert_eq!(state.get_reg(RegName::I), 0x0034);
     }
 
     #[test]

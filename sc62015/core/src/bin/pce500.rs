@@ -707,9 +707,42 @@ impl StandaloneBus {
     }
 
     fn tick_timers_only(&mut self) {
-        let (mti, sti) = self.timer.tick_timers(&mut self.memory, self.cycle_count);
-        if mti {
-            self.tick_keyboard();
+        let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+            &mut self.memory,
+            self.cycle_count,
+            |mem| {
+                let events = self.keyboard.scan_tick();
+                if events > 0 {
+                    self.keyboard.write_fifo_to_memory(mem);
+                }
+                (events, self.keyboard.fifo_len() > 0)
+            },
+        );
+        if mti && key_events > 0 {
+            self.pending_kil = self.keyboard.fifo_len() > 0;
+            if self.pending_kil {
+                self.raise_key_irq();
+            }
+            self.last_kbd_access = Some("scan".to_string());
+            self.log_irq_event(
+                "KeyScan",
+                Some("KEY"),
+                [
+                    (
+                        "isr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                    (
+                        "imr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                    ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
+                ],
+            );
         }
         if sti && self.keyboard.fifo_len() > 0 {
             if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
