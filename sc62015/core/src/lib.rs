@@ -220,6 +220,12 @@ pub fn collect_registers(state: &LlamaState) -> HashMap<String, u32> {
             .unwrap_or(0);
         regs.insert((*name).to_string(), value);
     }
+    // Capture temp registers (TEMP0..TEMP13) to align with Python snapshots.
+    for idx in 0..14u8 {
+        let name = format!("TEMP{idx}");
+        let reg = RegName::Temp(idx);
+        regs.insert(name, state.get_reg(reg) & mask_for_width(DEFAULT_REG_WIDTH));
+    }
     regs
 }
 
@@ -228,6 +234,12 @@ pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) {
         let value = *regs.get(*name).unwrap_or(&0);
         if let Some(reg) = reg_from_name(name) {
             state.set_reg(reg, value & mask_for_width(register_width(name)));
+        }
+    }
+    for idx in 0..14u8 {
+        let key = format!("TEMP{idx}");
+        if let Some(value) = regs.get(&key) {
+            state.set_reg(RegName::Temp(idx), *value & mask_for_width(DEFAULT_REG_WIDTH));
         }
     }
 }
@@ -277,6 +289,12 @@ impl CoreRuntime {
         metadata.instruction_count = self.metadata.instruction_count;
         metadata.cycle_count = self.metadata.cycle_count;
         metadata.pc = self.get_reg("PC");
+        metadata.call_depth = self.state.call_depth();
+        metadata.call_sub_level = self.state.call_sub_level();
+        metadata.temps = collect_registers(&self.state)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("TEMP"))
+            .collect();
         metadata.memory_dump_pc = 0;
         let regs = collect_registers(&self.state);
         snapshot::save_snapshot(path, &metadata, &regs, &self.memory, None)
@@ -286,6 +304,22 @@ impl CoreRuntime {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
         apply_registers(&mut self.state, &loaded.registers);
+        // Restore call depth/sub-level and temps from metadata if present.
+        if self.metadata.call_depth > 0 {
+            for _ in 0..self.metadata.call_depth {
+                self.state.call_depth_inc();
+            }
+        }
+        self.state
+            .set_call_sub_level(self.metadata.call_sub_level);
+        for (name, value) in self.metadata.temps.iter() {
+            if let Some(idx_str) = name.strip_prefix("TEMP") {
+                if let Ok(idx) = idx_str.parse::<u8>() {
+                    self.state
+                        .set_reg(RegName::Temp(idx), *value & mask_for_width(DEFAULT_REG_WIDTH));
+                }
+            }
+        }
         self.fast_mode = self.metadata.fast_mode;
         Ok(())
     }
@@ -312,5 +346,35 @@ impl CoreRuntime {
         reg_from_name(name)
             .map(|reg| self.state.get_reg(reg) as u8)
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llama::opcodes::RegName;
+    use std::fs;
+
+    #[test]
+    fn snapshot_roundtrip_preserves_call_and_temps() {
+        let tmp = std::env::temp_dir().join("core_snapshot_test.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let mut rt = CoreRuntime::new();
+        rt.state.call_depth_inc();
+        rt.state.call_depth_inc();
+        rt.state.set_call_sub_level(3);
+        rt.state.set_reg(RegName::Temp(0), 0x00AA_BB);
+        rt.state.set_reg(RegName::Temp(5), 0x123456);
+        rt.state.set_reg(RegName::PC, 0x12345);
+        rt.save_snapshot(&tmp).expect("save snapshot");
+
+        let mut rt2 = CoreRuntime::new();
+        rt2.load_snapshot(&tmp).expect("load snapshot");
+        assert_eq!(rt2.state.call_depth(), 2);
+        assert_eq!(rt2.state.call_sub_level(), 3);
+        assert_eq!(rt2.state.get_reg(RegName::Temp(0)) & 0xFFFFFF, 0x00AA_BB);
+        assert_eq!(rt2.state.get_reg(RegName::Temp(5)) & 0xFFFFFF, 0x123456);
+        assert_eq!(rt2.state.get_reg(RegName::PC) & 0x0F_FFFF, 0x12345);
     }
 }

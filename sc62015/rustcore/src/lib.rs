@@ -9,7 +9,7 @@ use pyo3::Bound;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
-        eval::{LlamaBus, LlamaExecutor},
+        eval::{reset_perf_counters, LlamaBus, LlamaExecutor},
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
     },
@@ -301,14 +301,38 @@ impl LlamaContractBus {
     #[pyo3(signature = (steps = 1))]
     fn tick_timers(&mut self, steps: u32) {
         for _ in 0..steps {
-            // Keep timer IMR/ISR mirrors in sync with current memory before ticking.
+            self.cycles = self.cycles.wrapping_add(1);
+            // Keep timer mirrors in sync with current memory before ticking.
             if let Some(imr) = self.memory.read_internal_byte(0xFB) {
                 self.timer.irq_imr = imr;
             }
             if let Some(isr) = self.memory.read_internal_byte(0xFC) {
                 self.timer.irq_isr = isr;
             }
-            let (mti, sti) = self.timer.tick_timers(&mut self.memory, &mut self.cycles);
+
+            let (mti, sti) = self.timer.tick_timers(&mut self.memory, self.cycles);
+            if mti {
+                let events = self.keyboard.scan_tick();
+                if events > 0 {
+                    self.keyboard.write_fifo_to_memory(&mut self.memory);
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        self.memory.write_internal_byte(0xFC, isr | 0x04);
+                    }
+                } else if self.keyboard.fifo_len() > 0 {
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        if (isr & 0x04) == 0 {
+                            self.memory.write_internal_byte(0xFC, isr | 0x04);
+                        }
+                    }
+                }
+            }
+            if sti && self.keyboard.fifo_len() > 0 {
+                if let Some(cur) = self.memory.read_internal_byte(0xFC) {
+                    if (cur & 0x04) == 0 {
+                        self.memory.write_internal_byte(0xFC, cur | 0x04);
+                    }
+                }
+            }
             if mti || sti {
                 let mut value = 0u8;
                 if mti {
@@ -780,17 +804,34 @@ impl LlamaCpu {
         Ok(cpu)
     }
 
+    fn sync_temps_from_state(&mut self) {
+        for idx in 0..14u32 {
+            let reg = LlamaRegName::Temp(idx as u8);
+            let val = self.state.get_reg(reg) & 0xFF_FFFF;
+            self.temps.insert(idx, val);
+        }
+    }
+
+    fn apply_temps_to_state(&mut self) {
+        for (idx, val) in self.temps.clone() {
+            let reg = LlamaRegName::Temp(idx as u8);
+            self.state.set_reg(reg, val);
+        }
+    }
+
     fn power_on_reset(&mut self) -> PyResult<()> {
         self.state.reset();
         self.state.set_pc(0);
         self.state.set_halted(false);
         self.call_sub_level = 0;
+        self.state.set_call_sub_level(0);
         self.temps.clear();
         self.mirror = MemoryImage::new();
         self.keyboard.reset(&mut self.mirror);
         self.memory_synced = true;
         self.memory_reads = 0;
         self.memory_writes = 0;
+        reset_perf_counters();
         Python::with_gil(|py| self.sync_mirror(py));
         Ok(())
     }
@@ -806,7 +847,8 @@ impl LlamaCpu {
             .map_err(|e| PyRuntimeError::new_err(format!("llama execute: {e}")))?;
         self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
         self.memory_writes = self.memory_writes.saturating_add(bus.memory_writes);
-        self.call_sub_level = self.state.call_depth();
+        self.call_sub_level = self.state.call_sub_level();
+        self.sync_temps_from_state();
         if opcode == 0xFE {
             // IR: interrupt entry
             let (imr, isr) = self.read_irq_registers(py, &mut bus);
@@ -899,8 +941,10 @@ impl LlamaCpu {
         kwargs.set_item("s", self.state.get_reg(LlamaRegName::S))?;
         kwargs.set_item("f", self.state.get_reg(LlamaRegName::F))?;
         let temps = PyDict::new_bound(py);
-        for (idx, value) in self.temps.iter() {
-            temps.set_item(idx, value)?;
+        for idx in 0..14u32 {
+            let reg = LlamaRegName::Temp(idx as u8);
+            let val = self.state.get_reg(reg) & 0xFF_FFFF;
+            temps.set_item(idx, val)?;
         }
         kwargs.set_item("temps", temps)?;
         kwargs.set_item("call_sub_level", self.call_sub_level)?;
@@ -927,6 +971,7 @@ impl LlamaCpu {
         if let Ok(temps_obj) = snap.getattr("temps") {
             if let Ok(mapping) = temps_obj.extract::<HashMap<u32, u32>>() {
                 self.temps = mapping;
+                self.apply_temps_to_state();
             }
         }
         if let Ok(call_depth) = snap
@@ -934,6 +979,7 @@ impl LlamaCpu {
             .and_then(|obj| obj.extract::<u32>())
         {
             self.call_sub_level = call_depth;
+            self.state.set_call_sub_level(call_depth);
         }
         Ok(())
     }
@@ -1054,10 +1100,11 @@ impl LlamaCpu {
         image.set_python_ranges(fallback_ranges.clone());
         image.set_readonly_ranges(readonly_ranges.clone());
 
-        let temps = self
-            .temps
-            .iter()
-            .map(|(k, v)| (k.to_string(), *v))
+        let temps: std::collections::HashMap<String, u32> = (0..14u32)
+            .map(|idx| {
+                let reg = LlamaRegName::Temp(idx as u8);
+                (idx.to_string(), self.state.get_reg(reg) & ADDRESS_MASK)
+            })
             .collect();
         let kb_state = self.keyboard.snapshot_state();
         let mut metadata = SnapshotMetadata {
@@ -1069,8 +1116,8 @@ impl LlamaCpu {
             memory_dump_pc: 0,
             memory_reads: self.memory_reads,
             memory_writes: self.memory_writes,
-            call_depth: self.call_sub_level,
-            call_sub_level: self.call_sub_level,
+            call_depth: self.state.call_depth(),
+            call_sub_level: self.state.call_sub_level(),
             temps,
             keyboard: to_value(&kb_state).ok(),
             kb_metrics: Some(json!({
@@ -1138,6 +1185,7 @@ impl LlamaCpu {
     #[setter]
     fn set_call_sub_level(&mut self, value: u32) {
         self.call_sub_level = value;
+        self.state.set_call_sub_level(value);
     }
 
     #[getter]
@@ -1153,6 +1201,7 @@ impl LlamaCpu {
     #[pyo3(signature = (path=None))]
     fn set_perfetto_trace(&mut self, path: Option<&str>) -> PyResult<()> {
         if let Some(p) = path {
+            reset_perf_counters();
             let tracer = PerfettoTracer::new(PathBuf::from(p));
             if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                 *guard = Some(tracer);

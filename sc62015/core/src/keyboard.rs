@@ -156,6 +156,7 @@ pub struct KeyboardMatrix {
     strobe_count: u32,
     irq_count: u32,
     column_histogram: [u32; COLUMN_COUNT],
+    keyi_latch: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,6 +212,7 @@ impl KeyboardMatrix {
             strobe_count: 0,
             irq_count: 0,
             column_histogram: [0; COLUMN_COUNT],
+            keyi_latch: false,
         };
         for matrix_code in 0..(11 * 8) {
             let column = (matrix_code >> 3) as u8;
@@ -282,6 +284,7 @@ impl KeyboardMatrix {
         self.fifo_tail = (self.fifo_tail + 1) % FIFO_SIZE;
         self.fifo_count += 1;
         self.irq_count = self.irq_count.wrapping_add(1);
+        self.keyi_latch = true;
         1
     }
 
@@ -299,6 +302,13 @@ impl KeyboardMatrix {
         }
         memory.write_external_byte(FIFO_HEAD_ADDR, self.fifo_head as u8);
         memory.write_external_byte(FIFO_TAIL_ADDR, self.fifo_tail as u8);
+        if self.keyi_latch && self.fifo_count > 0 {
+            if let Some(isr) = memory.read_internal_byte(0xFC) {
+                if (isr & 0x04) == 0 {
+                    memory.write_internal_byte(0xFC, isr | 0x04);
+                }
+            }
+        }
     }
 
     pub fn reset(&mut self, memory: &mut MemoryImage) {
@@ -313,6 +323,7 @@ impl KeyboardMatrix {
         self.irq_count = 0;
         self.column_histogram = [0; COLUMN_COUNT];
         self.scan_enabled = true;
+        self.keyi_latch = false;
         for state in &mut self.states {
             state.pressed = false;
             state.debounced = false;
@@ -438,6 +449,12 @@ impl KeyboardMatrix {
                     if let Some(isr) = memory.read_internal_byte(0xFC) {
                         memory.write_internal_byte(0xFC, isr | 0x04);
                     }
+                } else if self.keyi_latch && self.fifo_count > 0 {
+                    if let Some(isr) = memory.read_internal_byte(0xFC) {
+                        if (isr & 0x04) == 0 {
+                            memory.write_internal_byte(0xFC, isr | 0x04);
+                        }
+                    }
                 }
                 Some(self.kil_latch)
             }
@@ -457,6 +474,9 @@ impl KeyboardMatrix {
                 let events = self.scan_tick();
                 if events > 0 {
                     self.write_fifo_to_memory(memory);
+                    if let Some(isr) = memory.read_internal_byte(0xFC) {
+                        memory.write_internal_byte(0xFC, isr | 0x04);
+                    }
                 }
                 true
             }
@@ -467,6 +487,9 @@ impl KeyboardMatrix {
                 let events = self.scan_tick();
                 if events > 0 {
                     self.write_fifo_to_memory(memory);
+                    if let Some(isr) = memory.read_internal_byte(0xFC) {
+                        memory.write_internal_byte(0xFC, isr | 0x04);
+                    }
                 }
                 true
             }
@@ -524,6 +547,9 @@ impl KeyboardMatrix {
             }
         }
         self.kil_latch = self.compute_kil(false);
+        if self.fifo_count == 0 {
+            self.keyi_latch = false;
+        }
         events
     }
 }

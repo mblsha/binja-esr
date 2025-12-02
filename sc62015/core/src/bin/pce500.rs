@@ -3,8 +3,6 @@
 
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
-#[cfg(feature = "llama-tests")]
-use sc62015_core::PERFETTO_TRACER;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
@@ -15,7 +13,8 @@ use sc62015_core::{
     },
     memory::MemoryImage,
     timer::TimerContext,
-    ADDRESS_MASK, INTERNAL_MEMORY_START,
+    ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER, PerfettoTracer,
+    collect_registers,
 };
 use std::collections::HashMap;
 use std::env;
@@ -248,6 +247,7 @@ struct StandaloneBus {
     rom_kol_reads: u32,
     trace_kbd: bool,
     last_pc: u32,
+    instr_index: u64,
     vec_patched: bool,
     perfetto: Option<IrqPerfetto>,
     last_irq_src: Option<String>,
@@ -284,6 +284,7 @@ impl StandaloneBus {
             rom_kol_reads: 0,
             trace_kbd,
             last_pc: 0,
+            instr_index: 0,
             vec_patched: false,
             perfetto,
             last_irq_src: None,
@@ -309,6 +310,10 @@ impl StandaloneBus {
 
     fn set_pc(&mut self, pc: u32) {
         self.last_pc = pc & ADDRESS_MASK;
+    }
+
+    fn set_instr_index(&mut self, idx: u64) {
+        self.instr_index = idx;
     }
 
     fn trace_kbd_access(&self, kind: &str, addr: u32, offset: u32, bits: u8, value: u32) {
@@ -355,6 +360,26 @@ impl StandaloneBus {
             bits = bits,
             val = value & mask_bits(bits)
         );
+    }
+
+    fn trace_mem_write(&self, addr: u32, bits: u8, value: u32) {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let space = if MemoryImage::is_internal(addr) {
+                    "internal"
+                } else {
+                    "external"
+                };
+                tracer.record_mem_write(
+                    self.instr_index,
+                    self.last_pc,
+                    addr & ADDRESS_MASK,
+                    value & mask_bits(bits),
+                    space,
+                    bits,
+                );
+            }
+        }
     }
 
     /// Parity: leave vectors to the ROM; no patching.
@@ -538,25 +563,6 @@ impl StandaloneBus {
         pending
     }
 
-    fn idle_tick(&mut self) {
-        // Advance timers once; scan keyboard when MTI fires to mirror Python’s timer hook.
-        let (mti, sti) = self
-            .timer
-            .tick_timers(&mut self.memory, &mut self.cycle_count);
-        if mti {
-            self.tick_keyboard();
-        }
-        if sti && self.keyboard.fifo_len() > 0 {
-            // Parity: surface timer-driven keyboard IRQs when events are pending.
-            if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                if (cur & ISR_KEYI) == 0 {
-                    self.memory
-                        .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
-                }
-            }
-        }
-    }
-
     #[cfg(feature = "llama-tests")]
     #[allow(dead_code)]
     fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
@@ -683,6 +689,33 @@ impl StandaloneBus {
                 eprintln!("[perfetto] failed to save trace: {err}");
             }
         }
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.take() {
+                if let Err(err) = tracer.finish() {
+                    eprintln!("[perfetto] failed to save trace: {err}");
+                }
+            }
+        }
+    }
+
+    fn tick_timers_only(&mut self) {
+        let (mti, sti) = self.timer.tick_timers(&mut self.memory, self.cycle_count);
+        if mti {
+            self.tick_keyboard();
+        }
+        if sti && self.keyboard.fifo_len() > 0 {
+            if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                if (cur & ISR_KEYI) == 0 {
+                    self.memory
+                        .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
+                }
+            }
+        }
+    }
+
+    fn advance_cycle(&mut self) {
+        self.cycle_count = self.cycle_count.wrapping_add(1);
+        self.tick_timers_only();
     }
 }
 
@@ -857,6 +890,7 @@ impl LlamaBus for StandaloneBus {
                 ) {
                     self.trace_kbd_access("write", addr, offset, bits, value);
                 }
+                self.trace_mem_write(addr, bits, value);
                 if false {
                     println!(
                         "[kbd-write] pc=0x{pc:05X} addr=0x{addr:05X} offset=0x{offset:02X} value=0x{val:02X} last={last:?}",
@@ -890,6 +924,7 @@ impl LlamaBus for StandaloneBus {
                     );
                     self.log_lcd_count += 1;
                 }
+                self.trace_mem_write(addr, bits, value);
             }
             return;
         }
@@ -909,6 +944,7 @@ impl LlamaBus for StandaloneBus {
             );
         }
         let _ = self.memory.store(addr, bits, value);
+        self.trace_mem_write(addr, bits, value);
         if let Some((offset, prev)) = imr_isr_prev {
             if let Some(cur) = self.memory.read_internal_byte(offset) {
                 if cur != prev {
@@ -1061,6 +1097,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         })
         .unwrap_or(50);
 
+    if args.perfetto {
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            *guard = Some(PerfettoTracer::new(args.perfetto_path.clone()));
+        }
+    }
+
     let auto_key = if args.pf1 {
         Some(PF1_CODE)
     } else if args.pf2 {
@@ -1161,15 +1203,17 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if !bus.vec_patched {
             bus.maybe_patch_vectors();
         }
-        // Drive timers each iteration; keyboard scan occurs on timer cadence inside idle_tick.
-        bus.idle_tick();
+        // Drive timers using current cycle count (before this instruction executes).
+        bus.tick_timers_only();
         if bus.irq_pending() {
             bus.deliver_irq(&mut state);
         } else if state.is_halted() {
+            bus.advance_cycle();
             continue;
         }
         let pc = state.pc();
         bus.set_pc(pc);
+        bus.set_instr_index(executed);
         if pc == HANDLER_JP_Y_PC {
             let y = state.get_reg(RegName::Y) & 0xFFFFFF;
             if last_y_trace != Some(y) {
@@ -1325,11 +1369,34 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.last_irq_src = None;
                     bus.active_irq_mask = 0;
                 }
-                if wait_cycles > 0 {
-                    for _ in 0..wait_cycles {
-                        bus.idle_tick();
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        let regs = collect_registers(&state);
+                        let mem_imr = bus
+                            .memory
+                            .read_internal_byte(IMEM_IMR_OFFSET)
+                            .unwrap_or(0);
+                        let mem_isr = bus
+                            .memory
+                            .read_internal_byte(IMEM_ISR_OFFSET)
+                            .unwrap_or(0);
+                        tracer.record_regs(
+                            executed,
+                            pc,
+                            state.pc(),
+                            opcode,
+                            &regs,
+                            mem_imr,
+                            mem_isr,
+                        );
                     }
                 }
+                if wait_cycles > 0 {
+                    for _ in 0..wait_cycles {
+                        bus.advance_cycle();
+                    }
+                }
+                bus.cycle_count = bus.cycle_count.wrapping_add(1);
                 executed += 1;
                 if let Some(stop) = stop_pc {
                     if state.pc() == stop {

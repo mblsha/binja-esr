@@ -26,6 +26,7 @@ pub struct LlamaState {
     regs: HashMap<RegName, u32>,
     halted: bool,
     call_depth: u32,
+    call_sub_level: u32,
 }
 
 impl LlamaState {
@@ -34,6 +35,7 @@ impl LlamaState {
             regs: HashMap::new(),
             halted: false,
             call_depth: 0,
+            call_sub_level: 0,
         }
     }
 
@@ -151,20 +153,31 @@ impl LlamaState {
         self.regs.clear();
         self.halted = false;
         self.call_depth = 0;
+        self.call_sub_level = 0;
     }
 
     pub fn call_depth_inc(&mut self) {
         self.call_depth = self.call_depth.saturating_add(1);
+        self.call_sub_level = self.call_depth;
     }
 
     pub fn call_depth_dec(&mut self) {
         if self.call_depth > 0 {
             self.call_depth -= 1;
         }
+        self.call_sub_level = self.call_depth;
     }
 
     pub fn call_depth(&self) -> u32 {
         self.call_depth
+    }
+
+    pub fn call_sub_level(&self) -> u32 {
+        self.call_sub_level
+    }
+
+    pub fn set_call_sub_level(&mut self, value: u32) {
+        self.call_sub_level = value;
     }
 }
 

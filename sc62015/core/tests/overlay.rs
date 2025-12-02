@@ -19,8 +19,8 @@ fn lcd_reads_stub_to_ff() {
     use sc62015_core::lcd::LcdController;
 
     let mut lcd = LcdController::new();
-    // Instruction read path: returns 0xFF placeholder.
-    assert_eq!(lcd.read(0x2001), Some(0xFF));
-    // Data read path: also returns 0xFF placeholder.
-    assert_eq!(lcd.read(0x2003), Some(0xFF));
+    // Instruction read path: returns ON flag only (default off => 0).
+    assert_eq!(lcd.read(0x2001), Some(0x00));
+    // Data read path: default VRAM returns 0 and advances Y.
+    assert_eq!(lcd.read(0x2003), Some(0x00));
 }

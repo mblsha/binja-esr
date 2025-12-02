@@ -19,6 +19,12 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(0);
 static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(0);
+
+pub fn reset_perf_counters() {
+    PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
+    PERF_CURRENT_PC.store(0, Ordering::Relaxed);
+    PERF_CURRENT_OP.store(0, Ordering::Relaxed);
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AddressingMode {
     N,
@@ -258,6 +264,7 @@ pub struct LlamaExecutor;
 
 impl LlamaExecutor {
     pub fn new() -> Self {
+        reset_perf_counters();
         Self
     }
 
@@ -271,13 +278,19 @@ impl LlamaExecutor {
         sp_reg: RegName,
         value: u32,
         bits: u8,
+        big_endian: bool,
     ) {
         let bytes = bits.div_ceil(8);
         let mask = mask_for(sp_reg);
         let new_sp = state.get_reg(sp_reg).wrapping_sub(bytes as u32) & mask;
         for i in 0..bytes {
             let addr = new_sp.wrapping_add(i as u32) & mask;
-            let byte = (value >> (8 * i)) & 0xFF;
+            let shift = if big_endian {
+                8 * (bytes.saturating_sub(1) - i)
+            } else {
+                8 * i
+            };
+            let byte = (value >> shift) & 0xFF;
             Self::store_traced(bus, addr, 8, byte);
         }
         state.set_reg(sp_reg, new_sp);
@@ -288,6 +301,7 @@ impl LlamaExecutor {
         bus: &mut B,
         sp_reg: RegName,
         bits: u8,
+        big_endian: bool,
     ) -> u32 {
         let bytes = bits.div_ceil(8);
         let mut value = 0u32;
@@ -295,7 +309,12 @@ impl LlamaExecutor {
         let mut sp = state.get_reg(sp_reg);
         for i in 0..bytes {
             let byte = bus.load(sp, 8) & 0xFF;
-            value |= byte << (8 * i);
+            let shift = if big_endian {
+                8 * (bytes.saturating_sub(1) - i)
+            } else {
+                8 * i
+            };
+            value |= byte << shift;
             sp = sp.wrapping_add(1) & mask;
         }
         state.set_reg(sp_reg, sp);
@@ -2034,15 +2053,15 @@ impl LlamaExecutor {
             }
             InstrKind::Ir | InstrKind::Tcl => {
                 let instr_len = prefix_len + Self::estimated_length(entry);
-                if entry.kind == InstrKind::Ir {
-                    // Push PC (24-bit), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
-                    let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
-                    Self::push_stack(state, bus, RegName::S, pc, 24);
-                    let f = state.get_reg(RegName::F) & 0xFF;
-                    Self::push_stack(state, bus, RegName::S, f, 8);
-                    let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
-                    let imr = bus.load(imr_addr, 8) & 0xFF;
-                    Self::push_stack(state, bus, RegName::S, imr, 8);
+        if entry.kind == InstrKind::Ir {
+            // Push PC (24-bit), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
+            let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
+            Self::push_stack(state, bus, RegName::S, pc, 24, false);
+            let f = state.get_reg(RegName::F) & 0xFF;
+            Self::push_stack(state, bus, RegName::S, f, 8, false);
+            let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+            let imr = bus.load(imr_addr, 8) & 0xFF;
+            Self::push_stack(state, bus, RegName::S, imr, 8, false);
                     // Clear IRM bit in IMR (bit 7)
                     let cleared_imr = imr & 0x7F;
                     Self::store_traced(bus, imr_addr, 8, cleared_imr);
@@ -2136,20 +2155,20 @@ impl LlamaExecutor {
                     24
                 };
                 // Use S stack for CALL (matches PUSHU/POPU? here sticking with S per CPU specs)
-                Self::push_stack(state, bus, RegName::S, ret_addr, push_bits);
+                Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
                 Ok(decoded.len)
             }
             InstrKind::Ret => {
-                let ret = Self::pop_stack(state, bus, RegName::S, 16);
+                let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
                 let high = state.pc() & 0xFF0000;
                 state.set_pc((high | (ret & 0xFFFF)) & 0xFFFFF);
                 state.call_depth_dec();
                 Ok(1)
             }
             InstrKind::RetF => {
-                let ret = Self::pop_stack(state, bus, RegName::S, 24);
+                let ret = Self::pop_stack(state, bus, RegName::S, 24, false);
                 state.set_pc(ret & 0xFFFFF);
                 state.call_depth_dec();
                 Ok(1)
@@ -2167,7 +2186,8 @@ impl LlamaExecutor {
         let mut ret = 0u32;
         for i in 0..3 {
             let byte = bus.load(sp.wrapping_add(i) & mask_s, 8) & 0xFF;
-            ret |= byte << (8 * i);
+            let shift = 8 * i;
+            ret |= byte << shift;
         }
         sp = sp.wrapping_add(3) & mask_s;
         state.set_reg(RegName::S, sp);
@@ -2214,7 +2234,7 @@ impl LlamaExecutor {
         } else {
             RegName::S
         };
-        Self::push_stack(state, bus, sp_reg, value, bits);
+        Self::push_stack(state, bus, sp_reg, value, bits, false);
         if reg == RegName::IMR {
             let cleared = value & 0x7F;
             state.set_reg(RegName::IMR, cleared);
@@ -2248,7 +2268,7 @@ impl LlamaExecutor {
         } else {
             RegName::S
         };
-        let value = Self::pop_stack(state, bus, sp_reg, bits);
+        let value = Self::pop_stack(state, bus, sp_reg, bits, false);
         state.set_reg(reg, value);
         if reg == RegName::IMR {
             Self::store_traced(bus, INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, value & 0xFF);
@@ -2801,6 +2821,68 @@ mod tests {
         assert_eq!(state.get_reg(RegName::A), 0xC3);
         assert_eq!(state.get_reg(RegName::FZ), 0);
         assert_eq!(state.pc(), 1);
+    }
+
+    #[test]
+    fn ir_stack_pc_is_big_endian_and_reti_matches() {
+        // Verify IR pushes PC little-endian (low->high) and RETI reassembles the same order.
+        let mut bus = MemBus::with_size(0x80);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x20);
+        let pc = 0x0ABCDE;
+
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, pc, 24, true);
+        // Push F and IMR (single-byte, endian-neutral).
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xF0, 8, false);
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xC3, 8, false);
+
+        let sp = state.get_reg(RegName::S) as usize;
+        assert_eq!(sp, 0x20 - 5);
+        // Layout from low to high addresses after pushes: IMR, F, PC[23:16], PC[15:8], PC[7:0]
+        assert_eq!(bus.mem[sp], 0xC3); // IMR
+        assert_eq!(bus.mem[sp + 1], 0xF0); // F
+        assert_eq!(bus.mem[sp + 2], 0x0A);
+        assert_eq!(bus.mem[sp + 3], 0xBC);
+        assert_eq!(bus.mem[sp + 4], 0xDE);
+
+        // Simulate RETI: pop IMR, F, then PC little-endian.
+        let mut sp_iter = sp as u32;
+        let imr = bus.load(sp_iter, 8) & 0xFF;
+        sp_iter = sp_iter.wrapping_add(1);
+        let f = bus.load(sp_iter, 8) & 0xFF;
+        sp_iter = sp_iter.wrapping_add(1);
+        let mut ret_pc = 0u32;
+        for i in 0..3 {
+            let byte = bus.load(sp_iter + i, 8) & 0xFF;
+            let shift = 8 * i;
+            ret_pc |= byte << shift;
+        }
+        sp_iter = sp_iter.wrapping_add(3);
+
+        assert_eq!(imr, 0xC3);
+        assert_eq!(f, 0xF0);
+        assert_eq!(ret_pc, pc & 0xFF_FFFF);
+        assert_eq!(sp_iter as usize, 0x20);
+    }
+
+    #[test]
+    fn call_stack_is_little_endian() {
+        // CALL pushes return address low byte first (little-endian).
+        let mut bus = MemBus::with_size(0x80);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x40);
+        let ret = 0x012345;
+
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, ret, 24, false);
+        let sp = state.get_reg(RegName::S) as usize;
+        assert_eq!(sp, 0x40 - 3);
+        assert_eq!(bus.mem[sp], 0x45); // low byte first
+        assert_eq!(bus.mem[sp + 1], 0x23);
+        assert_eq!(bus.mem[sp + 2], 0x01); // high byte last
+
+        let popped = LlamaExecutor::pop_stack(&mut state, &mut bus, RegName::S, 24, false);
+        assert_eq!(popped, ret);
+        assert_eq!(state.get_reg(RegName::S) as usize, 0x40);
     }
 
     #[test]

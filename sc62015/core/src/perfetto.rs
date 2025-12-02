@@ -74,29 +74,15 @@ impl PerfettoTracer {
                 ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
             ]);
             for (name, value) in regs {
-                match name.as_str() {
-                    "BA" => {
-                        let ba = *value & 0xFFFF;
-                        ev.add_annotation("reg_BA", ba as u64);
-                        ev.add_annotation("reg_A", (ba & 0xFF) as u64);
-                        ev.add_annotation("reg_B", ((ba >> 8) & 0xFF) as u64);
-                    }
-                    "I" => {
-                        ev.add_annotation("reg_i", (*value & 0xFFFF) as u64);
-                    }
-                    "F" => {
-                        let f = *value & 0xFF;
-                        ev.add_annotation("reg_f", f as u64);
-                        ev.add_annotation("flag_c", f & 0x01);
-                        ev.add_annotation("flag_z", (f >> 1) & 0x01);
-                    }
-                    _ => {
-                        ev.add_annotation(
-                            format!("reg_{}", name.to_ascii_lowercase()),
-                            (*value & 0xFF_FFFF) as u64,
-                        );
-                    }
-                }
+                let key = format!("reg_{}", name.to_ascii_lowercase());
+                let masked = if name == "BA" {
+                    *value & 0xFFFF
+                } else if name == "F" {
+                    *value & 0xFF
+                } else {
+                    *value & 0xFF_FFFF
+                };
+                ev.add_annotation(key, masked as u64);
             }
             ev.finish();
         }
@@ -126,6 +112,11 @@ impl PerfettoTracer {
         space: &str,
         size: u8,
     ) {
+        let masked_value = if size == 0 || size >= 32 {
+            value
+        } else {
+            value & ((1u32 << size) - 1)
+        };
         let mut ev = self.builder.add_instant_event(
             self.mem_track,
             format!("Write@0x{addr:06X}"),
@@ -134,7 +125,7 @@ impl PerfettoTracer {
         ev.add_annotations([
             ("pc", AnnotationValue::Pointer(pc as u64)),
             ("address", AnnotationValue::Pointer(addr as u64)),
-            ("value", AnnotationValue::UInt((value & 0xFF) as u64)),
+            ("value", AnnotationValue::UInt(masked_value as u64)),
             ("space", AnnotationValue::Str(space.to_string())),
             ("size", AnnotationValue::UInt(size as u64)),
             ("op_index", AnnotationValue::UInt(instr_index)),
