@@ -420,6 +420,9 @@ impl StandaloneBus {
     }
 
     fn raise_key_irq(&mut self) {
+        if !self.timer.keyboard_irq_enabled() {
+            return;
+        }
         if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
             let new = cur | ISR_KEYI;
             self.memory.write_internal_byte(IMEM_ISR_OFFSET, new);
@@ -982,6 +985,12 @@ impl LlamaBus for StandaloneBus {
     fn peek_imem(&mut self, offset: u32) -> u8 {
         self.memory.read_internal_byte(offset).unwrap_or(0)
     }
+
+    fn wait_cycles(&mut self, cycles: u32) {
+        for _ in 0..cycles {
+            self.advance_cycle();
+        }
+    }
 }
 
 struct FontMap {
@@ -1334,13 +1343,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             );
         }
         let opcode = bus.load(pc, 8) as u8;
-        // Simulate WAIT timing like the Python emulator: if the opcode is WAIT (0xEF),
-        // advance timers/keyboard scans for I cycles so timer-driven scans are not starved.
-        let wait_cycles = if opcode == 0xEF {
-            (state.get_reg(RegName::I) & 0xFFFF) as usize
-        } else {
-            0
-        };
         if let Some(code) = auto_key {
             if !pressed_key && executed >= auto_press_step {
                 bus.press_key(code);
@@ -1414,11 +1416,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             mem_imr,
                             mem_isr,
                         );
-                    }
-                }
-                if wait_cycles > 0 {
-                    for _ in 0..wait_cycles {
-                        bus.advance_cycle();
                     }
                 }
                 bus.cycle_count = bus.cycle_count.wrapping_add(1);

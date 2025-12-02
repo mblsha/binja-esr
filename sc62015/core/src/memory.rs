@@ -2,6 +2,7 @@
 
 use crate::{CoreError, Result};
 use std::env;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const INTERNAL_MEMORY_START: u32 = 0x100000;
 pub const ADDRESS_MASK: u32 = 0x00FF_FFFF;
@@ -14,6 +15,9 @@ pub const INTERNAL_RAM_SIZE: usize = 0x8000;
 fn canonical_address(address: u32) -> u32 {
     address & ADDRESS_MASK
 }
+
+// Monotonic counter for host-side/internal writes that happen outside the LLAMA executor.
+static HOST_MEM_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub struct MemoryImage {
@@ -290,6 +294,19 @@ impl MemoryImage {
                 self.internal[index] = value;
                 self.dirty_internal
                     .push((INTERNAL_MEMORY_START + offset, value));
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        let seq = HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+                        tracer.record_mem_write(
+                            seq,
+                            0,
+                            INTERNAL_MEMORY_START + offset,
+                            value as u32,
+                            "internal",
+                            8,
+                        );
+                    }
+                }
                 // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
                 if offset == 0xFC && (value & 0x04) != 0 {
                     #[cfg(feature = "llama-tests")]

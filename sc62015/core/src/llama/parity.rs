@@ -537,6 +537,8 @@ impl LlamaBus for RecordingBus {
     fn resolve_emem(&mut self, base: u32) -> u32 {
         base
     }
+
+    fn wait_cycles(&mut self, _cycles: u32) {}
 }
 
 /// Execute one instruction in LLAMA and produce a trace event plus snapshot.

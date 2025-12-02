@@ -14,6 +14,7 @@ pub struct TimerContext {
     pub sti_period: u64,
     pub next_mti: u64,
     pub next_sti: u64,
+    pub kb_irq_enabled: bool,
     pub irq_pending: bool,
     pub irq_source: Option<String>,
     pub irq_imr: u8,
@@ -32,6 +33,7 @@ impl TimerContext {
             sti_period: sti_period.max(0) as u64,
             next_mti: 0,
             next_sti: 0,
+            kb_irq_enabled: true,
             irq_pending: false,
             irq_source: None,
             irq_imr: 0,
@@ -72,6 +74,7 @@ impl TimerContext {
             sti_period: self.sti_period.min(i32::MAX as u64) as i32,
             next_mti: self.next_mti.min(i32::MAX as u64) as i32,
             next_sti: self.next_sti.min(i32::MAX as u64) as i32,
+            kb_irq_enabled: self.kb_irq_enabled,
         };
         let interrupts = InterruptInfo {
             pending: self.irq_pending,
@@ -94,6 +97,7 @@ impl TimerContext {
         self.sti_period = timer.sti_period.max(0) as u64;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
+        self.kb_irq_enabled = timer.kb_irq_enabled;
 
         self.irq_pending = interrupts.pending;
         self.in_interrupt = interrupts.in_interrupt;
@@ -128,6 +132,14 @@ impl TimerContext {
         self.interrupt_stack = interrupt_stack.unwrap_or_default();
         self.next_interrupt_id = next_interrupt_id;
         self.last_fired = None;
+    }
+
+    pub fn set_keyboard_irq_enabled(&mut self, enabled: bool) {
+        self.kb_irq_enabled = enabled;
+    }
+
+    pub fn keyboard_irq_enabled(&self) -> bool {
+        self.kb_irq_enabled
     }
 
     pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: u64) -> (bool, bool) {
@@ -199,7 +211,7 @@ impl TimerContext {
         let (mti, sti) = self.tick_timers(memory, cycle_count);
         let mut key_events = 0usize;
         let mut fifo_nonempty = false;
-        if mti {
+        if mti && self.kb_irq_enabled {
             let (events, fifo_has_data) = keyboard_scan(memory);
             key_events = events;
             fifo_nonempty = fifo_has_data;
@@ -218,7 +230,7 @@ impl TimerContext {
                 }
             }
         }
-        if sti && (key_events == 0 && fifo_nonempty) {
+        if sti && self.kb_irq_enabled && (key_events == 0 && fifo_nonempty) {
             if let Some(cur) = memory.read_internal_byte(ISR_OFFSET) {
                 if (cur & 0x04) == 0 {
                     memory.write_internal_byte(ISR_OFFSET, cur | 0x04);
@@ -303,6 +315,7 @@ mod tests {
                 sti_period: 30,
                 next_mti: 150,
                 next_sti: 200,
+                kb_irq_enabled: true,
             },
             &InterruptInfo::default(),
         );

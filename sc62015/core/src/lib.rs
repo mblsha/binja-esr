@@ -49,7 +49,7 @@ pub enum CoreError {
     Other(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerInfo {
     #[serde(default)]
     pub enabled: bool,
@@ -61,6 +61,21 @@ pub struct TimerInfo {
     pub next_mti: i32,
     #[serde(default)]
     pub next_sti: i32,
+    #[serde(default = "default_true")]
+    pub kb_irq_enabled: bool,
+}
+
+impl Default for TimerInfo {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mti_period: 0,
+            sti_period: 0,
+            next_mti: 0,
+            next_sti: 0,
+            kb_irq_enabled: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -159,11 +174,15 @@ impl Default for SnapshotMetadata {
     }
 }
 
-pub fn now_timestamp() -> String {
-    match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(duration) => format!("{}Z", duration.as_secs()),
-        Err(_) => "0Z".to_string(),
+    pub fn now_timestamp() -> String {
+        match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(duration) => format!("{}Z", duration.as_secs()),
+            Err(_) => "0Z".to_string(),
+        }
     }
+
+fn default_true() -> bool {
+    true
 }
 
 pub const DEFAULT_REG_WIDTH: u8 = 24;

@@ -741,6 +741,8 @@ impl LlamaBus for LlamaPyBus {
     fn resolve_emem(&mut self, base: u32) -> u32 {
         base
     }
+
+    fn wait_cycles(&mut self, _cycles: u32) {}
 }
 
 /// Lazy parse a comma-separated list of absolute addresses in `TRACE_ADDRS`.

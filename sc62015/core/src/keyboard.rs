@@ -3,6 +3,7 @@
 use crate::memory::MemoryImage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const FIFO_SIZE: usize = 8;
 const COLUMN_COUNT: usize = 11; // 8 from KOL, 3 from KOH
@@ -13,6 +14,9 @@ const DEFAULT_PRESS_TICKS: u8 = 6;
 const DEFAULT_RELEASE_TICKS: u8 = 6;
 const DEFAULT_REPEAT_DELAY: u8 = 24;
 const DEFAULT_REPEAT_INTERVAL: u8 = 6;
+
+// Host-side write sequence for Perfetto logging of FIFO/KIL writes outside the LLAMA executor.
+static HOST_MEM_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Default)]
 struct KeyLocation {
@@ -288,6 +292,15 @@ impl KeyboardMatrix {
         1
     }
 
+    fn log_fifo_write(addr: u32, value: u8) {
+        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let seq = HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+                tracer.record_mem_write(seq, 0, addr, value as u32, "external", 8);
+            }
+        }
+    }
+
     pub fn write_fifo_to_memory(&self, memory: &mut MemoryImage) {
         let mut idx = self.fifo_head;
         for slot in 0..FIFO_SIZE {
@@ -298,14 +311,31 @@ impl KeyboardMatrix {
             } else {
                 0
             };
-            memory.write_external_byte(FIFO_BASE_ADDR + slot as u32, value);
+            let addr = FIFO_BASE_ADDR + slot as u32;
+            memory.write_external_byte(addr, value);
+            Self::log_fifo_write(addr, value);
         }
         memory.write_external_byte(FIFO_HEAD_ADDR, self.fifo_head as u8);
+        Self::log_fifo_write(FIFO_HEAD_ADDR, self.fifo_head as u8);
         memory.write_external_byte(FIFO_TAIL_ADDR, self.fifo_tail as u8);
+        Self::log_fifo_write(FIFO_TAIL_ADDR, self.fifo_tail as u8);
         if self.keyi_latch && self.fifo_count > 0 {
             if let Some(isr) = memory.read_internal_byte(0xFC) {
                 if (isr & 0x04) == 0 {
                     memory.write_internal_byte(0xFC, isr | 0x04);
+                    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                        if let Some(tracer) = guard.as_mut() {
+                            let seq = HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+                            tracer.record_mem_write(
+                                seq,
+                                0,
+                                crate::INTERNAL_MEMORY_START + 0xFC,
+                                (isr | 0x04) as u32,
+                                "internal",
+                                8,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -420,19 +450,20 @@ impl KeyboardMatrix {
     }
 
     pub fn press_matrix_code(&mut self, code: u8, memory: &mut MemoryImage) {
+        let _ = memory;
         if let Some(state) = self.states.get_mut(code as usize) {
             state.pressed = true;
             state.debounced = false;
             state.press_ticks = 0;
             state.release_ticks = 0;
             state.repeat_ticks = self.repeat_delay;
-            self.kil_latch = self.compute_kil(true);
-            // Parity: defer event enqueue/KEYI to timer-driven scan_tick.
-            memory.write_internal_byte(0xF2, self.kil_latch);
+            self.kil_latch = self.compute_kil(false);
+            // Parity: defer event enqueue/KEYI to timer-driven scan_tick; do not push KIL to IMEM here.
         }
     }
 
     pub fn release_matrix_code(&mut self, code: u8, memory: &mut MemoryImage) {
+        let _ = memory;
         if let Some(state) = self.states.get_mut(code as usize) {
             state.pressed = false;
             state.debounced = false;
@@ -440,7 +471,6 @@ impl KeyboardMatrix {
             state.release_ticks = 0;
             state.repeat_ticks = 0;
             self.kil_latch = self.compute_kil(false);
-            memory.write_internal_byte(0xF2, self.kil_latch);
             // Parity: defer event enqueue/KEYI to timer-driven scan_tick.
         }
     }

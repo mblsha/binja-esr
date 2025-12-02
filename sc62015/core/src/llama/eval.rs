@@ -106,6 +106,8 @@ pub trait LlamaBus {
         let addr = INTERNAL_MEMORY_START + offset;
         (self.load(addr, 8) & 0xFF) as u8
     }
+    /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations.
+    fn wait_cycles(&mut self, _cycles: u32) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1733,9 +1735,13 @@ impl LlamaExecutor {
             }
             InstrKind::Wait => {
                 // WAIT is an idle loop that drains I to zero and clears FC/FZ; match the Python fast-path.
+                let wait_cycles = state.get_reg(RegName::I) & mask_for(RegName::I);
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
+                if wait_cycles > 0 {
+                    bus.wait_cycles(wait_cycles);
+                }
                 // Do not auto-halt; let the host decide when to block.
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
@@ -2594,6 +2600,7 @@ mod tests {
         fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
             0
         }
+        fn wait_cycles(&mut self, _cycles: u32) {}
     }
 
     #[test]
@@ -2657,6 +2664,29 @@ mod tests {
         assert_eq!(state.get_reg(RegName::FZ), 0);
     }
 
+    struct WaitBus {
+        spins: u32,
+    }
+
+    impl LlamaBus for WaitBus {
+        fn wait_cycles(&mut self, cycles: u32) {
+            self.spins = self.spins.saturating_add(cycles);
+        }
+    }
+
+    #[test]
+    fn wait_calls_bus_wait_cycles() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = WaitBus { spins: 0 };
+        state.set_reg(RegName::I, 5);
+        let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 1);
+        assert_eq!(bus.spins, 5);
+        assert_eq!(state.get_reg(RegName::I), 0);
+    }
+
     struct MemBus {
         mem: Vec<u8>,
     }
@@ -2698,6 +2728,8 @@ mod tests {
         fn resolve_emem(&mut self, base: u32) -> u32 {
             base
         }
+
+        fn wait_cycles(&mut self, _cycles: u32) {}
     }
 
     #[test]
