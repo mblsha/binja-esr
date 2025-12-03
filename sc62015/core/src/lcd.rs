@@ -232,7 +232,7 @@ impl LcdController {
 
     pub fn handles(&self, address: u32) -> bool {
         let addr = address & 0x00FF_FFFF;
-        (0x0000_2000..=0x0000_200F).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
+        (0x0000_2000..=0x0000_2FFF).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
     }
 
     pub fn write(&mut self, address: u32, value: u8) {
@@ -488,5 +488,17 @@ mod tests {
         assert_eq!(super::pixel_on(0b0000_0000, 0), 0);
         assert_eq!(super::pixel_on(0b1000_0000, 7), 1);
         assert_eq!(super::pixel_on(0b0111_1111, 7), 0);
+    }
+
+    #[test]
+    fn handles_full_0x2000_mirror() {
+        let mut lcd = LcdController::new();
+        assert!(lcd.handles(0x2000));
+        assert!(lcd.handles(0x2ABC));
+        assert!(lcd.handles(0x2FFF));
+
+        // Write ON instruction to right chip via an address in the 0x2xxx range (CS=Right).
+        lcd.write(0x2B04, 0x3F);
+        assert!(lcd.chips[1].state.on);
     }
 }

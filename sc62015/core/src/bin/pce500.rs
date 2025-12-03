@@ -524,16 +524,7 @@ impl StandaloneBus {
                 self.in_interrupt = false;
                 self.active_irq_mask = 0;
             } else {
-                #[cfg(feature = "llama-tests")]
-                {
-                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
-                            tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
-                            tracer.record_kio_read(Some(self.last_pc), 0xEF, 0);
-                        }
-                    }
-                }
+                // Avoid duplicate IMR/ISR KIO logging; Python tracer does not emit these here.
                 return false;
             }
         }
@@ -541,16 +532,6 @@ impl StandaloneBus {
         // them to pend even if IRM is still masked to mirror the Python emulator.
         let irm_enabled = (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0);
         if !irm_enabled {
-            #[cfg(feature = "llama-tests")]
-            {
-                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
-                        tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
-                        tracer.record_kio_read(Some(self.last_pc), 0xEF, 0);
-                    }
-                }
-            }
             return false;
         }
         // Per-bit masks are "enabled when set".
@@ -561,27 +542,11 @@ impl StandaloneBus {
         if !pending && isr != 0 && self.active_irq_mask == 0 {
             self.last_irq_src = Some("masked".to_string());
         }
-        // Trace pending decision for visibility (Perfetto + console).
-        #[cfg(feature = "llama-tests")]
-        {
-            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    tracer.record_kio_read(Some(self.last_pc), IMEM_IMR_OFFSET as u8, imr);
-                    tracer.record_kio_read(Some(self.last_pc), IMEM_ISR_OFFSET as u8, isr);
-                    tracer.record_kio_read(Some(self.last_pc), 0xEE, pending as u8);
-                    // Encode src mask: bit0=KEY, bit1=MTI, bit2=STI
-                    let mask = (((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0)) as u8)
-                        | ((((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0)) as u8) << 1)
-                        | ((((isr & ISR_STI != 0) && (imr & IMR_STI != 0)) as u8) << 2);
-                    tracer.record_kio_read(Some(self.last_pc), 0xED, mask);
-                }
-            }
-            if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
-                println!(
-                    "[irq-pending] pc=0x{:05X} imr=0x{:02X} isr=0x{:02X} pending={} in_irq={}",
-                    self.last_pc, imr, isr, pending, self.in_interrupt
-                );
-            }
+        if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
+            println!(
+                "[irq-pending] pc=0x{:05X} imr=0x{:02X} isr=0x{:02X} pending={} in_irq={}",
+                self.last_pc, imr, isr, pending, self.in_interrupt
+            );
         }
         pending
     }
@@ -597,16 +562,6 @@ impl StandaloneBus {
     }
 
     fn log_irq_delivery(&mut self, src: Option<&str>, vec: u32, imr: u8, isr: u8, pc: u32) {
-        #[cfg(feature = "llama-tests")]
-        {
-            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    tracer.record_kio_read(Some(pc), IMEM_IMR_OFFSET as u8, imr);
-                    tracer.record_kio_read(Some(pc), IMEM_ISR_OFFSET as u8, isr);
-                    tracer.record_kio_read(Some(pc), 0xFF, (vec & 0xFF) as u8);
-                }
-            }
-        }
         if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
             println!(
                 "[irq-deliver] pc=0x{pc:05X} src={src:?} vec=0x{vec:05X} imr=0x{imr:02X} isr=0x{isr:02X}",

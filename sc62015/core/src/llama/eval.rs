@@ -39,6 +39,11 @@ pub fn perfetto_instr_context() -> Option<(u64, u32)> {
     }
 }
 
+/// Last-seen instruction index for host-side events that occur outside executor context.
+pub fn perfetto_last_instr_index() -> u64 {
+    PERF_INSTR_COUNTER.load(Ordering::Relaxed)
+}
+
 pub fn reset_perf_counters() {
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
     PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
@@ -165,32 +170,7 @@ struct DecodedOperands {
 }
 
 fn read_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32) -> u8 {
-    let val = bus.load(INTERNAL_MEMORY_START + offset, 8) as u8;
-    // Perfetto/trace hook for IMR reads when available.
-    #[cfg(feature = "llama-tests")]
-    {
-        if offset == IMEM_IMR_OFFSET {
-            if let Ok(env) = std::env::var("TRACE_IMR_READ") {
-                if env == "1" {
-                    eprintln!(
-                        "[imr-read-core] addr=0x{addr:06X} value=0x{val:02X}",
-                        addr = INTERNAL_MEMORY_START + offset
-                    );
-                }
-            }
-        }
-    }
-    if matches!(
-        offset,
-        IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET | IMEM_IMR_OFFSET | IMEM_ISR_OFFSET
-    ) {
-        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-            if let Some(tracer) = guard.as_mut() {
-                tracer.record_kio_read(None, offset as u8, val);
-            }
-        }
-    }
-    val
+    bus.load(INTERNAL_MEMORY_START + offset, 8) as u8
 }
 
 fn write_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32, value: u8) {
@@ -522,7 +502,9 @@ impl LlamaExecutor {
             state.set_reg(RegName::IMR, val);
             if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
-                    tracer.record_imr_read(Some(state.pc()), val as u8);
+                    let instr = PERF_CURRENT_OP.load(Ordering::Relaxed);
+                    let instr_idx = if instr != u64::MAX { Some(instr) } else { None };
+                    tracer.record_imr_read(Some(state.pc()), val as u8, instr_idx);
                 }
             }
             val
@@ -1142,16 +1124,16 @@ impl LlamaExecutor {
                     .side_effect
                     .map(|(reg, new_val)| {
                         let curr = state.get_reg(reg);
-                        let mask = mask_for(reg);
-                        (new_val.wrapping_sub(curr)) & mask
+                        let delta = Self::addr_step_from_side_effect(reg, curr, new_val);
+                        delta.unsigned_abs()
                     })
                     .unwrap_or_else(|| mem_dst.bits.div_ceil(8) as u32);
                 let src_step = mem_src
                     .side_effect
                     .map(|(reg, new_val)| {
                         let curr = state.get_reg(reg);
-                        let mask = mask_for(reg);
-                        (new_val.wrapping_sub(curr)) & mask
+                        let delta = Self::addr_step_from_side_effect(reg, curr, new_val);
+                        delta.unsigned_abs()
                     })
                     .unwrap_or_else(|| mem_src.bits.div_ceil(8) as u32);
                 for _ in 0..length {
@@ -2170,15 +2152,15 @@ impl LlamaExecutor {
             }
             InstrKind::Ir | InstrKind::Tcl => {
                 let instr_len = prefix_len + Self::estimated_length(entry);
-        if entry.kind == InstrKind::Ir {
-            // Push PC (24-bit, big-endian), F, IMR (memory-mapped), clear IRM (bit7), and jump to interrupt vector.
-            let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
-            Self::push_stack(state, bus, RegName::S, pc, 24, true);
-            let f = state.get_reg(RegName::F) & 0xFF;
-            Self::push_stack(state, bus, RegName::S, f, 8, false);
-            let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
-            let imr = bus.load(imr_addr, 8) & 0xFF;
-            Self::push_stack(state, bus, RegName::S, imr, 8, false);
+                if entry.kind == InstrKind::Ir {
+                    // Push IMR, F, PC (little-endian) to match Python RETI stack layout, clear IRM, and jump to vector.
+                    let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
+                    Self::push_stack(state, bus, RegName::S, pc, 24, false);
+                    let f = state.get_reg(RegName::F) & 0xFF;
+                    Self::push_stack(state, bus, RegName::S, f, 8, false);
+                    let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+                    let imr = bus.load(imr_addr, 8) & 0xFF;
+                    Self::push_stack(state, bus, RegName::S, imr, 8, false);
                     // Clear IRM bit in IMR (bit 7)
                     let cleared_imr = imr & 0x7F;
                     Self::store_traced(bus, imr_addr, 8, cleared_imr);
@@ -2292,32 +2274,32 @@ impl LlamaExecutor {
                 Ok(1)
             }
             InstrKind::RetI => {
-                // Stack layout: IMR (1), F(1), 24-bit PC. Mirror Python exactly.
+                // Stack layout: IMR (1), F(1), 24-bit PC (little-endian).
                 let mask_s = mask_for(RegName::S);
-        let mut sp = state.get_reg(RegName::S) & mask_s;
-        let sp_before = sp;
-        let trace_reti = std::env::var("TRACE_RETI").is_ok();
-        let imr = bus.load(sp, 8) & 0xFF;
-        sp = sp.wrapping_add(1) & mask_s;
-        let f = bus.load(sp, 8) & 0xFF;
-        sp = sp.wrapping_add(1) & mask_s;
-        let pc_hi = bus.load(sp, 8) & 0xFF;
-        let pc_mid = bus.load(sp.wrapping_add(1) & mask_s, 8) & 0xFF;
-        let pc_lo = bus.load(sp.wrapping_add(2) & mask_s, 8) & 0xFF;
-        let ret = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
-        sp = sp.wrapping_add(3) & mask_s;
-        state.set_reg(RegName::S, sp);
-        let imr_restored = imr;
-        Self::store_traced(
-            bus,
-            INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
-            8,
-            imr_restored & 0xFF,
-        );
-        state.set_reg(RegName::IMR, imr_restored);
-        state.set_reg(RegName::F, f);
-        state.set_pc(ret & 0xFFFFF);
-        state.call_depth_dec();
+                let mut sp = state.get_reg(RegName::S) & mask_s;
+                let sp_before = sp;
+                let trace_reti = std::env::var("TRACE_RETI").is_ok();
+                let imr = bus.load(sp, 8) & 0xFF;
+                sp = sp.wrapping_add(1) & mask_s;
+                let f = bus.load(sp, 8) & 0xFF;
+                sp = sp.wrapping_add(1) & mask_s;
+                let pc_lo = bus.load(sp, 8) & 0xFF;
+                let pc_mid = bus.load(sp.wrapping_add(1) & mask_s, 8) & 0xFF;
+                let pc_hi = bus.load(sp.wrapping_add(2) & mask_s, 8) & 0xFF;
+                let ret = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
+                sp = sp.wrapping_add(3) & mask_s;
+                state.set_reg(RegName::S, sp);
+                let imr_restored = imr;
+                Self::store_traced(
+                    bus,
+                    INTERNAL_MEMORY_START + IMEM_IMR_OFFSET,
+                    8,
+                    imr_restored & 0xFF,
+                );
+                state.set_reg(RegName::IMR, imr_restored);
+                state.set_reg(RegName::F, f);
+                state.set_pc(ret & 0xFFFFF);
+                state.call_depth_dec();
                 if trace_reti {
                     eprintln!(
                         "[reti] sp_before=0x{sp_before:06X} imr=0x{imr:02X} f=0x{f:02X} ret=0x{ret:06X} sp_after=0x{sp:06X} imr_restored=0x{imr_restored:02X}",
@@ -2851,6 +2833,123 @@ mod tests {
         assert_eq!(len, 2);
         assert_eq!(state.get_reg(RegName::A), 0x01);
         assert_eq!(state.get_reg(RegName::FZ), 0);
+    }
+
+    #[test]
+    fn ir_stacks_imr_f_pc_little_endian() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
+
+        // Seed IMR and interrupt vector.
+        let imr_saved: u8 = 0xAA;
+        bus.store(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, u32::from(imr_saved));
+        bus.mem[0x0FFFFA] = 0x21; // reset vector low
+        bus.mem[0x0FFFFB] = 0x43; // mid
+        bus.mem[0x0FFFFC] = 0x05; // high -> 0x054321
+
+        assert_eq!(
+            bus.load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8,
+            imr_saved
+        );
+
+        let pc_start = 0x001234;
+        let f_saved: u8 = 0xA5;
+        let sp_start = 0x0200;
+        state.set_pc(pc_start);
+        state.set_reg(RegName::F, u32::from(f_saved));
+        state.set_reg(RegName::S, sp_start);
+
+        let len = exec.execute(0xFE, &mut state, &mut bus).unwrap(); // IR
+        assert_eq!(len, 1);
+
+        let expected_pc = (pc_start.wrapping_add(len as u32)) & mask_for(RegName::PC);
+        let expected_sp = sp_start.wrapping_sub(5) & mask_for(RegName::S);
+        assert_eq!(state.get_reg(RegName::S), expected_sp);
+
+        let base = MemBus::translate(expected_sp);
+        assert_eq!(
+            &bus.mem[base..base + 5],
+            &[
+                imr_saved,
+                f_saved,
+                (expected_pc & 0xFF) as u8,
+                ((expected_pc >> 8) & 0xFF) as u8,
+                ((expected_pc >> 16) & 0xFF) as u8
+            ]
+        );
+
+        // IMR should be cleared in state/memory after the push.
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved & 0x7F));
+        assert_eq!(
+            bus.mem[MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET)],
+            imr_saved & 0x7F
+        );
+        assert_eq!(state.pc(), 0x054321);
+    }
+
+    #[test]
+    fn reti_restores_imr_f_pc_little_endian() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
+
+        let sp_start = 0x0200;
+        let imr_saved: u8 = 0x00;
+        let f_saved: u8 = 0x7C;
+        let ret_pc: u32 = 0x053412;
+
+        let base = MemBus::translate(sp_start);
+        bus.mem[base] = imr_saved;
+        bus.mem[base + 1] = f_saved;
+        bus.mem[base + 2] = (ret_pc & 0xFF) as u8;
+        bus.mem[base + 3] = ((ret_pc >> 8) & 0xFF) as u8;
+        bus.mem[base + 4] = ((ret_pc >> 16) & 0xFF) as u8;
+
+        state.set_reg(RegName::S, sp_start);
+        state.call_depth_inc();
+
+        let len = exec.execute(0x01, &mut state, &mut bus).unwrap(); // RETI
+        assert_eq!(len, 1);
+        assert_eq!(state.get_reg(RegName::S), (sp_start + 5) & mask_for(RegName::S));
+        assert_eq!(state.pc(), ret_pc & mask_for(RegName::PC));
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved));
+        assert_eq!(state.get_reg(RegName::F), u32::from(f_saved));
+        assert_eq!(
+            bus.mem[MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET)],
+            imr_saved
+        );
+    }
+
+    #[test]
+    fn mvl_predec_updates_pointer_without_wrap() {
+        // Opcode 0xE3: MVL IMem8, EMemReg (mode byte), uses pre-dec when reg byte upper nibble is 0x3.
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+
+        // Program: [0]=0xE3 (MVL), [1]=0x36 (pre-dec, reg=U), [2]=0x10 (IMEM offset)
+        bus.mem[0x0000] = 0xE3;
+        bus.mem[0x0001] = 0x36; // mode=PreDec, reg selector=6 (U)
+        bus.mem[0x0002] = 0x10; // IMEM destination offset
+
+        // Source byte resides at U-1 after pre-dec.
+        state.set_reg(RegName::U, 0x0030);
+        bus.mem[0x002F] = 0xAB;
+
+        // Set transfer length to 1.
+        state.set_reg(RegName::I, 1);
+
+        let len = exec.execute(0xE3, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(state.get_reg(RegName::PC), 3);
+
+        // Destination should receive the byte.
+        let dst_addr = MemBus::translate(INTERNAL_MEMORY_START + 0x10);
+        assert_eq!(bus.mem[dst_addr], 0xAB);
+
+        // U should pre-decrement by 1, not wrap to a huge value.
+        assert_eq!(state.get_reg(RegName::U), 0x002F);
     }
 
     #[test]

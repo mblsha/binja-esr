@@ -12,6 +12,8 @@ pub struct PerfettoTracer {
     timeline_track: TrackId,
     mem_track: TrackId,
     imr_track: TrackId,
+    imr_zero_counter: TrackId,
+    imr_nonzero_counter: TrackId,
     irq_timer_track: TrackId,
     irq_key_track: TrackId,
     irq_misc_track: TrackId,
@@ -32,6 +34,9 @@ impl PerfettoTracer {
         let timeline_track = builder.add_thread("Execution");
         let mem_track = builder.add_thread("MemoryWrites");
         let imr_track = builder.add_thread("IMR");
+        let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);
+        let imr_nonzero_counter =
+            builder.add_counter_track("IMR_ReadNonZero", Some("count"), None);
         // Align IRQ tracks with Python tracer.
         let irq_timer_track = builder.add_thread("irq.timer");
         let irq_key_track = builder.add_thread("irq.key");
@@ -42,6 +47,8 @@ impl PerfettoTracer {
             timeline_track,
             mem_track,
             imr_track,
+            imr_zero_counter,
+            imr_nonzero_counter,
             irq_timer_track,
             irq_key_track,
             irq_misc_track,
@@ -157,19 +164,33 @@ impl PerfettoTracer {
     }
 
     /// IMR read diagnostics: log each read and keep running zero/non-zero counters.
-    pub fn record_imr_read(&mut self, pc: Option<u32>, value: u8) {
+    /// If an instruction index is available, align the timestamp to that index to match Python.
+    pub fn record_imr_read(&mut self, pc: Option<u32>, value: u8, instr_index: Option<u64>) {
         let zero = value == 0;
         if zero {
             self.imr_read_zero = self.imr_read_zero.saturating_add(1);
         } else {
             self.imr_read_nonzero = self.imr_read_nonzero.saturating_add(1);
         }
-        let ts = self.imr_seq;
+        let ts = if let Some(op) = instr_index {
+            self.ts(op, 0)
+        } else {
+            self.imr_seq as i64
+        };
         self.imr_seq = self.imr_seq.saturating_add(1);
+
+        // Mirror Python tracer: update IMR counters.
+        if zero {
+            self.builder
+                .update_counter(self.imr_zero_counter, self.imr_read_zero as f64, ts as i64);
+        } else {
+            self.builder
+                .update_counter(self.imr_nonzero_counter, self.imr_read_nonzero as f64, ts as i64);
+        }
 
         let mut ev =
             self.builder
-                .add_instant_event(self.imr_track, "IMR_Read".to_string(), ts as i64);
+                .add_instant_event(self.imr_track, "IMR_Read".to_string(), ts);
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", pc_val as u64);
         }
