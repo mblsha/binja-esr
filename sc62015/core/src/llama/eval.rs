@@ -17,13 +17,32 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
-static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(0);
-static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(0);
+static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
+static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
+
+struct PerfettoContextGuard;
+impl Drop for PerfettoContextGuard {
+    fn drop(&mut self) {
+        PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
+        PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
+    }
+}
+
+/// Expose current instruction context for Perfetto correlation outside the executor.
+pub fn perfetto_instr_context() -> Option<(u64, u32)> {
+    let op = PERF_CURRENT_OP.load(Ordering::Relaxed);
+    let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+    if op == u64::MAX || pc == u32::MAX {
+        None
+    } else {
+        Some((op, pc))
+    }
+}
 
 pub fn reset_perf_counters() {
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
-    PERF_CURRENT_PC.store(0, Ordering::Relaxed);
-    PERF_CURRENT_OP.store(0, Ordering::Relaxed);
+    PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
+    PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
 }
 
 fn fallback_unknown(state: &mut LlamaState, prefix_len: u8) -> Result<u8, &'static str> {
@@ -384,17 +403,19 @@ impl LlamaExecutor {
                     ("S", RegName::S),
                     ("PC", RegName::PC),
                     ("F", RegName::F),
+                    ("FC", RegName::FC),
+                    ("FZ", RegName::FZ),
                     ("IMR", RegName::IMR),
                 ] {
-                    regs.insert(name.to_string(), state.get_reg(reg));
+                    regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
                 }
                 // Parity: sample IMR/ISR without triggering device-side effects.
-                let mem_imr = bus.peek_imem(IMEM_IMR_OFFSET);
-                let mem_isr = bus.peek_imem(IMEM_ISR_OFFSET);
+                let mem_imr = bus.peek_imem(IMEM_IMR_OFFSET) & 0xFF;
+                let mem_isr = bus.peek_imem(IMEM_ISR_OFFSET) & 0xFF;
                 tracer.record_regs(
                     instr_index,
-                    pc_trace,
-                    state.pc(),
+                    pc_trace & mask_for(RegName::PC),
+                    state.pc() & mask_for(RegName::PC),
                     opcode,
                     &regs,
                     mem_imr,
@@ -1677,16 +1698,20 @@ impl LlamaExecutor {
         bus: &mut B,
     ) -> Result<u8, &'static str> {
         let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pc_trace = state.pc();
+        let pc_trace = state.pc() & mask_for(RegName::PC);
         PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
         PERF_CURRENT_PC.store(pc_trace, Ordering::Relaxed);
-        let (len, traced_opcode) = match self.lookup(opcode) {
+        let _ctx_guard = PerfettoContextGuard;
+        // Trace the pre-execution snapshot to mirror Python perfetto ordering.
+        self.trace_instr(opcode, state, bus, instr_index, pc_trace);
+
+        match self.lookup(opcode) {
             Some(entry) if entry.kind == InstrKind::Pre => {
                 let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
                 let next_pc = state.pc().wrapping_add(1);
                 let next_opcode = bus.load(next_pc, 8) as u8;
                 if let Some(next_entry) = self.lookup(next_opcode) {
-                    let l = self.execute_with(
+                    self.execute_with(
                         next_opcode,
                         next_entry,
                         state,
@@ -1694,24 +1719,14 @@ impl LlamaExecutor {
                         Some(&pre_modes),
                         Some(next_pc),
                         1,
-                    )?;
-                    (l, next_opcode)
+                    )
                 } else {
-                    let l = fallback_unknown(state, 1)?;
-                    (l, next_opcode)
+                    fallback_unknown(state, 1)
                 }
             }
-            Some(entry) => {
-                let l = self.execute_with(opcode, entry, state, bus, None, None, 0)?;
-                (l, opcode)
-            }
-            None => {
-                let l = fallback_unknown(state, 0)?;
-                (l, opcode)
-            }
-        };
-        self.trace_instr(traced_opcode, state, bus, instr_index, pc_trace);
-        Ok(len)
+            Some(entry) => self.execute_with(opcode, entry, state, bus, None, None, 0),
+            None => fallback_unknown(state, 0),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1734,15 +1749,12 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // WAIT is an idle loop that drains I to zero and clears FC/FZ; match the Python fast-path.
+                // WAIT loops down I to zero and leaves flags untouched (Python parity).
                 let wait_cycles = state.get_reg(RegName::I) & mask_for(RegName::I);
-                state.set_reg(RegName::I, 0);
-                state.set_reg(RegName::FC, 0);
-                state.set_reg(RegName::FZ, 0);
                 if wait_cycles > 0 {
                     bus.wait_cycles(wait_cycles);
                 }
-                // Do not auto-halt; let the host decide when to block.
+                state.set_reg(RegName::I, 0);
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -2660,8 +2672,8 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
         assert_eq!(state.get_reg(RegName::I), 0);
-        assert_eq!(state.get_reg(RegName::FC), 0);
-        assert_eq!(state.get_reg(RegName::FZ), 0);
+        assert_eq!(state.get_reg(RegName::FC), 1, "WAIT should not clear C");
+        assert_eq!(state.get_reg(RegName::FZ), 1, "WAIT should not clear Z");
     }
 
     struct WaitBus {
@@ -3118,12 +3130,16 @@ mod tests {
         let mut bus = MemBus::with_size(1);
         bus.mem[0] = 0xEF; // WAIT
         let mut state = LlamaState::new();
+        state.set_reg(RegName::FC, 1);
+        state.set_reg(RegName::FZ, 0);
         state.set_reg(RegName::I, 0xFFFF);
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap();
         assert_eq!(len, 1);
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.pc(), 1);
+        assert_eq!(state.get_reg(RegName::FC), 1, "WAIT should preserve C");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should preserve Z");
     }
 
     #[test]

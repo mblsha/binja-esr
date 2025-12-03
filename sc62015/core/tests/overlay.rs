@@ -1,3 +1,5 @@
+// PY_SOURCE: pce500/tests/test_peripherals.py
+// PY_SOURCE: pce500/tests/test_lcd_read_parity.py
 use sc62015_core::keyboard::KeyboardMatrix;
 use sc62015_core::memory::MemoryImage;
 

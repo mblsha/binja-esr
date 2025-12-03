@@ -1,3 +1,4 @@
+// PY_SOURCE: sc62015/pysc62015/instr/opcode_table.py
 //! Opcode table scaffolding for LLAMA.
 //!
 //! This mirrors the structure of `sc62015/pysc62015/instr/opcode_table.py`

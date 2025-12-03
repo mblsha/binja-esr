@@ -54,6 +54,10 @@ impl PerfettoTracer {
         }
     }
 
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
     fn ts(&self, instr_index: u64, substep: u64) -> i64 {
         (instr_index
             .saturating_mul(self.units_per_instr)

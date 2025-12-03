@@ -292,14 +292,15 @@ impl KeyboardMatrix {
         1
     }
 
-    fn log_fifo_write(addr: u32, value: u8) {
-        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-            if let Some(tracer) = guard.as_mut() {
-                let seq = HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
-                tracer.record_mem_write(seq, 0, addr, value as u32, "external", 8);
-            }
+fn log_fifo_write(addr: u32, value: u8) {
+    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+        if let Some(tracer) = guard.as_mut() {
+            let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                .unwrap_or_else(|| (HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed), 0));
+            tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
         }
     }
+}
 
     pub fn write_fifo_to_memory(&self, memory: &mut MemoryImage) {
         let mut idx = self.fifo_head;
@@ -319,21 +320,27 @@ impl KeyboardMatrix {
         Self::log_fifo_write(FIFO_HEAD_ADDR, self.fifo_head as u8);
         memory.write_external_byte(FIFO_TAIL_ADDR, self.fifo_tail as u8);
         Self::log_fifo_write(FIFO_TAIL_ADDR, self.fifo_tail as u8);
-        if self.keyi_latch && self.fifo_count > 0 {
-            if let Some(isr) = memory.read_internal_byte(0xFC) {
-                if (isr & 0x04) == 0 {
-                    memory.write_internal_byte(0xFC, isr | 0x04);
-                    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            let seq = HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
-                            tracer.record_mem_write(
-                                seq,
-                                0,
-                                crate::INTERNAL_MEMORY_START + 0xFC,
-                                (isr | 0x04) as u32,
-                                "internal",
-                                8,
-                            );
+            if self.keyi_latch && self.fifo_count > 0 {
+                if let Some(isr) = memory.read_internal_byte(0xFC) {
+                    if (isr & 0x04) == 0 {
+                        memory.write_internal_byte(0xFC, isr | 0x04);
+                        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                            if let Some(tracer) = guard.as_mut() {
+                                let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                                    .unwrap_or_else(|| {
+                                        (
+                                            HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed),
+                                            0,
+                                        )
+                                    });
+                                tracer.record_mem_write(
+                                    seq,
+                                    pc,
+                                    crate::INTERNAL_MEMORY_START + 0xFC,
+                                    (isr | 0x04) as u32,
+                                    "internal",
+                                    8,
+                                );
                         }
                     }
                 }

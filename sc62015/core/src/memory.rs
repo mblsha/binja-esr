@@ -205,6 +205,18 @@ impl MemoryImage {
         if let Some(index) = Self::internal_index(address) {
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
+            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                        .unwrap_or_else(|| {
+                            (
+                                HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed),
+                                0,
+                            )
+                        });
+                    tracer.record_mem_write(seq, pc, address, value as u32, "internal", 8);
+                }
+            }
             return;
         }
         if self.is_read_only_range(address, 1) {
@@ -296,10 +308,16 @@ impl MemoryImage {
                     .push((INTERNAL_MEMORY_START + offset, value));
                 if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
-                        let seq = HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+                        let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                            .unwrap_or_else(|| {
+                                (
+                                    HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed),
+                                    0,
+                                )
+                            });
                         tracer.record_mem_write(
                             seq,
-                            0,
+                            pc,
                             INTERNAL_MEMORY_START + offset,
                             value as u32,
                             "internal",

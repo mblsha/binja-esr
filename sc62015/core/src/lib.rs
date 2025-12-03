@@ -33,6 +33,8 @@ pub use snapshot::{
 };
 pub use timer::TimerContext;
 
+use crate::llama::eval::LlamaBus;
+
 pub type Result<T> = std::result::Result<T, CoreError>;
 
 #[derive(Debug, Error)]
@@ -269,6 +271,7 @@ pub struct CoreRuntime {
     pub memory: MemoryImage,
     pub state: LlamaState,
     pub fast_mode: bool,
+    executor: crate::llama::eval::LlamaExecutor,
 }
 
 impl Default for CoreRuntime {
@@ -284,6 +287,7 @@ impl CoreRuntime {
             memory: MemoryImage::new(),
             state: LlamaState::new(),
             fast_mode: false,
+            executor: crate::llama::eval::LlamaExecutor::new(),
         }
     }
 
@@ -295,11 +299,37 @@ impl CoreRuntime {
         }
     }
 
-    pub fn step(&mut self, _instructions: usize) -> Result<()> {
-        let pc = self.state.get_reg(RegName::PC);
-        self.state.set_pc(pc.wrapping_add(1) & ADDRESS_MASK);
-        self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
-        self.metadata.cycle_count = self.metadata.cycle_count.wrapping_add(1);
+    pub fn step(&mut self, instructions: usize) -> Result<()> {
+        // Execute real instructions through the LLAMA evaluator instead of bumping PC.
+        struct RuntimeBus<'a> {
+            mem: &'a mut MemoryImage,
+        }
+        impl<'a> LlamaBus for RuntimeBus<'a> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.mem.load(addr, bits).unwrap_or(0)
+            }
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                let _ = self.mem.store(addr, bits, value);
+            }
+            fn resolve_emem(&mut self, base: u32) -> u32 {
+                base
+            }
+            fn wait_cycles(&mut self, _cycles: u32) {}
+        }
+
+        let mut bus = RuntimeBus { mem: &mut self.memory };
+        for _ in 0..instructions {
+            if self.state.is_halted() {
+                break;
+            }
+            let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+            let opcode = bus.load(pc, 8) as u8;
+            if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
+                return Err(CoreError::Other(format!("execute opcode 0x{opcode:02X}: {e}")));
+            }
+            self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
+            self.metadata.cycle_count = self.metadata.cycle_count.wrapping_add(1);
+        }
         Ok(())
     }
 

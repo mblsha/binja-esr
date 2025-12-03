@@ -1,3 +1,5 @@
+// PY_SOURCE: pce500/tests/test_keyboard_handler.py
+// PY_SOURCE: pce500/tests/test_keyboard_matrix.py
 use sc62015_core::keyboard::KeyboardMatrix;
 use sc62015_core::memory::MemoryImage;
 

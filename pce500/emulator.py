@@ -5,7 +5,7 @@ import os
 import time
 import zipfile
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
@@ -1497,7 +1497,8 @@ class PCE500Emulator:
             "magic": SNAPSHOT_MAGIC,
             "version": SNAPSHOT_VERSION,
             "backend": self.cpu.backend,
-            "created": datetime.utcnow().isoformat() + "Z",
+            # Use timezone-aware UTC timestamp to avoid deprecated utcnow().
+            "created": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "instruction_count": int(self.instruction_count),
             "cycle_count": int(self.cycle_count),
             "memory_reads": int(self.memory_read_count),

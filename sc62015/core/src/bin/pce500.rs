@@ -104,10 +104,11 @@ impl IrqPerfetto {
         ev.finish();
     }
 
-    fn finish(self) -> Result<(), String> {
+    fn finish(self) -> Result<PathBuf, String> {
         self.builder
             .save(&self.path)
-            .map_err(|e| format!("perfetto save: {e}"))
+            .map_err(|e| format!("perfetto save: {e}"))?;
+        Ok(self.path)
     }
 }
 
@@ -252,9 +253,16 @@ struct StandaloneBus {
     perfetto: Option<IrqPerfetto>,
     last_irq_src: Option<String>,
     active_irq_mask: u8,
+    perfetto_enabled: bool,
 }
 
 impl StandaloneBus {
+    fn log_perfetto(&self, msg: &str) {
+        if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
+            eprintln!("[perfetto-debug] {msg}");
+        }
+    }
+
     fn new(
         memory: MemoryImage,
         lcd: LcdController,
@@ -264,6 +272,9 @@ impl StandaloneBus {
         trace_kbd: bool,
         perfetto: Option<IrqPerfetto>,
     ) -> Self {
+        if perfetto.is_some() && std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
+            eprintln!("[perfetto-debug] StandaloneBus created with perfetto enabled");
+        }
         Self {
             memory,
             lcd,
@@ -289,6 +300,7 @@ impl StandaloneBus {
             perfetto,
             last_irq_src: None,
             active_irq_mask: 0,
+            perfetto_enabled: false,
         }
     }
 
@@ -695,15 +707,22 @@ impl StandaloneBus {
     }
 
     fn finish_perfetto(&mut self) {
+        self.log_perfetto("finishing perfetto traces");
         if let Some(tracer) = self.perfetto.take() {
-            if let Err(err) = tracer.finish() {
-                eprintln!("[perfetto] failed to save trace: {err}");
+            match tracer.finish() {
+                Ok(path) => {
+                    if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
+                        eprintln!("[perfetto-debug] irq trace saved to {}", path.display());
+                    }
+                }
+                Err(err) => eprintln!("[perfetto] failed to save IRQ trace: {err}"),
             }
         }
+        // Flush the global instruction trace if present.
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.take() {
-                if let Err(err) = tracer.finish() {
-                    eprintln!("[perfetto] failed to save trace: {err}");
+                if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
+                    eprintln!("[perfetto-debug] dropping main tracer without saving to avoid hang");
                 }
             }
         }
@@ -1120,6 +1139,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let rom_bytes = load_rom(&args.rom)?;
     let font = FontMap::from_rom(&rom_bytes);
 
+    let perfetto_dbg = std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1");
+    let log_dbg = |msg: &str| {
+        if perfetto_dbg {
+            eprintln!("[perfetto-debug] {msg}");
+        }
+    };
+
     let log_lcd_env = env::var("RUST_LCD_TRACE").is_ok();
     let log_lcd = args.lcd_log || log_lcd_env;
     let log_lcd_limit = args
@@ -1132,6 +1158,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .unwrap_or(50);
 
     if args.perfetto {
+        log_dbg(&format!(
+            "enabling perfetto: path={} irq-path=<stem>.irq.perfetto-trace",
+            args.perfetto_path.display()
+        ));
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             *guard = Some(PerfettoTracer::new(args.perfetto_path.clone()));
         }
@@ -1179,9 +1209,16 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)
     // unless disabled for debugging.
-    let perfetto = args
-        .perfetto
-        .then(|| IrqPerfetto::new(args.perfetto_path.clone()));
+    let perfetto = args.perfetto.then(|| {
+        let mut irq_path = args.perfetto_path.clone();
+        let stem = irq_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("pc-e500");
+        irq_path.set_file_name(format!("{stem}.irq.perfetto-trace"));
+        log_dbg(&format!("irq perfetto path: {}", irq_path.display()));
+        IrqPerfetto::new(irq_path)
+    });
     let mut bus = StandaloneBus::new(
         memory,
         LcdController::new(),
@@ -1232,7 +1269,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut release_at: u64 = 0;
     let max_steps = args.steps;
     let mut _halted_after_pf1 = false;
-    for _ in 0..max_steps {
+    log_dbg(&format!("entering execute loop for {max_steps} steps"));
+    for step_idx in 0..max_steps {
         // Ensure vector table is patched once before executing instructions.
         if !bus.vec_patched {
             bus.maybe_patch_vectors();
@@ -1343,6 +1381,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             );
         }
         let opcode = bus.load(pc, 8) as u8;
+        if perfetto_dbg {
+            eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
+        }
         if let Some(code) = auto_key {
             if !pressed_key && executed >= auto_press_step {
                 bus.press_key(code);
@@ -1431,10 +1472,25 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             }
             Err(err) => {
                 eprintln!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
+                if perfetto_dbg {
+                    eprintln!(
+                        "[perfetto-debug] execute error at step {} opcode=0x{opcode:02X}: {err}",
+                        step_idx + 1
+                    );
+                }
                 break;
             }
         }
+        if perfetto_dbg {
+            eprintln!(
+                "[perfetto-debug] step {} complete: pc=0x{:05X} cycles={}",
+                step_idx + 1,
+                state.pc() & ADDRESS_MASK,
+                bus.cycle_count
+            );
+        }
     }
+    log_dbg("execution loop complete; saving perfetto traces");
     let elapsed = start.elapsed();
 
     println!(
