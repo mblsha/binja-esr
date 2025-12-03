@@ -130,7 +130,7 @@ pub trait LlamaBus {
         let addr = INTERNAL_MEMORY_START + offset;
         (self.load(addr, 8) & 0xFF) as u8
     }
-    /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations.
+    /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations (unused for Python parity WAIT).
     fn wait_cycles(&mut self, _cycles: u32) {}
 }
 
@@ -500,17 +500,9 @@ impl LlamaExecutor {
         if reg == RegName::IMR {
             let val = bus.peek_imem(IMEM_IMR_OFFSET) as u32;
             state.set_reg(RegName::IMR, val);
-            if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let instr = PERF_CURRENT_OP.load(Ordering::Relaxed);
-                    let instr_idx = if instr != u64::MAX { Some(instr) } else { None };
-                    tracer.record_imr_read(Some(state.pc()), val as u8, instr_idx);
-                }
-            }
-            val
-        } else {
-            state.get_reg(reg)
+            return val;
         }
+        state.get_reg(reg)
     }
 
     fn read_imm<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
@@ -1731,12 +1723,10 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // WAIT loops down I to zero and leaves flags untouched (Python parity).
-                let wait_cycles = state.get_reg(RegName::I) & mask_for(RegName::I);
-                if wait_cycles > 0 {
-                    bus.wait_cycles(wait_cycles);
-                }
+                // Python WAIT fast-path: zero I and clear flags without advancing timers.
                 state.set_reg(RegName::I, 0);
+                state.set_reg(RegName::FC, 0);
+                state.set_reg(RegName::FZ, 0);
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -2654,8 +2644,8 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
         assert_eq!(state.get_reg(RegName::I), 0);
-        assert_eq!(state.get_reg(RegName::FC), 1, "WAIT should not clear C");
-        assert_eq!(state.get_reg(RegName::FZ), 1, "WAIT should not clear Z");
+        assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
     }
 
     struct WaitBus {
@@ -2677,7 +2667,7 @@ mod tests {
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
-        assert_eq!(bus.spins, 5);
+        assert_eq!(bus.spins, 0);
         assert_eq!(state.get_reg(RegName::I), 0);
     }
 
@@ -3230,15 +3220,15 @@ mod tests {
         bus.mem[0] = 0xEF; // WAIT
         let mut state = LlamaState::new();
         state.set_reg(RegName::FC, 1);
-        state.set_reg(RegName::FZ, 0);
+        state.set_reg(RegName::FZ, 1);
         state.set_reg(RegName::I, 0xFFFF);
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap();
         assert_eq!(len, 1);
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.pc(), 1);
-        assert_eq!(state.get_reg(RegName::FC), 1, "WAIT should preserve C");
-        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should preserve Z");
+        assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
     }
 
     #[test]

@@ -157,14 +157,14 @@ impl LlamaState {
 
     pub fn call_depth_inc(&mut self) {
         self.call_depth = self.call_depth.saturating_add(1);
-        self.call_sub_level = self.call_depth;
+        self.call_sub_level = self.call_sub_level.saturating_add(1);
     }
 
     pub fn call_depth_dec(&mut self) {
         if self.call_depth > 0 {
             self.call_depth -= 1;
         }
-        self.call_sub_level = self.call_depth;
+        // Python call_sub_level is cumulative and does not decrement on RET.
     }
 
     pub fn call_depth(&self) -> u32 {
@@ -221,5 +221,18 @@ mod tests {
         assert_eq!(state.get_reg(RegName::F), 0b1111_1110);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 1);
+    }
+
+    #[test]
+    fn call_sub_level_is_cumulative() {
+        let mut state = LlamaState::new();
+        state.call_depth_inc();
+        state.call_depth_inc();
+        assert_eq!(state.call_depth(), 2);
+        assert_eq!(state.call_sub_level(), 2);
+        state.call_depth_dec();
+        // Python parity: call_sub_level does not decrement on returns.
+        assert_eq!(state.call_depth(), 1);
+        assert_eq!(state.call_sub_level(), 2);
     }
 }

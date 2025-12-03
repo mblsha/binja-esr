@@ -210,30 +210,14 @@ impl TimerContext {
     {
         let (mti, sti) = self.tick_timers(memory, cycle_count);
         let mut key_events = 0usize;
-        let mut fifo_nonempty = false;
         if mti && self.kb_irq_enabled {
-            let (events, fifo_has_data) = keyboard_scan(memory);
+            let (events, _fifo_has_data) = keyboard_scan(memory);
             key_events = events;
-            fifo_nonempty = fifo_has_data;
             if key_events > 0 {
                 if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                     if (isr & 0x04) == 0 {
                         memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
                     }
-                }
-            } else if fifo_nonempty {
-                // Python sets KEYI on MTI even if FIFO already had data.
-                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                    if (isr & 0x04) == 0 {
-                        memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
-                    }
-                }
-            }
-        }
-        if sti && self.kb_irq_enabled && (key_events == 0 && fifo_nonempty) {
-            if let Some(cur) = memory.read_internal_byte(ISR_OFFSET) {
-                if (cur & 0x04) == 0 {
-                    memory.write_internal_byte(ISR_OFFSET, cur | 0x04);
                 }
             }
         }
@@ -362,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn tick_timers_with_keyboard_sets_keyi_when_fifo_already_populated() {
+    fn tick_timers_with_keyboard_does_not_raise_keyi_without_events() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         // No new events, but FIFO already has data -> KEYI should still assert on MTI.
@@ -370,6 +354,6 @@ mod tests {
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true));
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & 0x04, 0x04, "KEYI should assert when FIFO non-empty on MTI");
+        assert_eq!(isr & 0x04, 0x00, "KEYI should remain clear when no new events");
     }
 }
