@@ -36,6 +36,7 @@ pub use timer::TimerContext;
 
 use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::LlamaBus;
+use crate::llama::state::mask_for;
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
@@ -328,22 +329,57 @@ impl CoreRuntime {
             fn wait_cycles(&mut self, _cycles: u32) {}
         }
 
-        let mut bus = RuntimeBus { mem: &mut self.memory };
         for _ in 0..instructions {
             if self.state.is_halted() {
                 break;
             }
-            let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-            let opcode = bus.load(pc, 8) as u8;
-            if let Err(e) = self
-                .executor
-                .execute(opcode, &mut self.state, &mut bus)
             {
-                return Err(CoreError::Other(format!("execute opcode 0x{opcode:02X}: {e}")));
+                let mut bus = RuntimeBus { mem: &mut self.memory };
+                let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                let opcode = bus.load(pc, 8) as u8;
+                if let Err(e) = self
+                    .executor
+                    .execute(opcode, &mut self.state, &mut bus)
+                {
+                    return Err(CoreError::Other(format!("execute opcode 0x{opcode:02X}: {e}")));
+                }
             }
             self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
             // Python emulator counts instructions, not byte-length; keep parity by bumping once per opcode.
             self.metadata.cycle_count = self.metadata.cycle_count.wrapping_add(1);
+            // Advance timers/keyboard each instruction to mirror Python runtime.
+            let cycles = self.metadata.cycle_count;
+            let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                &mut self.memory,
+                cycles,
+                |mem| {
+                    if let Some(kb) = self.keyboard.as_mut() {
+                        let events = kb.scan_tick();
+                        if events > 0 {
+                            kb.write_fifo_to_memory(mem);
+                        }
+                        (events, kb.fifo_len() > 0)
+                    } else {
+                        (0, false)
+                    }
+                },
+            );
+            let fifo_non_empty = self
+                .keyboard
+                .as_ref()
+                .map(|kb| kb.fifo_len() > 0)
+                .unwrap_or(false);
+            if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
+                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                    if (isr & 0x04) == 0 {
+                        self.memory.write_internal_byte(0xFC, isr | 0x04);
+                    }
+                }
+            }
+            if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                self.timer.irq_isr = isr;
+            }
+            self.deliver_pending_irq();
         }
         Ok(())
     }
@@ -463,7 +499,106 @@ impl CoreRuntime {
             .map(|reg| self.state.get_reg(reg) as u8)
             .unwrap_or(0)
     }
+
+    fn push_stack(&mut self, reg: RegName, value: u32, bits: u8) {
+        let bytes = bits.div_ceil(8);
+        let mask = mask_for(reg);
+        let sp = self.state.get_reg(reg) & mask;
+        let new_sp = sp.wrapping_sub(bytes as u32) & mask;
+        for i in 0..bytes {
+            let byte = (value >> (8 * i)) & 0xFF;
+            let _ = self.memory.store(new_sp + i as u32, 8, byte);
+        }
+        self.state.set_reg(reg, new_sp);
+    }
+
+    fn deliver_pending_irq(&mut self) {
+        if !self.timer.irq_pending {
+            return;
+        }
+        let imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(0);
+        let isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(0);
+        if (imr & IMR_MASTER) == 0 {
+            return;
+        }
+        let src = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
+            Some((ISR_ONKI, "ONK"))
+        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+            Some((ISR_KEYI, "KEY"))
+        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
+            Some((ISR_MTI, "MTI"))
+        } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
+            Some((ISR_STI, "STI"))
+        } else {
+            None
+        };
+        let Some((mask, src_name)) = src else { return };
+
+        let pc = self.state.pc() & ADDRESS_MASK;
+        // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
+        self.push_stack(RegName::S, pc, 24);
+        let f = self.state.get_reg(RegName::F) & 0xFF;
+        self.push_stack(RegName::S, f, 8);
+        let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+        let imr_mem = self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF;
+        self.push_stack(RegName::S, imr_mem, 8);
+        let cleared_imr = (imr_mem as u8) & 0x7F;
+        let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
+        self.state.set_reg(RegName::IMR, cleared_imr as u32);
+
+        // Jump to vector.
+        let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
+            | (self
+                .memory
+                .load(INTERRUPT_VECTOR_ADDR + 1, 8)
+                .unwrap_or(0)
+                << 8)
+            | (self
+                .memory
+                .load(INTERRUPT_VECTOR_ADDR + 2, 8)
+                .unwrap_or(0)
+                << 16);
+        self.state.set_pc(vec & ADDRESS_MASK);
+        self.state.set_halted(false);
+
+        // Track interrupt metadata similar to Python snapshot fields.
+        self.timer.in_interrupt = true;
+        self.timer.irq_pending = false;
+        self.timer.irq_source = Some(src_name.to_string());
+        self.timer.interrupt_stack.push(pc);
+        self.timer.last_fired = Some(src_name.to_string());
+        self.timer.irq_isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        // Remember active mask to help RETI-like flows.
+        self.timer.next_interrupt_id = self.timer.next_interrupt_id.saturating_add(1);
+        self.timer.interrupt_stack.push(mask as u32);
+    }
 }
+
+const IMEM_IMR_OFFSET: u32 = 0xFB;
+const IMEM_ISR_OFFSET: u32 = 0xFC;
+const IMR_MASTER: u8 = 0x80;
+const IMR_MTI: u8 = 0x01;
+const IMR_STI: u8 = 0x02;
+const IMR_KEY: u8 = 0x04;
+const IMR_ONK: u8 = 0x08;
+const ISR_MTI: u8 = 0x01;
+const ISR_STI: u8 = 0x02;
+const ISR_KEYI: u8 = 0x04;
+const ISR_ONKI: u8 = 0x08;
+const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
 #[cfg(test)]
 mod tests {
@@ -578,5 +713,17 @@ mod tests {
             rt2.metadata.kb_metrics.is_some(),
             "keyboard metrics should be stored in snapshot metadata"
         );
+    }
+
+    #[test]
+    fn step_ticks_timer_and_updates_isr() {
+        let mut rt = CoreRuntime::new();
+        // Enable timer with immediate MTI fire on first instruction boundary.
+        rt.timer = TimerContext::new(true, 1, 0);
+        let res = rt.step(1);
+        assert!(res.is_ok(), "step should execute without error");
+        let isr = rt.memory.read_internal_byte(0xFC).unwrap_or(0);
+        assert_eq!(isr & 0x01, 0x01, "MTI should set ISR bit after first step");
+        assert_eq!(rt.metadata.cycle_count, 1);
     }
 }

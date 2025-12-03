@@ -11,6 +11,7 @@ pub struct PerfettoTracer {
     exec_track: TrackId,
     timeline_track: TrackId,
     mem_track: TrackId,
+    instr_counter_track: TrackId,
     imr_track: TrackId,
     imr_zero_counter: TrackId,
     imr_nonzero_counter: TrackId,
@@ -33,6 +34,7 @@ impl PerfettoTracer {
         // Optional visual parity: emit a parallel Execution track like the Python tracer does.
         let timeline_track = builder.add_thread("Execution");
         let mem_track = builder.add_thread("MemoryWrites");
+        let instr_counter_track = builder.add_counter_track("instructions", Some("count"), None);
         let imr_track = builder.add_thread("IMR");
         let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);
         let imr_nonzero_counter =
@@ -46,6 +48,7 @@ impl PerfettoTracer {
             exec_track,
             timeline_track,
             mem_track,
+            instr_counter_track,
             imr_track,
             imr_zero_counter,
             imr_nonzero_counter,
@@ -131,6 +134,13 @@ impl PerfettoTracer {
             ]);
             exec.finish();
         }
+
+        // Keep an explicit instruction counter aligned to InstructionTrace.
+        self.builder.update_counter(
+            self.instr_counter_track,
+            instr_index as f64 + 1.0,
+            self.ts(instr_index, 0),
+        );
     }
 
     pub fn record_mem_write(
@@ -209,38 +219,65 @@ impl PerfettoTracer {
     }
 
     /// IMEM effective address diagnostics to align with Python tracing.
-    pub fn record_imem_addr(&mut self, mode: &str, base: u32, bp: u32, px: u32, py: u32) {
+    pub fn record_imem_addr(
+        &mut self,
+        mode: &str,
+        base: u32,
+        bp: u32,
+        px: u32,
+        py: u32,
+        op_index: Option<u64>,
+        pc: Option<u32>,
+    ) {
+        let ts = op_index.map(|idx| self.ts(idx, 0)).unwrap_or(0);
         let mut ev =
             self.builder
-                .add_instant_event(self.exec_track, "IMEM_EffectiveAddr".to_string(), 0);
+                .add_instant_event(self.exec_track, "IMEM_EffectiveAddr".to_string(), ts);
         ev.add_annotation("mode", mode.to_string());
         ev.add_annotation("base", base as u64);
         ev.add_annotation("bp", bp as u64);
         ev.add_annotation("px", px as u64);
         ev.add_annotation("py", py as u64);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", pc_val as u64);
+        }
+        if let Some(idx) = op_index {
+            ev.add_annotation("op_index", idx);
+        }
         ev.finish();
     }
 
     /// Lightweight instant for IMEM/ISR diagnostics (used by test hooks).
-    pub fn record_keyi_set(&mut self, addr: u32, value: u8) {
+    pub fn record_keyi_set(&mut self, addr: u32, value: u8, op_index: Option<u64>, pc: Option<u32>) {
+        let ts = op_index.map(|idx| self.ts(idx, 0)).unwrap_or(0);
         let mut ev = self
             .builder
-            .add_instant_event(self.exec_track, "KEYI_Set".to_string(), 0);
+            .add_instant_event(self.exec_track, "KEYI_Set".to_string(), ts);
         ev.add_annotation("offset", addr as u64);
         ev.add_annotation("value", value as u64);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", pc_val as u64);
+        }
+        if let Some(idx) = op_index {
+            ev.add_annotation("op_index", idx);
+        }
         ev.finish();
     }
 
     /// Generic KIO read hook for KOL/KOH/KIL visibility.
-    pub fn record_kio_read(&mut self, pc: Option<u32>, offset: u8, value: u8) {
+    pub fn record_kio_read(&mut self, pc: Option<u32>, offset: u8, value: u8, op_index: Option<u64>) {
+        let ts = op_index.map(|idx| self.ts(idx, 0)).unwrap_or(0);
         let mut ev = self
             .builder
-            .add_instant_event(self.exec_track, "read@KIO".to_string(), 0);
+            .add_instant_event(self.exec_track, "read@KIO".to_string(), ts);
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", pc_val as u64);
         }
         ev.add_annotation("offset", offset as u64);
         ev.add_annotation("value", value as u64);
+        if let Some(idx) = op_index {
+            ev.add_annotation("op_index", idx);
+        }
         ev.finish();
     }
 

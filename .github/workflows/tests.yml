@@ -45,7 +45,14 @@ jobs:
         FORCE_BINJA_MOCK: 1
       run: |
         uv run python tools/llama_parity_sweep.py --emit-traces --trace-prefix trace_ref
-        uv run python scripts/compare_perfetto_traces.py trace_ref_python.trace trace_ref_llama.trace
+        uv run python scripts/compare_perfetto_traces.py --compare-irq trace_ref_python.trace trace_ref_llama.trace
+
+    - name: Run stress parity sweep (immediates)
+      env:
+        FORCE_BINJA_MOCK: 1
+      run: |
+        uv run python tools/llama_parity_sweep.py --limit 1024 --stress-immediates --emit-traces --trace-prefix ci_stress
+        uv run python scripts/compare_perfetto_traces.py --compare-irq ci_stress_python.trace ci_stress_llama.trace
 
     - name: Run contract harness parity tests
       env:

@@ -27,6 +27,7 @@ pub struct LlamaState {
     halted: bool,
     call_depth: u32,
     call_sub_level: u32,
+    call_page_stack: Vec<u32>,
 }
 
 impl LlamaState {
@@ -36,6 +37,7 @@ impl LlamaState {
             halted: false,
             call_depth: 0,
             call_sub_level: 0,
+            call_page_stack: Vec::new(),
         }
     }
 
@@ -153,6 +155,7 @@ impl LlamaState {
         self.halted = false;
         self.call_depth = 0;
         self.call_sub_level = 0;
+        self.call_page_stack.clear();
     }
 
     pub fn call_depth_inc(&mut self) {
@@ -179,6 +182,15 @@ impl LlamaState {
 
     pub fn set_call_sub_level(&mut self, value: u32) {
         self.call_sub_level = value;
+    }
+
+    /// Track the 20-bit page of near CALL sites so RET can reconstruct the full return PC.
+    pub fn push_call_page(&mut self, page: u32) {
+        self.call_page_stack.push(page & 0xFF_0000);
+    }
+
+    pub fn pop_call_page(&mut self) -> Option<u32> {
+        self.call_page_stack.pop()
     }
 }
 
@@ -236,5 +248,15 @@ mod tests {
         // Python parity: call_sub_level tracks current depth and should decrement on returns.
         assert_eq!(state.call_depth(), 1);
         assert_eq!(state.call_sub_level(), 1);
+    }
+
+    #[test]
+    fn call_page_stack_tracks_pages() {
+        let mut state = LlamaState::new();
+        state.push_call_page(0x120000);
+        state.push_call_page(0xAB0000);
+        assert_eq!(state.pop_call_page(), Some(0xAB0000));
+        assert_eq!(state.pop_call_page(), Some(0x120000));
+        assert_eq!(state.pop_call_page(), None);
     }
 }

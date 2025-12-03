@@ -595,7 +595,7 @@ impl StandaloneBus {
     fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
-                tracer.record_kio_read(Some(pc), offset, value);
+                tracer.record_kio_read(Some(pc), offset, value, None);
             }
         }
     }
@@ -653,16 +653,26 @@ impl StandaloneBus {
         state.set_pc(vec & ADDRESS_MASK);
         state.set_halted(false);
         self.in_interrupt = true;
-        let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
+        // Deliver highest-priority pending respecting masks.
+        let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
             (Some("ONK"), ISR_ONKI)
-        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY) != 0 {
             (Some("KEY"), ISR_KEYI)
-        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
+        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI) != 0 {
             (Some("MTI"), ISR_MTI)
-        } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
+        } else if (isr & ISR_STI != 0) && (imr & IMR_STI) != 0 {
             (Some("STI"), ISR_STI)
         } else {
-            (None, 0)
+            // No deliverable IRQ because of masks; unwind stack effects to avoid corruption.
+            let _ = self.memory.store(imr_addr, 8, imr as u32);
+            state.set_reg(RegName::IMR, u32::from(imr));
+            let mut sp = state.get_reg(RegName::S);
+            sp = sp.wrapping_add(1); // IMR
+            sp = sp.wrapping_add(1); // F
+            sp = sp.wrapping_add(3); // PC (24-bit)
+            state.set_reg(RegName::S, sp);
+            self.in_interrupt = false;
+            return;
         };
         self.last_irq_src = src.map(|s| s.to_string());
         self.active_irq_mask = mask;
@@ -817,7 +827,12 @@ impl LlamaBus for StandaloneBus {
                     {
                         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                             if let Some(tracer) = guard.as_mut() {
-                                tracer.record_kio_read(Some(self.last_pc), offset as u8, byte);
+                                tracer.record_kio_read(
+                                    Some(self.last_pc),
+                                    offset as u8,
+                                    byte,
+                                    Some(self.instr_index),
+                                );
                             }
                         }
                     }

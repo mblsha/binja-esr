@@ -600,7 +600,7 @@ impl LlamaBus for LlamaPyBus {
                 if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
                     if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                         if let Some(tracer) = guard.as_mut() {
-                            tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8);
+                            tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
                             tracer_ok = true;
                         }
                     }
@@ -636,6 +636,29 @@ impl LlamaBus for LlamaPyBus {
         }
     }
 
+    fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+        // Try to read IMEM without emitting Python-side tracer callbacks.
+        Python::with_gil(|py| {
+            let bound = self.memory.bind(py);
+            // Prefer an internal silent helper if available.
+            if let Ok(obj) = bound.getattr("internal_memory") {
+                if let Ok(method) = obj.getattr("read_byte") {
+                    if let Ok(val) = method.call1((INTERNAL_MEMORY_START + offset,)) {
+                        if let Ok(byte) = val.extract::<u8>() {
+                            return byte;
+                        }
+                    }
+                }
+            }
+            // Fallback to the standard read_byte path.
+            bound
+                .call_method1("read_byte", (INTERNAL_MEMORY_START + offset,))
+                .ok()
+                .and_then(|v| v.extract::<u8>().ok())
+                .unwrap_or(0)
+        })
+    }
+
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
         // Mirror KIO writes into the Python tracer so overlays see LLAMA traffic.
         let absolute = addr & ADDRESS_MASK;
@@ -650,7 +673,7 @@ impl LlamaBus for LlamaPyBus {
                 });
                 if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
-                        tracer.record_kio_read(Some(self.pc), offset as u8, value as u8);
+                        tracer.record_kio_read(Some(self.pc), offset as u8, value as u8, None);
                     }
                 }
             } else if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET | IMEM_SCR_OFFSET) {

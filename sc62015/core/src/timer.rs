@@ -176,7 +176,6 @@ impl TimerContext {
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
                 }
             }
-            self.irq_pending = true;
             self.irq_source = if fired_mti && fired_sti {
                 Some("MTI+STI".to_string())
             } else if fired_mti {
@@ -192,7 +191,19 @@ impl TimerContext {
             self.irq_isr = memory
                 .read_internal_byte(ISR_OFFSET)
                 .unwrap_or(self.irq_isr);
-            self.emit_irq_trace(fired_mti, fired_sti, memory);
+            // Respect IMR gating when IMR deviates from the default all-enabled state.
+            let master = (self.irq_imr & 0x80) != 0;
+            let mti_enabled = (self.irq_imr & 0x01) != 0;
+            let sti_enabled = (self.irq_imr & 0x02) != 0;
+            let gated = self.irq_imr != 0xFF;
+            self.irq_pending = if gated {
+                (fired_mti && master && mti_enabled) || (fired_sti && master && sti_enabled)
+            } else {
+                fired_mti || fired_sti
+            };
+            if self.irq_pending {
+                self.emit_irq_trace(fired_mti, fired_sti, memory);
+            }
         }
         (fired_mti, fired_sti)
     }
@@ -331,6 +342,26 @@ mod tests {
         timer.tick_timers(&mut mem, 1);
         assert_eq!(timer.irq_imr, 0xAA);
         assert_eq!(timer.irq_isr & 0x01, 0x01);
+    }
+
+    #[test]
+    fn tick_timers_respects_imr_master_and_bits_for_pending() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        // IMR master cleared -> no pending even if MTI fired.
+        mem.write_internal_byte(0xFB, 0x00);
+        let (_mti, _sti) = timer.tick_timers(&mut mem, 1);
+        assert!(!timer.irq_pending, "irq_pending should respect IMR master");
+
+        // Enable master but mask out MTI bit -> still not pending.
+        mem.write_internal_byte(0xFB, 0x80);
+        timer.tick_timers(&mut mem, 2);
+        assert!(!timer.irq_pending, "irq_pending should respect MTI mask");
+
+        // Enable MTI bit -> should pend on next fire.
+        mem.write_internal_byte(0xFB, 0x81);
+        timer.tick_timers(&mut mem, 3);
+        assert!(timer.irq_pending, "irq_pending should set when master+MTI enabled");
     }
 
     #[test]

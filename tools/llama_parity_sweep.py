@@ -180,8 +180,19 @@ def emit_perfetto_traces(prefix: Path) -> None:
     from sc62015.pysc62015 import CPU
     from pce500.tracing.perfetto_tracing import tracer as perfetto_tracer
 
-    # Small deterministic sequence: NOP + simple writes (avoid unimplemented LLIL).
-    program = bytes([0x00, 0x00, 0x00, 0x00])
+    # Small deterministic sequence with simple ALU and IMEM writes (all supported by both backends):
+    # 0: NOP
+    # 1: MV A,0x12
+    # 3: ADD A,0x01
+    # 5: MV IMem8,0x34 (offset 0x10)
+    # 8: MV IMem8,A   (offset 0x11)
+    program = bytes([
+        0x00,                   # NOP
+        0x08, 0x12,             # MV A,0x12
+        0x40, 0x01,             # ADD A,0x01
+        0xCC, 0x10, 0x34,       # MV IMem8,0x34 @0x10
+        0xA0, 0x11,             # MV IMem8,A @0x11
+    ])
 
     def _run_trace(backend: str, path: Path) -> None:
         perfetto_tracer.stop()
