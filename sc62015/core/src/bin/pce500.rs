@@ -14,7 +14,6 @@ use sc62015_core::{
     memory::MemoryImage,
     timer::TimerContext,
     ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER, PerfettoTracer,
-    collect_registers,
 };
 use std::collections::HashMap;
 use std::env;
@@ -41,12 +40,14 @@ const VEC_RANGE_START: u32 = 0x00BFCC6;
 const VEC_RANGE_END: u32 = 0x00BFCCC;
 const HANDLER_JP_Y_PC: u32 = 0x0F2053;
 const ISR_KEYI: u8 = 0x04;
+const ISR_ONKI: u8 = 0x08;
 const ISR_MTI: u8 = 0x01;
 const ISR_STI: u8 = 0x02;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
+const IMR_ONK: u8 = 0x08;
 const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const PF2_MENU_PC: u32 = 0x0F1FBF; // observed Python PC after PF2 menu renders
@@ -135,7 +136,7 @@ struct Args {
     pf2: bool,
 
     /// Optional explicit matrix code to auto-press (overrides --pf1/--pf2). Accepts
-    /// 'pf1', 'pf2', decimal, or hex (e.g., 0x56).
+    /// 'pf1', 'pf2', 'on', decimal, or hex (e.g., 0x56).
     #[arg(long, value_name = "CODE")]
     auto_key: Option<String>,
 
@@ -241,6 +242,7 @@ struct StandaloneBus {
     in_interrupt: bool,
     delivered_irq_count: u32,
     pending_kil: bool,
+    pending_onk: bool,
     last_kbd_access: Option<String>,
     kil_reads: u32,
     rom_kil_reads: u32,
@@ -255,6 +257,12 @@ struct StandaloneBus {
     active_irq_mask: u8,
     #[allow(dead_code)]
     perfetto_enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutoKeyKind {
+    Matrix(u8),
+    OnKey,
 }
 
 impl StandaloneBus {
@@ -289,6 +297,7 @@ impl StandaloneBus {
             in_interrupt: false,
             delivered_irq_count: 0,
             pending_kil: false,
+            pending_onk: false,
             last_kbd_access: None,
             kil_reads: 0,
             rom_kil_reads: 0,
@@ -451,6 +460,26 @@ impl StandaloneBus {
         self.keyboard.release_matrix_code(code, &mut self.memory);
     }
 
+    fn press_on_key(&mut self) {
+        // ON key is not part of the matrix; assert ONK input and pending IRQ.
+        let ssr = self.memory.read_internal_byte(0xFF).unwrap_or(0);
+        let new_ssr = ssr | 0x08;
+        self.memory.write_internal_byte(0xFF, new_ssr);
+        if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+            if (isr & ISR_ONKI) == 0 {
+                self.memory.write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+            }
+        }
+        self.pending_onk = true;
+    }
+
+    fn clear_on_key(&mut self) {
+        let ssr = self.memory.read_internal_byte(0xFF).unwrap_or(0);
+        let new_ssr = ssr & !0x08;
+        self.memory.write_internal_byte(0xFF, new_ssr);
+        self.pending_onk = false;
+    }
+
     fn log_irq_event<'a>(
         &mut self,
         name: &str,
@@ -530,14 +559,22 @@ impl StandaloneBus {
                 return false;
             }
         }
+        // ONK is level-triggered like KEYI; if latched and cleared while masked, reassert.
+        if self.pending_onk && (isr & ISR_ONKI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+            isr |= ISR_ONKI;
+        }
         // Master bit set means interrupts enabled. Keyboard IRQs are level-triggered, so allow
         // them to pend even if IRM is still masked to mirror the Python emulator.
-        let irm_enabled = (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0);
+        let irm_enabled =
+            (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0) || (isr & ISR_ONKI != 0);
         if !irm_enabled {
             return false;
         }
         // Per-bit masks are "enabled when set".
-        let pending = ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
+        let pending = ((isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0))
+            || ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
             || ((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
             || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0));
         // If IMR masks everything, remember pending ISRs so we can restore on RETI.
@@ -616,7 +653,9 @@ impl StandaloneBus {
         state.set_pc(vec & ADDRESS_MASK);
         state.set_halted(false);
         self.in_interrupt = true;
-        let (src, mask) = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+        let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
+            (Some("ONK"), ISR_ONKI)
+        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
             (Some("KEY"), ISR_KEYI)
         } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
             (Some("MTI"), ISR_MTI)
@@ -765,11 +804,6 @@ impl LlamaBus for StandaloneBus {
                     return 0;
                 }
             }
-            // E-port inputs (PEI1/PEI2) are host-driven in Python; return 0 when not bridged.
-            if matches!(offset, 0xF5 | 0xF6) {
-                self.trace_kbd_access("read-eport", addr, offset, bits, 0);
-                return 0;
-            }
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
                     IMEM_KIL_OFFSET => self.kil_reads = self.kil_reads.saturating_add(1),
@@ -823,11 +857,24 @@ impl LlamaBus for StandaloneBus {
                     | IMEM_KOH_OFFSET
                     | IMEM_IMR_OFFSET
                     | IMEM_ISR_OFFSET
+                    | 0xF5
+                    | 0xF6
             ) && self.trace_kbd
             {
                 // Trace fallthrough reads (handled by memory, not keyboard).
                 if let Some(val) = self.memory.read_internal_byte(offset) {
                     self.trace_kbd_access("read-fallthrough", addr, offset, bits, val as u32);
+                }
+            }
+        }
+        if MemoryImage::is_internal(addr) {
+            if let Some(offset) = MemoryImage::internal_offset(addr) {
+                if offset < 0x10 && bits == 8 {
+                    let lcd_addr = 0x02000 + offset;
+                    if let Some(byte) = self.lcd.read(lcd_addr) {
+                        return byte as u32;
+                    }
+                    return self.lcd.read_placeholder(lcd_addr);
                 }
             }
         }
@@ -873,11 +920,6 @@ impl LlamaBus for StandaloneBus {
             }
         }
         if let Some(offset) = kbd_offset {
-            if matches!(offset, 0xF5 | 0xF6) {
-                // Ignore writes to host-driven E-port inputs for parity.
-                self.trace_kbd_access("write-eport", addr, offset, bits, value);
-                return;
-            }
             if self
                 .keyboard
                 .handle_write(offset, value as u8, &mut self.memory)
@@ -911,6 +953,26 @@ impl LlamaBus for StandaloneBus {
                     }
                 }
                 return;
+            }
+        }
+        if MemoryImage::is_internal(addr) {
+            if let Some(offset) = MemoryImage::internal_offset(addr) {
+                if offset < 0x10 && bits == 8 {
+                    let lcd_addr = 0x02000 + offset;
+                    self.lcd.write(lcd_addr, value as u8);
+                    self.lcd_writes = self.lcd_writes.saturating_add(1);
+                    if self.log_lcd && self.log_lcd_count < self.log_lcd_limit {
+                        println!(
+                            "[lcd-write] addr=0x{addr:05X} value=0x{val:02X} count={cnt}",
+                            addr = lcd_addr,
+                            val = value as u8,
+                            cnt = self.lcd_writes
+                        );
+                        self.log_lcd_count += 1;
+                    }
+                    self.trace_mem_write(lcd_addr, bits, value);
+                    return;
+                }
             }
         }
         if self.lcd.handles(addr) {
@@ -1065,20 +1127,23 @@ fn load_rom(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(data)
 }
 
-fn parse_matrix_code(raw: &str) -> Result<Option<u8>, Box<dyn Error>> {
+fn parse_matrix_code(raw: &str) -> Result<Option<AutoKeyKind>, Box<dyn Error>> {
     let lowered = raw.trim().to_lowercase();
     if lowered == "pf1" {
-        return Ok(Some(PF1_CODE));
+        return Ok(Some(AutoKeyKind::Matrix(PF1_CODE)));
     }
     if lowered == "pf2" {
-        return Ok(Some(PF2_CODE));
+        return Ok(Some(AutoKeyKind::Matrix(PF2_CODE)));
+    }
+    if lowered == "on" || lowered == "key_on" || lowered == "onk" {
+        return Ok(Some(AutoKeyKind::OnKey));
     }
     if let Some(hex) = lowered.strip_prefix("0x") {
         let value = u8::from_str_radix(hex, 16)?;
-        return Ok(Some(value));
+        return Ok(Some(AutoKeyKind::Matrix(value)));
     }
     if let Ok(value) = lowered.parse::<u8>() {
-        return Ok(Some(value));
+        return Ok(Some(AutoKeyKind::Matrix(value)));
     }
     Err(format!("could not parse matrix code '{raw}'").into())
 }
@@ -1135,9 +1200,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     let auto_key = if args.pf1 {
-        Some(PF1_CODE)
+        Some(AutoKeyKind::Matrix(PF1_CODE))
     } else if args.pf2 {
-        Some(PF2_CODE)
+        Some(AutoKeyKind::Matrix(PF2_CODE))
     } else if let Some(raw) = args.auto_key.as_ref() {
         parse_matrix_code(raw)?
     } else {
@@ -1353,14 +1418,22 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
         if let Some(code) = auto_key {
             if !pressed_key && executed >= auto_press_step {
-                bus.press_key(code);
-                if args.force_pf2_jump && code == PF2_CODE {
-                    state.set_pc(PF2_MENU_PC);
+                match code {
+                    AutoKeyKind::Matrix(code) => {
+                        bus.press_key(code);
+                        if args.force_pf2_jump && code == PF2_CODE {
+                            state.set_pc(PF2_MENU_PC);
+                        }
+                    }
+                    AutoKeyKind::OnKey => bus.press_on_key(),
                 }
                 pressed_key = true;
                 release_at = executed + auto_release_after;
             } else if pressed_key && executed >= release_at {
-                bus.release_key(code);
+                match code {
+                    AutoKeyKind::Matrix(code) => bus.release_key(code),
+                    AutoKeyKind::OnKey => bus.clear_on_key(),
+                }
                 pressed_key = false;
             }
         }
@@ -1399,32 +1472,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                         if bus.active_irq_mask == ISR_KEYI {
                             bus.pending_kil = false;
                         }
+                        if bus.active_irq_mask == ISR_ONKI {
+                            bus.pending_onk = false;
+                        }
                     }
                     bus.in_interrupt = false;
                     bus.last_irq_src = None;
                     bus.active_irq_mask = 0;
-                }
-                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let regs = collect_registers(&state);
-                        let mem_imr = bus
-                            .memory
-                            .read_internal_byte_silent(IMEM_IMR_OFFSET)
-                            .unwrap_or_else(|| bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0));
-                        let mem_isr = bus
-                            .memory
-                            .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                            .unwrap_or_else(|| bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0));
-                        tracer.record_regs(
-                            executed,
-                            pc,
-                            state.pc(),
-                            opcode,
-                            &regs,
-                            mem_imr,
-                            mem_isr,
-                        );
-                    }
                 }
                 bus.cycle_count = bus.cycle_count.wrapping_add(1);
                 executed += 1;
@@ -1566,5 +1620,73 @@ fn main() {
     if let Err(err) = run(args) {
         eprintln!("fatal: {err}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_key_sets_isr_and_triggers_pending_irq() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            LcdController::new(),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+        );
+        // Enable ONK in IMR and set master bit.
+        bus.memory
+            .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_ONK);
+        // Assert ONK input and ISR bit.
+        bus.press_on_key();
+        let isr = bus
+            .memory
+            .read_internal_byte(super::IMEM_ISR_OFFSET)
+            .unwrap_or(0);
+        assert_ne!(isr & super::ISR_ONKI, 0, "ONKI should latch after ON key");
+        // irq_pending should fire with ONK masked in.
+        assert!(bus.irq_pending(), "ONK should make IRQ pending when unmasked");
+        // Simulate RETI clearing the active IRQ mask.
+        bus.active_irq_mask = super::ISR_ONKI;
+        if let Some(cur_isr) = bus.memory.read_internal_byte(super::IMEM_ISR_OFFSET) {
+            bus.memory
+                .write_internal_byte(super::IMEM_ISR_OFFSET, cur_isr & !bus.active_irq_mask);
+        }
+        bus.pending_onk = true;
+        // irq_pending should reassert ONKI when pending_onk is true.
+        assert!(bus.irq_pending(), "pending_onk should reassert ONKI after clear");
+    }
+
+    #[test]
+    fn deliver_irq_prefers_onk_when_masked_in() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            LcdController::new(),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+        );
+        let mut state = LlamaState::new();
+        // Enable master + ONK mask.
+        bus.memory
+            .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_ONK);
+        // Assert ONK pending.
+        bus.memory
+            .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_ONKI);
+        bus.pending_onk = true;
+        assert!(bus.irq_pending(), "ONK pending should signal irq_pending");
+        bus.deliver_irq(&mut state);
+        assert_eq!(
+            bus.active_irq_mask, super::ISR_ONKI,
+            "ONK should be the active IRQ mask"
+        );
+        assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));
+        assert!(bus.in_interrupt);
     }
 }

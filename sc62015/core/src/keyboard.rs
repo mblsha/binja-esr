@@ -159,7 +159,7 @@ pub struct KeyboardMatrix {
     keyi_latch: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardSnapshot {
     pub kol: u8,
     pub koh: u8,
@@ -448,6 +448,63 @@ fn log_fifo_write(addr: u32, value: u8) {
         }
     }
 
+    pub fn load_snapshot_state(&mut self, snapshot: &KeyboardSnapshot) {
+        self.kol = snapshot.kol;
+        self.koh = snapshot.koh & 0x0F;
+        self.kil_latch = snapshot.kil_latch;
+        self.fifo_storage = [0; FIFO_SIZE];
+        for (idx, byte) in snapshot.fifo.iter().enumerate().take(FIFO_SIZE) {
+            self.fifo_storage[idx] = *byte;
+        }
+        self.fifo_head = snapshot.head.min(FIFO_SIZE.saturating_sub(1));
+        self.fifo_tail = snapshot.tail.min(FIFO_SIZE.saturating_sub(1));
+        self.fifo_count = snapshot.fifo_len.min(FIFO_SIZE);
+        self.irq_count = snapshot.irq_count;
+        self.strobe_count = snapshot.strobe_count;
+        self.column_histogram = {
+            let mut hist = [0u32; COLUMN_COUNT];
+            for (idx, val) in snapshot
+                .column_histogram
+                .iter()
+                .enumerate()
+                .take(COLUMN_COUNT)
+            {
+                hist[idx] = *val;
+            }
+            hist
+        };
+        self.press_threshold = snapshot.press_threshold;
+        self.release_threshold = snapshot.release_threshold;
+        self.repeat_delay = snapshot.repeat_delay;
+        self.repeat_interval = snapshot.repeat_interval;
+        self.columns_active_high = snapshot.columns_active_high;
+        self.scan_enabled = snapshot.scan_enabled;
+        // Reset per-key state and repopulate from snapshot where names match.
+        for state in &mut self.states {
+            state.pressed = false;
+            state.debounced = false;
+            state.press_ticks = 0;
+            state.release_ticks = 0;
+            state.repeat_ticks = 0;
+        }
+        for (name, saved) in &snapshot.key_states {
+            if let Some(idx) = KEY_NAMES
+                .iter()
+                .position(|entry| entry.map(|s| s == name).unwrap_or(false))
+            {
+                if let Some(state) = self.states.get_mut(idx) {
+                    state.pressed = saved.pressed;
+                    state.debounced = saved.debounced;
+                    state.press_ticks = saved.press_ticks;
+                    state.release_ticks = saved.release_ticks;
+                    state.repeat_ticks = saved.repeat_ticks;
+                }
+            }
+        }
+        self.keyi_latch = snapshot.fifo_len > 0;
+        self.kil_latch = self.compute_kil(false);
+    }
+
     pub fn set_repeat_enabled(&mut self, enabled: bool) {
         self.repeat_enabled = enabled;
     }
@@ -486,8 +543,6 @@ fn log_fifo_write(addr: u32, value: u8) {
                 self.kil_latch = self.compute_kil(false);
                 Some(self.kil_latch)
             }
-            // E-port input registers are host-driven; return 0 for parity.
-            0xF5 | 0xF6 => Some(0),
             _ => None,
         }
     }
@@ -512,8 +567,6 @@ fn log_fifo_write(addr: u32, value: u8) {
                 memory.write_internal_byte(offset, self.kil_latch);
                 true
             }
-            // Ignore writes to host-driven E-port inputs.
-            0xF5 | 0xF6 => true,
             _ => false,
         }
     }

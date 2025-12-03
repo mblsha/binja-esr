@@ -11,6 +11,7 @@ pub mod timer;
 
 use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -33,6 +34,7 @@ pub use snapshot::{
 };
 pub use timer::TimerContext;
 
+use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::LlamaBus;
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -272,6 +274,9 @@ pub struct CoreRuntime {
     pub state: LlamaState,
     pub fast_mode: bool,
     executor: crate::llama::eval::LlamaExecutor,
+    pub keyboard: Option<KeyboardMatrix>,
+    pub lcd: Option<LcdController>,
+    pub timer: TimerContext,
 }
 
 impl Default for CoreRuntime {
@@ -288,6 +293,9 @@ impl CoreRuntime {
             state: LlamaState::new(),
             fast_mode: false,
             executor: crate::llama::eval::LlamaExecutor::new(),
+            keyboard: Some(KeyboardMatrix::new()),
+            lcd: Some(LcdController::new()),
+            timer: TimerContext::new(false, 0, 0),
         }
     }
 
@@ -352,14 +360,66 @@ impl CoreRuntime {
             .filter(|(k, _)| k.starts_with("TEMP"))
             .collect();
         metadata.memory_dump_pc = 0;
+        if let Some(kb) = self.keyboard.as_ref() {
+            let kb_state = kb.snapshot_state();
+            if let Ok(snapshot) = serde_json::to_value(&kb_state) {
+                metadata.keyboard = Some(snapshot);
+                metadata.kb_metrics = Some(json!({
+                    "irq_count": kb_state.irq_count,
+                    "strobe_count": kb_state.strobe_count,
+                    "column_hist": kb_state.column_histogram,
+                    "last_cols": kb_state.active_columns,
+                    "last_kol": kb_state.kol,
+                    "last_koh": kb_state.koh,
+                    "kil_reads": kb_state.fifo_len,
+                    "kb_irq_enabled": true,
+                }));
+            }
+        }
+        let mut lcd_payload: Option<Vec<u8>> = None;
+        if let Some(lcd) = self.lcd.as_ref() {
+            let (lcd_meta, payload) = lcd.export_snapshot();
+            metadata.lcd = Some(lcd_meta);
+            metadata.lcd_payload_size = payload.len();
+            lcd_payload = Some(payload);
+        }
+        // Persist timer/interrupt mirrors to match Python snapshot expectations.
+        let (timer_info, intr_info) = self.timer.snapshot_info();
+        metadata.timer = timer_info;
+        metadata.interrupts = intr_info;
         let regs = collect_registers(&self.state);
-        snapshot::save_snapshot(path, &metadata, &regs, &self.memory, None)
+        snapshot::save_snapshot(
+            path,
+            &metadata,
+            &regs,
+            &self.memory,
+            lcd_payload.as_deref(),
+        )
     }
 
     pub fn load_snapshot(&mut self, path: &std::path::Path) -> Result<()> {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
         apply_registers(&mut self.state, &loaded.registers);
+        self.fast_mode = self.metadata.fast_mode;
+        self.timer
+            .apply_snapshot_info(&self.metadata.timer, &self.metadata.interrupts);
+        if self.keyboard.is_none() {
+            self.keyboard = Some(KeyboardMatrix::new());
+        }
+        if let (Some(kb_meta), Some(kb)) = (self.metadata.keyboard.clone(), self.keyboard.as_mut()) {
+            if let Ok(snapshot) = serde_json::from_value::<KeyboardSnapshot>(kb_meta) {
+                kb.load_snapshot_state(&snapshot);
+            }
+        }
+        if self.lcd.is_none() {
+            self.lcd = Some(LcdController::new());
+        }
+        if let (Some(lcd_meta), Some(payload), Some(lcd)) =
+            (self.metadata.lcd.clone(), loaded.lcd_payload.as_deref(), self.lcd.as_mut())
+        {
+            let _ = lcd.load_snapshot(&lcd_meta, payload);
+        }
         // Restore call depth/sub-level and temps from metadata if present.
         if self.metadata.call_depth > 0 {
             for _ in 0..self.metadata.call_depth {
@@ -432,5 +492,91 @@ mod tests {
         assert_eq!(rt2.state.get_reg(RegName::Temp(0)) & 0xFFFFFF, 0x00AA_BB);
         assert_eq!(rt2.state.get_reg(RegName::Temp(5)) & 0xFFFFFF, 0x123456);
         assert_eq!(rt2.state.get_reg(RegName::PC) & 0x0F_FFFF, 0x12345);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_keeps_timer_and_fast_mode() {
+        let tmp = std::env::temp_dir().join("core_snapshot_timer.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let mut rt = CoreRuntime::new();
+        rt.fast_mode = true;
+        rt.metadata.fast_mode = true;
+        rt.timer.enabled = true;
+        rt.timer.mti_period = 7;
+        rt.timer.sti_period = 11;
+        rt.timer.next_mti = 123;
+        rt.timer.next_sti = 456;
+        rt.timer.kb_irq_enabled = false;
+        rt.timer.set_interrupt_state(
+            true,  // pending
+            0xAA,  // imr
+            0x55,  // isr
+            200,   // next_mti
+            300,   // next_sti
+            Some("MTI".to_string()),
+            true,              // in_interrupt
+            Some(vec![0xDEAD]), // interrupt_stack
+            5,                 // next_interrupt_id
+        );
+        rt.save_snapshot(&tmp).expect("save snapshot");
+
+        let mut rt2 = CoreRuntime::new();
+        rt2.load_snapshot(&tmp).expect("load snapshot");
+        assert!(rt2.fast_mode, "fast_mode should round-trip");
+        assert!(rt2.timer.enabled);
+        assert_eq!(rt2.timer.mti_period, 7);
+        assert_eq!(rt2.timer.sti_period, 11);
+        assert_eq!(rt2.timer.next_mti, 200);
+        assert_eq!(rt2.timer.next_sti, 300);
+        assert!(!rt2.timer.kb_irq_enabled);
+        assert!(rt2.timer.irq_pending);
+        assert_eq!(rt2.timer.irq_imr, 0xAA);
+        assert_eq!(rt2.timer.irq_isr, 0x55);
+        assert!(rt2.timer.in_interrupt);
+        assert_eq!(rt2.timer.interrupt_stack, vec![0xDEAD]);
+        assert_eq!(rt2.timer.next_interrupt_id, 5);
+        assert_eq!(rt2.timer.last_fired, None);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_captures_keyboard_and_lcd() {
+        let tmp = std::env::temp_dir().join("core_snapshot_kb_lcd.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let mut rt = CoreRuntime::new();
+        let kb = rt.keyboard.as_mut().expect("keyboard present");
+        // Simulate a key press (matrix code 0) to populate snapshot.
+        kb.press_matrix_code(0, &mut rt.memory);
+        // Exercise LCD writes to mutate vram and counters.
+        let lcd = rt.lcd.as_mut().expect("lcd present");
+        lcd.write(0x2000, 0b1100_0000); // ON instruction (turn on)
+        lcd.write(0x2003, 0xAA); // Data write to advance Y/counts
+        rt.save_snapshot(&tmp).expect("save snapshot");
+
+        let mut rt2 = CoreRuntime::new();
+        rt2.load_snapshot(&tmp).expect("load snapshot");
+
+        // Keyboard state should round-trip (pressed key recorded).
+        let kb_state = rt2
+            .keyboard
+            .as_ref()
+            .expect("keyboard restored")
+            .snapshot_state();
+        assert!(
+            !kb_state.pressed_keys.is_empty(),
+            "pressed keys should persist across snapshot"
+        );
+        // LCD stats should reflect the writes we performed before saving.
+        let lcd_stats = rt2.lcd.as_ref().expect("lcd restored").stats();
+        assert!(
+            lcd_stats.data_write_counts.iter().any(|&c| c > 0),
+            "lcd data writes should persist across snapshot"
+        );
+        // Metadata should include kb_metrics for parity with Python.
+        assert!(
+            rt2.metadata.kb_metrics.is_some(),
+            "keyboard metrics should be stored in snapshot metadata"
+        );
     }
 }

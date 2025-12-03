@@ -164,7 +164,9 @@ impl LlamaState {
         if self.call_depth > 0 {
             self.call_depth -= 1;
         }
-        // Python call_sub_level is cumulative and does not decrement on RET.
+        if self.call_sub_level > 0 {
+            self.call_sub_level -= 1;
+        }
     }
 
     pub fn call_depth(&self) -> u32 {
@@ -231,8 +233,8 @@ mod tests {
         assert_eq!(state.call_depth(), 2);
         assert_eq!(state.call_sub_level(), 2);
         state.call_depth_dec();
-        // Python parity: call_sub_level does not decrement on returns.
+        // Python parity: call_sub_level tracks current depth and should decrement on returns.
         assert_eq!(state.call_depth(), 1);
-        assert_eq!(state.call_sub_level(), 2);
+        assert_eq!(state.call_sub_level(), 1);
     }
 }

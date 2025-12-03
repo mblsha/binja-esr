@@ -56,6 +56,12 @@ class PCE500KeyboardHandler:
     # ------------------------------------------------------------------ #
 
     def press_key(self, key_code: str) -> bool:
+        # Special-case ON key: forward to bridge CPU when enabled so ONK parity holds.
+        if key_code == "KEY_ON" and self._bridge_enabled:
+            if not self._forward_bridge_event(key_code, release=False):
+                return False
+            self._bridge_keys.add(key_code)
+            return True
         if self._bridge_enabled:
             if not self._forward_bridge_event(key_code, release=False):
                 return False
@@ -69,6 +75,10 @@ class PCE500KeyboardHandler:
         return True
 
     def release_key(self, key_code: str) -> None:
+        if key_code == "KEY_ON" and self._bridge_enabled:
+            if self._forward_bridge_event(key_code, release=True):
+                self._bridge_keys.discard(key_code)
+            return
         if self._bridge_enabled:
             if self._forward_bridge_event(key_code, release=True):
                 self._bridge_keys.discard(key_code)
@@ -183,6 +193,15 @@ class PCE500KeyboardHandler:
     def _forward_bridge_event(self, key_code: str, *, release: bool) -> bool:
         if not self._bridge_enabled or not self._bridge_cpu:
             return False
+        if key_code == "KEY_ON":
+            try:
+                if release:
+                    self._bridge_cpu.keyboard_release_on_key()
+                else:
+                    self._bridge_cpu.keyboard_press_on_key()
+                return True
+            except Exception:
+                return False
         loc = KEY_LOCATIONS.get(key_code)
         if loc is None:
             return False

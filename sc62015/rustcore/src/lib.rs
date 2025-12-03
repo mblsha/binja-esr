@@ -1005,6 +1005,29 @@ impl LlamaCpu {
         Ok(self.keyboard.fifo_len() != fifo_before)
     }
 
+    fn keyboard_press_on_key(&mut self, py: Python<'_>) -> PyResult<bool> {
+        // Emulate ON key: set SSR.ONK and ISR.ONKI, mirror to internal memory.
+        let ssr_offset = 0xFF;
+        let isr_offset = IMEM_ISR_OFFSET;
+        let ssr = self.mirror.read_internal_byte(ssr_offset).unwrap_or(0);
+        self.mirror.write_internal_byte(ssr_offset, ssr | 0x08);
+        let isr = self.mirror.read_internal_byte(isr_offset).unwrap_or(0);
+        self.mirror.write_internal_byte(isr_offset, isr | 0x08);
+        self.sync_mirror(py);
+        Ok(true)
+    }
+
+    fn keyboard_release_on_key(&mut self, py: Python<'_>) -> PyResult<()> {
+        let ssr_offset = 0xFF;
+        let isr_offset = IMEM_ISR_OFFSET;
+        let ssr = self.mirror.read_internal_byte(ssr_offset).unwrap_or(0);
+        self.mirror.write_internal_byte(ssr_offset, ssr & !0x08);
+        let isr = self.mirror.read_internal_byte(isr_offset).unwrap_or(0);
+        self.mirror.write_internal_byte(isr_offset, isr & !0x08);
+        self.sync_mirror(py);
+        Ok(())
+    }
+
     fn keyboard_release_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
         let fifo_before = self.keyboard.fifo_len();
         self.keyboard
