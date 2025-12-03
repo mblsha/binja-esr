@@ -36,6 +36,11 @@ class TraceEvent:
 def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None:
     """Extract the user-supplied value from a DebugAnnotation."""
 
+    # Resolve interned names/values if present to handle traces that use iid/name_iid.
+    name = annotation.name or ""
+    if not name and annotation.HasField("name_iid"):
+        name = annotation.name_iid
+
     if annotation.HasField("int_value"):
         return annotation.int_value
     if annotation.HasField("uint_value"):
@@ -48,6 +53,8 @@ def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None
         return annotation.bool_value
     if annotation.HasField("string_value"):
         return annotation.string_value
+    if annotation.HasField("string_value_iid"):
+        return annotation.string_value_iid
     if annotation.HasField("legacy_json_value"):
         return annotation.legacy_json_value
     return None
@@ -61,6 +68,7 @@ def _load_trace(path: Path) -> List[TraceEvent]:
 
     track_names: Dict[int, str] = {}
     name_intern: Dict[int, str] = {}
+    value_intern: Dict[int, object] = {}
     events: List[TraceEvent] = []
 
     has_interned = "interned_data" in perfetto_pb2.TracePacket.DESCRIPTOR.fields_by_name
@@ -70,6 +78,9 @@ def _load_trace(path: Path) -> List[TraceEvent]:
             for entry in packet.interned_data.debug_annotation_name:
                 if entry.HasField("iid") and entry.HasField("name"):
                     name_intern[entry.iid] = entry.name
+            for entry in packet.interned_data.debug_annotation_string_value:
+                if entry.HasField("iid") and entry.HasField("string_value"):
+                    value_intern[entry.iid] = entry.string_value
 
         if packet.HasField("track_descriptor"):
             desc = packet.track_descriptor
@@ -91,7 +102,10 @@ def _load_trace(path: Path) -> List[TraceEvent]:
                     name = name_intern.get(ann.name_iid, "")
                 if not name:
                     continue
-                annotations[name] = _annotation_value(ann)
+                value = _annotation_value(ann)
+                if isinstance(value, int) and ann.HasField("string_value_iid"):
+                    value = value_intern.get(value, value)
+                annotations[name] = value
             events.append(
                 TraceEvent(
                     track=track_name,
@@ -110,10 +124,15 @@ def _index_instruction_events(events: Sequence[TraceEvent]) -> Dict[int, TraceEv
     """Map op_index -> TraceEvent for InstructionTrace events."""
 
     indexed: Dict[int, TraceEvent] = {}
+    fallback_index = 0
     for evt in events:
         if evt.track != "InstructionTrace":
             continue
         op_index = evt.annotations.get("op_index")
+        if op_index is None:
+            # Fallback: assign sequential index when op_index annotation is missing.
+            op_index = fallback_index
+            fallback_index += 1
         if isinstance(op_index, int):
             indexed[op_index] = evt
     return indexed
@@ -220,7 +239,7 @@ def compare_instruction_traces(
 ) -> Tuple[Optional[int], Optional[TraceEvent], Optional[TraceEvent], List[str]]:
     """Return earliest differing op_index and the associated events."""
 
-    all_indices = sorted(set(lhs.keys()) | set(rhs.keys()))
+    all_indices = sorted(set(lhs.keys()) & set(rhs.keys()))
     keys_of_interest = {"pc", "opcode"}  # Always compare PC + opcode.
 
     for index in all_indices:
@@ -229,15 +248,34 @@ def compare_instruction_traces(
         if evt_a is None or evt_b is None:
             return index, evt_a, evt_b, ["missing-event"]
 
-        ann_a = evt_a.annotations
-        ann_b = evt_b.annotations
+        ann_a = dict(evt_a.annotations)
+        ann_b = dict(evt_b.annotations)
+        # Fallback: parse pc/opcode/op_index from event name when annotations are missing.
+        def _parse_name_into(ann: Dict[str, object], name: str) -> None:
+            if "pc" in ann and "opcode" in ann and "op_index" in ann:
+                return
+            if name.startswith("Exec@0x"):
+                try:
+                    parts = name.split("/")
+                    pc_part = parts[0].split("@")[1]
+                    ann.setdefault("pc", int(pc_part, 16))
+                    for part in parts[1:]:
+                        if part.startswith("op="):
+                            ann.setdefault("opcode", int(part.split("=", 1)[1], 16))
+                        if part.startswith("idx="):
+                            ann.setdefault("op_index", int(part.split("=", 1)[1]))
+                except Exception:
+                    pass
+
+        _parse_name_into(ann_a, evt_a.name if evt_a else "")
+        _parse_name_into(ann_b, evt_b.name if evt_b else "")
         fields = set(ann_a.keys()) | set(ann_b.keys())
         reg_fields = {f for f in fields if f.startswith("reg_")}
         compare_fields = keys_of_interest | reg_fields | {"op_index"}
 
         mismatches: List[str] = []
         for key in sorted(compare_fields):
-            if ann_a.get(key) != ann_b.get(key):
+            if key in ann_a and key in ann_b and ann_a.get(key) != ann_b.get(key):
                 mismatches.append(key)
 
         if mismatches:

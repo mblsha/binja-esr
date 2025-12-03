@@ -253,6 +253,7 @@ struct StandaloneBus {
     perfetto: Option<IrqPerfetto>,
     last_irq_src: Option<String>,
     active_irq_mask: u8,
+    #[allow(dead_code)]
     perfetto_enabled: bool,
 }
 
@@ -399,6 +400,7 @@ impl StandaloneBus {
         self.vec_patched = true;
     }
 
+    #[allow(dead_code)]
     fn tick_keyboard(&mut self) {
         // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
         let events = self.keyboard.scan_tick();
@@ -676,8 +678,10 @@ impl StandaloneBus {
         // Flush the global instruction trace if present.
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.take() {
-                if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
-                    eprintln!("[perfetto-debug] dropping main tracer without saving to avoid hang");
+                if let Err(err) = tracer.finish() {
+                    eprintln!("[perfetto] failed to save instruction trace: {err}");
+                } else if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
+                    eprintln!("[perfetto-debug] saved instruction trace");
                 }
             }
         }
@@ -959,9 +963,17 @@ impl LlamaBus for StandaloneBus {
     fn peek_imem(&mut self, offset: u32) -> u8 {
         self.memory.read_internal_byte(offset).unwrap_or(0)
     }
+    fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+        // Bypass perfetto IMR read logging when sampling for tracing metadata.
+        self.memory
+            .read_internal_byte_silent(offset)
+            .or_else(|| self.memory.read_internal_byte(offset))
+            .unwrap_or(0)
+    }
 
     fn wait_cycles(&mut self, cycles: u32) {
-        for _ in 0..cycles {
+        // Python WAIT decrements I to zero; each loop advances cycle_count and timers.
+        for _ in 0..cycles.max(1) {
             self.advance_cycle();
         }
     }
@@ -1397,12 +1409,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                         let regs = collect_registers(&state);
                         let mem_imr = bus
                             .memory
-                            .read_internal_byte(IMEM_IMR_OFFSET)
-                            .unwrap_or(0);
+                            .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                            .unwrap_or_else(|| bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0));
                         let mem_isr = bus
                             .memory
-                            .read_internal_byte(IMEM_ISR_OFFSET)
-                            .unwrap_or(0);
+                            .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                            .unwrap_or_else(|| bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0));
                         tracer.record_regs(
                             executed,
                             pc,

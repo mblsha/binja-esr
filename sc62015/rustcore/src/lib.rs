@@ -742,7 +742,15 @@ impl LlamaBus for LlamaPyBus {
         base
     }
 
-    fn wait_cycles(&mut self, _cycles: u32) {}
+    fn wait_cycles(&mut self, cycles: u32) {
+        // Allow the Python host to advance timers/keyboard during WAIT if it exposes a wait_cycles hook.
+        Python::with_gil(|py| {
+            let bound = self.memory.bind(py);
+            if let Ok(method) = bound.getattr("wait_cycles") {
+                let _ = method.call1((cycles.max(1),));
+            }
+        });
+    }
 }
 
 /// Lazy parse a comma-separated list of absolute addresses in `TRACE_ADDRS`.

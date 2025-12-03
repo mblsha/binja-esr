@@ -203,12 +203,9 @@ impl MemoryImage {
             self.dirty_internal.push((address, value));
             if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
-                    let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
-                        (
-                            crate::llama::eval::perfetto_last_instr_index().saturating_add(1),
-                            0,
-                        )
-                    });
+                    // Use last completed instruction index to avoid emitting unmatched op_index values.
+                    let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                        .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), 0));
                     tracer.record_mem_write(seq, pc, address, value as u32, "internal", 8);
                     if address == INTERNAL_MEMORY_START + 0xFB {
                         tracer.record_imr_read(None, value, Some(seq));
@@ -313,13 +310,7 @@ impl MemoryImage {
                 if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
                         let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                            .unwrap_or_else(|| {
-                                (
-                                    crate::llama::eval::perfetto_last_instr_index()
-                                        .saturating_add(1),
-                                    0,
-                                )
-                            });
+                            .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), 0));
                         tracer.record_mem_write(
                             seq,
                             pc,
@@ -383,6 +374,17 @@ impl MemoryImage {
                 }
             }
             Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// Read an internal byte without emitting perfetto diagnostics. Intended for
+    /// tracing-only snapshots (e.g., IMR/ISR sampling) to avoid creating extra
+    /// IMR_Read events.
+    pub fn read_internal_byte_silent(&self, offset: u32) -> Option<u8> {
+        if offset < INTERNAL_SPACE as u32 {
+            Some(self.internal[offset as usize])
         } else {
             None
         }

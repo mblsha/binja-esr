@@ -130,6 +130,10 @@ pub trait LlamaBus {
         let addr = INTERNAL_MEMORY_START + offset;
         (self.load(addr, 8) & 0xFF) as u8
     }
+    /// Peek IMEM without emitting tracing side-effects (IMR/ISR sampling).
+    fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+        self.peek_imem(offset)
+    }
     /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations (unused for Python parity WAIT).
     fn wait_cycles(&mut self, _cycles: u32) {}
 }
@@ -390,8 +394,8 @@ impl LlamaExecutor {
                     regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
                 }
                 // Parity: sample IMR/ISR without triggering device-side effects.
-                let mem_imr = bus.peek_imem(IMEM_IMR_OFFSET) & 0xFF;
-                let mem_isr = bus.peek_imem(IMEM_ISR_OFFSET) & 0xFF;
+                let mem_imr = bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF;
+                let mem_isr = bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF;
                 tracer.record_regs(
                     instr_index,
                     pc_trace & mask_for(RegName::PC),

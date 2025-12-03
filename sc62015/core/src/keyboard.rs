@@ -3,7 +3,6 @@
 use crate::memory::MemoryImage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const FIFO_SIZE: usize = 8;
 const COLUMN_COUNT: usize = 11; // 8 from KOL, 3 from KOH
@@ -14,9 +13,6 @@ const DEFAULT_PRESS_TICKS: u8 = 6;
 const DEFAULT_RELEASE_TICKS: u8 = 6;
 const DEFAULT_REPEAT_DELAY: u8 = 24;
 const DEFAULT_REPEAT_INTERVAL: u8 = 6;
-
-// Host-side write sequence for Perfetto logging of FIFO/KIL writes outside the LLAMA executor.
-static HOST_MEM_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Default)]
 struct KeyLocation {
@@ -295,12 +291,8 @@ impl KeyboardMatrix {
 fn log_fifo_write(addr: u32, value: u8) {
     if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
         if let Some(tracer) = guard.as_mut() {
-            let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
-                (
-                    crate::llama::eval::perfetto_last_instr_index().saturating_add(1),
-                    0,
-                )
-            });
+            let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), 0));
             tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
         }
     }
@@ -333,7 +325,7 @@ fn log_fifo_write(addr: u32, value: u8) {
                                 let (seq, pc) = crate::llama::eval::perfetto_instr_context()
                                     .unwrap_or_else(|| {
                                         (
-                                            HOST_MEM_WRITE_SEQ.fetch_add(1, Ordering::Relaxed),
+                                            crate::llama::eval::perfetto_last_instr_index(),
                                             0,
                                         )
                                     });

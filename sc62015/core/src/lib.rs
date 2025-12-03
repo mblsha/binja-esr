@@ -314,6 +314,9 @@ impl CoreRuntime {
             fn resolve_emem(&mut self, base: u32) -> u32 {
                 base
             }
+            fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+                self.mem.read_internal_byte_silent(offset).unwrap_or(0)
+            }
             fn wait_cycles(&mut self, _cycles: u32) {}
         }
 
@@ -324,10 +327,14 @@ impl CoreRuntime {
             }
             let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
             let opcode = bus.load(pc, 8) as u8;
-            if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
+            if let Err(e) = self
+                .executor
+                .execute(opcode, &mut self.state, &mut bus)
+            {
                 return Err(CoreError::Other(format!("execute opcode 0x{opcode:02X}: {e}")));
             }
             self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
+            // Python emulator counts instructions, not byte-length; keep parity by bumping once per opcode.
             self.metadata.cycle_count = self.metadata.cycle_count.wrapping_add(1);
         }
         Ok(())

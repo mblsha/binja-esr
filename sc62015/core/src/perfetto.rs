@@ -83,11 +83,14 @@ impl PerfettoTracer {
         mem_isr: u8,
     ) {
         {
+            // Encode key fields in the event name so readers without interned annotations
+            // can still recover pc/opcode/op_index.
             let mut ev = self.builder.add_instant_event(
                 self.exec_track,
-                format!("Exec@0x{pc:06X}"),
+                format!("Exec@0x{pc:06X}/op=0x{opcode:02X}/idx={instr_index}"),
                 self.ts(instr_index, 0),
             );
+            // Duplicate annotations with explicit, non-interned keys to keep compatibility with Python proto parsers.
             ev.add_annotations([
                 ("backend", AnnotationValue::Str("rust".to_string())),
                 ("pc", AnnotationValue::Pointer(reg_pc as u64)),
@@ -95,6 +98,10 @@ impl PerfettoTracer {
                 ("op_index", AnnotationValue::UInt(instr_index)),
                 ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
                 ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
+                // Redundant, uninferred keys to bypass interned name lookups.
+                ("pc_raw", AnnotationValue::Pointer(reg_pc as u64)),
+                ("opcode_raw", AnnotationValue::UInt(opcode as u64)),
+                ("op_index_raw", AnnotationValue::UInt(instr_index)),
             ]);
             for (name, value) in regs {
                 let key = format!("reg_{}", name.to_ascii_lowercase());
