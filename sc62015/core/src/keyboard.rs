@@ -288,6 +288,28 @@ impl KeyboardMatrix {
         1
     }
 
+    /// Inject a matrix event immediately, bypassing debounce, and mirror state into memory.
+    pub fn inject_matrix_event(
+        &mut self,
+        code: u8,
+        release: bool,
+        memory: &mut MemoryImage,
+    ) -> usize {
+        let events = self.enqueue_event(code & 0x7F, release);
+        // Update KIL latch directly for bridge calls (row is low 3 bits).
+        let row_mask = 1u8 << (code & 0x07);
+        if release {
+            self.kil_latch &= !row_mask;
+        } else {
+            self.kil_latch |= row_mask;
+        }
+        memory.write_internal_byte(0xF2, self.kil_latch);
+        if events > 0 {
+            self.write_fifo_to_memory(memory);
+        }
+        events
+    }
+
 fn log_fifo_write(addr: u32, value: u8) {
     if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
         if let Some(tracer) = guard.as_mut() {

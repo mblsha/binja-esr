@@ -4,6 +4,7 @@
 use crate::memory::MemoryImage;
 use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
+use std::collections::HashMap;
 
 const ISR_OFFSET: u32 = 0xFC;
 
@@ -91,12 +92,28 @@ impl TimerContext {
         (timer, interrupts)
     }
 
-    pub fn apply_snapshot_info(&mut self, timer: &TimerInfo, interrupts: &InterruptInfo) {
+    pub fn apply_snapshot_info(
+        &mut self,
+        timer: &TimerInfo,
+        interrupts: &InterruptInfo,
+        current_cycle: u64,
+    ) {
         self.enabled = timer.enabled;
         self.mti_period = timer.mti_period.max(0) as u64;
         self.sti_period = timer.sti_period.max(0) as u64;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
+        // Rebase saved absolute targets so they do not land in the past relative to the restored cycle counter.
+        if self.mti_period > 0 {
+            while self.next_mti != 0 && self.next_mti < current_cycle {
+                self.next_mti = self.next_mti.wrapping_add(self.mti_period);
+            }
+        }
+        if self.sti_period > 0 {
+            while self.next_sti != 0 && self.next_sti < current_cycle {
+                self.next_sti = self.next_sti.wrapping_add(self.sti_period);
+            }
+        }
         self.kb_irq_enabled = timer.kb_irq_enabled;
 
         self.irq_pending = interrupts.pending;
@@ -191,16 +208,9 @@ impl TimerContext {
             self.irq_isr = memory
                 .read_internal_byte(ISR_OFFSET)
                 .unwrap_or(self.irq_isr);
-            // Respect IMR gating when IMR deviates from the default all-enabled state.
-            let master = (self.irq_imr & 0x80) != 0;
-            let mti_enabled = (self.irq_imr & 0x01) != 0;
-            let sti_enabled = (self.irq_imr & 0x02) != 0;
-            let gated = self.irq_imr != 0xFF;
-            self.irq_pending = if gated {
-                (fired_mti && master && mti_enabled) || (fired_sti && master && sti_enabled)
-            } else {
-                fired_mti || fired_sti
-            };
+            // Parity: mark IRQ pending whenever a timer fires, regardless of IMR gating.
+            // IMR masking is honored later during delivery.
+            self.irq_pending = fired_mti || fired_sti;
             if self.irq_pending {
                 self.emit_irq_trace(fired_mti, fired_sti, memory);
             }
@@ -230,6 +240,34 @@ impl TimerContext {
                         memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
                     }
                 }
+                // Mirror Python: key events latch KEYI and mark a pending IRQ immediately.
+                self.irq_pending = true;
+                self.irq_source = Some("KEY".to_string());
+                self.last_fired = self.irq_source.clone();
+                self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
+                self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
+                // Perfetto parity: emit a KeyIRQ marker.
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        let mut payload = HashMap::new();
+                        payload.insert("events".to_string(), key_events as u64);
+                        payload.insert("imr".to_string(), self.irq_imr as u64);
+                        payload.insert("isr".to_string(), self.irq_isr as u64);
+                        tracer.record_irq_event("KeyIRQ", payload);
+                    }
+                }
+            }
+        }
+        // Perfetto parity: emit a scan event regardless of new key events.
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = HashMap::new();
+                payload.insert("events".to_string(), key_events as u64);
+                payload.insert("mti".to_string(), mti as u64);
+                payload.insert("sti".to_string(), sti as u64);
+                payload.insert("imr".to_string(), self.irq_imr as u64);
+                payload.insert("isr".to_string(), self.irq_isr as u64);
+                tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
         (mti, sti, key_events)
@@ -313,6 +351,7 @@ mod tests {
                 kb_irq_enabled: true,
             },
             &InterruptInfo::default(),
+            100,
         );
         let mut mem = MemoryImage::new();
         let mut cycles = 100u64; // current cycle when snapshot applied
@@ -345,18 +384,18 @@ mod tests {
     }
 
     #[test]
-    fn tick_timers_respects_imr_master_and_bits_for_pending() {
+    fn tick_timers_sets_pending_even_when_imr_masked() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
-        // IMR master cleared -> no pending even if MTI fired.
+        // IMR master cleared -> still pend like Python; delivery will gate later.
         mem.write_internal_byte(0xFB, 0x00);
         let (_mti, _sti) = timer.tick_timers(&mut mem, 1);
-        assert!(!timer.irq_pending, "irq_pending should respect IMR master");
+        assert!(timer.irq_pending, "irq_pending should set even when IMR master=0");
 
-        // Enable master but mask out MTI bit -> still not pending.
+        // Enable master but mask out MTI bit -> still pend; gating happens during delivery.
         mem.write_internal_byte(0xFB, 0x80);
         timer.tick_timers(&mut mem, 2);
-        assert!(!timer.irq_pending, "irq_pending should respect MTI mask");
+        assert!(timer.irq_pending, "irq_pending should set even when MTI masked");
 
         // Enable MTI bit -> should pend on next fire.
         mem.write_internal_byte(0xFB, 0x81);

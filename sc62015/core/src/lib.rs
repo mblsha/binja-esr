@@ -312,13 +312,58 @@ impl CoreRuntime {
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
+            keyboard_ptr: *mut KeyboardMatrix,
+            lcd_ptr: *mut LcdController,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
-                self.mem.load(addr, bits).unwrap_or(0)
+                // Route keyboard/LCD accesses to their devices for parity with Python overlays.
+                unsafe {
+                    // Keyboard: internal IMEM offsets 0xF0-0xF2.
+                    if !self.keyboard_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK as u32
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
+                        if let Some(val) = (*self.keyboard_ptr).handle_read(offset, &mut *self.mem) {
+                            return val as u32;
+                        }
+                    }
+                    // LCD controller mirrored at 0x2000/0xA000.
+                    if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
+                        if let Some(val) = (*self.lcd_ptr).read(addr) {
+                            return val as u32;
+                        }
+                    }
+                    (*self.mem).load(addr, bits).unwrap_or(0)
+                }
             }
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
-                let _ = self.mem.store(addr, bits, value);
+                unsafe {
+                    // Keyboard KOL/KOH/KIL writes.
+                    if !self.keyboard_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK as u32
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
+                        if (0xF0..=0xF2).contains(&offset) {
+                            if (*self.keyboard_ptr).handle_write(offset, value as u8, &mut *self.mem) {
+                                // Mirror writes into IMEM except when the handler already wrote KIL.
+                                if offset != 0xF2 {
+                                    let _ = (*self.mem).store_internal_value(addr, bits, value);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    // LCD writes.
+                    if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
+                        (*self.lcd_ptr).write(addr, value as u8);
+                        let _ = (*self.mem).store(addr, bits, value);
+                        return;
+                    }
+                    let _ = (*self.mem).store(addr, bits, value);
+                }
             }
             fn resolve_emem(&mut self, base: u32) -> u32 {
                 base
@@ -330,55 +375,119 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            // Halted cores still consume idle cycles and allow timers/IRQs to run.
             if self.state.is_halted() {
-                break;
-            }
-            {
-                let mut bus = RuntimeBus { mem: &mut self.memory };
-                let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                let opcode = bus.load(pc, 8) as u8;
-                if let Err(e) = self
-                    .executor
-                    .execute(opcode, &mut self.state, &mut bus)
-                {
-                    return Err(CoreError::Other(format!("execute opcode 0x{opcode:02X}: {e}")));
+                let prev_cycle = self.metadata.cycle_count;
+                let new_cycle = prev_cycle.wrapping_add(1);
+                self.metadata.cycle_count = new_cycle;
+                let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                    &mut self.memory,
+                    new_cycle,
+                    |mem| {
+                        if let Some(kb) = self.keyboard.as_mut() {
+                            let events = kb.scan_tick();
+                            if events > 0 {
+                                kb.write_fifo_to_memory(mem);
+                            }
+                            (events, kb.fifo_len() > 0)
+                        } else {
+                            (0, false)
+                        }
+                    },
+                );
+                let fifo_non_empty = self
+                    .keyboard
+                    .as_ref()
+                    .map(|kb| kb.fifo_len() > 0)
+                    .unwrap_or(false);
+                if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        if (isr & 0x04) == 0 {
+                            self.memory.write_internal_byte(0xFC, isr | 0x04);
+                            self.timer.irq_pending = true;
+                            self.timer.irq_source = Some("KEY".to_string());
+                            self.timer.last_fired = self.timer.irq_source.clone();
+                        }
+                    }
                 }
+                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                    self.timer.irq_isr = isr;
+                }
+                self.deliver_pending_irq();
+                continue;
+            }
+
+            let keyboard_ptr = self
+                .keyboard
+                .as_mut()
+                .map(|kb| kb as *mut KeyboardMatrix)
+                .unwrap_or(std::ptr::null_mut());
+            let lcd_ptr = self
+                .lcd
+                .as_mut()
+                .map(|lcd| lcd as *mut LcdController)
+                .unwrap_or(std::ptr::null_mut());
+            let mut bus = RuntimeBus {
+                mem: &mut self.memory,
+                keyboard_ptr,
+                lcd_ptr,
+            };
+            let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+            let opcode = bus.load(pc, 8) as u8;
+            // Capture WAIT loop count before execution (executor clears I).
+            let wait_loops = if opcode == 0xEF {
+                self.state.get_reg(RegName::I) & mask_for(RegName::I)
+            } else {
+                0
+            };
+            if let Err(e) = self
+                .executor
+                .execute(opcode, &mut self.state, &mut bus)
+            {
+                return Err(CoreError::Other(format!("execute opcode 0x{opcode:02X}: {e}")));
             }
             self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
-            // Python emulator counts instructions, not byte-length; keep parity by bumping once per opcode.
-            self.metadata.cycle_count = self.metadata.cycle_count.wrapping_add(1);
-            // Advance timers/keyboard each instruction to mirror Python runtime.
-            let cycles = self.metadata.cycle_count;
-            let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
-                &mut self.memory,
-                cycles,
-                |mem| {
-                    if let Some(kb) = self.keyboard.as_mut() {
-                        let events = kb.scan_tick();
-                        if events > 0 {
-                            kb.write_fifo_to_memory(mem);
+
+            // Advance cycles: one for the opcode plus simulated WAIT idle cycles.
+            let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
+            let prev_cycle = self.metadata.cycle_count;
+            let new_cycle = prev_cycle.wrapping_add(cycle_increment);
+            for cyc in prev_cycle + 1..=new_cycle {
+                let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                    &mut self.memory,
+                    cyc,
+                    |mem| {
+                        if let Some(kb) = self.keyboard.as_mut() {
+                            let events = kb.scan_tick();
+                            if events > 0 {
+                                kb.write_fifo_to_memory(mem);
+                            }
+                            (events, kb.fifo_len() > 0)
+                        } else {
+                            (0, false)
                         }
-                        (events, kb.fifo_len() > 0)
-                    } else {
-                        (0, false)
-                    }
-                },
-            );
-            let fifo_non_empty = self
-                .keyboard
-                .as_ref()
-                .map(|kb| kb.fifo_len() > 0)
-                .unwrap_or(false);
-            if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
-                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                    if (isr & 0x04) == 0 {
-                        self.memory.write_internal_byte(0xFC, isr | 0x04);
+                    },
+                );
+                let fifo_non_empty = self
+                    .keyboard
+                    .as_ref()
+                    .map(|kb| kb.fifo_len() > 0)
+                    .unwrap_or(false);
+                if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        if (isr & 0x04) == 0 {
+                            self.memory.write_internal_byte(0xFC, isr | 0x04);
+                            self.timer.irq_pending = true;
+                            self.timer.irq_source = Some("KEY".to_string());
+                            self.timer.last_fired = self.timer.irq_source.clone();
+                        }
                     }
                 }
+                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                    self.timer.irq_isr = isr;
+                }
             }
-            if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                self.timer.irq_isr = isr;
-            }
+            self.metadata.cycle_count = new_cycle;
             self.deliver_pending_irq();
         }
         Ok(())
@@ -439,7 +548,11 @@ impl CoreRuntime {
         apply_registers(&mut self.state, &loaded.registers);
         self.fast_mode = self.metadata.fast_mode;
         self.timer
-            .apply_snapshot_info(&self.metadata.timer, &self.metadata.interrupts);
+            .apply_snapshot_info(
+                &self.metadata.timer,
+                &self.metadata.interrupts,
+                self.metadata.cycle_count,
+            );
         if self.keyboard.is_none() {
             self.keyboard = Some(KeyboardMatrix::new());
         }

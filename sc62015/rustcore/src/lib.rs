@@ -1021,11 +1021,11 @@ impl LlamaCpu {
     }
 
     fn keyboard_press_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
-        let fifo_before = self.keyboard.fifo_len();
-        self.keyboard
-            .press_matrix_code(code & 0x7F, &mut self.mirror);
+        let events = self
+            .keyboard
+            .inject_matrix_event(code & 0x7F, false, &mut self.mirror);
         self.sync_mirror(py);
-        Ok(self.keyboard.fifo_len() != fifo_before)
+        Ok(events > 0)
     }
 
     fn keyboard_press_on_key(&mut self, py: Python<'_>) -> PyResult<bool> {
@@ -1052,11 +1052,11 @@ impl LlamaCpu {
     }
 
     fn keyboard_release_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
-        let fifo_before = self.keyboard.fifo_len();
-        self.keyboard
-            .release_matrix_code(code & 0x7F, &mut self.mirror);
+        let events = self
+            .keyboard
+            .inject_matrix_event(code & 0x7F, true, &mut self.mirror);
         self.sync_mirror(py);
-        Ok(self.keyboard.fifo_len() != fifo_before)
+        Ok(events > 0)
     }
 
     fn is_memory_synced(&self) -> bool {
