@@ -186,6 +186,11 @@ impl LlamaState {
         self.call_sub_level = value;
     }
 
+    /// Drop any saved call-page context (used for 16-bit CALL/RET page reconstruction).
+    pub fn clear_call_page_stack(&mut self) {
+        self.call_page_stack.clear();
+    }
+
     /// Track the 20-bit page of near CALL sites so RET can reconstruct the full return PC.
     pub fn push_call_page(&mut self, page: u32) {
         self.call_page_stack.push(page & 0xFF_0000);

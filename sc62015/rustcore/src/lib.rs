@@ -857,17 +857,81 @@ impl LlamaCpu {
     }
 
     fn power_on_reset(&mut self) -> PyResult<()> {
-        self.state.reset();
-        self.state.set_pc(0);
-        self.state.set_halted(false);
-        self.call_sub_level = 0;
-        self.state.set_call_sub_level(0);
-        self.temps.clear();
-        self.mirror = MemoryImage::new();
-        self.keyboard.reset(&mut self.mirror);
+        // Apply RESET intrinsic semantics using Python memory for reads/writes so the
+        // reset vector and IMEM updates match the Python emulator, while keeping the
+        // mirror in sync.
+        Python::with_gil(|py| {
+            struct ResetBus<'py, 'a> {
+                py: Python<'py>,
+                mem: Py<PyAny>,
+                mirror: &'a mut MemoryImage,
+            }
+
+            impl<'py, 'a> ResetBus<'py, 'a> {
+                fn read_byte(&self, addr: u32) -> u8 {
+                    let addr = addr & ADDRESS_MASK;
+                    let bound = self.mem.bind(self.py);
+                    bound
+                        .call_method1("read_byte", (addr,))
+                        .and_then(|obj| obj.extract::<u8>())
+                        .unwrap_or(0)
+                }
+
+                fn write_byte(&mut self, addr: u32, value: u8) {
+                    let addr = addr & ADDRESS_MASK;
+                    let bound = self.mem.bind(self.py);
+                    let _ = bound.call_method1("write_byte", (addr, value));
+                    let _ = self.mirror.store(addr, 8, value as u32);
+                }
+            }
+
+            impl<'py, 'a> LlamaBus for ResetBus<'py, 'a> {
+                fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                    let bytes = bits.div_ceil(8).max(1);
+                    let mut value = 0u32;
+                    for i in 0..bytes {
+                        let byte = self.read_byte(addr.wrapping_add(i as u32));
+                        value |= (byte as u32) << (8 * i);
+                    }
+                    if bits == 0 || bits >= 32 {
+                        value
+                    } else {
+                        value & ((1u32 << bits) - 1)
+                    }
+                }
+
+                fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                    let bytes = bits.div_ceil(8).max(1);
+                    for i in 0..bytes {
+                        let byte = ((value >> (8 * i)) & 0xFF) as u8;
+                        self.write_byte(addr.wrapping_add(i as u32), byte);
+                    }
+                }
+
+                fn resolve_emem(&mut self, base: u32) -> u32 {
+                    base
+                }
+
+                fn peek_imem(&mut self, offset: u32) -> u8 {
+                    self.read_byte(INTERNAL_MEMORY_START + offset)
+                }
+
+                fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+                    self.read_byte(INTERNAL_MEMORY_START + offset)
+                }
+            }
+
+            let mem = self.memory.clone_ref(py);
+            let mut bus = ResetBus {
+                py,
+                mem,
+                mirror: &mut self.mirror,
+            };
+            power_on_reset(&mut bus, &mut self.state);
+            Ok(())
+        })?;
+
         self.memory_synced = true;
-        self.memory_reads = 0;
-        self.memory_writes = 0;
         reset_perf_counters();
         Python::with_gil(|py| self.sync_mirror(py));
         Ok(())

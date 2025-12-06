@@ -273,7 +273,6 @@ fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
 /// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
 pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
-    state.reset();
     let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
     lcc &= !0x80;
     write_imem_byte(bus, IMEM_LCC_OFFSET, lcc);
@@ -291,11 +290,14 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr &= !0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-        let reset_vector = bus.load(INTERRUPT_VECTOR_ADDR, 8)
-            | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
-            | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
-        state.set_pc(reset_vector & mask_for(RegName::PC));
-        state.set_halted(false);
+    let reset_vector = bus.load(INTERRUPT_VECTOR_ADDR, 8)
+        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
+        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+    // Parity: keep register/flag values intact; only adjust IMEM/PC. Drop any saved
+    // call-page context so near returns fall back to the current page like Python.
+    state.clear_call_page_stack();
+    state.set_pc(reset_vector & mask_for(RegName::PC));
+    state.set_halted(false);
 }
 
 pub struct LlamaExecutor;
@@ -1678,7 +1680,6 @@ impl LlamaExecutor {
                 let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
                 let next_pc = start_pc.wrapping_add(1) & mask_for(RegName::PC);
                 let next_opcode = bus.load(next_pc, 8) as u8;
-                trace_pc = next_pc;
                 trace_opcode = next_opcode;
                 prefix_len = 1;
                 pre_modes_opt = Some(pre_modes);
@@ -2239,10 +2240,9 @@ impl LlamaExecutor {
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let (target, bits) = decoded.imm.ok_or("missing jump target")?;
                 let ret_addr = state.pc().wrapping_add(decoded.len as u32);
-                let call_page = state.pc() & 0xFF0000;
                 let mut dest = target;
                 let push_bits = if bits == 16 {
-                    // Push 16-bit return; retain high page from current PC
+                    // Push 16-bit return; retain high page from current PC (Python parity).
                     let high = state.pc() & 0xFF0000;
                     dest = high | (target & 0xFFFF);
                     16
@@ -2251,17 +2251,14 @@ impl LlamaExecutor {
                 };
                 // Use S stack for CALL (matches PUSHU/POPU? here sticking with S per CPU specs)
                 Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
-                if push_bits == 16 {
-                    // Preserve call-site page so RET can restore even if callee changes page.
-                    state.push_call_page(call_page);
-                }
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
                 Ok(decoded.len)
             }
             InstrKind::Ret => {
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
-                let high = state.pop_call_page().unwrap_or_else(|| state.pc() & 0xFF0000);
+                // Python RET reconstructs the high page from the current PC at return time.
+                let high = state.pc() & 0xFF0000;
                 state.set_pc((high | (ret & 0xFFFF)) & 0xFFFFF);
                 state.call_depth_dec();
                 Ok(1)
