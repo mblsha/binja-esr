@@ -1,6 +1,7 @@
 // PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
 
 use crate::Result;
+use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -282,8 +283,24 @@ impl PerfettoTracer {
     }
 
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
-    pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, u64>) {
-        let ts = self.irq_seq as i64;
+    pub fn record_irq_event(&mut self, name: &str, mut payload: HashMap<String, AnnotationValue>) {
+        // Align IRQ/key events to the instruction index when available (parity with Python manual clock).
+        let (op_idx, pc) = perfetto_instr_context()
+            .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
+        let have_ctx = op_idx != u64::MAX;
+        if have_ctx {
+            payload
+                .entry("op_index".to_string())
+                .or_insert(AnnotationValue::UInt(op_idx));
+            payload
+                .entry("pc".to_string())
+                .or_insert(AnnotationValue::Pointer(pc as u64));
+        }
+        let ts = if have_ctx {
+            self.ts(op_idx, 0)
+        } else {
+            self.irq_seq as i64
+        };
         self.irq_seq = self.irq_seq.saturating_add(1);
         let track = match name {
             "TimerFired" | "Timer" | "MTI" | "STI" => self.irq_timer_track,

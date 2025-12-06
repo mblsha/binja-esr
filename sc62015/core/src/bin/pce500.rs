@@ -11,7 +11,10 @@ use sc62015_core::{
         opcodes::RegName,
         state::LlamaState,
     },
-    memory::MemoryImage,
+    memory::{
+        IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
+        IMEM_LCC_OFFSET, MemoryImage,
+    },
     timer::TimerContext,
     ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER, PerfettoTracer,
 };
@@ -28,12 +31,6 @@ const GLYPH_STRIDE: usize = GLYPH_WIDTH + 1;
 const GLYPH_COUNT: usize = 96;
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
-const IMEM_IMR_OFFSET: u32 = 0xFB;
-const IMEM_ISR_OFFSET: u32 = 0xFC;
-const IMEM_KOL_OFFSET: u32 = 0xF0;
-const IMEM_KOH_OFFSET: u32 = 0xF1;
-const IMEM_KIL_OFFSET: u32 = 0xF2;
-const IMEM_LCC_OFFSET: u32 = 0xFE;
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const VEC_RANGE_START: u32 = 0x00BFCC6;

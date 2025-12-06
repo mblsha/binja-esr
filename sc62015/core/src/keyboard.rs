@@ -313,8 +313,12 @@ impl KeyboardMatrix {
 fn log_fifo_write(addr: u32, value: u8) {
     if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
         if let Some(tracer) = guard.as_mut() {
-            let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), 0));
+            let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
+                (
+                    crate::llama::eval::perfetto_last_instr_index(),
+                    crate::llama::eval::perfetto_last_pc(),
+                )
+            });
             tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
         }
     }
@@ -348,7 +352,7 @@ fn log_fifo_write(addr: u32, value: u8) {
                                     .unwrap_or_else(|| {
                                         (
                                             crate::llama::eval::perfetto_last_instr_index(),
-                                            0,
+                                            crate::llama::eval::perfetto_last_pc(),
                                         )
                                     });
                                 tracer.record_mem_write(

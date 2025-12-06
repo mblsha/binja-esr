@@ -3,6 +3,7 @@
 
 use crate::memory::MemoryImage;
 use crate::PERFETTO_TRACER;
+use crate::perfetto::AnnotationValue;
 use crate::{InterruptInfo, TimerInfo};
 use std::collections::HashMap;
 
@@ -24,6 +25,7 @@ pub struct TimerContext {
     pub interrupt_stack: Vec<u32>,
     pub next_interrupt_id: u32,
     pub last_fired: Option<String>,
+    pub key_irq_latched: bool,
 }
 
 impl TimerContext {
@@ -43,6 +45,7 @@ impl TimerContext {
             interrupt_stack: Vec::new(),
             next_interrupt_id: 0,
             last_fired: None,
+            key_irq_latched: false,
         };
         ctx.reset(0);
         ctx
@@ -66,6 +69,7 @@ impl TimerContext {
         self.in_interrupt = false;
         self.interrupt_stack.clear();
         self.next_interrupt_id = 0;
+        self.key_irq_latched = false;
     }
 
     pub fn snapshot_info(&self) -> (TimerInfo, InterruptInfo) {
@@ -124,6 +128,7 @@ impl TimerContext {
         self.irq_imr = interrupts.imr;
         self.irq_isr = interrupts.isr;
         self.last_fired = None;
+        self.key_irq_latched = false;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -149,6 +154,7 @@ impl TimerContext {
         self.interrupt_stack = interrupt_stack.unwrap_or_default();
         self.next_interrupt_id = next_interrupt_id;
         self.last_fired = None;
+        self.key_irq_latched = false;
     }
 
     pub fn set_keyboard_irq_enabled(&mut self, enabled: bool) {
@@ -231,9 +237,11 @@ impl TimerContext {
     {
         let (mti, sti) = self.tick_timers(memory, cycle_count);
         let mut key_events = 0usize;
+        let mut fifo_has_data = self.key_irq_latched;
         if mti && self.kb_irq_enabled {
-            let (events, _fifo_has_data) = keyboard_scan(memory);
+            let (events, has_data) = keyboard_scan(memory);
             key_events = events;
+            fifo_has_data = fifo_has_data || has_data;
             if key_events > 0 {
                 if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                     if (isr & 0x04) == 0 {
@@ -250,23 +258,29 @@ impl TimerContext {
                 if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
                         let mut payload = HashMap::new();
-                        payload.insert("events".to_string(), key_events as u64);
-                        payload.insert("imr".to_string(), self.irq_imr as u64);
-                        payload.insert("isr".to_string(), self.irq_isr as u64);
+                        payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                        payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+                        payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
                         tracer.record_irq_event("KeyIRQ", payload);
                     }
                 }
             }
         }
+        // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
+        if key_events > 0 || fifo_has_data {
+            self.key_irq_latched = true;
+        } else {
+            self.key_irq_latched = false;
+        }
         // Perfetto parity: emit a scan event regardless of new key events.
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
                 let mut payload = HashMap::new();
-                payload.insert("events".to_string(), key_events as u64);
-                payload.insert("mti".to_string(), mti as u64);
-                payload.insert("sti".to_string(), sti as u64);
-                payload.insert("imr".to_string(), self.irq_imr as u64);
-                payload.insert("isr".to_string(), self.irq_isr as u64);
+                payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                payload.insert("mti".to_string(), AnnotationValue::UInt(mti as u64));
+                payload.insert("sti".to_string(), AnnotationValue::UInt(sti as u64));
+                payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+                payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
@@ -302,7 +316,7 @@ impl TimerContext {
                     "TimerFired",
                     payload
                         .into_iter()
-                        .map(|(k, v)| (k.to_string(), v as u64))
+                        .map(|(k, v)| (k.to_string(), AnnotationValue::UInt(v as u64)))
                         .collect(),
                 );
             }

@@ -35,6 +35,7 @@ pub use snapshot::{
 pub use timer::TimerContext;
 
 use crate::keyboard::KeyboardSnapshot;
+use crate::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use crate::llama::eval::LlamaBus;
 use crate::llama::state::mask_for;
 
@@ -300,6 +301,73 @@ impl CoreRuntime {
         }
     }
 
+    fn refresh_key_irq_latch(&mut self) {
+        if let Some(kb) = self.keyboard.as_ref() {
+            let fifo_len = kb.fifo_len();
+            if fifo_len > 0 {
+                self.timer.key_irq_latched = true;
+                let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                if (isr & ISR_KEYI) == 0 {
+                    let new_isr = isr | ISR_KEYI;
+                    self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+                    self.timer.irq_pending = true;
+                    if self.timer.irq_source.is_none() {
+                        self.timer.irq_source = Some("KEY".to_string());
+                    }
+                    self.timer.last_fired = self.timer.irq_source.clone();
+                    self.timer.irq_isr = new_isr;
+                    self.timer.irq_imr = self
+                        .memory
+                        .read_internal_byte(IMEM_IMR_OFFSET)
+                        .unwrap_or(self.timer.irq_imr);
+                }
+            } else {
+                self.timer.key_irq_latched = false;
+            }
+        }
+    }
+
+    fn arm_pending_irq_from_isr(&mut self) {
+        if self.timer.irq_pending {
+            return;
+        }
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if isr == 0 {
+            return;
+        }
+        let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+        let mut irm_enabled = (imr & IMR_MASTER) != 0;
+        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
+            // Level-triggered keyboard/on-key interrupts should not be lost while IMR master is off.
+            irm_enabled = true;
+        }
+        if irm_enabled {
+            if (imr & isr) == 0 && (isr & (ISR_KEYI | ISR_ONKI)) == 0 {
+                // Nothing enabled by IMR and no level-triggered keyboard/on-key bits.
+                return;
+            }
+            self.timer.irq_pending = true;
+            self.timer.irq_isr = isr;
+            self.timer.irq_imr = imr;
+            // Prefer keyboard/ONK over timers, then MTI, then STI.
+            let src = if (isr & ISR_KEYI) != 0 {
+                "KEY"
+            } else if (isr & ISR_ONKI) != 0 {
+                "ONK"
+            } else if (isr & ISR_MTI) != 0 {
+                "MTI"
+            } else if (isr & ISR_STI) != 0 {
+                "STI"
+            } else {
+                "IRQ"
+            };
+            if self.timer.irq_source.is_none() {
+                self.timer.irq_source = Some(src.to_string());
+            }
+            self.timer.last_fired = self.timer.irq_source.clone();
+        }
+    }
+
     pub fn load_rom(&mut self, blob: &[u8], start: usize) {
         let end = (start + blob.len()).min(self.memory.external_len());
         if start < end {
@@ -375,43 +443,80 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
+            self.refresh_key_irq_latch();
+            // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
+            self.arm_pending_irq_from_isr();
+
+            // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
+            if self.state.is_halted() {
+                if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                    if isr != 0 {
+                        self.state.set_halted(false);
+                        self.timer.irq_pending = true;
+                        self.timer.irq_isr = isr;
+                        self.timer.irq_imr = self
+                            .memory
+                            .read_internal_byte(IMEM_IMR_OFFSET)
+                            .unwrap_or(self.timer.irq_imr);
+                        if self.timer.irq_source.is_none() {
+                            let src = if (isr & ISR_KEYI) != 0 {
+                                "KEY"
+                            } else if (isr & ISR_ONKI) != 0 {
+                                "ONK"
+                            } else if (isr & ISR_MTI) != 0 {
+                                "MTI"
+                            } else if (isr & ISR_STI) != 0 {
+                                "STI"
+                            } else {
+                                "IRQ"
+                            };
+                            self.timer.irq_source = Some(src.to_string());
+                        }
+                        self.timer.last_fired = self.timer.irq_source.clone();
+                    }
+                }
+            }
+
             // Halted cores still consume idle cycles and allow timers/IRQs to run.
             if self.state.is_halted() {
                 let prev_cycle = self.metadata.cycle_count;
                 let new_cycle = prev_cycle.wrapping_add(1);
                 self.metadata.cycle_count = new_cycle;
-                let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
-                    &mut self.memory,
-                    new_cycle,
-                    |mem| {
-                        if let Some(kb) = self.keyboard.as_mut() {
-                            let events = kb.scan_tick();
-                            if events > 0 {
-                                kb.write_fifo_to_memory(mem);
+                if !self.timer.in_interrupt {
+                    let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                        &mut self.memory,
+                        new_cycle,
+                        |mem| {
+                            if let Some(kb) = self.keyboard.as_mut() {
+                                let events = kb.scan_tick();
+                                if events > 0 {
+                                    kb.write_fifo_to_memory(mem);
+                                }
+                                (events, kb.fifo_len() > 0)
+                            } else {
+                                (0, false)
                             }
-                            (events, kb.fifo_len() > 0)
-                        } else {
-                            (0, false)
-                        }
-                    },
-                );
-                let fifo_non_empty = self
-                    .keyboard
-                    .as_ref()
-                    .map(|kb| kb.fifo_len() > 0)
-                    .unwrap_or(false);
-                if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
-                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                        if (isr & 0x04) == 0 {
-                            self.memory.write_internal_byte(0xFC, isr | 0x04);
-                            self.timer.irq_pending = true;
-                            self.timer.irq_source = Some("KEY".to_string());
-                            self.timer.last_fired = self.timer.irq_source.clone();
+                        },
+                    );
+                    let fifo_non_empty = self
+                        .keyboard
+                        .as_ref()
+                        .map(|kb| kb.fifo_len() > 0)
+                        .unwrap_or(false);
+                    if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
+                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                            if (isr & 0x04) == 0 {
+                                self.memory.write_internal_byte(0xFC, isr | 0x04);
+                                self.timer.irq_pending = true;
+                                self.timer.irq_source = Some("KEY".to_string());
+                                self.timer.last_fired = self.timer.irq_source.clone();
+                            }
                         }
                     }
-                }
-                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                    self.timer.irq_isr = isr;
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        self.timer.irq_isr = isr;
+                    }
                 }
                 self.deliver_pending_irq();
                 continue;
@@ -453,41 +558,87 @@ impl CoreRuntime {
             let prev_cycle = self.metadata.cycle_count;
             let new_cycle = prev_cycle.wrapping_add(cycle_increment);
             for cyc in prev_cycle + 1..=new_cycle {
-                let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
-                    &mut self.memory,
-                    cyc,
-                    |mem| {
-                        if let Some(kb) = self.keyboard.as_mut() {
-                            let events = kb.scan_tick();
-                            if events > 0 {
-                                kb.write_fifo_to_memory(mem);
+                if !self.timer.in_interrupt {
+                    let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                        &mut self.memory,
+                        cyc,
+                        |mem| {
+                            if let Some(kb) = self.keyboard.as_mut() {
+                                let events = kb.scan_tick();
+                                if events > 0 {
+                                    kb.write_fifo_to_memory(mem);
+                                }
+                                (events, kb.fifo_len() > 0)
+                            } else {
+                                (0, false)
                             }
-                            (events, kb.fifo_len() > 0)
-                        } else {
-                            (0, false)
-                        }
-                    },
-                );
-                let fifo_non_empty = self
-                    .keyboard
-                    .as_ref()
-                    .map(|kb| kb.fifo_len() > 0)
-                    .unwrap_or(false);
-                if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
-                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                        if (isr & 0x04) == 0 {
-                            self.memory.write_internal_byte(0xFC, isr | 0x04);
-                            self.timer.irq_pending = true;
-                            self.timer.irq_source = Some("KEY".to_string());
-                            self.timer.last_fired = self.timer.irq_source.clone();
+                        },
+                    );
+                    let fifo_non_empty = self
+                        .keyboard
+                        .as_ref()
+                        .map(|kb| kb.fifo_len() > 0)
+                        .unwrap_or(false);
+                    if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
+                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                            if (isr & 0x04) == 0 {
+                                self.memory.write_internal_byte(0xFC, isr | 0x04);
+                                self.timer.irq_pending = true;
+                                self.timer.irq_source = Some("KEY".to_string());
+                                self.timer.last_fired = self.timer.irq_source.clone();
+                            }
                         }
                     }
-                }
-                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                    self.timer.irq_isr = isr;
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        self.timer.irq_isr = isr;
+                    }
                 }
             }
             self.metadata.cycle_count = new_cycle;
+            if opcode == 0x01 {
+                let irq_src = self.timer.irq_source.clone();
+                self.timer.in_interrupt = false;
+                if irq_src.as_deref().is_some_and(|s| s == "KEY") {
+                    self.timer.key_irq_latched = false;
+                }
+                self.timer.irq_source = None;
+                // Clear the delivered ISR bit to mirror Python RETI.
+                let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
+                let mut mask_from_stack: Option<u8> = None;
+                if let Some(mask_val) = self.timer.interrupt_stack.pop() {
+                    if mask_val <= 0xFF {
+                        mask_from_stack = Some(mask_val as u8);
+                    }
+                }
+                // Discard any remaining stack frames (e.g., stored PCs).
+                self.timer.interrupt_stack.clear();
+                if let Some(isr_val) = self.memory.load(isr_addr, 8) {
+                    if let Some(bit) = irq_src
+                        .as_deref()
+                        .and_then(|s| src_mask_for_name(s))
+                        .or(mask_from_stack)
+                    {
+                        let cleared = (isr_val as u8) & (!bit);
+                        let _ = self.memory.store(isr_addr, 8, cleared as u32);
+                    }
+                }
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        let mut payload = std::collections::HashMap::new();
+                        payload.insert("pc".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                        payload.insert("ret".to_string(), perfetto::AnnotationValue::Pointer(self.state.pc() as u64));
+                        payload.insert(
+                            "src".to_string(),
+                            perfetto::AnnotationValue::Str(irq_src.unwrap_or_else(|| "".to_string())),
+                        );
+                        payload.insert(
+                            "imr".to_string(),
+                            perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
+                        );
+                        tracer.record_irq_event("IRQ_Exit", payload);
+                    }
+                }
+            }
             self.deliver_pending_irq();
         }
         Ok(())
@@ -654,16 +805,30 @@ impl CoreRuntime {
         let Some((mask, src_name)) = src else { return };
 
         let pc = self.state.pc() & ADDRESS_MASK;
+        let (op_idx, pc_trace) = crate::llama::eval::perfetto_instr_context()
+            .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), pc));
+
+        let record_stack_write = |addr: u32, bits: u8, value: u32, space: &str| {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_mem_write(op_idx, pc_trace, addr, value, space, bits);
+                }
+            }
+        };
         // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
         self.push_stack(RegName::S, pc, 24);
+        record_stack_write(self.state.get_reg(RegName::S), 24, pc & ADDRESS_MASK, "external");
         let f = self.state.get_reg(RegName::F) & 0xFF;
         self.push_stack(RegName::S, f, 8);
+        record_stack_write(self.state.get_reg(RegName::S), 8, f, "external");
         let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
         let imr_mem = self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF;
         self.push_stack(RegName::S, imr_mem, 8);
+        record_stack_write(self.state.get_reg(RegName::S), 8, imr_mem, "external");
         let cleared_imr = (imr_mem as u8) & 0x7F;
         let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
         self.state.set_reg(RegName::IMR, cleared_imr as u32);
+        record_stack_write(imr_addr, 8, cleared_imr as u32, "internal");
 
         // Jump to vector.
         let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
@@ -677,6 +842,20 @@ impl CoreRuntime {
                 .load(INTERRUPT_VECTOR_ADDR + 2, 8)
                 .unwrap_or(0)
                 << 16);
+        if src_name == "KEY" {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert("from".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                    payload.insert("vector".to_string(), perfetto::AnnotationValue::Pointer(vec as u64));
+                    payload.insert("imr".to_string(), perfetto::AnnotationValue::UInt(imr as u64));
+                    payload.insert("isr".to_string(), perfetto::AnnotationValue::UInt(isr as u64));
+                    payload.insert("s".to_string(), perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64));
+                    payload.insert("src".to_string(), perfetto::AnnotationValue::Str(src_name.to_string()));
+                    tracer.record_irq_event("KeyDeliver", payload);
+                }
+            }
+        }
         self.state.set_pc(vec & ADDRESS_MASK);
         self.state.set_halted(false);
 
@@ -685,23 +864,38 @@ impl CoreRuntime {
         self.timer.irq_pending = false;
         self.timer.irq_source = Some(src_name.to_string());
         self.timer.interrupt_stack.push(pc);
-        self.timer.last_fired = Some(src_name.to_string());
-        self.timer.irq_isr = self
-            .memory
-            .read_internal_byte(IMEM_ISR_OFFSET)
-            .unwrap_or(self.timer.irq_isr);
-        self.timer.irq_imr = self
-            .memory
-            .read_internal_byte(IMEM_IMR_OFFSET)
-            .unwrap_or(self.timer.irq_imr);
-        // Remember active mask to help RETI-like flows.
-        self.timer.next_interrupt_id = self.timer.next_interrupt_id.saturating_add(1);
-        self.timer.interrupt_stack.push(mask as u32);
+            self.timer.last_fired = Some(src_name.to_string());
+            self.timer.irq_isr = self
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(self.timer.irq_isr);
+            self.timer.irq_imr = self
+                .memory
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.timer.irq_imr);
+            // Remember active mask to help RETI-like flows.
+            self.timer.next_interrupt_id = self.timer.next_interrupt_id.saturating_add(1);
+            self.timer.interrupt_stack.push(mask as u32);
+
+        // Emit an IRQ entry marker for perfetto parity with Python.
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = std::collections::HashMap::new();
+                payload.insert("pc".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                payload.insert("from".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                payload.insert("vector".to_string(), perfetto::AnnotationValue::Pointer(vec as u64));
+                payload.insert("imr_before".to_string(), perfetto::AnnotationValue::UInt(imr as u64));
+                payload.insert("imr_after".to_string(), perfetto::AnnotationValue::UInt(cleared_imr as u64));
+                payload.insert("isr".to_string(), perfetto::AnnotationValue::UInt(isr as u64));
+                payload.insert("s".to_string(), perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64));
+                payload.insert("y".to_string(), perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64));
+                payload.insert("src".to_string(), perfetto::AnnotationValue::Str(src_name.to_string()));
+                tracer.record_irq_event("IRQ_Enter", payload);
+            }
+        }
     }
 }
 
-const IMEM_IMR_OFFSET: u32 = 0xFB;
-const IMEM_ISR_OFFSET: u32 = 0xFC;
 const IMR_MASTER: u8 = 0x80;
 const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
@@ -712,6 +906,16 @@ const ISR_STI: u8 = 0x02;
 const ISR_KEYI: u8 = 0x04;
 const ISR_ONKI: u8 = 0x08;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
+
+fn src_mask_for_name(name: &str) -> Option<u8> {
+    match name {
+        "KEY" => Some(ISR_KEYI),
+        "ONK" => Some(ISR_ONKI),
+        "MTI" => Some(ISR_MTI),
+        "STI" => Some(ISR_STI),
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -785,6 +989,326 @@ mod tests {
         assert_eq!(rt2.timer.interrupt_stack, vec![0xDEAD]);
         assert_eq!(rt2.timer.next_interrupt_id, 5);
         assert_eq!(rt2.timer.last_fired, None);
+    }
+
+    #[test]
+    fn arm_pending_irq_from_isr_handles_masked_keyi() {
+        let mut rt = CoreRuntime::new();
+        // IMR master off, KEYI asserted.
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        rt.timer.irq_pending = false;
+        rt.arm_pending_irq_from_isr();
+        assert!(
+            rt.timer.irq_pending,
+            "KEYI should arm pending even when IMR master is 0"
+        );
+        assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
+        // Pure timer bit with master off should not arm.
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_MTI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        rt.arm_pending_irq_from_isr();
+        assert!(
+            !rt.timer.irq_pending,
+            "MTI with IMR master 0 should stay masked until IMR enables it"
+        );
+    }
+
+    #[test]
+    fn refresh_key_irq_latch_reasserts_keyi() {
+        let mut rt = CoreRuntime::new();
+        let kb = rt.keyboard.as_mut().unwrap();
+        let mut events = 0;
+        // Press a key and strobe columns so scan_tick can debounce.
+        kb.press_matrix_code(0x10, &mut rt.memory);
+        kb.handle_write(0xF0, 0xFF, &mut rt.memory);
+        kb.handle_write(0xF1, 0x07, &mut rt.memory);
+        for _ in 0..8 {
+            events += kb.scan_tick();
+            if events > 0 {
+                break;
+            }
+        }
+        kb.write_fifo_to_memory(&mut rt.memory);
+        assert!(kb.fifo_len() > 0, "fifo should have data after scan");
+        // Simulate firmware clearing ISR and dropping the latch.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
+        rt.timer.key_irq_latched = false;
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+        rt.refresh_key_irq_latch();
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & ISR_KEYI, 0, "KEYI should be reasserted from FIFO latch");
+        assert!(rt.timer.key_irq_latched, "latch should stay set when FIFO non-empty");
+        assert!(rt.timer.irq_pending, "pending IRQ should be armed from latch");
+        assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
+    }
+
+    #[test]
+    fn halt_wakes_on_isr_even_when_imr_masked() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_halted(true);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        let _ = rt.step(1);
+        assert!(
+            !rt.state.is_halted(),
+            "HALT should clear when ISR is set regardless of IMR"
+        );
+        assert!(rt.timer.irq_pending, "pending IRQ should be armed on wake");
+    }
+
+    #[test]
+    fn irq_delivery_waits_for_imr_master_then_delivers() {
+        let mut rt = CoreRuntime::new();
+        // Seed PC/SP and vector.
+        rt.state.set_reg(RegName::PC, 0x0010);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory.write_external_byte(0x0FFFFA, 0x34);
+        rt.memory.write_external_byte(0x0FFFFB, 0x12);
+        rt.memory.write_external_byte(0x0FFFFC, 0x00);
+
+        // Assert ISR but keep IMR master off.
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        let _ = rt.step(1);
+        // Should remain pending and PC should not jump to vector yet.
+        assert!(rt.timer.irq_pending, "pending should stay set while IMR master=0");
+        assert_ne!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x001234);
+
+        // Enable IMR master and KEY bits; next step should deliver.
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        let _ = rt.step(1);
+        assert!(
+            !rt.timer.irq_pending,
+            "pending should clear after delivery when IMR master enabled"
+        );
+        assert_eq!(
+            rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
+            0x001234,
+            "PC should jump to interrupt vector when IMR master enabled"
+        );
+    }
+
+    #[test]
+    fn onk_pending_survives_imr_mask_and_delivers_when_enabled() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::PC, 0x0010);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory.write_external_byte(0x0FFFFA, 0x78);
+        rt.memory.write_external_byte(0x0FFFFB, 0x56);
+        rt.memory.write_external_byte(0x0FFFFC, 0x00);
+
+        // ONK latched, IMR master off.
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        let _ = rt.step(1);
+        assert!(
+            rt.timer.irq_pending,
+            "ONK should arm pending while IMR master is off"
+        );
+        // Enable master + ONK, then deliver.
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_ONK);
+        let _ = rt.step(1);
+        assert!(
+            !rt.timer.irq_pending,
+            "ONK pending should clear after delivery once IMR enables it"
+        );
+        assert_eq!(
+            rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
+            0x005678,
+            "PC should jump to vector on ONK delivery"
+        );
+    }
+
+    #[test]
+    fn reti_clears_interrupt_state_and_isr_bit() {
+        let mut rt = CoreRuntime::new();
+        // Prepare stack and vector to a RETI instruction.
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.state.set_reg(RegName::PC, 0x0000);
+        rt.memory
+            .write_external_byte(0x0FFFFA, 0x10); // vector low
+        rt.memory
+            .write_external_byte(0x0FFFFB, 0x00);
+        rt.memory
+            .write_external_byte(0x0FFFFC, 0x00);
+        rt.memory.write_external_byte(0x0010, 0x01); // RETI opcode
+        // Seed IMR/ISR and pending IRQ.
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+
+        // First step: deliver IRQ and jump to vector.
+        rt.step(1).expect("deliver irq");
+        assert!(rt.timer.in_interrupt, "interrupt flag should set on entry");
+        assert_eq!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x0010);
+
+        // Second step: execute RETI, clear bookkeeping and ISR bit.
+        rt.step(1).expect("execute reti");
+        assert!(!rt.timer.in_interrupt, "RETI should clear in_interrupt");
+        assert!(rt.timer.interrupt_stack.is_empty(), "interrupt stack should clear");
+        assert!(rt.timer.irq_source.is_none(), "irq source should clear after RETI");
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & ISR_KEYI, 0, "RETI should clear delivered ISR bit");
+    }
+
+    #[test]
+    fn reti_uses_interrupt_stack_mask_when_source_missing() {
+        let mut rt = CoreRuntime::new();
+        // Fake a pending interrupt state with stack mask stored.
+        rt.state.set_reg(RegName::S, 0x0030);
+        rt.state.set_reg(RegName::PC, 0x0000);
+        // RETI opcode at PC.
+        rt.memory.write_external_byte(0x0000, 0x01);
+        // Stack frame IMR,F,PC
+        rt.memory.write_external_byte(0x0030, 0xFF); // IMR
+        rt.memory.write_external_byte(0x0031, 0x00); // F
+        rt.memory.write_external_byte(0x0032, 0x34);
+        rt.memory.write_external_byte(0x0033, 0x12);
+        rt.memory.write_external_byte(0x0034, 0x00);
+        // ISR has ONK bit set; irq_source unknown but interrupt_stack carries mask.
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
+        rt.timer.in_interrupt = true;
+        rt.timer.interrupt_stack = vec![0x123456, u32::from(ISR_ONKI)];
+        rt.timer.irq_source = None;
+
+        rt.step(1).expect("execute reti without source");
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(
+            isr & ISR_ONKI,
+            0,
+            "RETI should clear ISR using mask from interrupt_stack when source is None"
+        );
+        assert!(rt.timer.interrupt_stack.is_empty());
+    }
+
+    #[test]
+    fn timers_do_not_tick_during_interrupts() {
+        let mut rt = CoreRuntime::new();
+        rt.timer.enabled = true;
+        rt.timer.mti_period = 1;
+        rt.timer.reset(0);
+        rt.timer.in_interrupt = true;
+        rt.state.set_reg(RegName::PC, 0x0000); // opcode 0x00 = NOP by default
+
+        rt.step(1).expect("step while in interrupt");
+        assert!(
+            !rt.timer.irq_pending,
+            "timer should not pend IRQs while in_interrupt"
+        );
+        assert_eq!(
+            rt.timer.next_mti, 1,
+            "next_mti should stay unchanged when ticking is gated"
+        );
+    }
+
+    #[test]
+    fn perfetto_irq_entry_exit_smoke() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join("perfetto_irq_smoke.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.lock().unwrap();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut rt = CoreRuntime::new();
+        // Place RETI at vector 0x0000.
+        rt.memory.write_external_byte(0x0000, 0x01);
+        rt.memory.write_external_byte(0x0FFFFA, 0x00);
+        rt.memory.write_external_byte(0x0FFFFB, 0x00);
+        rt.memory.write_external_byte(0x0FFFFC, 0x00);
+        rt.state.set_reg(RegName::PC, 0x0100);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+
+        rt.step(1).expect("deliver irq and jump to vector");
+        rt.step(1).expect("execute RETI");
+
+        let size = fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+        assert!(size > 0, "perfetto trace should be written");
+        // Trace should contain IRQ markers.
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.contains("IRQ_Enter"),
+            "trace should contain IRQ_Enter marker"
+        );
+        assert!(
+            text.contains("KeyDeliver"),
+            "trace should contain KeyDeliver marker"
+        );
+        assert!(
+            text.contains("IRQ_Exit"),
+            "trace should contain IRQ_Exit marker"
+        );
+        assert!(
+            text.contains("src"),
+            "trace should encode src annotation for IRQ"
+        );
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn perfetto_timer_irq_smoke() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join("perfetto_timer_irq.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.lock().unwrap();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut rt = CoreRuntime::new();
+        // Seed IMR to allow MTI delivery and place a NOP at PC=0.
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        rt.memory.write_external_byte(0x0000, 0x00); // NOP
+        rt.state.set_reg(RegName::PC, 0x0000);
+        rt.state.set_reg(RegName::S, 0x0200);
+        // Configure timer to fire immediately.
+        rt.timer.enabled = true;
+        rt.timer.mti_period = 1;
+        rt.timer.next_mti = 0;
+
+        rt.step(1).expect("tick timer and deliver MTI");
+
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.contains("TimerFired"),
+            "trace should contain TimerFired marker"
+        );
+        assert!(
+            text.contains("IRQ_Enter"),
+            "trace should contain IRQ_Enter for MTI"
+        );
+        assert!(
+            text.contains("src"),
+            "trace should encode src annotation for MTI"
+        );
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap());
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]

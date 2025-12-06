@@ -12,7 +12,14 @@ use super::{
     opcodes::{InstrKind, OpcodeEntry, OperandKind, RegName},
     state::{mask_for, LlamaState},
 };
-use crate::{memory::with_imr_read_suppressed, PERFETTO_TRACER};
+use crate::{
+    memory::{
+        with_imr_read_suppressed, IMEM_BP_OFFSET, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET,
+        IMEM_LCC_OFFSET, IMEM_PX_OFFSET, IMEM_PY_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET,
+        IMEM_UCR_OFFSET, IMEM_USR_OFFSET, INTERNAL_MEMORY_START,
+    },
+    PERFETTO_TRACER,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -109,21 +116,7 @@ const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
     0xF7, 0xFC,
 ];
 
-const INTERNAL_MEMORY_START: u32 = 0x100000; // align with Python INTERNAL_MEMORY_START
-const IMEM_IMR_OFFSET: u32 = 0xFB; // IMR offset within internal space (matches Python IMEMRegisters.IMR)
-const IMEM_UCR_OFFSET: u32 = 0xF7;
-const IMEM_USR_OFFSET: u32 = 0xF8;
-const IMEM_ISR_OFFSET: u32 = 0xFC;
-const IMEM_SCR_OFFSET: u32 = 0xFD;
-const IMEM_LCC_OFFSET: u32 = 0xFE;
-const IMEM_SSR_OFFSET: u32 = 0xFF;
-const IMEM_KOL_OFFSET: u32 = 0xF0;
-const IMEM_KOH_OFFSET: u32 = 0xF1;
-const IMEM_KIL_OFFSET: u32 = 0xF2;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const IMEM_BP_OFFSET: u32 = 0xEC;
-const IMEM_PX_OFFSET: u32 = 0xED;
-const IMEM_PY_OFFSET: u32 = 0xEE;
 
 pub trait LlamaBus {
     fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
