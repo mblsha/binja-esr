@@ -25,6 +25,7 @@ pub struct PerfettoTracer {
     imr_read_zero: u64,
     imr_read_nonzero: u64,
     irq_seq: u64,
+    mem_seq: u64,
 }
 
 impl PerfettoTracer {
@@ -61,6 +62,7 @@ impl PerfettoTracer {
             imr_read_zero: 0,
             imr_read_nonzero: 0,
             irq_seq: 0,
+            mem_seq: 0,
         }
     }
 
@@ -189,20 +191,36 @@ impl PerfettoTracer {
         } else {
             value & ((1u32 << size) - 1)
         };
+        let (ctx_op, ctx_pc) = perfetto_instr_context()
+            .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
+        let have_ctx = ctx_op != u64::MAX;
+        let ts = if have_ctx {
+            self.ts(ctx_op, 1)
+        } else {
+            // Align host writes to the same clock domain (units_per_instr) when a cycle count is provided.
+            self.mem_seq = self.mem_seq.saturating_add(1);
+            cycle
+                .saturating_mul(self.units_per_instr)
+                .saturating_add(self.mem_seq)
+                as i64
+        };
         let mut ev = self
             .builder
-            .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), cycle as i64);
+            .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
         ev.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("address", AnnotationValue::Pointer(addr as u64)),
             ("value", AnnotationValue::UInt(masked_value as u64)),
             ("space", AnnotationValue::Str(space.to_string())),
             ("size", AnnotationValue::UInt(size as u64)),
-            ("cycle", AnnotationValue::UInt(cycle)),
         ]);
-        if let Some(pc_val) = pc {
+        if let Some(pc_val) = pc.or(if have_ctx { Some(ctx_pc) } else { None }) {
             ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
         }
+        if have_ctx {
+            ev.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
+        }
+        ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
         ev.finish();
     }
 

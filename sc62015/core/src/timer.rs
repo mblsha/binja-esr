@@ -280,7 +280,12 @@ impl TimerContext {
     {
         let (mti, sti) = self.tick_timers(memory, cycle_count);
         let mut key_events = 0usize;
-        let mut fifo_has_data = self.key_irq_latched;
+        // Only carry a latch forward while the keyboard IRQ is enabled; otherwise drop it.
+        let mut fifo_has_data = if self.kb_irq_enabled {
+            self.key_irq_latched
+        } else {
+            false
+        };
         let mut kb_stats: Option<KeyboardTelemetry> = None;
         if mti {
             let (events, has_data, stats) = keyboard_scan(memory);
@@ -288,7 +293,11 @@ impl TimerContext {
             key_events = events;
             fifo_has_data = fifo_has_data || has_data;
         }
-        if (key_events > 0 || fifo_has_data) && self.kb_irq_enabled {
+        let pc_trace = crate::llama::eval::perfetto_instr_context()
+            .map(|(_, pc)| pc)
+            .unwrap_or_else(perfetto_last_pc);
+        let latch_active = self.kb_irq_enabled && (key_events > 0 || fifo_has_data);
+        if latch_active {
             if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                 if (isr & 0x04) == 0 {
                     memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
@@ -320,7 +329,7 @@ impl TimerContext {
                     );
                     payload.insert(
                         "pc".to_string(),
-                        AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                        AnnotationValue::Pointer(pc_trace as u64),
                     );
                     payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                     tracer.record_irq_event("KeyIRQ", payload);
@@ -351,7 +360,7 @@ impl TimerContext {
                             );
                             payload.insert(
                                 "pc".to_string(),
-                                AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                                AnnotationValue::Pointer(pc_trace as u64),
                             );
                             payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                             tracer.record_irq_event("KeyScanEmpty", payload);
@@ -361,11 +370,7 @@ impl TimerContext {
             }
         }
         // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
-        if key_events > 0 || fifo_has_data {
-            self.key_irq_latched = true;
-        } else {
-            self.key_irq_latched = false;
-        }
+        self.key_irq_latched = latch_active;
         // Perfetto parity: emit a scan event regardless of new key events.
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
@@ -402,7 +407,7 @@ impl TimerContext {
                 }
                 payload.insert(
                     "pc".to_string(),
-                    AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                    AnnotationValue::Pointer(pc_trace as u64),
                 );
                 payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 tracer.record_irq_event("KeyScanEvent", payload);

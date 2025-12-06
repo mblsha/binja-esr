@@ -1726,7 +1726,7 @@ impl LlamaExecutor {
         // Trace the pre-execution snapshot using the resolved opcode/PC (post-PRE).
         self.trace_instr(trace_opcode, state, bus, instr_index, trace_pc);
 
-        match entry {
+        let result = match entry {
             Some(entry) => self.execute_with(
                 trace_opcode,
                 entry,
@@ -1737,7 +1737,10 @@ impl LlamaExecutor {
                 prefix_len,
             ),
             None => fallback_unknown(state, prefix_len),
-        }
+        };
+        // Keep last-PC aligned to the post-execution PC so timer/IRQ traces reflect the live value.
+        PERF_LAST_PC.store(state.pc() & mask_for(RegName::PC), Ordering::Relaxed);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2300,8 +2303,6 @@ impl LlamaExecutor {
                     // Push 16-bit return; retain high page from current PC (Python parity).
                     let high = state.pc() & 0xFF0000;
                     dest = high | (target & 0xFFFF);
-                    // Remember the call-site page so RET can reconstruct even if PC page changes.
-                    state.push_call_page(high);
                     16
                 } else {
                     24
@@ -2314,10 +2315,8 @@ impl LlamaExecutor {
             }
             InstrKind::Ret => {
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
-                // Python RET reconstructs the high page from the current PC at return time; prefer saved call page when present.
-                let high = state
-                    .pop_call_page()
-                    .unwrap_or_else(|| state.peek_call_page().unwrap_or(state.pc() & 0xFF0000));
+                // Python RET reconstructs the high page from the current PC at return time (no saved page).
+                let high = state.pc() & 0xFF0000;
                 state.set_pc((high | (ret & 0xFFFF)) & 0xFFFFF);
                 state.call_depth_dec();
                 Ok(1)
@@ -3212,7 +3211,7 @@ mod tests {
     }
 
     #[test]
-    fn ret_near_uses_call_site_page() {
+    fn ret_near_uses_current_page_at_return() {
         // CALL from page 0x30000 to 0x0020, then RET executed after callee changes PC page.
         let mut bus = MemBus::with_size(0x50000);
         let call_pc = 0x30000u32;
@@ -3239,8 +3238,8 @@ mod tests {
         state.set_pc(alt_pc);
         let len_ret = exec.execute(0x06, &mut state, &mut bus).unwrap();
         assert_eq!(len_ret, 1);
-        // Return PC should use the CALL-site page (0x30000) even though RET ran on 0x40000.
-        assert_eq!(state.get_reg(RegName::PC), 0x30003);
+        // Return PC should use the RET page (0x40000) like Python, not the CALL-site page.
+        assert_eq!(state.get_reg(RegName::PC), 0x40003);
     }
 
     #[test]
