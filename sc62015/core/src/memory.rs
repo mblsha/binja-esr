@@ -243,14 +243,13 @@ impl MemoryImage {
             if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
                     // Use last completed instruction index to avoid emitting unmatched op_index values.
-                    let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(
-                        || {
+                    let (seq, pc) =
+                        crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
                             (
                                 crate::llama::eval::perfetto_last_instr_index(),
                                 crate::llama::eval::perfetto_last_pc(),
                             )
-                        },
-                    );
+                        });
                     tracer.record_mem_write(seq, pc, address, value as u32, "internal", 8);
                 }
             }
@@ -330,15 +329,18 @@ impl MemoryImage {
             if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
                     let ctx = crate::llama::eval::perfetto_instr_context();
-                    let (op_idx, pc) = ctx
-                        .unwrap_or((
-                            crate::llama::eval::perfetto_last_instr_index(),
-                            crate::llama::eval::perfetto_last_pc(),
-                        ));
+                    let (op_idx, pc) = ctx.unwrap_or((
+                        crate::llama::eval::perfetto_last_instr_index(),
+                        crate::llama::eval::perfetto_last_pc(),
+                    ));
                     tracer.record_imr_read(
                         if op_idx == u64::MAX { None } else { Some(pc) },
                         value as u8,
-                        if op_idx == u64::MAX { None } else { Some(op_idx) },
+                        if op_idx == u64::MAX {
+                            None
+                        } else {
+                            Some(op_idx)
+                        },
                     );
                 }
             }
@@ -354,28 +356,30 @@ impl MemoryImage {
                 self.dirty_internal
                     .push((INTERNAL_MEMORY_START + offset, value));
                 if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                        .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), 0));
-                    tracer.record_mem_write(
-                        seq,
-                        pc,
-                        INTERNAL_MEMORY_START + offset,
-                        value as u32,
-                        "internal",
-                        8,
-                    );
-                    // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
-                    if offset == 0xFC && (value & 0x04) != 0 {
-                        tracer.record_keyi_set(
+                    if let Some(tracer) = guard.as_mut() {
+                        let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                            .unwrap_or_else(|| {
+                                (crate::llama::eval::perfetto_last_instr_index(), 0)
+                            });
+                        tracer.record_mem_write(
+                            seq,
+                            pc,
                             INTERNAL_MEMORY_START + offset,
-                            value,
-                            Some(seq),
-                            Some(pc),
+                            value as u32,
+                            "internal",
+                            8,
                         );
+                        // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
+                        if offset == 0xFC && (value & 0x04) != 0 {
+                            tracer.record_keyi_set(
+                                INTERNAL_MEMORY_START + offset,
+                                value,
+                                Some(seq),
+                                Some(pc),
+                            );
+                        }
                     }
                 }
-            }
             }
         }
     }
@@ -400,7 +404,11 @@ impl MemoryImage {
                         tracer.record_imr_read(
                             if op_idx == u64::MAX { None } else { Some(pc) },
                             val,
-                            if op_idx == u64::MAX { None } else { Some(op_idx) },
+                            if op_idx == u64::MAX {
+                                None
+                            } else {
+                                Some(op_idx)
+                            },
                         );
                     }
                 }
@@ -409,12 +417,17 @@ impl MemoryImage {
                 if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
                         let ctx = crate::llama::eval::perfetto_instr_context();
-                        let (op_idx, pc) = ctx.unwrap_or((u64::MAX, crate::llama::eval::perfetto_last_pc()));
+                        let (op_idx, pc) =
+                            ctx.unwrap_or((u64::MAX, crate::llama::eval::perfetto_last_pc()));
                         tracer.record_kio_read(
                             if op_idx == u64::MAX { None } else { Some(pc) },
                             offset as u8,
                             val,
-                            if op_idx == u64::MAX { None } else { Some(op_idx) },
+                            if op_idx == u64::MAX {
+                                None
+                            } else {
+                                Some(op_idx)
+                            },
                         );
                     }
                 }

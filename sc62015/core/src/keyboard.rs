@@ -314,26 +314,26 @@ impl KeyboardMatrix {
         }
         memory.write_internal_byte(0xF2, self.kil_latch);
         if events > 0 {
-            self.write_fifo_to_memory(memory);
+            self.write_fifo_to_memory(memory, true);
         }
         events
     }
 
-fn log_fifo_write(addr: u32, value: u8) {
-    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-        if let Some(tracer) = guard.as_mut() {
-            let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
-                (
-                    crate::llama::eval::perfetto_last_instr_index(),
-                    crate::llama::eval::perfetto_last_pc(),
-                )
-            });
-            tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
+    fn log_fifo_write(addr: u32, value: u8) {
+        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
+                    (
+                        crate::llama::eval::perfetto_last_instr_index(),
+                        crate::llama::eval::perfetto_last_pc(),
+                    )
+                });
+                tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
+            }
         }
     }
-}
 
-    pub fn write_fifo_to_memory(&self, memory: &mut MemoryImage) {
+    pub fn write_fifo_to_memory(&self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
         let mut idx = self.fifo_head;
         for slot in 0..FIFO_SIZE {
             let value = if slot < self.fifo_count {
@@ -351,27 +351,28 @@ fn log_fifo_write(addr: u32, value: u8) {
         Self::log_fifo_write(FIFO_HEAD_ADDR, self.fifo_head as u8);
         memory.write_external_byte(FIFO_TAIL_ADDR, self.fifo_tail as u8);
         Self::log_fifo_write(FIFO_TAIL_ADDR, self.fifo_tail as u8);
-            if self.keyi_latch && self.fifo_count > 0 {
-                if let Some(isr) = memory.read_internal_byte(0xFC) {
-                    if (isr & 0x04) == 0 {
-                        memory.write_internal_byte(0xFC, isr | 0x04);
-                        if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-                            if let Some(tracer) = guard.as_mut() {
-                                let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                                    .unwrap_or_else(|| {
-                                        (
-                                            crate::llama::eval::perfetto_last_instr_index(),
-                                            crate::llama::eval::perfetto_last_pc(),
-                                        )
-                                    });
-                                tracer.record_mem_write(
-                                    seq,
-                                    pc,
-                                    crate::INTERNAL_MEMORY_START + 0xFC,
-                                    (isr | 0x04) as u32,
-                                    "internal",
-                                    8,
-                                );
+        // Assert KEYI only if keyboard IRQs are enabled, matching Python gating.
+        if self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
+            if let Some(isr) = memory.read_internal_byte(0xFC) {
+                if (isr & 0x04) == 0 {
+                    memory.write_internal_byte(0xFC, isr | 0x04);
+                    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                        if let Some(tracer) = guard.as_mut() {
+                            let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                                .unwrap_or_else(|| {
+                                    (
+                                        crate::llama::eval::perfetto_last_instr_index(),
+                                        crate::llama::eval::perfetto_last_pc(),
+                                    )
+                                });
+                            tracer.record_mem_write(
+                                seq,
+                                pc,
+                                crate::INTERNAL_MEMORY_START + 0xFC,
+                                (isr | 0x04) as u32,
+                                "internal",
+                                8,
+                            );
                         }
                     }
                 }
@@ -399,7 +400,7 @@ fn log_fifo_write(addr: u32, value: u8) {
             state.release_ticks = 0;
             state.repeat_ticks = 0;
         }
-        self.write_fifo_to_memory(memory);
+        self.write_fifo_to_memory(memory, true);
     }
 
     pub fn fifo_snapshot(&self) -> Vec<u8> {
@@ -413,9 +414,7 @@ fn log_fifo_write(addr: u32, value: u8) {
     }
 
     fn key_name_for(matrix_code: u8) -> Option<&'static str> {
-        KEY_NAMES
-            .get(matrix_code as usize)
-            .and_then(|entry| *entry)
+        KEY_NAMES.get(matrix_code as usize).and_then(|entry| *entry)
     }
 
     pub fn irq_count(&self) -> u32 {
@@ -441,11 +440,7 @@ fn log_fifo_write(addr: u32, value: u8) {
     }
 
     pub fn telemetry(&self) -> KeyboardTelemetry {
-        let pressed = self
-            .states
-            .iter()
-            .filter(|s| s.pressed)
-            .count();
+        let pressed = self.states.iter().filter(|s| s.pressed).count();
         KeyboardTelemetry {
             pressed,
             strobe_count: self.strobe_count,

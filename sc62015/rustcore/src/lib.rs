@@ -6,6 +6,7 @@ use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyAnyMethods, PyBytes, PyDict, PyModule, PyTuple};
 use pyo3::Bound;
+use retrobus_perfetto::AnnotationValue;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
@@ -19,7 +20,6 @@ use sc62015_core::{
     PerfettoTracer, SnapshotMetadata, ADDRESS_MASK, EXTERNAL_SPACE, INTERNAL_MEMORY_START,
     PERFETTO_TRACER,
 };
-use retrobus_perfetto::AnnotationValue;
 use serde_json::{json, to_value, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -241,6 +241,7 @@ struct LlamaContractBus {
     events: Vec<ContractEvent>,
     timer: TimerContext,
     cycles: u64,
+    host_memory: Option<Py<PyAny>>,
     last_lcd_status: Option<u8>,
     lcd_log: Vec<(u32, u8)>,
     lcd_shadow: [LcdShadow; 2],
@@ -256,6 +257,7 @@ impl LlamaContractBus {
             events: Vec::new(),
             timer: TimerContext::new(true, 0, 0),
             cycles: 0,
+            host_memory: None,
             last_lcd_status: None,
             lcd_log: Vec::new(),
             lcd_shadow: [LcdShadow::new(), LcdShadow::new()],
@@ -287,6 +289,11 @@ impl LlamaContractBus {
         self.memory.set_keyboard_bridge(enabled);
     }
 
+    /// Optional host memory hook for addresses that require Python overlays (e.g., ON/ONK).
+    fn set_host_memory(&mut self, memory: Py<PyAny>) {
+        self.host_memory = Some(memory);
+    }
+
     fn requires_python(&self, address: u32) -> bool {
         self.memory.requires_python(address)
     }
@@ -311,17 +318,19 @@ impl LlamaContractBus {
                 self.timer.irq_isr = isr;
             }
 
-            let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
-                &mut self.memory,
-                self.cycles,
-                |mem| {
-                    let events = self.keyboard.scan_tick();
-                    if events > 0 {
-                        self.keyboard.write_fifo_to_memory(mem);
-                    }
-                    (events, self.keyboard.fifo_len() > 0, Some(self.keyboard.telemetry()))
-                },
-            );
+            let (mti, sti, key_events, _kb_stats) =
+                self.timer
+                    .tick_timers_with_keyboard(&mut self.memory, self.cycles, |mem| {
+                        let events = self.keyboard.scan_tick();
+                        if events > 0 {
+                            self.keyboard.write_fifo_to_memory(mem, true);
+                        }
+                        (
+                            events,
+                            self.keyboard.fifo_len() > 0,
+                            Some(self.keyboard.telemetry()),
+                        )
+                    });
             if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
                 // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
                 if let Some(isr) = self.memory.read_internal_byte(0xFC) {
@@ -362,6 +371,24 @@ impl LlamaContractBus {
     #[pyo3(signature = (address, pc=None))]
     fn read_byte(&mut self, address: u32, pc: Option<u32>) -> PyResult<u8> {
         let addr = address & ADDRESS_MASK;
+        // Defer to host memory when Python overlays are required.
+        if self.memory.requires_python(addr) {
+            if let Some(host) = &self.host_memory {
+                return Python::with_gil(|py| {
+                    let bound = host.bind(py);
+                    bound
+                        .call_method1("read_byte", (addr, pc))
+                        .or_else(|err| {
+                            if err.is_instance_of::<PyTypeError>(py) {
+                                bound.call_method1("read_byte", (addr,))
+                            } else {
+                                Err(err)
+                            }
+                        })
+                        .and_then(|val| val.extract::<u8>())
+                });
+            }
+        }
         if addr >= INTERNAL_MEMORY_START {
             if let Some(offset) = addr.checked_sub(INTERNAL_MEMORY_START) {
                 if let Some(value) = self.keyboard.handle_read(offset, &mut self.memory) {
@@ -393,6 +420,23 @@ impl LlamaContractBus {
     #[pyo3(signature = (address, value, pc=None))]
     fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
         let addr = address & ADDRESS_MASK;
+        if self.memory.requires_python(addr) {
+            if let Some(host) = &self.host_memory {
+                return Python::with_gil(|py| {
+                    let bound = host.bind(py);
+                    bound
+                        .call_method1("write_byte", (addr, value, pc))
+                        .or_else(|err| {
+                            if err.is_instance_of::<PyTypeError>(py) {
+                                bound.call_method1("write_byte", (addr, value))
+                            } else {
+                                Err(err)
+                            }
+                        })
+                        .map(|_| ())
+                });
+            }
+        }
         if addr >= INTERNAL_MEMORY_START {
             if let Some(offset) = addr.checked_sub(INTERNAL_MEMORY_START) {
                 if self.keyboard.handle_write(offset, value, &mut self.memory) {
@@ -1139,8 +1183,14 @@ impl LlamaCpu {
                     .get("src")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                self.timer.last_irq_pc = last_irq.get("pc").and_then(|v| v.as_u64()).map(|v| v as u32);
-                self.timer.last_irq_vector = last_irq.get("vector").and_then(|v| v.as_u64()).map(|v| v as u32);
+                self.timer.last_irq_pc = last_irq
+                    .get("pc")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
+                self.timer.last_irq_vector = last_irq
+                    .get("vector")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
             }
         }
         Ok(())

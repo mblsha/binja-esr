@@ -1,9 +1,9 @@
 // PY_SOURCE: pce500/scheduler.py:TimerScheduler
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator._tick_timers
 
+use crate::keyboard::KeyboardTelemetry;
 use crate::llama::eval::perfetto_last_pc;
 use crate::memory::MemoryImage;
-use crate::keyboard::KeyboardTelemetry;
 use crate::perfetto::AnnotationValue;
 use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
@@ -129,24 +129,14 @@ impl TimerContext {
         &mut self,
         timer: &TimerInfo,
         interrupts: &InterruptInfo,
-        current_cycle: u64,
+        _current_cycle: u64,
     ) {
         self.enabled = timer.enabled;
         self.mti_period = timer.mti_period.max(0) as u64;
         self.sti_period = timer.sti_period.max(0) as u64;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
-        // Rebase saved absolute targets so they do not land in the past relative to the restored cycle counter.
-        if self.mti_period > 0 {
-            while self.next_mti != 0 && self.next_mti < current_cycle {
-                self.next_mti = self.next_mti.wrapping_add(self.mti_period);
-            }
-        }
-        if self.sti_period > 0 {
-            while self.next_sti != 0 && self.next_sti < current_cycle {
-                self.next_sti = self.next_sti.wrapping_add(self.sti_period);
-            }
-        }
+        // Python stores absolute targets; do not rebase forward. Allow immediate fire if targets are in the past.
         self.kb_irq_enabled = timer.kb_irq_enabled;
 
         self.irq_pending = interrupts.pending;
@@ -178,7 +168,10 @@ impl TimerContext {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             self.last_irq_pc = last.get("pc").and_then(|v| v.as_u64()).map(|v| v as u32);
-            self.last_irq_vector = last.get("vector").and_then(|v| v.as_u64()).map(|v| v as u32);
+            self.last_irq_vector = last
+                .get("vector")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
         }
     }
 
@@ -260,9 +253,7 @@ impl TimerContext {
                 self.last_fired = self.irq_source.clone();
             }
             // Keep mirror fields in sync with the actual IMEM values for snapshots/tracing parity.
-            self.irq_imr = memory
-                .read_internal_byte(0xFB)
-                .unwrap_or(self.irq_imr);
+            self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
             self.irq_isr = memory
                 .read_internal_byte(ISR_OFFSET)
                 .unwrap_or(self.irq_isr);
@@ -308,14 +299,25 @@ impl TimerContext {
             self.irq_source = Some("KEY".to_string());
             self.last_fired = self.irq_source.clone();
             self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
-            self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
+            self.irq_isr = memory
+                .read_internal_byte(ISR_OFFSET)
+                .unwrap_or(self.irq_isr);
             // Perfetto parity: emit a KeyIRQ marker with PC/cycle context.
             if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
                     let mut payload = HashMap::new();
-                    payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
-                    payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-                    payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                    payload.insert(
+                        "events".to_string(),
+                        AnnotationValue::UInt(key_events as u64),
+                    );
+                    payload.insert(
+                        "imr".to_string(),
+                        AnnotationValue::UInt(self.irq_imr as u64),
+                    );
+                    payload.insert(
+                        "isr".to_string(),
+                        AnnotationValue::UInt(self.irq_isr as u64),
+                    );
                     payload.insert(
                         "pc".to_string(),
                         AnnotationValue::Pointer(perfetto_last_pc() as u64),
@@ -331,15 +333,26 @@ impl TimerContext {
                     if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                         if let Some(tracer) = guard.as_mut() {
                             let mut payload = HashMap::new();
-                            payload.insert("pressed".to_string(), AnnotationValue::UInt(stats.pressed as u64));
-                            payload.insert("strobe_count".to_string(), AnnotationValue::UInt(stats.strobe_count as u64));
-                            payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
-                            payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                            payload.insert(
+                                "pressed".to_string(),
+                                AnnotationValue::UInt(stats.pressed as u64),
+                            );
+                            payload.insert(
+                                "strobe_count".to_string(),
+                                AnnotationValue::UInt(stats.strobe_count as u64),
+                            );
+                            payload
+                                .insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                            payload
+                                .insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
                             payload.insert(
                                 "active_cols".to_string(),
                                 AnnotationValue::Str(format!("{:?}", stats.active_columns)),
                             );
-                            payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
+                            payload.insert(
+                                "pc".to_string(),
+                                AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                            );
                             payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                             tracer.record_irq_event("KeyScanEmpty", payload);
                         }
@@ -357,14 +370,29 @@ impl TimerContext {
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
                 let mut payload = HashMap::new();
-                payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                payload.insert(
+                    "events".to_string(),
+                    AnnotationValue::UInt(key_events as u64),
+                );
                 payload.insert("mti".to_string(), AnnotationValue::UInt(mti as u64));
                 payload.insert("sti".to_string(), AnnotationValue::UInt(sti as u64));
-                payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-                payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                payload.insert(
+                    "imr".to_string(),
+                    AnnotationValue::UInt(self.irq_imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    AnnotationValue::UInt(self.irq_isr as u64),
+                );
                 if let Some(stats) = kb_stats.as_ref() {
-                    payload.insert("pressed".to_string(), AnnotationValue::UInt(stats.pressed as u64));
-                    payload.insert("strobe_count".to_string(), AnnotationValue::UInt(stats.strobe_count as u64));
+                    payload.insert(
+                        "pressed".to_string(),
+                        AnnotationValue::UInt(stats.pressed as u64),
+                    );
+                    payload.insert(
+                        "strobe_count".to_string(),
+                        AnnotationValue::UInt(stats.strobe_count as u64),
+                    );
                     payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
                     payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
                     payload.insert(
@@ -372,7 +400,10 @@ impl TimerContext {
                         AnnotationValue::Str(format!("{:?}", stats.active_columns)),
                     );
                 }
-                payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
+                payload.insert(
+                    "pc".to_string(),
+                    AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                );
                 payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
@@ -504,17 +535,26 @@ mod tests {
         // IMR master cleared -> still pend like Python; delivery will gate later.
         mem.write_internal_byte(0xFB, 0x00);
         let (_mti, _sti) = timer.tick_timers(&mut mem, 1);
-        assert!(timer.irq_pending, "irq_pending should set even when IMR master=0");
+        assert!(
+            timer.irq_pending,
+            "irq_pending should set even when IMR master=0"
+        );
 
         // Enable master but mask out MTI bit -> still pend; gating happens during delivery.
         mem.write_internal_byte(0xFB, 0x80);
         timer.tick_timers(&mut mem, 2);
-        assert!(timer.irq_pending, "irq_pending should set even when MTI masked");
+        assert!(
+            timer.irq_pending,
+            "irq_pending should set even when MTI masked"
+        );
 
         // Enable MTI bit -> should pend on next fire.
         mem.write_internal_byte(0xFB, 0x81);
         timer.tick_timers(&mut mem, 3);
-        assert!(timer.irq_pending, "irq_pending should set when master+MTI enabled");
+        assert!(
+            timer.irq_pending,
+            "irq_pending should set when master+MTI enabled"
+        );
     }
 
     #[test]
@@ -525,15 +565,12 @@ mod tests {
         // Force MTI to fire on first tick.
         timer.next_mti = 0;
         let mut scanned = false;
-        let (mti, _sti, key_events, _stats) = timer.tick_timers_with_keyboard(
-            &mut mem,
-            1,
-            |_mem| {
+        let (mti, _sti, key_events, _stats) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| {
                 scanned = true;
                 // Simulate one key event and non-empty FIFO.
                 (1, true, None)
-            },
-        );
+            });
         assert!(mti, "MTI should fire");
         assert!(scanned, "keyboard_scan should run even when IRQ disabled");
         assert_eq!(key_events, 1);
@@ -553,7 +590,11 @@ mod tests {
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None));
         assert_eq!(events, 1);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & 0x04, 0x04, "KEYI bit should be set on MTI with events");
+        assert_eq!(
+            isr & 0x04,
+            0x04,
+            "KEYI bit should be set on MTI with events"
+        );
     }
 
     #[test]
@@ -565,7 +606,14 @@ mod tests {
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None));
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & 0x04, 0x04, "KEYI should reassert when FIFO has data even without new events");
-        assert!(timer.irq_pending, "pending IRQ should be latched when FIFO remains non-empty");
+        assert_eq!(
+            isr & 0x04,
+            0x04,
+            "KEYI should reassert when FIFO has data even without new events"
+        );
+        assert!(
+            timer.irq_pending,
+            "pending IRQ should be latched when FIFO remains non-empty"
+        );
     }
 }

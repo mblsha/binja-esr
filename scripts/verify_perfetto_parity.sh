@@ -10,6 +10,7 @@ PAIRS=(
   "trace_ref_python.trace trace_ref_llama.trace"
   "sweep_trace_python.trace sweep_trace_llama.trace"
   "long_trace_python.trace long_trace_llama.trace"
+  "trace_latest_python.trace trace_latest_llama.trace"
 )
 
 cd "$ROOT"

@@ -24,8 +24,7 @@ fn lcd_reads_stub_to_ff() {
     use sc62015_core::lcd::LcdController;
 
     let mut lcd = LcdController::new();
-    // Instruction read path: returns ON flag only (default off => 0).
-    assert_eq!(lcd.read(0x2001), Some(0x00));
-    // Data read path: default VRAM returns 0 and advances Y.
-    assert_eq!(lcd.read(0x2003), Some(0x00));
+    // Both instruction/data reads are stubbed to 0xFF to match Python overlay.
+    assert_eq!(lcd.read(0x2001), Some(0xFF));
+    assert_eq!(lcd.read(0x2003), Some(0xFF));
 }

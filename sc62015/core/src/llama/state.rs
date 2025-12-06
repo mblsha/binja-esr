@@ -199,6 +199,11 @@ impl LlamaState {
     pub fn pop_call_page(&mut self) -> Option<u32> {
         self.call_page_stack.pop()
     }
+
+    /// Peek the most recent call page without popping; helps RET when stack was manipulated.
+    pub fn peek_call_page(&self) -> Option<u32> {
+        self.call_page_stack.last().copied()
+    }
 }
 
 #[cfg(test)]

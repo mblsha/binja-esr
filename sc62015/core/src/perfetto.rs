@@ -1,7 +1,7 @@
 // PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
 
-use crate::Result;
 use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
+use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,8 +38,7 @@ impl PerfettoTracer {
         let instr_counter_track = builder.add_counter_track("instructions", Some("count"), None);
         let imr_track = builder.add_thread("IMR");
         let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);
-        let imr_nonzero_counter =
-            builder.add_counter_track("IMR_ReadNonZero", Some("count"), None);
+        let imr_nonzero_counter = builder.add_counter_track("IMR_ReadNonZero", Some("count"), None);
         // Align IRQ tracks with Python tracer.
         let irq_timer_track = builder.add_thread("irq.timer");
         let irq_key_track = builder.add_thread("irq.key");
@@ -199,16 +198,22 @@ impl PerfettoTracer {
 
         // Mirror Python tracer: update IMR counters.
         if zero {
-            self.builder
-                .update_counter(self.imr_zero_counter, self.imr_read_zero as f64, ts as i64);
+            self.builder.update_counter(
+                self.imr_zero_counter,
+                self.imr_read_zero as f64,
+                ts as i64,
+            );
         } else {
-            self.builder
-                .update_counter(self.imr_nonzero_counter, self.imr_read_nonzero as f64, ts as i64);
+            self.builder.update_counter(
+                self.imr_nonzero_counter,
+                self.imr_read_nonzero as f64,
+                ts as i64,
+            );
         }
 
-        let mut ev =
-            self.builder
-                .add_instant_event(self.imr_track, "IMR_Read".to_string(), ts);
+        let mut ev = self
+            .builder
+            .add_instant_event(self.imr_track, "IMR_Read".to_string(), ts);
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", pc_val as u64);
         }
@@ -249,7 +254,13 @@ impl PerfettoTracer {
     }
 
     /// Lightweight instant for IMEM/ISR diagnostics (used by test hooks).
-    pub fn record_keyi_set(&mut self, addr: u32, value: u8, op_index: Option<u64>, pc: Option<u32>) {
+    pub fn record_keyi_set(
+        &mut self,
+        addr: u32,
+        value: u8,
+        op_index: Option<u64>,
+        pc: Option<u32>,
+    ) {
         let ts = op_index.map(|idx| self.ts(idx, 0)).unwrap_or(0);
         let mut ev = self
             .builder
@@ -266,7 +277,13 @@ impl PerfettoTracer {
     }
 
     /// Generic KIO read hook for KOL/KOH/KIL visibility.
-    pub fn record_kio_read(&mut self, pc: Option<u32>, offset: u8, value: u8, op_index: Option<u64>) {
+    pub fn record_kio_read(
+        &mut self,
+        pc: Option<u32>,
+        offset: u8,
+        value: u8,
+        op_index: Option<u64>,
+    ) {
         let ts = op_index.map(|idx| self.ts(idx, 0)).unwrap_or(0);
         let mut ev = self
             .builder
@@ -333,9 +350,7 @@ impl PerfettoTracer {
             }
             _ => self.irq_misc_track,
         };
-        let mut ev = self
-            .builder
-            .add_instant_event(track, name.to_string(), ts);
+        let mut ev = self.builder.add_instant_event(track, name.to_string(), ts);
         for (k, v) in payload {
             ev.add_annotation(k, v);
         }

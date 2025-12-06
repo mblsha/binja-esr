@@ -22,8 +22,11 @@ fn scan_tick_populates_fifo_and_sets_keyi() {
             break;
         }
     }
-    assert!(events > 0, "scan_tick should detect the pressed key after debounce");
-    kb.write_fifo_to_memory(&mut mem);
+    assert!(
+        events > 0,
+        "scan_tick should detect the pressed key after debounce"
+    );
+    kb.write_fifo_to_memory(&mut mem, true);
     assert!(kb.fifo_len() > 0);
     let isr = mem.read_internal_byte(0xFC).unwrap_or(0);
     assert_ne!(isr & 0x04, 0, "KEYI should be set after scan");
@@ -43,7 +46,7 @@ fn keyi_is_not_reasserted_by_kil_read_without_host() {
             break;
         }
     }
-    kb.write_fifo_to_memory(&mut mem);
+    kb.write_fifo_to_memory(&mut mem, true);
     assert!(kb.fifo_len() > 0);
     let isr_after_scan = mem.read_internal_byte(0xFC).unwrap_or(0);
     assert_ne!(isr_after_scan & 0x04, 0, "KEYI should be set after scan");

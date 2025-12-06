@@ -12,11 +12,11 @@ use sc62015_core::{
         state::LlamaState,
     },
     memory::{
-        IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
-        IMEM_LCC_OFFSET, MemoryImage,
+        MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
     },
     timer::TimerContext,
-    ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER, PerfettoTracer,
+    PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
 use std::env;
@@ -411,7 +411,7 @@ impl StandaloneBus {
         // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
         let events = self.keyboard.scan_tick();
         if events > 0 {
-            self.keyboard.write_fifo_to_memory(&mut self.memory);
+            self.keyboard.write_fifo_to_memory(&mut self.memory, true);
             self.pending_kil = self.keyboard.fifo_len() > 0;
             if self.pending_kil {
                 self.raise_key_irq();
@@ -464,7 +464,8 @@ impl StandaloneBus {
         self.memory.write_internal_byte(0xFF, new_ssr);
         if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
             if (isr & ISR_ONKI) == 0 {
-                self.memory.write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+                self.memory
+                    .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
             }
         }
         self.pending_onk = true;
@@ -564,8 +565,7 @@ impl StandaloneBus {
         }
         // Master bit set means interrupts enabled. Keyboard IRQs are level-triggered, so allow
         // them to pend even if IRM is still masked to mirror the Python emulator.
-        let irm_enabled =
-            (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0) || (isr & ISR_ONKI != 0);
+        let irm_enabled = (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0) || (isr & ISR_ONKI != 0);
         if !irm_enabled {
             return false;
         }
@@ -734,17 +734,19 @@ impl StandaloneBus {
     }
 
     fn tick_timers_only(&mut self) {
-        let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
-            &mut self.memory,
-            self.cycle_count,
-            |mem| {
-                let events = self.keyboard.scan_tick();
-                if events > 0 {
-                    self.keyboard.write_fifo_to_memory(mem);
-                }
-                (events, self.keyboard.fifo_len() > 0, Some(self.keyboard.telemetry()))
-            },
-        );
+        let (mti, sti, key_events, _kb_stats) =
+            self.timer
+                .tick_timers_with_keyboard(&mut self.memory, self.cycle_count, |mem| {
+                    let events = self.keyboard.scan_tick();
+                    if events > 0 {
+                        self.keyboard.write_fifo_to_memory(mem, true);
+                    }
+                    (
+                        events,
+                        self.keyboard.fifo_len() > 0,
+                        Some(self.keyboard.telemetry()),
+                    )
+                });
         if mti && key_events > 0 {
             self.pending_kil = self.keyboard.fifo_len() > 0;
             if self.pending_kil {
@@ -1661,7 +1663,10 @@ mod tests {
             .unwrap_or(0);
         assert_ne!(isr & super::ISR_ONKI, 0, "ONKI should latch after ON key");
         // irq_pending should fire with ONK masked in.
-        assert!(bus.irq_pending(), "ONK should make IRQ pending when unmasked");
+        assert!(
+            bus.irq_pending(),
+            "ONK should make IRQ pending when unmasked"
+        );
         // Simulate RETI clearing the active IRQ mask.
         bus.active_irq_mask = super::ISR_ONKI;
         if let Some(cur_isr) = bus.memory.read_internal_byte(super::IMEM_ISR_OFFSET) {
@@ -1670,7 +1675,10 @@ mod tests {
         }
         bus.pending_onk = true;
         // irq_pending should reassert ONKI when pending_onk is true.
-        assert!(bus.irq_pending(), "pending_onk should reassert ONKI after clear");
+        assert!(
+            bus.irq_pending(),
+            "pending_onk should reassert ONKI after clear"
+        );
     }
 
     #[test]
@@ -1695,7 +1703,8 @@ mod tests {
         assert!(bus.irq_pending(), "ONK pending should signal irq_pending");
         bus.deliver_irq(&mut state);
         assert_eq!(
-            bus.active_irq_mask, super::ISR_ONKI,
+            bus.active_irq_mask,
+            super::ISR_ONKI,
             "ONK should be the active IRQ mask"
         );
         assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));

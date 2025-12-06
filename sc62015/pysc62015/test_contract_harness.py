@@ -13,7 +13,7 @@ from sc62015.pysc62015.contract_harness import (
 def _init_backends():
     py_backend = PythonContractBackend()
     try:
-        rust_backend = RustContractBackend()
+        rust_backend = RustContractBackend(host_memory=py_backend.memory)
     except (
         RuntimeError
     ) as exc:  # pragma: no cover - exercised in CI when rustcore exists
@@ -211,6 +211,60 @@ def test_dsll_dsrll_imem_cadence():
     rs_int = runs["llama"].snapshot.internal
     for offset in (0xB2, 0xB3):
         assert py_int[offset] == rs_int[offset]
+
+
+def test_requires_python_overlays_are_delegated():
+    py_backend, rust_backend = _init_backends()
+    # Default keyboard bridge is disabled, so KIO and ON/ONK should route via host memory.
+    vectors = [
+        AccessVector("read", 0x100000 + 0xF5, pc=0x080000),  # ON
+        AccessVector("read", 0x100000 + 0xF6, pc=0x080002),  # ONK
+        AccessVector("write", 0x100000 + 0xF0, 0xFF, pc=0x080010),  # KOL
+        AccessVector("write", 0x100000 + 0xF1, 0x07, pc=0x080012),  # KOH
+        AccessVector("read", 0x100000 + 0xF2, pc=0x080020),  # KIL latch
+    ]
+
+    runs = run_dual(vectors, python_backend=py_backend, rust_backend=rust_backend)
+    py_run = runs["python"]
+    rs_run = runs["llama"]
+
+    py_events = [(e.kind, e.address, e.value, e.pc) for e in py_run.events]
+    rs_events = [(e.kind, e.address, e.value, e.pc) for e in rs_run.events]
+    assert py_events == rs_events
+
+    # KIO/ON/ONK reads should match exactly.
+    py_int = py_run.snapshot.internal
+    rs_int = rs_run.snapshot.internal
+    for offset in (0xF0, 0xF1, 0xF2, 0xF5, 0xF6):
+        assert py_int[offset] == rs_int[offset]
+
+
+def test_lcd_reads_stubbed_to_ff_parity():
+    py_backend, rust_backend = _init_backends()
+    vectors = [
+        AccessVector("write", 0x2000, 0x12, pc=0x090000),  # instruction write (ignored by read stub)
+        AccessVector("read", 0x2001, pc=0x090002),  # instruction read
+        AccessVector("write", 0xA000, 0x34, pc=0x090010),  # high mirror write
+        AccessVector("read", 0xA001, pc=0x090012),  # data read
+    ]
+
+    runs = run_dual(vectors, python_backend=py_backend, rust_backend=rust_backend)
+    py_run = runs["python"]
+    rs_run = runs["llama"]
+
+    py_events = [(e.kind, e.address, e.value, e.pc) for e in py_run.events]
+    rs_events = [(e.kind, e.address, e.value, e.pc) for e in rs_run.events]
+    assert py_events == rs_events
+
+    # External memory should remain aligned; read events must report 0xFF on both sides.
+    assert py_run.snapshot.external is not None
+    assert rs_run.snapshot.external is not None
+    py_ext = py_run.snapshot.external
+    rs_ext = rs_run.snapshot.external
+    assert py_ext[0x2000] == rs_ext[0x2000] == 0x12
+    assert py_ext[0xA000] == rs_ext[0xA000] == 0x34
+    assert py_ext[0x2001] == rs_ext[0x2001]
+    assert py_ext[0xA001] == rs_ext[0xA001]
 
 
 def test_exl_dsbl_cadence_parity():

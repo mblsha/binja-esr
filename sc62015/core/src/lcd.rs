@@ -137,10 +137,14 @@ struct LcdCommand {
 
 fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite)> {
     let addr_hi = address & 0x0F000;
+    let addr_lo = address & 0x0FFF;
+    // Low mirror is restricted to 0x2000-0x200F to match Python overlay range.
+    if addr_hi == LCD_ADDR_HI_RIGHT && addr_lo > 0x000F {
+        return None;
+    }
     if addr_hi != LCD_ADDR_HI_LEFT && addr_hi != LCD_ADDR_HI_RIGHT {
         return None;
     }
-    let addr_lo = address & 0x0FFF;
     let rw = if (addr_lo & 1) == 0 {
         ReadWrite::Write
     } else {
@@ -158,7 +162,7 @@ fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite
         0b11 => return None,
         _ => return None,
     };
-        Some((cs, di, rw))
+    Some((cs, di, rw))
 }
 
 fn parse_command(address: u32, value: u8) -> Option<LcdCommand> {
@@ -232,7 +236,7 @@ impl LcdController {
 
     pub fn handles(&self, address: u32) -> bool {
         let addr = address & 0x00FF_FFFF;
-        (0x0000_2000..=0x0000_2FFF).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
+        (0x0000_2000..=0x0000_200F).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
     }
 
     pub fn write(&mut self, address: u32, value: u8) {
@@ -256,23 +260,12 @@ impl LcdController {
     }
 
     pub fn read(&mut self, address: u32) -> Option<u8> {
-        let (cs, di, rw) = decode_access(address)?;
+        let (_cs, _di, rw) = decode_access(address)?;
         if rw != ReadWrite::Read {
             return None;
         }
-        let idxs = match cs {
-            ChipSelect::Both => [0usize, 1usize],
-            ChipSelect::Left => [0usize, 0usize],
-            ChipSelect::Right => [1usize, 1usize],
-        };
-        let primary = idxs[0];
-        let chip = &mut self.chips[primary];
-        let value = match di {
-            DataInstruction::Instruction => chip.read_status(),
-            DataInstruction::Data => chip.read_data(),
-        };
-        self.last_status = Some(value);
-        Some(value)
+        // Parity: Python controller wrapper always returns 0xFF and does not update counters/state.
+        Some(0xFF)
     }
 
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
@@ -491,14 +484,19 @@ mod tests {
     }
 
     #[test]
-    fn handles_full_0x2000_mirror() {
+    fn handles_mirrors_match_python() {
         let mut lcd = LcdController::new();
         assert!(lcd.handles(0x2000));
-        assert!(lcd.handles(0x2ABC));
-        assert!(lcd.handles(0x2FFF));
+        assert!(lcd.handles(0x200F));
+        assert!(
+            !lcd.handles(0x2010),
+            "low mirror is restricted to 0x2000-0x200F"
+        );
+        assert!(lcd.handles(0xA000));
+        assert!(lcd.handles(0xAFFF));
 
-        // Write ON instruction to right chip via an address in the 0x2xxx range (CS=Right).
-        lcd.write(0x2B04, 0x3F);
+        // Write ON instruction to right chip via the high mirror (CS=Right).
+        lcd.write(0xA004, 0x3F);
         assert!(lcd.chips[1].state.on);
     }
 }

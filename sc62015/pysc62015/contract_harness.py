@@ -247,10 +247,16 @@ class PythonContractBackend:
 class RustContractBackend:
     """Adapter over the PyO3 contract bus exposed by the LLAMA core."""
 
-    def __init__(self) -> None:
+    def __init__(self, host_memory: Optional[PCE500Memory] = None) -> None:
         if rustcore is None or not hasattr(rustcore, "LlamaContractBus"):
             raise RuntimeError("LlamaContractBus is unavailable (build rustcore first)")
         self._impl = rustcore.LlamaContractBus()  # type: ignore[attr-defined]
+        if host_memory is not None and hasattr(self._impl, "set_host_memory"):
+            try:
+                self._impl.set_host_memory(host_memory)
+            except Exception:
+                # Best-effort: if host memory fails, continue with local-only model.
+                pass
 
     def load_memory(
         self, *, external: Optional[bytes] = None, internal: Optional[bytes] = None
@@ -385,7 +391,7 @@ def run_dual(
     """Drive identical vectors through Python and Rust backends."""
 
     py = python_backend or PythonContractBackend()
-    rs = rust_backend or RustContractBackend()
+    rs = rust_backend or RustContractBackend(host_memory=py.memory)
     return {
         "python": run_vectors(vectors, py),
         "llama": run_vectors(vectors, rs),
