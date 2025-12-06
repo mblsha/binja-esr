@@ -159,6 +159,15 @@ pub struct KeyboardMatrix {
     keyi_latch: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct KeyboardTelemetry {
+    pub pressed: usize,
+    pub strobe_count: u32,
+    pub kol: u8,
+    pub koh: u8,
+    pub active_columns: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardSnapshot {
     pub kol: u8,
@@ -429,6 +438,21 @@ fn log_fifo_write(addr: u32, value: u8) {
 
     pub fn fifo_len(&self) -> usize {
         self.fifo_count
+    }
+
+    pub fn telemetry(&self) -> KeyboardTelemetry {
+        let pressed = self
+            .states
+            .iter()
+            .filter(|s| s.pressed)
+            .count();
+        KeyboardTelemetry {
+            pressed,
+            strobe_count: self.strobe_count,
+            kol: self.kol,
+            koh: self.koh,
+            active_columns: self.active_columns(),
+        }
     }
 
     pub fn snapshot_state(&self) -> KeyboardSnapshot {

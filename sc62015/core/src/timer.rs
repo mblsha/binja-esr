@@ -1,10 +1,13 @@
 // PY_SOURCE: pce500/scheduler.py:TimerScheduler
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator._tick_timers
 
+use crate::llama::eval::perfetto_last_pc;
 use crate::memory::MemoryImage;
-use crate::PERFETTO_TRACER;
+use crate::keyboard::KeyboardTelemetry;
 use crate::perfetto::AnnotationValue;
+use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
+use serde_json::json;
 use std::collections::HashMap;
 
 const ISR_OFFSET: u32 = 0xFC;
@@ -26,6 +29,13 @@ pub struct TimerContext {
     pub next_interrupt_id: u32,
     pub last_fired: Option<String>,
     pub key_irq_latched: bool,
+    pub irq_total: u32,
+    pub irq_key: u32,
+    pub irq_mti: u32,
+    pub irq_sti: u32,
+    pub last_irq_src: Option<String>,
+    pub last_irq_pc: Option<u32>,
+    pub last_irq_vector: Option<u32>,
 }
 
 impl TimerContext {
@@ -46,6 +56,13 @@ impl TimerContext {
             next_interrupt_id: 0,
             last_fired: None,
             key_irq_latched: false,
+            irq_total: 0,
+            irq_key: 0,
+            irq_mti: 0,
+            irq_sti: 0,
+            last_irq_src: None,
+            last_irq_pc: None,
+            last_irq_vector: None,
         };
         ctx.reset(0);
         ctx
@@ -89,9 +106,21 @@ impl TimerContext {
             next_id: self.next_interrupt_id,
             imr: self.irq_imr,
             isr: self.irq_isr,
-            irq_counts: None,
-            last_irq: None,
-            irq_bit_watch: None,
+            irq_counts: Some(json!({
+                "total": self.irq_total,
+                "KEY": self.irq_key,
+                "MTI": self.irq_mti,
+                "STI": self.irq_sti,
+            })),
+            last_irq: Some(json!({
+                "src": self.last_irq_src,
+                "pc": self.last_irq_pc,
+                "vector": self.last_irq_vector,
+            })),
+            irq_bit_watch: Some(json!({
+                "IMR": {},
+                "ISR": {},
+            })),
         };
         (timer, interrupts)
     }
@@ -129,6 +158,28 @@ impl TimerContext {
         self.irq_isr = interrupts.isr;
         self.last_fired = None;
         self.key_irq_latched = false;
+        // Restore IRQ counters/last info if present; otherwise zero them.
+        self.irq_total = 0;
+        self.irq_key = 0;
+        self.irq_mti = 0;
+        self.irq_sti = 0;
+        self.last_irq_src = None;
+        self.last_irq_pc = None;
+        self.last_irq_vector = None;
+        if let Some(counts) = interrupts.irq_counts.as_ref() {
+            self.irq_total = counts.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            self.irq_key = counts.get("KEY").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            self.irq_mti = counts.get("MTI").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            self.irq_sti = counts.get("STI").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        }
+        if let Some(last) = interrupts.last_irq.as_ref().and_then(|v| v.as_object()) {
+            self.last_irq_src = last
+                .get("src")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            self.last_irq_pc = last.get("pc").and_then(|v| v.as_u64()).map(|v| v as u32);
+            self.last_irq_vector = last.get("vector").and_then(|v| v.as_u64()).map(|v| v as u32);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -199,14 +250,15 @@ impl TimerContext {
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
                 }
             }
-            self.irq_source = if fired_mti && fired_sti {
-                Some("MTI+STI".to_string())
-            } else if fired_mti {
-                Some("MTI".to_string())
-            } else {
-                Some("STI".to_string())
-            };
-            self.last_fired = self.irq_source.clone();
+            // Match Python: when both fire, the later source wins (STI overwrites MTI).
+            if fired_mti {
+                self.irq_source = Some("MTI".to_string());
+                self.last_fired = self.irq_source.clone();
+            }
+            if fired_sti {
+                self.irq_source = Some("STI".to_string());
+                self.last_fired = self.irq_source.clone();
+            }
             // Keep mirror fields in sync with the actual IMEM values for snapshots/tracing parity.
             self.irq_imr = memory
                 .read_internal_byte(0xFB)
@@ -218,7 +270,7 @@ impl TimerContext {
             // IMR masking is honored later during delivery.
             self.irq_pending = fired_mti || fired_sti;
             if self.irq_pending {
-                self.emit_irq_trace(fired_mti, fired_sti, memory);
+                self.emit_irq_trace(fired_mti, fired_sti, cycle_count, memory);
             }
         }
         (fired_mti, fired_sti)
@@ -231,37 +283,60 @@ impl TimerContext {
         memory: &mut MemoryImage,
         cycle_count: u64,
         mut keyboard_scan: F,
-    ) -> (bool, bool, usize)
+    ) -> (bool, bool, usize, Option<KeyboardTelemetry>)
     where
-        F: FnMut(&mut MemoryImage) -> (usize, bool),
-        {
-            let (mti, sti) = self.tick_timers(memory, cycle_count);
-            let mut key_events = 0usize;
-            let mut fifo_has_data = self.key_irq_latched;
-            if mti && self.kb_irq_enabled {
-                let (events, has_data) = keyboard_scan(memory);
-                key_events = events;
-                fifo_has_data = fifo_has_data || has_data;
-                if key_events > 0 || fifo_has_data {
-                    if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                        if (isr & 0x04) == 0 {
-                            memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
-                        }
+        F: FnMut(&mut MemoryImage) -> (usize, bool, Option<KeyboardTelemetry>),
+    {
+        let (mti, sti) = self.tick_timers(memory, cycle_count);
+        let mut key_events = 0usize;
+        let mut fifo_has_data = self.key_irq_latched;
+        let mut kb_stats: Option<KeyboardTelemetry> = None;
+        if mti && self.kb_irq_enabled {
+            let (events, has_data, stats) = keyboard_scan(memory);
+            kb_stats = stats;
+            key_events = events;
+            fifo_has_data = fifo_has_data || has_data;
+            if key_events > 0 || fifo_has_data {
+                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                    if (isr & 0x04) == 0 {
+                        memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
                     }
-                    // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
-                    self.irq_pending = true;
-                    self.irq_source = Some("KEY".to_string());
-                    self.last_fired = self.irq_source.clone();
-                    self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
-                    self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
-                    // Perfetto parity: emit a KeyIRQ marker.
-                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            let mut payload = HashMap::new();
-                            payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                }
+                // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
+                self.irq_pending = true;
+                self.irq_source = Some("KEY".to_string());
+                self.last_fired = self.irq_source.clone();
+                self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
+                self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
+                // Perfetto parity: emit a KeyIRQ marker.
+                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        let mut payload = HashMap::new();
+                        payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
                         payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
                         payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
                         tracer.record_irq_event("KeyIRQ", payload);
+                    }
+                }
+            }
+        }
+        if key_events == 0 {
+            if let Some(stats) = kb_stats.as_ref() {
+                if stats.pressed > 0 {
+                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                        if let Some(tracer) = guard.as_mut() {
+                            let mut payload = HashMap::new();
+                            payload.insert("pressed".to_string(), AnnotationValue::UInt(stats.pressed as u64));
+                            payload.insert("strobe_count".to_string(), AnnotationValue::UInt(stats.strobe_count as u64));
+                            payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                            payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                            payload.insert(
+                                "active_cols".to_string(),
+                                AnnotationValue::Str(format!("{:?}", stats.active_columns)),
+                            );
+                            payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
+                            tracer.record_irq_event("KeyScanEmpty", payload);
+                        }
                     }
                 }
             }
@@ -281,10 +356,21 @@ impl TimerContext {
                 payload.insert("sti".to_string(), AnnotationValue::UInt(sti as u64));
                 payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
                 payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                if let Some(stats) = kb_stats.as_ref() {
+                    payload.insert("pressed".to_string(), AnnotationValue::UInt(stats.pressed as u64));
+                    payload.insert("strobe_count".to_string(), AnnotationValue::UInt(stats.strobe_count as u64));
+                    payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                    payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                    payload.insert(
+                        "active_cols".to_string(),
+                        AnnotationValue::Str(format!("{:?}", stats.active_columns)),
+                    );
+                }
+                payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
-        (mti, sti, key_events)
+        (mti, sti, key_events, kb_stats)
     }
 
     pub fn drain_pending_irq(&mut self) -> Option<String> {
@@ -295,21 +381,28 @@ impl TimerContext {
         self.irq_source.take()
     }
 
-    fn emit_irq_trace(&self, fired_mti: bool, fired_sti: bool, memory: &MemoryImage) {
+    fn emit_irq_trace(
+        &self,
+        fired_mti: bool,
+        fired_sti: bool,
+        cycle_count: u64,
+        memory: &MemoryImage,
+    ) {
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
-                let mut payload = Vec::new();
+                let mut payload: Vec<(&str, u64)> = Vec::new();
                 if fired_mti {
-                    payload.push(("mti", 1u32));
+                    payload.push(("mti", 1));
                 }
                 if fired_sti {
-                    payload.push(("sti", 1u32));
+                    payload.push(("sti", 1));
                 }
-                payload.push(("isr", self.irq_isr as u32));
-                payload.push(("imr", self.irq_imr as u32));
+                payload.push(("isr", self.irq_isr as u64));
+                payload.push(("imr", self.irq_imr as u64));
+                payload.push(("cycle", cycle_count as u64));
                 // Include ISR snapshot if available.
                 if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                    payload.push(("isr_mem", isr as u32));
+                    payload.push(("isr_mem", isr as u64));
                 }
                 // Align event naming with Python tracer ("TimerFired").
                 tracer.record_irq_event(
@@ -422,8 +515,8 @@ mod tests {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         // Simulate keyboard scan emitting one event.
-        let (_, _, events) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true));
+        let (_, _, events, _) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None));
         assert_eq!(events, 1);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x04, 0x04, "KEYI bit should be set on MTI with events");
@@ -434,8 +527,8 @@ mod tests {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         // No new events, but FIFO already has data -> KEYI should still assert on MTI.
-        let (_mti, _sti, events) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true));
+        let (_mti, _sti, events, _) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None));
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x04, 0x04, "KEYI should reassert when FIFO has data even without new events");

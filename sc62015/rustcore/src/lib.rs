@@ -311,7 +311,7 @@ impl LlamaContractBus {
                 self.timer.irq_isr = isr;
             }
 
-            let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+            let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
                 &mut self.memory,
                 self.cycles,
                 |mem| {
@@ -319,7 +319,7 @@ impl LlamaContractBus {
                     if events > 0 {
                         self.keyboard.write_fifo_to_memory(mem);
                     }
-                    (events, self.keyboard.fifo_len() > 0)
+                    (events, self.keyboard.fifo_len() > 0, Some(self.keyboard.telemetry()))
                 },
             );
             if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
@@ -1018,6 +1018,67 @@ impl LlamaCpu {
             self.call_sub_level = call_depth;
             self.state.set_call_sub_level(call_depth);
         }
+        // Restore timer/interrupt mirrors if present to match Python snapshot semantics.
+        if let Ok(interrupts) = snap.getattr("interrupts") {
+            if let Ok(imr) = interrupts.getattr("imr").and_then(|o| o.extract::<u8>()) {
+                self.timer.irq_imr = imr;
+                self.mirror.write_internal_byte(IMEM_IMR_OFFSET, imr);
+            }
+            if let Ok(isr) = interrupts.getattr("isr").and_then(|o| o.extract::<u8>()) {
+                self.timer.irq_isr = isr;
+                self.mirror.write_internal_byte(IMEM_ISR_OFFSET, isr);
+            }
+            if let Ok(pending) = interrupts
+                .getattr("pending")
+                .and_then(|o| o.extract::<bool>())
+            {
+                self.timer.irq_pending = pending;
+            }
+            if let Ok(in_irq) = interrupts
+                .getattr("in_interrupt")
+                .and_then(|o| o.extract::<bool>())
+            {
+                self.timer.in_interrupt = in_irq;
+            }
+            if let Ok(src) = interrupts
+                .getattr("source")
+                .and_then(|o| o.extract::<Option<String>>())
+            {
+                self.timer.irq_source = src;
+            }
+            if let Ok(stack) = interrupts
+                .getattr("stack")
+                .and_then(|o| o.extract::<Vec<u32>>())
+            {
+                self.timer.interrupt_stack = stack;
+            }
+            if let Ok(next_id) = interrupts
+                .getattr("next_id")
+                .and_then(|o| o.extract::<u32>())
+            {
+                self.timer.next_interrupt_id = next_id;
+            }
+            if let Ok(counts) = interrupts
+                .getattr("irq_counts")
+                .and_then(|o| o.extract::<HashMap<String, u32>>())
+            {
+                self.timer.irq_total = *counts.get("total").unwrap_or(&0);
+                self.timer.irq_key = *counts.get("KEY").unwrap_or(&0);
+                self.timer.irq_mti = *counts.get("MTI").unwrap_or(&0);
+                self.timer.irq_sti = *counts.get("STI").unwrap_or(&0);
+            }
+            if let Ok(last_irq) = interrupts
+                .getattr("last_irq")
+                .and_then(|o| o.extract::<HashMap<String, serde_json::Value>>())
+            {
+                self.timer.last_irq_src = last_irq
+                    .get("src")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                self.timer.last_irq_pc = last_irq.get("pc").and_then(|v| v.as_u64()).map(|v| v as u32);
+                self.timer.last_irq_vector = last_irq.get("vector").and_then(|v| v.as_u64()).map(|v| v as u32);
+            }
+        }
         Ok(())
     }
 
@@ -1183,15 +1244,19 @@ impl LlamaCpu {
             kb_metrics: Some(json!({
                 "irq_count": kb_state.irq_count,
                 "strobe_count": kb_state.strobe_count,
-                "column_hist": Vec::<u32>::new(),
+                "column_hist": kb_state.column_histogram,
                 "last_cols": kb_state.active_columns,
                 "last_kol": kb_state.kol,
                 "last_koh": kb_state.koh,
-                "kil_reads": 0,
+                "kil_reads": kb_state.fifo_len,
                 "kb_irq_enabled": true,
             })),
             ..SnapshotMetadata::default()
         };
+        // Capture timer/interrupt mirrors for parity with Python snapshots.
+        let (timer_info, interrupt_info) = self.timer.snapshot_info();
+        metadata.timer = timer_info;
+        metadata.interrupts = interrupt_info;
         if let Some(imr) = image.read_internal_byte(IMEM_IMR_OFFSET) {
             metadata.interrupts.imr = imr;
         }

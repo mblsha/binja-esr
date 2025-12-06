@@ -484,7 +484,7 @@ impl CoreRuntime {
                 let new_cycle = prev_cycle.wrapping_add(1);
                 self.metadata.cycle_count = new_cycle;
                 if !self.timer.in_interrupt {
-                    let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                    let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
                         &mut self.memory,
                         new_cycle,
                         |mem| {
@@ -493,9 +493,9 @@ impl CoreRuntime {
                                 if events > 0 {
                                     kb.write_fifo_to_memory(mem);
                                 }
-                                (events, kb.fifo_len() > 0)
+                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
                             } else {
-                                (0, false)
+                                (0, false, None)
                             }
                         },
                     );
@@ -518,7 +518,7 @@ impl CoreRuntime {
                         self.timer.irq_isr = isr;
                     }
                 }
-                self.deliver_pending_irq();
+                self.deliver_pending_irq()?;
                 continue;
             }
 
@@ -559,7 +559,7 @@ impl CoreRuntime {
             let new_cycle = prev_cycle.wrapping_add(cycle_increment);
             for cyc in prev_cycle + 1..=new_cycle {
                 if !self.timer.in_interrupt {
-                    let (mti, sti, key_events) = self.timer.tick_timers_with_keyboard(
+                    let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
                         &mut self.memory,
                         cyc,
                         |mem| {
@@ -568,9 +568,9 @@ impl CoreRuntime {
                                 if events > 0 {
                                     kb.write_fifo_to_memory(mem);
                                 }
-                                (events, kb.fifo_len() > 0)
+                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
                             } else {
-                                (0, false)
+                                (0, false, None)
                             }
                         },
                     );
@@ -639,7 +639,7 @@ impl CoreRuntime {
                     }
                 }
             }
-            self.deliver_pending_irq();
+            self.deliver_pending_irq()?;
         }
         Ok(())
     }
@@ -776,9 +776,9 @@ impl CoreRuntime {
         self.state.set_reg(reg, new_sp);
     }
 
-    fn deliver_pending_irq(&mut self) {
+    fn deliver_pending_irq(&mut self) -> Result<()> {
         if !self.timer.irq_pending {
-            return;
+            return Ok(());
         }
         let imr = self
             .memory
@@ -789,7 +789,7 @@ impl CoreRuntime {
             .read_internal_byte(IMEM_ISR_OFFSET)
             .unwrap_or(0);
         if (imr & IMR_MASTER) == 0 {
-            return;
+            return Ok(());
         }
         let src = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
             Some((ISR_ONKI, "ONK"))
@@ -802,7 +802,15 @@ impl CoreRuntime {
         } else {
             None
         };
-        let Some((mask, src_name)) = src else { return };
+        let Some((mask, src_name)) = src else { return Ok(()) };
+
+        // Match Python guard: defer delivery until firmware initializes the stack pointer.
+        let sp = self.state.get_reg(RegName::S) & ADDRESS_MASK;
+        if sp < 5 {
+            return Err(CoreError::Other(
+                "IRQ deferred: stack pointer not initialized".to_string(),
+            ));
+        }
 
         let pc = self.state.pc() & ADDRESS_MASK;
         let (op_idx, pc_trace) = crate::llama::eval::perfetto_instr_context()
@@ -815,6 +823,20 @@ impl CoreRuntime {
                 }
             }
         };
+        // Emit a pre-delivery marker on the key track to align with Python logging.
+        if src_name == "KEY" {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert("from".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                    payload.insert("imr".to_string(), perfetto::AnnotationValue::UInt(imr as u64));
+                    payload.insert("isr".to_string(), perfetto::AnnotationValue::UInt(isr as u64));
+                    payload.insert("s".to_string(), perfetto::AnnotationValue::Pointer(sp as u64));
+                    tracer.record_irq_event("KeyDeliver", payload);
+                }
+            }
+        }
+
         // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
         self.push_stack(RegName::S, pc, 24);
         record_stack_write(self.state.get_reg(RegName::S), 24, pc & ADDRESS_MASK, "external");
@@ -876,6 +898,17 @@ impl CoreRuntime {
             // Remember active mask to help RETI-like flows.
             self.timer.next_interrupt_id = self.timer.next_interrupt_id.saturating_add(1);
             self.timer.interrupt_stack.push(mask as u32);
+        // Update IRQ counters/last metadata to mirror Python bookkeeping.
+        self.timer.irq_total = self.timer.irq_total.saturating_add(1);
+        match src_name {
+            "KEY" => self.timer.irq_key = self.timer.irq_key.saturating_add(1),
+            "MTI" => self.timer.irq_mti = self.timer.irq_mti.saturating_add(1),
+            "STI" => self.timer.irq_sti = self.timer.irq_sti.saturating_add(1),
+            _ => {}
+        }
+        self.timer.last_irq_src = Some(src_name.to_string());
+        self.timer.last_irq_pc = Some(pc);
+        self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
 
         // Emit an IRQ entry marker for perfetto parity with Python.
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
@@ -891,8 +924,17 @@ impl CoreRuntime {
                 payload.insert("y".to_string(), perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64));
                 payload.insert("src".to_string(), perfetto::AnnotationValue::Str(src_name.to_string()));
                 tracer.record_irq_event("IRQ_Enter", payload);
+                let mut delivered = std::collections::HashMap::new();
+                delivered.insert("from".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                delivered.insert("vector".to_string(), perfetto::AnnotationValue::Pointer(vec as u64));
+                delivered.insert("src".to_string(), perfetto::AnnotationValue::Str(src_name.to_string()));
+                delivered.insert("imr".to_string(), perfetto::AnnotationValue::UInt(imr as u64));
+                delivered.insert("isr".to_string(), perfetto::AnnotationValue::UInt(isr as u64));
+                delivered.insert("s".to_string(), perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64));
+                tracer.record_irq_event("IRQ_Delivered", delivered);
             }
         }
+        Ok(())
     }
 }
 

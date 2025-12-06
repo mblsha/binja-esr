@@ -296,15 +296,41 @@ impl PerfettoTracer {
                 .entry("pc".to_string())
                 .or_insert(AnnotationValue::Pointer(pc as u64));
         }
-        let ts = if have_ctx {
-            self.ts(op_idx, 0)
-        } else {
-            self.irq_seq as i64
-        };
+        // If no instruction context, prefer a provided cycle count to timestamp the event like Python's manual clock.
+        let mut ts = None;
+        if !have_ctx {
+            if let Some(AnnotationValue::UInt(cycle)) = payload.get("cycle") {
+                ts = Some(*cycle as i64);
+            }
+        }
+        let ts = ts.unwrap_or_else(|| {
+            if have_ctx {
+                self.ts(op_idx, 0)
+            } else {
+                self.irq_seq as i64
+            }
+        });
         self.irq_seq = self.irq_seq.saturating_add(1);
         let track = match name {
             "TimerFired" | "Timer" | "MTI" | "STI" => self.irq_timer_track,
-            "KEYI_Set" | "KeyScan" | "KEYI" | "KeyDeliver" => self.irq_key_track,
+            "KEYI_Set" | "KeyScan" | "KeyScanEvent" | "KeyScanEmpty" | "KEYI" | "KeyDeliver" => {
+                self.irq_key_track
+            }
+            "IRQ_Enter" | "IRQ_Exit" | "IRQ_Delivered" => {
+                // Derive track from src payload when available; default to misc.
+                let src_track = payload
+                    .get("src")
+                    .and_then(|v| match v {
+                        AnnotationValue::Str(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .map(|s| s.to_ascii_uppercase());
+                match src_track.as_deref() {
+                    Some("KEY") | Some("ONK") => self.irq_key_track,
+                    Some("MTI") | Some("STI") => self.irq_timer_track,
+                    _ => self.irq_misc_track,
+                }
+            }
             _ => self.irq_misc_track,
         };
         let mut ev = self
