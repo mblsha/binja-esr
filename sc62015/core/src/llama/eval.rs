@@ -273,6 +273,7 @@ fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
 /// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
 pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
+    state.reset();
     let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
     lcc &= !0x80;
     write_imem_byte(bus, IMEM_LCC_OFFSET, lcc);
@@ -1121,48 +1122,25 @@ impl LlamaExecutor {
             if let (Some(mem_dst), Some(mem_src)) = (decoded.mem, decoded.mem2) {
                 let mut dst_addr = mem_dst.addr;
                 let mut src_addr = mem_src.addr;
-                let wrap_internal = matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld);
-                let dst_wrap =
-                    wrap_internal && mem_dst.bits == 8 && Self::is_internal_addr(mem_dst.addr);
-                let src_wrap =
-                    wrap_internal && mem_src.bits == 8 && Self::is_internal_addr(mem_src.addr);
-                let is_decrement = entry.kind == InstrKind::Mvld;
                 let dst_step = mem_dst
                     .side_effect
-                    .map(|(reg, new_val)| {
-                        let curr = state.get_reg(reg);
-                        let delta = Self::addr_step_from_side_effect(reg, curr, new_val);
-                        delta.unsigned_abs()
-                    })
-                    .unwrap_or_else(|| mem_dst.bits.div_ceil(8) as u32);
+                    .map(|(reg, new_val)| Self::addr_step_from_side_effect(reg, state.get_reg(reg), new_val))
+                    .unwrap_or_else(|| {
+                        let base = mem_dst.bits.div_ceil(8) as i32;
+                        if entry.kind == InstrKind::Mvld { -base } else { base }
+                    });
                 let src_step = mem_src
                     .side_effect
-                    .map(|(reg, new_val)| {
-                        let curr = state.get_reg(reg);
-                        let delta = Self::addr_step_from_side_effect(reg, curr, new_val);
-                        delta.unsigned_abs()
-                    })
-                    .unwrap_or_else(|| mem_src.bits.div_ceil(8) as u32);
+                    .map(|(reg, new_val)| Self::addr_step_from_side_effect(reg, state.get_reg(reg), new_val))
+                    .unwrap_or_else(|| {
+                        let base = mem_src.bits.div_ceil(8) as i32;
+                        if entry.kind == InstrKind::Mvld { -base } else { base }
+                    });
                 for _ in 0..length {
                     let val = bus.load(src_addr, mem_dst.bits);
                     Self::store_traced(bus, dst_addr, mem_dst.bits, val);
-                    let advance = |addr: u32, step: u32, wrap: bool| {
-                        if wrap {
-                            let offset = addr.wrapping_sub(INTERNAL_MEMORY_START);
-                            let next = if is_decrement {
-                                offset.wrapping_sub(step) & 0xFF
-                            } else {
-                                offset.wrapping_add(step) & 0xFF
-                            };
-                            INTERNAL_MEMORY_START + next
-                        } else if is_decrement {
-                            addr.wrapping_sub(step)
-                        } else {
-                            addr.wrapping_add(step)
-                        }
-                    };
-                    src_addr = advance(src_addr, src_step, src_wrap);
-                    dst_addr = advance(dst_addr, dst_step, dst_wrap);
+                    src_addr = Self::advance_internal_addr_signed(src_addr, src_step);
+                    dst_addr = Self::advance_internal_addr_signed(dst_addr, dst_step);
                 }
             }
         }
@@ -1226,11 +1204,11 @@ impl LlamaExecutor {
             let (val, bits) = src_val.ok_or("missing source")?;
             let masked = val & Self::mask_for_width(bits);
             state.set_reg(reg, masked);
-            if reg == RegName::IMR {
-                Self::store_traced(bus, INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, masked & 0xFF);
-            }
-            // Preserve flags for MV-to-reg; zero flag is only updated for MVL handling below.
-        } else if matches!(
+                    if reg == RegName::IMR {
+                        Self::store_traced(bus, INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8, masked & 0xFF);
+                    }
+                    // Preserve flags for MV-to-reg; zero flag is only updated for MVL handling below.
+                } else if matches!(
             dst_op,
             OperandKind::IMem(_)
                 | OperandKind::IMemWidth(_)
@@ -1687,34 +1665,45 @@ impl LlamaExecutor {
         bus: &mut B,
     ) -> Result<u8, &'static str> {
         let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pc_trace = state.pc() & mask_for(RegName::PC);
-        PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
-        PERF_CURRENT_PC.store(pc_trace, Ordering::Relaxed);
-        let _ctx_guard = PerfettoContextGuard;
-        // Trace the pre-execution snapshot to mirror Python perfetto ordering.
-        self.trace_instr(opcode, state, bus, instr_index, pc_trace);
+        let start_pc = state.pc() & mask_for(RegName::PC);
+        let mut trace_pc = start_pc;
+        let mut trace_opcode = opcode;
+        let mut prefix_len = 0u8;
+        let mut pre_modes_opt: Option<PreModes> = None;
+        let mut pc_override = None;
+        let mut entry = self.lookup(opcode);
 
-        match self.lookup(opcode) {
-            Some(entry) if entry.kind == InstrKind::Pre => {
+        if let Some(e) = entry {
+            if e.kind == InstrKind::Pre {
                 let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
-                let next_pc = state.pc().wrapping_add(1);
+                let next_pc = start_pc.wrapping_add(1) & mask_for(RegName::PC);
                 let next_opcode = bus.load(next_pc, 8) as u8;
-                if let Some(next_entry) = self.lookup(next_opcode) {
-                    self.execute_with(
-                        next_opcode,
-                        next_entry,
-                        state,
-                        bus,
-                        Some(&pre_modes),
-                        Some(next_pc),
-                        1,
-                    )
-                } else {
-                    fallback_unknown(state, 1)
-                }
+                trace_pc = next_pc;
+                trace_opcode = next_opcode;
+                prefix_len = 1;
+                pre_modes_opt = Some(pre_modes);
+                pc_override = Some(next_pc);
+                entry = self.lookup(next_opcode);
             }
-            Some(entry) => self.execute_with(opcode, entry, state, bus, None, None, 0),
-            None => fallback_unknown(state, 0),
+        }
+
+        PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
+        PERF_CURRENT_PC.store(trace_pc, Ordering::Relaxed);
+        let _ctx_guard = PerfettoContextGuard;
+        // Trace the pre-execution snapshot using the resolved opcode/PC (post-PRE).
+        self.trace_instr(trace_opcode, state, bus, instr_index, trace_pc);
+
+        match entry {
+            Some(entry) => self.execute_with(
+                trace_opcode,
+                entry,
+                state,
+                bus,
+                pre_modes_opt.as_ref(),
+                pc_override,
+                prefix_len,
+            ),
+            None => fallback_unknown(state, prefix_len),
         }
     }
 

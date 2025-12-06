@@ -922,6 +922,16 @@ mod tests {
     use super::*;
     use crate::llama::opcodes::RegName;
     use std::fs;
+    use std::sync::{MutexGuard, OnceLock};
+
+    static PERFETTO_TEST_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+
+    fn perfetto_test_guard() -> MutexGuard<'static, ()> {
+        PERFETTO_TEST_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("perfetto test mutex poisoned")
+    }
 
     #[test]
     fn snapshot_roundtrip_preserves_call_and_temps() {
@@ -1220,6 +1230,7 @@ mod tests {
     #[test]
     fn perfetto_irq_entry_exit_smoke() {
         use std::fs;
+        let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_irq_smoke.perfetto-trace");
         let _ = fs::remove_file(&tmp);
         {
@@ -1243,6 +1254,11 @@ mod tests {
 
         rt.step(1).expect("deliver irq and jump to vector");
         rt.step(1).expect("execute RETI");
+
+        // Flush perfetto trace to disk before reading.
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap()) {
+            let _ = tracer.finish();
+        }
 
         let size = fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
         assert!(size > 0, "perfetto trace should be written");
@@ -1272,6 +1288,7 @@ mod tests {
     #[test]
     fn perfetto_timer_irq_smoke() {
         use std::fs;
+        let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_timer_irq.perfetto-trace");
         let _ = fs::remove_file(&tmp);
         {
@@ -1292,6 +1309,11 @@ mod tests {
         rt.timer.next_mti = 0;
 
         rt.step(1).expect("tick timer and deliver MTI");
+
+        // Flush perfetto trace to disk before reading.
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap()) {
+            let _ = tracer.finish();
+        }
 
         let buf = fs::read(&tmp).expect("read perfetto trace");
         let text = String::from_utf8_lossy(&buf);

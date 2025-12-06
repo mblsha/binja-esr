@@ -19,6 +19,7 @@ use sc62015_core::{
     PerfettoTracer, SnapshotMetadata, ADDRESS_MASK, EXTERNAL_SPACE, INTERNAL_MEMORY_START,
     PERFETTO_TRACER,
 };
+use retrobus_perfetto::AnnotationValue;
 use serde_json::{json, to_value, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1330,7 +1331,11 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
 fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
     if let Ok(mut guard) = PERFETTO_TRACER.lock() {
         if let Some(tracer) = guard.as_mut() {
-            tracer.record_irq_event(name, payload);
+            let mut converted = HashMap::new();
+            for (k, v) in payload {
+                converted.insert(k, AnnotationValue::UInt(v));
+            }
+            tracer.record_irq_event(name, converted);
         }
     }
     Ok(())

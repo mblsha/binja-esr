@@ -234,31 +234,31 @@ impl TimerContext {
     ) -> (bool, bool, usize)
     where
         F: FnMut(&mut MemoryImage) -> (usize, bool),
-    {
-        let (mti, sti) = self.tick_timers(memory, cycle_count);
-        let mut key_events = 0usize;
-        let mut fifo_has_data = self.key_irq_latched;
-        if mti && self.kb_irq_enabled {
-            let (events, has_data) = keyboard_scan(memory);
-            key_events = events;
-            fifo_has_data = fifo_has_data || has_data;
-            if key_events > 0 {
-                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                    if (isr & 0x04) == 0 {
-                        memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
+        {
+            let (mti, sti) = self.tick_timers(memory, cycle_count);
+            let mut key_events = 0usize;
+            let mut fifo_has_data = self.key_irq_latched;
+            if mti && self.kb_irq_enabled {
+                let (events, has_data) = keyboard_scan(memory);
+                key_events = events;
+                fifo_has_data = fifo_has_data || has_data;
+                if key_events > 0 || fifo_has_data {
+                    if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                        if (isr & 0x04) == 0 {
+                            memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
+                        }
                     }
-                }
-                // Mirror Python: key events latch KEYI and mark a pending IRQ immediately.
-                self.irq_pending = true;
-                self.irq_source = Some("KEY".to_string());
-                self.last_fired = self.irq_source.clone();
-                self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
-                self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
-                // Perfetto parity: emit a KeyIRQ marker.
-                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let mut payload = HashMap::new();
-                        payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                    // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
+                    self.irq_pending = true;
+                    self.irq_source = Some("KEY".to_string());
+                    self.last_fired = self.irq_source.clone();
+                    self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
+                    self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
+                    // Perfetto parity: emit a KeyIRQ marker.
+                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                        if let Some(tracer) = guard.as_mut() {
+                            let mut payload = HashMap::new();
+                            payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
                         payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
                         payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
                         tracer.record_irq_event("KeyIRQ", payload);
@@ -430,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn tick_timers_with_keyboard_does_not_raise_keyi_without_events() {
+    fn tick_timers_with_keyboard_reasserts_keyi_without_events() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         // No new events, but FIFO already has data -> KEYI should still assert on MTI.
@@ -438,6 +438,7 @@ mod tests {
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true));
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & 0x04, 0x00, "KEYI should remain clear when no new events");
+        assert_eq!(isr & 0x04, 0x04, "KEYI should reassert when FIFO has data even without new events");
+        assert!(timer.irq_pending, "pending IRQ should be latched when FIFO remains non-empty");
     }
 }

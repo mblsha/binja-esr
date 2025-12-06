@@ -786,6 +786,7 @@ name = "sc62015-rustcore"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "retrobus-perfetto",
  "sc62015-core",
  "serde_json",
 ]
