@@ -174,6 +174,38 @@ impl PerfettoTracer {
         ev.finish();
     }
 
+    /// Record a memory write at a specific manual-clock cycle (used for host/applied writes outside executor).
+    pub fn record_mem_write_at_cycle(
+        &mut self,
+        cycle: u64,
+        pc: Option<u32>,
+        addr: u32,
+        value: u32,
+        space: &str,
+        size: u8,
+    ) {
+        let masked_value = if size == 0 || size >= 32 {
+            value
+        } else {
+            value & ((1u32 << size) - 1)
+        };
+        let mut ev = self
+            .builder
+            .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), cycle as i64);
+        ev.add_annotations([
+            ("backend", AnnotationValue::Str("rust".to_string())),
+            ("address", AnnotationValue::Pointer(addr as u64)),
+            ("value", AnnotationValue::UInt(masked_value as u64)),
+            ("space", AnnotationValue::Str(space.to_string())),
+            ("size", AnnotationValue::UInt(size as u64)),
+            ("cycle", AnnotationValue::UInt(cycle)),
+        ]);
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
+        }
+        ev.finish();
+    }
+
     pub fn finish(self) -> Result<()> {
         self.builder
             .save(&self.path)

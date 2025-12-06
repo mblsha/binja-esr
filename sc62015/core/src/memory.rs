@@ -235,22 +235,34 @@ impl MemoryImage {
         std::mem::take(&mut self.dirty)
     }
 
-    pub fn apply_host_write(&mut self, address: u32, value: u8) {
+    /// Apply a host-driven write (e.g., overlay/bridge) and optionally tag it with a manual-clock cycle for Perfetto.
+    pub fn apply_host_write_with_cycle(&mut self, address: u32, value: u8, cycle: Option<u64>) {
         let address = canonical_address(address);
         if let Some(index) = Self::internal_index(address) {
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
             if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
-                    // Use last completed instruction index to avoid emitting unmatched op_index values.
-                    let (seq, pc) =
-                        crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
-                            (
-                                crate::llama::eval::perfetto_last_instr_index(),
-                                crate::llama::eval::perfetto_last_pc(),
-                            )
-                        });
-                    tracer.record_mem_write(seq, pc, address, value as u32, "internal", 8);
+                    if let Some(cyc) = cycle {
+                        tracer.record_mem_write_at_cycle(
+                            cyc,
+                            Some(crate::llama::eval::perfetto_last_pc()),
+                            address,
+                            value as u32,
+                            "internal",
+                            8,
+                        );
+                    } else {
+                        // Use last completed instruction index to avoid emitting unmatched op_index values.
+                        let (seq, pc) =
+                            crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
+                                (
+                                    crate::llama::eval::perfetto_last_instr_index(),
+                                    crate::llama::eval::perfetto_last_pc(),
+                                )
+                            });
+                        tracer.record_mem_write(seq, pc, address, value as u32, "internal", 8);
+                    }
                 }
             }
             return;
@@ -262,6 +274,10 @@ impl MemoryImage {
         if let Some(slot) = self.external.get_mut(addr) {
             *slot = value;
         }
+    }
+
+    pub fn apply_host_write(&mut self, address: u32, value: u8) {
+        self.apply_host_write_with_cycle(address, value, None);
     }
 
     pub fn write_external_byte(&mut self, address: u32, value: u8) {

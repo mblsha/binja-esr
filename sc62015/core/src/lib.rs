@@ -289,6 +289,9 @@ pub struct CoreRuntime {
     pub keyboard: Option<KeyboardMatrix>,
     pub lcd: Option<LcdController>,
     pub timer: TimerContext,
+    host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
+    host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
+    onk_level: bool,
 }
 
 impl Default for CoreRuntime {
@@ -308,7 +311,92 @@ impl CoreRuntime {
             keyboard: Some(KeyboardMatrix::new()),
             lcd: Some(LcdController::new()),
             timer: TimerContext::new(false, 0, 0),
+            host_read: None,
+            host_write: None,
+            onk_level: false,
         }
+    }
+
+    /// Provide an optional host overlay reader for IMEM regions that require Python/device handling
+    /// (e.g., E-port inputs, ONK). Called only when `MemoryImage::requires_python` flags an address.
+    pub fn set_host_read<F>(&mut self, f: F)
+    where
+        F: FnMut(u32) -> Option<u8> + Send + 'static,
+    {
+        self.host_read = Some(Box::new(f));
+    }
+
+    /// Provide an optional host overlay writer for IMEM regions that require Python/device handling.
+    pub fn set_host_write<F>(&mut self, f: F)
+    where
+        F: FnMut(u32, u8) + Send + 'static,
+    {
+        self.host_write = Some(Box::new(f));
+    }
+
+    /// Clear any host overlay handlers.
+    pub fn clear_host_overlays(&mut self) {
+        self.host_read = None;
+        self.host_write = None;
+    }
+
+    /// Set the ON key level high and assert ISR.ONKI/IRQ pending to mirror Python KEY_ON handling.
+    pub fn press_on_key(&mut self) {
+        self.onk_level = true;
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if (isr & ISR_ONKI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+        }
+        self.timer.irq_pending = true;
+        self.timer.irq_source = Some("ONK".to_string());
+        self.timer.last_fired = self.timer.irq_source.clone();
+        self.timer.irq_isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = std::collections::HashMap::new();
+                payload.insert(
+                    "pc".to_string(),
+                    perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                );
+                payload.insert(
+                    "imr".to_string(),
+                    perfetto::AnnotationValue::UInt(self.timer.irq_imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
+                );
+                payload.insert(
+                    "src".to_string(),
+                    perfetto::AnnotationValue::Str("ONK".to_string()),
+                );
+                tracer.record_irq_event("KeyIRQ", payload);
+            }
+        }
+    }
+
+    /// Clear the ON key level and deassert ONKI in ISR (firmware may also clear ONKI).
+    pub fn release_on_key(&mut self) {
+        self.onk_level = false;
+        if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+            let new_isr = isr & !ISR_ONKI;
+            self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+            self.timer.irq_isr = new_isr;
+        }
+    }
+
+    /// Set the E-port input buffer values (EIL/EIH) to emulate external pin state.
+    pub fn set_e_port_inputs(&mut self, low: u8, high: u8) {
+        self.memory.write_internal_byte(0xF5, low);
+        self.memory.write_internal_byte(0xF6, high);
     }
 
     fn maybe_force_keyboard_activity(&mut self) {
@@ -521,6 +609,10 @@ impl CoreRuntime {
             mem: &'a mut MemoryImage,
             keyboard_ptr: *mut KeyboardMatrix,
             lcd_ptr: *mut LcdController,
+            host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+            host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
+            onk_level: bool,
+            cycle: u64,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
@@ -541,6 +633,32 @@ impl CoreRuntime {
                     if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
                         if let Some(val) = (*self.lcd_ptr).read(addr) {
                             return val as u32;
+                        }
+                    }
+                    // Host overlay: delegate addresses flagged as Python-only.
+                    if (*self.mem).requires_python(addr) {
+                        if let Some(cb) = self.host_read {
+                            if let Some(val) = (*cb)(addr) {
+                                return val as u32;
+                            }
+                        } else if MemoryImage::is_internal(addr) {
+                            let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
+                            // E-port inputs and ONK status mirror host pins when no callback is present.
+                            if offset == 0xF5 {
+                                if let Some(val) = (*self.mem).read_internal_byte(offset) {
+                                    return val as u32;
+                                }
+                            } else if offset == 0xF6 {
+                                if let Some(val) = (*self.mem).read_internal_byte(offset) {
+                                    return val as u32;
+                                }
+                            } else if offset == 0xFF {
+                                let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
+                                if self.onk_level {
+                                    val |= 0x08;
+                                }
+                                return val as u32;
+                            }
                         }
                     }
                     (*self.mem).load(addr, bits).unwrap_or(0)
@@ -572,6 +690,19 @@ impl CoreRuntime {
                     if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
                         (*self.lcd_ptr).write(addr, value as u8);
                         let _ = (*self.mem).store(addr, bits, value);
+                        return;
+                    }
+                    if (*self.mem).requires_python(addr) {
+                        if let Some(cb) = self.host_write {
+                            (*cb)(addr, value as u8);
+                        } else {
+                            // No host hook: treat as a host-applied write and emit trace with current cycle if available.
+                            (*self.mem).apply_host_write_with_cycle(
+                                addr,
+                                value as u8,
+                                Some(self.cycle),
+                            );
+                        }
                         return;
                     }
                     let _ = (*self.mem).store(addr, bits, value);
@@ -676,10 +807,22 @@ impl CoreRuntime {
                 .as_mut()
                 .map(|lcd| lcd as *mut LcdController)
                 .unwrap_or(std::ptr::null_mut());
+            let host_read = self
+                .host_read
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+            let host_write = self
+                .host_write
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
             let mut bus = RuntimeBus {
                 mem: &mut self.memory,
                 keyboard_ptr,
                 lcd_ptr,
+                host_read,
+                host_write,
+                onk_level: self.onk_level,
+                cycle: self.metadata.cycle_count,
             };
             let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
             let opcode = bus.load(pc, 8) as u8;
@@ -774,14 +917,28 @@ impl CoreRuntime {
                         mask_from_stack = Some(mask_val as u8);
                     }
                 }
+                // If the top element was a PC frame, fall back to any remaining byte-sized mask.
+                if mask_from_stack.is_none() {
+                    mask_from_stack = self
+                        .timer
+                        .interrupt_stack
+                        .iter()
+                        .rev()
+                        .find_map(|v| (*v <= 0xFF).then_some(*v as u8));
+                }
                 // Discard any remaining stack frames (e.g., stored PCs).
                 self.timer.interrupt_stack.clear();
                 if let Some(isr_val) = self.memory.load(isr_addr, 8) {
-                    if let Some(bit) = irq_src
+                    let bit = irq_src
                         .as_deref()
                         .and_then(|s| src_mask_for_name(s))
                         .or(mask_from_stack)
-                    {
+                        .or_else(|| {
+                            // Fallback: clear the lowest set ISR bit when no source/mask is known.
+                            let val = isr_val as u8;
+                            (val != 0).then_some(val & (!val).wrapping_add(1))
+                        });
+                    if let Some(bit) = bit {
                         let cleared = (isr_val as u8) & (!bit);
                         let _ = self.memory.store(isr_addr, 8, cleared as u32);
                     }
@@ -1278,6 +1435,43 @@ mod tests {
         assert_eq!(rt2.timer.last_irq_src, Some("KEY".to_string()));
         assert_eq!(rt2.timer.last_irq_pc, Some(0x012345));
         assert_eq!(rt2.timer.last_irq_vector, Some(0x0ABCDE));
+    }
+
+    #[test]
+    fn onk_press_sets_isr_and_irq_pending() {
+        let mut rt = CoreRuntime::new();
+        rt.press_on_key();
+
+        let isr = rt
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .expect("isr present");
+        assert!(isr & ISR_ONKI != 0, "ONKI should be asserted in ISR");
+        assert!(rt.timer.irq_pending, "irq_pending should be set after ONK");
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("ONK"));
+
+        rt.release_on_key();
+        let cleared = rt
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .expect("isr present");
+        assert_eq!(cleared & ISR_ONKI, 0, "ONKI should clear on release");
+    }
+
+    #[test]
+    fn e_port_inputs_are_written_into_imem() {
+        let mut rt = CoreRuntime::new();
+        rt.set_e_port_inputs(0xAA, 0x55);
+        let eil = rt
+            .memory
+            .read_internal_byte(0xF5)
+            .expect("EIL readable");
+        let eih = rt
+            .memory
+            .read_internal_byte(0xF6)
+            .expect("EIH readable");
+        assert_eq!(eil, 0xAA);
+        assert_eq!(eih, 0x55);
     }
 
     #[test]
