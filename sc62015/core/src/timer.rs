@@ -274,6 +274,7 @@ impl TimerContext {
         memory: &mut MemoryImage,
         cycle_count: u64,
         mut keyboard_scan: F,
+        y_reg: Option<u32>,
     ) -> (bool, bool, usize, Option<KeyboardTelemetry>)
     where
         F: FnMut(&mut MemoryImage) -> (usize, bool, Option<KeyboardTelemetry>),
@@ -332,6 +333,17 @@ impl TimerContext {
                         AnnotationValue::Pointer(pc_trace as u64),
                     );
                     payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+                    if let Some(y) = y_reg {
+                        payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
+                    }
+                    if let Some(stats) = kb_stats.as_ref() {
+                        payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                        payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                        payload.insert(
+                            "pressed".to_string(),
+                            AnnotationValue::UInt(stats.pressed as u64),
+                        );
+                    }
                     tracer.record_irq_event("KeyIRQ", payload);
                 }
             }
@@ -350,10 +362,14 @@ impl TimerContext {
                                 "strobe_count".to_string(),
                                 AnnotationValue::UInt(stats.strobe_count as u64),
                             );
-                            payload
-                                .insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
-                            payload
-                                .insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                            payload.insert(
+                                "kol".to_string(),
+                                AnnotationValue::UInt(stats.kol as u64),
+                            );
+                            payload.insert(
+                                "koh".to_string(),
+                                AnnotationValue::UInt(stats.koh as u64),
+                            );
                             payload.insert(
                                 "active_cols".to_string(),
                                 AnnotationValue::Str(format!("{:?}", stats.active_columns)),
@@ -575,7 +591,7 @@ mod tests {
                 scanned = true;
                 // Simulate one key event and non-empty FIFO.
                 (1, true, None)
-            });
+            }, None);
         assert!(mti, "MTI should fire");
         assert!(scanned, "keyboard_scan should run even when IRQ disabled");
         assert_eq!(key_events, 1);
@@ -592,7 +608,7 @@ mod tests {
         let mut mem = MemoryImage::new();
         // Simulate keyboard scan emitting one event.
         let (_, _, events, _) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None));
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None), None);
         assert_eq!(events, 1);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(
@@ -608,7 +624,7 @@ mod tests {
         let mut mem = MemoryImage::new();
         // No new events, but FIFO already has data -> KEYI should still assert on MTI.
         let (_mti, _sti, events, _) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None));
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None), None);
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(

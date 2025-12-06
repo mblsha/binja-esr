@@ -330,7 +330,7 @@ impl LlamaContractBus {
                             self.keyboard.fifo_len() > 0,
                             Some(self.keyboard.telemetry()),
                         )
-                    });
+                    }, Some(self.state.get_reg(LlamaRegName::Y)));
             if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
                 // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
                 if let Some(isr) = self.memory.read_internal_byte(0xFC) {

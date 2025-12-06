@@ -412,6 +412,7 @@ impl CoreRuntime {
             let _ = kb.handle_write(0xF0, 0xFF, &mut self.memory);
             let _ = kb.handle_write(0xF1, 0x0F, &mut self.memory);
             let events = kb.scan_tick();
+            let stats = kb.telemetry();
             if events > 0 {
                 kb.write_fifo_to_memory(&mut self.memory, self.timer.kb_irq_enabled);
             }
@@ -454,6 +455,18 @@ impl CoreRuntime {
                     payload.insert(
                         "cycle".to_string(),
                         perfetto::AnnotationValue::UInt(self.metadata.cycle_count),
+                    );
+                    payload.insert(
+                        "kol".to_string(),
+                        perfetto::AnnotationValue::UInt(stats.kol as u64),
+                    );
+                    payload.insert(
+                        "koh".to_string(),
+                        perfetto::AnnotationValue::UInt(stats.koh as u64),
+                    );
+                    payload.insert(
+                        "pressed".to_string(),
+                        perfetto::AnnotationValue::UInt(stats.pressed as u64),
                     );
                     if let Some((op_idx, _)) = perfetto_instr_context() {
                         payload.insert(
@@ -501,12 +514,28 @@ impl CoreRuntime {
                         perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
                     );
                     payload.insert(
+                        "kol".to_string(),
+                        perfetto::AnnotationValue::UInt(kb.telemetry().kol as u64),
+                    );
+                    payload.insert(
+                        "koh".to_string(),
+                        perfetto::AnnotationValue::UInt(kb.telemetry().koh as u64),
+                    );
+                    payload.insert(
+                        "pressed".to_string(),
+                        perfetto::AnnotationValue::UInt(kb.telemetry().pressed as u64),
+                    );
+                    payload.insert(
                         "cols".to_string(),
                         perfetto::AnnotationValue::Str(format!("{:?}", kb.active_columns())),
                     );
                     payload.insert(
                         "cycle".to_string(),
                         perfetto::AnnotationValue::UInt(self.metadata.cycle_count),
+                    );
+                    payload.insert(
+                        "y".to_string(),
+                        perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64),
                     );
                     if let Some((op_idx, _)) = perfetto_instr_context() {
                         payload.insert(
@@ -526,9 +555,6 @@ impl CoreRuntime {
     }
 
     fn refresh_key_irq_latch(&mut self) {
-        if !self.timer.kb_irq_enabled {
-            return;
-        }
         if let Some(kb) = self.keyboard.as_ref() {
             let fifo_len = kb.fifo_len();
             if fifo_len > 0 {
@@ -772,7 +798,7 @@ impl CoreRuntime {
                                 } else {
                                     (0, false, None)
                                 }
-                            });
+                            }, Some(self.state.get_reg(RegName::Y)));
                     let fifo_non_empty = self
                         .keyboard
                         .as_ref()
@@ -879,7 +905,7 @@ impl CoreRuntime {
                                 } else {
                                     (0, false, None)
                                 }
-                            });
+                            }, Some(self.state.get_reg(RegName::Y)));
                     // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
                     if let Some(isr) = self.memory.read_internal_byte(0xFC) {
                         self.timer.irq_isr = isr;
@@ -895,40 +921,19 @@ impl CoreRuntime {
                     self.timer.key_irq_latched = false;
                 }
                 self.timer.irq_source = None;
-                // Clear the delivered ISR bit to mirror Python RETI.
-                let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
-                let mut mask_from_stack: Option<u8> = None;
-                if let Some(mask_val) = self.timer.interrupt_stack.pop() {
-                    if mask_val <= 0xFF {
-                        mask_from_stack = Some(mask_val as u8);
-                    }
-                }
-                // If the top element was a PC frame, fall back to any remaining byte-sized mask.
-                if mask_from_stack.is_none() {
-                    mask_from_stack = self
-                        .timer
-                        .interrupt_stack
-                        .iter()
-                        .rev()
-                        .find_map(|v| (*v <= 0xFF).then_some(*v as u8));
-                }
-                // Discard any remaining stack frames (e.g., stored PCs).
-                self.timer.interrupt_stack.clear();
-                if let Some(isr_val) = self.memory.load(isr_addr, 8) {
-                    let bit = irq_src
-                        .as_deref()
-                        .and_then(|s| src_mask_for_name(s))
-                        .or(mask_from_stack)
-                        .or_else(|| {
-                            // Fallback: clear the lowest set ISR bit when no source/mask is known.
-                            let val = isr_val as u8;
-                            (val != 0).then_some(val & (!val).wrapping_add(1))
-                        });
-                    if let Some(bit) = bit {
-                        let cleared = (isr_val as u8) & (!bit);
+                // Clear the delivered ISR bit only when we know which source fired (Python parity).
+                if let Some(src_mask) = irq_src
+                    .as_deref()
+                    .and_then(|s| src_mask_for_name(s))
+                {
+                    let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
+                    if let Some(isr_val) = self.memory.load(isr_addr, 8) {
+                        let cleared = (isr_val as u8) & (!src_mask);
                         let _ = self.memory.store(isr_addr, 8, cleared as u32);
                     }
                 }
+                // Drop any stale interrupt-stack frames (used only for bookkeeping).
+                self.timer.interrupt_stack.clear();
                 if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
                         let mut payload = std::collections::HashMap::new();
@@ -1094,7 +1099,12 @@ impl CoreRuntime {
         }
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        if (imr & IMR_MASTER) == 0 {
+        // Treat KEY/ONK as level-triggered: allow delivery when their ISR bits are set even if IRM is 0.
+        let mut irm_enabled = (imr & IMR_MASTER) != 0;
+        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
+            irm_enabled = true;
+        }
+        if !irm_enabled {
             return Ok(());
         }
         let src = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
@@ -1154,6 +1164,35 @@ impl CoreRuntime {
         let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
+        // Emit a pre-vector delivery marker to mirror Python's first KeyDeliver instant.
+        if src_name == "KEY" {
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert(
+                        "from".to_string(),
+                        perfetto::AnnotationValue::Pointer(pc as u64),
+                    );
+                    payload.insert(
+                        "imr".to_string(),
+                        perfetto::AnnotationValue::UInt(imr as u64),
+                    );
+                    payload.insert(
+                        "isr".to_string(),
+                        perfetto::AnnotationValue::UInt(isr as u64),
+                    );
+                    payload.insert(
+                        "s".to_string(),
+                        perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
+                    );
+                    payload.insert(
+                        "src".to_string(),
+                        perfetto::AnnotationValue::Str(src_name.to_string()),
+                    );
+                    tracer.record_irq_event("KeyDeliver", payload);
+                }
+            }
+        }
         // Emit a single delivery marker (matches Python tracer).
         if src_name == "KEY" {
             if let Ok(mut guard) = PERFETTO_TRACER.lock() {

@@ -752,7 +752,7 @@ impl StandaloneBus {
                         self.keyboard.fifo_len() > 0,
                         Some(self.keyboard.telemetry()),
                     )
-                });
+                }, None);
         if mti && key_events > 0 {
             self.pending_kil = self.keyboard.fifo_len() > 0;
             if self.pending_kil {
