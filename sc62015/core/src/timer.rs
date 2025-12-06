@@ -291,32 +291,37 @@ impl TimerContext {
         let mut key_events = 0usize;
         let mut fifo_has_data = self.key_irq_latched;
         let mut kb_stats: Option<KeyboardTelemetry> = None;
-        if mti && self.kb_irq_enabled {
+        if mti {
             let (events, has_data, stats) = keyboard_scan(memory);
             kb_stats = stats;
             key_events = events;
             fifo_has_data = fifo_has_data || has_data;
-            if key_events > 0 || fifo_has_data {
-                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                    if (isr & 0x04) == 0 {
-                        memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
-                    }
+        }
+        if (key_events > 0 || fifo_has_data) && self.kb_irq_enabled {
+            if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                if (isr & 0x04) == 0 {
+                    memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
                 }
-                // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
-                self.irq_pending = true;
-                self.irq_source = Some("KEY".to_string());
-                self.last_fired = self.irq_source.clone();
-                self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
-                self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
-                // Perfetto parity: emit a KeyIRQ marker.
-                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let mut payload = HashMap::new();
-                        payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
-                        payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-                        payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
-                        tracer.record_irq_event("KeyIRQ", payload);
-                    }
+            }
+            // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
+            self.irq_pending = true;
+            self.irq_source = Some("KEY".to_string());
+            self.last_fired = self.irq_source.clone();
+            self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
+            self.irq_isr = memory.read_internal_byte(ISR_OFFSET).unwrap_or(self.irq_isr);
+            // Perfetto parity: emit a KeyIRQ marker with PC/cycle context.
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = HashMap::new();
+                    payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                    payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+                    payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                    payload.insert(
+                        "pc".to_string(),
+                        AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                    );
+                    payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+                    tracer.record_irq_event("KeyIRQ", payload);
                 }
             }
         }
@@ -335,6 +340,7 @@ impl TimerContext {
                                 AnnotationValue::Str(format!("{:?}", stats.active_columns)),
                             );
                             payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
+                            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                             tracer.record_irq_event("KeyScanEmpty", payload);
                         }
                     }
@@ -367,6 +373,7 @@ impl TimerContext {
                     );
                 }
                 payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
+                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
@@ -508,6 +515,33 @@ mod tests {
         mem.write_internal_byte(0xFB, 0x81);
         timer.tick_timers(&mut mem, 3);
         assert!(timer.irq_pending, "irq_pending should set when master+MTI enabled");
+    }
+
+    #[test]
+    fn keyboard_scan_runs_even_when_irq_disabled() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        timer.set_keyboard_irq_enabled(false);
+        let mut mem = MemoryImage::new();
+        // Force MTI to fire on first tick.
+        timer.next_mti = 0;
+        let mut scanned = false;
+        let (mti, _sti, key_events, _stats) = timer.tick_timers_with_keyboard(
+            &mut mem,
+            1,
+            |_mem| {
+                scanned = true;
+                // Simulate one key event and non-empty FIFO.
+                (1, true, None)
+            },
+        );
+        assert!(mti, "MTI should fire");
+        assert!(scanned, "keyboard_scan should run even when IRQ disabled");
+        assert_eq!(key_events, 1);
+        // KEYI should not be asserted when kb_irq_enabled is false.
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x04, 0);
+        // Timer fires should still mark irq_pending, but KEYI must stay clear when disabled.
+        assert!(timer.irq_pending, "timer fire should still pend an IRQ");
     }
 
     #[test]
