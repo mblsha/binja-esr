@@ -133,7 +133,7 @@ pub trait LlamaBus {
     }
     /// Peek IMEM without emitting tracing side-effects (IMR/ISR sampling).
     fn peek_imem_silent(&mut self, offset: u32) -> u8 {
-        self.peek_imem(offset)
+        with_imr_read_suppressed(|| self.peek_imem(offset))
     }
     /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations (unused for Python parity WAIT).
     fn wait_cycles(&mut self, _cycles: u32) {}
@@ -233,16 +233,11 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
     }
 
     // Optional perfetto emit when the builder is available (llama-tests builds).
-    #[cfg(feature = "llama-tests")]
     if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
         if let Some(tracer) = guard.as_mut() {
             let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
             let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
-            let op = if op_idx == u64::MAX {
-                None
-            } else {
-                Some(op_idx)
-            };
+            let op = if op_idx == u64::MAX { None } else { Some(op_idx) };
             let pc_val = if pc == u32::MAX { None } else { Some(pc) };
             tracer.record_imem_addr(
                 &format!("{mode:?}"),
@@ -850,7 +845,12 @@ impl LlamaExecutor {
             decoded.len = offset as u8;
             return Ok(decoded);
         }
-        for (operand_index, op) in entry.operands.iter().enumerate() {
+        let coding_order: Vec<(usize, &OperandKind)> = if entry.ops_reversed.unwrap_or(false) {
+            entry.operands.iter().enumerate().rev().collect()
+        } else {
+            entry.operands.iter().enumerate().collect()
+        };
+        for (operand_index, op) in coding_order {
             match op {
                 OperandKind::Imm(bits) => {
                     let val = Self::read_imm(bus, pc + offset, *bits);
@@ -3423,6 +3423,67 @@ mod tests {
             "offset load should not mutate X"
         );
         assert_eq!(state.pc(), 3);
+    }
+
+    struct LoggingBus {
+        mem: Vec<u8>,
+        log: Vec<u32>,
+    }
+
+    impl LoggingBus {
+        fn with_bytes(bytes: &[u8]) -> Self {
+            let mut mem = bytes.to_vec();
+            if mem.is_empty() {
+                mem.push(0);
+            }
+            Self { mem, log: Vec::new() }
+        }
+    }
+
+    impl LlamaBus for LoggingBus {
+        fn load(&mut self, addr: u32, bits: u8) -> u32 {
+            if addr < INTERNAL_MEMORY_START {
+                self.log.push(addr);
+            }
+            let bytes = bits.div_ceil(8);
+            let mut val = 0u32;
+            for i in 0..bytes {
+                let idx = addr as usize + i as usize;
+                let b = *self.mem.get(idx).unwrap_or(&0) as u32;
+                val |= b << (8 * i);
+            }
+            if bits == 0 || bits >= 32 {
+                val
+            } else {
+                val & ((1u32 << bits) - 1)
+            }
+        }
+
+        fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {}
+
+        fn resolve_emem(&mut self, base: u32) -> u32 {
+            base
+        }
+    }
+
+    #[test]
+    fn cmpw_prefixed_reads_coding_order_for_ops_reversed() {
+        // PRE should be followed by the opcode byte, then the operands in coding order (ops_reversed flips them).
+        // Bytes: [PRE 0x32][opcode 0xD6 CMPW][reg selector][IMem offset]
+        let program = [0x32u8, 0xD6, 0xAB, 0x10];
+        let mut bus = LoggingBus::with_bytes(&program);
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        let mut exec = LlamaExecutor::new();
+
+        let _ = exec.execute(0x32, &mut state, &mut bus).unwrap();
+
+        // The program-order loads (excluding IMEM perfetto sampling) should see opcode, reg selector, then IMem offset.
+        assert!(
+            bus.log.starts_with(&[1, 2, 3]),
+            "expected coding-order fetches after PRE, got {:?}",
+            bus.log
+        );
     }
 
     #[test]

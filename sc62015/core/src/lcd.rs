@@ -461,6 +461,16 @@ mod tests {
     }
 
     #[test]
+    fn status_read_when_off_reports_ready_zero() {
+        let mut chip = Hd61202Chip::default();
+        chip.state.on = false;
+        chip.state.busy = true;
+        let status = chip.read_status();
+        assert_eq!(status, 0x00);
+        assert!(!chip.state.busy);
+    }
+
+    #[test]
     fn data_read_advances_y_address() {
         let mut chip = Hd61202Chip::default();
         chip.state.page = 0;

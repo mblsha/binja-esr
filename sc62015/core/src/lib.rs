@@ -867,7 +867,7 @@ impl CoreRuntime {
             for cyc in prev_cycle + 1..=new_cycle {
                 if !self.timer.in_interrupt {
                     let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let (mti, sti, key_events, _kb_stats) =
+                    let (_mti, _sti, _key_events, _kb_stats) =
                         self.timer
                             .tick_timers_with_keyboard(&mut self.memory, cyc, |mem| {
                                 if let Some(kb) = self.keyboard.as_mut() {
@@ -880,21 +880,7 @@ impl CoreRuntime {
                                     (0, false, None)
                                 }
                             });
-                    let fifo_non_empty = self
-                        .keyboard
-                        .as_ref()
-                        .map(|kb| kb.fifo_len() > 0)
-                        .unwrap_or(false);
-                    if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
-                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                            if (isr & 0x04) == 0 {
-                                self.memory.write_internal_byte(0xFC, isr | 0x04);
-                                self.timer.irq_pending = true;
-                                self.timer.irq_source = Some("KEY".to_string());
-                                self.timer.last_fired = self.timer.irq_source.clone();
-                            }
-                        }
-                    }
+                    // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
                     if let Some(isr) = self.memory.read_internal_byte(0xFC) {
                         self.timer.irq_isr = isr;
                     }

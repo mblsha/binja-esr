@@ -333,10 +333,18 @@ impl PerfettoTracer {
 
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
     pub fn record_irq_event(&mut self, name: &str, mut payload: HashMap<String, AnnotationValue>) {
-        // Align IRQ/key events to the instruction index when available (parity with Python manual clock).
+        // Prefer explicit cycle payload (manual clock) when present to align with Python traces.
+        let cycle_ts = payload
+            .get("cycle")
+            .and_then(|v| match v {
+                AnnotationValue::UInt(c) => Some(*c as i64),
+                _ => None,
+            });
+
+        // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
         let (op_idx, pc) = perfetto_instr_context()
             .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
-        let have_ctx = op_idx != u64::MAX;
+        let have_ctx = op_idx != u64::MAX && cycle_ts.is_none();
         if have_ctx {
             payload
                 .entry("op_index".to_string())
@@ -345,15 +353,11 @@ impl PerfettoTracer {
                 .entry("pc".to_string())
                 .or_insert(AnnotationValue::Pointer(pc as u64));
         }
-        // If no instruction context, prefer a provided cycle count to timestamp the event like Python's manual clock.
-        let mut ts = None;
-        if !have_ctx {
-            if let Some(AnnotationValue::UInt(cycle)) = payload.get("cycle") {
-                ts = Some(*cycle as i64);
-            }
-        }
-        let ts = ts.unwrap_or_else(|| {
+
+        let ts = cycle_ts.unwrap_or_else(|| {
             if have_ctx {
+                self.ts(op_idx, 0)
+            } else if op_idx != u64::MAX {
                 self.ts(op_idx, 0)
             } else {
                 self.irq_seq as i64

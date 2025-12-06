@@ -80,3 +80,24 @@ fn kil_read_does_not_generate_events_without_scan() {
     assert_eq!(kb.fifo_len(), 0);
     assert_eq!(mem.read_internal_byte(0xFC).unwrap_or(0) & 0x04, 0);
 }
+
+#[test]
+fn defaults_match_python_keyboard_matrix() {
+    // Parity guard: ensure Rust defaults mirror pce500/keyboard_matrix.py.
+    let kb = KeyboardMatrix::new();
+    let snap = kb.snapshot_state();
+    assert!(snap.columns_active_high);
+    assert_eq!(snap.press_threshold, 6);
+    assert_eq!(snap.release_threshold, 6);
+    assert_eq!(snap.repeat_delay, 24);
+    assert_eq!(snap.repeat_interval, 6);
+    assert!(snap.scan_enabled);
+    assert_eq!(snap.kol, 0x00);
+    assert_eq!(snap.koh, 0x00);
+    assert_eq!(snap.kil_latch, 0x00);
+    assert_eq!(snap.fifo_len, 0);
+    assert_eq!(snap.head, 0);
+    assert_eq!(snap.tail, 0);
+    assert_eq!(snap.fifo_len, 0);
+    assert!(snap.fifo.iter().all(|b| *b == 0));
+}

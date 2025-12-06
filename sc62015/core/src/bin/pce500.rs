@@ -254,6 +254,8 @@ struct StandaloneBus {
     active_irq_mask: u8,
     #[allow(dead_code)]
     perfetto_enabled: bool,
+    host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
+    host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,6 +279,8 @@ impl StandaloneBus {
         log_lcd_limit: u32,
         trace_kbd: bool,
         perfetto: Option<IrqPerfetto>,
+        host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
+        host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     ) -> Self {
         if perfetto.is_some() && std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
             eprintln!("[perfetto-debug] StandaloneBus created with perfetto enabled");
@@ -308,6 +312,8 @@ impl StandaloneBus {
             last_irq_src: None,
             active_irq_mask: 0,
             perfetto_enabled: false,
+            host_read,
+            host_write,
         }
     }
 
@@ -901,6 +907,13 @@ impl LlamaBus for StandaloneBus {
                 val = self.memory.load(addr, bits).unwrap_or(0) & mask_bits(bits)
             );
         }
+        if self.memory.requires_python(addr) {
+            if let Some(cb) = self.host_read.as_mut() {
+                if let Some(val) = (cb)(addr) {
+                    return val as u32;
+                }
+            }
+        }
         self.memory
             .load(addr, bits)
             .map(|val| {
@@ -1011,6 +1024,12 @@ impl LlamaBus for StandaloneBus {
         }
         if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
             self.trace_fifo_access("write", addr, bits, value);
+        }
+        if self.memory.requires_python(addr) {
+            if let Some(cb) = self.host_write.as_mut() {
+                (cb)(addr, value as u8);
+                return;
+            }
         }
         if self.trace_kbd && (VEC_RANGE_START..=VEC_RANGE_END).contains(&addr) {
             println!(
@@ -1278,6 +1297,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         log_lcd_limit,
         trace_kbd,
         perfetto,
+        None,
+        None,
     );
     bus.strobe_all_columns();
     if auto_key.is_some() {
@@ -1651,6 +1672,8 @@ mod tests {
             0,
             false,
             None,
+            None,
+            None,
         );
         // Enable ONK in IMR and set master bit.
         bus.memory
@@ -1690,6 +1713,8 @@ mod tests {
             false,
             0,
             false,
+            None,
+            None,
             None,
         );
         let mut state = LlamaState::new();
