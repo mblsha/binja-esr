@@ -331,7 +331,7 @@ impl LlamaContractBus {
                             self.keyboard.fifo_len() > 0,
                             Some(self.keyboard.telemetry()),
                         )
-                    }, Some(self.state.get_reg(LlamaRegName::Y)));
+                    }, None);
             if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
                 // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
                 if let Some(isr) = self.memory.read_internal_byte(0xFC) {
@@ -1490,6 +1490,22 @@ impl LlamaCpu {
         for (addr, value) in self.mirror.drain_dirty() {
             let _ = bound.call_method1("write_byte", (addr, value));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sc62015_core::INTERNAL_MEMORY_START;
+
+    #[test]
+    fn contract_bus_tick_timers_sets_mti_and_isr() {
+        let mut bus = LlamaContractBus::new();
+        bus.configure_timer(1, 0, true);
+        bus.tick_timers(1);
+        let isr = bus.memory.read_internal_byte(INTERNAL_MEMORY_START + 0xFC).unwrap_or(0);
+        assert_eq!(isr & 0x01, 0x01, "MTI bit should be set in ISR");
+        assert!(bus.timer.irq_pending, "MTI should mark irq_pending");
     }
 }
 

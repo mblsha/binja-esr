@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     memory::{
-        with_imr_read_suppressed, IMEM_BP_OFFSET, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET,
+        with_imr_read_suppressed, ADDRESS_MASK, IMEM_BP_OFFSET, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET,
         IMEM_LCC_OFFSET, IMEM_PX_OFFSET, IMEM_PY_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET,
         IMEM_UCR_OFFSET, IMEM_USR_OFFSET, INTERNAL_MEMORY_START,
     },
@@ -546,7 +546,7 @@ impl LlamaExecutor {
             let wrapped = offset.wrapping_add(step) & 0xFF;
             INTERNAL_MEMORY_START + wrapped
         } else {
-            addr.wrapping_add(step)
+            addr.wrapping_add(step) & ADDRESS_MASK
         }
     }
 
@@ -574,9 +574,9 @@ impl LlamaExecutor {
             } & 0xFF;
             INTERNAL_MEMORY_START + next
         } else if step >= 0 {
-            addr.wrapping_add(step as u32)
+            addr.wrapping_add(step as u32) & ADDRESS_MASK
         } else {
-            addr.wrapping_sub((-step) as u32)
+            addr.wrapping_sub((-step) as u32) & ADDRESS_MASK
         }
     }
 
@@ -1706,18 +1706,21 @@ impl LlamaExecutor {
         let mut pc_override = None;
         let mut entry = self.lookup(opcode);
 
-        if let Some(e) = entry {
-            if e.kind == InstrKind::Pre {
-                let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
-                let next_pc = start_pc.wrapping_add(1) & mask_for(RegName::PC);
-                let next_opcode = bus.load(next_pc, 8) as u8;
-                trace_opcode = next_opcode;
-                trace_pc = next_pc;
-                prefix_len = 1;
-                pre_modes_opt = Some(pre_modes);
-                pc_override = Some(next_pc);
-                entry = self.lookup(next_opcode);
+        let mut pre_chain_guard = 0u8;
+        while let Some(e) = entry {
+            if e.kind != InstrKind::Pre || pre_chain_guard > 3 {
+                break;
             }
+            let pre_modes = pre_modes_for(trace_opcode).ok_or("unknown PRE opcode")?;
+            let next_pc = trace_pc.wrapping_add(1) & mask_for(RegName::PC);
+            let next_opcode = bus.load(next_pc, 8) as u8;
+            trace_opcode = next_opcode;
+            trace_pc = next_pc;
+            prefix_len = prefix_len.saturating_add(1);
+            pre_modes_opt = Some(pre_modes);
+            pc_override = Some(next_pc);
+            entry = self.lookup(next_opcode);
+            pre_chain_guard = pre_chain_guard.saturating_add(1);
         }
 
         PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
@@ -2641,6 +2644,7 @@ impl Default for LlamaExecutor {
 mod tests {
     use super::*;
     use crate::llama::opcodes::OPCODES;
+    use crate::memory::ADDRESS_MASK;
     use std::collections::HashSet;
 
     struct NullBus;
@@ -3054,6 +3058,23 @@ mod tests {
     }
 
     #[test]
+    fn stacked_pre_prefixes_decode_next_opcode() {
+        // PRE + PRE + JP (16-bit) should consume both prefixes and fetch operands from the final opcode.
+        let mut bus = MemBus::with_size(8);
+        bus.mem[0] = 0x32; // PRE
+        bus.mem[1] = 0x32; // PRE
+        bus.mem[2] = 0x02; // JP abs16
+        bus.mem[3] = 0x78;
+        bus.mem[4] = 0x9A;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 5);
+        assert_eq!(state.pc(), 0x009A78);
+    }
+
+    #[test]
     fn dadl_wraps_internal_addresses_and_updates_pointers() {
         // Opcode 0xC4: DADL (m),(n) with IMEM offsets. Length=2, should wrap within IMEM space.
         let mut bus = MemBus::with_size(0x400);
@@ -3332,6 +3353,20 @@ mod tests {
         assert_eq!(state.pc(), 1);
         assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
         assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
+    }
+
+    #[test]
+    fn external_address_advances_wrap_24bit() {
+        // External post-inc/pre-dec addressing should stay masked to 24 bits like Python.
+        let top = ADDRESS_MASK;
+        assert_eq!(
+            LlamaExecutor::advance_internal_addr_signed(top, 1),
+            0x000000
+        );
+        assert_eq!(
+            LlamaExecutor::advance_internal_addr_signed(0, -1),
+            ADDRESS_MASK
+        );
     }
 
     #[test]

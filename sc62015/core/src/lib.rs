@@ -1141,66 +1141,37 @@ impl CoreRuntime {
         let (op_idx, pc_trace) = crate::llama::eval::perfetto_instr_context()
             .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), pc));
 
-        let record_stack_write = |addr: u32, bits: u8, value: u32, space: &str| {
+        let record_stack_write = |addr: u32, bits: u8, value: u32| {
             if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
+                    let space = if MemoryImage::is_internal(addr) {
+                        "internal"
+                    } else {
+                        "external"
+                    };
                     tracer.record_mem_write(op_idx, pc_trace, addr, value, space, bits);
                 }
             }
         };
         // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
         self.push_stack(RegName::S, pc, 24);
-        record_stack_write(
-            self.state.get_reg(RegName::S),
-            24,
-            pc & ADDRESS_MASK,
-            "external",
-        );
+        record_stack_write(self.state.get_reg(RegName::S), 24, pc & ADDRESS_MASK);
         let f = self.state.get_reg(RegName::F) & 0xFF;
         self.push_stack(RegName::S, f, 8);
-        record_stack_write(self.state.get_reg(RegName::S), 8, f, "external");
+        record_stack_write(self.state.get_reg(RegName::S), 8, f);
         let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
         let imr_mem = self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF;
         self.push_stack(RegName::S, imr_mem, 8);
-        record_stack_write(self.state.get_reg(RegName::S), 8, imr_mem, "external");
+        record_stack_write(self.state.get_reg(RegName::S), 8, imr_mem);
         let cleared_imr = (imr_mem as u8) & 0x7F;
         let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
         self.state.set_reg(RegName::IMR, cleared_imr as u32);
-        record_stack_write(imr_addr, 8, cleared_imr as u32, "internal");
+        record_stack_write(imr_addr, 8, cleared_imr as u32);
 
         // Jump to vector.
         let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
-        // Emit a pre-vector delivery marker to mirror Python's first KeyDeliver instant.
-        if src_name == "KEY" {
-            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let mut payload = std::collections::HashMap::new();
-                    payload.insert(
-                        "from".to_string(),
-                        perfetto::AnnotationValue::Pointer(pc as u64),
-                    );
-                    payload.insert(
-                        "imr".to_string(),
-                        perfetto::AnnotationValue::UInt(imr as u64),
-                    );
-                    payload.insert(
-                        "isr".to_string(),
-                        perfetto::AnnotationValue::UInt(isr as u64),
-                    );
-                    payload.insert(
-                        "s".to_string(),
-                        perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
-                    );
-                    payload.insert(
-                        "src".to_string(),
-                        perfetto::AnnotationValue::Str(src_name.to_string()),
-                    );
-                    tracer.record_irq_event("KeyDeliver", payload);
-                }
-            }
-        }
         // Emit a single delivery marker (matches Python tracer).
         if src_name == "KEY" {
             if let Ok(mut guard) = PERFETTO_TRACER.lock() {
@@ -1254,7 +1225,10 @@ impl CoreRuntime {
         // Remember active mask to help RETI-like flows.
         self.timer.next_interrupt_id = self.timer.next_interrupt_id.saturating_add(1);
         self.timer.interrupt_stack.push(mask as u32);
-        // Update IRQ counters/last metadata to mirror Python bookkeeping.
+        // Track last IRQ metadata with the resolved vector and increment counters.
+        self.timer.last_irq_src = Some(src_name.to_string());
+        self.timer.last_irq_pc = Some(pc);
+        self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
         self.timer.irq_total = self.timer.irq_total.saturating_add(1);
         match src_name {
             "KEY" => self.timer.irq_key = self.timer.irq_key.saturating_add(1),
@@ -1262,9 +1236,6 @@ impl CoreRuntime {
             "STI" => self.timer.irq_sti = self.timer.irq_sti.saturating_add(1),
             _ => {}
         }
-        self.timer.last_irq_src = Some(src_name.to_string());
-        self.timer.last_irq_pc = Some(pc);
-        self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
 
         // Emit an IRQ entry marker for perfetto parity with Python.
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
@@ -2003,6 +1974,38 @@ mod tests {
         );
         let _ = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap());
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn irq_counters_increment_on_delivery_only() {
+        let mut rt = CoreRuntime::new();
+        // Place RETI at vector 0x0000.
+        rt.memory.write_external_byte(0x0000, 0x01);
+        rt.memory.write_external_byte(0x0FFFFA, 0x00);
+        rt.memory.write_external_byte(0x0FFFFB, 0x00);
+        rt.memory.write_external_byte(0x0FFFFC, 0x00);
+        rt.state.set_reg(RegName::PC, 0x0100);
+        rt.state.set_reg(RegName::S, 0x0200);
+        // Enable IMR master and KEY bit.
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        // Seed ISR with KEYI pending; do not tick timers to avoid pre-delivery increments.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+
+        // Before delivery, counters should be zero.
+        assert_eq!(rt.timer.irq_total, 0);
+        assert_eq!(rt.timer.irq_key, 0);
+
+        // Deliver the IRQ (one step runs IR intrinsic, second executes RETI).
+        rt.step(1).expect("deliver irq");
+        assert_eq!(rt.timer.irq_total, 1);
+        assert_eq!(rt.timer.irq_key, 1);
+        rt.step(1).expect("execute RETI");
+        // Counters should remain at one after RETI.
+        assert_eq!(rt.timer.irq_total, 1);
+        assert_eq!(rt.timer.irq_key, 1);
     }
 
     #[test]

@@ -476,6 +476,17 @@ impl TimerContext {
                 payload.push(("isr", self.irq_isr as u64));
                 payload.push(("imr", self.irq_imr as u64));
                 payload.push(("cycle", cycle_count as u64));
+                if let Some((op_idx, pc)) = crate::llama::eval::perfetto_instr_context() {
+                    payload.push(("op_index", op_idx));
+                    payload.push(("pc", pc as u64));
+                } else {
+                    let last_pc = crate::llama::eval::perfetto_last_pc();
+                    payload.push(("pc", last_pc as u64));
+                    let last_idx = crate::llama::eval::perfetto_last_instr_index();
+                    if last_idx != u64::MAX {
+                        payload.push(("op_index", last_idx));
+                    }
+                }
                 // Include ISR snapshot if available.
                 if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                     payload.push(("isr_mem", isr as u64));
@@ -593,6 +604,35 @@ mod tests {
             timer.irq_pending,
             "irq_pending should set when master+MTI enabled"
         );
+    }
+
+    #[test]
+    fn tick_timers_increments_counters_on_fire() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        timer.tick_timers(&mut mem, 1);
+        assert_eq!(timer.irq_total, 0, "counters should advance on delivery");
+        assert_eq!(timer.irq_mti, 0);
+        assert_eq!(timer.last_irq_src, None);
+    }
+
+    #[test]
+    fn key_latch_increments_counters() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        timer.next_mti = 0;
+        let mut mem = MemoryImage::new();
+        // Force latch_active path by preloading FIFO state via keyboard scan closure.
+        let (_mti, _sti, events, _stats) = timer.tick_timers_with_keyboard(
+            &mut mem,
+            0,
+            |_mem| (1, true, None),
+            None,
+        );
+        assert_eq!(events, 1, "keyboard scan should run on MTI fire");
+        // Counters should only increment on delivery; latch alone must not bump them.
+        assert_eq!(timer.irq_total, 0);
+        assert_eq!(timer.irq_key, 0);
+        assert_eq!(timer.last_irq_src, None);
     }
 
     #[test]
