@@ -21,6 +21,12 @@ pub const LCD_DISPLAY_COLS: usize = 240;
 const LCD_ADDR_HI_LEFT: u32 = 0x0A000;
 const LCD_ADDR_HI_RIGHT: u32 = 0x02000;
 
+/// Map an internal LCD overlay offset (0x00-0x0F) to the standard controller address space.
+/// Parity: Python exposes the controller via an IMEM remap; treat it like the 0x2000 mirror.
+pub fn overlay_addr(offset: u32) -> u32 {
+    LCD_ADDR_HI_RIGHT + (offset & 0x0FFF)
+}
+
 #[derive(Clone, Copy, Default)]
 struct Hd61202State {
     on: bool,

@@ -416,7 +416,7 @@ impl LlamaExecutor {
                 tracer.record_regs(
                     instr_index,
                     pc_trace & mask_for(RegName::PC),
-                    state.pc() & mask_for(RegName::PC),
+                    pc_trace & mask_for(RegName::PC),
                     opcode,
                     &regs,
                     mem_imr,

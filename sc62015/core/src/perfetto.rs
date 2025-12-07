@@ -5,6 +5,7 @@ use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
 pub struct PerfettoTracer {
@@ -12,6 +13,7 @@ pub struct PerfettoTracer {
     exec_track: TrackId,
     timeline_track: TrackId,
     mem_track: TrackId,
+    memory_track: TrackId,
     instr_counter_track: TrackId,
     imr_track: TrackId,
     imr_zero_counter: TrackId,
@@ -29,6 +31,9 @@ pub struct PerfettoTracer {
     call_depth_counter: TrackId,
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
+    cpu_track: TrackId,
+    use_wall_clock: bool,
+    wall_start: Instant,
 }
 
 impl PerfettoTracer {
@@ -39,6 +44,9 @@ impl PerfettoTracer {
         // Optional visual parity: emit a parallel Execution track like the Python tracer does.
         let timeline_track = builder.add_thread("Execution");
         let mem_track = builder.add_thread("MemoryWrites");
+        // Track aliases to match Python tracer naming.
+        let memory_track = builder.add_thread("Memory");
+        let cpu_track = builder.add_thread("CPU");
         let instr_counter_track = builder.add_counter_track("instructions", Some("count"), None);
         let imr_track = builder.add_thread("IMR");
         let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);
@@ -50,11 +58,16 @@ impl PerfettoTracer {
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
+        let use_wall_clock = std::env::var("PERFETTO_WALL_CLOCK")
+            .ok()
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
         Self {
             builder,
             exec_track,
             timeline_track,
             mem_track,
+            memory_track,
             instr_counter_track,
             imr_track,
             imr_zero_counter,
@@ -72,6 +85,9 @@ impl PerfettoTracer {
             call_depth_counter,
             mem_read_counter,
             mem_write_counter,
+            cpu_track,
+            use_wall_clock,
+            wall_start: Instant::now(),
         }
     }
 
@@ -80,9 +96,14 @@ impl PerfettoTracer {
     }
 
     fn ts(&self, instr_index: u64, substep: u64) -> i64 {
-        (instr_index
-            .saturating_mul(self.units_per_instr)
-            .saturating_add(substep)) as i64
+        if self.use_wall_clock {
+            // Use wall-clock to match Python Perfetto tracer default.
+            self.wall_start.elapsed().as_nanos() as i64 + substep as i64
+        } else {
+            (instr_index
+                .saturating_mul(self.units_per_instr)
+                .saturating_add(substep)) as i64
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -146,6 +167,31 @@ impl PerfettoTracer {
             exec.finish();
         }
 
+        // Duplicate on the CPU track for parity with Python tracer naming.
+        {
+            let mut cpu_ev = self
+                .builder
+                .add_instant_event(self.cpu_track, "Exec".to_string(), self.ts(instr_index, 0));
+            cpu_ev.add_annotations([
+                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
+                ("opcode", AnnotationValue::UInt(opcode as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+                ("backend", AnnotationValue::Str("rust".to_string())),
+            ]);
+            for (name, value) in regs {
+                let key = format!("reg_{}", name.to_ascii_lowercase());
+                let masked = if name == "BA" {
+                    *value & 0xFFFF
+                } else if name == "F" {
+                    *value & 0xFF
+                } else {
+                    *value & 0xFF_FFFF
+                };
+                cpu_ev.add_annotation(key, masked as u64);
+            }
+            cpu_ev.finish();
+        }
+
         // Keep an explicit instruction counter aligned to InstructionTrace.
         self.builder.update_counter(
             self.instr_counter_track,
@@ -168,12 +214,28 @@ impl PerfettoTracer {
         } else {
             value & ((1u32 << size) - 1)
         };
-        let mut ev = self.builder.add_instant_event(
-            self.mem_track,
-            format!("Write@0x{addr:06X}"),
-            self.ts(instr_index, 1),
-        );
-        ev.add_annotations([
+        let ts = self.ts(instr_index, 1);
+        {
+            let mut ev = self
+                .builder
+                .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
+            ev.add_annotations([
+                ("backend", AnnotationValue::Str("rust".to_string())),
+                ("pc", AnnotationValue::Pointer(pc as u64)),
+                ("address", AnnotationValue::Pointer(addr as u64)),
+                ("value", AnnotationValue::UInt(masked_value as u64)),
+                ("space", AnnotationValue::Str(space.to_string())),
+                ("size", AnnotationValue::UInt(size as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+            ]);
+            ev.finish();
+        }
+
+        // Also mirror to "Memory" track to match Python tracer naming.
+        let mut mem_alias = self
+            .builder
+            .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
+        mem_alias.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("pc", AnnotationValue::Pointer(pc as u64)),
             ("address", AnnotationValue::Pointer(addr as u64)),
@@ -182,7 +244,7 @@ impl PerfettoTracer {
             ("size", AnnotationValue::UInt(size as u64)),
             ("op_index", AnnotationValue::UInt(instr_index)),
         ]);
-        ev.finish();
+        mem_alias.finish();
     }
 
     /// Record a memory write at a specific manual-clock cycle (used for host/applied writes outside executor).
@@ -209,24 +271,46 @@ impl PerfettoTracer {
             self.mem_seq = self.mem_seq.saturating_add(1);
             self.mem_seq as i64
         };
-        let mut ev =
+        {
+            let mut ev =
+                self.builder
+                    .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
+            ev.add_annotations([
+                ("backend", AnnotationValue::Str("rust".to_string())),
+                ("address", AnnotationValue::Pointer(addr as u64)),
+                ("value", AnnotationValue::UInt(masked_value as u64)),
+                ("space", AnnotationValue::Str(space.to_string())),
+                ("size", AnnotationValue::UInt(size as u64)),
+            ]);
+            if let Some(pc_val) = pc.or(if ctx_op != u64::MAX { Some(ctx_pc) } else { None }) {
+                ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
+            }
+            if ctx_op != u64::MAX {
+                ev.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
+            }
+            ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
+            ev.finish();
+        }
+
+        // Mirror to Memory track for Python parity.
+        let mut mem_alias =
             self.builder
-                .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
-        ev.add_annotations([
+                .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
+        mem_alias.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("address", AnnotationValue::Pointer(addr as u64)),
             ("value", AnnotationValue::UInt(masked_value as u64)),
             ("space", AnnotationValue::Str(space.to_string())),
             ("size", AnnotationValue::UInt(size as u64)),
+            ("cycle", AnnotationValue::UInt(cycle)),
         ]);
         if let Some(pc_val) = pc.or(if ctx_op != u64::MAX { Some(ctx_pc) } else { None }) {
-            ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
+            mem_alias.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
         }
         if ctx_op != u64::MAX {
-            ev.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
+            mem_alias.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
         }
-        ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
-        ev.finish();
+        mem_alias.finish();
     }
 
     pub fn update_counters(

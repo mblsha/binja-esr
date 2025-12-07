@@ -648,6 +648,13 @@ impl CoreRuntime {
                             (*self.mem).log_kio_read(offset, val);
                             return val as u32;
                         }
+                        if offset <= 0x0F && !self.lcd_ptr.is_null() {
+                            // IMEM overlay for the LCD controller; mirror to the 0x2000 map.
+                            let mapped = crate::lcd::overlay_addr(offset);
+                            if let Some(val) = (*self.lcd_ptr).read(mapped) {
+                                return val as u32;
+                            }
+                        }
                     }
                     // LCD controller mirrored at 0x2000/0xA000.
                     if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
@@ -696,9 +703,8 @@ impl CoreRuntime {
                         }
                     }
                     if python_required {
-                        panic!(
-                            "host overlay required for address 0x{addr:06X} but no host_read callback installed"
-                        );
+                        // Parity: if no host overlay is present, fall back to local memory like Python.
+                        // This mirrors the earlier silent behavior rather than aborting execution.
                     }
                     (*self.mem).load(addr, bits).unwrap_or(0)
                 }
@@ -723,6 +729,11 @@ impl CoreRuntime {
                                 }
                                 return;
                             }
+                        }
+                        if offset <= 0x0F && !self.lcd_ptr.is_null() {
+                            let mapped = crate::lcd::overlay_addr(offset);
+                            (*self.lcd_ptr).write(mapped, value as u8);
+                            return;
                         }
                     }
                     // LCD writes.
@@ -942,37 +953,45 @@ impl CoreRuntime {
             self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
             // Advance cycles: one for the opcode plus simulated WAIT idle cycles.
-            let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
+            // Parity: Python fast-path WAIT does not spin timers; skip timer ticks when opcode is WAIT.
+            let run_timer_cycles = opcode != 0xEF;
+            let cycle_increment = if opcode == 0xEF {
+                1
+            } else {
+                1u64.wrapping_add(wait_loops as u64)
+            };
             let prev_cycle = self.metadata.cycle_count;
             let new_cycle = prev_cycle.wrapping_add(cycle_increment);
-            for cyc in prev_cycle + 1..=new_cycle {
-                let mut timer_fired = false;
-                if !self.timer.in_interrupt {
-                    let _kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let (mti, sti, _key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
-                        &mut self.memory,
-                        cyc,
-                        |mem| {
-                            if let Some(kb) = self.keyboard.as_mut() {
-                                let events = kb.scan_tick(kb_irq_enabled);
-                                if events > 0 {
-                                    kb.write_fifo_to_memory(mem, kb_irq_enabled);
+            if run_timer_cycles {
+                for cyc in prev_cycle + 1..=new_cycle {
+                    let mut timer_fired = false;
+                    if !self.timer.in_interrupt {
+                        let _kb_irq_enabled = self.timer.kb_irq_enabled;
+                        let kb_irq_enabled = self.timer.kb_irq_enabled;
+                        let (mti, sti, _key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+                            &mut self.memory,
+                            cyc,
+                            |mem| {
+                                if let Some(kb) = self.keyboard.as_mut() {
+                                    let events = kb.scan_tick(kb_irq_enabled);
+                                    if events > 0 {
+                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                    }
+                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                                } else {
+                                    (0, false, None)
                                 }
-                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                            } else {
-                                (0, false, None)
-                            }
-                        },
-                        Some(self.state.get_reg(RegName::Y)),
-                    );
-                    timer_fired = mti || sti;
-                    // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
-                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                        self.timer.irq_isr = isr;
+                            },
+                            Some(self.state.get_reg(RegName::Y)),
+                        );
+                        timer_fired = mti || sti;
+                        // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
+                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                            self.timer.irq_isr = isr;
+                        }
                     }
+                    self.maybe_force_keyboard_activity(timer_fired);
                 }
-                self.maybe_force_keyboard_activity(timer_fired);
             }
             self.metadata.cycle_count = new_cycle;
             if opcode == 0x01 {
@@ -2368,15 +2387,38 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "host overlay required for address")]
-    fn requires_python_without_host_panics() {
+    fn wait_does_not_spin_timers() {
+        // Python fast-path WAIT clears I/flags and returns without ticking timers.
+        let mut rt = CoreRuntime::new();
+        // Place WAIT at PC=0.
+        rt.memory.write_external_slice(0, &[0xEF]);
+        // Enable timers that would normally fire on the first cycle.
+        rt.timer = TimerContext::new(true, 1, 1);
+        rt.timer.next_mti = 1;
+        rt.timer.next_sti = 1;
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::I, 5);
+
+        rt.step(1).expect("WAIT step");
+
+        // Timers should not have fired or pended IRQs.
+        assert!(!rt.timer.irq_pending, "WAIT should not pend IRQs");
+        assert_eq!(rt.timer.irq_mti, 0);
+        assert_eq!(rt.timer.irq_sti, 0);
+        // Cycle counter should advance a single instruction.
+        assert_eq!(rt.metadata.cycle_count, 1);
+    }
+
+    #[test]
+    fn requires_python_without_host_falls_back() {
         let mut rt = CoreRuntime::new();
         // Mark an external range as Python-only and point PC at it.
         rt.memory.set_python_ranges(vec![(0x0000_2000, 0x0000_2000)]);
         rt.state.set_reg(RegName::PC, 0x0000_2000);
         // Seed a NOP opcode so the fetch path is taken.
         rt.memory.write_external_byte(0x0000_2000, 0x00);
-        // Without a host_read overlay, the runtime bus should refuse to service the access.
-        let _ = rt.step(1);
+        // Without a host_read overlay, the runtime bus should fall back to local memory.
+        let res = rt.step(1);
+        assert!(res.is_ok(), "step should not panic without host overlay");
     }
 }
