@@ -27,7 +27,6 @@ pub struct PerfettoTracer {
     imr_read_zero: u64,
     imr_read_nonzero: u64,
     irq_seq: u64,
-    mem_seq: u64,
     call_depth_counter: TrackId,
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
@@ -61,7 +60,7 @@ impl PerfettoTracer {
         let use_wall_clock = std::env::var("PERFETTO_WALL_CLOCK")
             .ok()
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(true);
+            .unwrap_or(false);
         Self {
             builder,
             exec_track,
@@ -81,7 +80,6 @@ impl PerfettoTracer {
             imr_read_zero: 0,
             imr_read_nonzero: 0,
             irq_seq: 0,
-            mem_seq: 0,
             call_depth_counter,
             mem_read_counter,
             mem_write_counter,
@@ -267,9 +265,8 @@ impl PerfettoTracer {
         let ts = if ctx_op != u64::MAX {
             self.ts(ctx_op, 1)
         } else {
-            // Fallback: maintain monotonic ordering even without instruction context.
-            self.mem_seq = self.mem_seq.saturating_add(1);
-            self.mem_seq as i64
+            // Align to the provided manual cycle when no instruction context is available.
+            cycle as i64
         };
         {
             let mut ev =

@@ -373,6 +373,7 @@ impl TimerContext {
                     payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
                     payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
                     payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
+                    payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                     if let Some(y) = y_reg {
                         payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
                     }
@@ -402,14 +403,12 @@ impl TimerContext {
                                 "active_cols".to_string(),
                                 AnnotationValue::Str(format!("{:?}", stats.active_columns)),
                             );
-                            payload.insert(
-                                "pc".to_string(),
-                                AnnotationValue::Pointer(pc_trace as u64),
-                            );
-                            tracer.record_irq_event("KeyScanEmpty", payload);
-                        }
-                    }
+                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
+                    payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+                    tracer.record_irq_event("KeyScanEmpty", payload);
                 }
+            }
+        }
             }
         }
         // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
@@ -430,6 +429,7 @@ impl TimerContext {
                     "isr".to_string(),
                     AnnotationValue::UInt(self.irq_isr as u64),
                 );
+                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 if let Some(stats) = kb_stats.as_ref() {
                     payload.insert(
                         "pressed".to_string(),

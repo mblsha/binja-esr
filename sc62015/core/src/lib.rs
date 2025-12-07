@@ -557,11 +557,23 @@ impl CoreRuntime {
             return;
         }
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        let mut irm_enabled = (imr & IMR_MASTER) != 0;
+        let irm_enabled = (imr & IMR_MASTER) != 0;
+
+        // Allow KEYI/ONKI to latch pending even when master is off; delivery waits for IMR.
         if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
-            // Level-triggered keyboard/on-key interrupts should not be lost while IMR master is off.
-            irm_enabled = true;
+            self.timer.irq_pending = true;
+            self.timer.irq_isr = isr;
+            self.timer.irq_imr = imr;
+            self.timer.irq_source = Some(if (isr & ISR_KEYI) != 0 {
+                "KEY"
+            } else {
+                "ONK"
+            }
+            .to_string());
+            self.timer.last_fired = self.timer.irq_source.clone();
+            return;
         }
+
         if irm_enabled {
             if (imr & isr) == 0 && (isr & (ISR_KEYI | ISR_ONKI)) == 0 {
                 // Nothing enabled by IMR and no level-triggered keyboard/on-key bits.
@@ -1221,11 +1233,7 @@ impl CoreRuntime {
         let pc = self.state.pc() & ADDRESS_MASK;
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        // Treat KEY/ONK as level-triggered: allow delivery when their ISR bits are set even if IRM is 0.
-        let mut irm_enabled = (imr & IMR_MASTER) != 0;
-        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
-            irm_enabled = true;
-        }
+        let irm_enabled = (imr & IMR_MASTER) != 0;
         let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
         let imr_reg = self.state.get_reg(RegName::IMR) as u8;
         let pending_src = self

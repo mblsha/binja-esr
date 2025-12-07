@@ -144,10 +144,6 @@ struct LcdCommand {
 fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite)> {
     let addr_hi = address & 0x0F000;
     let addr_lo = address & 0x0FFF;
-    // Low mirror is restricted to 0x2000-0x200F to match Python overlay range.
-    if addr_hi == LCD_ADDR_HI_RIGHT && addr_lo > 0x000F {
-        return None;
-    }
     if addr_hi != LCD_ADDR_HI_LEFT && addr_hi != LCD_ADDR_HI_RIGHT {
         return None;
     }
@@ -242,7 +238,7 @@ impl LcdController {
 
     pub fn handles(&self, address: u32) -> bool {
         let addr = address & 0x00FF_FFFF;
-        (0x0000_2000..=0x0000_200F).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
+        (0x0000_2000..=0x0000_2FFF).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
     }
 
     pub fn write(&mut self, address: u32, value: u8) {
@@ -504,10 +500,7 @@ mod tests {
         let mut lcd = LcdController::new();
         assert!(lcd.handles(0x2000));
         assert!(lcd.handles(0x200F));
-        assert!(
-            !lcd.handles(0x2010),
-            "low mirror is restricted to 0x2000-0x200F"
-        );
+        assert!(lcd.handles(0x2010), "low mirror spans 0x2000-0x2FFF like Python");
         assert!(lcd.handles(0xA000));
         assert!(lcd.handles(0xAFFF));
 
