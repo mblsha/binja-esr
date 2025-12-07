@@ -1943,7 +1943,7 @@ mod tests {
         rt.timer.set_keyboard_irq_enabled(false);
         let kb = rt.keyboard.as_mut().unwrap();
         // Inject a matrix event to populate FIFO without relying on IRQ enable.
-        kb.inject_matrix_event(0x10, false, &mut rt.memory);
+        kb.inject_matrix_event(0x10, false, &mut rt.memory, rt.timer.kb_irq_enabled);
         rt.refresh_key_irq_latch();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "KEYI should still assert from latch");

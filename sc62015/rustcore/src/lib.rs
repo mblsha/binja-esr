@@ -1237,7 +1237,12 @@ impl LlamaCpu {
     fn keyboard_press_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
         let events = self
             .keyboard
-            .inject_matrix_event(code & 0x7F, false, &mut self.mirror);
+            .inject_matrix_event(
+                code & 0x7F,
+                false,
+                &mut self.mirror,
+                self.timer.kb_irq_enabled,
+            );
         self.sync_mirror(py);
         Ok(events > 0)
     }
@@ -1268,7 +1273,12 @@ impl LlamaCpu {
     fn keyboard_release_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
         let events = self
             .keyboard
-            .inject_matrix_event(code & 0x7F, true, &mut self.mirror);
+            .inject_matrix_event(
+                code & 0x7F,
+                true,
+                &mut self.mirror,
+                self.timer.kb_irq_enabled,
+            );
         self.sync_mirror(py);
         Ok(events > 0)
     }

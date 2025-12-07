@@ -477,11 +477,7 @@ impl TimerContext {
         let (mti, sti) = self.tick_timers(memory, cycle_count, pc_hint);
         let mut key_events = 0usize;
         // Only carry a latch forward while the keyboard IRQ is enabled; otherwise drop it.
-        let mut fifo_has_data = if self.kb_irq_enabled {
-            self.key_irq_latched
-        } else {
-            false
-        };
+        let mut fifo_has_data = self.key_irq_latched;
         let mut kb_stats: Option<KeyboardTelemetry> = None;
         if mti {
             let (events, has_data, stats) = keyboard_scan(memory);
@@ -493,13 +489,16 @@ impl TimerContext {
             .map(|(_, pc)| pc)
             .or(pc_hint)
             .unwrap_or_else(perfetto_last_pc);
-        let latch_active = self.kb_irq_enabled && (key_events > 0 || fifo_has_data);
-        if latch_active {
+        let latch_active = key_events > 0 || fifo_has_data;
+        let should_assert = self.kb_irq_enabled && latch_active;
+        if should_assert {
             if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                 if (isr & 0x04) == 0 {
                     let new_isr = isr | 0x04;
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
                     self.record_bit_watch_transition("ISR", isr, new_isr, pc_trace);
+                } else {
+                    self.record_bit_watch_transition("ISR", isr, isr, pc_trace);
                 }
             }
             // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
@@ -596,7 +595,7 @@ impl TimerContext {
             }
         }
         // Maintain bit-watch parity even when KEYI was already set prior to the scan.
-        if latch_active {
+        if should_assert {
             if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                 if (isr & 0x04) != 0 {
                     self.record_bit_watch_transition("ISR", isr, isr, pc_trace);
@@ -640,13 +639,6 @@ impl TimerContext {
                     payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
                 } else if let Some(pc) = pc_hint {
                     payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
-                } else {
-                    let last_pc = crate::llama::eval::perfetto_last_pc();
-                    payload.insert("pc".to_string(), AnnotationValue::Pointer(last_pc as u64));
-                    let last_idx = crate::llama::eval::perfetto_last_instr_index();
-                    if last_idx != u64::MAX {
-                        payload.insert("op_index".to_string(), AnnotationValue::UInt(last_idx));
-                    }
                 }
                 // Align event naming with Python tracer ("TimerFired").
                 tracer.record_irq_event("TimerFired", payload);

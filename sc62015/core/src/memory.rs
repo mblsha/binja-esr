@@ -3,6 +3,7 @@
 use crate::{CoreError, Result};
 use std::cell::Cell;
 use std::env;
+use std::sync::{MutexGuard, TryLockError};
 
 pub const INTERNAL_MEMORY_START: u32 = 0x100000;
 pub const ADDRESS_MASK: u32 = 0x00FF_FFFF;
@@ -31,6 +32,17 @@ fn canonical_address(address: u32) -> u32 {
 
 thread_local! {
     static IMR_READ_SUPPRESS: Cell<bool> = Cell::new(false);
+}
+
+fn perfetto_guard() -> Option<MutexGuard<'static, Option<crate::PerfettoTracer>>> {
+    for _ in 0..8 {
+        match crate::PERFETTO_TRACER.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => std::thread::yield_now(),
+        }
+    }
+    None
 }
 
 /// Run `f` with IMR read tracing/logging suppressed. Used for perfetto sampling paths that
@@ -259,24 +271,30 @@ impl MemoryImage {
         if let Some(index) = Self::internal_index(address) {
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
-            if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+            if let Some(mut guard) = perfetto_guard() {
                 if let Some(tracer) = guard.as_mut() {
-                    if let Some(cyc) = cycle {
-                        tracer.record_mem_write_at_cycle(
-                            cyc,
-                            pc.or_else(|| Some(crate::llama::eval::perfetto_last_pc())),
-                            address,
-                            value as u32,
-                            "internal",
-                            8,
-                        );
-                    } else {
-                        // Use last completed instruction index to avoid emitting unmatched op_index values.
-                        let (seq, pc_val) = crate::llama::eval::perfetto_instr_context().unwrap_or((
-                            crate::llama::eval::perfetto_last_instr_index(),
-                            pc.unwrap_or_else(crate::llama::eval::perfetto_last_pc),
-                        ));
-                        tracer.record_mem_write(seq, pc_val, address, value as u32, "internal", 8);
+                    match (cycle, crate::llama::eval::perfetto_instr_context()) {
+                        (Some(cyc), _) => {
+                            tracer.record_mem_write_at_cycle(
+                                cyc,
+                                pc,
+                                address,
+                                value as u32,
+                                "internal",
+                                8,
+                            );
+                        }
+                        (None, Some((op_idx, pc_ctx))) => {
+                            tracer.record_mem_write(
+                                op_idx,
+                                pc_ctx,
+                                address,
+                                value as u32,
+                                "internal",
+                                8,
+                            );
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -362,7 +380,7 @@ impl MemoryImage {
                     );
                 }
             }
-            if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+            if let Some(mut guard) = perfetto_guard() {
                 if let Some(tracer) = guard.as_mut() {
                     let ctx = crate::llama::eval::perfetto_instr_context();
                     let (op_idx, pc) = ctx.unwrap_or((
@@ -393,7 +411,7 @@ impl MemoryImage {
                 self.internal[index] = value;
                 self.dirty_internal
                     .push((INTERNAL_MEMORY_START + offset, value));
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+                if let Some(mut guard) = perfetto_guard() {
                     if let Some(tracer) = guard.as_mut() {
                         let (seq, pc) = crate::llama::eval::perfetto_instr_context()
                             .unwrap_or_else(|| {
@@ -434,7 +452,7 @@ impl MemoryImage {
                         eprintln!("[imr-read] offset=0x{offset:02X} val=0x{val:02X}");
                     }
                 }
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+                if let Some(mut guard) = perfetto_guard() {
                     if let Some(tracer) = guard.as_mut() {
                         let ctx = crate::llama::eval::perfetto_instr_context();
                         let (op_idx, pc) = ctx.unwrap_or((
@@ -485,7 +503,7 @@ impl MemoryImage {
 
     /// Perfetto/logging helper for KIO (KOL/KOH/KIL) reads, preserving instruction context.
     pub fn log_kio_read(&self, offset: u32, value: u8) {
-        if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+        if let Some(mut guard) = perfetto_guard() {
             if let Some(tracer) = guard.as_mut() {
                 let ctx = crate::llama::eval::perfetto_instr_context();
                 let (op_idx, pc) = ctx.unwrap_or((

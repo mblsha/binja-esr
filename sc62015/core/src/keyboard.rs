@@ -309,6 +309,7 @@ impl KeyboardMatrix {
         code: u8,
         release: bool,
         memory: &mut MemoryImage,
+        kb_irq_enabled: bool,
     ) -> usize {
         let events = self.enqueue_event(code & 0x7F, release, true);
         // Update KIL latch directly for bridge calls (row is low 3 bits).
@@ -320,7 +321,7 @@ impl KeyboardMatrix {
         }
         memory.write_internal_byte(0xF2, self.kil_latch);
         if events > 0 {
-            self.write_fifo_to_memory(memory, true);
+            self.write_fifo_to_memory(memory, kb_irq_enabled);
         }
         events
     }
