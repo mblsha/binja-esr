@@ -284,7 +284,7 @@ impl KeyboardMatrix {
         value
     }
 
-    fn enqueue_event(&mut self, code: u8, release: bool) -> usize {
+    fn enqueue_event(&mut self, code: u8, release: bool, count_irq: bool) -> usize {
         let mut value = code & 0x7F;
         if release {
             value |= 0x80;
@@ -296,7 +296,9 @@ impl KeyboardMatrix {
         self.fifo_storage[self.fifo_tail] = value;
         self.fifo_tail = (self.fifo_tail + 1) % FIFO_SIZE;
         self.fifo_count += 1;
-        self.irq_count = self.irq_count.wrapping_add(1);
+        if count_irq {
+            self.irq_count = self.irq_count.wrapping_add(1);
+        }
         self.keyi_latch = true;
         1
     }
@@ -308,7 +310,7 @@ impl KeyboardMatrix {
         release: bool,
         memory: &mut MemoryImage,
     ) -> usize {
-        let events = self.enqueue_event(code & 0x7F, release);
+        let events = self.enqueue_event(code & 0x7F, release, true);
         // Update KIL latch directly for bridge calls (row is low 3 bits).
         let row_mask = 1u8 << (code & 0x07);
         if release {
@@ -624,7 +626,7 @@ impl KeyboardMatrix {
         }
     }
 
-    pub fn scan_tick(&mut self) -> usize {
+    pub fn scan_tick(&mut self, count_irq: bool) -> usize {
         if !self.scan_enabled {
             return 0;
         }
@@ -658,7 +660,7 @@ impl KeyboardMatrix {
                 }
             }
             if let Some((code, release)) = enqueue {
-                events += self.enqueue_event(code, release);
+                events += self.enqueue_event(code, release, count_irq);
             }
         }
         self.kil_latch = self.compute_kil(false);

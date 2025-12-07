@@ -305,7 +305,7 @@ def test_llama_ir_traces_irq_enter() -> None:
     assert entry["vector"] == 0x12345
 
 
-def test_llama_reti_traces_irq_exit() -> None:
+def test_llama_reti_traces_irq_return() -> None:
     mem = _MemoryWithKioTrace()
     # RETI opcode with stack frame IMR,F,PC bytes
     mem._raw[0] = 0x01
@@ -321,9 +321,11 @@ def test_llama_reti_traces_irq_exit() -> None:
 
     cpu.execute_instruction(0x0000)
 
-    assert any(name == "IRQ_Exit" for name, _ in mem.irq_traces)
+    assert any(name in ("IRQ_Return", "IRQ_Exit") for name, _ in mem.irq_traces)
     exit_payload = next(
-        payload for name, payload in mem.irq_traces if name == "IRQ_Exit"
+        payload
+        for name, payload in mem.irq_traces
+        if name in ("IRQ_Return", "IRQ_Exit")
     )
     assert exit_payload["pc"] == 0
     assert exit_payload["ret"] == 0x032211

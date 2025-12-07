@@ -415,7 +415,7 @@ impl StandaloneBus {
     #[allow(dead_code)]
     fn tick_keyboard(&mut self) {
         // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
-        let events = self.keyboard.scan_tick();
+        let events = self.keyboard.scan_tick(self.timer.kb_irq_enabled);
         if events > 0 {
             self.keyboard.write_fifo_to_memory(&mut self.memory, true);
             self.pending_kil = self.keyboard.fifo_len() > 0;
@@ -740,11 +740,12 @@ impl StandaloneBus {
     }
 
     fn tick_timers_only(&mut self) {
+        let kb_irq_enabled = self.timer.kb_irq_enabled;
         let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
             &mut self.memory,
             self.cycle_count,
             |mem| {
-                let events = self.keyboard.scan_tick();
+                let events = self.keyboard.scan_tick(kb_irq_enabled);
                 if events > 0 {
                     self.keyboard.write_fifo_to_memory(mem, true);
                 }

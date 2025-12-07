@@ -369,30 +369,12 @@ impl TimerContext {
             if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                 if let Some(tracer) = guard.as_mut() {
                     let mut payload = HashMap::new();
-                    payload.insert(
-                        "events".to_string(),
-                        AnnotationValue::UInt(key_events as u64),
-                    );
-                    payload.insert(
-                        "imr".to_string(),
-                        AnnotationValue::UInt(self.irq_imr as u64),
-                    );
-                    payload.insert(
-                        "isr".to_string(),
-                        AnnotationValue::UInt(self.irq_isr as u64),
-                    );
+                    payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                    payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+                    payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
                     payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-                    payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                     if let Some(y) = y_reg {
                         payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
-                    }
-                    if let Some(stats) = kb_stats.as_ref() {
-                        payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
-                        payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
-                        payload.insert(
-                            "pressed".to_string(),
-                            AnnotationValue::UInt(stats.pressed as u64),
-                        );
                     }
                     tracer.record_irq_event("KeyIRQ", payload);
                 }
@@ -424,7 +406,6 @@ impl TimerContext {
                                 "pc".to_string(),
                                 AnnotationValue::Pointer(pc_trace as u64),
                             );
-                            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                             tracer.record_irq_event("KeyScanEmpty", payload);
                         }
                     }
@@ -441,8 +422,6 @@ impl TimerContext {
                     "events".to_string(),
                     AnnotationValue::UInt(key_events as u64),
                 );
-                payload.insert("mti".to_string(), AnnotationValue::UInt(mti as u64));
-                payload.insert("sti".to_string(), AnnotationValue::UInt(sti as u64));
                 payload.insert(
                     "imr".to_string(),
                     AnnotationValue::UInt(self.irq_imr as u64),
@@ -468,7 +447,6 @@ impl TimerContext {
                     );
                 }
                 payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
@@ -485,20 +463,14 @@ impl TimerContext {
 
     fn emit_irq_trace(
         &self,
-        fired_mti: bool,
-        fired_sti: bool,
+        _fired_mti: bool,
+        _fired_sti: bool,
         cycle_count: u64,
-        memory: &MemoryImage,
+        _memory: &MemoryImage,
     ) {
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
                 let mut payload: Vec<(&str, u64)> = Vec::new();
-                if fired_mti {
-                    payload.push(("mti", 1));
-                }
-                if fired_sti {
-                    payload.push(("sti", 1));
-                }
                 payload.push(("isr", self.irq_isr as u64));
                 payload.push(("imr", self.irq_imr as u64));
                 payload.push(("cycle", cycle_count as u64));
@@ -512,10 +484,6 @@ impl TimerContext {
                     if last_idx != u64::MAX {
                         payload.push(("op_index", last_idx));
                     }
-                }
-                // Include ISR snapshot if available.
-                if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                    payload.push(("isr_mem", isr as u64));
                 }
                 // Align event naming with Python tracer ("TimerFired").
                 tracer.record_irq_event(

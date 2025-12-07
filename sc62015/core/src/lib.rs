@@ -35,7 +35,7 @@ pub use snapshot::{
 pub use timer::TimerContext;
 
 use crate::keyboard::KeyboardSnapshot;
-use crate::llama::eval::{perfetto_instr_context, perfetto_last_pc, LlamaBus};
+use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::mask_for;
 use crate::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 
@@ -412,7 +412,7 @@ impl CoreRuntime {
         if force_strobe {
             let _ = kb.handle_write(0xF0, 0xFF, &mut self.memory);
             let _ = kb.handle_write(0xF1, 0x0F, &mut self.memory);
-            let events = kb.scan_tick();
+            let events = kb.scan_tick(self.timer.kb_irq_enabled);
             let stats = kb.telemetry();
             if events > 0 {
                 kb.write_fifo_to_memory(&mut self.memory, self.timer.kb_irq_enabled);
@@ -446,18 +446,6 @@ impl CoreRuntime {
                         ),
                     );
                     payload.insert(
-                        "cols".to_string(),
-                        perfetto::AnnotationValue::Str(format!("{:?}", kb.active_columns())),
-                    );
-                    payload.insert(
-                        "pc".to_string(),
-                        perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
-                    );
-                    payload.insert(
-                        "cycle".to_string(),
-                        perfetto::AnnotationValue::UInt(self.metadata.cycle_count),
-                    );
-                    payload.insert(
                         "kol".to_string(),
                         perfetto::AnnotationValue::UInt(stats.kol as u64),
                     );
@@ -469,13 +457,14 @@ impl CoreRuntime {
                         "pressed".to_string(),
                         perfetto::AnnotationValue::UInt(stats.pressed as u64),
                     );
-                    if let Some((op_idx, _)) = perfetto_instr_context() {
-                        payload.insert(
-                            "op_index".to_string(),
-                            perfetto::AnnotationValue::UInt(op_idx),
-                        );
-                    }
-                    payload.insert("forced".to_string(), perfetto::AnnotationValue::UInt(1));
+                    payload.insert(
+                        "active_cols".to_string(),
+                        perfetto::AnnotationValue::Str(format!("{:?}", kb.active_columns())),
+                    );
+                    payload.insert(
+                        "pc".to_string(),
+                        perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                    );
                     tracer.record_irq_event("KeyScanEvent", payload);
                 }
             }
@@ -515,40 +504,13 @@ impl CoreRuntime {
                         perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
                     );
                     payload.insert(
-                        "kol".to_string(),
-                        perfetto::AnnotationValue::UInt(kb.telemetry().kol as u64),
-                    );
-                    payload.insert(
-                        "koh".to_string(),
-                        perfetto::AnnotationValue::UInt(kb.telemetry().koh as u64),
-                    );
-                    payload.insert(
-                        "pressed".to_string(),
-                        perfetto::AnnotationValue::UInt(kb.telemetry().pressed as u64),
-                    );
-                    payload.insert(
-                        "cols".to_string(),
-                        perfetto::AnnotationValue::Str(format!("{:?}", kb.active_columns())),
-                    );
-                    payload.insert(
-                        "cycle".to_string(),
-                        perfetto::AnnotationValue::UInt(self.metadata.cycle_count),
+                        "src".to_string(),
+                        perfetto::AnnotationValue::Str("KEY".to_string()),
                     );
                     payload.insert(
                         "y".to_string(),
                         perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64),
                     );
-                    if let Some((op_idx, _)) = perfetto_instr_context() {
-                        payload.insert(
-                            "op_index".to_string(),
-                            perfetto::AnnotationValue::UInt(op_idx),
-                        );
-                    }
-                    payload.insert(
-                        "src".to_string(),
-                        perfetto::AnnotationValue::Str("KEY".to_string()),
-                    );
-                    payload.insert("forced".to_string(), perfetto::AnnotationValue::UInt(1));
                     tracer.record_irq_event("KeyIRQ", payload);
                 }
             }
@@ -823,19 +785,20 @@ impl CoreRuntime {
                 let new_cycle = prev_cycle.wrapping_add(1);
                 self.metadata.cycle_count = new_cycle;
                 if !self.timer.in_interrupt {
-                    let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
-                        &mut self.memory,
-                        new_cycle,
-                        |mem| {
-                            if let Some(kb) = self.keyboard.as_mut() {
-                                let events = kb.scan_tick();
-                                if events > 0 {
-                                    kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                }
-                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                            } else {
-                                (0, false, None)
+                    let _kb_irq_enabled = self.timer.kb_irq_enabled;
+            let kb_irq_enabled = self.timer.kb_irq_enabled;
+            let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+                &mut self.memory,
+                new_cycle,
+                |mem| {
+                    if let Some(kb) = self.keyboard.as_mut() {
+                        let events = kb.scan_tick(kb_irq_enabled);
+                        if events > 0 {
+                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                        }
+                        (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                    } else {
+                        (0, false, None)
                             }
                         },
                         Some(self.state.get_reg(RegName::Y)),
@@ -934,13 +897,14 @@ impl CoreRuntime {
             for cyc in prev_cycle + 1..=new_cycle {
                 let mut timer_fired = false;
                 if !self.timer.in_interrupt {
+                    let _kb_irq_enabled = self.timer.kb_irq_enabled;
                     let kb_irq_enabled = self.timer.kb_irq_enabled;
                     let (mti, sti, _key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
                         &mut self.memory,
                         cyc,
                         |mem| {
                             if let Some(kb) = self.keyboard.as_mut() {
-                                let events = kb.scan_tick();
+                                let events = kb.scan_tick(kb_irq_enabled);
                                 if events > 0 {
                                     kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                 }
@@ -998,7 +962,7 @@ impl CoreRuntime {
                             "imr".to_string(),
                             perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
                         );
-                        tracer.record_irq_event("IRQ_Exit", payload);
+                        tracer.record_irq_event("IRQ_Return", payload);
                     }
                 }
             }
@@ -1224,8 +1188,10 @@ impl CoreRuntime {
         // Match Python guard: defer delivery until firmware initializes the stack pointer.
         let sp = self.state.get_reg(RegName::S) & ADDRESS_MASK;
         if sp < 5 {
-            // Leave irq_pending intact and let firmware deliver once SP is set.
-            return Ok(());
+            // Leave irq_pending intact and surface an error like Python does.
+            return Err(CoreError::Other(
+                "IRQ deferred: stack pointer not initialized".to_string(),
+            ));
         }
 
         let pc = self.state.pc() & ADDRESS_MASK;
@@ -1699,7 +1665,7 @@ mod tests {
         kb.handle_write(0xF0, 0xFF, &mut rt.memory);
         kb.handle_write(0xF1, 0x07, &mut rt.memory);
         for _ in 0..8 {
-            events += kb.scan_tick();
+            events += kb.scan_tick(rt.timer.kb_irq_enabled);
             if events > 0 {
                 break;
             }
@@ -1754,7 +1720,7 @@ mod tests {
         kb.handle_write(0xF1, 0x0F, &mut rt.memory);
         let mut events = 0;
         for _ in 0..8 {
-            events += kb.scan_tick();
+            events += kb.scan_tick(rt.timer.kb_irq_enabled);
             if events > 0 {
                 break;
             }
@@ -2073,8 +2039,8 @@ mod tests {
             "trace should contain KeyDeliver marker"
         );
         assert!(
-            text.contains("IRQ_Exit"),
-            "trace should contain IRQ_Exit marker"
+            text.contains("IRQ_Return"),
+            "trace should contain IRQ_Return marker"
         );
         assert!(
             text.contains("src"),

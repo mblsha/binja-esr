@@ -371,7 +371,7 @@ impl PerfettoTracer {
     }
 
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
-    pub fn record_irq_event(&mut self, name: &str, mut payload: HashMap<String, AnnotationValue>) {
+    pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, AnnotationValue>) {
         // Prefer explicit cycle payload (manual clock) when present to align with Python traces.
         let cycle_ts = payload.get("cycle").and_then(|v| match v {
             AnnotationValue::UInt(c) => Some(*c as i64),
@@ -379,17 +379,9 @@ impl PerfettoTracer {
         });
 
         // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
-        let (op_idx, pc) = perfetto_instr_context()
+        let (op_idx, _pc) = perfetto_instr_context()
             .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
         let have_ctx = op_idx != u64::MAX && cycle_ts.is_none();
-        if have_ctx {
-            payload
-                .entry("op_index".to_string())
-                .or_insert(AnnotationValue::UInt(op_idx));
-            payload
-                .entry("pc".to_string())
-                .or_insert(AnnotationValue::Pointer(pc as u64));
-        }
 
         let ts = cycle_ts.unwrap_or_else(|| {
             if have_ctx {
@@ -406,7 +398,7 @@ impl PerfettoTracer {
             "KEYI_Set" | "KeyScan" | "KeyScanEvent" | "KeyScanEmpty" | "KEYI" | "KeyDeliver" => {
                 self.irq_key_track
             }
-            "IRQ_Enter" | "IRQ_Exit" | "IRQ_Delivered" => {
+            "IRQ_Enter" | "IRQ_Return" | "IRQ_Delivered" | "IRQ_Exit" => {
                 // Derive track from src payload when available; default to misc.
                 let src_track = payload
                     .get("src")

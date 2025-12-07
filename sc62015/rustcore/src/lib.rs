@@ -10,7 +10,7 @@ use retrobus_perfetto::AnnotationValue;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
-        eval::{reset_perf_counters, LlamaBus, LlamaExecutor},
+        eval::{power_on_reset, reset_perf_counters, LlamaBus, LlamaExecutor},
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
     },
@@ -318,14 +318,14 @@ impl LlamaContractBus {
                 self.timer.irq_isr = isr;
             }
 
+            let kb_irq_enabled = self.timer.kb_irq_enabled;
             let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
                 &mut self.memory,
                 self.cycles,
                 |mem| {
-                    let events = self.keyboard.scan_tick();
+                    let events = self.keyboard.scan_tick(kb_irq_enabled);
                     if events > 0 {
-                        self.keyboard
-                            .write_fifo_to_memory(mem, self.timer.kb_irq_enabled);
+                        self.keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
                     }
                     (
                         events,
@@ -435,12 +435,12 @@ impl LlamaContractBus {
     fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
         let addr = address & ADDRESS_MASK;
         if self.memory.requires_python(addr) {
-            if let Some(host) = &self.host_memory {
-                Python::with_gil(|py| {
-                    let bound = host.bind(py);
-                    bound
-                        .call_method1("write_byte", (addr, value, pc))
-                        .or_else(|err| {
+                if let Some(host) = &self.host_memory {
+                    Python::with_gil(|py| {
+                        let bound = host.bind(py);
+                        bound
+                            .call_method1("write_byte", (addr, value, pc))
+                            .or_else(|err| {
                             if err.is_instance_of::<PyTypeError>(py) {
                                 bound.call_method1("write_byte", (addr, value))
                             } else {
@@ -448,14 +448,23 @@ impl LlamaContractBus {
                             }
                         })
                         .map(|_| ())
-                })?;
-                // Parity: count/log host-handled writes and mirror into memory for tracing.
-                self.memory
-                    .apply_host_write_with_cycle(addr, value, None);
-                self.events.push(ContractEvent {
-                    kind: "write",
-                    address: addr,
-                    value,
+                    })?;
+                    // Parity: for host-handled IMEM writes, avoid mirroring keyboard/E-port overlays
+                    // into internal memory; Python overlays do not mutate IMEM for KIO/ONK.
+                    let should_mirror = if MemoryImage::is_internal(addr) {
+                        let offset = addr - INTERNAL_MEMORY_START;
+                        !MemoryImage::is_keyboard_offset(offset) && offset != 0xF5 && offset != 0xF6
+                    } else {
+                        true
+                    };
+                    if should_mirror {
+                        self.memory
+                            .apply_host_write_with_cycle(addr, value, None);
+                    }
+                    self.events.push(ContractEvent {
+                        kind: "write",
+                        address: addr,
+                        value,
                     pc: pc.map(|v| v & ADDRESS_MASK),
                     detail: None,
                 });
@@ -882,6 +891,7 @@ struct LlamaCpu {
     temps: HashMap<u32, u32>,
     mirror: MemoryImage,
     keyboard: KeyboardMatrix,
+    timer: TimerContext,
     memory_synced: bool,
     memory_reads: u64,
     memory_writes: u64,
@@ -900,6 +910,7 @@ impl LlamaCpu {
             temps: HashMap::new(),
             mirror: MemoryImage::new(),
             keyboard: KeyboardMatrix::new(),
+            timer: TimerContext::new(false, 0, 0),
             memory_synced: false,
             memory_reads: 0,
             memory_writes: 0,
@@ -991,13 +1002,9 @@ impl LlamaCpu {
             }
 
             let mem = self.memory.clone_ref(py);
-            let mut bus = ResetBus {
-                py,
-                mem,
-                mirror: &mut self.mirror,
-            };
+            let mut bus = ResetBus { py, mem, mirror: &mut self.mirror };
             power_on_reset(&mut bus, &mut self.state);
-            Ok(())
+            Ok::<(), pyo3::PyErr>(())
         })?;
 
         self.memory_synced = true;
@@ -1040,7 +1047,7 @@ impl LlamaCpu {
             let (imr, isr) = self.read_irq_registers(py, &mut bus);
             self.emit_irq_trace(
                 py,
-                "IRQ_Exit",
+                "IRQ_Return",
                 HashMap::from([
                     ("pc", entry_pc & ADDRESS_MASK),
                     ("ret", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
@@ -1200,22 +1207,26 @@ impl LlamaCpu {
                 self.timer.irq_mti = *counts.get("MTI").unwrap_or(&0);
                 self.timer.irq_sti = *counts.get("STI").unwrap_or(&0);
             }
-            if let Ok(last_irq) = interrupts
-                .getattr("last_irq")
-                .and_then(|o| o.extract::<HashMap<String, serde_json::Value>>())
-            {
-                self.timer.last_irq_src = last_irq
-                    .get("src")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                self.timer.last_irq_pc = last_irq
-                    .get("pc")
-                    .and_then(|v| v.as_u64())
-                    .map(|v| v as u32);
-                self.timer.last_irq_vector = last_irq
-                    .get("vector")
-                    .and_then(|v| v.as_u64())
-                    .map(|v| v as u32);
+            if let Ok(last_irq_obj) = interrupts.getattr("last_irq") {
+                if let Ok(dict) = last_irq_obj.downcast::<PyDict>() {
+                    self.timer.last_irq_src = dict
+                        .get_item("src")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.extract::<String>().ok());
+                    self.timer.last_irq_pc = dict
+                        .get_item("pc")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.extract::<u64>().ok())
+                        .map(|v| v as u32);
+                    self.timer.last_irq_vector = dict
+                        .get_item("vector")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.extract::<u64>().ok())
+                        .map(|v| v as u32);
+                }
             }
         }
         Ok(())
