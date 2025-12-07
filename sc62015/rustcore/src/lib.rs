@@ -380,7 +380,7 @@ impl LlamaContractBus {
             if let Some(host) = &self.host_memory {
                 return Python::with_gil(|py| {
                     let bound = host.bind(py);
-                    bound
+                    let value = bound
                         .call_method1("read_byte", (addr, pc))
                         .or_else(|err| {
                             if err.is_instance_of::<PyTypeError>(py) {
@@ -389,7 +389,17 @@ impl LlamaContractBus {
                                 Err(err)
                             }
                         })
-                        .and_then(|val| val.extract::<u8>())
+                        .and_then(|val| val.extract::<u8>())?;
+                    // Parity: still bump counters and record a read event even when the host services it.
+                    self.memory.bump_read_count();
+                    self.events.push(ContractEvent {
+                        kind: "read",
+                        address: addr,
+                        value,
+                        pc: pc.map(|v| v & ADDRESS_MASK),
+                        detail: None,
+                    });
+                    return Ok(value);
                 });
             }
         }
@@ -426,7 +436,7 @@ impl LlamaContractBus {
         let addr = address & ADDRESS_MASK;
         if self.memory.requires_python(addr) {
             if let Some(host) = &self.host_memory {
-                return Python::with_gil(|py| {
+                Python::with_gil(|py| {
                     let bound = host.bind(py);
                     bound
                         .call_method1("write_byte", (addr, value, pc))
@@ -438,7 +448,18 @@ impl LlamaContractBus {
                             }
                         })
                         .map(|_| ())
+                })?;
+                // Parity: count/log host-handled writes and mirror into memory for tracing.
+                self.memory
+                    .apply_host_write_with_cycle(addr, value, None);
+                self.events.push(ContractEvent {
+                    kind: "write",
+                    address: addr,
+                    value,
+                    pc: pc.map(|v| v & ADDRESS_MASK),
+                    detail: None,
                 });
+                return Ok(());
             }
         }
         if addr >= INTERNAL_MEMORY_START {

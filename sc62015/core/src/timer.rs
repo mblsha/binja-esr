@@ -9,11 +9,10 @@ use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
 use serde_json::json;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::env;
 
 const ISR_OFFSET: u32 = 0xFC;
-const LLAMA_MTI_PERIOD_DEFAULT: u64 = 500;
-const LLAMA_STI_PERIOD_DEFAULT: u64 = 5000;
 
 #[derive(Clone, Debug)]
 pub struct TimerContext {
@@ -141,27 +140,13 @@ impl TimerContext {
         timer: &TimerInfo,
         interrupts: &InterruptInfo,
         _current_cycle: u64,
-        allow_scale: bool,
+        _allow_scale: bool,
     ) {
         self.enabled = timer.enabled;
         self.mti_period = timer.mti_period.max(0) as u64;
         self.sti_period = timer.sti_period.max(0) as u64;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
-        if allow_scale {
-            if let Ok(scale_raw) = env::var("LLAMA_TIMER_SCALE") {
-                if let Ok(scale) = scale_raw.parse::<f64>() {
-                    if (scale - 1.0).abs() > f64::EPSILON {
-                        let scaled_mti =
-                            (LLAMA_MTI_PERIOD_DEFAULT as f64 * scale).floor().max(1.0) as u64;
-                        let scaled_sti =
-                            (LLAMA_STI_PERIOD_DEFAULT as f64 * scale).floor().max(1.0) as u64;
-                        self.mti_period = scaled_mti;
-                        self.sti_period = scaled_sti;
-                    }
-                }
-            }
-        }
         // Python stores absolute targets; do not rebase forward. Allow immediate fire if targets are in the past.
         self.kb_irq_enabled = timer.kb_irq_enabled;
 
@@ -757,8 +742,15 @@ mod tests {
             true,
         );
 
-        assert_eq!(timer.mti_period, 250, "MTI period should scale by env");
-        assert_eq!(timer.sti_period, 2500, "STI period should scale by env");
+        // Parity: snapshot restore uses serialized periods verbatim; ignore env scaling.
+        assert_eq!(
+            timer.mti_period, 100,
+            "MTI period should not scale on snapshot load"
+        );
+        assert_eq!(
+            timer.sti_period, 200,
+            "STI period should not scale on snapshot load"
+        );
 
         if let Some(val) = prev {
             env::set_var("LLAMA_TIMER_SCALE", val);
@@ -769,9 +761,7 @@ mod tests {
 
     #[test]
     fn apply_snapshot_does_not_scale_when_disabled() {
-        let prev = env::var("LLAMA_TIMER_SCALE").ok();
-        env::set_var("LLAMA_TIMER_SCALE", "0.25");
-
+        // Maintain previous contract: disable scaling path; periods remain as serialized.
         let mut timer = TimerContext::new(true, 100, 200);
         timer.apply_snapshot_info(
             &crate::TimerInfo {
@@ -787,19 +777,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(
-            timer.mti_period, 100,
-            "mti_period should not scale when allow_scale is false"
-        );
-        assert_eq!(
-            timer.sti_period, 200,
-            "sti_period should not scale when allow_scale is false"
-        );
-
-        if let Some(val) = prev {
-            env::set_var("LLAMA_TIMER_SCALE", val);
-        } else {
-            env::remove_var("LLAMA_TIMER_SCALE");
-        }
+        assert_eq!(timer.mti_period, 100);
+        assert_eq!(timer.sti_period, 200);
     }
 }

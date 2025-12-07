@@ -1266,12 +1266,9 @@ impl LlamaExecutor {
         for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
             if let Some((reg, new_val)) = m.side_effect {
                 if Some(reg) != dst_reg {
-                    let curr = state.get_reg(reg);
-                    let mask = mask_for(reg);
-                    let delta = new_val.wrapping_sub(curr) & mask;
-                    let final_val =
-                        curr.wrapping_add(delta.wrapping_mul(pointer_steps) & mask) & mask;
-                    state.set_reg(reg, final_val);
+                    // Use the same signed-step logic as other multi-byte helpers so pre-dec
+                    // addressing walks backward instead of wrapping forward.
+                    Self::apply_pointer_side_effect(state, reg, new_val, pointer_steps);
                 }
             }
         }
@@ -1710,9 +1707,8 @@ impl LlamaExecutor {
         let mut pc_override = None;
         let mut entry = self.lookup(opcode);
 
-        let mut pre_chain_guard = 0u8;
         while let Some(e) = entry {
-            if e.kind != InstrKind::Pre || pre_chain_guard > 3 {
+            if e.kind != InstrKind::Pre {
                 break;
             }
             let pre_modes = pre_modes_for(trace_opcode).ok_or("unknown PRE opcode")?;
@@ -1724,7 +1720,6 @@ impl LlamaExecutor {
             pre_modes_opt = Some(pre_modes);
             pc_override = Some(next_pc);
             entry = self.lookup(next_opcode);
-            pre_chain_guard = pre_chain_guard.saturating_add(1);
         }
 
         PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
@@ -2740,6 +2735,15 @@ mod tests {
     }
 
     #[test]
+    fn apply_pointer_side_effect_handles_predec_over_multiple_iterations() {
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x10);
+        // Side-effect encodes pre-dec by one; three iterations should land at 0x0D.
+        LlamaExecutor::apply_pointer_side_effect(&mut state, RegName::X, 0x0F, 3);
+        assert_eq!(state.get_reg(RegName::X), 0x0D);
+    }
+
+    #[test]
     fn wait_advances_pc() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
@@ -3111,6 +3115,25 @@ mod tests {
         let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
         assert_eq!(len, 5);
         assert_eq!(state.pc(), 0x009A78);
+    }
+
+    #[test]
+    fn stacked_pre_prefixes_unbounded() {
+        // Four PRE bytes followed by JP should still resolve the JP and operands.
+        let mut bus = MemBus::with_size(10);
+        bus.mem[0] = 0x32;
+        bus.mem[1] = 0x32;
+        bus.mem[2] = 0x32;
+        bus.mem[3] = 0x32;
+        bus.mem[4] = 0x02; // JP abs16
+        bus.mem[5] = 0x34;
+        bus.mem[6] = 0x12;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 7);
+        assert_eq!(state.pc(), 0x001234);
     }
 
     #[test]
