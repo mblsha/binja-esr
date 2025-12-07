@@ -335,18 +335,20 @@ impl LlamaContractBus {
                 },
                 None,
             );
-            if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
-                // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
-                if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                    if (isr & 0x04) == 0 {
-                        self.memory.write_internal_byte(0xFC, isr | 0x04);
+            if kb_irq_enabled {
+                if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
+                    // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        if (isr & 0x04) == 0 {
+                            self.memory.write_internal_byte(0xFC, isr | 0x04);
+                        }
                     }
                 }
-            }
-            if sti && self.keyboard.fifo_len() > 0 {
-                if let Some(cur) = self.memory.read_internal_byte(0xFC) {
-                    if (cur & 0x04) == 0 {
-                        self.memory.write_internal_byte(0xFC, cur | 0x04);
+                if sti && self.keyboard.fifo_len() > 0 {
+                    if let Some(cur) = self.memory.read_internal_byte(0xFC) {
+                        if (cur & 0x04) == 0 {
+                            self.memory.write_internal_byte(0xFC, cur | 0x04);
+                        }
                     }
                 }
             }

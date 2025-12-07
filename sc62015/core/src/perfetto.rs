@@ -432,6 +432,8 @@ impl PerfettoTracer {
         pending: bool,
         in_interrupt: bool,
         pending_src: Option<&str>,
+        kil: Option<u8>,
+        imr_reg: Option<u8>,
     ) {
         let mut payload = HashMap::new();
         payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
@@ -446,6 +448,15 @@ impl PerfettoTracer {
             payload.insert(
                 "pending_src".to_string(),
                 AnnotationValue::Str(src.to_string()),
+            );
+        }
+        if let Some(k) = kil {
+            payload.insert("kil".to_string(), AnnotationValue::UInt(k as u64));
+        }
+        if let Some(imr_reg_val) = imr_reg {
+            payload.insert(
+                "imr_reg".to_string(),
+                AnnotationValue::UInt(imr_reg_val as u64),
             );
         }
         self.record_irq_event(name, payload);

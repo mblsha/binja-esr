@@ -37,7 +37,7 @@ pub use timer::TimerContext;
 use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::mask_for;
-use crate::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
+use crate::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET};
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
@@ -582,10 +582,33 @@ impl CoreRuntime {
             } else {
                 "IRQ"
             };
-            if self.timer.irq_source.is_none() {
-                self.timer.irq_source = Some(src.to_string());
+            // Allow a newly latched KEY/ONK to override earlier timer sources to match Python priority.
+            match self.timer.irq_source.as_deref() {
+                None => self.timer.irq_source = Some(src.to_string()),
+                Some(cur) => {
+                    if (src == "KEY" || src == "ONK") && cur != "KEY" && cur != "ONK" {
+                        self.timer.irq_source = Some(src.to_string());
+                    }
+                }
             }
             self.timer.last_fired = self.timer.irq_source.clone();
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                    tracer.record_irq_check(
+                        "IRQ_PendingArm",
+                        self.state.pc() & ADDRESS_MASK,
+                        imr,
+                        isr,
+                        self.timer.irq_pending,
+                        self.timer.in_interrupt,
+                        self.timer.irq_source.as_deref(),
+                        Some(kil),
+                        Some(imr_reg),
+                    );
+                }
+            }
         }
     }
 
@@ -612,6 +635,7 @@ impl CoreRuntime {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
+                    let python_required = (*self.mem).requires_python(addr);
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -632,7 +656,7 @@ impl CoreRuntime {
                         }
                     }
                     // Host overlay: delegate addresses flagged as Python-only.
-                    if (*self.mem).requires_python(addr) {
+                    if python_required {
                         if let Some(cb) = self.host_read {
                             if let Some(val) = (*cb)(addr) {
                                 (*self.mem).bump_read_count();
@@ -670,6 +694,11 @@ impl CoreRuntime {
                             }
                             return val as u32;
                         }
+                    }
+                    if python_required {
+                        panic!(
+                            "host overlay required for address 0x{addr:06X} but no host_read callback installed"
+                        );
                     }
                     (*self.mem).load(addr, bits).unwrap_or(0)
                 }
@@ -733,6 +762,26 @@ impl CoreRuntime {
                 if let Some(tracer) = guard.as_mut() {
                     let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
                     let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                    let pending_src = self
+                        .timer
+                        .irq_source
+                        .as_deref()
+                        .map(str::to_string)
+                        .or_else(|| {
+                            if (isr & ISR_KEYI) != 0 {
+                                Some("KEY".to_string())
+                            } else if (isr & ISR_ONKI) != 0 {
+                                Some("ONK".to_string())
+                            } else if (isr & ISR_MTI) != 0 {
+                                Some("MTI".to_string())
+                            } else if (isr & ISR_STI) != 0 {
+                                Some("STI".to_string())
+                            } else {
+                                None
+                            }
+                        });
                     tracer.record_irq_check(
                         "IRQ_Check",
                         self.state.pc() & ADDRESS_MASK,
@@ -740,7 +789,9 @@ impl CoreRuntime {
                         isr,
                         self.timer.irq_pending,
                         self.timer.in_interrupt,
-                        self.timer.irq_source.as_deref(),
+                        pending_src.as_deref(),
+                        Some(kil),
+                        Some(imr_reg),
                     );
                 }
             }
@@ -926,13 +977,20 @@ impl CoreRuntime {
             self.metadata.cycle_count = new_cycle;
             if opcode == 0x01 {
                 let irq_src = self.timer.irq_source.clone();
+                // If irq_source was lost, fall back to the saved ISR mask from interrupt_stack.
+                let stack_mask = self.timer.interrupt_stack.last().copied();
+                let clear_mask = irq_src
+                    .as_deref()
+                    .and_then(src_mask_for_name)
+                    .or_else(|| stack_mask.map(|m| m as u8));
+
                 self.timer.in_interrupt = false;
                 if irq_src.as_deref().is_some_and(|s| s == "KEY") {
                     self.timer.key_irq_latched = false;
                 }
                 self.timer.irq_source = None;
-                // Clear the delivered ISR bit only when we know which source fired (Python parity).
-                if let Some(src_mask) = irq_src.as_deref().and_then(|s| src_mask_for_name(s)) {
+                // Clear the delivered ISR bit, preferring explicit source but falling back to the saved mask.
+                if let Some(src_mask) = clear_mask {
                     let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
                     if let Some(isr_val) = self.memory.load(isr_addr, 8) {
                         let cleared = (isr_val as u8) & (!src_mask);
@@ -958,6 +1016,12 @@ impl CoreRuntime {
                                 irq_src.unwrap_or_else(|| "".to_string()),
                             ),
                         );
+                        if let Some(mask) = clear_mask {
+                            payload.insert(
+                                "mask".to_string(),
+                                perfetto::AnnotationValue::UInt(mask as u64),
+                            );
+                        }
                         payload.insert(
                             "imr".to_string(),
                             perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
@@ -1143,6 +1207,26 @@ impl CoreRuntime {
         if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
             irm_enabled = true;
         }
+        let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+        let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+        let pending_src = self
+            .timer
+            .irq_source
+            .as_deref()
+            .map(str::to_string)
+            .or_else(|| {
+                if (isr & ISR_KEYI) != 0 {
+                    Some("KEY".to_string())
+                } else if (isr & ISR_ONKI) != 0 {
+                    Some("ONK".to_string())
+                } else if (isr & ISR_MTI) != 0 {
+                    Some("MTI".to_string())
+                } else if (isr & ISR_STI) != 0 {
+                    Some("STI".to_string())
+                } else {
+                    None
+                }
+            });
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
                 tracer.record_irq_check(
@@ -1152,7 +1236,9 @@ impl CoreRuntime {
                     isr,
                     self.timer.irq_pending,
                     self.timer.in_interrupt,
-                    self.timer.irq_source.as_deref(),
+                    pending_src.as_deref(),
+                    Some(kil),
+                    Some(imr_reg),
                 );
                 if imr == 0 {
                     tracer.record_irq_check(
@@ -1162,7 +1248,9 @@ impl CoreRuntime {
                         isr,
                         self.timer.irq_pending,
                         self.timer.in_interrupt,
-                        self.timer.irq_source.as_deref(),
+                        pending_src.as_deref(),
+                        Some(kil),
+                        Some(imr_reg),
                     );
                 }
             }
@@ -1656,6 +1744,31 @@ mod tests {
     }
 
     #[test]
+    fn arm_pending_irq_prefers_keyboard_over_existing_timer_source() {
+        let mut rt = CoreRuntime::new();
+        // KEYI and MTI both set; IMR enables both.
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI | ISR_MTI);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY | IMR_MTI);
+        // Seed an existing timer source; KEY should override.
+        rt.timer.irq_source = Some("MTI".to_string());
+        rt.timer.irq_pending = false;
+
+        rt.arm_pending_irq_from_isr();
+
+        assert!(
+            rt.timer.irq_pending,
+            "pending should be armed when IMR+ISR allow delivery"
+        );
+        assert_eq!(
+            rt.timer.irq_source,
+            Some("KEY".to_string()),
+            "keyboard should override existing timer source"
+        );
+    }
+
+    #[test]
     fn refresh_key_irq_latch_reasserts_keyi() {
         let mut rt = CoreRuntime::new();
         let kb = rt.keyboard.as_mut().unwrap();
@@ -2141,7 +2254,17 @@ mod tests {
 
         // Emit diagnostics without running the runtime loop.
         if let Some(mut tracer) = PERFETTO_TRACER.lock().unwrap().take() {
-            tracer.record_irq_check("IRQ_Check", 0x0100, 0x80, 0x04, true, false, Some("KEY"));
+            tracer.record_irq_check(
+                "IRQ_Check",
+                0x0100,
+                0x80,
+                0x04,
+                true,
+                false,
+                Some("KEY"),
+                None,
+                None,
+            );
             tracer.record_call_flow("CALL", 0x012345, 0x020000, 2);
             let _ = tracer.finish();
         }
@@ -2242,5 +2365,18 @@ mod tests {
         let isr = rt.memory.read_internal_byte(0xFC).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI should set ISR bit after first step");
         assert_eq!(rt.metadata.cycle_count, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "host overlay required for address")]
+    fn requires_python_without_host_panics() {
+        let mut rt = CoreRuntime::new();
+        // Mark an external range as Python-only and point PC at it.
+        rt.memory.set_python_ranges(vec![(0x0000_2000, 0x0000_2000)]);
+        rt.state.set_reg(RegName::PC, 0x0000_2000);
+        // Seed a NOP opcode so the fetch path is taken.
+        rt.memory.write_external_byte(0x0000_2000, 0x00);
+        // Without a host_read overlay, the runtime bus should refuse to service the access.
+        let _ = rt.step(1);
     }
 }
