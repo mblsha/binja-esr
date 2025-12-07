@@ -39,6 +39,65 @@ pub struct TimerContext {
     pub last_irq_pc: Option<u32>,
     pub last_irq_vector: Option<u32>,
     pub irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
+    pub delivered_masks: Vec<u8>,
+}
+
+fn default_bit_watch_table() -> serde_json::Map<String, serde_json::Value> {
+    let mut table = serde_json::Map::new();
+    for reg in ["IMR", "ISR"] {
+        let mut reg_map = serde_json::Map::new();
+        for bit in 0..8u8 {
+            reg_map.insert(
+                bit.to_string(),
+                json!({
+                    "set": [],
+                    "clear": [],
+                }),
+            );
+        }
+        table.insert(reg.to_string(), serde_json::Value::Object(reg_map));
+    }
+    table
+}
+
+fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
+    for reg in ["IMR", "ISR"] {
+        if !table
+            .get(reg)
+            .map(|v| v.is_object())
+            .unwrap_or(false)
+        {
+            table.insert(reg.to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        }
+        let reg_entry = table
+            .get_mut(reg)
+            .expect("bit watch reg must exist");
+        if !reg_entry.is_object() {
+            *reg_entry = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let reg_obj = reg_entry
+            .as_object_mut()
+            .expect("bit watch reg is object");
+        for bit in 0..8u8 {
+            if !reg_obj
+                .get(&bit.to_string())
+                .map(|v| v.is_object())
+                .unwrap_or(false)
+            {
+                reg_obj.insert(bit.to_string(), json!({ "set": [], "clear": [] }));
+            }
+            let bit_obj = reg_obj
+                .get_mut(&bit.to_string())
+                .and_then(|v| v.as_object_mut())
+                .expect("bit watch bit entry should be object");
+            bit_obj
+                .entry("set".to_string())
+                .or_insert_with(|| json!([]));
+            bit_obj
+                .entry("clear".to_string())
+                .or_insert_with(|| json!([]));
+        }
+    }
 }
 
 impl TimerContext {
@@ -67,6 +126,7 @@ impl TimerContext {
             last_irq_pc: None,
             last_irq_vector: None,
             irq_bit_watch: None,
+            delivered_masks: Vec::new(),
         };
         ctx.reset(0);
         ctx
@@ -89,6 +149,7 @@ impl TimerContext {
         };
         self.in_interrupt = false;
         self.interrupt_stack.clear();
+        self.delivered_masks.clear();
         self.next_interrupt_id = 0;
         self.key_irq_latched = false;
     }
@@ -102,6 +163,11 @@ impl TimerContext {
             next_sti: self.next_sti.min(i32::MAX as u64) as i32,
             kb_irq_enabled: self.kb_irq_enabled,
         };
+        let mut watch = self
+            .irq_bit_watch
+            .clone()
+            .unwrap_or_else(default_bit_watch_table);
+        normalize_bit_watch(&mut watch);
         let interrupts = InterruptInfo {
             pending: self.irq_pending,
             in_interrupt: self.in_interrupt,
@@ -121,16 +187,8 @@ impl TimerContext {
                 "pc": self.last_irq_pc,
                 "vector": self.last_irq_vector,
             })),
-            irq_bit_watch: self
-                .irq_bit_watch
-                .clone()
-                .map(|watch| json!(watch))
-                .or_else(|| {
-                    Some(json!({
-                        "IMR": {},
-                        "ISR": {},
-                    }))
-                }),
+            irq_bit_watch: Some(json!(watch)),
+            delivered_masks: self.delivered_masks.clone(),
         };
         (timer, interrupts)
     }
@@ -143,8 +201,25 @@ impl TimerContext {
         _allow_scale: bool,
     ) {
         self.enabled = timer.enabled;
-        self.mti_period = timer.mti_period.max(0) as u64;
-        self.sti_period = timer.sti_period.max(0) as u64;
+        let mut mti = timer.mti_period.max(0) as u64;
+        let mut sti = timer.sti_period.max(0) as u64;
+        // Optional LLAMA timer scaling for parity with Python loader.
+        if _allow_scale {
+            if let Ok(val) = std::env::var("LLAMA_TIMER_SCALE") {
+                if let Ok(scale) = val.parse::<f64>() {
+                    if (scale - 1.0).abs() > f64::EPSILON {
+                        let apply_scale = |v: u64| -> u64 {
+                            let scaled = (v as f64 * scale).round();
+                            scaled.max(1.0) as u64
+                        };
+                        mti = apply_scale(mti);
+                        sti = apply_scale(sti);
+                    }
+                }
+            }
+        }
+        self.mti_period = mti;
+        self.sti_period = sti;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
         // Python stores absolute targets; do not rebase forward. Allow immediate fire if targets are in the past.
@@ -161,7 +236,17 @@ impl TimerContext {
             .irq_bit_watch
             .as_ref()
             .and_then(|v| v.as_object())
-            .map(|obj| obj.clone());
+            .map(|obj| {
+                let mut map = obj.clone();
+                normalize_bit_watch(&mut map);
+                map
+            })
+            .or_else(|| {
+                let mut table = default_bit_watch_table();
+                normalize_bit_watch(&mut table);
+                Some(table)
+            });
+        self.delivered_masks = interrupts.delivered_masks.clone();
         self.last_fired = None;
         self.key_irq_latched = false;
         // Restore IRQ counters/last info if present; otherwise zero them.
@@ -217,6 +302,57 @@ impl TimerContext {
         self.last_fired = None;
         self.key_irq_latched = false;
         self.irq_bit_watch = irq_bit_watch;
+        self.delivered_masks.clear();
+    }
+
+    /// Record IMR/ISR bit transitions (set/clear) keyed by bit number and PC, mirroring Python.
+    pub fn record_bit_watch_transition(&mut self, reg_name: &str, prev_val: u8, new_val: u8, pc: u32) {
+        if prev_val == new_val {
+            return;
+        }
+        let table = self
+            .irq_bit_watch
+            .get_or_insert_with(default_bit_watch_table);
+        normalize_bit_watch(table);
+        let Some(reg_entry) = table.get_mut(reg_name) else { return };
+        let Some(reg_obj) = reg_entry.as_object_mut() else { return };
+        for bit in 0..8u8 {
+            let prev = (prev_val >> bit) & 1;
+            let new = (new_val >> bit) & 1;
+            if prev == new {
+                continue;
+            }
+            let key = bit.to_string();
+            let Some(bit_entry) = reg_obj.get_mut(&key) else { continue };
+            let Some(bit_obj) = bit_entry.as_object_mut() else { continue };
+            let action = if new == 1 { "set" } else { "clear" };
+            if !bit_obj.contains_key(action) {
+                bit_obj.insert(action.to_string(), json!([]));
+            }
+            if bit_obj
+                .get(action)
+                .and_then(|v| v.as_array())
+                .is_none()
+            {
+                bit_obj.insert(action.to_string(), json!([]));
+            }
+            let arr = bit_obj
+                .get_mut(action)
+                .and_then(|v| v.as_array_mut())
+                .expect("array exists");
+            if arr
+                .last()
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                == Some(pc)
+            {
+                continue;
+            }
+            arr.push(json!(pc));
+            if arr.len() > 10 {
+                arr.remove(0);
+            }
+        }
     }
 
     pub fn set_keyboard_irq_enabled(&mut self, enabled: bool) {
@@ -227,7 +363,12 @@ impl TimerContext {
         self.kb_irq_enabled
     }
 
-    pub fn tick_timers(&mut self, memory: &mut MemoryImage, cycle_count: u64) -> (bool, bool) {
+    pub fn tick_timers(
+        &mut self,
+        memory: &mut MemoryImage,
+        cycle_count: u64,
+        pc_hint: Option<u32>,
+    ) -> (bool, bool) {
         if !self.enabled {
             return (false, false);
         }
@@ -259,6 +400,8 @@ impl TimerContext {
                 }
                 if new_isr != current_isr {
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
+                    let pc = pc_hint.unwrap_or_else(perfetto_last_pc);
+                    self.record_bit_watch_transition("ISR", current_isr, new_isr, pc);
                 }
             }
             // Match Python: when both fire, the later source wins (STI overwrites MTI).
@@ -279,11 +422,9 @@ impl TimerContext {
             // IMR masking is honored later during delivery.
             self.irq_pending = fired_mti || fired_sti;
             if self.irq_pending {
-                self.emit_irq_trace(fired_mti, fired_sti, cycle_count, memory);
+                self.emit_irq_trace(fired_mti, fired_sti, cycle_count, memory, pc_hint);
             }
             // Record IMR/ISR transitions for parity bit-watch metadata.
-            self.record_bit_watch("IMR", memory.read_internal_byte(0xFB).unwrap_or(0));
-            self.record_bit_watch("ISR", memory.read_internal_byte(ISR_OFFSET).unwrap_or(0));
         }
         (fired_mti, fired_sti)
     }
@@ -328,11 +469,12 @@ impl TimerContext {
         cycle_count: u64,
         mut keyboard_scan: F,
         y_reg: Option<u32>,
+        pc_hint: Option<u32>,
     ) -> (bool, bool, usize, Option<KeyboardTelemetry>)
     where
         F: FnMut(&mut MemoryImage) -> (usize, bool, Option<KeyboardTelemetry>),
     {
-        let (mti, sti) = self.tick_timers(memory, cycle_count);
+        let (mti, sti) = self.tick_timers(memory, cycle_count, pc_hint);
         let mut key_events = 0usize;
         // Only carry a latch forward while the keyboard IRQ is enabled; otherwise drop it.
         let mut fifo_has_data = if self.kb_irq_enabled {
@@ -349,12 +491,15 @@ impl TimerContext {
         }
         let pc_trace = crate::llama::eval::perfetto_instr_context()
             .map(|(_, pc)| pc)
+            .or(pc_hint)
             .unwrap_or_else(perfetto_last_pc);
         let latch_active = self.kb_irq_enabled && (key_events > 0 || fifo_has_data);
         if latch_active {
             if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                 if (isr & 0x04) == 0 {
-                    memory.write_internal_byte(ISR_OFFSET, isr | 0x04);
+                    let new_isr = isr | 0x04;
+                    memory.write_internal_byte(ISR_OFFSET, new_isr);
+                    self.record_bit_watch_transition("ISR", isr, new_isr, pc_trace);
                 }
             }
             // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
@@ -467,6 +612,7 @@ impl TimerContext {
         _fired_sti: bool,
         cycle_count: u64,
         _memory: &MemoryImage,
+        pc_hint: Option<u32>,
     ) {
         if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             if let Some(tracer) = guard.as_mut() {
@@ -476,6 +622,8 @@ impl TimerContext {
                 payload.push(("cycle", cycle_count as u64));
                 if let Some((op_idx, pc)) = crate::llama::eval::perfetto_instr_context() {
                     payload.push(("op_index", op_idx));
+                    payload.push(("pc", pc as u64));
+                } else if let Some(pc) = pc_hint {
                     payload.push(("pc", pc as u64));
                 } else {
                     let last_pc = crate::llama::eval::perfetto_last_pc();
@@ -511,14 +659,14 @@ mod tests {
         let mut cycles = 0u64;
         // Run up to but not including the target
         for _ in 0..49 {
-            timer.tick_timers(&mut mem, cycles);
+            timer.tick_timers(&mut mem, cycles, None);
             cycles += 1;
             assert!(!timer.irq_pending);
         }
         assert_eq!(cycles, 49);
         // The 50th tick should fire MTI and roll the target forward.
         cycles = 50;
-        timer.tick_timers(&mut mem, cycles);
+        timer.tick_timers(&mut mem, cycles, None);
         assert!(timer.irq_pending);
         assert!(timer.next_mti > 50);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
@@ -547,13 +695,13 @@ mod tests {
 
         // Advance to just before first fire
         while cycles < 149 {
-            timer.tick_timers(&mut mem, cycles);
+            timer.tick_timers(&mut mem, cycles, None);
             cycles += 1;
             assert!(!timer.irq_pending);
         }
         // Fire MTI at cycle 150, then next target moves to 170.
         cycles = 150;
-        timer.tick_timers(&mut mem, cycles);
+        timer.tick_timers(&mut mem, cycles, None);
         assert!(timer.irq_pending);
         assert!(timer.next_mti > 150);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
@@ -567,7 +715,7 @@ mod tests {
         // Preload IMR so mirror should reflect it.
         mem.write_internal_byte(0xFB, 0xAA);
         // First tick should fire MTI and update ISR/IMR mirrors.
-        timer.tick_timers(&mut mem, 1);
+        timer.tick_timers(&mut mem, 1, None);
         assert_eq!(timer.irq_imr, 0xAA);
         assert_eq!(timer.irq_isr & 0x01, 0x01);
     }
@@ -578,7 +726,7 @@ mod tests {
         let mut mem = MemoryImage::new();
         // IMR master cleared -> still pend like Python; delivery will gate later.
         mem.write_internal_byte(0xFB, 0x00);
-        let (_mti, _sti) = timer.tick_timers(&mut mem, 1);
+        let (_mti, _sti) = timer.tick_timers(&mut mem, 1, None);
         assert!(
             timer.irq_pending,
             "irq_pending should set even when IMR master=0"
@@ -586,7 +734,7 @@ mod tests {
 
         // Enable master but mask out MTI bit -> still pend; gating happens during delivery.
         mem.write_internal_byte(0xFB, 0x80);
-        timer.tick_timers(&mut mem, 2);
+        timer.tick_timers(&mut mem, 2, None);
         assert!(
             timer.irq_pending,
             "irq_pending should set even when MTI masked"
@@ -594,7 +742,7 @@ mod tests {
 
         // Enable MTI bit -> should pend on next fire.
         mem.write_internal_byte(0xFB, 0x81);
-        timer.tick_timers(&mut mem, 3);
+        timer.tick_timers(&mut mem, 3, None);
         assert!(
             timer.irq_pending,
             "irq_pending should set when master+MTI enabled"
@@ -605,7 +753,7 @@ mod tests {
     fn tick_timers_increments_counters_on_fire() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
-        timer.tick_timers(&mut mem, 1);
+        timer.tick_timers(&mut mem, 1, None);
         assert_eq!(timer.irq_total, 0, "counters should advance on delivery");
         assert_eq!(timer.irq_mti, 0);
         assert_eq!(timer.last_irq_src, None);
@@ -618,7 +766,7 @@ mod tests {
         let mut mem = MemoryImage::new();
         // Force latch_active path by preloading FIFO state via keyboard scan closure.
         let (_mti, _sti, events, _stats) =
-            timer.tick_timers_with_keyboard(&mut mem, 0, |_mem| (1, true, None), None);
+            timer.tick_timers_with_keyboard(&mut mem, 0, |_mem| (1, true, None), None, None);
         assert_eq!(events, 1, "keyboard scan should run on MTI fire");
         // Counters should only increment on delivery; latch alone must not bump them.
         assert_eq!(timer.irq_total, 0);
@@ -643,6 +791,7 @@ mod tests {
                 (1, true, None)
             },
             None,
+            None,
         );
         assert!(mti, "MTI should fire");
         assert!(scanned, "keyboard_scan should run even when IRQ disabled");
@@ -660,7 +809,7 @@ mod tests {
         let mut mem = MemoryImage::new();
         // Simulate keyboard scan emitting one event.
         let (_, _, events, _) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None), None);
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None), None, None);
         assert_eq!(events, 1);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(
@@ -676,7 +825,7 @@ mod tests {
         let mut mem = MemoryImage::new();
         // No new events, but FIFO already has data -> KEYI should still assert on MTI.
         let (_mti, _sti, events, _) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None), None);
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None), None, None);
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(
@@ -710,15 +859,9 @@ mod tests {
             true,
         );
 
-        // Parity: snapshot restore uses serialized periods verbatim; ignore env scaling.
-        assert_eq!(
-            timer.mti_period, 100,
-            "MTI period should not scale on snapshot load"
-        );
-        assert_eq!(
-            timer.sti_period, 200,
-            "STI period should not scale on snapshot load"
-        );
+        // Parity: LLAMA loader scales timers when env is set.
+        assert_eq!(timer.mti_period, 50, "MTI period should scale by env factor");
+        assert_eq!(timer.sti_period, 100, "STI period should scale by env factor");
 
         if let Some(val) = prev {
             env::set_var("LLAMA_TIMER_SCALE", val);

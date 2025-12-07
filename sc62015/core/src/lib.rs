@@ -106,6 +106,8 @@ pub struct InterruptInfo {
     pub last_irq: Option<serde_json::Value>,
     #[serde(default)]
     pub irq_bit_watch: Option<serde_json::Value>,
+    #[serde(default)]
+    pub delivered_masks: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,8 +347,11 @@ impl CoreRuntime {
         self.onk_level = true;
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         if (isr & ISR_ONKI) == 0 {
+            let new_isr = isr | ISR_ONKI;
             self.memory
-                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+                .write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+            self.timer
+                .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
         }
         self.timer.irq_pending = true;
         self.timer.irq_source = Some("ONK".to_string());
@@ -389,6 +394,8 @@ impl CoreRuntime {
         if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
             let new_isr = isr & !ISR_ONKI;
             self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+            self.timer
+                .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
             self.timer.irq_isr = new_isr;
         }
     }
@@ -473,8 +480,11 @@ impl CoreRuntime {
         if force_keyi || (force_strobe && fifo_non_empty) {
             let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
             if (isr & ISR_KEYI) == 0 {
+                let new_isr = isr | ISR_KEYI;
                 self.memory
-                    .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_KEYI);
+                    .write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+                self.timer
+                    .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
             }
             self.timer.irq_pending = true;
             self.timer.irq_source = Some("KEY".to_string());
@@ -518,30 +528,29 @@ impl CoreRuntime {
     }
 
     fn refresh_key_irq_latch(&mut self) {
-        if !self.timer.kb_irq_enabled {
-            // Parity: when keyboard IRQs are disabled, never reassert KEYI from FIFO state.
-            self.timer.key_irq_latched = false;
-            return;
-        }
         if let Some(kb) = self.keyboard.as_ref() {
             let fifo_len = kb.fifo_len();
-            if fifo_len > 0 {
+            if fifo_len > 0 || self.timer.key_irq_latched {
                 self.timer.key_irq_latched = true;
                 let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
                 if (isr & ISR_KEYI) == 0 {
                     let new_isr = isr | ISR_KEYI;
                     self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
-                    self.timer.irq_pending = true;
-                    if self.timer.irq_source.is_none() {
-                        self.timer.irq_source = Some("KEY".to_string());
-                    }
-                    self.timer.last_fired = self.timer.irq_source.clone();
+                    self.timer
+                        .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
                     self.timer.irq_isr = new_isr;
-                    self.timer.irq_imr = self
-                        .memory
-                        .read_internal_byte(IMEM_IMR_OFFSET)
-                        .unwrap_or(self.timer.irq_imr);
+                } else {
+                    self.timer.irq_isr = isr;
                 }
+                self.timer.irq_pending = true;
+                if self.timer.irq_source.is_none() {
+                    self.timer.irq_source = Some("KEY".to_string());
+                }
+                self.timer.last_fired = self.timer.irq_source.clone();
+                self.timer.irq_imr = self
+                    .memory
+                    .read_internal_byte(IMEM_IMR_OFFSET)
+                    .unwrap_or(self.timer.irq_imr);
             } else {
                 self.timer.key_irq_latched = false;
             }
@@ -642,6 +651,7 @@ impl CoreRuntime {
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             onk_level: bool,
             cycle: u64,
+            pc: u32,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
@@ -763,6 +773,7 @@ impl CoreRuntime {
                                 addr,
                                 value as u8,
                                 Some(self.cycle),
+                                Some(self.pc),
                             );
                         }
                         return;
@@ -873,10 +884,11 @@ impl CoreRuntime {
                         (events, kb.fifo_len() > 0, Some(kb.telemetry()))
                     } else {
                         (0, false, None)
-                            }
-                        },
-                        Some(self.state.get_reg(RegName::Y)),
-                    );
+                    }
+                },
+                Some(self.state.get_reg(RegName::Y)),
+                Some(self.state.get_reg(RegName::PC)),
+            );
                     let fifo_non_empty = self
                         .keyboard
                         .as_ref()
@@ -919,6 +931,7 @@ impl CoreRuntime {
                 .host_write
                 .as_mut()
                 .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
+            let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
             let mut bus = RuntimeBus {
                 mem: &mut self.memory,
                 keyboard_ptr,
@@ -927,8 +940,8 @@ impl CoreRuntime {
                 host_write,
                 onk_level: self.onk_level,
                 cycle: self.metadata.cycle_count,
+                pc,
             };
-            let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
             let opcode = bus.load(pc, 8) as u8;
             // Capture WAIT loop count before execution (executor clears I).
             let wait_loops = if opcode == 0xEF {
@@ -964,14 +977,10 @@ impl CoreRuntime {
             }
             self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
-            // Advance cycles: one for the opcode plus simulated WAIT idle cycles.
-            // Parity: Python fast-path WAIT does not spin timers; skip timer ticks when opcode is WAIT.
-            let run_timer_cycles = opcode != 0xEF;
-            let cycle_increment = if opcode == 0xEF {
-                1
-            } else {
-                1u64.wrapping_add(wait_loops as u64)
-            };
+            // Advance cycles: one for the opcode plus simulated WAIT idle cycles, mirroring Python
+            // _simulate_wait which burns I cycles and ticks timers/keyboard each iteration.
+            let run_timer_cycles = true;
+            let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
             let prev_cycle = self.metadata.cycle_count;
             let new_cycle = prev_cycle.wrapping_add(cycle_increment);
             if run_timer_cycles {
@@ -995,6 +1004,7 @@ impl CoreRuntime {
                                 }
                             },
                             Some(self.state.get_reg(RegName::Y)),
+                            Some(self.state.get_reg(RegName::PC)),
                         );
                         timer_fired = mti || sti;
                         // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
@@ -1008,13 +1018,29 @@ impl CoreRuntime {
             self.metadata.cycle_count = new_cycle;
             if opcode == 0x01 {
                 let irq_src = self.timer.irq_source.clone();
-                // If irq_source was lost, fall back to the saved ISR mask from interrupt_stack.
-                let stack_mask = self.timer.interrupt_stack.last().copied();
+                // If irq_source was lost, fall back to the delivered mask stack or live ISR bits.
+                let stack_mask = self.timer.delivered_masks.pop();
                 let clear_mask = irq_src
                     .as_deref()
                     .and_then(src_mask_for_name)
-                    .or_else(|| stack_mask.map(|m| m as u8));
-
+                    .or(stack_mask)
+                    .or_else(|| {
+                        self.memory
+                            .read_internal_byte(IMEM_ISR_OFFSET)
+                            .and_then(|isr| {
+                                if (isr & ISR_KEYI) != 0 {
+                                    Some(ISR_KEYI)
+                                } else if (isr & ISR_ONKI) != 0 {
+                                    Some(ISR_ONKI)
+                                } else if (isr & ISR_MTI) != 0 {
+                                    Some(ISR_MTI)
+                                } else if (isr & ISR_STI) != 0 {
+                                    Some(ISR_STI)
+                                } else {
+                                    None
+                                }
+                            })
+                    });
                 self.timer.in_interrupt = false;
                 if irq_src.as_deref().is_some_and(|s| s == "KEY") {
                     self.timer.key_irq_latched = false;
@@ -1024,12 +1050,19 @@ impl CoreRuntime {
                 if let Some(src_mask) = clear_mask {
                     let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
                     if let Some(isr_val) = self.memory.load(isr_addr, 8) {
-                        let cleared = (isr_val as u8) & (!src_mask);
+                        let prev = isr_val as u8;
+                        let cleared = prev & (!src_mask);
                         let _ = self.memory.store(isr_addr, 8, cleared as u32);
+                        self.timer.record_bit_watch_transition(
+                            "ISR",
+                            prev,
+                            cleared,
+                            pc,
+                        );
                     }
                 }
                 // Drop any stale interrupt-stack frames (used only for bookkeeping).
-                self.timer.interrupt_stack.clear();
+                let _ = self.timer.interrupt_stack.pop();
                 if let Ok(mut guard) = PERFETTO_TRACER.lock() {
                     if let Some(tracer) = guard.as_mut() {
                         let mut payload = std::collections::HashMap::new();
@@ -1233,7 +1266,12 @@ impl CoreRuntime {
         let pc = self.state.pc() & ADDRESS_MASK;
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        let irm_enabled = (imr & IMR_MASTER) != 0;
+        let mut irm_enabled = (imr & IMR_MASTER) != 0;
+        // Parity: allow KEYI/ONKI delivery to proceed even if IRM is clear so level-triggered
+        // keyboard/on-key events are not dropped before firmware enables the master bit.
+        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
+            irm_enabled = true;
+        }
         let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
         let imr_reg = self.state.get_reg(RegName::IMR) as u8;
         let pending_src = self
@@ -1337,6 +1375,8 @@ impl CoreRuntime {
         record_stack_write(self.state.get_reg(RegName::S), 8, imr_mem);
         let cleared_imr = (imr_mem as u8) & 0x7F;
         let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
+        self.timer
+            .record_bit_watch_transition("IMR", imr_mem as u8, cleared_imr, pc);
         self.state.set_reg(RegName::IMR, cleared_imr as u32);
         record_stack_write(imr_addr, 8, cleared_imr as u32);
 
@@ -1384,7 +1424,10 @@ impl CoreRuntime {
         self.timer.in_interrupt = true;
         self.timer.irq_pending = false;
         self.timer.irq_source = Some(src_name.to_string());
-        self.timer.interrupt_stack.push(pc);
+        // Track interrupt metadata similar to Python snapshot fields.
+        let irq_id = self.timer.next_interrupt_id;
+        self.timer.interrupt_stack.push(irq_id);
+        self.timer.delivered_masks.push(mask);
         self.timer.last_fired = Some(src_name.to_string());
         self.timer.irq_isr = self
             .memory
@@ -1396,7 +1439,6 @@ impl CoreRuntime {
             .unwrap_or(self.timer.irq_imr);
         // Remember active mask to help RETI-like flows.
         self.timer.next_interrupt_id = self.timer.next_interrupt_id.saturating_add(1);
-        self.timer.interrupt_stack.push(mask as u32);
         // Track last IRQ metadata with the resolved vector and increment counters.
         self.timer.last_irq_src = Some(src_name.to_string());
         self.timer.last_irq_pc = Some(pc);
@@ -1564,10 +1606,11 @@ mod tests {
             300,  // next_sti
             Some("MTI".to_string()),
             true,               // in_interrupt
-            Some(vec![0xDEAD]), // interrupt_stack
+            Some(vec![0xDEAD]), // interrupt_stack (flow IDs)
             5,                  // next_interrupt_id
             None,               // irq_bit_watch
         );
+        rt.timer.delivered_masks = vec![ISR_MTI];
         rt.save_snapshot(&tmp).expect("save snapshot");
 
         let mut rt2 = CoreRuntime::new();
@@ -1584,6 +1627,7 @@ mod tests {
         assert_eq!(rt2.timer.irq_isr, 0x55);
         assert!(rt2.timer.in_interrupt);
         assert_eq!(rt2.timer.interrupt_stack, vec![0xDEAD]);
+        assert_eq!(rt2.timer.delivered_masks, vec![ISR_MTI]);
         assert_eq!(rt2.timer.next_interrupt_id, 5);
         assert_eq!(rt2.timer.last_fired, None);
     }
@@ -1840,13 +1884,14 @@ mod tests {
         let mut rt = CoreRuntime::new();
         rt.timer.set_keyboard_irq_enabled(false);
         let kb = rt.keyboard.as_mut().unwrap();
-        kb.write_fifo_to_memory(&mut rt.memory, true);
+        // Inject a matrix event to populate FIFO without relying on IRQ enable.
+        kb.inject_matrix_event(0x10, false, &mut rt.memory);
         rt.refresh_key_irq_latch();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
-            isr & ISR_KEYI,
-            0,
-            "KEYI should not assert when kb_irq_enabled is false"
+        assert_ne!(isr & ISR_KEYI, 0, "KEYI should still assert from latch");
+        assert!(
+            rt.timer.irq_pending,
+            "pending IRQ should be armed even when kb IRQs disabled"
         );
     }
 
@@ -1875,18 +1920,15 @@ mod tests {
         rt.refresh_key_irq_latch();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
+        assert_ne!(
             isr & ISR_KEYI,
             0,
-            "KEYI should remain clear when kb IRQs are disabled"
+            "KEYI should reassert from FIFO even when kb IRQs disabled"
         );
+        assert!(rt.timer.irq_pending, "pending should arm from FIFO latch");
         assert!(
-            !rt.timer.irq_pending,
-            "irq_pending should not be armed when kb IRQs are disabled"
-        );
-        assert!(
-            !rt.timer.key_irq_latched,
-            "key_irq_latched should clear when kb IRQs are disabled"
+            rt.timer.key_irq_latched,
+            "latch should stay set while FIFO has data"
         );
     }
 
@@ -2084,7 +2126,7 @@ mod tests {
     #[test]
     fn reti_uses_interrupt_stack_mask_when_source_missing() {
         let mut rt = CoreRuntime::new();
-        // Fake a pending interrupt state with stack mask stored.
+        // Fake a pending interrupt state with a delivered mask stored separately.
         rt.state.set_reg(RegName::S, 0x0030);
         rt.state.set_reg(RegName::PC, 0x0000);
         // RETI opcode at PC.
@@ -2095,10 +2137,11 @@ mod tests {
         rt.memory.write_external_byte(0x0032, 0x34);
         rt.memory.write_external_byte(0x0033, 0x12);
         rt.memory.write_external_byte(0x0034, 0x00);
-        // ISR has ONK bit set; irq_source unknown but interrupt_stack carries mask.
+        // ISR has ONK bit set; irq_source unknown but delivered_masks carries mask.
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
         rt.timer.in_interrupt = true;
-        rt.timer.interrupt_stack = vec![0x123456, u32::from(ISR_ONKI)];
+        rt.timer.interrupt_stack = vec![1]; // flow id placeholder
+        rt.timer.delivered_masks = vec![ISR_ONKI];
         rt.timer.irq_source = None;
 
         rt.step(1).expect("execute reti without source");
@@ -2107,9 +2150,10 @@ mod tests {
         assert_eq!(
             isr & ISR_ONKI,
             0,
-            "RETI should clear ISR using mask from interrupt_stack when source is None"
+            "RETI should clear ISR using delivered mask when source is None"
         );
         assert!(rt.timer.interrupt_stack.is_empty());
+        assert!(rt.timer.delivered_masks.is_empty());
     }
 
     #[test]
@@ -2396,7 +2440,7 @@ mod tests {
 
     #[test]
     fn wait_does_not_spin_timers() {
-        // Python fast-path WAIT clears I/flags and returns without ticking timers.
+        // Python fast-path WAIT clears I/flags and still burns I cycles, ticking timers each loop.
         let mut rt = CoreRuntime::new();
         // Place WAIT at PC=0.
         rt.memory.write_external_slice(0, &[0xEF]);
@@ -2409,12 +2453,12 @@ mod tests {
 
         rt.step(1).expect("WAIT step");
 
-        // Timers should not have fired or pended IRQs.
-        assert!(!rt.timer.irq_pending, "WAIT should not pend IRQs");
-        assert_eq!(rt.timer.irq_mti, 0);
-        assert_eq!(rt.timer.irq_sti, 0);
-        // Cycle counter should advance a single instruction.
-        assert_eq!(rt.metadata.cycle_count, 1);
+        // Timers should fire across the idle cycles and pend IRQs.
+        assert!(rt.timer.irq_pending, "WAIT idle loop should pend IRQs");
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & (ISR_MTI | ISR_STI), 0, "ISR should reflect timer fire");
+        // Cycle counter should advance for opcode + I loops.
+        assert_eq!(rt.metadata.cycle_count, 6);
     }
 
     #[test]
