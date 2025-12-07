@@ -1,3 +1,6 @@
+Open
+- Switch PERFETTO_TRACER to a reentrant lock and refactor logging to allow nested perfetto calls without dropping events. This may require large API changes (lock wrapper, guard plumbing) and broad signature updates across runtime/bus/timer/memory/keyboard paths.
+
 Resolved
 - sc62015/core/src/lib.rs: RETI fallback clearing, pending source prioritization (KEY/ONK), pending/perfetto diagnostics, and KEY overrides are aligned with Python; requires_python paths no longer panic and fall back like Python.
 - sc62015/core/src/perfetto.rs: record_irq_check accepts Python parity fields; added CPU/Memory track aliases and optional wall-clock timestamps via PERFETTO_WALL_CLOCK for Python trace parity.
