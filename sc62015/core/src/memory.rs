@@ -284,7 +284,10 @@ impl MemoryImage {
         }
         let addr = (address as usize) & (EXTERNAL_SPACE - 1);
         if let Some(slot) = self.external.get_mut(addr) {
-            *slot = value;
+            if *slot != value {
+                *slot = value;
+                self.dirty.push((address, value));
+            }
         }
     }
 
@@ -428,7 +431,7 @@ impl MemoryImage {
                         eprintln!("[imr-read] offset=0x{offset:02X} val=0x{val:02X}");
                     }
                 }
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
                     if let Some(tracer) = guard.as_mut() {
                         let ctx = crate::llama::eval::perfetto_instr_context();
                         let (op_idx, pc) = ctx.unwrap_or((
@@ -447,29 +450,8 @@ impl MemoryImage {
                     }
                 }
             }
-            if offset == 0xF2 {
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let ctx = crate::llama::eval::perfetto_instr_context();
-                        let (op_idx, pc) =
-                            ctx.unwrap_or((u64::MAX, crate::llama::eval::perfetto_last_pc()));
-                        tracer.record_kio_read(
-                            if op_idx == u64::MAX { None } else { Some(pc) },
-                            offset as u8,
-                            val,
-                            if op_idx == u64::MAX {
-                                None
-                            } else {
-                                Some(op_idx)
-                            },
-                        );
-                    }
-                }
-                if let Ok(env) = std::env::var("KIL_READ_DEBUG") {
-                    if env == "1" {
-                        eprintln!("[kil-read-rust] offset=0x{offset:02X} val=0x{val:02X}");
-                    }
-                }
+            if (0xF0..=0xF2).contains(&offset) {
+                self.log_kio_read(offset, val);
             }
             Some(val)
         } else {
@@ -485,6 +467,41 @@ impl MemoryImage {
             Some(self.internal[offset as usize])
         } else {
             None
+        }
+    }
+
+    pub fn bump_read_count(&self) {
+        self.memory_reads
+            .set(self.memory_reads.get().saturating_add(1));
+    }
+
+    /// Perfetto/logging helper for KIO (KOL/KOH/KIL) reads, preserving instruction context.
+    pub fn log_kio_read(&self, offset: u32, value: u8) {
+        if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+            if let Some(tracer) = guard.as_mut() {
+                let ctx = crate::llama::eval::perfetto_instr_context();
+                let (op_idx, pc) = ctx.unwrap_or((
+                    crate::llama::eval::perfetto_last_instr_index(),
+                    crate::llama::eval::perfetto_last_pc(),
+                ));
+                tracer.record_kio_read(
+                    if op_idx == u64::MAX { None } else { Some(pc) },
+                    offset as u8,
+                    value,
+                    if op_idx == u64::MAX {
+                        None
+                    } else {
+                        Some(op_idx)
+                    },
+                );
+            }
+        }
+        if offset == 0xF2 {
+            if let Ok(env) = std::env::var("KIL_READ_DEBUG") {
+                if env == "1" {
+                    eprintln!("[kil-read-rust] offset=0x{offset:02X} val=0x{value:02X}");
+                }
+            }
         }
     }
 
@@ -673,5 +690,17 @@ mod tests {
         let _ = mem.read_internal_byte(IMEM_IMR_OFFSET);
         assert_eq!(mem.memory_write_count(), 1);
         assert_eq!(mem.memory_read_count(), 2);
+    }
+
+    #[test]
+    fn apply_host_write_marks_external_dirty() {
+        let mut mem = MemoryImage::new();
+        mem.apply_host_write_with_cycle(0x0010, 0xBE, Some(0));
+        let dirty = mem.drain_dirty();
+        assert_eq!(dirty, vec![(0x0010, 0xBE)]);
+        // Ensure subsequent apply with same value does not duplicate entries.
+        mem.apply_host_write_with_cycle(0x0010, 0xBE, Some(1));
+        let dirty_after = mem.drain_dirty();
+        assert!(dirty_after.is_empty());
     }
 }

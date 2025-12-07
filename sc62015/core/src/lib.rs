@@ -658,6 +658,8 @@ impl CoreRuntime {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
                         if let Some(val) = (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
                         {
+                            (*self.mem).bump_read_count();
+                            (*self.mem).log_kio_read(offset, val);
                             return val as u32;
                         }
                     }
@@ -671,6 +673,7 @@ impl CoreRuntime {
                     if (*self.mem).requires_python(addr) {
                         if let Some(cb) = self.host_read {
                             if let Some(val) = (*cb)(addr) {
+                                (*self.mem).bump_read_count();
                                 return val as u32;
                             }
                         } else if MemoryImage::is_internal(addr) {
@@ -691,6 +694,19 @@ impl CoreRuntime {
                                 }
                                 return val as u32;
                             }
+                        }
+                    }
+                    // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
+                    if MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK as u32
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
+                        if offset == 0xFF {
+                            let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
+                            if self.onk_level {
+                                val |= 0x08;
+                            }
+                            return val as u32;
                         }
                     }
                     (*self.mem).load(addr, bits).unwrap_or(0)
@@ -1060,10 +1076,17 @@ impl CoreRuntime {
         self.fast_mode = self.metadata.fast_mode;
         self.memory
             .set_memory_counts(self.metadata.memory_reads, self.metadata.memory_writes);
+        let allow_timer_scale = matches!(
+            self.metadata.backend.as_str(),
+            b if b.eq_ignore_ascii_case("core")
+                || b.eq_ignore_ascii_case("llama")
+                || b.eq_ignore_ascii_case("rust")
+        );
         self.timer.apply_snapshot_info(
             &self.metadata.timer,
             &self.metadata.interrupts,
             self.metadata.cycle_count,
+            allow_timer_scale,
         );
         if let Some(watch) = self.metadata.interrupts.irq_bit_watch.as_ref() {
             self.timer.irq_bit_watch = watch.as_object().map(|obj| obj.clone());
@@ -1529,6 +1552,106 @@ mod tests {
             .read_internal_byte(IMEM_ISR_OFFSET)
             .expect("isr present");
         assert_eq!(cleared & ISR_ONKI, 0, "ONKI should clear on release");
+    }
+
+    #[test]
+    fn onk_press_sets_ssr_bit_on_read() {
+        let mut rt = CoreRuntime::new();
+        // Ensure SSR is clear before ONK.
+        let ssr_before = rt
+            .memory
+            .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
+            .unwrap_or(0);
+        assert_eq!(ssr_before & 0x08, 0, "SSR ONK bit should start clear");
+
+        rt.press_on_key();
+        // Read SSR through the runtime bus path (simulating CPU load).
+        let ssr_after = {
+            // Minimal runtime bus mirroring CoreRuntime::step wiring.
+            struct TestBus<'a> {
+                mem: &'a mut crate::memory::MemoryImage,
+                onk_level: bool,
+            }
+            impl<'a> crate::llama::eval::LlamaBus for TestBus<'a> {
+                fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                    if crate::memory::MemoryImage::is_internal(addr) {
+                        let offset =
+                            (addr - crate::memory::INTERNAL_MEMORY_START) & crate::memory::INTERNAL_ADDR_MASK as u32;
+                        if offset == crate::memory::IMEM_SSR_OFFSET {
+                            let mut val = self.mem.read_internal_byte(offset).unwrap_or(0);
+                            if self.onk_level {
+                                val |= 0x08;
+                            }
+                            return val as u32;
+                        }
+                    }
+                    self.mem.load(addr, bits).unwrap_or(0)
+                }
+            }
+            let mut rt_bus = TestBus {
+                mem: &mut rt.memory,
+                onk_level: rt.onk_level,
+            };
+            rt_bus.load(
+                crate::memory::INTERNAL_MEMORY_START + crate::memory::IMEM_SSR_OFFSET,
+                8,
+            ) as u8
+        };
+        assert_ne!(
+            ssr_after & 0x08,
+            0,
+            "SSR should reflect ONK level when pressed"
+        );
+
+        rt.release_on_key();
+        let ssr_clear = rt
+            .memory
+            .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
+            .unwrap_or(0);
+        assert_eq!(ssr_clear & 0x08, 0, "SSR ONK bit should clear after release");
+    }
+
+    #[test]
+    fn keyboard_reads_increment_memory_counters() {
+        use crate::llama::eval::LlamaBus;
+        let mut mem = crate::memory::MemoryImage::new();
+        let mut kb = KeyboardMatrix::new();
+        // Seed KOL to make the read non-zero but predictable.
+        kb.handle_write(0xF0, 0xFF, &mut mem);
+        assert_eq!(mem.memory_read_count(), 0);
+
+        struct TestBus<'a> {
+            mem: &'a mut crate::memory::MemoryImage,
+            kb: &'a mut KeyboardMatrix,
+        }
+        impl<'a> LlamaBus for TestBus<'a> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                if crate::memory::MemoryImage::is_internal(addr)
+                    && (addr - crate::memory::INTERNAL_MEMORY_START)
+                        <= crate::memory::INTERNAL_ADDR_MASK as u32
+                {
+                    let offset = (addr - crate::memory::INTERNAL_MEMORY_START)
+                        & crate::memory::INTERNAL_ADDR_MASK as u32;
+                    if let Some(val) = self.kb.handle_read(offset, self.mem) {
+                        self.mem.bump_read_count();
+                        self.mem.log_kio_read(offset, val);
+                        return val as u32;
+                    }
+                }
+                self.mem.load(addr, bits).unwrap_or(0)
+            }
+        }
+
+        let mut bus = TestBus {
+            mem: &mut mem,
+            kb: &mut kb,
+        };
+        let _ = bus.load(crate::memory::INTERNAL_MEMORY_START + 0xF0, 8);
+        assert_eq!(
+            bus.mem.memory_read_count(),
+            1,
+            "KIO reads through bus should increment memory read count"
+        );
     }
 
     #[test]

@@ -202,15 +202,12 @@ impl PerfettoTracer {
         };
         let (ctx_op, ctx_pc) = perfetto_instr_context()
             .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
-        let have_ctx = ctx_op != u64::MAX;
-        let ts = if have_ctx {
+        let ts = if ctx_op != u64::MAX {
             self.ts(ctx_op, 1)
         } else {
-            // Align host writes to the same clock domain (units_per_instr) when a cycle count is provided.
+            // Fallback: maintain monotonic ordering even without instruction context.
             self.mem_seq = self.mem_seq.saturating_add(1);
-            cycle
-                .saturating_mul(self.units_per_instr)
-                .saturating_add(self.mem_seq) as i64
+            self.mem_seq as i64
         };
         let mut ev =
             self.builder
@@ -222,10 +219,10 @@ impl PerfettoTracer {
             ("space", AnnotationValue::Str(space.to_string())),
             ("size", AnnotationValue::UInt(size as u64)),
         ]);
-        if let Some(pc_val) = pc.or(if have_ctx { Some(ctx_pc) } else { None }) {
+        if let Some(pc_val) = pc.or(if ctx_op != u64::MAX { Some(ctx_pc) } else { None }) {
             ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
         }
-        if have_ctx {
+        if ctx_op != u64::MAX {
             ev.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
         }
         ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
