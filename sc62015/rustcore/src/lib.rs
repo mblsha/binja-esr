@@ -323,7 +323,8 @@ impl LlamaContractBus {
                     .tick_timers_with_keyboard(&mut self.memory, self.cycles, |mem| {
                         let events = self.keyboard.scan_tick();
                         if events > 0 {
-                            self.keyboard.write_fifo_to_memory(mem, true);
+                            self.keyboard
+                                .write_fifo_to_memory(mem, self.timer.kb_irq_enabled);
                         }
                         (
                             events,

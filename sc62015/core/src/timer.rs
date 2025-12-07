@@ -9,8 +9,11 @@ use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
 use serde_json::json;
 use std::collections::HashMap;
+use std::env;
 
 const ISR_OFFSET: u32 = 0xFC;
+const LLAMA_MTI_PERIOD_DEFAULT: u64 = 500;
+const LLAMA_STI_PERIOD_DEFAULT: u64 = 5000;
 
 #[derive(Clone, Debug)]
 pub struct TimerContext {
@@ -136,6 +139,20 @@ impl TimerContext {
         self.sti_period = timer.sti_period.max(0) as u64;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
+        if let Ok(scale_raw) = env::var("LLAMA_TIMER_SCALE") {
+            if let Ok(scale) = scale_raw.parse::<f64>() {
+                if (scale - 1.0).abs() > f64::EPSILON {
+                    let scaled_mti = (LLAMA_MTI_PERIOD_DEFAULT as f64 * scale)
+                        .floor()
+                        .max(1.0) as u64;
+                    let scaled_sti = (LLAMA_STI_PERIOD_DEFAULT as f64 * scale)
+                        .floor()
+                        .max(1.0) as u64;
+                    self.mti_period = scaled_mti;
+                    self.sti_period = scaled_sti;
+                }
+            }
+        }
         // Python stores absolute targets; do not rebase forward. Allow immediate fire if targets are in the past.
         self.kb_irq_enabled = timer.kb_irq_enabled;
 
@@ -636,5 +653,34 @@ mod tests {
             timer.irq_pending,
             "pending IRQ should be latched when FIFO remains non-empty"
         );
+    }
+
+    #[test]
+    fn apply_snapshot_scales_timers_for_llama() {
+        let prev = env::var("LLAMA_TIMER_SCALE").ok();
+        env::set_var("LLAMA_TIMER_SCALE", "0.5");
+
+        let mut timer = TimerContext::new(true, 100, 200);
+        timer.apply_snapshot_info(
+            &crate::TimerInfo {
+                enabled: true,
+                mti_period: 100,
+                sti_period: 200,
+                next_mti: 75,
+                next_sti: 125,
+                kb_irq_enabled: true,
+            },
+            &InterruptInfo::default(),
+            0,
+        );
+
+        assert_eq!(timer.mti_period, 250, "MTI period should scale by env");
+        assert_eq!(timer.sti_period, 2500, "STI period should scale by env");
+
+        if let Some(val) = prev {
+            env::set_var("LLAMA_TIMER_SCALE", val);
+        } else {
+            env::remove_var("LLAMA_TIMER_SCALE");
+        }
     }
 }

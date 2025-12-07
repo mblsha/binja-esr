@@ -399,10 +399,11 @@ impl CoreRuntime {
         self.memory.write_internal_byte(0xF6, high);
     }
 
-    fn maybe_force_keyboard_activity(&mut self) {
+    fn maybe_force_keyboard_activity(&mut self, timer_fired: bool) {
         let force_strobe = env_flag("FORCE_STROBE_LLAMA");
         let force_keyi = env_flag("FORCE_KEYI_LLAMA");
-        if !force_strobe && !force_keyi {
+        // Parity: Python only runs these debug hooks when the timer fires.
+        if !timer_fired || (!force_strobe && !force_keyi) {
             return;
         }
         let Some(kb) = self.keyboard.as_mut() else {
@@ -555,6 +556,11 @@ impl CoreRuntime {
     }
 
     fn refresh_key_irq_latch(&mut self) {
+        if !self.timer.kb_irq_enabled {
+            // Parity: when keyboard IRQs are disabled, never reassert KEYI from FIFO state.
+            self.timer.key_irq_latched = false;
+            return;
+        }
         if let Some(kb) = self.keyboard.as_ref() {
             let fifo_len = kb.fifo_len();
             if fifo_len > 0 {
@@ -817,8 +823,8 @@ impl CoreRuntime {
                     if let Some(isr) = self.memory.read_internal_byte(0xFC) {
                         self.timer.irq_isr = isr;
                     }
+                    self.maybe_force_keyboard_activity(mti || sti);
                 }
-                self.maybe_force_keyboard_activity();
                 self.deliver_pending_irq()?;
                 continue;
             }
@@ -891,9 +897,10 @@ impl CoreRuntime {
             let prev_cycle = self.metadata.cycle_count;
             let new_cycle = prev_cycle.wrapping_add(cycle_increment);
             for cyc in prev_cycle + 1..=new_cycle {
+                let mut timer_fired = false;
                 if !self.timer.in_interrupt {
                     let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let (_mti, _sti, _key_events, _kb_stats) =
+                    let (mti, sti, _key_events, _kb_stats) =
                         self.timer
                             .tick_timers_with_keyboard(&mut self.memory, cyc, |mem| {
                                 if let Some(kb) = self.keyboard.as_mut() {
@@ -906,12 +913,13 @@ impl CoreRuntime {
                                     (0, false, None)
                                 }
                             }, Some(self.state.get_reg(RegName::Y)));
+                    timer_fired = mti || sti;
                     // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
                     if let Some(isr) = self.memory.read_internal_byte(0xFC) {
                         self.timer.irq_isr = isr;
                     }
                 }
-                self.maybe_force_keyboard_activity();
+                self.maybe_force_keyboard_activity(timer_fired);
             }
             self.metadata.cycle_count = new_cycle;
             if opcode == 0x01 {
@@ -1580,6 +1588,46 @@ mod tests {
     }
 
     #[test]
+    fn refresh_key_irq_latch_respects_kb_irq_disable_with_fifo_data() {
+        let mut rt = CoreRuntime::new();
+        rt.timer.set_keyboard_irq_enabled(false);
+        let kb = rt.keyboard.as_mut().unwrap();
+        kb.press_matrix_code(0x10, &mut rt.memory);
+        kb.handle_write(0xF0, 0xFF, &mut rt.memory);
+        kb.handle_write(0xF1, 0x0F, &mut rt.memory);
+        let mut events = 0;
+        for _ in 0..8 {
+            events += kb.scan_tick();
+            if events > 0 {
+                break;
+            }
+        }
+        assert!(events > 0, "expected a debounced key event");
+        kb.write_fifo_to_memory(&mut rt.memory, rt.timer.kb_irq_enabled);
+        assert!(kb.fifo_len() > 0, "fifo should hold the event");
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+
+        rt.refresh_key_irq_latch();
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(
+            isr & ISR_KEYI,
+            0,
+            "KEYI should remain clear when kb IRQs are disabled"
+        );
+        assert!(
+            !rt.timer.irq_pending,
+            "irq_pending should not be armed when kb IRQs are disabled"
+        );
+        assert!(
+            !rt.timer.key_irq_latched,
+            "key_irq_latched should clear when kb IRQs are disabled"
+        );
+    }
+
+    #[test]
     fn force_strobe_llama_sets_keyi_and_pending() {
         let _guard = perfetto_test_guard();
         std::env::set_var("FORCE_STROBE_LLAMA", "1");
@@ -1592,7 +1640,7 @@ mod tests {
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0);
         // Call repeatedly to satisfy debounce threshold.
         for _ in 0..6 {
-            rt.maybe_force_keyboard_activity();
+            rt.maybe_force_keyboard_activity(true);
         }
         std::env::remove_var("FORCE_STROBE_LLAMA");
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
@@ -1607,11 +1655,47 @@ mod tests {
         let mut rt = CoreRuntime::new();
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0);
-        rt.maybe_force_keyboard_activity();
+        rt.maybe_force_keyboard_activity(true);
         std::env::remove_var("FORCE_KEYI_LLAMA");
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "FORCE_KEYI_LLAMA should assert KEYI");
         assert!(rt.timer.irq_pending);
+    }
+
+    #[test]
+    fn force_strobe_llama_respects_timer_gate() {
+        let _guard = perfetto_test_guard();
+        std::env::set_var("FORCE_STROBE_LLAMA", "1");
+        let mut rt = CoreRuntime::new();
+        // Seed a key so strobe can surface an event.
+        if let Some(kb) = rt.keyboard.as_mut() {
+            kb.press_matrix_code(0x10, &mut rt.memory);
+        }
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.irq_pending = false;
+
+        // Without a timer fire, forced strobe should be ignored.
+        rt.maybe_force_keyboard_activity(false);
+        let isr_no_fire = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(
+            isr_no_fire & ISR_KEYI,
+            0,
+            "FORCE_STROBE_LLAMA should do nothing when no timer fired"
+        );
+        assert!(!rt.timer.irq_pending);
+
+        // With a timer fire, forced strobe should assert KEYI.
+        for _ in 0..6 {
+            rt.maybe_force_keyboard_activity(true);
+        }
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(
+            isr & ISR_KEYI,
+            0,
+            "FORCE_STROBE_LLAMA should assert KEYI when timer fired"
+        );
+        assert!(rt.timer.irq_pending);
+        std::env::remove_var("FORCE_STROBE_LLAMA");
     }
 
     #[test]
@@ -1860,7 +1944,7 @@ mod tests {
         if let Some(kb) = rt.keyboard.as_mut() {
             kb.press_matrix_code(0x10, &mut rt.memory);
         }
-        rt.maybe_force_keyboard_activity();
+        rt.maybe_force_keyboard_activity(true);
         std::env::remove_var("FORCE_KEYI_LLAMA");
 
         // Flush perfetto trace to disk before reading.
