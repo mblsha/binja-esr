@@ -57,10 +57,9 @@ impl PerfettoTracer {
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
-        let use_wall_clock = std::env::var("PERFETTO_WALL_CLOCK")
-            .ok()
-            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(false);
+        // Parity: default to instruction-index timestamps to match Python trace ordering; wall-clock
+        // introduces jitter across platforms.
+        let use_wall_clock = false;
         Self {
             builder,
             exec_track,
@@ -260,14 +259,11 @@ impl PerfettoTracer {
         } else {
             value & ((1u32 << size) - 1)
         };
-        let (ctx_op, ctx_pc) = perfetto_instr_context()
-            .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
-        let ts = if ctx_op != u64::MAX {
-            self.ts(ctx_op, 1)
-        } else {
-            // Align to the provided manual cycle when no instruction context is available.
-            cycle as i64
-        };
+        let ctx = perfetto_instr_context();
+        let ts = ctx
+            .map(|(op, _)| self.ts(op, 1))
+            // Align to provided manual cycle when no live instruction context.
+            .unwrap_or(cycle as i64);
         {
             let mut ev =
                 self.builder
@@ -279,11 +275,11 @@ impl PerfettoTracer {
                 ("space", AnnotationValue::Str(space.to_string())),
                 ("size", AnnotationValue::UInt(size as u64)),
             ]);
-            if let Some(pc_val) = pc.or(if ctx_op != u64::MAX { Some(ctx_pc) } else { None }) {
+            if let Some(pc_val) = pc.or(ctx.map(|(_, pc)| pc)) {
                 ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
             }
-            if ctx_op != u64::MAX {
-                ev.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
+            if let Some((op_idx, _)) = ctx {
+                ev.add_annotation("op_index", AnnotationValue::UInt(op_idx));
             }
             ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
             ev.finish();
@@ -301,11 +297,11 @@ impl PerfettoTracer {
             ("size", AnnotationValue::UInt(size as u64)),
             ("cycle", AnnotationValue::UInt(cycle)),
         ]);
-        if let Some(pc_val) = pc.or(if ctx_op != u64::MAX { Some(ctx_pc) } else { None }) {
+        if let Some(pc_val) = pc.or(ctx.map(|(_, pc)| pc)) {
             mem_alias.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
         }
-        if ctx_op != u64::MAX {
-            mem_alias.add_annotation("op_index", AnnotationValue::UInt(ctx_op));
+        if let Some((op_idx, _)) = ctx {
+            mem_alias.add_annotation("op_index", AnnotationValue::UInt(op_idx));
         }
         mem_alias.finish();
     }

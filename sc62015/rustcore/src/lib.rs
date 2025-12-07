@@ -461,7 +461,7 @@ impl LlamaContractBus {
                     };
                     if should_mirror {
                         self.memory
-                            .apply_host_write_with_cycle(addr, value, None);
+                            .apply_host_write_with_cycle(addr, value, None, pc.map(|v| v & ADDRESS_MASK));
                     }
                     self.events.push(ContractEvent {
                         kind: "write",

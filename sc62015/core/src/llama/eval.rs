@@ -233,7 +233,7 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
     }
 
     // Optional perfetto emit when the builder is available (llama-tests builds).
-    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+    if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
         if let Some(tracer) = guard.as_mut() {
             let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
             let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
@@ -384,7 +384,7 @@ impl LlamaExecutor {
         instr_index: u64,
         pc_trace: u32,
     ) {
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
             if let Some(tracer) = guard.as_mut() {
                 let mut regs = HashMap::new();
                 for (name, reg) in [
@@ -456,7 +456,7 @@ impl LlamaExecutor {
     }
 
     fn trace_mem_write(addr: u32, bits: u8, value: u32) {
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
             if let Some(tracer) = guard.as_mut() {
                 let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
                 let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
@@ -1766,6 +1766,10 @@ impl LlamaExecutor {
             }
             InstrKind::Wait => {
                 // Python WAIT fast-path: zero I and clear flags without advancing timers.
+                let wait_loops = state.get_reg(RegName::I) & mask_for(RegName::I);
+                if wait_loops > 0 {
+                    bus.wait_cycles(wait_loops);
+                }
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
@@ -2182,58 +2186,56 @@ impl LlamaExecutor {
                 }
                 Ok(len)
             }
-            InstrKind::Ir | InstrKind::Tcl => {
+            InstrKind::Ir => {
                 let instr_len = prefix_len + Self::estimated_length(entry);
-                if entry.kind == InstrKind::Ir {
-                    // Push IMR, F, PC (little-endian) to match Python RETI stack layout, clear IRM, and jump to vector.
-                    let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
-                    Self::push_stack(state, bus, RegName::S, pc, 24, false);
-                    let f = state.get_reg(RegName::F) & 0xFF;
-                    Self::push_stack(state, bus, RegName::S, f, 8, false);
-                    let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
-                    let imr = bus.load(imr_addr, 8) & 0xFF;
-                    Self::push_stack(state, bus, RegName::S, imr, 8, false);
-                    // Clear IRM bit in IMR (bit 7)
-                    let cleared_imr = imr & 0x7F;
-                    Self::store_traced(bus, imr_addr, 8, cleared_imr);
-                    state.set_reg(RegName::IMR, cleared_imr);
-                    state.call_depth_inc();
-                    let vec = bus.load(INTERRUPT_VECTOR_ADDR, 8)
-                        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
-                        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
-                    state.set_pc(vec & mask_for(RegName::PC));
-                    // Parity: emit perfetto IRQ entry like Python IR intrinsic.
-                    if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            let mut payload = std::collections::HashMap::new();
-                            payload.insert(
-                                "pc".to_string(),
-                                AnnotationValue::Pointer((pc & mask_for(RegName::PC)) as u64),
-                            );
-                            payload
-                                .insert("vector".to_string(), AnnotationValue::Pointer(vec as u64));
-                            payload.insert(
-                                "imr_before".to_string(),
-                                AnnotationValue::UInt(imr as u64),
-                            );
-                            payload.insert(
-                                "imr_after".to_string(),
-                                AnnotationValue::UInt(cleared_imr as u64),
-                            );
-                            payload
-                                .insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
-                            tracer.record_irq_event("IRQ_Enter", payload);
-                        }
+                // Push IMR, F, PC (little-endian) to match Python RETI stack layout, clear IRM, and jump to vector.
+                let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
+                Self::push_stack(state, bus, RegName::S, pc, 24, false);
+                let f = state.get_reg(RegName::F) & 0xFF;
+                Self::push_stack(state, bus, RegName::S, f, 8, false);
+                let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+                let imr = bus.load(imr_addr, 8) & 0xFF;
+                Self::push_stack(state, bus, RegName::S, imr, 8, false);
+                // Clear IRM bit in IMR (bit 7)
+                let cleared_imr = imr & 0x7F;
+                Self::store_traced(bus, imr_addr, 8, cleared_imr);
+                state.set_reg(RegName::IMR, cleared_imr);
+                state.call_depth_inc();
+                let vec = bus.load(INTERRUPT_VECTOR_ADDR, 8)
+                    | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
+                    | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+                state.set_pc(vec & mask_for(RegName::PC));
+                // Parity: emit perfetto IRQ entry like Python IR intrinsic.
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        let mut payload = std::collections::HashMap::new();
+                        payload.insert(
+                            "pc".to_string(),
+                            AnnotationValue::Pointer((pc & mask_for(RegName::PC)) as u64),
+                        );
+                        payload.insert("vector".to_string(), AnnotationValue::Pointer(vec as u64));
+                        payload.insert(
+                            "imr_before".to_string(),
+                            AnnotationValue::UInt(imr as u64),
+                        );
+                        payload.insert(
+                            "imr_after".to_string(),
+                            AnnotationValue::UInt(cleared_imr as u64),
+                        );
+                        payload.insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
+                        tracer.record_irq_event("IRQ_Enter", payload);
                     }
-                    Ok(instr_len)
-                } else {
-                    let len = instr_len;
-                    let start_pc = state.pc();
-                    if state.pc() == start_pc {
-                        state.set_pc(start_pc.wrapping_add(len as u32));
-                    }
-                    Ok(len)
                 }
+                Ok(instr_len)
+            }
+            InstrKind::Tcl => {
+                // Python TCL intrinsic is a no-op; just advance PC by length.
+                let len = prefix_len + Self::estimated_length(entry);
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(len as u32));
+                }
+                Ok(len)
             }
             InstrKind::JpAbs => {
                 // Absolute jump; operand may be 16-bit (low bits) or 20-bit.
@@ -2314,7 +2316,7 @@ impl LlamaExecutor {
                 Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
                     if let Some(tracer) = guard.as_mut() {
                         tracer.record_call_flow(
                             "CALL",
@@ -2334,7 +2336,7 @@ impl LlamaExecutor {
                 let dest = (high | (ret & 0xFFFF)) & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
                     if let Some(tracer) = guard.as_mut() {
                         tracer.record_call_flow(
                             "RET",
@@ -2352,7 +2354,7 @@ impl LlamaExecutor {
                 let dest = ret & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
                     if let Some(tracer) = guard.as_mut() {
                         tracer.record_call_flow(
                             "RETF",
@@ -2778,7 +2780,7 @@ mod tests {
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
-        assert_eq!(bus.spins, 0);
+        assert_eq!(bus.spins, 5);
         assert_eq!(state.get_reg(RegName::I), 0);
     }
 
@@ -3326,6 +3328,22 @@ mod tests {
     }
 
     #[test]
+    fn reti_decrements_call_depth() {
+        let mut bus = MemBus::with_size(0x80);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x20);
+        // Simulate an interrupt frame to return from.
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0x123456, 24, false);
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xF0, 8, false);
+        LlamaExecutor::push_stack(&mut state, &mut bus, RegName::S, 0xAA, 8, false);
+        state.call_depth_inc();
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x01, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.call_depth(), 0, "RETI should reduce call depth");
+    }
+
+    #[test]
     fn pushu_imr_reads_from_imem() {
         let mut bus = MemBus::with_size(0x200);
         // Preload IMR in internal memory to a value different from the register snapshot.
@@ -3643,5 +3661,22 @@ mod tests {
         assert_eq!(len, 4);
         assert_eq!(bus.mem[0x40], 0xCD);
         assert_eq!(state.pc(), 4);
+    }
+
+    #[test]
+    fn tcl_is_no_op_and_advances_pc() {
+        // TCL (0xCE) should be a no-op intrinsic: no stack/IMR changes, just PC advance.
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0xCE;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        state.set_reg(RegName::S, 0x0100);
+        state.set_reg(RegName::IMR, 0xAA);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xCE, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 1, "PC should advance by instruction length");
+        assert_eq!(state.get_reg(RegName::S), 0x0100, "stack pointer unchanged");
+        assert_eq!(state.get_reg(RegName::IMR), 0xAA, "IMR unchanged");
     }
 }

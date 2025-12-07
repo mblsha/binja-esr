@@ -388,7 +388,7 @@ impl StandaloneBus {
     }
 
     fn trace_mem_write(&self, addr: u32, bits: u8, value: u32) {
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
             if let Some(tracer) = guard.as_mut() {
                 let space = if MemoryImage::is_internal(addr) {
                     "internal"
@@ -596,7 +596,7 @@ impl StandaloneBus {
     #[cfg(feature = "llama-tests")]
     #[allow(dead_code)]
     fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
             if let Some(tracer) = guard.as_mut() {
                 tracer.record_kio_read(Some(pc), offset, value, None);
             }
@@ -728,7 +728,7 @@ impl StandaloneBus {
             }
         }
         // Flush the global instruction trace if present.
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
             if let Some(tracer) = guard.take() {
                 if let Err(err) = tracer.finish() {
                     eprintln!("[perfetto] failed to save instruction trace: {err}");
@@ -756,6 +756,7 @@ impl StandaloneBus {
                 )
             },
             None,
+            Some(self.last_pc),
         );
         if mti && key_events > 0 {
             self.pending_kil = self.keyboard.fifo_len() > 0;
@@ -834,7 +835,7 @@ impl LlamaBus for StandaloneBus {
                     // Emit perfetto event for KIL read with PC/value.
                     #[cfg(feature = "llama-tests")]
                     {
-                        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
                             if let Some(tracer) = guard.as_mut() {
                                 tracer.record_kio_read(
                                     Some(self.last_pc),
@@ -1231,7 +1232,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             "enabling perfetto: path={} irq-path=<stem>.irq.perfetto-trace",
             args.perfetto_path.display()
         ));
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
+            *guard = Some(PerfettoTracer::new(args.perfetto_path.clone()));
+        } else if let Ok(mut guard) = PERFETTO_TRACER.lock() {
             *guard = Some(PerfettoTracer::new(args.perfetto_path.clone()));
         }
     }

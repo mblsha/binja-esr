@@ -307,15 +307,15 @@ impl TimerContext {
 
     /// Record IMR/ISR bit transitions (set/clear) keyed by bit number and PC, mirroring Python.
     pub fn record_bit_watch_transition(&mut self, reg_name: &str, prev_val: u8, new_val: u8, pc: u32) {
-        if prev_val == new_val {
-            return;
-        }
         let table = self
             .irq_bit_watch
             .get_or_insert_with(default_bit_watch_table);
         normalize_bit_watch(table);
         let Some(reg_entry) = table.get_mut(reg_name) else { return };
         let Some(reg_obj) = reg_entry.as_object_mut() else { return };
+        if prev_val == new_val {
+            return;
+        }
         for bit in 0..8u8 {
             let prev = (prev_val >> bit) & 1;
             let new = (new_val >> bit) & 1;
@@ -511,7 +511,7 @@ impl TimerContext {
                 .read_internal_byte(ISR_OFFSET)
                 .unwrap_or(self.irq_isr);
             // Perfetto parity: emit a KeyIRQ marker with PC/cycle context.
-            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
                 if let Some(tracer) = guard.as_mut() {
                     let mut payload = HashMap::new();
                     payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
@@ -529,7 +529,7 @@ impl TimerContext {
         if key_events == 0 {
             if let Some(stats) = kb_stats.as_ref() {
                 if stats.pressed > 0 {
-                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                    if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
                         if let Some(tracer) = guard.as_mut() {
                             let mut payload = HashMap::new();
                             payload.insert(
@@ -559,7 +559,7 @@ impl TimerContext {
         // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
         self.key_irq_latched = latch_active;
         // Perfetto parity: emit a scan event regardless of new key events.
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
             if let Some(tracer) = guard.as_mut() {
                 let mut payload = HashMap::new();
                 payload.insert(
@@ -595,6 +595,14 @@ impl TimerContext {
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
+        // Maintain bit-watch parity even when KEYI was already set prior to the scan.
+        if latch_active {
+            if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
+                if (isr & 0x04) != 0 {
+                    self.record_bit_watch_transition("ISR", isr, isr, pc_trace);
+                }
+            }
+        }
         (mti, sti, key_events, kb_stats)
     }
 
@@ -614,33 +622,34 @@ impl TimerContext {
         _memory: &MemoryImage,
         pc_hint: Option<u32>,
     ) {
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        let mut maybe_guard = PERFETTO_TRACER.try_lock().ok();
+        if maybe_guard.is_none() {
+            maybe_guard = PERFETTO_TRACER.lock().ok();
+        }
+        if let Some(mut guard) = maybe_guard {
             if let Some(tracer) = guard.as_mut() {
-                let mut payload: Vec<(&str, u64)> = Vec::new();
-                payload.push(("isr", self.irq_isr as u64));
-                payload.push(("imr", self.irq_imr as u64));
-                payload.push(("cycle", cycle_count as u64));
+                let mut payload = std::collections::HashMap::new();
+                payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count as u64));
+                if let Some(src) = self.irq_source.as_deref() {
+                    payload.insert("src".to_string(), AnnotationValue::Str(src.to_string()));
+                }
                 if let Some((op_idx, pc)) = crate::llama::eval::perfetto_instr_context() {
-                    payload.push(("op_index", op_idx));
-                    payload.push(("pc", pc as u64));
+                    payload.insert("op_index".to_string(), AnnotationValue::UInt(op_idx));
+                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
                 } else if let Some(pc) = pc_hint {
-                    payload.push(("pc", pc as u64));
+                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
                 } else {
                     let last_pc = crate::llama::eval::perfetto_last_pc();
-                    payload.push(("pc", last_pc as u64));
+                    payload.insert("pc".to_string(), AnnotationValue::Pointer(last_pc as u64));
                     let last_idx = crate::llama::eval::perfetto_last_instr_index();
                     if last_idx != u64::MAX {
-                        payload.push(("op_index", last_idx));
+                        payload.insert("op_index".to_string(), AnnotationValue::UInt(last_idx));
                     }
                 }
                 // Align event naming with Python tracer ("TimerFired").
-                tracer.record_irq_event(
-                    "TimerFired",
-                    payload
-                        .into_iter()
-                        .map(|(k, v)| (k.to_string(), AnnotationValue::UInt(v as u64)))
-                        .collect(),
-                );
+                tracer.record_irq_event("TimerFired", payload);
             }
         }
     }
@@ -817,6 +826,16 @@ mod tests {
             0x04,
             "KEYI bit should be set on MTI with events"
         );
+        assert!(
+            timer
+                .irq_bit_watch
+                .as_ref()
+                .and_then(|w| w.get("ISR"))
+                .is_some(),
+            "bit watch should track ISR changes for KEYI"
+        );
+        // Perfetto payload should carry src and PC.
+        assert_eq!(timer.irq_source, Some("KEY".to_string()));
     }
 
     #[test]

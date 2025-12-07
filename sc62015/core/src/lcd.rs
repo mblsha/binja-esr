@@ -143,7 +143,8 @@ struct LcdCommand {
 
 fn decode_access(address: u32) -> Option<(ChipSelect, DataInstruction, ReadWrite)> {
     let addr_hi = address & 0x0F000;
-    let addr_lo = address & 0x0FFF;
+    // Parity: tolerate accesses anywhere in the mirrored window by folding to the low nibble.
+    let addr_lo = address & 0x000F;
     if addr_hi != LCD_ADDR_HI_LEFT && addr_hi != LCD_ADDR_HI_RIGHT {
         return None;
     }
@@ -507,5 +508,18 @@ mod tests {
         // Write ON instruction to right chip via the high mirror (CS=Right).
         lcd.write(0xA004, 0x3F);
         assert!(lcd.chips[1].state.on);
+    }
+
+    #[test]
+    fn high_offset_addresses_map_to_low_nibble() {
+        // Addresses like 0x2100 should decode the same as 0x2000 mirror.
+        let mut lcd = LcdController::new();
+        // Set Y address to 0 via high offset instruction address (bit1=0 => instruction).
+        lcd.write(0x2100, 0x40); // SetYAddress=0
+        // Write data using high offset data address (bit1=1).
+        lcd.write(0x2102, 0xAA);
+        // Verify write landed in VRAM for both chips at y=0 page 0.
+        assert_eq!(lcd.chips[0].vram[0][0], 0xAA);
+        assert_eq!(lcd.chips[1].vram[0][0], 0xAA);
     }
 }
