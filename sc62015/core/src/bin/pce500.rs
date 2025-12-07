@@ -740,19 +740,22 @@ impl StandaloneBus {
     }
 
     fn tick_timers_only(&mut self) {
-        let (mti, sti, key_events, _kb_stats) =
-            self.timer
-                .tick_timers_with_keyboard(&mut self.memory, self.cycle_count, |mem| {
-                    let events = self.keyboard.scan_tick();
-                    if events > 0 {
-                        self.keyboard.write_fifo_to_memory(mem, true);
-                    }
-                    (
-                        events,
-                        self.keyboard.fifo_len() > 0,
-                        Some(self.keyboard.telemetry()),
-                    )
-                }, None);
+        let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+            &mut self.memory,
+            self.cycle_count,
+            |mem| {
+                let events = self.keyboard.scan_tick();
+                if events > 0 {
+                    self.keyboard.write_fifo_to_memory(mem, true);
+                }
+                (
+                    events,
+                    self.keyboard.fifo_len() > 0,
+                    Some(self.keyboard.telemetry()),
+                )
+            },
+            None,
+        );
         if mti && key_events > 0 {
             self.pending_kil = self.keyboard.fifo_len() > 0;
             if self.pending_kil {

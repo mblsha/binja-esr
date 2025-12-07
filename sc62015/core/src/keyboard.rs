@@ -157,6 +157,7 @@ pub struct KeyboardMatrix {
     irq_count: u32,
     column_histogram: [u32; COLUMN_COUNT],
     keyi_latch: bool,
+    kil_read_count: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -189,6 +190,8 @@ pub struct KeyboardSnapshot {
     pub repeat_interval: u8,
     pub columns_active_high: bool,
     pub scan_enabled: bool,
+    #[serde(default)]
+    pub kil_read_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +225,7 @@ impl KeyboardMatrix {
             irq_count: 0,
             column_histogram: [0; COLUMN_COUNT],
             keyi_latch: false,
+            kil_read_count: 0,
         };
         for matrix_code in 0..(11 * 8) {
             let column = (matrix_code >> 3) as u8;
@@ -393,6 +397,7 @@ impl KeyboardMatrix {
         self.column_histogram = [0; COLUMN_COUNT];
         self.scan_enabled = true;
         self.keyi_latch = false;
+        self.kil_read_count = 0;
         for state in &mut self.states {
             state.pressed = false;
             state.debounced = false;
@@ -490,6 +495,7 @@ impl KeyboardMatrix {
             repeat_interval: self.repeat_interval,
             columns_active_high: self.columns_active_high,
             scan_enabled: self.scan_enabled,
+            kil_read_count: self.kil_read_count,
         }
     }
 
@@ -524,6 +530,7 @@ impl KeyboardMatrix {
         self.repeat_interval = snapshot.repeat_interval;
         self.columns_active_high = snapshot.columns_active_high;
         self.scan_enabled = snapshot.scan_enabled;
+        self.kil_read_count = snapshot.kil_read_count;
         // Reset per-key state and repopulate from snapshot where names match.
         for state in &mut self.states {
             state.pressed = false;
@@ -586,6 +593,7 @@ impl KeyboardMatrix {
             0xF1 => Some(self.koh),
             0xF2 => {
                 self.kil_latch = self.compute_kil(false);
+                self.kil_read_count = self.kil_read_count.wrapping_add(1);
                 Some(self.kil_latch)
             }
             _ => None,

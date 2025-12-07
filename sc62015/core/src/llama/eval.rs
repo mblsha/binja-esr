@@ -237,7 +237,11 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
         if let Some(tracer) = guard.as_mut() {
             let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
             let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
-            let op = if op_idx == u64::MAX { None } else { Some(op_idx) };
+            let op = if op_idx == u64::MAX {
+                None
+            } else {
+                Some(op_idx)
+            };
             let pc_val = if pc == u32::MAX { None } else { Some(pc) };
             tracer.record_imem_addr(
                 &format!("{mode:?}"),
@@ -2300,11 +2304,12 @@ impl LlamaExecutor {
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let (target, bits) = decoded.imm.ok_or("missing jump target")?;
-                let ret_addr = state.pc().wrapping_add(decoded.len as u32);
+                let pc_before = state.pc();
+                let ret_addr = pc_before.wrapping_add(decoded.len as u32);
                 let mut dest = target;
                 let push_bits = if bits == 16 {
                     // Push 16-bit return; retain high page from current PC (Python parity).
-                    let high = state.pc() & 0xFF0000;
+                    let high = pc_before & 0xFF0000;
                     dest = high | (target & 0xFFFF);
                     16
                 } else {
@@ -2314,20 +2319,54 @@ impl LlamaExecutor {
                 Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_call_flow(
+                            "CALL",
+                            pc_before & mask_for(RegName::PC),
+                            dest & 0xFFFFF,
+                            state.call_depth(),
+                        );
+                    }
+                }
                 Ok(decoded.len)
             }
             InstrKind::Ret => {
+                let pc_before = state.pc();
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
                 // Python RET reconstructs the high page from the current PC at return time (no saved page).
                 let high = state.pc() & 0xFF0000;
-                state.set_pc((high | (ret & 0xFFFF)) & 0xFFFFF);
+                let dest = (high | (ret & 0xFFFF)) & 0xFFFFF;
+                state.set_pc(dest);
                 state.call_depth_dec();
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_call_flow(
+                            "RET",
+                            pc_before & mask_for(RegName::PC),
+                            dest,
+                            state.call_depth(),
+                        );
+                    }
+                }
                 Ok(1)
             }
             InstrKind::RetF => {
+                let pc_before = state.pc();
                 let ret = Self::pop_stack(state, bus, RegName::S, 24, false);
-                state.set_pc(ret & 0xFFFFF);
+                let dest = ret & 0xFFFFF;
+                state.set_pc(dest);
                 state.call_depth_dec();
+                if let Ok(mut guard) = crate::PERFETTO_TRACER.lock() {
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_call_flow(
+                            "RETF",
+                            pc_before & mask_for(RegName::PC),
+                            dest,
+                            state.call_depth(),
+                        );
+                    }
+                }
                 Ok(1)
             }
             InstrKind::RetI => {
@@ -3470,7 +3509,10 @@ mod tests {
             if mem.is_empty() {
                 mem.push(0);
             }
-            Self { mem, log: Vec::new() }
+            Self {
+                mem,
+                log: Vec::new(),
+            }
         }
     }
 

@@ -39,6 +39,7 @@ pub struct TimerContext {
     pub last_irq_src: Option<String>,
     pub last_irq_pc: Option<u32>,
     pub last_irq_vector: Option<u32>,
+    pub irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl TimerContext {
@@ -66,6 +67,7 @@ impl TimerContext {
             last_irq_src: None,
             last_irq_pc: None,
             last_irq_vector: None,
+            irq_bit_watch: None,
         };
         ctx.reset(0);
         ctx
@@ -120,10 +122,16 @@ impl TimerContext {
                 "pc": self.last_irq_pc,
                 "vector": self.last_irq_vector,
             })),
-            irq_bit_watch: Some(json!({
-                "IMR": {},
-                "ISR": {},
-            })),
+            irq_bit_watch: self
+                .irq_bit_watch
+                .clone()
+                .map(|watch| json!(watch))
+                .or_else(|| {
+                    Some(json!({
+                        "IMR": {},
+                        "ISR": {},
+                    }))
+                }),
         };
         (timer, interrupts)
     }
@@ -142,12 +150,10 @@ impl TimerContext {
         if let Ok(scale_raw) = env::var("LLAMA_TIMER_SCALE") {
             if let Ok(scale) = scale_raw.parse::<f64>() {
                 if (scale - 1.0).abs() > f64::EPSILON {
-                    let scaled_mti = (LLAMA_MTI_PERIOD_DEFAULT as f64 * scale)
-                        .floor()
-                        .max(1.0) as u64;
-                    let scaled_sti = (LLAMA_STI_PERIOD_DEFAULT as f64 * scale)
-                        .floor()
-                        .max(1.0) as u64;
+                    let scaled_mti =
+                        (LLAMA_MTI_PERIOD_DEFAULT as f64 * scale).floor().max(1.0) as u64;
+                    let scaled_sti =
+                        (LLAMA_STI_PERIOD_DEFAULT as f64 * scale).floor().max(1.0) as u64;
                     self.mti_period = scaled_mti;
                     self.sti_period = scaled_sti;
                 }
@@ -163,6 +169,11 @@ impl TimerContext {
         self.next_interrupt_id = interrupts.next_id;
         self.irq_imr = interrupts.imr;
         self.irq_isr = interrupts.isr;
+        self.irq_bit_watch = interrupts
+            .irq_bit_watch
+            .as_ref()
+            .and_then(|v| v.as_object())
+            .map(|obj| obj.clone());
         self.last_fired = None;
         self.key_irq_latched = false;
         // Restore IRQ counters/last info if present; otherwise zero them.
@@ -204,6 +215,7 @@ impl TimerContext {
         in_interrupt: bool,
         interrupt_stack: Option<Vec<u32>>,
         next_interrupt_id: u32,
+        irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
     ) {
         self.irq_pending = pending;
         self.irq_source = source;
@@ -216,6 +228,7 @@ impl TimerContext {
         self.next_interrupt_id = next_interrupt_id;
         self.last_fired = None;
         self.key_irq_latched = false;
+        self.irq_bit_watch = irq_bit_watch;
     }
 
     pub fn set_keyboard_irq_enabled(&mut self, enabled: bool) {
@@ -280,8 +293,43 @@ impl TimerContext {
             if self.irq_pending {
                 self.emit_irq_trace(fired_mti, fired_sti, cycle_count, memory);
             }
+            // Record IMR/ISR transitions for parity bit-watch metadata.
+            self.record_bit_watch("IMR", memory.read_internal_byte(0xFB).unwrap_or(0));
+            self.record_bit_watch("ISR", memory.read_internal_byte(ISR_OFFSET).unwrap_or(0));
         }
         (fired_mti, fired_sti)
+    }
+
+    fn record_bit_watch(&mut self, reg_name: &str, new_val: u8) {
+        let table = self.irq_bit_watch.get_or_insert_with(serde_json::Map::new);
+        let entry = table
+            .entry(reg_name.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let obj = entry
+            .as_object_mut()
+            .expect("bit watch entry should be an object");
+        let prev = obj
+            .get("last")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(new_val as u64) as u8;
+        obj.insert("last".to_string(), serde_json::json!(new_val));
+        if prev == new_val {
+            return;
+        }
+        let (action_key, _val) = if new_val > prev {
+            ("set", new_val)
+        } else {
+            ("clear", new_val)
+        };
+        let arr = obj
+            .entry(action_key)
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("bit watch bucket should be an array");
+        arr.push(serde_json::json!(new_val));
+        if arr.len() > 10 {
+            arr.remove(0);
+        }
     }
 
     /// Tick timers and optionally run a keyboard scan when MTI fires, mirroring Python's _tick_timers.
@@ -345,10 +393,7 @@ impl TimerContext {
                         "isr".to_string(),
                         AnnotationValue::UInt(self.irq_isr as u64),
                     );
-                    payload.insert(
-                        "pc".to_string(),
-                        AnnotationValue::Pointer(pc_trace as u64),
-                    );
+                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
                     payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                     if let Some(y) = y_reg {
                         payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
@@ -379,14 +424,10 @@ impl TimerContext {
                                 "strobe_count".to_string(),
                                 AnnotationValue::UInt(stats.strobe_count as u64),
                             );
-                            payload.insert(
-                                "kol".to_string(),
-                                AnnotationValue::UInt(stats.kol as u64),
-                            );
-                            payload.insert(
-                                "koh".to_string(),
-                                AnnotationValue::UInt(stats.koh as u64),
-                            );
+                            payload
+                                .insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                            payload
+                                .insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
                             payload.insert(
                                 "active_cols".to_string(),
                                 AnnotationValue::Str(format!("{:?}", stats.active_columns)),
@@ -438,10 +479,7 @@ impl TimerContext {
                         AnnotationValue::Str(format!("{:?}", stats.active_columns)),
                     );
                 }
-                payload.insert(
-                    "pc".to_string(),
-                    AnnotationValue::Pointer(pc_trace as u64),
-                );
+                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
                 payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 tracer.record_irq_event("KeyScanEvent", payload);
             }
@@ -622,12 +660,8 @@ mod tests {
         timer.next_mti = 0;
         let mut mem = MemoryImage::new();
         // Force latch_active path by preloading FIFO state via keyboard scan closure.
-        let (_mti, _sti, events, _stats) = timer.tick_timers_with_keyboard(
-            &mut mem,
-            0,
-            |_mem| (1, true, None),
-            None,
-        );
+        let (_mti, _sti, events, _stats) =
+            timer.tick_timers_with_keyboard(&mut mem, 0, |_mem| (1, true, None), None);
         assert_eq!(events, 1, "keyboard scan should run on MTI fire");
         // Counters should only increment on delivery; latch alone must not bump them.
         assert_eq!(timer.irq_total, 0);
@@ -643,12 +677,16 @@ mod tests {
         // Force MTI to fire on first tick.
         timer.next_mti = 0;
         let mut scanned = false;
-        let (mti, _sti, key_events, _stats) =
-            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| {
+        let (mti, _sti, key_events, _stats) = timer.tick_timers_with_keyboard(
+            &mut mem,
+            1,
+            |_mem| {
                 scanned = true;
                 // Simulate one key event and non-empty FIFO.
                 (1, true, None)
-            }, None);
+            },
+            None,
+        );
         assert!(mti, "MTI should fire");
         assert!(scanned, "keyboard_scan should run even when IRQ disabled");
         assert_eq!(key_events, 1);

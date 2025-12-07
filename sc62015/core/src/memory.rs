@@ -60,6 +60,8 @@ pub struct MemoryImage {
     readonly_ranges: Vec<(u32, u32)>,
     internal: [u8; INTERNAL_SPACE],
     keyboard_bridge: bool,
+    memory_reads: Cell<u64>,
+    memory_writes: Cell<u64>,
 }
 
 impl Default for MemoryImage {
@@ -85,6 +87,8 @@ impl MemoryImage {
             readonly_ranges: Vec::new(),
             internal,
             keyboard_bridge: false,
+            memory_reads: Cell::new(0),
+            memory_writes: Cell::new(0),
         }
     }
 
@@ -170,6 +174,8 @@ impl MemoryImage {
     }
 
     pub fn read_byte(&self, address: u32) -> Option<u8> {
+        self.memory_reads
+            .set(self.memory_reads.get().saturating_add(1));
         let address = canonical_address(address);
         if let Some(index) = Self::internal_index(address) {
             // Optional bridge: allow external-memory writes to mirror into internal for diagnostics.
@@ -181,6 +187,8 @@ impl MemoryImage {
     }
 
     pub fn load(&self, address: u32, bits: u8) -> Option<u32> {
+        self.memory_reads
+            .set(self.memory_reads.get().saturating_add(1));
         let address = canonical_address(address);
         if let Some(value) = self.load_internal_value(address, bits) {
             return Some(value);
@@ -212,6 +220,8 @@ impl MemoryImage {
     }
 
     pub fn store(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
+        self.memory_writes
+            .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
         if self.store_internal_value(address, bits, value).is_some() {
             return Some(());
@@ -237,6 +247,8 @@ impl MemoryImage {
 
     /// Apply a host-driven write (e.g., overlay/bridge) and optionally tag it with a manual-clock cycle for Perfetto.
     pub fn apply_host_write_with_cycle(&mut self, address: u32, value: u8, cycle: Option<u64>) {
+        self.memory_writes
+            .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
         if let Some(index) = Self::internal_index(address) {
             self.internal[index] = value;
@@ -254,8 +266,8 @@ impl MemoryImage {
                         );
                     } else {
                         // Use last completed instruction index to avoid emitting unmatched op_index values.
-                        let (seq, pc) =
-                            crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
+                        let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                            .unwrap_or_else(|| {
                                 (
                                     crate::llama::eval::perfetto_last_instr_index(),
                                     crate::llama::eval::perfetto_last_pc(),
@@ -281,6 +293,8 @@ impl MemoryImage {
     }
 
     pub fn write_external_byte(&mut self, address: u32, value: u8) {
+        self.memory_writes
+            .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
         let idx = (address as usize) & (EXTERNAL_SPACE - 1);
         if self.external[idx] != value {
@@ -367,6 +381,8 @@ impl MemoryImage {
     pub fn write_internal_byte(&mut self, offset: u32, value: u8) {
         if offset < INTERNAL_SPACE as u32 {
             let index = offset as usize;
+            self.memory_writes
+                .set(self.memory_writes.get().saturating_add(1));
             if self.internal[index] != value {
                 self.internal[index] = value;
                 self.dirty_internal
@@ -402,6 +418,8 @@ impl MemoryImage {
 
     pub fn read_internal_byte(&self, offset: u32) -> Option<u8> {
         if offset < INTERNAL_SPACE as u32 {
+            self.memory_reads
+                .set(self.memory_reads.get().saturating_add(1));
             let val = self.internal[offset as usize];
             // Optional debug hook: enable IMR read logging with IMR_READ_DEBUG=1.
             if offset == 0xFB && !imr_read_suppressed() {
@@ -532,6 +550,19 @@ impl MemoryImage {
         }
     }
 
+    pub fn memory_read_count(&self) -> u64 {
+        self.memory_reads.get()
+    }
+
+    pub fn memory_write_count(&self) -> u64 {
+        self.memory_writes.get()
+    }
+
+    pub fn set_memory_counts(&self, reads: u64, writes: u64) {
+        self.memory_reads.set(reads);
+        self.memory_writes.set(writes);
+    }
+
     pub fn copy_external_from(&mut self, data: &[u8]) -> Result<()> {
         if data.len() != self.external.len() {
             return Err(CoreError::InvalidSnapshot(format!(
@@ -630,5 +661,17 @@ mod tests {
             .load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8)
             .unwrap_or(0xFF);
         assert_eq!(imr, 0x00, "IMR should start cleared like Python reset()");
+    }
+
+    #[test]
+    fn memory_read_write_counters_increment() {
+        let mut mem = MemoryImage::new();
+        // External write and read.
+        let _ = mem.store(0x0000, 8, 0xAA);
+        let _ = mem.load(0x0000, 8);
+        // Direct internal read should also bump counters.
+        let _ = mem.read_internal_byte(IMEM_IMR_OFFSET);
+        assert_eq!(mem.memory_write_count(), 1);
+        assert_eq!(mem.memory_read_count(), 2);
     }
 }

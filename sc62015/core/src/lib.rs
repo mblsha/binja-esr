@@ -712,7 +712,7 @@ impl CoreRuntime {
                             ) {
                                 // Mirror writes into IMEM except when the handler already wrote KIL.
                                 if offset != 0xF2 {
-                                    let _ = (*self.mem).store_internal_value(addr, bits, value);
+                                    let _ = (*self.mem).store(addr, bits, value);
                                 }
                                 return;
                             }
@@ -750,6 +750,22 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+                    let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    tracer.record_irq_check(
+                        "IRQ_Check",
+                        self.state.pc() & ADDRESS_MASK,
+                        imr,
+                        isr,
+                        self.timer.irq_pending,
+                        self.timer.in_interrupt,
+                        self.timer.irq_source.as_deref(),
+                    );
+                }
+            }
             // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
             self.refresh_key_irq_latch();
             // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
@@ -792,19 +808,22 @@ impl CoreRuntime {
                 self.metadata.cycle_count = new_cycle;
                 if !self.timer.in_interrupt {
                     let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let (mti, sti, key_events, _kb_stats) =
-                        self.timer
-                            .tick_timers_with_keyboard(&mut self.memory, new_cycle, |mem| {
-                                if let Some(kb) = self.keyboard.as_mut() {
-                                    let events = kb.scan_tick();
-                                    if events > 0 {
-                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                    }
-                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                                } else {
-                                    (0, false, None)
+                    let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+                        &mut self.memory,
+                        new_cycle,
+                        |mem| {
+                            if let Some(kb) = self.keyboard.as_mut() {
+                                let events = kb.scan_tick();
+                                if events > 0 {
+                                    kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                 }
-                            }, Some(self.state.get_reg(RegName::Y)));
+                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                            } else {
+                                (0, false, None)
+                            }
+                        },
+                        Some(self.state.get_reg(RegName::Y)),
+                    );
                     let fifo_non_empty = self
                         .keyboard
                         .as_ref()
@@ -900,19 +919,22 @@ impl CoreRuntime {
                 let mut timer_fired = false;
                 if !self.timer.in_interrupt {
                     let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let (mti, sti, _key_events, _kb_stats) =
-                        self.timer
-                            .tick_timers_with_keyboard(&mut self.memory, cyc, |mem| {
-                                if let Some(kb) = self.keyboard.as_mut() {
-                                    let events = kb.scan_tick();
-                                    if events > 0 {
-                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                    }
-                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                                } else {
-                                    (0, false, None)
+                    let (mti, sti, _key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+                        &mut self.memory,
+                        cyc,
+                        |mem| {
+                            if let Some(kb) = self.keyboard.as_mut() {
+                                let events = kb.scan_tick();
+                                if events > 0 {
+                                    kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                 }
-                            }, Some(self.state.get_reg(RegName::Y)));
+                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                            } else {
+                                (0, false, None)
+                            }
+                        },
+                        Some(self.state.get_reg(RegName::Y)),
+                    );
                     timer_fired = mti || sti;
                     // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
                     if let Some(isr) = self.memory.read_internal_byte(0xFC) {
@@ -930,10 +952,7 @@ impl CoreRuntime {
                 }
                 self.timer.irq_source = None;
                 // Clear the delivered ISR bit only when we know which source fired (Python parity).
-                if let Some(src_mask) = irq_src
-                    .as_deref()
-                    .and_then(|s| src_mask_for_name(s))
-                {
+                if let Some(src_mask) = irq_src.as_deref().and_then(|s| src_mask_for_name(s)) {
                     let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
                     if let Some(isr_val) = self.memory.load(isr_addr, 8) {
                         let cleared = (isr_val as u8) & (!src_mask);
@@ -968,6 +987,16 @@ impl CoreRuntime {
                 }
             }
             self.deliver_pending_irq()?;
+            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.update_counters(
+                        self.metadata.instruction_count,
+                        self.state.call_depth(),
+                        self.memory.memory_read_count(),
+                        self.memory.memory_write_count(),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -977,6 +1006,8 @@ impl CoreRuntime {
         metadata.instruction_count = self.metadata.instruction_count;
         metadata.cycle_count = self.metadata.cycle_count;
         metadata.pc = self.get_reg("PC");
+        metadata.memory_reads = self.memory.memory_read_count();
+        metadata.memory_writes = self.memory.memory_write_count();
         metadata.call_depth = self.state.call_depth();
         metadata.call_sub_level = self.state.call_sub_level();
         metadata.temps = collect_registers(&self.state)
@@ -995,8 +1026,8 @@ impl CoreRuntime {
                     "last_cols": kb_state.active_columns,
                     "last_kol": kb_state.kol,
                     "last_koh": kb_state.koh,
-                    "kil_reads": kb_state.fifo_len,
-                    "kb_irq_enabled": true,
+                    "kil_reads": kb_state.kil_read_count,
+                    "kb_irq_enabled": self.timer.kb_irq_enabled,
                 }));
             }
         }
@@ -1011,6 +1042,13 @@ impl CoreRuntime {
         let (timer_info, intr_info) = self.timer.snapshot_info();
         metadata.timer = timer_info;
         metadata.interrupts = intr_info;
+        if metadata.interrupts.irq_bit_watch.is_none() {
+            metadata.interrupts.irq_bit_watch = self
+                .timer
+                .irq_bit_watch
+                .clone()
+                .map(serde_json::Value::Object);
+        }
         let regs = collect_registers(&self.state);
         snapshot::save_snapshot(path, &metadata, &regs, &self.memory, lcd_payload.as_deref())
     }
@@ -1020,11 +1058,16 @@ impl CoreRuntime {
         self.metadata = loaded.metadata;
         apply_registers(&mut self.state, &loaded.registers);
         self.fast_mode = self.metadata.fast_mode;
+        self.memory
+            .set_memory_counts(self.metadata.memory_reads, self.metadata.memory_writes);
         self.timer.apply_snapshot_info(
             &self.metadata.timer,
             &self.metadata.interrupts,
             self.metadata.cycle_count,
         );
+        if let Some(watch) = self.metadata.interrupts.irq_bit_watch.as_ref() {
+            self.timer.irq_bit_watch = watch.as_object().map(|obj| obj.clone());
+        }
         if self.keyboard.is_none() {
             self.keyboard = Some(KeyboardMatrix::new());
         }
@@ -1105,12 +1148,37 @@ impl CoreRuntime {
         if !self.timer.irq_pending {
             return Ok(());
         }
+        let pc = self.state.pc() & ADDRESS_MASK;
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         // Treat KEY/ONK as level-triggered: allow delivery when their ISR bits are set even if IRM is 0.
         let mut irm_enabled = (imr & IMR_MASTER) != 0;
         if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
             irm_enabled = true;
+        }
+        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+            if let Some(tracer) = guard.as_mut() {
+                tracer.record_irq_check(
+                    "IRQ_PendingCheck",
+                    pc,
+                    imr,
+                    isr,
+                    self.timer.irq_pending,
+                    self.timer.in_interrupt,
+                    self.timer.irq_source.as_deref(),
+                );
+                if imr == 0 {
+                    tracer.record_irq_check(
+                        "IMR_ReadZero",
+                        pc,
+                        imr,
+                        isr,
+                        self.timer.irq_pending,
+                        self.timer.in_interrupt,
+                        self.timer.irq_source.as_deref(),
+                    );
+                }
+            }
         }
         if !irm_enabled {
             return Ok(());
@@ -1394,6 +1462,7 @@ mod tests {
             true,               // in_interrupt
             Some(vec![0xDEAD]), // interrupt_stack
             5,                  // next_interrupt_id
+            None,               // irq_bit_watch
         );
         rt.save_snapshot(&tmp).expect("save snapshot");
 
@@ -1466,14 +1535,8 @@ mod tests {
     fn e_port_inputs_are_written_into_imem() {
         let mut rt = CoreRuntime::new();
         rt.set_e_port_inputs(0xAA, 0x55);
-        let eil = rt
-            .memory
-            .read_internal_byte(0xF5)
-            .expect("EIL readable");
-        let eih = rt
-            .memory
-            .read_internal_byte(0xF6)
-            .expect("EIH readable");
+        let eil = rt.memory.read_internal_byte(0xF5).expect("EIL readable");
+        let eih = rt.memory.read_internal_byte(0xF6).expect("EIH readable");
         assert_eq!(eil, 0xAA);
         assert_eq!(eih, 0x55);
     }
@@ -1973,6 +2036,37 @@ mod tests {
             "trace should encode src annotation for MTI"
         );
         let _ = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn perfetto_irq_check_and_call_flow_smoke() {
+        use std::fs;
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("perfetto_irq_check_call.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.lock().unwrap();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        // Emit diagnostics without running the runtime loop.
+        if let Some(mut tracer) = PERFETTO_TRACER.lock().unwrap().take() {
+            tracer.record_irq_check("IRQ_Check", 0x0100, 0x80, 0x04, true, false, Some("KEY"));
+            tracer.record_call_flow("CALL", 0x012345, 0x020000, 2);
+            let _ = tracer.finish();
+        }
+
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.contains("IRQ_Check"),
+            "trace should include IRQ_Check diagnostic"
+        );
+        assert!(
+            text.contains("CALL"),
+            "trace should include CALL flow marker"
+        );
         let _ = fs::remove_file(&tmp);
     }
 

@@ -26,6 +26,9 @@ pub struct PerfettoTracer {
     imr_read_nonzero: u64,
     irq_seq: u64,
     mem_seq: u64,
+    call_depth_counter: TrackId,
+    mem_read_counter: TrackId,
+    mem_write_counter: TrackId,
 }
 
 impl PerfettoTracer {
@@ -44,6 +47,9 @@ impl PerfettoTracer {
         let irq_timer_track = builder.add_thread("irq.timer");
         let irq_key_track = builder.add_thread("irq.key");
         let irq_misc_track = builder.add_thread("irq.misc");
+        let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
+        let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
+        let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
         Self {
             builder,
             exec_track,
@@ -63,6 +69,9 @@ impl PerfettoTracer {
             imr_read_nonzero: 0,
             irq_seq: 0,
             mem_seq: 0,
+            call_depth_counter,
+            mem_read_counter,
+            mem_write_counter,
         }
     }
 
@@ -201,12 +210,11 @@ impl PerfettoTracer {
             self.mem_seq = self.mem_seq.saturating_add(1);
             cycle
                 .saturating_mul(self.units_per_instr)
-                .saturating_add(self.mem_seq)
-                as i64
+                .saturating_add(self.mem_seq) as i64
         };
-        let mut ev = self
-            .builder
-            .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
+        let mut ev =
+            self.builder
+                .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
         ev.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("address", AnnotationValue::Pointer(addr as u64)),
@@ -222,6 +230,22 @@ impl PerfettoTracer {
         }
         ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
         ev.finish();
+    }
+
+    pub fn update_counters(
+        &mut self,
+        instr_index: u64,
+        call_depth: u32,
+        mem_reads: u64,
+        mem_writes: u64,
+    ) {
+        let ts = self.ts(instr_index, 0);
+        self.builder
+            .update_counter(self.call_depth_counter, call_depth as f64, ts);
+        self.builder
+            .update_counter(self.mem_read_counter, mem_reads as f64, ts);
+        self.builder
+            .update_counter(self.mem_write_counter, mem_writes as f64, ts);
     }
 
     pub fn finish(self) -> Result<()> {
@@ -352,12 +376,10 @@ impl PerfettoTracer {
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
     pub fn record_irq_event(&mut self, name: &str, mut payload: HashMap<String, AnnotationValue>) {
         // Prefer explicit cycle payload (manual clock) when present to align with Python traces.
-        let cycle_ts = payload
-            .get("cycle")
-            .and_then(|v| match v {
-                AnnotationValue::UInt(c) => Some(*c as i64),
-                _ => None,
-            });
+        let cycle_ts = payload.get("cycle").and_then(|v| match v {
+            AnnotationValue::UInt(c) => Some(*c as i64),
+            _ => None,
+        });
 
         // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
         let (op_idx, pc) = perfetto_instr_context()
@@ -409,5 +431,43 @@ impl PerfettoTracer {
             ev.add_annotation(k, v);
         }
         ev.finish();
+    }
+
+    /// Diagnostic instants mirroring Python IRQ pending checks (IRQ_Check/IRQ_PendingCheck/IMR_ReadZero).
+    pub fn record_irq_check(
+        &mut self,
+        name: &str,
+        pc: u32,
+        imr: u8,
+        isr: u8,
+        pending: bool,
+        in_interrupt: bool,
+        pending_src: Option<&str>,
+    ) {
+        let mut payload = HashMap::new();
+        payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
+        payload.insert("imr".to_string(), AnnotationValue::UInt(imr as u64));
+        payload.insert("isr".to_string(), AnnotationValue::UInt(isr as u64));
+        payload.insert("pending".to_string(), AnnotationValue::UInt(pending as u64));
+        payload.insert(
+            "in_interrupt".to_string(),
+            AnnotationValue::UInt(in_interrupt as u64),
+        );
+        if let Some(src) = pending_src {
+            payload.insert(
+                "pending_src".to_string(),
+                AnnotationValue::Str(src.to_string()),
+            );
+        }
+        self.record_irq_event(name, payload);
+    }
+
+    /// Function enter/exit markers to mirror Python call/return tracing.
+    pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
+        let mut payload = HashMap::new();
+        payload.insert("from".to_string(), AnnotationValue::Pointer(pc_from as u64));
+        payload.insert("to".to_string(), AnnotationValue::Pointer(pc_to as u64));
+        payload.insert("depth".to_string(), AnnotationValue::UInt(depth as u64));
+        self.record_irq_event(name, payload);
     }
 }

@@ -318,20 +318,23 @@ impl LlamaContractBus {
                 self.timer.irq_isr = isr;
             }
 
-            let (mti, sti, key_events, _kb_stats) =
-                self.timer
-                    .tick_timers_with_keyboard(&mut self.memory, self.cycles, |mem| {
-                        let events = self.keyboard.scan_tick();
-                        if events > 0 {
-                            self.keyboard
-                                .write_fifo_to_memory(mem, self.timer.kb_irq_enabled);
-                        }
-                        (
-                            events,
-                            self.keyboard.fifo_len() > 0,
-                            Some(self.keyboard.telemetry()),
-                        )
-                    }, None);
+            let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+                &mut self.memory,
+                self.cycles,
+                |mem| {
+                    let events = self.keyboard.scan_tick();
+                    if events > 0 {
+                        self.keyboard
+                            .write_fifo_to_memory(mem, self.timer.kb_irq_enabled);
+                    }
+                    (
+                        events,
+                        self.keyboard.fifo_len() > 0,
+                        Some(self.keyboard.telemetry()),
+                    )
+                },
+                None,
+            );
             if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
                 // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
                 if let Some(isr) = self.memory.read_internal_byte(0xFC) {
@@ -1503,7 +1506,10 @@ mod tests {
         let mut bus = LlamaContractBus::new();
         bus.configure_timer(1, 0, true);
         bus.tick_timers(1);
-        let isr = bus.memory.read_internal_byte(INTERNAL_MEMORY_START + 0xFC).unwrap_or(0);
+        let isr = bus
+            .memory
+            .read_internal_byte(INTERNAL_MEMORY_START + 0xFC)
+            .unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI bit should be set in ISR");
         assert!(bus.timer.irq_pending, "MTI should mark irq_pending");
     }
