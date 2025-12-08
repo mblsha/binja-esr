@@ -37,6 +37,10 @@ Resolved
 - sc62015/core/src/llama/eval.rs: RET uses the current page when it differs from the saved call page (Python parity for near returns that page-hop) and falls back to saved page otherwise.
 - sc62015/core/src/timer.rs: Removed duplicate ISR bit-watch/Perfetto logging; rely on memory write hook so IMR/ISR transitions match Python counts.
 - sc62015/core/src/lib.rs: Suppressed dead_code warnings on RuntimeBus metadata fields to keep parity builds clean without changing behavior.
+- Rust overlay gaps to align with Python (add APIs + parity tests across backends):
+  - External overlays (MemoryBus) for add_overlay/add_ram/add_rom/load_memory_card and caller-provided handlers aren’t modeled in Rust; only python_required host callbacks exist.
+  - Overlay tagging/logging: Python logs overlay names in Perfetto/read/write logs; Rust only tags `python_overlay`.
+  - Add unit tests that drive the same overlay vectors through Python and Rust once overlay support is added.
 
 Tests/Checks
 - cargo test --quiet (sc62015/core)
