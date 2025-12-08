@@ -337,6 +337,12 @@ class RustContractBackend:
     def load_memory_card(self, data: bytes) -> None:
         self._impl.load_memory_card(data)
 
+    def overlay_read_log(self) -> list[dict]:
+        return list(self._impl.overlay_read_log())  # type: ignore[attr-defined]
+
+    def overlay_write_log(self) -> list[dict]:
+        return list(self._impl.overlay_write_log())  # type: ignore[attr-defined]
+
     def read(self, address: int, pc: Optional[int] = None) -> int:
         return int(self._impl.read_byte(address, pc))
 

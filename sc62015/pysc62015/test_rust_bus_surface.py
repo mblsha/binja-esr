@@ -45,3 +45,18 @@ def test_overlay_helpers_exposed():
     card = bytes([0xCC] * 8192)
     backend.load_memory_card(card)
     assert backend.read(0x040000) == 0xCC
+
+
+@pytest.mark.skipif(not _has_rust(), reason="LLAMA backend unavailable")
+def test_overlay_logs_exposed():
+    backend = RustContractBackend()
+    backend.add_ram_overlay(0x6000, 2, name="log_overlay")
+    backend.write(0x6000, 0xAB, pc=0x0100)
+    _ = backend.read(0x6000, pc=0x0200)
+
+    writes = backend.overlay_write_log()
+    reads = backend.overlay_read_log()
+    assert any(entry["overlay"] == "log_overlay" for entry in writes)
+    assert any(entry["overlay"] == "log_overlay" for entry in reads)
+    assert any(entry.get("pc") == 0x0100 for entry in writes)
+    assert any(entry.get("pc") == 0x0200 for entry in reads)

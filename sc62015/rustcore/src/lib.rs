@@ -304,6 +304,49 @@ impl LlamaContractBus {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    fn overlay_read_log(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let log = self
+            .memory
+            .overlay_read_log()
+            .into_iter()
+            .map(|entry| {
+                let dict = PyDict::new_bound(py);
+                let _ = dict.set_item("kind", "read");
+                let _ = dict.set_item("address", entry.address);
+                let _ = dict.set_item("value", entry.value);
+                let _ = dict.set_item("overlay", entry.overlay);
+                if let Some(pc) = entry.pc {
+                    let _ = dict.set_item("pc", pc);
+                }
+                dict.into_py(py)
+            })
+            .collect::<Vec<_>>();
+        Ok(log.into_py(py))
+    }
+
+    fn overlay_write_log(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let log = self
+            .memory
+            .overlay_write_log()
+            .into_iter()
+            .map(|entry| {
+                let dict = PyDict::new_bound(py);
+                let _ = dict.set_item("kind", "write");
+                let _ = dict.set_item("address", entry.address);
+                let _ = dict.set_item("value", entry.value);
+                let _ = dict.set_item("overlay", entry.overlay);
+                if let Some(pc) = entry.pc {
+                    let _ = dict.set_item("pc", pc);
+                }
+                if let Some(prev) = entry.previous {
+                    let _ = dict.set_item("previous", prev);
+                }
+                dict.into_py(py)
+            })
+            .collect::<Vec<_>>();
+        Ok(log.into_py(py))
+    }
+
     /// Optional host memory hook for addresses that require Python overlays (e.g., ON/ONK).
     fn set_host_memory(&mut self, memory: Py<PyAny>) {
         self.host_memory = Some(memory);
