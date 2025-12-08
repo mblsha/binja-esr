@@ -334,6 +334,7 @@ impl LlamaContractBus {
                     )
                 },
                 None,
+                None,
             );
             if kb_irq_enabled {
                 if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
@@ -1540,7 +1541,6 @@ impl LlamaCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sc62015_core::INTERNAL_MEMORY_START;
 
     #[test]
     fn contract_bus_tick_timers_sets_mti_and_isr() {
@@ -1549,7 +1549,7 @@ mod tests {
         bus.tick_timers(1);
         let isr = bus
             .memory
-            .read_internal_byte(INTERNAL_MEMORY_START + 0xFC)
+            .read_internal_byte(0xFC)
             .unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI bit should be set in ISR");
         assert!(bus.timer.irq_pending, "MTI should mark irq_pending");

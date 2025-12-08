@@ -4,6 +4,7 @@ use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perf
 use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
+use std::env;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -35,17 +36,48 @@ pub struct PerfettoTracer {
     wall_start: Instant,
 }
 
+fn env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("True")
+    )
+}
+
 impl PerfettoTracer {
     pub fn new(path: PathBuf) -> Self {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
+        let compat_python = env_flag("PERFETTO_PYTHON_COMPAT");
+        // When compat is enabled, align naming/timestamping with Python's legacy/new tracers.
+        let use_wall_clock = compat_python || env_flag("PERFETTO_WALL_CLOCK");
+
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
-        let exec_track = builder.add_thread("InstructionTrace");
-        // Optional visual parity: emit a parallel Execution track like the Python tracer does.
-        let timeline_track = builder.add_thread("Execution");
-        let mem_track = builder.add_thread("MemoryWrites");
+        let exec_track = if compat_python {
+            builder.add_thread("Execution")
+        } else {
+            builder.add_thread("InstructionTrace")
+        };
+        // Optional visual parity: emit a parallel Execution/CPU track.
+        let timeline_track = if compat_python {
+            builder.add_thread("CPU")
+        } else {
+            builder.add_thread("Execution")
+        };
+        let mem_track = if compat_python {
+            builder.add_thread("Memory")
+        } else {
+            builder.add_thread("MemoryWrites")
+        };
         // Track aliases to match Python tracer naming.
-        let memory_track = builder.add_thread("Memory");
-        let cpu_track = builder.add_thread("CPU");
+        let memory_track = if compat_python {
+            mem_track
+        } else {
+            builder.add_thread("Memory")
+        };
+        let cpu_track = if compat_python {
+            timeline_track
+        } else {
+            builder.add_thread("CPU")
+        };
         let instr_counter_track = builder.add_counter_track("instructions", Some("count"), None);
         let imr_track = builder.add_thread("IMR");
         let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);
@@ -57,9 +89,6 @@ impl PerfettoTracer {
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
-        // Parity: default to instruction-index timestamps to match Python trace ordering; wall-clock
-        // introduces jitter across platforms.
-        let use_wall_clock = false;
         Self {
             builder,
             exec_track,

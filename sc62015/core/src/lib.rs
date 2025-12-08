@@ -612,6 +612,10 @@ impl CoreRuntime {
     }
 
     fn refresh_key_irq_latch(&mut self) {
+        if !self.timer.kb_irq_enabled {
+            self.timer.key_irq_latched = false;
+            return;
+        }
         if let Some(kb) = self.keyboard.as_ref() {
             let fifo_len = kb.fifo_len();
             if fifo_len > 0 || self.timer.key_irq_latched {
@@ -735,6 +739,8 @@ impl CoreRuntime {
             onk_level: bool,
             cycle: u64,
             pc: u32,
+            meta_ptr: *const SnapshotMetadata,
+            state_ptr: *const LlamaState,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
@@ -854,12 +860,22 @@ impl CoreRuntime {
                         if let Some(cb) = self.host_write {
                             (*cb)(addr, value as u8);
                         } else {
-                            // No host hook: treat as a host-applied write and emit trace with current cycle if available.
+                            // No host hook: treat as a host-applied write and emit trace with live cycle/PC to match Python.
+                            let live_cycle = if self.meta_ptr.is_null() {
+                                self.cycle
+                            } else {
+                                (*self.meta_ptr).cycle_count
+                            };
+                            let live_pc = if self.state_ptr.is_null() {
+                                self.pc
+                            } else {
+                                (*self.state_ptr).get_reg(RegName::PC) & ADDRESS_MASK
+                            };
                             (*self.mem).apply_host_write_with_cycle(
                                 addr,
                                 value as u8,
-                                Some(self.cycle),
-                                Some(self.pc),
+                                Some(live_cycle),
+                                Some(live_pc),
                             );
                         }
                         return;
@@ -1026,6 +1042,8 @@ impl CoreRuntime {
                 onk_level: self.onk_level,
                 cycle: self.metadata.cycle_count,
                 pc,
+                meta_ptr: &self.metadata as *const SnapshotMetadata,
+                state_ptr: &self.state as *const LlamaState,
             };
             let opcode = bus.load(pc, 8) as u8;
             // Capture WAIT loop count before execution (executor clears I).
@@ -1409,10 +1427,11 @@ impl CoreRuntime {
         if !irm_enabled {
             return Ok(());
         }
-        let src = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
-            Some((ISR_ONKI, "ONK"))
-        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+        // Match Python ordering: deliver KEY before ONK when both are set/enabled.
+        let src = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
             Some((ISR_KEYI, "KEY"))
+        } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
+            Some((ISR_ONKI, "ONK"))
         } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
             Some((ISR_MTI, "MTI"))
         } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
@@ -2010,10 +2029,14 @@ mod tests {
         kb.inject_matrix_event(0x10, false, &mut rt.memory, rt.timer.kb_irq_enabled);
         rt.refresh_key_irq_latch();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_ne!(isr & ISR_KEYI, 0, "KEYI should still assert from latch");
+        assert_eq!(
+            isr & ISR_KEYI,
+            0,
+            "KEYI should stay masked when keyboard IRQs are disabled"
+        );
         assert!(
-            rt.timer.irq_pending,
-            "pending IRQ should be armed even when kb IRQs disabled"
+            !rt.timer.irq_pending,
+            "pending IRQ should not arm when kb IRQs are disabled"
         );
     }
 
@@ -2042,15 +2065,18 @@ mod tests {
         rt.refresh_key_irq_latch();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_ne!(
+        assert_eq!(
             isr & ISR_KEYI,
             0,
-            "KEYI should reassert from FIFO even when kb IRQs disabled"
+            "KEYI should remain masked when kb IRQs are disabled even with FIFO data"
         );
-        assert!(rt.timer.irq_pending, "pending should arm from FIFO latch");
         assert!(
-            rt.timer.key_irq_latched,
-            "latch should stay set while FIFO has data"
+            !rt.timer.irq_pending,
+            "pending should not arm from FIFO latch when kb IRQs are disabled"
+        );
+        assert!(
+            !rt.timer.key_irq_latched,
+            "latch should clear while kb IRQs are disabled"
         );
     }
 

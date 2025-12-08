@@ -4,13 +4,17 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Slim PyO3 bridge for the SC62015 CPU facade."
-
-[lib]
-name = "_sc62015_rustcore"
-crate-type = ["cdylib"]
+build = "build.rs"
 
 [dependencies]
 pyo3 = { version = "0.22.2", features = ["extension-module"] }
 sc62015-core = { path = "../core" }
 serde_json = "1.0"
 retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git" }
+
+[build-dependencies]
+pyo3-build-config = "0.22"
+
+[lib]
+name = "_sc62015_rustcore"
+crate-type = ["cdylib"]

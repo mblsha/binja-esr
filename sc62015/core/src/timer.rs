@@ -489,8 +489,9 @@ impl TimerContext {
             .map(|(_, pc)| pc)
             .or(pc_hint)
             .unwrap_or_else(perfetto_last_pc);
-        let latch_active = key_events > 0 || fifo_has_data;
-        let should_assert = self.kb_irq_enabled && latch_active;
+        // Only maintain latch/KEYI when keyboard IRQs are enabled to mirror Python.
+        let latch_active = self.kb_irq_enabled && (key_events > 0 || fifo_has_data);
+        let should_assert = latch_active;
         if should_assert {
             if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
                 if (isr & 0x04) == 0 {
@@ -553,6 +554,10 @@ impl TimerContext {
         }
         // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
         self.key_irq_latched = latch_active;
+        if !self.kb_irq_enabled && !latch_active {
+            // Drop any stale latch when IRQs are disabled.
+            self.key_irq_latched = false;
+        }
         // Perfetto parity: emit a scan event regardless of new key events.
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.as_mut() {
