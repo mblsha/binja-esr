@@ -2,8 +2,10 @@ Open
 - (none)
 
 Resolved
-- Strict opcode parity guard: LLAMA_STRICT_OPCODES causes unknown/unsupported opcodes to raise instead of advancing, avoiding silent divergence (sc62015/core/src/llama/eval.rs).
-- Strict opcodes now default to Python parity; LLAMA_PERMISSIVE_OPCODES opt-out is available. Regression tests cover both strict and permissive modes (sc62015/core/src/llama/eval.rs).
+- sc62015/core/src/memory.rs: dirty_internal now records the true IMEM address (not INTERNAL_MEMORY_START + byte offset); regression test covers IMEM_KIL writes draining dirty_internal.
+- sc62015/core/src/memory.rs: dirty_internal tracks multi-byte IMEM writes with exact addresses; regression test covers 16-bit stores to ensure replay parity.
+- sc62015/core/src/perfetto.rs: default timestamps now use instruction-index counters; wall-clock timing is opt-in via PERFETTO_WALL_CLOCK, keeping compare_perfetto_traces.py aligned by default.
+- Strict opcode parity guard: unknown/unsupported opcodes always raise instead of advancing, avoiding silent divergence (sc62015/core/src/llama/eval.rs).
 - Generic MV fallback now handles remaining reg/mem move patterns instead of erroring (sc62015/core/src/llama/eval.rs), reducing silent NOPs.
 - HALT wake parity: ignore KEYI when keyboard IRQs are disabled so HALT only wakes for enabled sources; regression test added (sc62015/core/src/lib.rs).
 - 16-bit CALL/RET now track call pages via call_page_stack so returns land on the original page even if PC page changes (sc62015/core/src/llama/eval.rs).
@@ -11,7 +13,6 @@ Resolved
 - Python-only overlays now enforce host callbacks unless LLAMA_ALLOW_PY_FALLBACK=1 (sc62015/core/src/lib.rs); prevents silent divergence on python-required addresses.
 - WAIT parity guard: LlamaPyBus requires memory.wait_cycles unless LLAMA_ALLOW_MISSING_WAIT_CYCLES=1 (sc62015/rustcore/src/lib.rs), avoiding silent timer drift.
 - Unknown opcode advance parity: fallback now consumes the estimated opcode length (including prefixes) so bad bytes don’t desync tracing (sc62015/core/src/llama/eval.rs).
-- Perfetto defaults to Python-compatible layout/timestamps unless PERFETTO_RUST_LAYOUT=1 is set (sc62015/core/src/perfetto.rs), reducing drift in compare_perfetto_traces.py without extra env.
 - sc62015/core: PERFETTO_TRACER replaced with PerfettoHandle (depth-counted guard + thread owner + gate mutex) allowing reentrant access; callers updated to use enter()/guard deref; tests exercise nested access and run across threads without dropped events. Added guard helpers (tracer_mut/take) and kept ownership assertions.
 - sc62015/core/src/llama/eval.rs: Unsupported MV/memory patterns no longer error; they advance PC to avoid halting execution. (Full parity semantics still pending.)
 - sc62015/core/src/llama/eval.rs: Added generic MV fallback that writes decoded sources to memory/reg where possible instead of erroring; cargo tests cover executor flows.

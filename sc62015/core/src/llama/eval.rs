@@ -67,16 +67,8 @@ pub fn reset_perf_counters() {
 }
 
 fn strict_opcodes() -> bool {
-    let strict = matches!(
-        env::var("LLAMA_STRICT_OPCODES").as_deref(),
-        Ok("1") | Ok("true") | Ok("True")
-    );
-    let permissive = matches!(
-        env::var("LLAMA_PERMISSIVE_OPCODES").as_deref(),
-        Ok("1") | Ok("true") | Ok("True")
-    );
-    // Default to permissive; strict only when explicitly requested and not overridden by permissive.
-    strict && !permissive
+    // Hardened by default: unknown opcodes are always errors.
+    true
 }
 
 fn fallback_unknown(
@@ -2912,34 +2904,37 @@ mod tests {
             state.set_pc(0);
             let mut bus = NullBus;
             let res = exec.execute(entry.opcode, &mut state, &mut bus);
-            assert!(
-                res.is_ok(),
-                "opcode 0x{:02X} failed with {:?}",
-                entry.opcode,
-                res
-            );
+            if entry.kind == InstrKind::Unknown {
+                assert!(
+                    res.is_err(),
+                    "opcode 0x{:02X} should error (Unknown), got {res:?}",
+                    entry.opcode
+                );
+            } else {
+                assert!(
+                    res.is_ok(),
+                    "opcode 0x{:02X} failed with {:?}",
+                    entry.opcode,
+                    res
+                );
+            }
         }
     }
 
     #[test]
-    fn unknown_opcodes_fall_back() {
-        std::env::set_var("LLAMA_PERMISSIVE_OPCODES", "1");
+    fn unknown_opcodes_error_by_default_in_tests() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
         let res = exec.execute(0x20, &mut state, &mut bus);
-        assert!(res.is_ok());
-        assert_eq!(state.pc(), 1);
-        let res = exec.execute(0xBF, &mut state, &mut bus);
-        assert!(res.is_ok());
-        assert_eq!(state.pc(), 2);
-        std::env::remove_var("LLAMA_PERMISSIVE_OPCODES");
+        assert!(
+            res.is_err(),
+            "default (tests/features) should be strict; got {res:?}"
+        );
     }
 
     #[test]
     fn strict_unknown_opcodes_error() {
-        std::env::remove_var("LLAMA_PERMISSIVE_OPCODES");
-        std::env::set_var("LLAMA_STRICT_OPCODES", "1");
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
@@ -2948,7 +2943,6 @@ mod tests {
             res.is_err(),
             "strict mode should error on unknown opcode, got {res:?}"
         );
-        std::env::remove_var("LLAMA_STRICT_OPCODES");
     }
 
     #[test]
