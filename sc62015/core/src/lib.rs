@@ -657,6 +657,10 @@ impl CoreRuntime {
     }
 
     fn refresh_key_irq_latch(&mut self) {
+        if self.timer.in_interrupt {
+            // Parity: do not reassert KEYI while already in an interrupt handler.
+            return;
+        }
         if !self.timer.kb_irq_enabled {
             self.timer.key_irq_latched = false;
             return;
@@ -691,6 +695,9 @@ impl CoreRuntime {
     }
 
     fn arm_pending_irq_from_isr(&mut self) {
+        if self.timer.in_interrupt {
+            return;
+        }
         if self.timer.irq_pending {
             return;
         }
@@ -704,70 +711,53 @@ impl CoreRuntime {
         }
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let irm_enabled = (imr & IMR_MASTER) != 0;
-
-        // Allow KEYI/ONKI to latch pending even when master is off; delivery waits for IMR.
-        if !irm_enabled && (isr_effective & (ISR_KEYI | ISR_ONKI)) != 0 {
-            self.timer.irq_pending = true;
-            self.timer.irq_isr = isr_effective;
-            self.timer.irq_imr = imr;
-            self.timer.irq_source = Some(if (isr_effective & ISR_KEYI) != 0 {
-                "KEY"
-            } else if (isr_effective & ISR_ONKI) != 0 {
-                "ONK"
-            } else {
-                "IRQ"
-            }
-            .to_string());
-            self.timer.last_fired = self.timer.irq_source.clone();
+        if !irm_enabled {
             return;
         }
-
-        if irm_enabled {
-            if (imr & isr_effective) == 0 && (isr_effective & (ISR_KEYI | ISR_ONKI)) == 0 {
-                // Nothing enabled by IMR and no level-triggered keyboard/on-key bits.
-                return;
-            }
-            self.timer.irq_pending = true;
-            self.timer.irq_isr = isr_effective;
-            self.timer.irq_imr = imr;
-            // Prefer keyboard/ONK over timers, then MTI, then STI.
-            let src = if (isr_effective & ISR_KEYI) != 0 {
-                "KEY"
-            } else if (isr_effective & ISR_ONKI) != 0 {
-                "ONK"
-            } else if (isr_effective & ISR_MTI) != 0 {
-                "MTI"
-            } else if (isr_effective & ISR_STI) != 0 {
-                "STI"
-            } else {
-                "IRQ"
-            };
-            // Allow a newly latched KEY/ONK to override earlier timer sources to match Python priority.
-            match self.timer.irq_source.as_deref() {
-                None => self.timer.irq_source = Some(src.to_string()),
-                Some(cur) => {
-                    if (src == "KEY" || src == "ONK") && cur != "KEY" && cur != "ONK" {
-                        self.timer.irq_source = Some(src.to_string());
-                    }
+        if (imr & isr_effective) == 0 {
+            // Nothing enabled by IMR (including keyboard/on-key) — keep running.
+            return;
+        }
+        self.timer.irq_pending = true;
+        self.timer.irq_isr = isr_effective;
+        self.timer.irq_imr = imr;
+        // Prefer keyboard/ONK over timers, then MTI, then STI.
+        let src = if (isr_effective & ISR_KEYI) != 0 {
+            "KEY"
+        } else if (isr_effective & ISR_ONKI) != 0 {
+            "ONK"
+        } else if (isr_effective & ISR_MTI) != 0 {
+            "MTI"
+        } else if (isr_effective & ISR_STI) != 0 {
+            "STI"
+        } else {
+            "IRQ"
+        };
+        // Allow a newly latched KEY/ONK to override earlier timer sources to match Python priority.
+        match self.timer.irq_source.as_deref() {
+            None => self.timer.irq_source = Some(src.to_string()),
+            Some(cur) => {
+                if (src == "KEY" || src == "ONK") && cur != "KEY" && cur != "ONK" {
+                    self.timer.irq_source = Some(src.to_string());
                 }
             }
-            self.timer.last_fired = self.timer.irq_source.clone();
-            let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
-                let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
-                let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                tracer.record_irq_check(
-                    "IRQ_PendingArm",
-                    self.state.pc() & ADDRESS_MASK,
-                    imr,
-                    isr,
-                    self.timer.irq_pending,
-                    self.timer.in_interrupt,
-                    self.timer.irq_source.as_deref(),
-                    Some(kil),
-                    Some(imr_reg),
-                );
-            }
+        }
+        self.timer.last_fired = self.timer.irq_source.clone();
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+            let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+            tracer.record_irq_check(
+                "IRQ_PendingArm",
+                self.state.pc() & ADDRESS_MASK,
+                imr,
+                isr,
+                self.timer.irq_pending,
+                self.timer.in_interrupt,
+                self.timer.irq_source.as_deref(),
+                Some(kil),
+                Some(imr_reg),
+            );
         }
     }
 
@@ -2072,16 +2062,16 @@ mod tests {
     #[test]
     fn arm_pending_irq_from_isr_handles_masked_keyi() {
         let mut rt = CoreRuntime::new();
-        // IMR master off, KEYI asserted.
+        // IMR master off, KEYI asserted: pending should stay clear until IMR enables it.
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
         rt.timer.irq_pending = false;
         rt.arm_pending_irq_from_isr();
         assert!(
-            rt.timer.irq_pending,
-            "KEYI should arm pending even when IMR master is 0"
+            !rt.timer.irq_pending,
+            "KEYI should not arm pending while IMR master is 0"
         );
-        assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
+        assert!(rt.timer.irq_source.is_none());
         // Pure timer bit with master off should not arm.
         rt.timer.irq_pending = false;
         rt.timer.irq_source = None;
@@ -2116,6 +2106,56 @@ mod tests {
             rt.timer.irq_source,
             Some("KEY".to_string()),
             "keyboard should override existing timer source"
+        );
+    }
+
+    #[test]
+    fn arm_pending_irq_respects_imr_master_and_source_bits() {
+        let mut rt = CoreRuntime::new();
+        // IMR master off should not arm pending even when KEYI asserted externally.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        rt.timer.irq_pending = false;
+        rt.arm_pending_irq_from_isr();
+        assert!(
+            !rt.timer.irq_pending,
+            "pending should stay clear when IMR master is 0"
+        );
+        assert!(
+            rt.timer.irq_source.is_none(),
+            "irq_source should not be latched when IMR master is 0"
+        );
+
+        // Enabling IMR master+KEY should arm pending.
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+        rt.arm_pending_irq_from_isr();
+        assert!(rt.timer.irq_pending, "pending should arm when IMR allows it");
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("KEY"));
+    }
+
+    #[test]
+    fn arm_pending_irq_ignored_during_interrupt() {
+        let mut rt = CoreRuntime::new();
+        rt.timer.in_interrupt = true;
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI | ISR_MTI);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY | IMR_MTI);
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+
+        rt.arm_pending_irq_from_isr();
+
+        assert!(
+            !rt.timer.irq_pending,
+            "pending should not arm while already in an interrupt"
+        );
+        assert!(
+            rt.timer.irq_source.is_none(),
+            "irq_source should remain unset while in interrupt"
         );
     }
 
@@ -2216,6 +2256,24 @@ mod tests {
         assert!(
             !rt.timer.key_irq_latched,
             "latch should clear while kb IRQs are disabled"
+        );
+    }
+
+    #[test]
+    fn refresh_key_irq_latch_skips_when_in_interrupt() {
+        let mut rt = CoreRuntime::new();
+        rt.timer.in_interrupt = true;
+        rt.timer.key_irq_latched = true;
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.irq_pending = false;
+
+        rt.refresh_key_irq_latch();
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & ISR_KEYI, 0, "ISR should not change while in interrupt");
+        assert!(
+            !rt.timer.irq_pending,
+            "pending IRQ should remain clear while in interrupt"
         );
     }
 
@@ -2341,12 +2399,16 @@ mod tests {
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
         let _ = rt.step(1);
-        // Should remain pending and PC should not jump to vector yet.
+        // With IMR master off, pending should not arm and PC should not jump yet.
         assert!(
-            rt.timer.irq_pending,
-            "pending should stay set while IMR master=0"
+            !rt.timer.irq_pending,
+            "pending should stay clear while IMR master=0"
         );
-        assert_ne!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x001234);
+        assert_ne!(
+            rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
+            0x001234,
+            "PC should not jump while IMR master=0"
+        );
 
         // Enable IMR master and KEY bits; next step should deliver.
         rt.memory
@@ -2377,8 +2439,8 @@ mod tests {
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
         let _ = rt.step(1);
         assert!(
-            rt.timer.irq_pending,
-            "ONK should arm pending while IMR master is off"
+            !rt.timer.irq_pending,
+            "pending should stay clear while IMR master is off"
         );
         // Enable master + ONK, then deliver.
         rt.memory

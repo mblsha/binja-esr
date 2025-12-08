@@ -1948,8 +1948,10 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // Python WAIT fast-path: zero I and clear flags without advancing timers.
-                let _wait_loops = state.get_reg(RegName::I) & mask_for(RegName::I);
+                // Python WAIT fast-path: zero I and clear flags while allowing the host to
+                // advance timers/keyboard for the burned cycles.
+                let wait_loops = state.get_reg(RegName::I) & mask_for(RegName::I);
+                bus.wait_cycles(wait_loops as u32);
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
@@ -2994,10 +2996,12 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
         assert_eq!(
-            bus.spins, 0,
-            "WAIT should not advance timers/keyboard; Python fast-path does not call wait_cycles"
+            bus.spins, 5,
+            "WAIT should give the host a chance to advance timers/keyboard for burned cycles"
         );
         assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.get_reg(RegName::FC), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 0);
     }
 
     struct MemBus {

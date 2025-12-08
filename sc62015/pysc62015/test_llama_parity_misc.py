@@ -106,3 +106,25 @@ def test_dsll_shifts_left_digits(backend: str) -> None:
     assert memory._raw[INTERNAL_MEMORY_START + start - 1] == expected[1]
     assert cpu.regs.get(RegisterName.I) == 0
     assert cpu.regs.get(RegisterName.FZ) == 0
+
+
+def test_wait_invokes_wait_cycles_llama() -> None:
+    assert "llama" in available_backends(), "LLAMA backend not available"
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[0] = 0xEF  # WAIT
+    memory = _make_memory(raw)
+    spins = {"cycles": 0}
+
+    def wait_cycles(cycles: int) -> None:
+        spins["cycles"] += int(cycles)
+
+    setattr(memory, "wait_cycles", wait_cycles)
+
+    cpu = CPU(memory, reset_on_init=False, backend="llama")
+    cpu.regs.set(RegisterName.I, 3)
+
+    _run(cpu)
+
+    assert cpu.regs.get(RegisterName.I) == 0
+    assert spins["cycles"] == 3

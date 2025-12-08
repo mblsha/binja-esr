@@ -63,7 +63,7 @@ fn llama_flag_from_name(name: &str) -> Option<LlamaRegName> {
     }
 }
 
-fn require_wait_cycles(py: Python<'_>, memory: &PyAny) -> PyResult<()> {
+fn require_wait_cycles(memory: &pyo3::Bound<'_, PyAny>) -> PyResult<()> {
     let allow_missing = env::var("LLAMA_ALLOW_MISSING_WAIT_CYCLES").is_ok();
     if memory.hasattr("wait_cycles")? {
         return Ok(());
@@ -253,7 +253,7 @@ fn is_lcd_addr(addr: u32) -> bool {
         || (0xA000..=0xAFFF).contains(&(addr & ADDRESS_MASK))
 }
 
-#[pyclass(name = "LlamaContractBus")]
+#[pyclass(unsendable, name = "LlamaContractBus")]
 struct LlamaContractBus {
     memory: MemoryImage,
     events: Vec<ContractEvent>,
@@ -1021,7 +1021,7 @@ fn trace_loads() -> bool {
     })
 }
 
-#[pyclass(name = "LlamaCPU")]
+#[pyclass(unsendable, name = "LlamaCPU")]
 struct LlamaCpu {
     state: LlamaState,
     executor: LlamaExecutor,
@@ -1034,6 +1034,7 @@ struct LlamaCpu {
     memory_synced: bool,
     memory_reads: u64,
     memory_writes: u64,
+    cycles: u64,
 }
 
 #[pymethods]
@@ -1053,6 +1054,7 @@ impl LlamaCpu {
             memory_synced: false,
             memory_reads: 0,
             memory_writes: 0,
+            cycles: 0,
         };
         if reset_on_init {
             cpu.power_on_reset()?;
@@ -1165,7 +1167,7 @@ impl LlamaCpu {
     fn execute_instruction(&mut self, py: Python<'_>, address: u32) -> PyResult<(u8, u8)> {
         {
             let bound = self.memory.bind(py);
-            require_wait_cycles(py, bound.as_ref())?;
+            require_wait_cycles(&bound)?;
         }
         self.state.set_pc(address & ADDRESS_MASK);
         let entry_pc = self.state.get_reg(LlamaRegName::PC);
