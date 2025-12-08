@@ -1948,10 +1948,7 @@ impl LlamaExecutor {
             }
             InstrKind::Wait => {
                 // Python WAIT fast-path: zero I and clear flags without advancing timers.
-                let wait_loops = state.get_reg(RegName::I) & mask_for(RegName::I);
-                if wait_loops > 0 {
-                    bus.wait_cycles(wait_loops);
-                }
+                let _wait_loops = state.get_reg(RegName::I) & mask_for(RegName::I);
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
@@ -2995,7 +2992,10 @@ mod tests {
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
-        assert_eq!(bus.spins, 5);
+        assert_eq!(
+            bus.spins, 0,
+            "WAIT should not advance timers/keyboard; Python fast-path does not call wait_cycles"
+        );
         assert_eq!(state.get_reg(RegName::I), 0);
     }
 

@@ -33,6 +33,10 @@ Resolved
 - sc62015/core/src/memory.rs: PERFETTO_TRACER access now spins briefly on contention to reduce dropped IMR/ISR/KIO events without risking deadlock.
 - sc62015/core/src/memory.rs & sc62015/core/src/lib.rs: IMR/ISR writes now invoke a shared hook (Arc) to record bit-watch transitions, refresh irq_imr/irq_isr mirrors, and emit Perfetto IMR_Write/ISR_Write events with pc/prev/value, covering host and direct internal stores.
 - sc62015/core/src/perfetto.rs: InstructionTrace track is emitted by default (alongside Execution/CPU/Memory), keeping compare_perfetto_traces.py compatible without PERFETTO_RUST_LAYOUT overrides.
+- sc62015/core/src/llama/eval.rs: WAIT no longer calls bus.wait_cycles; matches Python fast-path (zero I/FC/FZ, advance PC) and stops timer/keyboard drift in Perfetto.
+- sc62015/core/src/llama/eval.rs: RET uses the current page when it differs from the saved call page (Python parity for near returns that page-hop) and falls back to saved page otherwise.
+- sc62015/core/src/timer.rs: Removed duplicate ISR bit-watch/Perfetto logging; rely on memory write hook so IMR/ISR transitions match Python counts.
+- sc62015/core/src/lib.rs: Suppressed dead_code warnings on RuntimeBus metadata fields to keep parity builds clean without changing behavior.
 
 Tests/Checks
 - cargo test --quiet (sc62015/core)
@@ -44,6 +48,9 @@ Tests/Checks
 - uv run python scripts/check_llama_opcodes.py
 - uv run python scripts/check_llama_pre_tables.py
 - cargo test --quiet (sc62015/core) after PerfettoHandle rework
+
+Findings
+- (none)
 
 Findings
 - (none)

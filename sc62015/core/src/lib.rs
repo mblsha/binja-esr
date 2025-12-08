@@ -788,9 +788,13 @@ impl CoreRuntime {
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             onk_level: bool,
+            #[allow(dead_code)]
             cycle: u64,
+            #[allow(dead_code)]
             pc: u32,
+            #[allow(dead_code)]
             meta_ptr: *const SnapshotMetadata,
+            #[allow(dead_code)]
             state_ptr: *const LlamaState,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {

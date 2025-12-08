@@ -418,8 +418,6 @@ impl TimerContext {
                 }
                 if new_isr != current_isr {
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
-                    let pc = pc_hint.unwrap_or_else(perfetto_last_pc);
-                    self.record_bit_watch_transition("ISR", current_isr, new_isr, pc);
                 }
             }
             // Match Python: when both fire, the later source wins (STI overwrites MTI).
@@ -484,9 +482,6 @@ impl TimerContext {
                 if (isr & 0x04) == 0 {
                     let new_isr = isr | 0x04;
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
-                    self.record_bit_watch_transition("ISR", isr, new_isr, pc_trace);
-                } else {
-                    self.record_bit_watch_transition("ISR", isr, isr, pc_trace);
                 }
             }
             // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
