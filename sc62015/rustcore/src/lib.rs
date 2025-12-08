@@ -10,7 +10,7 @@ use retrobus_perfetto::AnnotationValue;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
-        eval::{power_on_reset, reset_perf_counters, LlamaBus, LlamaExecutor},
+        eval::{perfetto_last_pc, power_on_reset, reset_perf_counters, LlamaBus, LlamaExecutor},
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
     },
@@ -32,6 +32,7 @@ const IMEM_KIL_OFFSET: u32 = 0xF2;
 const IMEM_IMR_OFFSET: u32 = 0xFB;
 const IMEM_ISR_OFFSET: u32 = 0xFC;
 const IMEM_SCR_OFFSET: u32 = 0xFD;
+const IMEM_SSR_OFFSET: u32 = 0xFF;
 
 fn llama_reg_from_name(name: &str) -> Option<LlamaRegName> {
     match name.to_ascii_uppercase().as_str() {
@@ -563,6 +564,12 @@ impl LlamaContractBus {
         let isr = *internal.get(0xFC).unwrap_or(&0);
         dict.set_item("imr", imr)?;
         dict.set_item("isr", isr)?;
+        dict.set_item("irq_pending", self.timer.irq_pending)?;
+        if let Some(src) = self.timer.irq_source.as_deref() {
+            dict.set_item("irq_source", src)?;
+        } else {
+            dict.set_item("irq_source", py.None())?;
+        }
         // Capture LCD-facing events without draining the event log.
         let mut seq: Vec<PyObject> = Vec::new();
         for evt in self.events.iter().filter(|e| is_lcd_addr(e.address)) {
@@ -591,6 +598,120 @@ impl LlamaContractBus {
         dict.set_item("lcd_vram", PyBytes::new_bound(py, &merged))?;
         dict.set_item("lcd_meta", "chips=2,pages=8,width=64")?;
         Ok(dict.into_py(py))
+    }
+
+    fn press_on_key(&mut self) {
+        let ssr_offset = IMEM_SSR_OFFSET;
+        let isr_offset = IMEM_ISR_OFFSET;
+        let ssr_addr = INTERNAL_MEMORY_START + ssr_offset;
+        let ssr = self.memory.read_internal_byte(ssr_offset).unwrap_or(0);
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: ssr_addr,
+            value: ssr,
+            pc: None,
+            detail: None,
+        });
+        self.memory.write_internal_byte(ssr_offset, ssr | 0x08);
+        self.events.push(ContractEvent {
+            kind: "write",
+            address: ssr_addr,
+            value: ssr | 0x08,
+            pc: None,
+            detail: None,
+        });
+        let isr_addr = INTERNAL_MEMORY_START + isr_offset;
+        let isr = self.memory.read_internal_byte(isr_offset).unwrap_or(0);
+        let new_isr = isr | 0x08;
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: isr_addr,
+            value: isr,
+            pc: None,
+            detail: None,
+        });
+        self.memory.write_internal_byte(isr_offset, new_isr);
+        self.events.push(ContractEvent {
+            kind: "write",
+            address: isr_addr,
+            value: new_isr,
+            pc: None,
+            detail: None,
+        });
+        self.timer
+            .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
+        self.timer.irq_pending = true;
+        self.timer.irq_source = Some("ONK".to_string());
+        self.timer.last_fired = self.timer.irq_source.clone();
+        self.timer.irq_isr = new_isr;
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut payload = HashMap::new();
+            payload.insert(
+                "pc".to_string(),
+                AnnotationValue::Pointer(perfetto_last_pc() as u64),
+            );
+            payload.insert(
+                "imr".to_string(),
+                AnnotationValue::UInt(self.timer.irq_imr as u64),
+            );
+            payload.insert(
+                "isr".to_string(),
+                AnnotationValue::UInt(self.timer.irq_isr as u64),
+            );
+            payload.insert(
+                "src".to_string(),
+                AnnotationValue::Str("ONK".to_string()),
+            );
+            tracer.record_irq_event("KeyIRQ", payload);
+        }
+    }
+
+    fn release_on_key(&mut self) {
+        let ssr_offset = IMEM_SSR_OFFSET;
+        let isr_offset = IMEM_ISR_OFFSET;
+        let ssr_addr = INTERNAL_MEMORY_START + ssr_offset;
+        let ssr = self.memory.read_internal_byte(ssr_offset).unwrap_or(0);
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: ssr_addr,
+            value: ssr,
+            pc: None,
+            detail: None,
+        });
+        self.memory.write_internal_byte(ssr_offset, ssr & !0x08);
+        self.events.push(ContractEvent {
+            kind: "write",
+            address: ssr_addr,
+            value: ssr & !0x08,
+            pc: None,
+            detail: None,
+        });
+        let isr_addr = INTERNAL_MEMORY_START + isr_offset;
+        let isr = self.memory.read_internal_byte(isr_offset).unwrap_or(0);
+        let new_isr = isr & !0x08;
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: isr_addr,
+            value: isr,
+            pc: None,
+            detail: None,
+        });
+        self.memory.write_internal_byte(isr_offset, new_isr);
+        self.events.push(ContractEvent {
+            kind: "write",
+            address: isr_addr,
+            value: new_isr,
+            pc: None,
+            detail: None,
+        });
+        self.timer
+            .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
+        self.timer.irq_isr = new_isr;
     }
 
     fn drain_events<'py>(&mut self, py: Python<'py>) -> PyResult<Vec<PyObject>> {
@@ -1284,7 +1405,31 @@ impl LlamaCpu {
         let ssr = self.mirror.read_internal_byte(ssr_offset).unwrap_or(0);
         self.mirror.write_internal_byte(ssr_offset, ssr | 0x08);
         let isr = self.mirror.read_internal_byte(isr_offset).unwrap_or(0);
-        self.mirror.write_internal_byte(isr_offset, isr | 0x08);
+        let new_isr = isr | 0x08;
+        self.mirror.write_internal_byte(isr_offset, new_isr);
+        // Parity: mirror CoreRuntime press_on_key side-effects so IRQ delivery and tracing match Python.
+        self.timer
+            .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
+        self.timer.irq_pending = true;
+        self.timer.irq_source = Some("ONK".to_string());
+        self.timer.last_fired = self.timer.irq_source.clone();
+        self.timer.irq_isr = self
+            .mirror
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.irq_imr = self
+            .mirror
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut payload = HashMap::new();
+            payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
+            payload.insert("imr".to_string(), AnnotationValue::UInt(self.timer.irq_imr as u64));
+            payload.insert("isr".to_string(), AnnotationValue::UInt(self.timer.irq_isr as u64));
+            payload.insert("src".to_string(), AnnotationValue::Str("ONK".to_string()));
+            tracer.record_irq_event("KeyIRQ", payload);
+        }
         self.sync_mirror(py);
         Ok(true)
     }
@@ -1295,7 +1440,11 @@ impl LlamaCpu {
         let ssr = self.mirror.read_internal_byte(ssr_offset).unwrap_or(0);
         self.mirror.write_internal_byte(ssr_offset, ssr & !0x08);
         let isr = self.mirror.read_internal_byte(isr_offset).unwrap_or(0);
-        self.mirror.write_internal_byte(isr_offset, isr & !0x08);
+        let new_isr = isr & !0x08;
+        self.mirror.write_internal_byte(isr_offset, new_isr);
+        self.timer
+            .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
+        self.timer.irq_isr = new_isr;
         self.sync_mirror(py);
         Ok(())
     }

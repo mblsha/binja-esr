@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional, Protocol, Sequence
 
-from pce500.memory import PCE500Memory
+from pce500.memory import INTERNAL_MEMORY_START, PCE500Memory
 from pce500.keyboard_handler import PCE500KeyboardHandler
 from pce500.display.hd61202 import HD61202, parse_command, ChipSelect
 
@@ -21,6 +21,9 @@ except ImportError:
 
 
 AccessKind = Literal["read", "write"]
+
+IMEM_ISR_OFFSET = 0xFC
+IMEM_SSR_OFFSET = 0xFF
 
 
 def _is_lcd_addr(address: int) -> bool:
@@ -90,6 +93,10 @@ class ContractBackend(Protocol):
 
     def tick_timers(self, steps: int = 1) -> None: ...  # pragma: no cover
 
+    def press_on_key(self) -> None: ...  # pragma: no cover
+
+    def release_on_key(self) -> None: ...  # pragma: no cover
+
 
 class PythonContractBackend:
     """Adapter over the Python memory bus/peripherals."""
@@ -97,6 +104,8 @@ class PythonContractBackend:
     def __init__(self, memory: Optional[PCE500Memory] = None) -> None:
         self.memory = memory or PCE500Memory()
         self._events: list[ContractEvent] = []
+        self._irq_pending = False
+        self._irq_source: Optional[str] = None
         from pce500.scheduler import TimerScheduler
 
         self._timer = TimerScheduler(mti_period=0, sti_period=0, enabled=True)
@@ -129,6 +138,8 @@ class PythonContractBackend:
             self._keyboard.release_all_keys()
         except Exception:
             pass
+        self._irq_pending = False
+        self._irq_source = None
 
     def read(self, address: int, pc: Optional[int] = None) -> int:
         value = int(self.memory.read_byte(address, pc)) & 0xFF
@@ -171,6 +182,26 @@ class PythonContractBackend:
         self._events.clear()
         return events
 
+    def press_on_key(self) -> None:
+        """Latch ONK in SSR/ISR and mark pending to mirror emulator behaviour."""
+        ssr_addr = INTERNAL_MEMORY_START + IMEM_SSR_OFFSET
+        isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET
+        ssr = self.read(ssr_addr)
+        # write(...) logs a ContractEvent, so use it to keep parity with Rust bus logging.
+        self.write(ssr_addr, ssr | 0x08)
+        isr = self.read(isr_addr)
+        self.write(isr_addr, isr | 0x08)
+        self._irq_pending = True
+        self._irq_source = "ONK"
+
+    def release_on_key(self) -> None:
+        ssr_addr = INTERNAL_MEMORY_START + IMEM_SSR_OFFSET
+        isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET
+        ssr = self.read(ssr_addr)
+        self.write(ssr_addr, ssr & ~0x08)
+        isr = self.read(isr_addr)
+        self.write(isr_addr, isr & ~0x08)
+
     def snapshot(self) -> ContractSnapshot:
         internal = bytes(self.memory.get_internal_memory_bytes())
         external = bytes(self.memory.external_memory)
@@ -207,6 +238,8 @@ class PythonContractBackend:
                 "imr": imr,
                 "isr": isr,
                 "lcd_status": status,
+                "irq_pending": self._irq_pending,
+                "irq_source": self._irq_source,
             },
         )
 
@@ -341,8 +374,16 @@ class RustContractBackend:
                 "imr": imr,
                 "isr": isr,
                 "lcd_status": lcd_status,
+                "irq_pending": bool(snap.get("irq_pending", False)),
+                "irq_source": snap.get("irq_source"),
             },
         )
+
+    def press_on_key(self) -> None:
+        self._impl.press_on_key()
+
+    def release_on_key(self) -> None:
+        self._impl.release_on_key()
 
     def set_python_ranges(self, ranges: list[tuple[int, int]]) -> None:
         self._impl.set_python_ranges(ranges)

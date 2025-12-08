@@ -2526,11 +2526,10 @@ impl LlamaExecutor {
                 let pc_before = state.pc();
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
                 let current_page = state.pc() & 0xFF0000;
-                let page = match state.pop_call_page() {
-                    Some(saved) if saved != current_page => current_page,
-                    Some(saved) => saved,
-                    None => current_page,
-                };
+                // Parity: always use the saved call page when present; Python preserves the
+                // caller page across near CALL/RET, even if execution moved to a different page.
+                // Fall back to the current page only when no saved page exists.
+                let page = state.pop_call_page().unwrap_or(current_page);
                 let dest = (page | (ret & 0xFFFF)) & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
