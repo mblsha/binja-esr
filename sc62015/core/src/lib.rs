@@ -21,8 +21,9 @@ pub use keyboard::KeyboardMatrix;
 pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 pub use llama::state::LlamaState as CpuState;
 pub use memory::{
-    MemoryImage, ADDRESS_MASK, EXTERNAL_SPACE, INTERNAL_ADDR_MASK, INTERNAL_MEMORY_START,
-    INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
+    AccessKind, MemoryAccessLog, MemoryImage, MemoryOverlay, ADDRESS_MASK, EXTERNAL_SPACE,
+    INTERNAL_ADDR_MASK, INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START,
+    INTERNAL_SPACE,
 };
 pub use perfetto::PerfettoTracer;
 pub struct PerfettoHandle {
@@ -862,7 +863,9 @@ impl CoreRuntime {
                             return val as u32;
                         }
                     }
-                    (*self.mem).load(addr, bits).unwrap_or(0)
+                    (*self.mem)
+                        .load_with_pc(addr, bits, Some(self.pc))
+                        .unwrap_or(0)
                 }
             }
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
@@ -953,7 +956,7 @@ impl CoreRuntime {
                         }
                         return;
                     }
-                    let _ = (*self.mem).store(addr, bits, value);
+                    let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
                 }
             }
             fn resolve_emem(&mut self, base: u32) -> u32 {

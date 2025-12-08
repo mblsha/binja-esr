@@ -1,7 +1,8 @@
 // PY_SOURCE: pce500/memory.py:PCE500Memory
 
 use crate::{CoreError, Result};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::env;
 use std::rc::Rc;
 
@@ -27,6 +28,7 @@ pub const IMEM_ISR_OFFSET: u32 = 0xFC;
 pub const IMEM_SCR_OFFSET: u32 = 0xFD;
 pub const IMEM_LCC_OFFSET: u32 = 0xFE;
 pub const IMEM_SSR_OFFSET: u32 = 0xFF;
+const OVERLAY_LOG_LIMIT: usize = 256;
 
 fn canonical_address(address: u32) -> u32 {
     address & ADDRESS_MASK
@@ -58,7 +60,82 @@ pub fn imr_read_suppressed() -> bool {
     IMR_READ_SUPPRESS.with(|flag| flag.get())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccessKind {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryAccessLog {
+    pub kind: AccessKind,
+    pub address: u32,
+    pub value: u8,
+    pub overlay: String,
+    pub pc: Option<u32>,
+    pub previous: Option<u8>,
+}
+
+type OverlayReadHandler = Box<dyn Fn(u32, Option<u32>) -> Option<u8>>;
+type OverlayWriteHandler = Box<dyn Fn(u32, u8, Option<u32>) -> bool>;
+
+pub struct MemoryOverlay {
+    pub start: u32,
+    pub end: u32,
+    pub name: String,
+    pub data: Option<Vec<u8>>,
+    pub read_only: bool,
+    pub read_handler: Option<OverlayReadHandler>,
+    pub write_handler: Option<OverlayWriteHandler>,
+    pub perfetto_thread: Option<String>,
+}
+
+impl MemoryOverlay {
+    pub fn contains(&self, address: u32) -> bool {
+        let addr = canonical_address(address);
+        addr >= self.start && addr <= self.end
+    }
+
+    fn offset(&self, address: u32) -> Option<usize> {
+        let addr = canonical_address(address);
+        addr.checked_sub(self.start).and_then(|off| usize::try_from(off).ok())
+    }
+
+    fn read(&self, address: u32, pc: Option<u32>) -> Option<u8> {
+        if let Some(handler) = self.read_handler.as_ref() {
+            if let Some(val) = handler(address, pc) {
+                return Some(val & 0xFF);
+            }
+        }
+        if let (Some(data), Some(offset)) = (self.data.as_ref(), self.offset(address)) {
+            return data.get(offset).copied();
+        }
+        None
+    }
+
+    fn write(&mut self, address: u32, value: u8, pc: Option<u32>) -> (bool, Option<u8>) {
+        if let Some(handler) = self.write_handler.as_mut() {
+            let handled = handler(address, value, pc);
+            return (handled, None);
+        }
+        if let Some(offset) = self.offset(address) {
+            if let Some(data) = self.data.as_mut() {
+                if offset < data.len() {
+                    let previous = data[offset];
+                    if !self.read_only {
+                        data[offset] = value;
+                    }
+                    return (true, Some(previous));
+                }
+            }
+            if self.read_only {
+                return (true, None);
+            }
+        }
+        (false, None)
+    }
+}
+
 pub struct MemoryImage {
     external: Vec<u8>,
     dirty: Vec<(u32, u8)>,
@@ -70,6 +147,9 @@ pub struct MemoryImage {
     memory_reads: Cell<u64>,
     memory_writes: Cell<u64>,
     imr_isr_hook: Option<ImrIsrHook>,
+    overlays: Vec<MemoryOverlay>,
+    read_log: RefCell<VecDeque<MemoryAccessLog>>,
+    write_log: RefCell<VecDeque<MemoryAccessLog>>,
 }
 
 impl Default for MemoryImage {
@@ -98,6 +178,9 @@ impl MemoryImage {
             memory_reads: Cell::new(0),
             memory_writes: Cell::new(0),
             imr_isr_hook: None,
+            overlays: Vec::new(),
+            read_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
+            write_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
         }
     }
 
@@ -164,6 +247,29 @@ impl MemoryImage {
         self.keyboard_bridge
     }
 
+    pub fn add_overlay(&mut self, overlay: MemoryOverlay) {
+        self.overlays.push(overlay);
+        self.overlays
+            .sort_by(|a, b| (a.start, a.end, &a.name).cmp(&(b.start, b.end, &b.name)));
+    }
+
+    pub fn remove_overlay(&mut self, name: &str) {
+        self.overlays.retain(|ov| ov.name != name);
+    }
+
+    pub fn clear_overlay_logs(&self) {
+        self.read_log.borrow_mut().clear();
+        self.write_log.borrow_mut().clear();
+    }
+
+    pub fn overlay_read_log(&self) -> Vec<MemoryAccessLog> {
+        self.read_log.borrow().iter().cloned().collect()
+    }
+
+    pub fn overlay_write_log(&self) -> Vec<MemoryAccessLog> {
+        self.write_log.borrow().iter().cloned().collect()
+    }
+
     pub fn requires_python(&self, address: u32) -> bool {
         let address = canonical_address(address);
         if Self::is_internal(address) {
@@ -214,10 +320,17 @@ impl MemoryImage {
     }
 
     pub fn load(&self, address: u32, bits: u8) -> Option<u32> {
+        self.load_with_pc(address, bits, None)
+    }
+
+    pub fn load_with_pc(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));
         let address = canonical_address(address);
         if let Some(value) = self.load_internal_value(address, bits) {
+            return Some(value);
+        }
+        if let Some(value) = self.load_overlay_value(address, bits, pc) {
             return Some(value);
         }
         let bytes = (bits / 8).max(1) as usize;
@@ -247,10 +360,23 @@ impl MemoryImage {
     }
 
     pub fn store(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
+        self.store_with_pc(address, bits, value, None)
+    }
+
+    pub fn store_with_pc(
+        &mut self,
+        address: u32,
+        bits: u8,
+        value: u32,
+        pc: Option<u32>,
+    ) -> Option<()> {
         self.memory_writes
             .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
         if self.store_internal_value(address, bits, value).is_some() {
+            return Some(());
+        }
+        if self.store_overlay_value(address, bits, value, pc).is_some() {
             return Some(());
         }
         let bytes = (bits / 8).max(1) as usize;
@@ -325,6 +451,99 @@ impl MemoryImage {
             if *slot != value {
                 *slot = value;
                 self.dirty.push((address, value));
+            }
+        }
+    }
+
+    fn load_overlay_value(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
+        let bytes = (bits / 8).max(1) as usize;
+        let mut value = 0u32;
+        for offset in 0..bytes {
+            let addr = canonical_address(address + offset as u32);
+            let mut handled = false;
+            for overlay in &self.overlays {
+                if !overlay.contains(addr) {
+                    continue;
+                }
+                if let Some(byte) = overlay.read(addr, pc) {
+                    self.push_overlay_log(AccessKind::Read, addr, byte, pc, &overlay.name, None);
+                    value |= (byte as u32) << (offset * 8);
+                    handled = true;
+                    break;
+                }
+            }
+            if !handled {
+                return None;
+            }
+        }
+        Some(value)
+    }
+
+    fn store_overlay_value(
+        &mut self,
+        address: u32,
+        bits: u8,
+        value: u32,
+        pc: Option<u32>,
+    ) -> Option<()> {
+        let bytes = (bits / 8).max(1) as usize;
+        for offset in 0..bytes {
+            let addr = canonical_address(address + offset as u32);
+            let byte = ((value >> (offset * 8)) & 0xFF) as u8;
+            let mut handled = false;
+            for idx in 0..self.overlays.len() {
+                if !self.overlays[idx].contains(addr) {
+                    continue;
+                }
+                let name = self.overlays[idx].name.clone();
+                let (ok, previous) = {
+                    let overlay = &mut self.overlays[idx];
+                    overlay.write(addr, byte, pc)
+                };
+                if ok {
+                    self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
+                    handled = true;
+                    break;
+                }
+            }
+            if !handled {
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    fn push_overlay_log(
+        &self,
+        kind: AccessKind,
+        address: u32,
+        value: u8,
+        pc: Option<u32>,
+        overlay: &str,
+        previous: Option<u8>,
+    ) {
+        let log = MemoryAccessLog {
+            kind,
+            address,
+            value,
+            overlay: overlay.to_string(),
+            pc,
+            previous,
+        };
+        match log.kind {
+            AccessKind::Read => {
+                let mut guard = self.read_log.borrow_mut();
+                if guard.len() == OVERLAY_LOG_LIMIT {
+                    guard.pop_front();
+                }
+                guard.push_back(log);
+            }
+            AccessKind::Write => {
+                let mut guard = self.write_log.borrow_mut();
+                if guard.len() == OVERLAY_LOG_LIMIT {
+                    guard.pop_front();
+                }
+                guard.push_back(log);
             }
         }
     }
@@ -757,5 +976,72 @@ mod tests {
         mem.apply_host_write_with_cycle(0x0010, 0xBE, Some(1), None);
         let dirty_after = mem.drain_dirty();
         assert!(dirty_after.is_empty());
+    }
+
+    #[test]
+    fn overlay_read_uses_handler_and_logs() {
+        let mut mem = MemoryImage::new();
+        mem.add_overlay(MemoryOverlay {
+            start: 0x2000,
+            end: 0x2000,
+            name: "test_overlay".to_string(),
+            data: None,
+            read_only: true,
+            read_handler: Some(Box::new(|_addr, _pc| Some(0xAB))),
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        let value = mem
+            .load_with_pc(0x2000, 8, Some(0x0100))
+            .expect("overlay read");
+        assert_eq!(value, 0xAB);
+        let log = mem.overlay_read_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].overlay, "test_overlay");
+        assert_eq!(log[0].value, 0xAB);
+        assert_eq!(log[0].pc, Some(0x0100));
+    }
+
+    #[test]
+    fn overlay_write_updates_data_and_logs() {
+        let mut mem = MemoryImage::new();
+        mem.add_overlay(MemoryOverlay {
+            start: 0x4000,
+            end: 0x4003,
+            name: "data_overlay".to_string(),
+            data: Some(vec![0u8; 4]),
+            read_only: false,
+            read_handler: None,
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        let _ = mem.store_with_pc(0x4000, 16, 0xBEEF, Some(0x0200));
+        let log = mem.overlay_write_log();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].overlay, "data_overlay");
+        assert_eq!(log[0].value, 0xEF);
+        assert_eq!(log[1].value, 0xBE);
+        assert_eq!(mem.overlays[0].data.as_ref().unwrap()[0], 0xEF);
+        assert_eq!(mem.overlays[0].data.as_ref().unwrap()[1], 0xBE);
+        assert_eq!(log[0].pc, Some(0x0200));
+    }
+
+    #[test]
+    fn overlay_falls_back_when_unhandled() {
+        let mut mem = MemoryImage::new();
+        mem.write_external_byte(0x5000, 0x55);
+        mem.add_overlay(MemoryOverlay {
+            start: 0x5000,
+            end: 0x5000,
+            name: "noop_overlay".to_string(),
+            data: None,
+            read_only: false,
+            read_handler: Some(Box::new(|_, _| None)),
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        let value = mem.load_with_pc(0x5000, 8, Some(0x0300));
+        assert_eq!(value, Some(0x55));
+        assert!(mem.overlay_read_log().is_empty());
     }
 }
