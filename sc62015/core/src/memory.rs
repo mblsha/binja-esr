@@ -114,9 +114,6 @@ impl MemoryImage {
         if offset != IMEM_IMR_OFFSET && offset != IMEM_ISR_OFFSET {
             return;
         }
-        if prev == new {
-            return;
-        }
         if let Some(hook) = self.imr_isr_hook.as_ref() {
             hook.as_ref()(offset, prev, new);
         }
