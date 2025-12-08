@@ -290,6 +290,20 @@ impl LlamaContractBus {
         self.memory.set_keyboard_bridge(enabled);
     }
 
+    fn add_ram_overlay(&mut self, start: u32, size: usize, name: &str) {
+        self.memory.add_ram_overlay(start, size, name);
+    }
+
+    fn add_rom_overlay(&mut self, start: u32, data: &[u8], name: &str) {
+        self.memory.add_rom_overlay(start, data, name);
+    }
+
+    fn load_memory_card(&mut self, data: &[u8]) -> PyResult<()> {
+        self.memory
+            .load_memory_card(data)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
     /// Optional host memory hook for addresses that require Python overlays (e.g., ON/ONK).
     fn set_host_memory(&mut self, memory: Py<PyAny>) {
         self.host_memory = Some(memory);
@@ -421,7 +435,10 @@ impl LlamaContractBus {
                 }
             }
         }
-        let value = self.memory.read_byte(addr).unwrap_or(0);
+        let value = self
+            .memory
+            .load_with_pc(addr, 8, pc.map(|v| v & ADDRESS_MASK))
+            .unwrap_or(0) as u8;
         if is_lcd_addr(address) && (address & 0x3) == 0x1 {
             self.last_lcd_status = Some(value);
         }
@@ -489,7 +506,9 @@ impl LlamaContractBus {
                 }
             }
         }
-        let _ = self.memory.store(addr, 8, value as u32);
+        let _ = self
+            .memory
+            .store_with_pc(addr, 8, value as u32, pc.map(|v| v & ADDRESS_MASK));
         if is_lcd_addr(addr) {
             self.lcd_log.push((address & ADDRESS_MASK, value));
             let addr_lo = address & 0x0FFF;

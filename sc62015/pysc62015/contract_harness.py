@@ -328,6 +328,15 @@ class RustContractBackend:
         if internal is not None:
             self._impl.load_internal(internal)
 
+    def add_ram_overlay(self, start: int, size: int, name: str = "ram_overlay") -> None:
+        self._impl.add_ram_overlay(int(start), int(size), str(name))
+
+    def add_rom_overlay(self, start: int, data: bytes, name: str = "rom_overlay") -> None:
+        self._impl.add_rom_overlay(int(start), data, str(name))
+
+    def load_memory_card(self, data: bytes) -> None:
+        self._impl.load_memory_card(data)
+
     def read(self, address: int, pc: Optional[int] = None) -> int:
         return int(self._impl.read_byte(address, pc))
 
