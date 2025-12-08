@@ -920,6 +920,32 @@ impl CoreRuntime {
                     if python_required {
                         if let Some(cb) = self.host_write {
                             (*cb)(addr, value as u8);
+                            // Parity: overlay writes should still count as memory writes and emit Perfetto traces.
+                            (*self.mem).bump_write_count();
+                            let mut guard = PERFETTO_TRACER.enter();
+                            if let Some(tracer) = guard.as_mut() {
+                                if let Some((op_idx, pc_ctx)) =
+                                    crate::llama::eval::perfetto_instr_context()
+                                {
+                                    tracer.record_mem_write(
+                                        op_idx,
+                                        pc_ctx,
+                                        addr,
+                                        value as u32,
+                                        "python_overlay",
+                                        bits,
+                                    );
+                                } else {
+                                    tracer.record_mem_write_at_cycle(
+                                        self.cycle,
+                                        Some(self.pc),
+                                        addr,
+                                        value as u32,
+                                        "python_overlay",
+                                        bits,
+                                    );
+                                }
+                            }
                             return;
                         }
                         if !allow_py_fallback {
@@ -1106,8 +1132,8 @@ impl CoreRuntime {
                 )));
             }
             if opcode == 0xFF {
-                // RESET intrinsic: clear timer/IRQ mirrors to match Python power-on behavior.
-                self.timer.reset_full(self.metadata.cycle_count);
+                // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
+                // refresh mirrors from IMEM without clearing counters/bit-watch.
                 self.timer.irq_imr = self
                     .memory
                     .read_internal_byte(IMEM_IMR_OFFSET)
@@ -2620,6 +2646,133 @@ mod tests {
         );
         let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn perfetto_lcd_events_match_python_shape() {
+        use std::fs;
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("perfetto_lcd.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut lcd = LcdController::new();
+        // Emit an instruction (SetPage) and a data write so both paths are traced.
+        lcd.write(0x02000, 0x81); // SetPage page=1, CS=both, write
+        lcd.write(0x02002, 0xAA); // Data write to both chips
+
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+            let _ = tracer.finish();
+        }
+
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.contains("Display"),
+            "Display track should be present for LCD parity"
+        );
+        assert!(
+            text.contains("LCD_SET_PAGE"),
+            "LCD_SET_PAGE instruction should be traced"
+        );
+        assert!(
+            text.contains("VRAM_Write"),
+            "VRAM_Write data events should be traced"
+        );
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn host_overlay_write_counts_and_traces() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::fs;
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("perfetto_host_overlay.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        let called = Arc::new(AtomicBool::new(false));
+        let flag = called.clone();
+        let mut rt = CoreRuntime::new();
+        rt.set_host_write(move |_addr, _val| {
+            flag.store(true, Ordering::Relaxed);
+        });
+        // Program: MV IMem8, imm8 targeting offset 0xF5 (python_required E-port input).
+        rt.memory.write_external_slice(0, &[0xCC, 0xF5, 0xAA]);
+        rt.state.set_pc(0);
+        let before_writes = rt.memory.memory_write_count();
+
+        rt.step(1).expect("execute host overlay write");
+
+        assert!(called.load(Ordering::Relaxed), "host_write callback should fire");
+        assert!(
+            rt.memory.memory_write_count() > before_writes,
+            "host overlay writes should bump memory_write_count"
+        );
+
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+            let _ = tracer.finish();
+        }
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.to_ascii_lowercase().contains("python_overlay"),
+            "perfetto trace should tag overlay writes with python_overlay space"
+        );
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn reset_intrinsic_preserves_timer_state() {
+        let mut rt = CoreRuntime::new();
+        // Seed timer bookkeeping to verify RESET does not wipe it.
+        rt.timer.irq_total = 5;
+        rt.timer.irq_key = 2;
+        rt.timer.irq_mti = 1;
+        rt.timer.irq_sti = 1;
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+        rt.timer.record_bit_watch_transition("IMR", 0x00, 0x80, 0x0100);
+        rt.timer.record_bit_watch_transition("ISR", 0x00, 0x04, 0x0100);
+
+        // Program RESET at PC=0.
+        rt.memory.write_external_byte(0x0000, 0xFF);
+        rt.state.set_reg(RegName::PC, 0x0000);
+
+        rt.step(1).expect("execute RESET");
+
+        // Timer counters should remain intact.
+        assert_eq!(rt.timer.irq_total, 5);
+        assert_eq!(rt.timer.irq_key, 2);
+        assert_eq!(rt.timer.irq_mti, 1);
+        assert_eq!(rt.timer.irq_sti, 1);
+        assert!(rt.timer.irq_pending, "pending flag should not be cleared by RESET");
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("KEY"));
+        // Bit-watch tables should remain populated.
+        let imr_watch = rt
+            .timer
+            .irq_bit_watch
+            .as_ref()
+            .and_then(|m| m.get("IMR"))
+            .and_then(|v| v.as_object())
+            .expect("IMR bit-watch should persist across RESET");
+        let imr_bit7 = imr_watch.get("7").and_then(|v| v.as_object()).unwrap();
+        assert!(
+            imr_bit7
+                .get("set")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| !arr.is_empty()),
+            "IMR bit-watch set entries should remain after RESET"
+        );
     }
 
     #[test]

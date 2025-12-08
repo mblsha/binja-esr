@@ -21,12 +21,14 @@ pub struct PerfettoTracer {
     irq_timer_track: TrackId,
     irq_key_track: TrackId,
     irq_misc_track: TrackId,
+    display_track: TrackId,
     units_per_instr: u64,
     path: PathBuf,
     imr_seq: u64,
     imr_read_zero: u64,
     imr_read_nonzero: u64,
     irq_seq: u64,
+    display_seq: u64,
     call_depth_counter: TrackId,
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
@@ -66,6 +68,7 @@ impl PerfettoTracer {
         let irq_timer_track = builder.add_thread("irq.timer");
         let irq_key_track = builder.add_thread("irq.key");
         let irq_misc_track = builder.add_thread("irq.misc");
+        let display_track = builder.add_thread("Display");
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
@@ -82,12 +85,14 @@ impl PerfettoTracer {
             irq_timer_track,
             irq_key_track,
             irq_misc_track,
+            display_track,
             units_per_instr: 1,
             path,
             imr_seq: 0,
             imr_read_zero: 0,
             imr_read_nonzero: 0,
             irq_seq: 0,
+            display_seq: 0,
             call_depth_counter,
             mem_read_counter,
             mem_write_counter,
@@ -306,6 +311,38 @@ impl PerfettoTracer {
             mem_alias.add_annotation("op_index", AnnotationValue::UInt(op_idx));
         }
         mem_alias.finish();
+    }
+
+    pub fn record_lcd_event(
+        &mut self,
+        name: &str,
+        addr: u32,
+        value: u8,
+        chip: usize,
+        page: u8,
+        column: u8,
+        pc: Option<u32>,
+        op_index: Option<u64>,
+    ) {
+        let ts = op_index
+            .map(|idx| self.ts(idx, 0))
+            .unwrap_or_else(|| self.display_seq as i64);
+        self.display_seq = self.display_seq.saturating_add(1);
+        let mut ev = self
+            .builder
+            .add_instant_event(self.display_track, name.to_string(), ts);
+        ev.add_annotation("address", AnnotationValue::Pointer(addr as u64));
+        ev.add_annotation("value", AnnotationValue::UInt(value as u64));
+        ev.add_annotation("chip", AnnotationValue::UInt(chip as u64));
+        ev.add_annotation("page", AnnotationValue::UInt(page as u64));
+        ev.add_annotation("column", AnnotationValue::UInt(column as u64));
+        if let Some(pc_val) = pc {
+            ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
+        }
+        if let Some(idx) = op_index {
+            ev.add_annotation("op_index", AnnotationValue::UInt(idx));
+        }
+        ev.finish();
     }
 
     pub fn update_counters(

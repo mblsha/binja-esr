@@ -398,7 +398,7 @@ impl LlamaExecutor {
     fn trace_instr<B: LlamaBus>(
         &self,
         opcode: u8,
-        state: &LlamaState,
+        state: &mut LlamaState,
         bus: &mut B,
         instr_index: u64,
         pc_trace: u32,
@@ -1909,7 +1909,7 @@ impl LlamaExecutor {
         PERF_CURRENT_PC.store(trace_pc, Ordering::Relaxed);
         let _ctx_guard = PerfettoContextGuard;
         // Trace the pre-execution snapshot using the resolved opcode/PC (post-PRE).
-        self.trace_instr(trace_opcode, state, bus, instr_index, trace_pc);
+            self.trace_instr(trace_opcode, state, bus, instr_index, trace_pc);
 
         let result = match entry {
             Some(entry) => self.execute_with(
@@ -2526,10 +2526,11 @@ impl LlamaExecutor {
                 let pc_before = state.pc();
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
                 let current_page = state.pc() & 0xFF0000;
-                // Parity: always use the saved call page when present; Python preserves the
-                // caller page across near CALL/RET, even if execution moved to a different page.
-                // Fall back to the current page only when no saved page exists.
-                let page = state.pop_call_page().unwrap_or(current_page);
+                // Parity: Python RET combines the low 16-bit return with the *current* page, even
+                // if CALL pushed a different page. Pop the saved page for bookkeeping but prefer
+                // the current execution page for the return address.
+                let _ = state.pop_call_page();
+                let page = current_page;
                 let dest = (page | (ret & 0xFFFF)) & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();

@@ -1,6 +1,10 @@
 // PY_SOURCE: pce500/display/hd61202.py:HD61202
 // PY_SOURCE: pce500/display/controller_wrapper.py:HD61202Controller
 
+use crate::{
+    llama::eval::{perfetto_instr_context, perfetto_last_pc},
+    PERFETTO_TRACER,
+};
 use serde_json::{json, Value};
 use std::env;
 
@@ -247,6 +251,9 @@ impl LcdController {
             if env::var("RUST_LCD_DEBUG").is_ok() {
                 println!("[rust-lcd-device] addr=0x{address:05X} value=0x{value:02X}");
             }
+            let ctx = perfetto_instr_context();
+            let op_index = ctx.map(|(idx, _)| idx);
+            let pc = ctx.map(|(_, pc)| pc).or(Some(perfetto_last_pc()));
             match command.cs {
                 ChipSelect::Both => self.cs_both_count = self.cs_both_count.wrapping_add(1),
                 ChipSelect::Left => self.cs_left_count = self.cs_left_count.wrapping_add(1),
@@ -255,8 +262,48 @@ impl LcdController {
             for idx in Self::chip_indices(command.cs) {
                 let chip = &mut self.chips[*idx];
                 match command.kind {
-                    CommandKind::Instruction(instr, data) => chip.write_instruction(instr, data),
-                    CommandKind::Data(data) => chip.write_data(data),
+                    CommandKind::Instruction(instr, data) => {
+                        let column_snapshot = chip.state.y_address;
+                        chip.write_instruction(instr, data);
+                        let name = match instr {
+                            LcdInstruction::OnOff => "LCD_ON_OFF",
+                            LcdInstruction::StartLine => "LCD_START_LINE",
+                            LcdInstruction::SetPage => "LCD_SET_PAGE",
+                            LcdInstruction::SetYAddress => "LCD_SET_Y_ADDRESS",
+                        };
+                        let mut guard = PERFETTO_TRACER.enter();
+                        if let Some(tracer) = guard.as_mut() {
+                            tracer.record_lcd_event(
+                                name,
+                                address & 0x00FF_FFFF,
+                                data,
+                                *idx,
+                                chip.state.page,
+                                column_snapshot,
+                                pc,
+                                op_index,
+                            );
+                        }
+                    }
+                    CommandKind::Data(data) => {
+                        let page_before = chip.state.page;
+                        let column_before = chip.state.y_address;
+                        chip.write_data(data);
+                        let column = (column_before as usize % LCD_WIDTH) as u8;
+                        let mut guard = PERFETTO_TRACER.enter();
+                        if let Some(tracer) = guard.as_mut() {
+                            tracer.record_lcd_event(
+                                "VRAM_Write",
+                                address & 0x00FF_FFFF,
+                                data,
+                                *idx,
+                                page_before,
+                                column,
+                                pc,
+                                op_index,
+                            );
+                        }
+                    }
                 }
             }
         }
