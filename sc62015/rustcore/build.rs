@@ -1,3 +1,4 @@
+// PY_SOURCE: sc62015/pysc62015/emulator.py:build_extension
 use std::env;
 use std::fs;
 use std::path::PathBuf;

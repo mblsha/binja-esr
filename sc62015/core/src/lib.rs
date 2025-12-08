@@ -971,44 +971,31 @@ impl CoreRuntime {
                 let new_cycle = prev_cycle.wrapping_add(1);
                 self.metadata.cycle_count = new_cycle;
                 if !self.timer.in_interrupt {
-                    let _kb_irq_enabled = self.timer.kb_irq_enabled;
-            let kb_irq_enabled = self.timer.kb_irq_enabled;
-            let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
-                &mut self.memory,
-                new_cycle,
-                |mem| {
-                    if let Some(kb) = self.keyboard.as_mut() {
-                        let events = kb.scan_tick(kb_irq_enabled);
-                        if events > 0 {
-                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                        }
-                        (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                    } else {
-                        (0, false, None)
-                    }
-                },
-                Some(self.state.get_reg(RegName::Y)),
-                Some(self.state.get_reg(RegName::PC)),
-            );
-                    let fifo_non_empty = self
-                        .keyboard
-                        .as_ref()
-                        .map(|kb| kb.fifo_len() > 0)
-                        .unwrap_or(false);
-                    if (mti && key_events > 0 && fifo_non_empty) || (sti && fifo_non_empty) {
-                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                            if (isr & 0x04) == 0 {
-                                self.memory.write_internal_byte(0xFC, isr | 0x04);
-                                self.timer.irq_pending = true;
-                                self.timer.irq_source = Some("KEY".to_string());
-                                self.timer.last_fired = self.timer.irq_source.clone();
-                            }
-                        }
-                    }
+                    let kb_irq_enabled = self.timer.kb_irq_enabled;
+                    let (mti, sti, _key_events, _kb_stats) =
+                        self.timer.tick_timers_with_keyboard(
+                            &mut self.memory,
+                            new_cycle,
+                            |mem| {
+                                if let Some(kb) = self.keyboard.as_mut() {
+                                    let events = kb.scan_tick(kb_irq_enabled);
+                                    if events > 0 {
+                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                    }
+                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                                } else {
+                                    (0, false, None)
+                                }
+                            },
+                            Some(self.state.get_reg(RegName::Y)),
+                            Some(self.state.get_reg(RegName::PC)),
+                        );
                     if let Some(isr) = self.memory.read_internal_byte(0xFC) {
                         self.timer.irq_isr = isr;
                     }
                     self.maybe_force_keyboard_activity(mti || sti);
+                    // Reassert KEYI latch only when enabled, mirroring Python HALT wake behavior.
+                    self.refresh_key_irq_latch();
                 }
                 self.deliver_pending_irq()?;
                 continue;
@@ -1056,6 +1043,18 @@ impl CoreRuntime {
                 return Err(CoreError::Other(format!(
                     "execute opcode 0x{opcode:02X}: {e}"
                 )));
+            }
+            if opcode == 0xFF {
+                // RESET intrinsic: clear timer/IRQ mirrors to match Python power-on behavior.
+                self.timer.reset_full(self.metadata.cycle_count);
+                self.timer.irq_imr = self
+                    .memory
+                    .read_internal_byte(IMEM_IMR_OFFSET)
+                    .unwrap_or(self.timer.irq_imr);
+                self.timer.irq_isr = self
+                    .memory
+                    .read_internal_byte(IMEM_ISR_OFFSET)
+                    .unwrap_or(self.timer.irq_isr);
             }
             // IR intrinsic bookkeeping: align timer metadata with Python intrinsic IRQ handling.
             if opcode == 0xFE {

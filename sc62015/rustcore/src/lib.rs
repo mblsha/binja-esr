@@ -1011,6 +1011,16 @@ impl LlamaCpu {
         self.memory_synced = true;
         reset_perf_counters();
         Python::with_gil(|py| self.sync_mirror(py));
+        self.cycles = 0;
+        self.timer.reset_full(self.cycles);
+        self.timer.irq_imr = self
+            .mirror
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        self.timer.irq_isr = self
+            .mirror
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
         Ok(())
     }
 

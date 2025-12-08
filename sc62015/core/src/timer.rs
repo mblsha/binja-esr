@@ -154,6 +154,24 @@ impl TimerContext {
         self.key_irq_latched = false;
     }
 
+    /// Full reset matching power-on behavior: clear pending/stack/bit-watch and counters.
+    pub fn reset_full(&mut self, current_cycle: u64) {
+        self.reset(current_cycle);
+        self.in_interrupt = false;
+        self.delivered_masks.clear();
+        self.next_interrupt_id = 0;
+        self.last_fired = None;
+        self.key_irq_latched = false;
+        self.irq_total = 0;
+        self.irq_key = 0;
+        self.irq_mti = 0;
+        self.irq_sti = 0;
+        self.last_irq_src = None;
+        self.last_irq_pc = None;
+        self.last_irq_vector = None;
+        self.irq_bit_watch = None;
+    }
+
     pub fn snapshot_info(&self) -> (TimerInfo, InterruptInfo) {
         let timer = TimerInfo {
             enabled: self.enabled,
@@ -429,37 +447,6 @@ impl TimerContext {
         (fired_mti, fired_sti)
     }
 
-    fn record_bit_watch(&mut self, reg_name: &str, new_val: u8) {
-        let table = self.irq_bit_watch.get_or_insert_with(serde_json::Map::new);
-        let entry = table
-            .entry(reg_name.to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        let obj = entry
-            .as_object_mut()
-            .expect("bit watch entry should be an object");
-        let prev = obj
-            .get("last")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(new_val as u64) as u8;
-        obj.insert("last".to_string(), serde_json::json!(new_val));
-        if prev == new_val {
-            return;
-        }
-        let (action_key, _val) = if new_val > prev {
-            ("set", new_val)
-        } else {
-            ("clear", new_val)
-        };
-        let arr = obj
-            .entry(action_key)
-            .or_insert_with(|| serde_json::json!([]))
-            .as_array_mut()
-            .expect("bit watch bucket should be an array");
-        arr.push(serde_json::json!(new_val));
-        if arr.len() > 10 {
-            arr.remove(0);
-        }
-    }
 
     /// Tick timers and optionally run a keyboard scan when MTI fires, mirroring Python's _tick_timers.
     /// Returns (mti, sti, key_events).
