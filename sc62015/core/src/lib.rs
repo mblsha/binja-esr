@@ -786,13 +786,14 @@ impl CoreRuntime {
             meta_ptr: *const SnapshotMetadata,
             #[allow(dead_code)]
             state_ptr: *const LlamaState,
+            deny_py_fallback: bool,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
                     let python_required = (*self.mem).requires_python(addr);
-                    let allow_py_fallback = env_flag("LLAMA_ALLOW_PY_FALLBACK");
+                    let allow_py_fallback = !self.deny_py_fallback && env_flag("LLAMA_ALLOW_PY_FALLBACK");
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -828,27 +829,24 @@ impl CoreRuntime {
                                 (*self.mem).bump_read_count();
                                 return val as u32;
                             }
-                        } else if MemoryImage::is_internal(addr) {
-                            let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
-                            // E-port inputs and ONK status mirror host pins when no callback is present.
-                            if offset == 0xF5 {
-                                if let Some(val) = (*self.mem).read_internal_byte(offset) {
-                                    return val as u32;
-                                }
-                            } else if offset == 0xF6 {
-                                if let Some(val) = (*self.mem).read_internal_byte(offset) {
-                                    return val as u32;
-                                }
-                            } else if offset == 0xFF {
-                                let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
-                                if self.onk_level {
-                                    val |= 0x08;
-                                }
-                                return val as u32;
-                            }
                         }
-                        if !allow_py_fallback {
-                            // Fall back to local memory to mirror Python tolerance when host is absent.
+                        // If we reach here, the address requires Python handling but no callback is present.
+                        if self.deny_py_fallback || !allow_py_fallback {
+                            // Emit a perfetto warning so traces surface the divergence and stop execution.
+                            let mut guard = PERFETTO_TRACER.enter();
+                            if let Some(tracer) = guard.as_mut() {
+                                let mut payload = std::collections::HashMap::new();
+                                payload.insert(
+                                    "addr".to_string(),
+                                    perfetto::AnnotationValue::Pointer(addr as u64),
+                                );
+                                payload.insert(
+                                    "pc".to_string(),
+                                    perfetto::AnnotationValue::Pointer(self.pc as u64),
+                                );
+                                tracer.record_irq_event("PythonOverlayMissing", payload);
+                            }
+                            return 0;
                         }
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
@@ -864,17 +862,13 @@ impl CoreRuntime {
                             return val as u32;
                         }
                     }
-                    if python_required {
-                        // Parity: if no host overlay is present, fall back to local memory like Python.
-                        // This mirrors the earlier silent behavior rather than aborting execution.
-                    }
                     (*self.mem).load(addr, bits).unwrap_or(0)
                 }
             }
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
                 unsafe {
                     let python_required = (*self.mem).requires_python(addr);
-                    let allow_py_fallback = env_flag("LLAMA_ALLOW_PY_FALLBACK");
+                    let allow_py_fallback = !self.deny_py_fallback && env_flag("LLAMA_ALLOW_PY_FALLBACK");
                     // Keyboard KOL/KOH/KIL writes.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -938,8 +932,25 @@ impl CoreRuntime {
                             }
                             return;
                         }
-                        if !allow_py_fallback {
-                            // Fall back to local memory to mirror Python tolerance when host is absent.
+                        if self.deny_py_fallback || !allow_py_fallback {
+                            let mut guard = PERFETTO_TRACER.enter();
+                            if let Some(tracer) = guard.as_mut() {
+                                let mut payload = std::collections::HashMap::new();
+                                payload.insert(
+                                    "addr".to_string(),
+                                    perfetto::AnnotationValue::Pointer(addr as u64),
+                                );
+                                payload.insert(
+                                    "pc".to_string(),
+                                    perfetto::AnnotationValue::Pointer(self.pc as u64),
+                                );
+                                payload.insert(
+                                    "value".to_string(),
+                                    perfetto::AnnotationValue::UInt(value as u64),
+                                );
+                                tracer.record_irq_event("PythonOverlayMissing", payload);
+                            }
+                            return;
                         }
                         // No host hook: treat as a host-applied write and emit trace using live executor
                         // context to avoid stale cycle/PC (lets perfetto_instr_context supply PC/op idx).
@@ -1108,6 +1119,7 @@ impl CoreRuntime {
                 pc,
                 meta_ptr: &self.metadata as *const SnapshotMetadata,
                 state_ptr: &self.state as *const LlamaState,
+                deny_py_fallback: true,
             };
             let opcode = bus.load(pc, 8) as u8;
             // Capture WAIT loop count before execution (executor clears I).
