@@ -6,7 +6,6 @@ pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackI
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::time::Instant;
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
 pub struct PerfettoTracer {
@@ -32,8 +31,6 @@ pub struct PerfettoTracer {
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
     cpu_track: TrackId,
-    use_wall_clock: bool,
-    wall_start: Instant,
 }
 
 fn env_flag(name: &str) -> bool {
@@ -48,8 +45,6 @@ impl PerfettoTracer {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
         // Default to Python-compatible layout/timestamps; set PERFETTO_RUST_LAYOUT=1 to opt out.
         let compat_python = !env_flag("PERFETTO_RUST_LAYOUT");
-        // When compat is enabled, align naming/timestamping with Python's legacy/new tracers.
-        let use_wall_clock = compat_python || env_flag("PERFETTO_WALL_CLOCK");
 
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
         let exec_track = builder.add_thread("InstructionTrace");
@@ -87,7 +82,7 @@ impl PerfettoTracer {
             irq_timer_track,
             irq_key_track,
             irq_misc_track,
-            units_per_instr: 10_000,
+            units_per_instr: 1,
             path,
             imr_seq: 0,
             imr_read_zero: 0,
@@ -97,8 +92,6 @@ impl PerfettoTracer {
             mem_read_counter,
             mem_write_counter,
             cpu_track,
-            use_wall_clock,
-            wall_start: Instant::now(),
         }
     }
 
@@ -107,14 +100,9 @@ impl PerfettoTracer {
     }
 
     fn ts(&self, instr_index: u64, substep: u64) -> i64 {
-        if self.use_wall_clock {
-            // Use wall-clock to match Python Perfetto tracer default.
-            self.wall_start.elapsed().as_nanos() as i64 + substep as i64
-        } else {
-            (instr_index
-                .saturating_mul(self.units_per_instr)
-                .saturating_add(substep)) as i64
-        }
+        (instr_index
+            .saturating_mul(self.units_per_instr)
+            .saturating_add(substep)) as i64
     }
 
     #[allow(clippy::too_many_arguments)]

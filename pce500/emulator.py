@@ -129,7 +129,7 @@ def _trace_probe_pc_and_opcode(emu):
 class PCE500Emulator:
     """PC-E500 emulator with integrated machine configuration."""
 
-    _TRACE_UNITS_PER_INSTRUCTION = 10_000
+    _TRACE_UNITS_PER_INSTRUCTION = 1
     _TRACE_REGISTERS = (
         RegisterName.PC,
         RegisterName.A,
