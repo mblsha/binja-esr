@@ -510,89 +510,78 @@ impl TimerContext {
                 .read_internal_byte(ISR_OFFSET)
                 .unwrap_or(self.irq_isr);
             // Perfetto parity: emit a KeyIRQ marker with PC/cycle context.
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let mut payload = HashMap::new();
-                    payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
-                    payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-                    payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
-                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-                    payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
-                    if let Some(y) = y_reg {
-                        payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
-                    }
-                    tracer.record_irq_event("KeyIRQ", payload);
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = HashMap::new();
+                payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
+                payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+                payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
+                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+                if let Some(y) = y_reg {
+                    payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
                 }
+                tracer.record_irq_event("KeyIRQ", payload);
             }
         }
         if key_events == 0 {
             if let Some(stats) = kb_stats.as_ref() {
                 if stats.pressed > 0 {
-                    if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            let mut payload = HashMap::new();
-                            payload.insert(
-                                "pressed".to_string(),
-                                AnnotationValue::UInt(stats.pressed as u64),
-                            );
-                            payload.insert(
-                                "strobe_count".to_string(),
-                                AnnotationValue::UInt(stats.strobe_count as u64),
-                            );
-                            payload
-                                .insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
-                            payload
-                                .insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
-                            payload.insert(
-                                "active_cols".to_string(),
-                                AnnotationValue::Str(format!("{:?}", stats.active_columns)),
-                            );
-                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-                    payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
-                    tracer.record_irq_event("KeyScanEmpty", payload);
+                    let mut guard = PERFETTO_TRACER.enter();
+                    if let Some(tracer) = guard.as_mut() {
+                        let mut payload = HashMap::new();
+                        payload.insert(
+                            "pressed".to_string(),
+                            AnnotationValue::UInt(stats.pressed as u64),
+                        );
+                        payload.insert(
+                            "strobe_count".to_string(),
+                            AnnotationValue::UInt(stats.strobe_count as u64),
+                        );
+                        payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                        payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                        payload.insert(
+                            "active_cols".to_string(),
+                            AnnotationValue::Str(format!("{:?}", stats.active_columns)),
+                        );
+                        payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
+                        payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+                        tracer.record_irq_event("KeyScanEmpty", payload);
+                    }
                 }
-            }
-        }
             }
         }
         // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
         self.key_irq_latched = latch_active;
         // Perfetto parity: emit a scan event regardless of new key events.
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = guard.as_mut() {
-                let mut payload = HashMap::new();
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut payload = HashMap::new();
+            payload.insert(
+                "events".to_string(),
+                AnnotationValue::UInt(key_events as u64),
+            );
+            payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+            payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+            if let Some(stats) = kb_stats.as_ref() {
                 payload.insert(
-                    "events".to_string(),
-                    AnnotationValue::UInt(key_events as u64),
+                    "pressed".to_string(),
+                    AnnotationValue::UInt(stats.pressed as u64),
                 );
                 payload.insert(
-                    "imr".to_string(),
-                    AnnotationValue::UInt(self.irq_imr as u64),
+                    "strobe_count".to_string(),
+                    AnnotationValue::UInt(stats.strobe_count as u64),
                 );
+                payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
                 payload.insert(
-                    "isr".to_string(),
-                    AnnotationValue::UInt(self.irq_isr as u64),
+                    "active_cols".to_string(),
+                    AnnotationValue::Str(format!("{:?}", stats.active_columns)),
                 );
-                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
-                if let Some(stats) = kb_stats.as_ref() {
-                    payload.insert(
-                        "pressed".to_string(),
-                        AnnotationValue::UInt(stats.pressed as u64),
-                    );
-                    payload.insert(
-                        "strobe_count".to_string(),
-                        AnnotationValue::UInt(stats.strobe_count as u64),
-                    );
-                    payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
-                    payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
-                    payload.insert(
-                        "active_cols".to_string(),
-                        AnnotationValue::Str(format!("{:?}", stats.active_columns)),
-                    );
-                }
-                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-                tracer.record_irq_event("KeyScanEvent", payload);
             }
+            payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
+            tracer.record_irq_event("KeyScanEvent", payload);
         }
         // Maintain bit-watch parity even when KEYI was already set prior to the scan.
         if should_assert {
@@ -621,28 +610,23 @@ impl TimerContext {
         _memory: &MemoryImage,
         pc_hint: Option<u32>,
     ) {
-        let mut maybe_guard = PERFETTO_TRACER.try_lock().ok();
-        if maybe_guard.is_none() {
-            maybe_guard = PERFETTO_TRACER.lock().ok();
-        }
-        if let Some(mut guard) = maybe_guard {
-            if let Some(tracer) = guard.as_mut() {
-                let mut payload = std::collections::HashMap::new();
-                payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
-                payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count as u64));
-                if let Some(src) = self.irq_source.as_deref() {
-                    payload.insert("src".to_string(), AnnotationValue::Str(src.to_string()));
-                }
-                if let Some((op_idx, pc)) = crate::llama::eval::perfetto_instr_context() {
-                    payload.insert("op_index".to_string(), AnnotationValue::UInt(op_idx));
-                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
-                } else if let Some(pc) = pc_hint {
-                    payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
-                }
-                // Align event naming with Python tracer ("TimerFired").
-                tracer.record_irq_event("TimerFired", payload);
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut payload = std::collections::HashMap::new();
+            payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+            payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
+            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count as u64));
+            if let Some(src) = self.irq_source.as_deref() {
+                payload.insert("src".to_string(), AnnotationValue::Str(src.to_string()));
             }
+            if let Some((op_idx, pc)) = crate::llama::eval::perfetto_instr_context() {
+                payload.insert("op_index".to_string(), AnnotationValue::UInt(op_idx));
+                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
+            } else if let Some(pc) = pc_hint {
+                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc as u64));
+            }
+            // Align event naming with Python tracer ("TimerFired").
+            tracer.record_irq_event("TimerFired", payload);
         }
     }
 }

@@ -3,7 +3,6 @@
 use crate::{CoreError, Result};
 use std::cell::Cell;
 use std::env;
-use std::sync::{MutexGuard, TryLockError};
 
 pub const INTERNAL_MEMORY_START: u32 = 0x100000;
 pub const ADDRESS_MASK: u32 = 0x00FF_FFFF;
@@ -34,15 +33,8 @@ thread_local! {
     static IMR_READ_SUPPRESS: Cell<bool> = Cell::new(false);
 }
 
-fn perfetto_guard() -> Option<MutexGuard<'static, Option<crate::PerfettoTracer>>> {
-    for _ in 0..8 {
-        match crate::PERFETTO_TRACER.try_lock() {
-            Ok(guard) => return Some(guard),
-            Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) => std::thread::yield_now(),
-        }
-    }
-    None
+fn perfetto_guard() -> crate::PerfettoGuard<'static> {
+    crate::PERFETTO_TRACER.enter()
 }
 
 /// Run `f` with IMR read tracing/logging suppressed. Used for perfetto sampling paths that
@@ -271,31 +263,30 @@ impl MemoryImage {
         if let Some(index) = Self::internal_index(address) {
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
-            if let Some(mut guard) = perfetto_guard() {
-                if let Some(tracer) = guard.as_mut() {
-                    match (cycle, crate::llama::eval::perfetto_instr_context()) {
-                        (Some(cyc), _) => {
-                            tracer.record_mem_write_at_cycle(
-                                cyc,
-                                pc,
-                                address,
-                                value as u32,
-                                "internal",
-                                8,
-                            );
-                        }
-                        (None, Some((op_idx, pc_ctx))) => {
-                            tracer.record_mem_write(
-                                op_idx,
-                                pc_ctx,
-                                address,
-                                value as u32,
-                                "internal",
-                                8,
-                            );
-                        }
-                        _ => {}
+            let mut guard = perfetto_guard();
+            if let Some(tracer) = guard.as_mut() {
+                match (cycle, crate::llama::eval::perfetto_instr_context()) {
+                    (Some(cyc), _) => {
+                        tracer.record_mem_write_at_cycle(
+                            cyc,
+                            pc,
+                            address,
+                            value as u32,
+                            "internal",
+                            8,
+                        );
                     }
+                    (None, Some((op_idx, pc_ctx))) => {
+                        tracer.record_mem_write(
+                            op_idx,
+                            pc_ctx,
+                            address,
+                            value as u32,
+                            "internal",
+                            8,
+                        );
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -380,23 +371,18 @@ impl MemoryImage {
                     );
                 }
             }
-            if let Some(mut guard) = perfetto_guard() {
-                if let Some(tracer) = guard.as_mut() {
-                    let ctx = crate::llama::eval::perfetto_instr_context();
-                    let (op_idx, pc) = ctx.unwrap_or((
-                        crate::llama::eval::perfetto_last_instr_index(),
-                        crate::llama::eval::perfetto_last_pc(),
-                    ));
-                    tracer.record_imr_read(
-                        if op_idx == u64::MAX { None } else { Some(pc) },
-                        value as u8,
-                        if op_idx == u64::MAX {
-                            None
-                        } else {
-                            Some(op_idx)
-                        },
-                    );
-                }
+            let mut guard = perfetto_guard();
+            if let Some(tracer) = guard.as_mut() {
+                let ctx = crate::llama::eval::perfetto_instr_context();
+                let (op_idx, pc) = ctx.unwrap_or((
+                    crate::llama::eval::perfetto_last_instr_index(),
+                    crate::llama::eval::perfetto_last_pc(),
+                ));
+                tracer.record_imr_read(
+                    if op_idx == u64::MAX { None } else { Some(pc) },
+                    value as u8,
+                    if op_idx == u64::MAX { None } else { Some(op_idx) },
+                );
             }
         }
         Some(value)
@@ -411,29 +397,28 @@ impl MemoryImage {
                 self.internal[index] = value;
                 self.dirty_internal
                     .push((INTERNAL_MEMORY_START + offset, value));
-                if let Some(mut guard) = perfetto_guard() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                            .unwrap_or_else(|| {
-                                (crate::llama::eval::perfetto_last_instr_index(), 0)
-                            });
-                        tracer.record_mem_write(
-                            seq,
-                            pc,
+                let mut guard = perfetto_guard();
+                if let Some(tracer) = guard.as_mut() {
+                    let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                        .unwrap_or_else(|| {
+                            (crate::llama::eval::perfetto_last_instr_index(), 0)
+                        });
+                    tracer.record_mem_write(
+                        seq,
+                        pc,
+                        INTERNAL_MEMORY_START + offset,
+                        value as u32,
+                        "internal",
+                        8,
+                    );
+                    // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
+                    if offset == 0xFC && (value & 0x04) != 0 {
+                        tracer.record_keyi_set(
                             INTERNAL_MEMORY_START + offset,
-                            value as u32,
-                            "internal",
-                            8,
+                            value,
+                            Some(seq),
+                            Some(pc),
                         );
-                        // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
-                        if offset == 0xFC && (value & 0x04) != 0 {
-                            tracer.record_keyi_set(
-                                INTERNAL_MEMORY_START + offset,
-                                value,
-                                Some(seq),
-                                Some(pc),
-                            );
-                        }
                     }
                 }
             }
@@ -452,23 +437,18 @@ impl MemoryImage {
                         eprintln!("[imr-read] offset=0x{offset:02X} val=0x{val:02X}");
                     }
                 }
-                if let Some(mut guard) = perfetto_guard() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let ctx = crate::llama::eval::perfetto_instr_context();
-                        let (op_idx, pc) = ctx.unwrap_or((
-                            crate::llama::eval::perfetto_last_instr_index(),
-                            crate::llama::eval::perfetto_last_pc(),
-                        ));
-                        tracer.record_imr_read(
-                            if op_idx == u64::MAX { None } else { Some(pc) },
-                            val,
-                            if op_idx == u64::MAX {
-                                None
-                            } else {
-                                Some(op_idx)
-                            },
-                        );
-                    }
+                let mut guard = perfetto_guard();
+                if let Some(tracer) = guard.as_mut() {
+                    let ctx = crate::llama::eval::perfetto_instr_context();
+                    let (op_idx, pc) = ctx.unwrap_or((
+                        crate::llama::eval::perfetto_last_instr_index(),
+                        crate::llama::eval::perfetto_last_pc(),
+                    ));
+                    tracer.record_imr_read(
+                        if op_idx == u64::MAX { None } else { Some(pc) },
+                        val,
+                        if op_idx == u64::MAX { None } else { Some(op_idx) },
+                    );
                 }
             }
             if (0xF0..=0xF2).contains(&offset) {
@@ -503,20 +483,19 @@ impl MemoryImage {
 
     /// Perfetto/logging helper for KIO (KOL/KOH/KIL) reads, preserving instruction context.
     pub fn log_kio_read(&self, offset: u32, value: u8) {
-        if let Some(mut guard) = perfetto_guard() {
-            if let Some(tracer) = guard.as_mut() {
-                let ctx = crate::llama::eval::perfetto_instr_context();
-                let (op_idx, pc) = ctx.unwrap_or((
-                    crate::llama::eval::perfetto_last_instr_index(),
-                    crate::llama::eval::perfetto_last_pc(),
-                ));
-                tracer.record_kio_read(
-                    if op_idx == u64::MAX { None } else { Some(pc) },
-                    offset as u8,
-                    value,
-                    if op_idx == u64::MAX { None } else { Some(op_idx) },
-                );
-            }
+        let mut guard = perfetto_guard();
+        if let Some(tracer) = guard.as_mut() {
+            let ctx = crate::llama::eval::perfetto_instr_context();
+            let (op_idx, pc) = ctx.unwrap_or((
+                crate::llama::eval::perfetto_last_instr_index(),
+                crate::llama::eval::perfetto_last_pc(),
+            ));
+            tracer.record_kio_read(
+                if op_idx == u64::MAX { None } else { Some(pc) },
+                offset as u8,
+                value,
+                if op_idx == u64::MAX { None } else { Some(op_idx) },
+            );
         }
         if offset == 0xF2 {
             if let Ok(env) = std::env::var("KIL_READ_DEBUG") {

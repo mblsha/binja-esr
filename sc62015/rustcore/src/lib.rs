@@ -679,11 +679,10 @@ impl LlamaBus for LlamaPyBus {
                 let offset = absolute - INTERNAL_MEMORY_START;
                 let mut tracer_ok = false;
                 if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
-                    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
-                            tracer_ok = true;
-                        }
+                    let mut guard = PERFETTO_TRACER.enter();
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
+                        tracer_ok = true;
                     }
                     // Mirror into Python's dispatcher so the main Perfetto trace sees KIO reads.
                     Python::with_gil(|py| {
@@ -752,10 +751,9 @@ impl LlamaBus for LlamaPyBus {
                         .bind(py)
                         .call_method1("trace_kio_from_rust", (offset, value & 0xFF, self.pc));
                 });
-                if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_kio_read(Some(self.pc), offset as u8, value as u8, None);
-                    }
+                let mut guard = PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_kio_read(Some(self.pc), offset as u8, value as u8, None);
                 }
             } else if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET | IMEM_SCR_OFFSET) {
                 // Mirror IRQ register writes into Python tracer for parity runs.
@@ -1490,11 +1488,11 @@ impl LlamaCpu {
         if let Some(p) = path {
             reset_perf_counters();
             let tracer = PerfettoTracer::new(PathBuf::from(p));
-            if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-                *guard = Some(tracer);
-            }
+            let mut guard = PERFETTO_TRACER.enter();
+            *guard = Some(tracer);
             println!("[perfetto-tracer] started at {}", p);
-        } else if let Ok(mut guard) = PERFETTO_TRACER.lock() {
+        } else {
+            let mut guard = PERFETTO_TRACER.enter();
             *guard = None;
             println!("[perfetto-tracer] cleared");
         }
@@ -1502,10 +1500,9 @@ impl LlamaCpu {
     }
 
     fn flush_perfetto(&mut self) -> PyResult<()> {
-        if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-            if let Some(tracer) = guard.take() {
-                let _ = tracer.finish();
-            }
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.take() {
+            let _ = tracer.finish();
         }
         Ok(())
     }
@@ -1575,14 +1572,13 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
 /// Helper to emit an IRQ event from Python into the Rust tracer when available.
 #[pyfunction]
 fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
-    if let Ok(mut guard) = PERFETTO_TRACER.lock() {
-        if let Some(tracer) = guard.as_mut() {
-            let mut converted = HashMap::new();
-            for (k, v) in payload {
-                converted.insert(k, AnnotationValue::UInt(v));
-            }
-            tracer.record_irq_event(name, converted);
+    let mut guard = PERFETTO_TRACER.enter();
+    if let Some(tracer) = guard.as_mut() {
+        let mut converted = HashMap::new();
+        for (k, v) in payload {
+            converted.insert(k, AnnotationValue::UInt(v));
         }
+        tracer.record_irq_event(name, converted);
     }
     Ok(())
 }

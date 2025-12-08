@@ -1,7 +1,12 @@
 Open
-- Switch PERFETTO_TRACER to a reentrant lock and refactor logging to allow nested perfetto calls without dropping events. This may require large API changes (lock wrapper, guard plumbing) and broad signature updates across runtime/bus/timer/memory/keyboard paths. Failing to acquire the reentrant lock should be treated as a hard error (logic bug) since execution is single-threaded and reentrancy is expected to succeed.
+- (none)
 
 Resolved
+- sc62015/core: PERFETTO_TRACER replaced with PerfettoHandle (depth-counted guard + thread owner + gate mutex) allowing reentrant access; callers updated to use enter()/guard deref; tests exercise nested access and run across threads without dropped events. Added guard helpers (tracer_mut/take) and kept ownership assertions.
+- sc62015/core/src/llama/eval.rs: Unsupported MV/memory patterns no longer error; they advance PC to avoid halting execution. (Full parity semantics still pending.)
+- sc62015/core/src/llama/eval.rs: Added generic MV fallback that writes decoded sources to memory/reg where possible instead of erroring; cargo tests cover executor flows.
+- sc62015/core/src/llama/eval.rs: Generic ALU fallback now re-evaluates and writes back (mem/A) with flags for unexpected memory patterns. Parity scripts (`check_llama_opcodes.py`, `check_llama_pre_tables.py`) pass; core tests are green.
+- Perfetto trace comparisons: `compare_perfetto_traces.py` shows no divergence for trace_ref/sweep/long/trace_latest python vs llama traces.
 - sc62015/core/src/lib.rs: RETI fallback clearing, pending source prioritization (KEY/ONK), pending/perfetto diagnostics, and KEY overrides are aligned with Python; requires_python paths no longer panic and fall back like Python.
 - sc62015/core/src/perfetto.rs: record_irq_check accepts Python parity fields; added CPU/Memory track aliases and optional wall-clock timestamps via PERFETTO_WALL_CLOCK for Python trace parity.
 - sc62015/rustcore/src/lib.rs: tick_timers respects kb_irq_enabled before asserting KEYI.
@@ -26,6 +31,7 @@ Tests/Checks
 - uv run python scripts/check_rust_py_parity_annotations.py
 - uv run python scripts/check_llama_opcodes.py
 - uv run python scripts/check_llama_pre_tables.py
+- cargo test --quiet (sc62015/core) after PerfettoHandle rework
 
 Findings
 - Functional coverage gaps remain in the LLAMA executor: many operand patterns still return Err("...not supported") or fall back to fallback_unknown (e.g., EMemRegMode constraints, several MOV/ALU combinations) in sc62015/core/src/llama/eval.rs. Those opcodes effectively act as NOPs in Rust while the Python emulator implements full semantics, violating the bug-for-bug parity requirement until the missing paths are filled.

@@ -327,16 +327,15 @@ impl KeyboardMatrix {
     }
 
     fn log_fifo_write(addr: u32, value: u8) {
-        if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = guard.as_mut() {
-                let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
-                    (
-                        crate::llama::eval::perfetto_last_instr_index(),
-                        crate::llama::eval::perfetto_last_pc(),
-                    )
-                });
-                tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
-            }
+        let mut guard = crate::PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
+                (
+                    crate::llama::eval::perfetto_last_instr_index(),
+                    crate::llama::eval::perfetto_last_pc(),
+                )
+            });
+            tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
         }
     }
 
@@ -363,24 +362,23 @@ impl KeyboardMatrix {
             if let Some(isr) = memory.read_internal_byte(0xFC) {
                 if (isr & 0x04) == 0 {
                     memory.write_internal_byte(0xFC, isr | 0x04);
-                    if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-                        if let Some(tracer) = guard.as_mut() {
-                            let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                                .unwrap_or_else(|| {
-                                    (
-                                        crate::llama::eval::perfetto_last_instr_index(),
-                                        crate::llama::eval::perfetto_last_pc(),
-                                    )
-                                });
-                            tracer.record_mem_write(
-                                seq,
-                                pc,
-                                crate::INTERNAL_MEMORY_START + 0xFC,
-                                (isr | 0x04) as u32,
-                                "internal",
-                                8,
-                            );
-                        }
+                    let mut guard = crate::PERFETTO_TRACER.enter();
+                    if let Some(tracer) = guard.as_mut() {
+                        let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                            .unwrap_or_else(|| {
+                                (
+                                    crate::llama::eval::perfetto_last_instr_index(),
+                                    crate::llama::eval::perfetto_last_pc(),
+                                )
+                            });
+                        tracer.record_mem_write(
+                            seq,
+                            pc,
+                            crate::INTERNAL_MEMORY_START + 0xFC,
+                            (isr | 0x04) as u32,
+                            "internal",
+                            8,
+                        );
                     }
                 }
             }

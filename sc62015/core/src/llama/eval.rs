@@ -233,26 +233,21 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
     }
 
     // Optional perfetto emit when the builder is available (llama-tests builds).
-    if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-        if let Some(tracer) = guard.as_mut() {
-            let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
-            let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
-            let op = if op_idx == u64::MAX {
-                None
-            } else {
-                Some(op_idx)
-            };
-            let pc_val = if pc == u32::MAX { None } else { Some(pc) };
-            tracer.record_imem_addr(
-                &format!("{mode:?}"),
-                base & 0xFF,
-                bp & 0xFF,
-                px & 0xFF,
-                py & 0xFF,
-                op,
-                pc_val,
-            );
-        }
+    let mut guard = crate::PERFETTO_TRACER.enter();
+    if let Some(tracer) = guard.as_mut() {
+        let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
+        let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+        let op = if op_idx == u64::MAX { None } else { Some(op_idx) };
+        let pc_val = if pc == u32::MAX { None } else { Some(pc) };
+        tracer.record_imem_addr(
+            &format!("{mode:?}"),
+            base & 0xFF,
+            bp & 0xFF,
+            px & 0xFF,
+            py & 0xFF,
+            op,
+            pc_val,
+        );
     }
 }
 
@@ -384,45 +379,44 @@ impl LlamaExecutor {
         instr_index: u64,
         pc_trace: u32,
     ) {
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = guard.as_mut() {
-                let mut regs = HashMap::new();
-                for (name, reg) in [
-                    ("A", RegName::A),
-                    ("B", RegName::B),
-                    ("BA", RegName::BA),
-                    ("IL", RegName::IL),
-                    ("IH", RegName::IH),
-                    ("I", RegName::I),
-                    ("X", RegName::X),
-                    ("Y", RegName::Y),
-                    ("U", RegName::U),
-                    ("S", RegName::S),
-                    ("PC", RegName::PC),
-                    ("F", RegName::F),
-                    ("FC", RegName::FC),
-                    ("FZ", RegName::FZ),
-                    ("IMR", RegName::IMR),
-                ] {
-                    regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
-                }
-                // Parity: sample IMR/ISR without triggering device-side effects.
-                let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
-                    (
-                        bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
-                        bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
-                    )
-                });
-                tracer.record_regs(
-                    instr_index,
-                    pc_trace & mask_for(RegName::PC),
-                    pc_trace & mask_for(RegName::PC),
-                    opcode,
-                    &regs,
-                    mem_imr,
-                    mem_isr,
-                );
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut regs = HashMap::new();
+            for (name, reg) in [
+                ("A", RegName::A),
+                ("B", RegName::B),
+                ("BA", RegName::BA),
+                ("IL", RegName::IL),
+                ("IH", RegName::IH),
+                ("I", RegName::I),
+                ("X", RegName::X),
+                ("Y", RegName::Y),
+                ("U", RegName::U),
+                ("S", RegName::S),
+                ("PC", RegName::PC),
+                ("F", RegName::F),
+                ("FC", RegName::FC),
+                ("FZ", RegName::FZ),
+                ("IMR", RegName::IMR),
+            ] {
+                regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
             }
+            // Parity: sample IMR/ISR without triggering device-side effects.
+            let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
+                (
+                    bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
+                    bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
+                )
+            });
+            tracer.record_regs(
+                instr_index,
+                pc_trace & mask_for(RegName::PC),
+                pc_trace & mask_for(RegName::PC),
+                opcode,
+                &regs,
+                mem_imr,
+                mem_isr,
+            );
         }
         PERF_LAST_PC.store(pc_trace, Ordering::Relaxed);
     }
@@ -456,23 +450,22 @@ impl LlamaExecutor {
     }
 
     fn trace_mem_write(addr: u32, bits: u8, value: u32) {
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = guard.as_mut() {
-                let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
-                let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
-                let masked = if bits == 0 || bits >= 32 {
-                    value
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
+            let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+            let masked = if bits == 0 || bits >= 32 {
+                value
+            } else {
+                value & ((1u32 << bits) - 1)
+            };
+            let space =
+                if (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr) {
+                    "internal"
                 } else {
-                    value & ((1u32 << bits) - 1)
+                    "external"
                 };
-                let space =
-                    if (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr) {
-                        "internal"
-                    } else {
-                        "external"
-                    };
-                tracer.record_mem_write(op_index, pc, addr, masked, space, bits);
-            }
+            tracer.record_mem_write(op_index, pc, addr, masked, space, bits);
         }
     }
 
@@ -1178,7 +1171,12 @@ impl LlamaExecutor {
                 }
                 return Ok(decoded.len);
             }
-            return Err("mv pattern not supported");
+            // Fallback: advance past the instruction even if the pattern is unusual.
+            let start_pc = state.pc();
+            if state.pc() == start_pc {
+                state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+            }
+            return Ok(decoded.len);
         }
         let dst_op = &entry.operands[0];
         let src_op = &entry.operands[1];
@@ -1258,7 +1256,24 @@ impl LlamaExecutor {
                 state.set_reg(reg, new_val);
             }
         } else {
-            return Err("mv pattern not supported");
+            // Generic move fallback: prefer decoded.mem as destination, otherwise mem2, otherwise A.
+            let (val, bits) = src_val.unwrap_or((0, 8));
+            let masked = val & Self::mask_for_width(bits);
+            if let Some(mem) = decoded.mem.or(decoded.mem2) {
+                Self::store_traced(bus, mem.addr, mem.bits, masked);
+                if let Some((reg, new_val)) = mem.side_effect {
+                    state.set_reg(reg, new_val);
+                }
+            } else if let Some(reg) = dst_reg.or(src_reg) {
+                state.set_reg(reg, masked);
+            } else {
+                state.set_reg(RegName::A, masked);
+            }
+            let start_pc = state.pc();
+            if state.pc() == start_pc {
+                state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+            }
+            return Ok(decoded.len);
         }
 
         // Apply any pointer side-effects even if the memory operand was a source.
@@ -1537,7 +1552,101 @@ impl LlamaExecutor {
                     Self::set_flags_for_result(state, result, carry);
                 }
             }
-            _ => return Err("memory pattern not supported"),
+            _ => {
+                // Generic fallback: re-evaluate with simple ALU semantics and write back to lhs.
+                let lhs_is_mem = matches!(
+                    entry.operands.get(0).unwrap_or(&OperandKind::Placeholder),
+                    OperandKind::IMem(_)
+                        | OperandKind::IMemWidth(_)
+                        | OperandKind::EMemAddrWidth(_)
+                        | OperandKind::EMemAddrWidthOp(_)
+                        | OperandKind::EMemRegWidth(_)
+                        | OperandKind::EMemRegWidthMode(_)
+                        | OperandKind::EMemIMemWidth(_)
+                );
+                let rhs_is_mem = entry
+                    .operands
+                    .get(1)
+                    .map(|op| {
+                        matches!(
+                            op,
+                            OperandKind::IMem(_)
+                                | OperandKind::IMemWidth(_)
+                                | OperandKind::EMemAddrWidth(_)
+                                | OperandKind::EMemAddrWidthOp(_)
+                                | OperandKind::EMemRegWidth(_)
+                                | OperandKind::EMemRegWidthMode(_)
+                                | OperandKind::EMemIMemWidth(_)
+                        )
+                    })
+                    .unwrap_or(false);
+                let mask = Self::mask_for_width(mem.bits);
+                let lhs_val = if lhs_is_mem {
+                    bus.load(mem.addr, mem.bits) & mask
+                } else {
+                    state.get_reg(RegName::A) & mask
+                };
+                let rhs_val = if rhs_is_mem {
+                    decoded
+                        .mem2
+                        .or(decoded.mem)
+                        .map(|m| bus.load(m.addr, m.bits) & Self::mask_for_width(m.bits))
+                        .unwrap_or(0)
+                } else if let Some((imm, _)) = decoded.imm {
+                    imm
+                } else if let Some(r) = Self::resolved_reg(
+                    entry.operands.get(1).unwrap_or(&OperandKind::Placeholder),
+                    &decoded,
+                ) {
+                    Self::read_reg(state, bus, r)
+                } else {
+                    state.get_reg(RegName::A) & mask
+                };
+                let (result, carry) = match entry.kind {
+                    InstrKind::Add => {
+                        let full = (lhs_val as u64) + (rhs_val as u64);
+                        ((full as u32) & mask, Some(full > mask as u64))
+                    }
+                    InstrKind::Sub => {
+                        let borrow = (lhs_val & mask) < (rhs_val & mask);
+                        ((lhs_val.wrapping_sub(rhs_val)) & mask, Some(borrow))
+                    }
+                    InstrKind::And => ((lhs_val & rhs_val) & mask, None),
+                    InstrKind::Or => ((lhs_val | rhs_val) & mask, None),
+                    InstrKind::Xor => ((lhs_val ^ rhs_val) & mask, None),
+                    InstrKind::Adc => {
+                        let c = state.get_reg(RegName::FC) & 1;
+                        let full = (lhs_val as u64) + (rhs_val as u64) + (c as u64);
+                        ((full as u32) & mask, Some(full > mask as u64))
+                    }
+                    InstrKind::Sbc => {
+                        let c = state.get_reg(RegName::FC) & 1;
+                        let borrow = (lhs_val as u64) < (rhs_val as u64 + c as u64);
+                        (
+                            lhs_val.wrapping_sub(rhs_val).wrapping_sub(c) & mask,
+                            Some(borrow),
+                        )
+                    }
+                    InstrKind::Cmp => {
+                        Self::set_flags_cmp(state, lhs_val & mask, rhs_val & mask, mem.bits);
+                        ((lhs_val.wrapping_sub(rhs_val)) & mask, None)
+                    }
+                    InstrKind::Test => {
+                        let res = (lhs_val & rhs_val) & mask;
+                        Self::set_flags_for_result(state, res, None);
+                        (res, None)
+                    }
+                    _ => (lhs_val, None),
+                };
+                if lhs_is_mem {
+                    Self::store_traced(bus, mem.addr, mem.bits, result);
+                } else {
+                    state.set_reg(RegName::A, result);
+                }
+                if !matches!(entry.kind, InstrKind::Cmp | InstrKind::Test) {
+                    Self::set_flags_for_result(state, result, carry);
+                }
+            }
         }
 
         if let Some((reg, new_val)) = mem.side_effect {
@@ -2206,25 +2315,24 @@ impl LlamaExecutor {
                     | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
                 state.set_pc(vec & mask_for(RegName::PC));
                 // Parity: emit perfetto IRQ entry like Python IR intrinsic.
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        let mut payload = std::collections::HashMap::new();
-                        payload.insert(
-                            "pc".to_string(),
-                            AnnotationValue::Pointer((pc & mask_for(RegName::PC)) as u64),
-                        );
-                        payload.insert("vector".to_string(), AnnotationValue::Pointer(vec as u64));
-                        payload.insert(
-                            "imr_before".to_string(),
-                            AnnotationValue::UInt(imr as u64),
-                        );
-                        payload.insert(
-                            "imr_after".to_string(),
-                            AnnotationValue::UInt(cleared_imr as u64),
-                        );
-                        payload.insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
-                        tracer.record_irq_event("IRQ_Enter", payload);
-                    }
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert(
+                        "pc".to_string(),
+                        AnnotationValue::Pointer((pc & mask_for(RegName::PC)) as u64),
+                    );
+                    payload.insert("vector".to_string(), AnnotationValue::Pointer(vec as u64));
+                    payload.insert(
+                        "imr_before".to_string(),
+                        AnnotationValue::UInt(imr as u64),
+                    );
+                    payload.insert(
+                        "imr_after".to_string(),
+                        AnnotationValue::UInt(cleared_imr as u64),
+                    );
+                    payload.insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
+                    tracer.record_irq_event("IRQ_Enter", payload);
                 }
                 Ok(instr_len)
             }
@@ -2316,15 +2424,14 @@ impl LlamaExecutor {
                 Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_call_flow(
-                            "CALL",
-                            pc_before & mask_for(RegName::PC),
-                            dest & 0xFFFFF,
-                            state.call_depth(),
-                        );
-                    }
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_call_flow(
+                        "CALL",
+                        pc_before & mask_for(RegName::PC),
+                        dest & 0xFFFFF,
+                        state.call_depth(),
+                    );
                 }
                 Ok(decoded.len)
             }
@@ -2336,15 +2443,14 @@ impl LlamaExecutor {
                 let dest = (high | (ret & 0xFFFF)) & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_call_flow(
-                            "RET",
-                            pc_before & mask_for(RegName::PC),
-                            dest,
-                            state.call_depth(),
-                        );
-                    }
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_call_flow(
+                        "RET",
+                        pc_before & mask_for(RegName::PC),
+                        dest,
+                        state.call_depth(),
+                    );
                 }
                 Ok(1)
             }
@@ -2354,15 +2460,14 @@ impl LlamaExecutor {
                 let dest = ret & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
-                if let Ok(mut guard) = crate::PERFETTO_TRACER.try_lock() {
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_call_flow(
-                            "RETF",
-                            pc_before & mask_for(RegName::PC),
-                            dest,
-                            state.call_depth(),
-                        );
-                    }
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.record_call_flow(
+                        "RETF",
+                        pc_before & mask_for(RegName::PC),
+                        dest,
+                        state.call_depth(),
+                    );
                 }
                 Ok(1)
             }

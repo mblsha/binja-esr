@@ -13,9 +13,9 @@ use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::SystemTime;
 use thiserror::Error;
+use std::{cell::{Cell, UnsafeCell}, thread::ThreadId};
 
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
@@ -25,8 +25,95 @@ pub use memory::{
     INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
 };
 pub use perfetto::PerfettoTracer;
+pub struct PerfettoHandle {
+    owner: Cell<Option<ThreadId>>,
+    depth: Cell<usize>,
+    inner: UnsafeCell<Option<PerfettoTracer>>,
+    gate: std::sync::Mutex<()>,
+}
+
+pub struct PerfettoGuard<'a> {
+    handle: &'a PerfettoHandle,
+    gate: Option<std::sync::MutexGuard<'a, ()>>,
+    released: bool,
+}
+
+impl PerfettoHandle {
+    pub const fn new() -> Self {
+        Self {
+            owner: Cell::new(None),
+            depth: Cell::new(0),
+            inner: UnsafeCell::new(None),
+            gate: std::sync::Mutex::new(()),
+        }
+    }
+
+    pub fn enter(&self) -> PerfettoGuard<'_> {
+        let tid = std::thread::current().id();
+        if self.owner.get() == Some(tid) {
+            self.depth.set(self.depth.get().saturating_add(1));
+            return PerfettoGuard {
+                handle: self,
+                gate: None,
+                released: false,
+            };
+        }
+        let gate = self.gate.lock().expect("perfetto gate poisoned");
+        debug_assert!(self.owner.get().is_none());
+        self.owner.set(Some(tid));
+        self.depth.set(1);
+        PerfettoGuard {
+            handle: self,
+            gate: Some(gate),
+            released: false,
+        }
+    }
+}
+
+unsafe impl Sync for PerfettoHandle {}
+
+impl<'a> PerfettoGuard<'a> {
+    pub fn tracer_mut(&mut self) -> Option<&mut PerfettoTracer> {
+        unsafe { &mut *self.handle.inner.get() }.as_mut()
+    }
+
+    pub fn take(&mut self) -> Option<PerfettoTracer> {
+        std::mem::take(unsafe { &mut *self.handle.inner.get() })
+    }
+}
+
+impl<'a> Drop for PerfettoGuard<'a> {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let depth = self.handle.depth.get();
+        if depth <= 1 {
+            self.handle.depth.set(0);
+            self.handle.owner.set(None);
+            // Drop the gate guard on the root acquisition to allow other threads in.
+            drop(self.gate.take());
+        } else {
+            self.handle.depth.set(depth - 1);
+        }
+        self.released = true;
+    }
+}
+
+impl<'a> std::ops::Deref for PerfettoGuard<'a> {
+    type Target = Option<PerfettoTracer>;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.handle.inner.get() }
+    }
+}
+
+impl<'a> std::ops::DerefMut for PerfettoGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.handle.inner.get() }
+    }
+}
 lazy_static::lazy_static! {
-    pub static ref PERFETTO_TRACER: Mutex<Option<PerfettoTracer>> = Mutex::new(None);
+    pub static ref PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new();
 }
 pub use snapshot::{
     load_snapshot, pack_registers, save_snapshot, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC,
@@ -364,27 +451,26 @@ impl CoreRuntime {
             .memory
             .read_internal_byte(IMEM_IMR_OFFSET)
             .unwrap_or(self.timer.irq_imr);
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = guard.as_mut() {
-                let mut payload = std::collections::HashMap::new();
-                payload.insert(
-                    "pc".to_string(),
-                    perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
-                );
-                payload.insert(
-                    "imr".to_string(),
-                    perfetto::AnnotationValue::UInt(self.timer.irq_imr as u64),
-                );
-                payload.insert(
-                    "isr".to_string(),
-                    perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
-                );
-                payload.insert(
-                    "src".to_string(),
-                    perfetto::AnnotationValue::Str("ONK".to_string()),
-                );
-                tracer.record_irq_event("KeyIRQ", payload);
-            }
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            let mut payload = std::collections::HashMap::new();
+            payload.insert(
+                "pc".to_string(),
+                perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
+            );
+            payload.insert(
+                "imr".to_string(),
+                perfetto::AnnotationValue::UInt(self.timer.irq_imr as u64),
+            );
+            payload.insert(
+                "isr".to_string(),
+                perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
+            );
+            payload.insert(
+                "src".to_string(),
+                perfetto::AnnotationValue::Str("ONK".to_string()),
+            );
+            tracer.record_irq_event("KeyIRQ", payload);
         }
     }
 
@@ -425,55 +511,54 @@ impl CoreRuntime {
                 kb.write_fifo_to_memory(&mut self.memory, self.timer.kb_irq_enabled);
             }
             // Emit a scan marker to mirror Python's forced strobe diagnostics.
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let mut payload = std::collections::HashMap::new();
-                    payload.insert(
-                        "events".to_string(),
-                        perfetto::AnnotationValue::UInt(events as u64),
-                    );
-                    payload.insert(
-                        "strobe_count".to_string(),
-                        perfetto::AnnotationValue::UInt(kb.strobe_count().into()),
-                    );
-                    payload.insert(
-                        "imr".to_string(),
-                        perfetto::AnnotationValue::UInt(
-                            self.memory
-                                .read_internal_byte(IMEM_IMR_OFFSET)
-                                .unwrap_or(self.timer.irq_imr) as u64,
-                        ),
-                    );
-                    payload.insert(
-                        "isr".to_string(),
-                        perfetto::AnnotationValue::UInt(
-                            self.memory
-                                .read_internal_byte(IMEM_ISR_OFFSET)
-                                .unwrap_or(self.timer.irq_isr) as u64,
-                        ),
-                    );
-                    payload.insert(
-                        "kol".to_string(),
-                        perfetto::AnnotationValue::UInt(stats.kol as u64),
-                    );
-                    payload.insert(
-                        "koh".to_string(),
-                        perfetto::AnnotationValue::UInt(stats.koh as u64),
-                    );
-                    payload.insert(
-                        "pressed".to_string(),
-                        perfetto::AnnotationValue::UInt(stats.pressed as u64),
-                    );
-                    payload.insert(
-                        "active_cols".to_string(),
-                        perfetto::AnnotationValue::Str(format!("{:?}", kb.active_columns())),
-                    );
-                    payload.insert(
-                        "pc".to_string(),
-                        perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
-                    );
-                    tracer.record_irq_event("KeyScanEvent", payload);
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = std::collections::HashMap::new();
+                payload.insert(
+                    "events".to_string(),
+                    perfetto::AnnotationValue::UInt(events as u64),
+                );
+                payload.insert(
+                    "strobe_count".to_string(),
+                    perfetto::AnnotationValue::UInt(kb.strobe_count().into()),
+                );
+                payload.insert(
+                    "imr".to_string(),
+                    perfetto::AnnotationValue::UInt(
+                        self.memory
+                            .read_internal_byte(IMEM_IMR_OFFSET)
+                            .unwrap_or(self.timer.irq_imr) as u64,
+                    ),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    perfetto::AnnotationValue::UInt(
+                        self.memory
+                            .read_internal_byte(IMEM_ISR_OFFSET)
+                            .unwrap_or(self.timer.irq_isr) as u64,
+                    ),
+                );
+                payload.insert(
+                    "kol".to_string(),
+                    perfetto::AnnotationValue::UInt(stats.kol as u64),
+                );
+                payload.insert(
+                    "koh".to_string(),
+                    perfetto::AnnotationValue::UInt(stats.koh as u64),
+                );
+                payload.insert(
+                    "pressed".to_string(),
+                    perfetto::AnnotationValue::UInt(stats.pressed as u64),
+                );
+                payload.insert(
+                    "active_cols".to_string(),
+                    perfetto::AnnotationValue::Str(format!("{:?}", kb.active_columns())),
+                );
+                payload.insert(
+                    "pc".to_string(),
+                    perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                );
+                tracer.record_irq_event("KeyScanEvent", payload);
             }
         }
         let fifo_non_empty = kb.fifo_len() > 0;
@@ -498,31 +583,30 @@ impl CoreRuntime {
                 .read_internal_byte(IMEM_IMR_OFFSET)
                 .unwrap_or(self.timer.irq_imr);
             self.timer.key_irq_latched = self.timer.key_irq_latched || fifo_non_empty;
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let mut payload = std::collections::HashMap::new();
-                    payload.insert(
-                        "pc".to_string(),
-                        perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
-                    );
-                    payload.insert(
-                        "imr".to_string(),
-                        perfetto::AnnotationValue::UInt(self.timer.irq_imr as u64),
-                    );
-                    payload.insert(
-                        "isr".to_string(),
-                        perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
-                    );
-                    payload.insert(
-                        "src".to_string(),
-                        perfetto::AnnotationValue::Str("KEY".to_string()),
-                    );
-                    payload.insert(
-                        "y".to_string(),
-                        perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64),
-                    );
-                    tracer.record_irq_event("KeyIRQ", payload);
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = std::collections::HashMap::new();
+                payload.insert(
+                    "pc".to_string(),
+                    perfetto::AnnotationValue::Pointer(perfetto_last_pc() as u64),
+                );
+                payload.insert(
+                    "imr".to_string(),
+                    perfetto::AnnotationValue::UInt(self.timer.irq_imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    perfetto::AnnotationValue::UInt(self.timer.irq_isr as u64),
+                );
+                payload.insert(
+                    "src".to_string(),
+                    perfetto::AnnotationValue::Str("KEY".to_string()),
+                );
+                payload.insert(
+                    "y".to_string(),
+                    perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64),
+                );
+                tracer.record_irq_event("KeyIRQ", payload);
             }
         }
     }
@@ -613,22 +697,21 @@ impl CoreRuntime {
                 }
             }
             self.timer.last_fired = self.timer.irq_source.clone();
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
-                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                    tracer.record_irq_check(
-                        "IRQ_PendingArm",
-                        self.state.pc() & ADDRESS_MASK,
-                        imr,
-                        isr,
-                        self.timer.irq_pending,
-                        self.timer.in_interrupt,
-                        self.timer.irq_source.as_deref(),
-                        Some(kil),
-                        Some(imr_reg),
-                    );
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+                let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                tracer.record_irq_check(
+                    "IRQ_PendingArm",
+                    self.state.pc() & ADDRESS_MASK,
+                    imr,
+                    isr,
+                    self.timer.irq_pending,
+                    self.timer.in_interrupt,
+                    self.timer.irq_source.as_deref(),
+                    Some(kil),
+                    Some(imr_reg),
+                );
             }
         }
     }
@@ -795,42 +878,41 @@ impl CoreRuntime {
 
         for _ in 0..instructions {
             // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-                    let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                    let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
-                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                    let pending_src = self
-                        .timer
-                        .irq_source
-                        .as_deref()
-                        .map(str::to_string)
-                        .or_else(|| {
-                            if (isr & ISR_KEYI) != 0 {
-                                Some("KEY".to_string())
-                            } else if (isr & ISR_ONKI) != 0 {
-                                Some("ONK".to_string())
-                            } else if (isr & ISR_MTI) != 0 {
-                                Some("MTI".to_string())
-                            } else if (isr & ISR_STI) != 0 {
-                                Some("STI".to_string())
-                            } else {
-                                None
-                            }
-                        });
-                    tracer.record_irq_check(
-                        "IRQ_Check",
-                        self.state.pc() & ADDRESS_MASK,
-                        imr,
-                        isr,
-                        self.timer.irq_pending,
-                        self.timer.in_interrupt,
-                        pending_src.as_deref(),
-                        Some(kil),
-                        Some(imr_reg),
-                    );
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+                let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+                let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                let pending_src = self
+                    .timer
+                    .irq_source
+                    .as_deref()
+                    .map(str::to_string)
+                    .or_else(|| {
+                        if (isr & ISR_KEYI) != 0 {
+                            Some("KEY".to_string())
+                        } else if (isr & ISR_ONKI) != 0 {
+                            Some("ONK".to_string())
+                        } else if (isr & ISR_MTI) != 0 {
+                            Some("MTI".to_string())
+                        } else if (isr & ISR_STI) != 0 {
+                            Some("STI".to_string())
+                        } else {
+                            None
+                        }
+                    });
+                tracer.record_irq_check(
+                    "IRQ_Check",
+                    self.state.pc() & ADDRESS_MASK,
+                    imr,
+                    isr,
+                    self.timer.irq_pending,
+                    self.timer.in_interrupt,
+                    pending_src.as_deref(),
+                    Some(kil),
+                    Some(imr_reg),
+                );
             }
             // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
             self.refresh_key_irq_latch();
@@ -1066,51 +1148,45 @@ impl CoreRuntime {
                 }
                 // Drop any stale interrupt-stack frames (used only for bookkeeping).
                 let _ = self.timer.interrupt_stack.pop();
-                let mut maybe_guard = PERFETTO_TRACER.try_lock().ok();
-                if maybe_guard.is_none() {
-                    maybe_guard = PERFETTO_TRACER.lock().ok();
-                }
-                if let Some(mut guard) = maybe_guard {
-                    if let Some(tracer) = guard.as_mut() {
-                        let mut payload = std::collections::HashMap::new();
+                let mut guard = PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert(
+                        "pc".to_string(),
+                        perfetto::AnnotationValue::Pointer(pc as u64),
+                    );
+                    payload.insert(
+                        "ret".to_string(),
+                        perfetto::AnnotationValue::Pointer(self.state.pc() as u64),
+                    );
+                    payload.insert(
+                        "src".to_string(),
+                        perfetto::AnnotationValue::Str(
+                            irq_src.unwrap_or_else(|| "".to_string()),
+                        ),
+                    );
+                    if let Some(mask) = clear_mask {
                         payload.insert(
-                            "pc".to_string(),
-                            perfetto::AnnotationValue::Pointer(pc as u64),
+                            "mask".to_string(),
+                            perfetto::AnnotationValue::UInt(mask as u64),
                         );
-                        payload.insert(
-                            "ret".to_string(),
-                            perfetto::AnnotationValue::Pointer(self.state.pc() as u64),
-                        );
-                        payload.insert(
-                            "src".to_string(),
-                            perfetto::AnnotationValue::Str(
-                                irq_src.unwrap_or_else(|| "".to_string()),
-                            ),
-                        );
-                        if let Some(mask) = clear_mask {
-                            payload.insert(
-                                "mask".to_string(),
-                                perfetto::AnnotationValue::UInt(mask as u64),
-                            );
-                        }
-                        payload.insert(
-                            "imr".to_string(),
-                            perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
-                        );
-                        tracer.record_irq_event("IRQ_Return", payload);
                     }
+                    payload.insert(
+                        "imr".to_string(),
+                        perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
+                    );
+                    tracer.record_irq_event("IRQ_Return", payload);
                 }
             }
             self.deliver_pending_irq()?;
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    tracer.update_counters(
-                        self.metadata.instruction_count,
-                        self.state.call_depth(),
-                        self.memory.memory_read_count(),
-                        self.memory.memory_write_count(),
-                    );
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                tracer.update_counters(
+                    self.metadata.instruction_count,
+                    self.state.call_depth(),
+                    self.memory.memory_read_count(),
+                    self.memory.memory_write_count(),
+                );
             }
         }
         Ok(())
@@ -1303,10 +1379,22 @@ impl CoreRuntime {
                     None
                 }
             });
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = guard.as_mut() {
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
+            tracer.record_irq_check(
+                "IRQ_PendingCheck",
+                pc,
+                imr,
+                isr,
+                self.timer.irq_pending,
+                self.timer.in_interrupt,
+                pending_src.as_deref(),
+                Some(kil),
+                Some(imr_reg),
+            );
+            if imr == 0 {
                 tracer.record_irq_check(
-                    "IRQ_PendingCheck",
+                    "IMR_ReadZero",
                     pc,
                     imr,
                     isr,
@@ -1316,19 +1404,6 @@ impl CoreRuntime {
                     Some(kil),
                     Some(imr_reg),
                 );
-                if imr == 0 {
-                    tracer.record_irq_check(
-                        "IMR_ReadZero",
-                        pc,
-                        imr,
-                        isr,
-                        self.timer.irq_pending,
-                        self.timer.in_interrupt,
-                        pending_src.as_deref(),
-                        Some(kil),
-                        Some(imr_reg),
-                    );
-                }
             }
         }
         if !irm_enabled {
@@ -1363,15 +1438,14 @@ impl CoreRuntime {
             .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), pc));
 
         let record_stack_write = |addr: u32, bits: u8, value: u32| {
-            if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-                if let Some(tracer) = guard.as_mut() {
-                    let space = if MemoryImage::is_internal(addr) {
-                        "internal"
-                    } else {
-                        "external"
-                    };
-                    tracer.record_mem_write(op_idx, pc_trace, addr, value, space, bits);
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let space = if MemoryImage::is_internal(addr) {
+                    "internal"
+                } else {
+                    "external"
+                };
+                tracer.record_mem_write(op_idx, pc_trace, addr, value, space, bits);
             }
         };
         // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
@@ -1397,39 +1471,34 @@ impl CoreRuntime {
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
         // Emit a single delivery marker (matches Python tracer).
         if src_name == "KEY" {
-            let mut maybe_guard = PERFETTO_TRACER.try_lock().ok();
-            if maybe_guard.is_none() {
-                maybe_guard = PERFETTO_TRACER.lock().ok();
-            }
-            if let Some(mut guard) = maybe_guard {
-                if let Some(tracer) = guard.as_mut() {
-                    let mut payload = std::collections::HashMap::new();
-                    payload.insert(
-                        "from".to_string(),
-                        perfetto::AnnotationValue::Pointer(pc as u64),
-                    );
-                    payload.insert(
-                        "vector".to_string(),
-                        perfetto::AnnotationValue::Pointer(vec as u64),
-                    );
-                    payload.insert(
-                        "imr".to_string(),
-                        perfetto::AnnotationValue::UInt(imr as u64),
-                    );
-                    payload.insert(
-                        "isr".to_string(),
-                        perfetto::AnnotationValue::UInt(isr as u64),
-                    );
-                    payload.insert(
-                        "s".to_string(),
-                        perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
-                    );
-                    payload.insert(
-                        "src".to_string(),
-                        perfetto::AnnotationValue::Str(src_name.to_string()),
-                    );
-                    tracer.record_irq_event("KeyDeliver", payload);
-                }
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = std::collections::HashMap::new();
+                payload.insert(
+                    "from".to_string(),
+                    perfetto::AnnotationValue::Pointer(pc as u64),
+                );
+                payload.insert(
+                    "vector".to_string(),
+                    perfetto::AnnotationValue::Pointer(vec as u64),
+                );
+                payload.insert(
+                    "imr".to_string(),
+                    perfetto::AnnotationValue::UInt(imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    perfetto::AnnotationValue::UInt(isr as u64),
+                );
+                payload.insert(
+                    "s".to_string(),
+                    perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
+                );
+                payload.insert(
+                    "src".to_string(),
+                    perfetto::AnnotationValue::Str(src_name.to_string()),
+                );
+                tracer.record_irq_event("KeyDeliver", payload);
             }
         }
         self.state.set_pc(vec & ADDRESS_MASK);
@@ -1469,12 +1538,8 @@ impl CoreRuntime {
         }
 
         // Emit an IRQ entry marker for perfetto parity with Python.
-        let mut maybe_guard = PERFETTO_TRACER.try_lock().ok();
-        if maybe_guard.is_none() {
-            maybe_guard = PERFETTO_TRACER.lock().ok();
-        }
-        if let Some(mut guard) = maybe_guard {
-            if let Some(tracer) = guard.as_mut() {
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(tracer) = guard.as_mut() {
                 let mut payload = std::collections::HashMap::new();
                 payload.insert(
                     "pc".to_string(),
@@ -1540,7 +1605,6 @@ impl CoreRuntime {
                 );
                 tracer.record_irq_event("IRQ_Delivered", delivered);
             }
-        }
         Ok(())
     }
 }
@@ -2240,10 +2304,8 @@ mod tests {
         let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_irq_smoke.perfetto-trace");
         let _ = fs::remove_file(&tmp);
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
-        } else {
-            let mut guard = PERFETTO_TRACER.lock().unwrap();
+        {
+            let mut guard = PERFETTO_TRACER.enter();
             *guard = Some(PerfettoTracer::new(tmp.clone()));
         }
 
@@ -2265,11 +2327,7 @@ mod tests {
         rt.step(1).expect("execute RETI");
 
         // Flush perfetto trace to disk before reading.
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = std::mem::take(&mut *guard) {
-                let _ = tracer.finish();
-            }
-        } else if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap()) {
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
             let _ = tracer.finish();
         }
 
@@ -2294,11 +2352,7 @@ mod tests {
             text.contains("src"),
             "trace should encode src annotation for IRQ"
         );
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            let _ = std::mem::take(&mut *guard);
-        } else {
-            let _ = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap());
-        }
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2308,10 +2362,8 @@ mod tests {
         let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_key_force.perfetto-trace");
         let _ = fs::remove_file(&tmp);
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
-        } else {
-            let mut guard = PERFETTO_TRACER.lock().unwrap();
+        {
+            let mut guard = PERFETTO_TRACER.enter();
             *guard = Some(PerfettoTracer::new(tmp.clone()));
         }
 
@@ -2325,11 +2377,7 @@ mod tests {
         std::env::remove_var("FORCE_KEYI_LLAMA");
 
         // Flush perfetto trace to disk before reading.
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = std::mem::take(&mut *guard) {
-                let _ = tracer.finish();
-            }
-        } else if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap()) {
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
             let _ = tracer.finish();
         }
 
@@ -2339,15 +2387,40 @@ mod tests {
     }
 
     #[test]
+    fn perfetto_handle_reentrant_allows_nested() {
+        use std::fs;
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("perfetto_reentrant.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+
+        {
+            let mut root = PERFETTO_TRACER.enter();
+            *root = Some(PerfettoTracer::new(tmp.clone()));
+            {
+                let mut nested = PERFETTO_TRACER.enter();
+                assert!(nested.is_some(), "nested guard should see tracer");
+                if let Some(tracer) = nested.tracer_mut() {
+                    tracer.record_call_flow("NESTED", 0x10, 0x20, 1);
+                }
+            }
+            if let Some(tracer) = root.take() {
+                let _ = tracer.finish();
+            }
+        }
+
+        let size = fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+        assert!(size > 0, "reentrant perfetto trace should be written");
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
     fn perfetto_timer_irq_smoke() {
         use std::fs;
         let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_timer_irq.perfetto-trace");
         let _ = fs::remove_file(&tmp);
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
-        } else {
-            let mut guard = PERFETTO_TRACER.lock().unwrap();
+        {
+            let mut guard = PERFETTO_TRACER.enter();
             *guard = Some(PerfettoTracer::new(tmp.clone()));
         }
 
@@ -2366,11 +2439,7 @@ mod tests {
         rt.step(1).expect("tick timer and deliver MTI");
 
         // Flush perfetto trace to disk before reading.
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(tracer) = std::mem::take(&mut *guard) {
-                let _ = tracer.finish();
-            }
-        } else if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap()) {
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
             let _ = tracer.finish();
         }
 
@@ -2388,11 +2457,7 @@ mod tests {
             text.contains("src"),
             "trace should encode src annotation for MTI"
         );
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            let _ = std::mem::take(&mut *guard);
-        } else {
-            let _ = std::mem::take(&mut *PERFETTO_TRACER.lock().unwrap());
-        }
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2402,31 +2467,13 @@ mod tests {
         let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_irq_check_call.perfetto-trace");
         let _ = fs::remove_file(&tmp);
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
-        } else {
-            let mut guard = PERFETTO_TRACER.lock().unwrap();
+        {
+            let mut guard = PERFETTO_TRACER.enter();
             *guard = Some(PerfettoTracer::new(tmp.clone()));
         }
 
         // Emit diagnostics without running the runtime loop.
-        if let Ok(mut guard) = PERFETTO_TRACER.try_lock() {
-            if let Some(mut tracer) = guard.take() {
-                tracer.record_irq_check(
-                    "IRQ_Check",
-                    0x0100,
-                    0x80,
-                    0x04,
-                    true,
-                    false,
-                    Some("KEY"),
-                    None,
-                    None,
-                );
-                tracer.record_call_flow("CALL", 0x012345, 0x020000, 2);
-                let _ = tracer.finish();
-            }
-        } else if let Some(mut tracer) = PERFETTO_TRACER.lock().unwrap().take() {
+        if let Some(mut tracer) = PERFETTO_TRACER.enter().take() {
             tracer.record_irq_check(
                 "IRQ_Check",
                 0x0100,
