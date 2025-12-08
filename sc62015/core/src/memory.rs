@@ -423,9 +423,6 @@ impl MemoryImage {
             self.memory_writes
                 .set(self.memory_writes.get().saturating_add(1));
             let prev = self.internal[index];
-            if prev == value {
-                return;
-            }
             self.internal[index] = value;
             self.dirty_internal
                 .push((INTERNAL_MEMORY_START + offset, value));
@@ -566,7 +563,7 @@ impl MemoryImage {
             if *slot != byte {
                 *slot = byte;
                 self.dirty_internal
-                    .push((INTERNAL_MEMORY_START + byte_offset as u32, byte));
+                    .push((address + byte_offset as u32, byte));
             }
         }
         self.invoke_imr_isr_hook(imem_offset, prev, value as u8);
@@ -714,6 +711,31 @@ mod tests {
             .load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8)
             .unwrap_or(0xFF);
         assert_eq!(imr, 0x00, "IMR should start cleared like Python reset()");
+    }
+
+    #[test]
+    fn internal_dirty_records_exact_address() {
+        let mut mem = MemoryImage::new();
+        let addr = INTERNAL_MEMORY_START + IMEM_KIL_OFFSET;
+        let _ = mem.store(addr, 8, 0xAB);
+        let dirty = mem.drain_dirty_internal();
+        assert_eq!(dirty, vec![(addr, 0xAB)]);
+    }
+
+    #[test]
+    fn internal_dirty_tracks_multi_byte_writes() {
+        let mut mem = MemoryImage::new();
+        let base = INTERNAL_MEMORY_START + 0x10;
+        let _ = mem.store(base, 16, 0xBEEF);
+        let mut dirty = mem.drain_dirty_internal();
+        dirty.sort_by_key(|(addr, _)| *addr);
+        assert_eq!(
+            dirty,
+            vec![
+                (base, 0xEF),
+                (base + 1, 0xBE),
+            ]
+        );
     }
 
     #[test]
