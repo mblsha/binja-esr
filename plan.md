@@ -10,7 +10,7 @@ Resolved
 - HALT wake parity: ignore KEYI when keyboard IRQs are disabled so HALT only wakes for enabled sources; regression test added (sc62015/core/src/lib.rs).
 - 16-bit CALL/RET now track call pages via call_page_stack so returns land on the original page even if PC page changes (sc62015/core/src/llama/eval.rs).
 - Host overlay fallback writes now use live executor context (perfetto_instr_context) instead of stale cycle/PC to align trace timing with Python when no host_write is installed (sc62015/core/src/lib.rs).
-- Python-only overlays now enforce host callbacks unless LLAMA_ALLOW_PY_FALLBACK=1 (sc62015/core/src/lib.rs); prevents silent divergence on python-required addresses.
+- Python-only overlays now require host callbacks; missing python_required overlays emit Perfetto warnings and hard-error to surface divergence (sc62015/core/src/lib.rs).
 - Unknown opcode advance parity: fallback now consumes the estimated opcode length (including prefixes) so bad bytes don’t desync tracing (sc62015/core/src/llama/eval.rs).
 - sc62015/core: PERFETTO_TRACER replaced with PerfettoHandle (depth-counted guard + thread owner + gate mutex) allowing reentrant access; callers updated to use enter()/guard deref; tests exercise nested access and run across threads without dropped events. Added guard helpers (tracer_mut/take) and kept ownership assertions.
 - sc62015/core/src/llama/eval.rs: Unsupported MV/memory patterns no longer error; they advance PC to avoid halting execution. (Full parity semantics still pending.)
@@ -23,7 +23,7 @@ Resolved
 - sc62015/core/src/llama/eval.rs & perfetto.rs: Prefixed instructions now annotate PC with the post-PRE value to match Python trace comparisons.
 - sc62015/core/src/lib.rs & lcd.rs: IMEM 0x00–0x0F routes to the LCD controller overlay for parity with Python’s internal remap.
 - sc62015/core/src/lib.rs: WAIT no longer spins timers and advances one cycle, matching Python fast-path semantics; regression test added.
-- sc62015/core/src/lib.rs: RuntimeBus requires_python accesses now fall back instead of panicking, matching Python tolerance.
+- sc62015/core/src/lib.rs: RuntimeBus python_required accesses now error when host overlays are absent, with regression coverage for fetch and E-port paths.
 - sc62015/core/src/keyboard.rs, sc62015/core/src/timer.rs, sc62015/rustcore/src/lib.rs: Host-injected matrix events now honor kb_irq_enabled and the KEYI latch is preserved even while keyboard IRQs are disabled so deferred delivery matches Python.
 - sc62015/core/src/memory.rs: Perfetto host writes now use the provided cycle or live executor context only; no more fabricated PC/op_index fallbacks that diverge from Python tracer metadata.
 - sc62015/core/src/timer.rs: TimerFired perfetto events drop the stale last-pc fallback; they use live executor context or pc_hint only, keeping timestamps/PCs aligned with Python traces.

@@ -786,14 +786,13 @@ impl CoreRuntime {
             meta_ptr: *const SnapshotMetadata,
             #[allow(dead_code)]
             state_ptr: *const LlamaState,
-            deny_py_fallback: bool,
+            overlay_fault_addr: Option<u32>,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
                     let python_required = (*self.mem).requires_python(addr);
-                    let allow_py_fallback = !self.deny_py_fallback && env_flag("LLAMA_ALLOW_PY_FALLBACK");
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -831,23 +830,24 @@ impl CoreRuntime {
                             }
                         }
                         // If we reach here, the address requires Python handling but no callback is present.
-                        if self.deny_py_fallback || !allow_py_fallback {
-                            // Emit a perfetto warning so traces surface the divergence and stop execution.
-                            let mut guard = PERFETTO_TRACER.enter();
-                            if let Some(tracer) = guard.as_mut() {
-                                let mut payload = std::collections::HashMap::new();
-                                payload.insert(
-                                    "addr".to_string(),
-                                    perfetto::AnnotationValue::Pointer(addr as u64),
-                                );
-                                payload.insert(
-                                    "pc".to_string(),
-                                    perfetto::AnnotationValue::Pointer(self.pc as u64),
-                                );
-                                tracer.record_irq_event("PythonOverlayMissing", payload);
-                            }
-                            return 0;
+                        // Emit a perfetto warning so traces surface the divergence and stop execution.
+                        let mut guard = PERFETTO_TRACER.enter();
+                        if let Some(tracer) = guard.as_mut() {
+                            let mut payload = std::collections::HashMap::new();
+                            payload.insert(
+                                "addr".to_string(),
+                                perfetto::AnnotationValue::Pointer(addr as u64),
+                            );
+                            payload.insert(
+                                "pc".to_string(),
+                                perfetto::AnnotationValue::Pointer(self.pc as u64),
+                            );
+                            tracer.record_irq_event("PythonOverlayMissing", payload);
                         }
+                        if self.overlay_fault_addr.is_none() {
+                            self.overlay_fault_addr = Some(addr);
+                        }
+                        return 0;
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
                     if MemoryImage::is_internal(addr)
@@ -868,7 +868,6 @@ impl CoreRuntime {
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
                 unsafe {
                     let python_required = (*self.mem).requires_python(addr);
-                    let allow_py_fallback = !self.deny_py_fallback && env_flag("LLAMA_ALLOW_PY_FALLBACK");
                     // Keyboard KOL/KOH/KIL writes.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -932,36 +931,26 @@ impl CoreRuntime {
                             }
                             return;
                         }
-                        if self.deny_py_fallback || !allow_py_fallback {
-                            let mut guard = PERFETTO_TRACER.enter();
-                            if let Some(tracer) = guard.as_mut() {
-                                let mut payload = std::collections::HashMap::new();
-                                payload.insert(
-                                    "addr".to_string(),
-                                    perfetto::AnnotationValue::Pointer(addr as u64),
-                                );
-                                payload.insert(
-                                    "pc".to_string(),
-                                    perfetto::AnnotationValue::Pointer(self.pc as u64),
-                                );
-                                payload.insert(
-                                    "value".to_string(),
-                                    perfetto::AnnotationValue::UInt(value as u64),
-                                );
-                                tracer.record_irq_event("PythonOverlayMissing", payload);
-                            }
-                            return;
+                        let mut guard = PERFETTO_TRACER.enter();
+                        if let Some(tracer) = guard.as_mut() {
+                            let mut payload = std::collections::HashMap::new();
+                            payload.insert(
+                                "addr".to_string(),
+                                perfetto::AnnotationValue::Pointer(addr as u64),
+                            );
+                            payload.insert(
+                                "pc".to_string(),
+                                perfetto::AnnotationValue::Pointer(self.pc as u64),
+                            );
+                            payload.insert(
+                                "value".to_string(),
+                                perfetto::AnnotationValue::UInt(value as u64),
+                            );
+                            tracer.record_irq_event("PythonOverlayMissing", payload);
                         }
-                        // No host hook: treat as a host-applied write and emit trace using live executor
-                        // context to avoid stale cycle/PC (lets perfetto_instr_context supply PC/op idx).
-                        let live_cycle = None;
-                        let live_pc = None;
-                        (*self.mem).apply_host_write_with_cycle(
-                            addr,
-                            value as u8,
-                            live_cycle,
-                            live_pc,
-                        );
+                        if self.overlay_fault_addr.is_none() {
+                            self.overlay_fault_addr = Some(addr);
+                        }
                         return;
                     }
                     let _ = (*self.mem).store(addr, bits, value);
@@ -1119,9 +1108,14 @@ impl CoreRuntime {
                 pc,
                 meta_ptr: &self.metadata as *const SnapshotMetadata,
                 state_ptr: &self.state as *const LlamaState,
-                deny_py_fallback: true,
+                overlay_fault_addr: None,
             };
             let opcode = bus.load(pc, 8) as u8;
+            if let Some(addr) = bus.overlay_fault_addr {
+                return Err(CoreError::Other(format!(
+                    "python overlay required for 0x{addr:06X} but no host handler is installed"
+                )));
+            }
             // Capture WAIT loop count before execution (executor clears I).
             let wait_loops = if opcode == 0xEF {
                 self.state.get_reg(RegName::I) & mask_for(RegName::I)
@@ -1131,6 +1125,11 @@ impl CoreRuntime {
             if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
                 return Err(CoreError::Other(format!(
                     "execute opcode 0x{opcode:02X}: {e}"
+                )));
+            }
+            if let Some(addr) = bus.overlay_fault_addr {
+                return Err(CoreError::Other(format!(
+                    "python overlay required for 0x{addr:06X} but no host handler is installed"
                 )));
             }
             if opcode == 0xFF {
@@ -3021,15 +3020,31 @@ mod tests {
     }
 
     #[test]
-    fn requires_python_without_host_falls_back() {
+    fn requires_python_without_host_errors() {
         let mut rt = CoreRuntime::new();
         // Mark an external range as Python-only and point PC at it.
         rt.memory.set_python_ranges(vec![(0x0000_2000, 0x0000_2000)]);
         rt.state.set_reg(RegName::PC, 0x0000_2000);
         // Seed a NOP opcode so the fetch path is taken.
         rt.memory.write_external_byte(0x0000_2000, 0x00);
-        // Without a host_read overlay, the runtime bus should fall back to local memory.
         let res = rt.step(1);
-        assert!(res.is_ok(), "step should not panic without host overlay");
+        assert!(
+            matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
+            "step should fail when Python-required overlays are missing: {res:?}"
+        );
+    }
+
+    #[test]
+    fn python_overlay_required_imem_access_fails_without_host() {
+        let mut rt = CoreRuntime::new();
+        // Program: MV IMem8, imm8 targeting offset 0xF5 (python_required E-port input).
+        rt.memory.write_external_slice(0, &[0xCC, 0xF5, 0xAA]);
+        rt.state.set_pc(0);
+
+        let res = rt.step(1);
+        assert!(
+            matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
+            "python-required IMEM access should fail without host overlay: {res:?}"
+        );
     }
 }
