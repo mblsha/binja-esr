@@ -2808,6 +2808,34 @@ mod tests {
     }
 
     #[test]
+    fn perfetto_overlay_writes_tag_overlay_name() {
+        use std::fs;
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("perfetto_overlay_name.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut mem = MemoryImage::new();
+        mem.add_ram_overlay(0x8000, 1, "ram_overlay");
+        let _ = mem.store_with_pc(0x8000, 8, 0xAA, Some(0x0123));
+
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+            let _ = tracer.finish();
+        }
+        let buf = fs::read(&tmp).expect("read perfetto overlay trace");
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.contains("ram_overlay"),
+            "overlay name should be present in perfetto output"
+        );
+        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
     fn reset_intrinsic_preserves_timer_state() {
         let mut rt = CoreRuntime::new();
         // Seed timer bookkeeping to verify RESET does not wipe it.
