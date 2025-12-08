@@ -22,7 +22,6 @@ use crate::{
     PERFETTO_TRACER,
 };
 use std::collections::HashMap;
-use std::env;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);

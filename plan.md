@@ -11,7 +11,6 @@ Resolved
 - 16-bit CALL/RET now track call pages via call_page_stack so returns land on the original page even if PC page changes (sc62015/core/src/llama/eval.rs).
 - Host overlay fallback writes now use live executor context (perfetto_instr_context) instead of stale cycle/PC to align trace timing with Python when no host_write is installed (sc62015/core/src/lib.rs).
 - Python-only overlays now enforce host callbacks unless LLAMA_ALLOW_PY_FALLBACK=1 (sc62015/core/src/lib.rs); prevents silent divergence on python-required addresses.
-- WAIT parity guard: LlamaPyBus requires memory.wait_cycles unless LLAMA_ALLOW_MISSING_WAIT_CYCLES=1 (sc62015/rustcore/src/lib.rs), avoiding silent timer drift.
 - Unknown opcode advance parity: fallback now consumes the estimated opcode length (including prefixes) so bad bytes don’t desync tracing (sc62015/core/src/llama/eval.rs).
 - sc62015/core: PERFETTO_TRACER replaced with PerfettoHandle (depth-counted guard + thread owner + gate mutex) allowing reentrant access; callers updated to use enter()/guard deref; tests exercise nested access and run across threads without dropped events. Added guard helpers (tracer_mut/take) and kept ownership assertions.
 - sc62015/core/src/llama/eval.rs: Unsupported MV/memory patterns no longer error; they advance PC to avoid halting execution. (Full parity semantics still pending.)

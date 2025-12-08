@@ -24,7 +24,6 @@ use serde_json::{json, to_value, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::env;
 
 const IMEM_KOL_OFFSET: u32 = 0xF0;
 const IMEM_KOH_OFFSET: u32 = 0xF1;
@@ -61,22 +60,6 @@ fn llama_flag_from_name(name: &str) -> Option<LlamaRegName> {
         "Z" | "FZ" => Some(LlamaRegName::FZ),
         _ => None,
     }
-}
-
-fn require_wait_cycles(memory: &pyo3::Bound<'_, PyAny>) -> PyResult<()> {
-    let allow_missing = env::var("LLAMA_ALLOW_MISSING_WAIT_CYCLES").is_ok();
-    if memory.hasattr("wait_cycles")? {
-        return Ok(());
-    }
-    if allow_missing {
-        eprintln!(
-            "[llama-wait] missing memory.wait_cycles; skipping WAIT timer ticks (LLAMA_ALLOW_MISSING_WAIT_CYCLES=1)"
-        );
-        return Ok(());
-    }
-    Err(PyRuntimeError::new_err(
-        "Rust LLAMA requires memory.wait_cycles for WAIT parity; set LLAMA_ALLOW_MISSING_WAIT_CYCLES=1 to force fallback",
-    ))
 }
 
 #[derive(Clone)]
@@ -729,10 +712,24 @@ struct LlamaPyBus {
     lcd_hook: Option<Py<PyAny>>,
     memory_reads: u64,
     memory_writes: u64,
+    has_wait_cycles: bool,
+    timer: *mut TimerContext,
+    keyboard: *mut KeyboardMatrix,
+    mirror: *mut MemoryImage,
+    cycles_ptr: *mut u64,
 }
 
 impl LlamaPyBus {
-    fn new(py: Python<'_>, memory: &Py<PyAny>, pc: u32) -> Self {
+    fn new(
+        py: Python<'_>,
+        memory: &Py<PyAny>,
+        pc: u32,
+        has_wait_cycles: bool,
+        timer: *mut TimerContext,
+        keyboard: *mut KeyboardMatrix,
+        mirror: *mut MemoryImage,
+        cycles_ptr: *mut u64,
+    ) -> Self {
         // Optional LCD hook used when Python overlays are disabled (pure LLAMA LCD path).
         let lcd_hook = memory
             .getattr(py, "_llama_lcd_write")
@@ -744,6 +741,11 @@ impl LlamaPyBus {
             lcd_hook,
             memory_reads: 0,
             memory_writes: 0,
+            has_wait_cycles,
+            timer,
+            keyboard,
+            mirror,
+            cycles_ptr,
         }
     }
 
@@ -984,13 +986,99 @@ impl LlamaBus for LlamaPyBus {
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
-        // Allow the Python host to advance timers/keyboard during WAIT if it exposes a wait_cycles hook.
-        Python::with_gil(|py| {
-            let bound = self.memory.bind(py);
-            if let Ok(method) = bound.getattr("wait_cycles") {
-                let _ = method.call1((cycles.max(1),));
+        // Prefer the Python host hook; otherwise, tick the Rust timer/keyboard locally for parity.
+        if self.has_wait_cycles {
+            Python::with_gil(|py| {
+                let bound = self.memory.bind(py);
+                let _ = bound.call_method1("wait_cycles", (cycles.max(1),));
+            });
+            return;
+        }
+
+        let ticks = cycles.max(1);
+        unsafe {
+            if self.timer.is_null()
+                || self.keyboard.is_null()
+                || self.mirror.is_null()
+                || self.cycles_ptr.is_null()
+            {
+                return;
             }
-        });
+            let timer = &mut *self.timer;
+            let keyboard = &mut *self.keyboard;
+            let mirror = &mut *self.mirror;
+            let cycles_counter = &mut *self.cycles_ptr;
+
+            // Keep IMR/ISR mirrors up to date before ticking.
+            Python::with_gil(|py| {
+                let bound = self.memory.bind(py);
+                for offset in [IMEM_IMR_OFFSET, IMEM_ISR_OFFSET] {
+                    if let Ok(val) = bound
+                        .call_method1("read_byte", (INTERNAL_MEMORY_START + offset,))
+                        .and_then(|obj| obj.extract::<u8>())
+                    {
+                        let _ = mirror.store(INTERNAL_MEMORY_START + offset, 8, val as u32);
+                    }
+                }
+            });
+
+            for _ in 0..ticks {
+                *cycles_counter = cycles_counter.wrapping_add(1);
+                if let Some(imr) = mirror.read_internal_byte(IMEM_IMR_OFFSET) {
+                    timer.irq_imr = imr;
+                }
+                if let Some(isr) = mirror.read_internal_byte(IMEM_ISR_OFFSET) {
+                    timer.irq_isr = isr;
+                }
+
+                let kb_irq_enabled = timer.kb_irq_enabled;
+                let (mti, sti, key_events, _kb_stats) = timer.tick_timers_with_keyboard(
+                    mirror,
+                    *cycles_counter,
+                    |mem| {
+                        let events = keyboard.scan_tick(kb_irq_enabled);
+                        if events > 0 {
+                            keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
+                        }
+                        (
+                            events,
+                            keyboard.fifo_len() > 0,
+                            Some(keyboard.telemetry()),
+                        )
+                    },
+                    None,
+                    None,
+                );
+                if kb_irq_enabled && (key_events > 0 || keyboard.fifo_len() > 0) {
+                    if let Some(cur) = mirror.read_internal_byte(IMEM_ISR_OFFSET) {
+                        if (cur & 0x04) == 0 {
+                            mirror.write_internal_byte(IMEM_ISR_OFFSET, cur | 0x04);
+                        }
+                    }
+                }
+                if mti || sti {
+                    let mut value = mirror.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    if mti {
+                        value |= 0x01;
+                    }
+                    if sti {
+                        value |= 0x02;
+                    }
+                    mirror.write_internal_byte(IMEM_ISR_OFFSET, value);
+                }
+            }
+
+            // Flush mirror deltas back to the Python memory so traces/state stay aligned.
+            Python::with_gil(|py| {
+                let bound = self.memory.bind(py);
+                for (addr, value) in mirror.drain_dirty_internal() {
+                    let _ = bound.call_method1("write_byte", (addr, value));
+                }
+                for (addr, value) in mirror.drain_dirty() {
+                    let _ = bound.call_method1("write_byte", (addr, value));
+                }
+            });
+        }
     }
 }
 
@@ -1165,13 +1253,22 @@ impl LlamaCpu {
     }
 
     fn execute_instruction(&mut self, py: Python<'_>, address: u32) -> PyResult<(u8, u8)> {
-        {
-            let bound = self.memory.bind(py);
-            require_wait_cycles(&bound)?;
-        }
         self.state.set_pc(address & ADDRESS_MASK);
         let entry_pc = self.state.get_reg(LlamaRegName::PC);
-        let mut bus = LlamaPyBus::new(py, &self.memory, entry_pc);
+        let has_wait_cycles = {
+            let bound = self.memory.bind(py);
+            bound.hasattr("wait_cycles")?
+        };
+        let mut bus = LlamaPyBus::new(
+            py,
+            &self.memory,
+            entry_pc,
+            has_wait_cycles,
+            &mut self.timer,
+            &mut self.keyboard,
+            &mut self.mirror,
+            &mut self.cycles,
+        );
         let opcode = bus.read_byte(entry_pc & ADDRESS_MASK);
         let len = self
             .executor
@@ -1189,10 +1286,7 @@ impl LlamaCpu {
                 "IRQ_Enter",
                 HashMap::from([
                     ("pc", entry_pc & ADDRESS_MASK),
-                    (
-                        "vector",
-                        self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
-                    ),
+                    ("vector", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
                     ("imr", imr as u32),
                     ("isr", isr as u32),
                 ]),
@@ -1770,6 +1864,56 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI bit should be set in ISR");
         assert!(bus.timer.irq_pending, "MTI should mark irq_pending");
+    }
+
+    #[test]
+    fn wait_fallback_ticks_timers_when_wait_cycles_missing() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self):
+        self.data = bytearray(0x100000 + 0x100)
+    def read_byte(self, addr, pc=None):
+        return self.data[addr & 0xFFFFFF]
+    def write_byte(self, addr, val, pc=None):
+        self.data[addr & 0xFFFFFF] = val & 0xFF
+        return None
+"#;
+            let module = PyModule::from_code_bound(py, code, "mem_mod.py", "mem_mod")
+                .expect("mem module");
+            let mem = module.getattr("Mem").unwrap().call0().unwrap();
+
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false).expect("cpu init");
+            // Seed WAIT at PC=0 and configure a fast timer tick.
+            let mem_obj = cpu.memory.clone_ref(py);
+            let bound_before = mem_obj.bind(py);
+            let _ = bound_before.call_method1("write_byte", (0u32, 0xEFu8));
+            cpu.state.set_reg(LlamaRegName::PC, 0);
+            cpu.state.set_reg(LlamaRegName::I, 2);
+            cpu.timer.enabled = true;
+            cpu.timer.mti_period = 1;
+            cpu.timer.reset(0);
+
+            let (_opcode, _len) = cpu.execute_instruction(py, 0).expect("execute WAIT");
+
+            // MTI should have fired during fallback wait_cycles and set IRQ pending.
+            assert!(cpu.timer.irq_pending, "timer should pend after WAIT fallback");
+            let bound_after = mem_obj.bind(py);
+            let isr = bound_after
+                .call_method1("read_byte", (INTERNAL_MEMORY_START + IMEM_ISR_OFFSET,))
+                .and_then(|obj| obj.extract::<u8>())
+                .unwrap_or(0);
+            assert!(
+                isr & 0x01 != 0,
+                "ISR MTI bit should set when wait_cycles fallback ticks timers"
+            );
+            assert_eq!(
+                cpu.state.get_reg(LlamaRegName::I),
+                0,
+                "WAIT should clear I even with fallback"
+            );
+        });
     }
 }
 
