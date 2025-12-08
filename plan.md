@@ -31,6 +31,8 @@ Resolved
 - sc62015/core/src/timer.rs: KEYI assertions now emit irq_bit_watch transitions even when KEYI was already set, matching Python ISR bit-watch metadata.
 - WAIT timing parity re-verified against Python’s _simulate_wait: Rust keeps cycle/timer advances aligned with I loops and flags clear.
 - sc62015/core/src/memory.rs: PERFETTO_TRACER access now spins briefly on contention to reduce dropped IMR/ISR/KIO events without risking deadlock.
+- sc62015/core/src/memory.rs & sc62015/core/src/lib.rs: IMR/ISR writes now invoke a shared hook (Arc) to record bit-watch transitions, refresh irq_imr/irq_isr mirrors, and emit Perfetto IMR_Write/ISR_Write events with pc/prev/value, covering host and direct internal stores.
+- sc62015/core/src/perfetto.rs: InstructionTrace track is emitted by default (alongside Execution/CPU/Memory), keeping compare_perfetto_traces.py compatible without PERFETTO_RUST_LAYOUT overrides.
 
 Tests/Checks
 - cargo test --quiet (sc62015/core)

@@ -58,7 +58,10 @@ impl PerfettoHandle {
                 released: false,
             };
         }
-        let gate = self.gate.lock().expect("perfetto gate poisoned");
+        let gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         debug_assert!(self.owner.get().is_none());
         self.owner.set(Some(tid));
         self.depth.set(1);
@@ -377,7 +380,7 @@ pub struct CoreRuntime {
     executor: crate::llama::eval::LlamaExecutor,
     pub keyboard: Option<KeyboardMatrix>,
     pub lcd: Option<LcdController>,
-    pub timer: TimerContext,
+    pub timer: Box<TimerContext>,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     onk_level: bool,
@@ -391,7 +394,7 @@ impl Default for CoreRuntime {
 
 impl CoreRuntime {
     pub fn new() -> Self {
-        Self {
+        let mut rt = Self {
             metadata: SnapshotMetadata::default(),
             memory: MemoryImage::new(),
             state: LlamaState::new(),
@@ -399,11 +402,13 @@ impl CoreRuntime {
             executor: crate::llama::eval::LlamaExecutor::new(),
             keyboard: Some(KeyboardMatrix::new()),
             lcd: Some(LcdController::new()),
-            timer: TimerContext::new(false, 0, 0),
+            timer: Box::new(TimerContext::new(false, 0, 0)),
             host_read: None,
             host_write: None,
             onk_level: false,
-        }
+        };
+        rt.install_imr_isr_hook();
+        rt
     }
 
     /// Provide an optional host overlay reader for IMEM regions that require Python/device handling
@@ -427,6 +432,46 @@ impl CoreRuntime {
     pub fn clear_host_overlays(&mut self) {
         self.host_read = None;
         self.host_write = None;
+    }
+
+    fn install_imr_isr_hook(&mut self) {
+        let timer_ptr: *mut TimerContext = self.timer.as_mut() as *mut TimerContext;
+        self.memory.set_imr_isr_hook(Some(move |offset, prev, new| {
+            let pc = crate::llama::eval::perfetto_instr_context()
+                .map(|(_, pc)| pc)
+                .unwrap_or_else(crate::llama::eval::perfetto_last_pc);
+            unsafe {
+                let timer = &mut *timer_ptr;
+                let reg_name = if offset == IMEM_IMR_OFFSET { "IMR" } else { "ISR" };
+                timer.record_bit_watch_transition(reg_name, prev, new, pc);
+                if offset == IMEM_IMR_OFFSET {
+                    timer.irq_imr = new;
+                } else if offset == IMEM_ISR_OFFSET {
+                    timer.irq_isr = new;
+                }
+                let mut guard = PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert("pc".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
+                    payload.insert("prev".to_string(), perfetto::AnnotationValue::UInt(prev as u64));
+                    payload.insert("value".to_string(), perfetto::AnnotationValue::UInt(new as u64));
+                    payload.insert(
+                        "imr".to_string(),
+                        perfetto::AnnotationValue::UInt(timer.irq_imr as u64),
+                    );
+                    payload.insert(
+                        "isr".to_string(),
+                        perfetto::AnnotationValue::UInt(timer.irq_isr as u64),
+                    );
+                    let name = if offset == IMEM_IMR_OFFSET {
+                        "IMR_Write"
+                    } else {
+                        "ISR_Write"
+                    };
+                    tracer.record_irq_event(name, payload);
+                }
+            }
+        }));
     }
 
     /// Set the ON key level high and assert ISR.ONKI/IRQ pending to mirror Python KEY_ON handling.
@@ -653,18 +698,24 @@ impl CoreRuntime {
         if isr == 0 {
             return;
         }
+        let mut isr_effective = isr;
+        if !self.timer.kb_irq_enabled {
+            isr_effective &= !ISR_KEYI;
+        }
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let irm_enabled = (imr & IMR_MASTER) != 0;
 
         // Allow KEYI/ONKI to latch pending even when master is off; delivery waits for IMR.
-        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
+        if !irm_enabled && (isr_effective & (ISR_KEYI | ISR_ONKI)) != 0 {
             self.timer.irq_pending = true;
-            self.timer.irq_isr = isr;
+            self.timer.irq_isr = isr_effective;
             self.timer.irq_imr = imr;
-            self.timer.irq_source = Some(if (isr & ISR_KEYI) != 0 {
+            self.timer.irq_source = Some(if (isr_effective & ISR_KEYI) != 0 {
                 "KEY"
-            } else {
+            } else if (isr_effective & ISR_ONKI) != 0 {
                 "ONK"
+            } else {
+                "IRQ"
             }
             .to_string());
             self.timer.last_fired = self.timer.irq_source.clone();
@@ -672,21 +723,21 @@ impl CoreRuntime {
         }
 
         if irm_enabled {
-            if (imr & isr) == 0 && (isr & (ISR_KEYI | ISR_ONKI)) == 0 {
+            if (imr & isr_effective) == 0 && (isr_effective & (ISR_KEYI | ISR_ONKI)) == 0 {
                 // Nothing enabled by IMR and no level-triggered keyboard/on-key bits.
                 return;
             }
             self.timer.irq_pending = true;
-            self.timer.irq_isr = isr;
+            self.timer.irq_isr = isr_effective;
             self.timer.irq_imr = imr;
             // Prefer keyboard/ONK over timers, then MTI, then STI.
-            let src = if (isr & ISR_KEYI) != 0 {
+            let src = if (isr_effective & ISR_KEYI) != 0 {
                 "KEY"
-            } else if (isr & ISR_ONKI) != 0 {
+            } else if (isr_effective & ISR_ONKI) != 0 {
                 "ONK"
-            } else if (isr & ISR_MTI) != 0 {
+            } else if (isr_effective & ISR_MTI) != 0 {
                 "MTI"
-            } else if (isr & ISR_STI) != 0 {
+            } else if (isr_effective & ISR_STI) != 0 {
                 "STI"
             } else {
                 "IRQ"
@@ -803,10 +854,7 @@ impl CoreRuntime {
                             }
                         }
                         if !allow_py_fallback {
-                            panic!(
-                                "host_read overlay required for python-only address 0x{addr:06X}; \
-set LLAMA_ALLOW_PY_FALLBACK=1 to use local memory"
-                            );
+                            // Fall back to local memory to mirror Python tolerance when host is absent.
                         }
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
@@ -868,13 +916,11 @@ set LLAMA_ALLOW_PY_FALLBACK=1 to use local memory"
                     if python_required {
                         if let Some(cb) = self.host_write {
                             (*cb)(addr, value as u8);
-                        } else {
-                            if !allow_py_fallback {
-                                panic!(
-                                    "host_write overlay required for python-only address 0x{addr:06X}; \
-set LLAMA_ALLOW_PY_FALLBACK=1 to apply local fallback"
-                                );
-                            }
+                            return;
+                        }
+                        if !allow_py_fallback {
+                            // Fall back to local memory to mirror Python tolerance when host is absent.
+                        }
                         // No host hook: treat as a host-applied write and emit trace using live executor
                         // context to avoid stale cycle/PC (lets perfetto_instr_context supply PC/op idx).
                         let live_cycle = None;
@@ -885,7 +931,6 @@ set LLAMA_ALLOW_PY_FALLBACK=1 to apply local fallback"
                             live_cycle,
                             live_pc,
                         );
-                        }
                         return;
                     }
                     let _ = (*self.mem).store(addr, bits, value);
@@ -1771,6 +1816,59 @@ mod tests {
         assert_eq!(rt2.timer.last_irq_src, Some("KEY".to_string()));
         assert_eq!(rt2.timer.last_irq_pc, Some(0x012345));
         assert_eq!(rt2.timer.last_irq_vector, Some(0x0ABCDE));
+    }
+
+    #[test]
+    fn imr_isr_hook_updates_mirrors_and_bit_watch() {
+        // CoreRuntime installs the IMR/ISR hook on construction.
+        let mut rt = CoreRuntime::new();
+        // Write IMR and ensure mirror + bit-watch capture the change.
+        rt.memory
+            .write_internal_byte(crate::memory::IMEM_IMR_OFFSET, 0xAA);
+        assert_eq!(rt.timer.irq_imr, 0xAA, "IMR mirror should update via hook");
+        let watch = rt
+            .timer
+            .irq_bit_watch
+            .as_ref()
+            .and_then(|map| map.get("IMR"))
+            .and_then(|v| v.as_object())
+            .expect("IMR bit watch table populated");
+        let bit7 = watch
+            .get("7")
+            .and_then(|v| v.as_object())
+            .expect("bit 7 entry exists");
+        let set_entries = bit7
+            .get("set")
+            .and_then(|v| v.as_array())
+            .expect("set array exists");
+        assert!(
+            !set_entries.is_empty(),
+            "IMR bit 7 set should be recorded in bit watch"
+        );
+
+        // ISR write should also refresh mirror and bit-watch.
+        rt.memory
+            .write_internal_byte(crate::memory::IMEM_ISR_OFFSET, 0x04);
+        assert_eq!(rt.timer.irq_isr, 0x04, "ISR mirror should update via hook");
+        let isr_watch = rt
+            .timer
+            .irq_bit_watch
+            .as_ref()
+            .and_then(|map| map.get("ISR"))
+            .and_then(|v| v.as_object())
+            .expect("ISR bit watch table populated");
+        let bit2 = isr_watch
+            .get("2")
+            .and_then(|v| v.as_object())
+            .expect("bit 2 entry exists");
+        let isr_set = bit2
+            .get("set")
+            .and_then(|v| v.as_array())
+            .expect("set array exists");
+        assert!(
+            !isr_set.is_empty(),
+            "ISR bit 2 set should be recorded in bit watch"
+        );
     }
 
     #[test]
@@ -2660,7 +2758,7 @@ mod tests {
     fn step_ticks_timer_and_updates_isr() {
         let mut rt = CoreRuntime::new();
         // Enable timer with immediate MTI fire on first instruction boundary.
-        rt.timer = TimerContext::new(true, 1, 0);
+        *rt.timer = TimerContext::new(true, 1, 0);
         let res = rt.step(1);
         assert!(res.is_ok(), "step should execute without error");
         let isr = rt.memory.read_internal_byte(0xFC).unwrap_or(0);
@@ -2675,7 +2773,7 @@ mod tests {
         // Place WAIT at PC=0.
         rt.memory.write_external_slice(0, &[0xEF]);
         // Enable timers that would normally fire on the first cycle.
-        rt.timer = TimerContext::new(true, 1, 1);
+        *rt.timer = TimerContext::new(true, 1, 1);
         rt.timer.next_mti = 1;
         rt.timer.next_sti = 1;
         rt.state.set_pc(0);

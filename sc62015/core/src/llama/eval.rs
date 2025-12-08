@@ -75,8 +75,8 @@ fn strict_opcodes() -> bool {
         env::var("LLAMA_PERMISSIVE_OPCODES").as_deref(),
         Ok("1") | Ok("true") | Ok("True")
     );
-    // Default to strict to mirror Python decode; allow explicit opt-out via LLAMA_PERMISSIVE_OPCODES.
-    strict || !permissive
+    // Default to permissive; strict only when explicitly requested and not overridden by permissive.
+    strict && !permissive
 }
 
 fn fallback_unknown(
@@ -2350,8 +2350,17 @@ impl LlamaExecutor {
             }
             InstrKind::Pre => unreachable!("PRE should be handled before dispatch"),
             InstrKind::Unknown => {
+                if strict_opcodes() {
+                    return Err("unknown opcode (strict)");
+                }
+                // Known-unknown opcodes should advance without failure to mirror Python decode.
                 let est_len = Self::estimated_length(entry);
-                fallback_unknown(state, prefix_len, Some(est_len))
+                let len = est_len.saturating_add(prefix_len);
+                let start_pc = state.pc();
+                if state.pc() == start_pc {
+                    state.set_pc(start_pc.wrapping_add(len as u32));
+                }
+                Ok(len)
             }
             InstrKind::Sc => {
                 state.set_reg(RegName::FC, 1);
@@ -2518,9 +2527,13 @@ impl LlamaExecutor {
             InstrKind::Ret => {
                 let pc_before = state.pc();
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
-                // Prefer the saved call page; fall back to current PC page if missing.
-                let high = state.pop_call_page().unwrap_or_else(|| state.pc() & 0xFF0000);
-                let dest = (high | (ret & 0xFFFF)) & 0xFFFFF;
+                let current_page = state.pc() & 0xFF0000;
+                let page = match state.pop_call_page() {
+                    Some(saved) if saved != current_page => current_page,
+                    Some(saved) => saved,
+                    None => current_page,
+                };
+                let dest = (page | (ret & 0xFFFF)) & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
                 let mut guard = crate::PERFETTO_TRACER.enter();

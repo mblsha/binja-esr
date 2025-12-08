@@ -52,33 +52,17 @@ impl PerfettoTracer {
         let use_wall_clock = compat_python || env_flag("PERFETTO_WALL_CLOCK");
 
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
-        let exec_track = if compat_python {
-            builder.add_thread("Execution")
-        } else {
-            builder.add_thread("InstructionTrace")
-        };
-        // Optional visual parity: emit a parallel Execution/CPU track.
-        let timeline_track = if compat_python {
-            builder.add_thread("CPU")
-        } else {
-            builder.add_thread("Execution")
-        };
+        let exec_track = builder.add_thread("InstructionTrace");
+        // Optional visual parity: emit parallel Execution/CPU tracks regardless of layout flag.
+        let timeline_track = builder.add_thread("Execution");
         let mem_track = if compat_python {
             builder.add_thread("Memory")
         } else {
             builder.add_thread("MemoryWrites")
         };
         // Track aliases to match Python tracer naming.
-        let memory_track = if compat_python {
-            mem_track
-        } else {
-            builder.add_thread("Memory")
-        };
-        let cpu_track = if compat_python {
-            timeline_track
-        } else {
-            builder.add_thread("CPU")
-        };
+        let memory_track = builder.add_thread("Memory");
+        let cpu_track = builder.add_thread("CPU");
         let instr_counter_track = builder.add_counter_track("instructions", Some("count"), None);
         let imr_track = builder.add_thread("IMR");
         let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);

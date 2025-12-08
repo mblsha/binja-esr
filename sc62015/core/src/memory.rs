@@ -3,6 +3,9 @@
 use crate::{CoreError, Result};
 use std::cell::Cell;
 use std::env;
+use std::rc::Rc;
+
+type ImrIsrHook = Rc<dyn Fn(u32, u8, u8)>;
 
 pub const INTERNAL_MEMORY_START: u32 = 0x100000;
 pub const ADDRESS_MASK: u32 = 0x00FF_FFFF;
@@ -66,6 +69,7 @@ pub struct MemoryImage {
     keyboard_bridge: bool,
     memory_reads: Cell<u64>,
     memory_writes: Cell<u64>,
+    imr_isr_hook: Option<ImrIsrHook>,
 }
 
 impl Default for MemoryImage {
@@ -93,6 +97,28 @@ impl MemoryImage {
             keyboard_bridge: false,
             memory_reads: Cell::new(0),
             memory_writes: Cell::new(0),
+            imr_isr_hook: None,
+        }
+    }
+
+    /// Install a callback invoked whenever IMR/ISR are written. Used to keep IRQ bit-watch,
+    /// mirror fields, and Perfetto diagnostics in sync with Python.
+    pub fn set_imr_isr_hook<F>(&mut self, hook: Option<F>)
+    where
+        F: Fn(u32, u8, u8) + 'static,
+    {
+        self.imr_isr_hook = hook.map(|h| Rc::new(h) as ImrIsrHook);
+    }
+
+    fn invoke_imr_isr_hook(&self, offset: u32, prev: u8, new: u8) {
+        if offset != IMEM_IMR_OFFSET && offset != IMEM_ISR_OFFSET {
+            return;
+        }
+        if prev == new {
+            return;
+        }
+        if let Some(hook) = self.imr_isr_hook.as_ref() {
+            hook.as_ref()(offset, prev, new);
         }
     }
 
@@ -261,8 +287,11 @@ impl MemoryImage {
             .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
         if let Some(index) = Self::internal_index(address) {
+            let offset = address - INTERNAL_MEMORY_START;
+            let prev = self.internal[index];
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
+            self.invoke_imr_isr_hook(offset, prev, value);
             let mut guard = perfetto_guard();
             if let Some(tracer) = guard.as_mut() {
                 match (cycle, crate::llama::eval::perfetto_instr_context()) {
@@ -393,33 +422,36 @@ impl MemoryImage {
             let index = offset as usize;
             self.memory_writes
                 .set(self.memory_writes.get().saturating_add(1));
-            if self.internal[index] != value {
-                self.internal[index] = value;
-                self.dirty_internal
-                    .push((INTERNAL_MEMORY_START + offset, value));
-                let mut guard = perfetto_guard();
-                if let Some(tracer) = guard.as_mut() {
-                    let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                        .unwrap_or_else(|| {
-                            (crate::llama::eval::perfetto_last_instr_index(), 0)
-                        });
-                    tracer.record_mem_write(
-                        seq,
-                        pc,
+            let prev = self.internal[index];
+            if prev == value {
+                return;
+            }
+            self.internal[index] = value;
+            self.dirty_internal
+                .push((INTERNAL_MEMORY_START + offset, value));
+            self.invoke_imr_isr_hook(offset, prev, value);
+            let mut guard = perfetto_guard();
+            if let Some(tracer) = guard.as_mut() {
+                let (seq, pc) = crate::llama::eval::perfetto_instr_context()
+                    .unwrap_or_else(|| {
+                        (crate::llama::eval::perfetto_last_instr_index(), 0)
+                    });
+                tracer.record_mem_write(
+                    seq,
+                    pc,
+                    INTERNAL_MEMORY_START + offset,
+                    value as u32,
+                    "internal",
+                    8,
+                );
+                // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
+                if offset == 0xFC && (value & 0x04) != 0 {
+                    tracer.record_keyi_set(
                         INTERNAL_MEMORY_START + offset,
-                        value as u32,
-                        "internal",
-                        8,
+                        value,
+                        Some(seq),
+                        Some(pc),
                     );
-                    // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
-                    if offset == 0xFC && (value & 0x04) != 0 {
-                        tracer.record_keyi_set(
-                            INTERNAL_MEMORY_START + offset,
-                            value,
-                            Some(seq),
-                            Some(pc),
-                        );
-                    }
                 }
             }
         }
@@ -526,15 +558,18 @@ impl MemoryImage {
         if index + bytes > self.internal.len() {
             return None;
         }
-        for offset in 0..bytes {
-            let byte = ((value >> (offset * 8)) & 0xFF) as u8;
-            let slot = &mut self.internal[index + offset];
+        let imem_offset = address - INTERNAL_MEMORY_START;
+        let prev = self.internal[index];
+        for byte_offset in 0..bytes {
+            let byte = ((value >> (byte_offset * 8)) & 0xFF) as u8;
+            let slot = &mut self.internal[index + byte_offset];
             if *slot != byte {
                 *slot = byte;
                 self.dirty_internal
-                    .push((INTERNAL_MEMORY_START + offset as u32, byte));
+                    .push((INTERNAL_MEMORY_START + byte_offset as u32, byte));
             }
         }
+        self.invoke_imr_isr_hook(imem_offset, prev, value as u8);
         Some(())
     }
 
