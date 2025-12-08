@@ -29,6 +29,13 @@ pub const IMEM_SCR_OFFSET: u32 = 0xFD;
 pub const IMEM_LCC_OFFSET: u32 = 0xFE;
 pub const IMEM_SSR_OFFSET: u32 = 0xFF;
 const OVERLAY_LOG_LIMIT: usize = 256;
+const MEMORY_CARD_RANGES: &[(usize, u32, u32, &str)] = &[
+    // (size bytes, start, end, perfetto thread)
+    (8192, 0x040000, 0x041FFF, "Memory_Card"),
+    (16384, 0x040000, 0x043FFF, "Memory_Card"),
+    (32768, 0x040000, 0x047FFF, "Memory_Card"),
+    (65536, 0x040000, 0x04FFFF, "Memory_Card"),
+];
 
 fn canonical_address(address: u32) -> u32 {
     address & ADDRESS_MASK
@@ -255,6 +262,68 @@ impl MemoryImage {
 
     pub fn remove_overlay(&mut self, name: &str) {
         self.overlays.retain(|ov| ov.name != name);
+    }
+
+    pub fn add_ram_overlay(&mut self, start: u32, size: usize, name: &str) {
+        if size == 0 {
+            return;
+        }
+        let end = start.saturating_add(size.saturating_sub(1) as u32);
+        self.remove_overlay(name);
+        self.add_overlay(MemoryOverlay {
+            start,
+            end,
+            name: name.to_string(),
+            data: Some(vec![0u8; size]),
+            read_only: false,
+            read_handler: None,
+            write_handler: None,
+            perfetto_thread: Some("Memory_RAM".to_string()),
+        });
+    }
+
+    pub fn add_rom_overlay(&mut self, start: u32, data: &[u8], name: &str) {
+        if data.is_empty() {
+            return;
+        }
+        let end = start.saturating_add(data.len().saturating_sub(1) as u32);
+        self.remove_overlay(name);
+        self.add_overlay(MemoryOverlay {
+            start,
+            end,
+            name: name.to_string(),
+            data: Some(data.to_vec()),
+            read_only: true,
+            read_handler: None,
+            write_handler: None,
+            perfetto_thread: Some("Memory_ROM".to_string()),
+        });
+    }
+
+    pub fn load_memory_card(&mut self, data: &[u8]) -> Result<()> {
+        if data.is_empty() {
+            return Err(CoreError::Other("memory card data is empty".to_string()));
+        }
+        let size = data.len();
+        let Some((_, start, end, thread)) =
+            MEMORY_CARD_RANGES.iter().find(|(len, _, _, _)| *len == size)
+        else {
+            return Err(CoreError::Other(format!(
+                "unsupported memory card size: {size} bytes"
+            )));
+        };
+        self.remove_overlay("memory_card");
+        self.add_overlay(MemoryOverlay {
+            start: *start,
+            end: *end,
+            name: "memory_card".to_string(),
+            data: Some(data.to_vec()),
+            read_only: true,
+            read_handler: None,
+            write_handler: None,
+            perfetto_thread: Some(thread.to_string()),
+        });
+        Ok(())
     }
 
     pub fn clear_overlay_logs(&self) {
@@ -502,6 +571,22 @@ impl MemoryImage {
                 };
                 if ok {
                     self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
+                    let mut guard = perfetto_guard();
+                    if let Some(tracer) = guard.as_mut() {
+                        if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
+                        {
+                            tracer.record_mem_write(
+                                op_idx,
+                                pc_ctx,
+                                addr,
+                                byte as u32,
+                                &name,
+                                8,
+                            );
+                        } else {
+                            tracer.record_mem_write_at_cycle(0, pc, addr, byte as u32, &name, 8);
+                        }
+                    }
                     handled = true;
                     break;
                 }
@@ -1043,5 +1128,54 @@ mod tests {
         let value = mem.load_with_pc(0x5000, 8, Some(0x0300));
         assert_eq!(value, Some(0x55));
         assert!(mem.overlay_read_log().is_empty());
+    }
+
+    #[test]
+    fn add_ram_overlay_initializes_and_orders() {
+        let mut mem = MemoryImage::new();
+        mem.add_ram_overlay(0x6000, 4, "ram1");
+        assert_eq!(mem.overlays.len(), 1);
+        assert_eq!(mem.overlays[0].name, "ram1");
+        assert_eq!(mem.overlays[0].data.as_ref().unwrap().len(), 4);
+        // Verify overlay read returns zeroed content and logs.
+        let val = mem.load_with_pc(0x6000, 8, Some(0x0400)).unwrap();
+        assert_eq!(val, 0x00);
+        assert_eq!(mem.overlay_read_log().len(), 1);
+    }
+
+    #[test]
+    fn add_rom_overlay_installs_readonly_data() {
+        let mut mem = MemoryImage::new();
+        mem.add_rom_overlay(0x7000, &[0x12, 0x34], "rom1");
+        assert_eq!(mem.overlays.len(), 1);
+        let val = mem.load_with_pc(0x7001, 8, None);
+        assert_eq!(val, Some(0x34));
+        // Write should be handled (read_only) but not mutate data.
+        let _ = mem.store_with_pc(0x7000, 8, 0xFF, Some(0x0500));
+        assert_eq!(mem.overlays[0].data.as_ref().unwrap()[0], 0x12);
+    }
+
+    #[test]
+    fn load_memory_card_maps_sizes() {
+        let mut mem = MemoryImage::new();
+        let data = vec![0xAA; 8192];
+        mem.load_memory_card(&data).expect("load 8KB card");
+        let card = mem
+            .overlays
+            .iter()
+            .find(|ov| ov.name == "memory_card")
+            .expect("memory card overlay");
+        assert_eq!(card.start, 0x040000);
+        assert_eq!(card.end, 0x041FFF);
+        assert_eq!(card.data.as_ref().unwrap().len(), 8192);
+        let val = mem.load_with_pc(0x040000, 8, None);
+        assert_eq!(val, Some(0xAA));
+    }
+
+    #[test]
+    fn load_memory_card_rejects_bad_sizes() {
+        let mut mem = MemoryImage::new();
+        let err = mem.load_memory_card(&[0xFF; 1024]);
+        assert!(err.is_err());
     }
 }
