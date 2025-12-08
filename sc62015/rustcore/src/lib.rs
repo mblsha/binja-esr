@@ -1394,6 +1394,28 @@ impl LlamaCpu {
                 &mut self.mirror,
                 self.timer.kb_irq_enabled,
             );
+        if self.timer.kb_irq_enabled && (events > 0 || self.keyboard.fifo_len() > 0) {
+            // Mirror Python scheduler: latch KEYI and pending IRQ immediately.
+            self.timer.irq_pending = true;
+            self.timer.irq_source = Some("KEY".to_string());
+            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.irq_isr = self
+                .mirror
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(self.timer.irq_isr);
+            self.timer.irq_imr = self
+                .mirror
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.timer.irq_imr);
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = HashMap::new();
+                payload.insert("imr".to_string(), AnnotationValue::UInt(self.timer.irq_imr as u64));
+                payload.insert("isr".to_string(), AnnotationValue::UInt(self.timer.irq_isr as u64));
+                payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
+                tracer.record_irq_event("KeyIRQ", payload);
+            }
+        }
         self.sync_mirror(py);
         Ok(events > 0)
     }
@@ -1458,6 +1480,19 @@ impl LlamaCpu {
                 &mut self.mirror,
                 self.timer.kb_irq_enabled,
             );
+        if self.timer.kb_irq_enabled && self.keyboard.fifo_len() > 0 {
+            self.timer.irq_pending = true;
+            self.timer.irq_source = Some("KEY".to_string());
+            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.irq_isr = self
+                .mirror
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(self.timer.irq_isr);
+            self.timer.irq_imr = self
+                .mirror
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.timer.irq_imr);
+        }
         self.sync_mirror(py);
         Ok(events > 0)
     }

@@ -159,6 +159,24 @@ def test_onk_press_sets_pending_parity():
     assert py_events == rs_events
 
 
+def test_keyboard_press_helper_sets_pending_parity():
+    py_backend, rust_backend = _init_backends()
+    assert py_backend.press_matrix_code(0x00)
+    assert rust_backend.press_matrix_code(0x00)
+
+    py_snap = py_backend.snapshot()
+    rs_snap = rust_backend.snapshot()
+
+    assert py_snap.isr & 0x04 == rs_snap.isr & 0x04 == 0x04
+    assert py_snap.metadata.get("irq_pending") is True
+    assert rs_snap.metadata.get("irq_pending") is True
+    assert py_snap.metadata.get("irq_source") == rs_snap.metadata.get("irq_source") == "KEY"
+
+    py_events = [(e.kind, e.address, e.value) for e in py_backend.drain_events()]
+    rs_events = [(e.kind, e.address, e.value) for e in rust_backend.drain_events()]
+    assert py_events == rs_events
+
+
 def test_external_wraparound_parity():
     py_backend, rust_backend = _init_backends()
     vectors = [

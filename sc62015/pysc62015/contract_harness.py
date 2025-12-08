@@ -97,6 +97,8 @@ class ContractBackend(Protocol):
 
     def release_on_key(self) -> None: ...  # pragma: no cover
 
+    def press_matrix_code(self, code: int, *, release: bool = False) -> bool: ...  # pragma: no cover
+
 
 class PythonContractBackend:
     """Adapter over the Python memory bus/peripherals."""
@@ -201,6 +203,33 @@ class PythonContractBackend:
         self.write(ssr_addr, ssr & ~0x08)
         isr = self.read(isr_addr)
         self.write(isr_addr, isr & ~0x08)
+        self._irq_pending = False
+        self._irq_source = None
+
+    def press_matrix_code(self, code: int, *, release: bool = False) -> bool:
+        """Inject a matrix event directly (used to mirror Rust bridge helpers)."""
+
+        # Find the key name matching this matrix code.
+        key_code = None
+        matrix = self._keyboard._matrix  # type: ignore[attr-defined]
+        for name, state in matrix._key_states.items():  # type: ignore[attr-defined]
+            if state.matrix_code == (code & 0x7F):
+                key_code = name
+                break
+        if key_code is None:
+            return False
+
+        if not matrix.inject_event(key_code, release=release):  # type: ignore[attr-defined]
+            return False
+
+        # Mirror scheduler effects: assert KEYI and mark pending.
+        isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET
+        isr = self.read(isr_addr)
+        if matrix.scan_enabled:  # type: ignore[attr-defined]
+            self.write(isr_addr, isr | 0x04)
+            self._irq_pending = True
+            self._irq_source = "KEY"
+        return True
 
     def snapshot(self) -> ContractSnapshot:
         internal = bytes(self.memory.get_internal_memory_bytes())
@@ -384,6 +413,11 @@ class RustContractBackend:
 
     def release_on_key(self) -> None:
         self._impl.release_on_key()
+
+    def press_matrix_code(self, code: int, *, release: bool = False) -> bool:
+        if release:
+            return bool(self._impl.keyboard_release_matrix_code(code))
+        return bool(self._impl.keyboard_press_matrix_code(code))
 
     def set_python_ranges(self, ranges: list[tuple[int, int]]) -> None:
         self._impl.set_python_ranges(ranges)
