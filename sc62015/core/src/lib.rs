@@ -747,6 +747,7 @@ impl CoreRuntime {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
                     let python_required = (*self.mem).requires_python(addr);
+                    let allow_py_fallback = env_flag("LLAMA_ALLOW_PY_FALLBACK");
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -801,6 +802,12 @@ impl CoreRuntime {
                                 return val as u32;
                             }
                         }
+                        if !allow_py_fallback {
+                            panic!(
+                                "host_read overlay required for python-only address 0x{addr:06X}; \
+set LLAMA_ALLOW_PY_FALLBACK=1 to use local memory"
+                            );
+                        }
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
                     if MemoryImage::is_internal(addr)
@@ -824,6 +831,8 @@ impl CoreRuntime {
             }
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
                 unsafe {
+                    let python_required = (*self.mem).requires_python(addr);
+                    let allow_py_fallback = env_flag("LLAMA_ALLOW_PY_FALLBACK");
                     // Keyboard KOL/KOH/KIL writes.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -856,27 +865,26 @@ impl CoreRuntime {
                         let _ = (*self.mem).store(addr, bits, value);
                         return;
                     }
-                    if (*self.mem).requires_python(addr) {
+                    if python_required {
                         if let Some(cb) = self.host_write {
                             (*cb)(addr, value as u8);
                         } else {
-                            // No host hook: treat as a host-applied write and emit trace with live cycle/PC to match Python.
-                            let live_cycle = if self.meta_ptr.is_null() {
-                                self.cycle
-                            } else {
-                                (*self.meta_ptr).cycle_count
-                            };
-                            let live_pc = if self.state_ptr.is_null() {
-                                self.pc
-                            } else {
-                                (*self.state_ptr).get_reg(RegName::PC) & ADDRESS_MASK
-                            };
-                            (*self.mem).apply_host_write_with_cycle(
-                                addr,
-                                value as u8,
-                                Some(live_cycle),
-                                Some(live_pc),
-                            );
+                            if !allow_py_fallback {
+                                panic!(
+                                    "host_write overlay required for python-only address 0x{addr:06X}; \
+set LLAMA_ALLOW_PY_FALLBACK=1 to apply local fallback"
+                                );
+                            }
+                        // No host hook: treat as a host-applied write and emit trace using live executor
+                        // context to avoid stale cycle/PC (lets perfetto_instr_context supply PC/op idx).
+                        let live_cycle = None;
+                        let live_pc = None;
+                        (*self.mem).apply_host_write_with_cycle(
+                            addr,
+                            value as u8,
+                            live_cycle,
+                            live_pc,
+                        );
                         }
                         return;
                     }
@@ -937,7 +945,11 @@ impl CoreRuntime {
 
             // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
             if self.state.is_halted() {
-                if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                if let Some(mut isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                    // When keyboard IRQs are disabled, ignore KEYI for HALT wake to mirror Python gating.
+                    if !self.timer.kb_irq_enabled {
+                        isr &= !ISR_KEYI;
+                    }
                     if isr != 0 {
                         self.state.set_halted(false);
                         self.timer.irq_pending = true;
@@ -2163,6 +2175,28 @@ mod tests {
             "HALT should clear when ISR is set regardless of IMR"
         );
         assert!(rt.timer.irq_pending, "pending IRQ should be armed on wake");
+    }
+
+    #[test]
+    fn halt_ignores_keyi_when_kb_irq_disabled() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_halted(true);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.timer.set_keyboard_irq_enabled(false);
+        // Assert KEYI in ISR with IMR master off to mimic a host write.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+
+        let _ = rt.step(1);
+
+        // HALT should remain and no pending IRQ when kb IRQs are disabled.
+        assert!(rt.state.is_halted(), "HALT should not wake on KEYI when kb IRQs disabled");
+        assert!(
+            !rt.timer.irq_pending,
+            "pending IRQ should not arm for KEYI when kb IRQs disabled"
+        );
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & ISR_KEYI, 0, "ISR bit should remain set but ignored");
     }
 
     #[test]

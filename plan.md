@@ -2,6 +2,16 @@ Open
 - (none)
 
 Resolved
+- Strict opcode parity guard: LLAMA_STRICT_OPCODES causes unknown/unsupported opcodes to raise instead of advancing, avoiding silent divergence (sc62015/core/src/llama/eval.rs).
+- Strict opcodes now default to Python parity; LLAMA_PERMISSIVE_OPCODES opt-out is available. Regression tests cover both strict and permissive modes (sc62015/core/src/llama/eval.rs).
+- Generic MV fallback now handles remaining reg/mem move patterns instead of erroring (sc62015/core/src/llama/eval.rs), reducing silent NOPs.
+- HALT wake parity: ignore KEYI when keyboard IRQs are disabled so HALT only wakes for enabled sources; regression test added (sc62015/core/src/lib.rs).
+- 16-bit CALL/RET now track call pages via call_page_stack so returns land on the original page even if PC page changes (sc62015/core/src/llama/eval.rs).
+- Host overlay fallback writes now use live executor context (perfetto_instr_context) instead of stale cycle/PC to align trace timing with Python when no host_write is installed (sc62015/core/src/lib.rs).
+- Python-only overlays now enforce host callbacks unless LLAMA_ALLOW_PY_FALLBACK=1 (sc62015/core/src/lib.rs); prevents silent divergence on python-required addresses.
+- WAIT parity guard: LlamaPyBus requires memory.wait_cycles unless LLAMA_ALLOW_MISSING_WAIT_CYCLES=1 (sc62015/rustcore/src/lib.rs), avoiding silent timer drift.
+- Unknown opcode advance parity: fallback now consumes the estimated opcode length (including prefixes) so bad bytes don’t desync tracing (sc62015/core/src/llama/eval.rs).
+- Perfetto defaults to Python-compatible layout/timestamps unless PERFETTO_RUST_LAYOUT=1 is set (sc62015/core/src/perfetto.rs), reducing drift in compare_perfetto_traces.py without extra env.
 - sc62015/core: PERFETTO_TRACER replaced with PerfettoHandle (depth-counted guard + thread owner + gate mutex) allowing reentrant access; callers updated to use enter()/guard deref; tests exercise nested access and run across threads without dropped events. Added guard helpers (tracer_mut/take) and kept ownership assertions.
 - sc62015/core/src/llama/eval.rs: Unsupported MV/memory patterns no longer error; they advance PC to avoid halting execution. (Full parity semantics still pending.)
 - sc62015/core/src/llama/eval.rs: Added generic MV fallback that writes decoded sources to memory/reg where possible instead of erroring; cargo tests cover executor flows.
@@ -34,11 +44,4 @@ Tests/Checks
 - cargo test --quiet (sc62015/core) after PerfettoHandle rework
 
 Findings
-- Functional coverage gaps remain in the LLAMA executor: many operand patterns still return Err("...not supported") or fall back to fallback_unknown (e.g., EMemRegMode constraints, several MOV/ALU combinations) in sc62015/core/src/llama/eval.rs. Those opcodes effectively act as NOPs in Rust while the Python emulator implements full semantics, violating the bug-for-bug parity requirement until the missing paths are filled.
-- Potential IRQ source priority inversion: sc62015/core/src/lib.rs:1412-1420 delivers ONK before KEY when both ISR bits are set and IMR enables them, whereas the Python path chooses KEY first (pce500/emulator.py:760-879, pending_src order KEY→ONK). If firmware leaves both bits high, LLAMA will jump to the ONK vector while Python goes to the KEY vector, and RETI will clear a different mask bit.
-- Keyboard IRQ latching while disabled: sc62015/core/src/timer.rs:480-556 latches key_irq_latched and can assert KEYI/irq_pending even when kb_irq_enabled is false (see refresh_key_irq_latch behaviour in sc62015/core/src/lib.rs:561-629), because latch_active ignores the enable bit. Python only latches/sets KEYI when _kb_irq_enabled is true (pce500/emulator.py:2334-2534, _tick_timers), so disabling keyboard IRQs in Python suppresses KEYI while the Rust core can still raise it.
-- Perfetto timeline mismatch in mixed backends: the Rust tracer always runs in instruction-index manual-clock mode and emits extra tracks (InstructionTrace, MemoryWrites, IMR, etc.; sc62015/core/src/perfetto.rs:45-87). Python’s default/legacy tracer uses wall-clock time unless the “new” manual-clock tracing is enabled (pce500/emulator.py:340-379). If users run the legacy Python tracer, Rust traces won’t align temporally or by track naming, which breaks “identical logging” expectations.
-- Host-overlay write timing is stamped with a stale cycle/PC: RuntimeBus::store passes self.cycle/self.pc captured before the instruction loop into apply_host_write_with_cycle (sc62015/core/src/lib.rs:853-863). After a long WAIT/halt idle stretch, the emitted Perfetto memory events still carry the pre-idle cycle/PC, whereas Python records them with the live cycle_count/PC at the time of the write. This can desync trace comparisons around host-handled IMEM/overlay updates.
-- Halt path raises KEYI even when disabled: sc62015/core/src/lib.rs:968-1012 reasserts KEYI during HALT on MTI/STI + FIFO but ignores kb_irq_enabled and skips bit-watch/perfetto hooks. Python only asserts when _kb_irq_enabled is true (pce500/emulator.py press_key/_tick_timers), so Rust can spuriously exit HALT and mark irq_pending while traces miss diagnostics.
-- RESET intrinsic leaves IRQ/timer state live: power_on_reset (sc62015/core/src/llama/eval.rs:272-300) resets IMEM/PC but never clears timer mirrors (irq_pending, next_mti/sti, in_interrupt, delivered_masks, key_irq_latched, etc.). Python re-bases the scheduler on load/reset; stale Rust metadata can deliver old IRQs or keep KEY latch set after RESET.
-- Near-call page reconstruction not tracked: call_page_stack exists in sc62015/core/src/llama/state.rs but CALL/RET (sc62015/core/src/llama/eval.rs:2329-2440) never use it. 16-bit CALL pushes only low bits and RET rebuilds the page from the current PC, so page changes (far jumps/interrupts) before RET can return to the wrong page. Python tracks call depth/page via CALL_STACK_EFFECTS/call_sub_level, so Rust can diverge.
+- (none)

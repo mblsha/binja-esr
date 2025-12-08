@@ -22,6 +22,7 @@ use crate::{
     PERFETTO_TRACER,
 };
 use std::collections::HashMap;
+use std::env;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -65,8 +66,31 @@ pub fn reset_perf_counters() {
     PERF_LAST_PC.store(0, Ordering::Relaxed);
 }
 
-fn fallback_unknown(state: &mut LlamaState, prefix_len: u8) -> Result<u8, &'static str> {
-    let len = 1 + prefix_len;
+fn strict_opcodes() -> bool {
+    let strict = matches!(
+        env::var("LLAMA_STRICT_OPCODES").as_deref(),
+        Ok("1") | Ok("true") | Ok("True")
+    );
+    let permissive = matches!(
+        env::var("LLAMA_PERMISSIVE_OPCODES").as_deref(),
+        Ok("1") | Ok("true") | Ok("True")
+    );
+    // Default to strict to mirror Python decode; allow explicit opt-out via LLAMA_PERMISSIVE_OPCODES.
+    strict || !permissive
+}
+
+fn fallback_unknown(
+    state: &mut LlamaState,
+    prefix_len: u8,
+    estimated_len: Option<u8>,
+) -> Result<u8, &'static str> {
+    if strict_opcodes() {
+        return Err("unknown opcode (strict)");
+    }
+    // Match Python decoder: consume the full estimated instruction length (if known) even
+    // for unknown/unsupported opcodes to keep the stream aligned for tracing.
+    let opcode_len = estimated_len.unwrap_or(1);
+    let len = opcode_len.saturating_add(prefix_len);
     let start_pc = state.pc();
     if state.pc() == start_pc {
         state.set_pc(start_pc.wrapping_add(len as u32));
@@ -1444,7 +1468,56 @@ impl LlamaExecutor {
                         let (val, _) = decoded.imm.ok_or("missing immediate")?;
                         Self::store_traced(bus, mem.addr, *bits, val);
                     }
-                    _ => return Err("mv pattern not supported"),
+                    // Generic fallback: handle Reg<->Mem moves not covered above.
+                    _ => {
+                        // mem -> reg
+                        if matches!(
+                            entry.operands.first(),
+                            Some(
+                                OperandKind::IMem(_)
+                                    | OperandKind::IMemWidth(_)
+                                    | OperandKind::EMemAddrWidth(_)
+                                    | OperandKind::EMemAddrWidthOp(_)
+                                    | OperandKind::EMemRegWidth(_)
+                                    | OperandKind::EMemRegWidthMode(_)
+                            )
+                        ) {
+                            if let Some(reg) = entry
+                                .operands
+                                .get(1)
+                                .and_then(|op| Self::resolved_reg(op, &decoded))
+                            {
+                                let val = bus.load(mem.addr, mem.bits);
+                                let mask = Self::mask_for_width(mem.bits);
+                                state.set_reg(reg, val & mask);
+                                return Ok(decoded.len);
+                            }
+                        }
+                        // reg -> mem
+                        if matches!(
+                            entry.operands.get(1),
+                            Some(
+                                OperandKind::IMem(_)
+                                    | OperandKind::IMemWidth(_)
+                                    | OperandKind::EMemAddrWidth(_)
+                                    | OperandKind::EMemAddrWidthOp(_)
+                                    | OperandKind::EMemRegWidth(_)
+                                    | OperandKind::EMemRegWidthMode(_)
+                            )
+                        ) {
+                            if let Some(reg) = entry
+                                .operands
+                                .first()
+                                .and_then(|op| Self::resolved_reg(op, &decoded))
+                            {
+                                let val = Self::read_reg(state, bus, reg)
+                                    & Self::mask_for_width(mem.bits);
+                                Self::store_traced(bus, mem.addr, mem.bits, val);
+                                return Ok(decoded.len);
+                            }
+                        }
+                        return Err("mv pattern not supported");
+                    }
                 }
             }
             InstrKind::Add
@@ -1847,7 +1920,7 @@ impl LlamaExecutor {
                 pc_override,
                 prefix_len,
             ),
-            None => fallback_unknown(state, prefix_len),
+            None => fallback_unknown(state, prefix_len, None),
         };
         // Keep last-PC aligned to the post-execution PC so timer/IRQ traces reflect the live value.
         PERF_LAST_PC.store(state.pc() & mask_for(RegName::PC), Ordering::Relaxed);
@@ -2276,7 +2349,10 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Pre => unreachable!("PRE should be handled before dispatch"),
-            InstrKind::Unknown => fallback_unknown(state, prefix_len),
+            InstrKind::Unknown => {
+                let est_len = Self::estimated_length(entry);
+                fallback_unknown(state, prefix_len, Some(est_len))
+            }
             InstrKind::Sc => {
                 state.set_reg(RegName::FC, 1);
                 let len = prefix_len + Self::estimated_length(entry);
@@ -2422,6 +2498,10 @@ impl LlamaExecutor {
                 };
                 // Use S stack for CALL (matches PUSHU/POPU? here sticking with S per CPU specs)
                 Self::push_stack(state, bus, RegName::S, ret_addr, push_bits, false);
+                if push_bits == 16 {
+                    // Track call page so RET can restore the original page even if PC page changes.
+                    state.push_call_page(pc_before);
+                }
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
                 let mut guard = crate::PERFETTO_TRACER.enter();
@@ -2438,8 +2518,8 @@ impl LlamaExecutor {
             InstrKind::Ret => {
                 let pc_before = state.pc();
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
-                // Python RET reconstructs the high page from the current PC at return time (no saved page).
-                let high = state.pc() & 0xFF0000;
+                // Prefer the saved call page; fall back to current PC page if missing.
+                let high = state.pop_call_page().unwrap_or_else(|| state.pc() & 0xFF0000);
                 let dest = (high | (ret & 0xFFFF)) & 0xFFFFF;
                 state.set_pc(dest);
                 state.call_depth_dec();
@@ -2830,6 +2910,7 @@ mod tests {
 
     #[test]
     fn unknown_opcodes_fall_back() {
+        std::env::set_var("LLAMA_PERMISSIVE_OPCODES", "1");
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
@@ -2839,6 +2920,22 @@ mod tests {
         let res = exec.execute(0xBF, &mut state, &mut bus);
         assert!(res.is_ok());
         assert_eq!(state.pc(), 2);
+        std::env::remove_var("LLAMA_PERMISSIVE_OPCODES");
+    }
+
+    #[test]
+    fn strict_unknown_opcodes_error() {
+        std::env::remove_var("LLAMA_PERMISSIVE_OPCODES");
+        std::env::set_var("LLAMA_STRICT_OPCODES", "1");
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = NullBus;
+        let res = exec.execute(0x20, &mut state, &mut bus);
+        assert!(
+            res.is_err(),
+            "strict mode should error on unknown opcode, got {res:?}"
+        );
+        std::env::remove_var("LLAMA_STRICT_OPCODES");
     }
 
     #[test]

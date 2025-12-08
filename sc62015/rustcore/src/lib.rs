@@ -24,6 +24,7 @@ use serde_json::{json, to_value, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::env;
 
 const IMEM_KOL_OFFSET: u32 = 0xF0;
 const IMEM_KOH_OFFSET: u32 = 0xF1;
@@ -59,6 +60,22 @@ fn llama_flag_from_name(name: &str) -> Option<LlamaRegName> {
         "Z" | "FZ" => Some(LlamaRegName::FZ),
         _ => None,
     }
+}
+
+fn require_wait_cycles(py: Python<'_>, memory: &PyAny) -> PyResult<()> {
+    let allow_missing = env::var("LLAMA_ALLOW_MISSING_WAIT_CYCLES").is_ok();
+    if memory.hasattr("wait_cycles")? {
+        return Ok(());
+    }
+    if allow_missing {
+        eprintln!(
+            "[llama-wait] missing memory.wait_cycles; skipping WAIT timer ticks (LLAMA_ALLOW_MISSING_WAIT_CYCLES=1)"
+        );
+        return Ok(());
+    }
+    Err(PyRuntimeError::new_err(
+        "Rust LLAMA requires memory.wait_cycles for WAIT parity; set LLAMA_ALLOW_MISSING_WAIT_CYCLES=1 to force fallback",
+    ))
 }
 
 #[derive(Clone)]
@@ -1025,6 +1042,10 @@ impl LlamaCpu {
     }
 
     fn execute_instruction(&mut self, py: Python<'_>, address: u32) -> PyResult<(u8, u8)> {
+        {
+            let bound = self.memory.bind(py);
+            require_wait_cycles(py, bound.as_ref())?;
+        }
         self.state.set_pc(address & ADDRESS_MASK);
         let entry_pc = self.state.get_reg(LlamaRegName::PC);
         let mut bus = LlamaPyBus::new(py, &self.memory, entry_pc);

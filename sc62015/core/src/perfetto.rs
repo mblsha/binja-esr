@@ -46,7 +46,8 @@ fn env_flag(name: &str) -> bool {
 impl PerfettoTracer {
     pub fn new(path: PathBuf) -> Self {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
-        let compat_python = env_flag("PERFETTO_PYTHON_COMPAT");
+        // Default to Python-compatible layout/timestamps; set PERFETTO_RUST_LAYOUT=1 to opt out.
+        let compat_python = !env_flag("PERFETTO_RUST_LAYOUT");
         // When compat is enabled, align naming/timestamping with Python's legacy/new tracers.
         let use_wall_clock = compat_python || env_flag("PERFETTO_WALL_CLOCK");
 
