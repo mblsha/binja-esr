@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from pce500.memory import PCE500Memory
+from pce500.memory_bus import MemoryOverlay
+
 from sc62015.pysc62015.contract_harness import RustContractBackend
 
 
@@ -60,3 +63,38 @@ def test_overlay_logs_exposed():
     assert any(entry["overlay"] == "log_overlay" for entry in reads)
     assert any(entry.get("pc") == 0x0100 for entry in writes)
     assert any(entry.get("pc") == 0x0200 for entry in reads)
+
+
+@pytest.mark.skipif(not _has_rust(), reason="LLAMA backend unavailable")
+def test_overlay_log_parity_with_python():
+    # Python backend overlay logs
+    py_mem = PCE500Memory()
+    py_mem.add_overlay(
+        MemoryOverlay(
+            start=0x7000,
+            end=0x7001,
+            name="py_overlay",
+            data=bytearray(2),
+            read_only=False,
+            read_handler=None,
+            write_handler=None,
+            perfetto_thread="Memory",
+        )
+    )
+    py_mem.write_byte(0x7000, 0xCC, cpu_pc=0x0300)
+    py_mem.read_byte(0x7000, cpu_pc=0x0400)
+    py_writes = [log for log in py_mem._bus.write_log() if log.overlay == "py_overlay"]  # type: ignore[attr-defined]
+    py_reads = [log for log in py_mem._bus.read_log() if log.overlay == "py_overlay"]  # type: ignore[attr-defined]
+
+    # Rust backend overlay logs
+    backend = RustContractBackend()
+    backend.add_ram_overlay(0x7000, 2, name="py_overlay")
+    backend.write(0x7000, 0xCC, pc=0x0300)
+    _ = backend.read(0x7000, pc=0x0400)
+    rs_writes = [log for log in backend.overlay_write_log() if log["overlay"] == "py_overlay"]
+    rs_reads = [log for log in backend.overlay_read_log() if log["overlay"] == "py_overlay"]
+
+    assert len(py_writes) == len(rs_writes) == 1
+    assert len(py_reads) == len(rs_reads) == 1
+    assert rs_writes[0]["value"] == py_writes[0].value
+    assert rs_reads[0]["value"] == py_reads[0].value

@@ -3,3 +3,4 @@ Rust/Python overlay parity plan
 - Done: Convenience helpers mirroring Python overlays (`add_ram_overlay`, `add_rom_overlay`, `load_memory_card`) with size validation matching Python memory card ranges.
 - Done: PyO3/Python harness overlay helpers (`add_ram_overlay`, `add_rom_overlay`, `load_memory_card`) and Python-side parity test for overlay reads/writes via RustContractBackend.
 - Done: Overlay read/write logs exposed via PyO3 and Python harness; parity test validates overlay access metadata.
+- Done: Cross-backend overlay log parity covered via Python vs Rust contract tests.

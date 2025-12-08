@@ -532,6 +532,30 @@ impl CoreRuntime {
         }
     }
 
+    pub fn add_ram_overlay(&mut self, start: u32, size: usize, name: &str) {
+        self.memory.add_ram_overlay(start, size, name);
+    }
+
+    pub fn add_rom_overlay(&mut self, start: u32, data: &[u8], name: &str) {
+        self.memory.add_rom_overlay(start, data, name);
+    }
+
+    pub fn load_memory_card(&mut self, data: &[u8]) -> Result<()> {
+        self.memory.load_memory_card(data)
+    }
+
+    pub fn overlay_read_log(&self) -> Vec<MemoryAccessLog> {
+        self.memory.overlay_read_log()
+    }
+
+    pub fn overlay_write_log(&self) -> Vec<MemoryAccessLog> {
+        self.memory.overlay_write_log()
+    }
+
+    pub fn clear_overlay_logs(&self) {
+        self.memory.clear_overlay_logs();
+    }
+
     /// Set the E-port input buffer values (EIL/EIH) to emulate external pin state.
     pub fn set_e_port_inputs(&mut self, low: u8, high: u8) {
         self.memory.write_internal_byte(0xF5, low);
@@ -3077,5 +3101,21 @@ mod tests {
             matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
             "python-required IMEM access should fail without host overlay: {res:?}"
         );
+    }
+
+    #[test]
+    fn runtime_overlay_helpers_route_through_memory_image() {
+        let mut rt = CoreRuntime::new();
+        rt.add_ram_overlay(0x8000, 2, "runtime_ram");
+        rt.clear_overlay_logs();
+        let _ = rt
+            .memory
+            .store_with_pc(0x8000, 16, 0xBEEF, Some(0x0100));
+        let writes = rt.overlay_write_log();
+        assert_eq!(writes.len(), 2, "should log 2 overlay byte writes");
+        assert!(writes.iter().all(|entry| entry.overlay == "runtime_ram"));
+        assert!(writes.iter().any(|entry| entry.pc == Some(0x0100)));
+        let val = rt.memory.load_with_pc(0x8000, 16, Some(0x0200)).unwrap();
+        assert_eq!(val, 0xBEEF);
     }
 }
