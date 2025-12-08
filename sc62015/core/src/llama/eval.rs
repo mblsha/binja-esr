@@ -406,6 +406,14 @@ impl LlamaExecutor {
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.as_mut() {
             let mut regs = HashMap::new();
+            // Refresh IMR from IMEM so register snapshot matches Python when host updates it.
+            let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
+                (
+                    bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
+                    bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
+                )
+            });
+            state.set_reg(RegName::IMR, mem_imr as u32);
             for (name, reg) in [
                 ("A", RegName::A),
                 ("B", RegName::B),
@@ -425,13 +433,6 @@ impl LlamaExecutor {
             ] {
                 regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
             }
-            // Parity: sample IMR/ISR without triggering device-side effects.
-            let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
-                (
-                    bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
-                    bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
-                )
-            });
             tracer.record_regs(
                 instr_index,
                 pc_trace & mask_for(RegName::PC),
