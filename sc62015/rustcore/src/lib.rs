@@ -304,6 +304,10 @@ impl LlamaContractBus {
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
+    fn remove_overlay(&mut self, name: &str) {
+        self.memory.remove_overlay(name);
+    }
+
     fn overlay_read_log(&self, py: Python<'_>) -> PyResult<PyObject> {
         let log = self
             .memory

@@ -337,6 +337,9 @@ class RustContractBackend:
     def load_memory_card(self, data: bytes) -> None:
         self._impl.load_memory_card(data)
 
+    def remove_overlay(self, name: str) -> None:
+        self._impl.remove_overlay(str(name))
+
     def overlay_read_log(self) -> list[dict]:
         return list(self._impl.overlay_read_log())  # type: ignore[attr-defined]
 

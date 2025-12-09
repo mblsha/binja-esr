@@ -264,6 +264,10 @@ impl MemoryImage {
         self.overlays.retain(|ov| ov.name != name);
     }
 
+    pub fn overlays(&self) -> &[MemoryOverlay] {
+        &self.overlays
+    }
+
     pub fn add_ram_overlay(&mut self, start: u32, size: usize, name: &str) {
         if size == 0 {
             return;

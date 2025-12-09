@@ -98,3 +98,14 @@ def test_overlay_log_parity_with_python():
     assert len(py_reads) == len(rs_reads) == 1
     assert rs_writes[0]["value"] == py_writes[0].value
     assert rs_reads[0]["value"] == py_reads[0].value
+
+
+@pytest.mark.skipif(not _has_rust(), reason="LLAMA backend unavailable")
+def test_overlay_removal():
+    backend = RustContractBackend()
+    backend.add_ram_overlay(0x7100, 1, name="temp_overlay")
+    backend.write(0x7100, 0x5A)
+    assert backend.read(0x7100) == 0x5A
+    backend.remove_overlay("temp_overlay")
+    # After removal, overlay should be gone and reads fall back to external memory default 0.
+    assert backend.read(0x7100) == 0x00

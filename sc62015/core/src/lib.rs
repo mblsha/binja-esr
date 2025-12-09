@@ -544,6 +544,14 @@ impl CoreRuntime {
         self.memory.load_memory_card(data)
     }
 
+    pub fn remove_overlay(&mut self, name: &str) {
+        self.memory.remove_overlay(name);
+    }
+
+    pub fn overlays(&self) -> &[MemoryOverlay] {
+        self.memory.overlays()
+    }
+
     pub fn overlay_read_log(&self) -> Vec<MemoryAccessLog> {
         self.memory.overlay_read_log()
     }
