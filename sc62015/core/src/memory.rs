@@ -3,7 +3,6 @@
 use crate::{llama::eval::perfetto_last_pc, CoreError, Result};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::env;
 use std::rc::Rc;
 
 type ImrIsrHook = Rc<dyn Fn(u32, u8, u8)>;
@@ -213,16 +212,6 @@ impl MemoryImage {
         let limit = self.external.len().min(blob.len());
         self.external[..limit].copy_from_slice(&blob[..limit]);
         self.dirty.clear();
-        if env::var("RUST_ROM_DEBUG").is_ok() {
-            let addr = 0x0F2BD0usize.min(self.external.len().saturating_sub(8));
-            let window = &self.external[addr..addr + 8];
-            let hex = window
-                .iter()
-                .map(|byte| format!("{byte:02X}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            eprintln!("[rom-debug-load] addr=0x{addr:06X} bytes={hex}");
-        }
     }
 
     pub fn load_internal(&mut self, blob: &[u8]) {
@@ -369,13 +358,6 @@ impl MemoryImage {
                 break;
             }
         }
-        if env::var("RUST_ROM_DEBUG").is_ok() && (0x0F2BD0..=0x0F2BD8).contains(&address) {
-            eprintln!(
-                "[rom-debug-route] addr=0x{addr:06X} python_range={range}",
-                addr = address,
-                range = in_python_range
-            );
-        }
         in_python_range || address >= EXTERNAL_SPACE as u32
     }
 
@@ -411,23 +393,6 @@ impl MemoryImage {
         for offset in 0..bytes {
             let idx = (address as usize + offset) & (EXTERNAL_SPACE - 1);
             value |= (self.external[idx] as u32) << (offset * 8);
-        }
-        if env::var("RUST_ROM_DEBUG").is_ok() && (0x0F2BD0..=0x0F2BD8).contains(&address) {
-            eprintln!(
-                "[rom-debug-read] addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
-                addr = address,
-                bits = bits,
-                val = value & mask_bits(bits),
-            );
-        }
-        if env::var("RUST_ROM_TRACE").is_ok() && (0x000F_2000..=0x000F_3000).contains(&address) {
-            let mask = mask_bits(bits);
-            println!(
-                "[rom-trace] addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
-                addr = address & ADDRESS_MASK,
-                bits = bits,
-                val = value & mask,
-            );
         }
         Some(value)
     }
@@ -741,16 +706,7 @@ impl MemoryImage {
         for offset in 0..bytes {
             value |= (self.internal[index + offset] as u32) << (offset * 8);
         }
-        // Optional debug for IMR reads to diagnose IMR/IRM coherence.
         if address == INTERNAL_MEMORY_START + 0xFB && !imr_read_suppressed() {
-            if let Ok(env) = std::env::var("IMR_READ_DEBUG") {
-                if env == "1" {
-                    eprintln!(
-                        "[imr-read] addr=0x{address:06X} bits={bits} value=0x{val:02X}",
-                        val = value & mask_bits(bits)
-                    );
-                }
-            }
             let mut guard = perfetto_guard();
             if let Some(tracer) = guard.as_mut() {
                 let ctx = crate::llama::eval::perfetto_instr_context();
@@ -810,13 +766,7 @@ impl MemoryImage {
             self.memory_reads
                 .set(self.memory_reads.get().saturating_add(1));
             let val = self.internal[offset as usize];
-            // Optional debug hook: enable IMR read logging with IMR_READ_DEBUG=1.
             if offset == 0xFB && !imr_read_suppressed() {
-                if let Ok(env) = std::env::var("IMR_READ_DEBUG") {
-                    if env == "1" {
-                        eprintln!("[imr-read] offset=0x{offset:02X} val=0x{val:02X}");
-                    }
-                }
                 let mut guard = perfetto_guard();
                 if let Some(tracer) = guard.as_mut() {
                     let ctx = crate::llama::eval::perfetto_instr_context();
@@ -876,13 +826,6 @@ impl MemoryImage {
                 value,
                 if op_idx == u64::MAX { None } else { Some(op_idx) },
             );
-        }
-        if offset == 0xF2 {
-            if let Ok(env) = std::env::var("KIL_READ_DEBUG") {
-                if env == "1" {
-                    eprintln!("[kil-read-rust] offset=0x{offset:02X} val=0x{value:02X}");
-                }
-            }
         }
     }
 

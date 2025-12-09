@@ -262,14 +262,12 @@ struct StandaloneBus {
 enum AutoKeyKind {
     Matrix(u8),
     OnKey,
-}
-
-impl StandaloneBus {
-    fn log_perfetto(&self, msg: &str) {
-        if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
-            eprintln!("[perfetto-debug] {msg}");
-        }
     }
+
+    impl StandaloneBus {
+        fn log_perfetto(&self, msg: &str) {
+            let _ = msg;
+        }
 
     fn new(
         memory: MemoryImage,
@@ -282,9 +280,6 @@ impl StandaloneBus {
         host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
         host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     ) -> Self {
-        if perfetto.is_some() && std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
-            eprintln!("[perfetto-debug] StandaloneBus created with perfetto enabled");
-        }
         Self {
             memory,
             lcd,
@@ -583,12 +578,6 @@ impl StandaloneBus {
         if !pending && isr != 0 && self.active_irq_mask == 0 {
             self.last_irq_src = Some("masked".to_string());
         }
-        if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
-            println!(
-                "[irq-pending] pc=0x{:05X} imr=0x{:02X} isr=0x{:02X} pending={} in_irq={}",
-                self.last_pc, imr, isr, pending, self.in_interrupt
-            );
-        }
         pending
     }
 
@@ -602,16 +591,6 @@ impl StandaloneBus {
     }
 
     fn log_irq_delivery(&mut self, src: Option<&str>, vec: u32, imr: u8, isr: u8, pc: u32) {
-        if std::env::var("IRQ_TRACE").as_deref() == Ok("1") {
-            println!(
-                "[irq-deliver] pc=0x{pc:05X} src={src:?} vec=0x{vec:05X} imr=0x{imr:02X} isr=0x{isr:02X}",
-                pc = pc,
-                src = src,
-                vec = vec & ADDRESS_MASK,
-                imr = imr,
-                isr = isr
-            );
-        }
     }
 
     fn deliver_irq(&mut self, state: &mut LlamaState) {
@@ -717,11 +696,7 @@ impl StandaloneBus {
         self.log_perfetto("finishing perfetto traces");
         if let Some(tracer) = self.perfetto.take() {
             match tracer.finish() {
-                Ok(path) => {
-                    if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
-                        eprintln!("[perfetto-debug] irq trace saved to {}", path.display());
-                    }
-                }
+                Ok(_path) => {}
                 Err(err) => eprintln!("[perfetto] failed to save IRQ trace: {err}"),
             }
         }
@@ -730,8 +705,6 @@ impl StandaloneBus {
         if let Some(tracer) = guard.take() {
             if let Err(err) = tracer.finish() {
                 eprintln!("[perfetto] failed to save instruction trace: {err}");
-            } else if std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1") {
-                eprintln!("[perfetto-debug] saved instruction trace");
             }
         }
     }
@@ -833,25 +806,19 @@ impl LlamaBus for StandaloneBus {
                     #[cfg(feature = "llama-tests")]
                     {
                         let mut guard = PERFETTO_TRACER.enter();
-                        if let Some(tracer) = guard.as_mut() {
-                            tracer.record_kio_read(
-                                Some(self.last_pc),
-                                offset as u8,
-                                byte,
-                                Some(self.instr_index),
-                            );
-                        }
-                    }
-                    if std::env::var("KIL_READ_DEBUG").as_deref() == Ok("1") {
-                        println!(
-                            "[kil-read-llama] pc=0x{:06X} val=0x{:02X}",
-                            self.last_pc, byte
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.record_kio_read(
+                            Some(self.last_pc),
+                            offset as u8,
+                            byte,
+                            Some(self.instr_index),
                         );
                     }
                 }
-                if matches!(
-                    offset,
-                    IMEM_KIL_OFFSET
+            }
+            if matches!(
+                offset,
+                IMEM_KIL_OFFSET
                         | IMEM_KOL_OFFSET
                         | IMEM_KOH_OFFSET
                         | IMEM_IMR_OFFSET
@@ -1205,29 +1172,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let rom_bytes = load_rom(&args.rom)?;
     let font = FontMap::from_rom(&rom_bytes);
 
-    let perfetto_dbg = std::env::var("PERFETTO_DEBUG").as_deref() == Ok("1");
-    let log_dbg = |msg: &str| {
-        if perfetto_dbg {
-            eprintln!("[perfetto-debug] {msg}");
-        }
-    };
-
-    let log_lcd_env = env::var("RUST_LCD_TRACE").is_ok();
-    let log_lcd = args.lcd_log || log_lcd_env;
-    let log_lcd_limit = args
-        .lcd_log_limit
-        .or_else(|| {
-            env::var("RUST_LCD_TRACE_MAX")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-        })
-        .unwrap_or(50);
+    let log_lcd = args.lcd_log;
+    let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
+    let perfetto_dbg = false;
+    let log_dbg = |_msg: &str| {};
 
     if args.perfetto {
-        log_dbg(&format!(
-            "enabling perfetto: path={} irq-path=<stem>.irq.perfetto-trace",
-            args.perfetto_path.display()
-        ));
         let mut guard = PERFETTO_TRACER.enter();
         *guard = Some(PerfettoTracer::new(args.perfetto_path.clone()));
     }

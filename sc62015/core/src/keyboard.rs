@@ -303,6 +303,31 @@ impl KeyboardMatrix {
         1
     }
 
+    /// Reconcile FIFO head/tail with firmware-written pointers in RAM so drained entries
+    /// do not linger in the Rust model (avoids reasserting KEYI after the host consumes data).
+    fn sync_fifo_from_memory(&mut self, memory: &MemoryImage) {
+        if let Some(head) = memory.load(FIFO_HEAD_ADDR, 8) {
+            let new_head = (head as usize) % FIFO_SIZE;
+            if new_head != self.fifo_head {
+                self.fifo_head = new_head;
+            }
+        }
+        // Tail is owned by the producer (this model); keep the in-memory value as advisory only.
+        // Recompute count based on reconciled head/tail.
+        let mut count = if self.fifo_tail >= self.fifo_head {
+            self.fifo_tail.saturating_sub(self.fifo_head)
+        } else {
+            FIFO_SIZE.saturating_sub(self.fifo_head.saturating_sub(self.fifo_tail))
+        };
+        if self.fifo_head == self.fifo_tail {
+            count = 0;
+        }
+        self.fifo_count = count.min(FIFO_SIZE);
+        if self.fifo_count == 0 {
+            self.keyi_latch = false;
+        }
+    }
+
     /// Inject a matrix event immediately, bypassing debounce, and mirror state into memory.
     pub fn inject_matrix_event(
         &mut self,
@@ -311,6 +336,7 @@ impl KeyboardMatrix {
         memory: &mut MemoryImage,
         kb_irq_enabled: bool,
     ) -> usize {
+        self.sync_fifo_from_memory(memory);
         let events = self.enqueue_event(code & 0x7F, release, true);
         // Update KIL latch directly for bridge calls (row is low 3 bits).
         let row_mask = 1u8 << (code & 0x07);
@@ -339,7 +365,8 @@ impl KeyboardMatrix {
         }
     }
 
-    pub fn write_fifo_to_memory(&self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
+    pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
+        self.sync_fifo_from_memory(memory);
         let mut idx = self.fifo_head;
         for slot in 0..FIFO_SIZE {
             let value = if slot < self.fifo_count {

@@ -66,8 +66,11 @@ pub fn reset_perf_counters() {
 }
 
 fn strict_opcodes() -> bool {
-    // Hardened by default: unknown opcodes are always errors.
-    true
+    // Default to Python parity: unknown opcodes advance PC instead of erroring.
+    matches!(
+        std::env::var("LLAMA_STRICT_OPCODES").as_deref(),
+        Ok("1") | Ok("true") | Ok("True")
+    )
 }
 
 fn fallback_unknown(
@@ -239,14 +242,6 @@ fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8)
 /// Emit the effective IMEM address and the raw registers used for BpPx/BpPy modes.
 /// Fires when perfetto is active or TRACE_IMEM_ADDR=1 is set.
 fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
-    // Debug-print when explicitly requested via env to avoid overwhelming logs.
-    if matches!(std::env::var("TRACE_IMEM_ADDR").as_deref(), Ok("1")) {
-        eprintln!(
-            "[imem-addr] mode={:?} base=0x{base:02X} bp=0x{bp:02X} px=0x{px:02X} py=0x{py:02X}",
-            mode
-        );
-    }
-
     // Optional perfetto emit when the builder is available (llama-tests builds).
     let mut guard = crate::PERFETTO_TRACER.enter();
     if let Some(tracer) = guard.as_mut() {
@@ -1939,10 +1934,9 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // Python WAIT fast-path: zero I and clear flags while allowing the host to
-                // advance timers/keyboard for the burned cycles.
-                let wait_loops = state.get_reg(RegName::I) & mask_for(RegName::I);
-                bus.wait_cycles(wait_loops as u32);
+                // Python WAIT fast-path: zero I and clear flags. Cycle/timer burn happens in
+                // the host loop, so avoid ticking from inside the executor to prevent double
+                // counting.
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
@@ -2559,8 +2553,7 @@ impl LlamaExecutor {
                 // Stack layout: IMR (1), F(1), 24-bit PC (little-endian).
                 let mask_s = mask_for(RegName::S);
                 let mut sp = state.get_reg(RegName::S) & mask_s;
-                let sp_before = sp;
-                let trace_reti = std::env::var("TRACE_RETI").is_ok();
+                let _sp_before = sp;
                 let imr = bus.load(sp, 8) & 0xFF;
                 sp = sp.wrapping_add(1) & mask_s;
                 let f = bus.load(sp, 8) & 0xFF;
@@ -2582,17 +2575,6 @@ impl LlamaExecutor {
                 state.set_reg(RegName::F, f);
                 state.set_pc(ret & 0xFFFFF);
                 state.call_depth_dec();
-                if trace_reti {
-                    eprintln!(
-                        "[reti] sp_before=0x{sp_before:06X} imr=0x{imr:02X} f=0x{f:02X} ret=0x{ret:06X} sp_after=0x{sp:06X} imr_restored=0x{imr_restored:02X}",
-                        sp_before = sp_before,
-                        imr = imr,
-                        f = f,
-                        ret = ret & 0xFFFFF,
-                        sp = sp,
-                        imr_restored = imr_restored,
-                    );
-                }
                 Ok(1 + prefix_len)
             }
             InstrKind::PushU | InstrKind::PushS => {
@@ -2897,47 +2879,55 @@ mod tests {
 
     #[test]
     fn all_opcodes_execute_without_error() {
+        let prev = std::env::var("LLAMA_STRICT_OPCODES").ok();
+        std::env::remove_var("LLAMA_STRICT_OPCODES");
         let mut exec = LlamaExecutor::new();
         for entry in OPCODES {
             let mut state = LlamaState::new();
             state.set_pc(0);
             let mut bus = NullBus;
             let res = exec.execute(entry.opcode, &mut state, &mut bus);
-            if entry.kind == InstrKind::Unknown {
-                assert!(
-                    res.is_err(),
-                    "opcode 0x{:02X} should error (Unknown), got {res:?}",
-                    entry.opcode
-                );
-            } else {
-                assert!(
-                    res.is_ok(),
-                    "opcode 0x{:02X} failed with {:?}",
-                    entry.opcode,
-                    res
-                );
-            }
+            assert!(
+                res.is_ok(),
+                "opcode 0x{:02X} failed with {:?}",
+                entry.opcode,
+                res
+            );
+        }
+        if let Some(val) = prev {
+            std::env::set_var("LLAMA_STRICT_OPCODES", val);
         }
     }
 
     #[test]
-    fn unknown_opcodes_error_by_default_in_tests() {
+    fn unknown_opcodes_fallback_advances_pc() {
+        let prev = std::env::var("LLAMA_STRICT_OPCODES").ok();
+        std::env::remove_var("LLAMA_STRICT_OPCODES");
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
+        state.set_pc(0x10);
         let res = exec.execute(0x20, &mut state, &mut bus);
-        assert!(
-            res.is_err(),
-            "default (tests/features) should be strict; got {res:?}"
-        );
+        assert!(res.is_ok(), "default mode should fall back on unknown opcodes");
+        assert_eq!(state.pc(), 0x11, "fallback should advance PC by length");
+        if let Some(val) = prev {
+            std::env::set_var("LLAMA_STRICT_OPCODES", val);
+        }
     }
 
     #[test]
     fn strict_unknown_opcodes_error() {
+        let prev = std::env::var("LLAMA_STRICT_OPCODES").ok();
+        std::env::set_var("LLAMA_STRICT_OPCODES", "1");
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
         let res = exec.execute(0x20, &mut state, &mut bus);
+        if let Some(val) = prev {
+            std::env::set_var("LLAMA_STRICT_OPCODES", val);
+        } else {
+            std::env::remove_var("LLAMA_STRICT_OPCODES");
+        }
         assert!(
             res.is_err(),
             "strict mode should error on unknown opcode, got {res:?}"
@@ -2980,7 +2970,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_calls_bus_wait_cycles() {
+    fn wait_does_not_call_bus_wait_cycles() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = WaitBus { spins: 0 };
@@ -2989,8 +2979,8 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
         assert_eq!(
-            bus.spins, 5,
-            "WAIT should give the host a chance to advance timers/keyboard for burned cycles"
+            bus.spins, 0,
+            "WAIT should defer timer burn to the host loop (no executor tick)"
         );
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.get_reg(RegName::FC), 0);

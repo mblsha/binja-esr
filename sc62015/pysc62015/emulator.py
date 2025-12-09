@@ -142,7 +142,7 @@ FLAG_TO_REGISTER: Dict[str, RegisterName] = {
 }
 
 
-_LCD_LOOP_TRACE_ENABLED: bool = os.getenv("LCD_LOOP_TRACE") == "1"
+_LCD_LOOP_TRACE_ENABLED: bool = False
 _LCD_LOOP_RANGE: tuple[int, int] | None = None
 _LCD_LOOP_RANGE_DEFAULT: tuple[int, int] = (0x0F29A0, 0x0F2B00)
 _LCD_LOOP_REGS = (
@@ -157,7 +157,7 @@ _LCD_LOOP_REGS = (
     RegisterName.S,
 )
 _LCD_LOOP_FLAGS = ("C", "Z")
-_LCD_TRACE_BP_ENABLED: bool = os.getenv("LCD_TRACE_BP") == "1"
+_LCD_TRACE_BP_ENABLED: bool = False
 
 _STACK_SNAPSHOT_RANGE: tuple[int, int] | None = None
 _STACK_SNAPSHOT_LEN: int | None = None
@@ -167,25 +167,7 @@ def _lcd_loop_range() -> tuple[int, int]:
     global _LCD_LOOP_RANGE
     if _LCD_LOOP_RANGE is not None:
         return _LCD_LOOP_RANGE
-    env = os.getenv("LCD_LOOP_RANGE")
-    if env:
-        parts = env.strip().split("-")
-        try:
-            start = int(parts[0], 0)
-        except ValueError:
-            start = _LCD_LOOP_RANGE_DEFAULT[0]
-        if len(parts) > 1:
-            try:
-                end = int(parts[1], 0)
-            except ValueError:
-                end = _LCD_LOOP_RANGE_DEFAULT[1]
-        else:
-            end = start
-        if start > end:
-            start, end = end, start
-        _LCD_LOOP_RANGE = (start, end)
-    else:
-        _LCD_LOOP_RANGE = _LCD_LOOP_RANGE_DEFAULT
+    _LCD_LOOP_RANGE = _LCD_LOOP_RANGE_DEFAULT
     return _LCD_LOOP_RANGE
 
 
@@ -232,41 +214,11 @@ def _log_bp_bytes(prefix: str, pc: int, memory: Memory) -> None:
 
 
 def _stack_snapshot_range() -> tuple[int, int] | None:
-    global _STACK_SNAPSHOT_RANGE
-    if _STACK_SNAPSHOT_RANGE is not None:
-        return _STACK_SNAPSHOT_RANGE
-    env = os.getenv("STACK_SNAPSHOT_RANGE")
-    if not env:
-        return None
-    parts = env.strip().split("-")
-    if not parts:
-        return None
-    try:
-        start = int(parts[0], 0)
-        end = int(parts[1], 0) if len(parts) > 1 else start
-    except ValueError:
-        return None
-    if start > end:
-        start, end = end, start
-    _STACK_SNAPSHOT_RANGE = (start, end)
-    return _STACK_SNAPSHOT_RANGE
+    return None
 
 
 def _stack_snapshot_len() -> int:
-    global _STACK_SNAPSHOT_LEN
-    if _STACK_SNAPSHOT_LEN is not None:
-        return _STACK_SNAPSHOT_LEN
-    length = 8
-    env = os.getenv("STACK_SNAPSHOT_LEN")
-    if env:
-        try:
-            candidate = int(env, 0)
-            if candidate > 0:
-                length = candidate
-        except ValueError:
-            pass
-    _STACK_SNAPSHOT_LEN = length
-    return length
+    return 8
 
 
 def _log_stack_snapshot(

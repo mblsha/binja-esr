@@ -1148,31 +1148,13 @@ impl LlamaBus for LlamaPyBus {
     }
 }
 
-/// Lazy parse a comma-separated list of absolute addresses in `TRACE_ADDRS`.
 fn should_trace_addr(addr: u32) -> bool {
-    static WATCH: OnceLock<Vec<u32>> = OnceLock::new();
-    let list = WATCH.get_or_init(|| {
-        std::env::var("TRACE_ADDRS")
-            .ok()
-            .map(|raw| {
-                raw.split(',')
-                    .filter_map(|tok| {
-                        u32::from_str_radix(tok.trim().trim_start_matches("0x"), 16).ok()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
-    list.contains(&addr)
+    let _ = addr;
+    false
 }
 
 fn trace_loads() -> bool {
-    static LOADS: OnceLock<bool> = OnceLock::new();
-    *LOADS.get_or_init(|| {
-        std::env::var("TRACE_ADDRS_LOAD")
-            .ok()
-            .is_some_and(|v| v != "0")
-    })
+    false
 }
 
 #[pyclass(unsendable, name = "LlamaCPU")]

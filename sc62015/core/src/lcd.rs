@@ -6,7 +6,6 @@ use crate::{
     PERFETTO_TRACER,
 };
 use serde_json::{json, Value};
-use std::env;
 
 const LCD_WIDTH: usize = 64;
 const LCD_PAGES: usize = 8;
@@ -248,9 +247,6 @@ impl LcdController {
 
     pub fn write(&mut self, address: u32, value: u8) {
         if let Some(command) = parse_command(address, value) {
-            if env::var("RUST_LCD_DEBUG").is_ok() {
-                println!("[rust-lcd-device] addr=0x{address:05X} value=0x{value:02X}");
-            }
             let ctx = perfetto_instr_context();
             let op_index = ctx.map(|(idx, _)| idx);
             let pc = ctx.map(|(_, pc)| pc).or(Some(perfetto_last_pc()));

@@ -92,21 +92,19 @@ class IRQSource(Enum):
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
 KOL, KOH, KIL = IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL
-IRQ_STACK_TRACE_ENABLED = os.getenv("IRQ_STACK_TRACE") == "1"
-PYTHON_PC_TRACE_ENABLED = os.getenv("PYTHON_PC_TRACE") == "1"
+IRQ_STACK_TRACE_ENABLED = False
+PYTHON_PC_TRACE_ENABLED = False
 
 _STACK_SNAPSHOT_RANGE: tuple[int, int] | None = None
 _STACK_SNAPSHOT_LEN: int | None = None
 
 
 def _env_flag(name: str) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return False
-    return raw not in {"0", "false", "False", "off", ""}
+    _ = name
+    return False
 
 
-IRQ_DEBUG_ENABLED = _env_flag("IRQ_DEBUG")
+IRQ_DEBUG_ENABLED = False
 
 
 def _log_irq_debug(message: str) -> None:
@@ -1030,7 +1028,7 @@ class PCE500Emulator:
 
         pc = self.cpu.regs.get(RegisterName.PC)
         self._last_pc, self._current_pc = self._current_pc, pc
-        if os.getenv("IRQ_DEBUG_CYCLES") == "1" and pc in (
+        if False and pc in (
             0x0F2051,
             0x0F2053,
             0x0F2055,
@@ -2164,7 +2162,7 @@ class PCE500Emulator:
         result = self.keyboard.press_key(key_code) if self.keyboard else False
         if result and self._kb_irq_enabled:
             self._key_irq_latched = True
-            if os.getenv("KEYI_DEBUG") == "1":
+            if False:
                 print(
                     f"[key-press] key={key_code} pc=0x{int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF:06X}"
                 )
@@ -2180,47 +2178,11 @@ class PCE500Emulator:
                 except Exception as exc:
                     print(f"[keyi-inject] failed: {exc}")
             # If scan didn’t raise IRQs, optionally inject a direct FIFO/ISR event to prove the path.
-            if os.getenv("FORCE_KEY_INJECT") in ("1", "true", "True"):
-                try:
-                    # Build a synthetic MatrixEvent for this key (press only).
-                    code = (
-                        getattr(self.keyboard, "name_map", {}).get(key_code) or key_code
-                    )
-                    if isinstance(code, str) and hasattr(self.keyboard, "_key_states"):
-                        state = self.keyboard._key_states.get(code)
-                        if state:
-                            byte = state.location.matrix_code & 0x7F
-                            self.keyboard._enqueue_event(
-                                MatrixEvent(code=byte, release=False)
-                            )
-                            self._set_isr_bits(int(ISRFlag.KEYI))
-                            self._irq_pending = True
-                            self._irq_source = IRQSource.KEY
-                            if os.getenv("KEYI_DEBUG") == "1":
-                                print(
-                                    f"[key-inject] code=0x{byte:02X} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
-                                )
-                except Exception:
-                    pass
+            if False:
+                pass
             # If strobing has not occurred yet, perform a guaranteed strobe + scan once.
-            if os.getenv("FORCE_STROBE_ON_KEY") in ("1", "true", "True"):
-                try:
-                    self.keyboard.strobe_count += 1
-                    # Strobe all columns (active high).
-                    self.keyboard.kol_value = 0xFF
-                    self.keyboard.koh_value = 0x0F
-                    events = self.keyboard.scan_tick()
-                    if events:
-                        self._kb_irq_count += len(events)
-                        self._set_isr_bits(int(ISRFlag.KEYI))
-                        self._irq_pending = True
-                        self._irq_source = IRQSource.KEY
-                        if os.getenv("KEYI_DEBUG") == "1":
-                            print(
-                                f"[force-strobe] events={len(events)} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
-                            )
-                except Exception:
-                    pass
+            if False:
+                pass
             events = self.keyboard.scan_tick()
             if events:
                 self._kb_irq_count += len(events)
@@ -2310,7 +2272,7 @@ class PCE500Emulator:
                     ),
                 },
             )
-            if os.getenv("KEYI_DEBUG") == "1":
+            if False:
                 print(
                     f"[keyi-debug] pc=0x{int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF:06X} prev=0x{val:02X} new=0x{new_val:02X} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X}"
                 )
@@ -2414,7 +2376,7 @@ class PCE500Emulator:
                     self._set_isr_bits(int(ISRFlag.KEYI))
                     self._irq_pending = True
                     self._irq_source = IRQSource.KEY
-                    if os.getenv("KEYI_DEBUG") == "1":
+                    if False:
                         print(
                             f"[force-strobe-llama] events={len(forced_events)} "
                             f"imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} "
@@ -2431,7 +2393,7 @@ class PCE500Emulator:
                 self._set_isr_bits(int(ISRFlag.KEYI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.KEY
-                if os.getenv("KEYI_DEBUG") == "1":
+                if False:
                     print(
                         f"[force-keyi-llama] imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} "
                         f"isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
@@ -3301,42 +3263,11 @@ class PCE500Emulator:
 
 
 def _stack_snapshot_range() -> tuple[int, int] | None:
-    global _STACK_SNAPSHOT_RANGE
-    if _STACK_SNAPSHOT_RANGE is not None:
-        return _STACK_SNAPSHOT_RANGE
-    raw = os.getenv("STACK_SNAPSHOT_RANGE")
-    if not raw:
-        return None
-    try:
-        start_str, end_str = raw.split("-", 1)
-        start = int(start_str, 0)
-        end = int(end_str, 0)
-    except ValueError:
-        try:
-            start = end = int(raw, 0)
-        except ValueError:
-            return None
-    if start > end:
-        start, end = end, start
-    _STACK_SNAPSHOT_RANGE = (start & 0xFFFFFF, end & 0xFFFFFF)
-    return _STACK_SNAPSHOT_RANGE
+    return None
 
 
 def _stack_snapshot_len() -> int:
-    global _STACK_SNAPSHOT_LEN
-    if _STACK_SNAPSHOT_LEN is not None:
-        return _STACK_SNAPSHOT_LEN
-    raw = os.getenv("STACK_SNAPSHOT_LEN")
-    length = 10
-    if raw:
-        try:
-            candidate = int(raw, 0)
-            if candidate > 0:
-                length = candidate
-        except ValueError:
-            pass
-    _STACK_SNAPSHOT_LEN = length
-    return length
+    return 10
 
 
 def _log_stack_snapshot_emulator(emu: "PCE500Emulator", pc: int) -> None:

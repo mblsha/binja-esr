@@ -4,7 +4,6 @@ use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perf
 use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
-use std::env;
 use std::path::PathBuf;
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
@@ -35,18 +34,11 @@ pub struct PerfettoTracer {
     cpu_track: TrackId,
 }
 
-fn env_flag(name: &str) -> bool {
-    matches!(
-        env::var(name).as_deref(),
-        Ok("1") | Ok("true") | Ok("True")
-    )
-}
-
 impl PerfettoTracer {
     pub fn new(path: PathBuf) -> Self {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
-        // Default to Python-compatible layout/timestamps; set PERFETTO_RUST_LAYOUT=1 to opt out.
-        let compat_python = !env_flag("PERFETTO_RUST_LAYOUT");
+        // Default to Python-compatible layout/timestamps.
+        let compat_python = true;
 
         // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
         let exec_track = builder.add_thread("InstructionTrace");

@@ -82,6 +82,41 @@ fn kil_read_does_not_generate_events_without_scan() {
 }
 
 #[test]
+fn fifo_syncs_head_from_memory_and_clears_keyi_when_drained() {
+    const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
+
+    let mut mem = MemoryImage::new();
+    let mut kb = KeyboardMatrix::new();
+
+    // Populate one event into the FIFO and assert KEYI.
+    kb.press_matrix_code(0x10, &mut mem);
+    kb.handle_write(0xF0, 0xFF, &mut mem);
+    kb.handle_write(0xF1, 0x07, &mut mem);
+    for _ in 0..8 {
+        if kb.scan_tick(true) > 0 {
+            break;
+        }
+    }
+    kb.write_fifo_to_memory(&mut mem, true);
+    let snap = kb.snapshot_state();
+    assert!(snap.fifo_len > 0);
+
+    // Firmware consumes the entry: advance head pointer in RAM and clear ISR.
+    mem.write_external_byte(FIFO_HEAD_ADDR, snap.tail as u8);
+    mem.write_internal_byte(0xFC, 0x00);
+
+    // Next mirror should notice the drained head and avoid reasserting KEYI.
+    kb.write_fifo_to_memory(&mut mem, true);
+    assert_eq!(
+        kb.fifo_len(),
+        0,
+        "FIFO should drop consumed events when head advances in RAM"
+    );
+    let isr = mem.read_internal_byte(0xFC).unwrap_or(0);
+    assert_eq!(isr & 0x04, 0, "KEYI should stay clear after drain");
+}
+
+#[test]
 fn defaults_match_python_keyboard_matrix() {
     // Parity guard: ensure Rust defaults mirror pce500/keyboard_matrix.py.
     let kb = KeyboardMatrix::new();
