@@ -65,22 +65,11 @@ pub fn reset_perf_counters() {
     PERF_LAST_PC.store(0, Ordering::Relaxed);
 }
 
-fn strict_opcodes() -> bool {
-    // Default to Python parity: unknown opcodes advance PC instead of erroring.
-    matches!(
-        std::env::var("LLAMA_STRICT_OPCODES").as_deref(),
-        Ok("1") | Ok("true") | Ok("True")
-    )
-}
-
 fn fallback_unknown(
     state: &mut LlamaState,
     prefix_len: u8,
     estimated_len: Option<u8>,
 ) -> Result<u8, &'static str> {
-    if strict_opcodes() {
-        return Err("unknown opcode (strict)");
-    }
     // Match Python decoder: consume the full estimated instruction length (if known) even
     // for unknown/unsupported opcodes to keep the stream aligned for tracing.
     let opcode_len = estimated_len.unwrap_or(1);
@@ -2335,17 +2324,9 @@ impl LlamaExecutor {
             }
             InstrKind::Pre => unreachable!("PRE should be handled before dispatch"),
             InstrKind::Unknown => {
-                if strict_opcodes() {
-                    return Err("unknown opcode (strict)");
-                }
                 // Known-unknown opcodes should advance without failure to mirror Python decode.
                 let est_len = Self::estimated_length(entry);
-                let len = est_len.saturating_add(prefix_len);
-                let start_pc = state.pc();
-                if state.pc() == start_pc {
-                    state.set_pc(start_pc.wrapping_add(len as u32));
-                }
-                Ok(len)
+                fallback_unknown(state, prefix_len, Some(est_len))
             }
             InstrKind::Sc => {
                 state.set_reg(RegName::FC, 1);
@@ -2879,8 +2860,6 @@ mod tests {
 
     #[test]
     fn all_opcodes_execute_without_error() {
-        let prev = std::env::var("LLAMA_STRICT_OPCODES").ok();
-        std::env::remove_var("LLAMA_STRICT_OPCODES");
         let mut exec = LlamaExecutor::new();
         for entry in OPCODES {
             let mut state = LlamaState::new();
@@ -2894,15 +2873,10 @@ mod tests {
                 res
             );
         }
-        if let Some(val) = prev {
-            std::env::set_var("LLAMA_STRICT_OPCODES", val);
-        }
     }
 
     #[test]
     fn unknown_opcodes_fallback_advances_pc() {
-        let prev = std::env::var("LLAMA_STRICT_OPCODES").ok();
-        std::env::remove_var("LLAMA_STRICT_OPCODES");
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = NullBus;
@@ -2910,28 +2884,6 @@ mod tests {
         let res = exec.execute(0x20, &mut state, &mut bus);
         assert!(res.is_ok(), "default mode should fall back on unknown opcodes");
         assert_eq!(state.pc(), 0x11, "fallback should advance PC by length");
-        if let Some(val) = prev {
-            std::env::set_var("LLAMA_STRICT_OPCODES", val);
-        }
-    }
-
-    #[test]
-    fn strict_unknown_opcodes_error() {
-        let prev = std::env::var("LLAMA_STRICT_OPCODES").ok();
-        std::env::set_var("LLAMA_STRICT_OPCODES", "1");
-        let mut exec = LlamaExecutor::new();
-        let mut state = LlamaState::new();
-        let mut bus = NullBus;
-        let res = exec.execute(0x20, &mut state, &mut bus);
-        if let Some(val) = prev {
-            std::env::set_var("LLAMA_STRICT_OPCODES", val);
-        } else {
-            std::env::remove_var("LLAMA_STRICT_OPCODES");
-        }
-        assert!(
-            res.is_err(),
-            "strict mode should error on unknown opcode, got {res:?}"
-        );
     }
 
     #[test]
