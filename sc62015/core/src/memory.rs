@@ -1,6 +1,6 @@
 // PY_SOURCE: pce500/memory.py:PCE500Memory
 
-use crate::{CoreError, Result};
+use crate::{llama::eval::perfetto_last_pc, CoreError, Result};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::env;
@@ -511,7 +511,17 @@ impl MemoryImage {
                             8,
                         );
                     }
-                    _ => {}
+                    _ => {
+                        let pc = pc.or_else(|| Some(perfetto_last_pc()));
+                        tracer.record_mem_write_at_cycle(
+                            0,
+                            pc,
+                            address,
+                            value as u32,
+                            "host_async",
+                            8,
+                        );
+                    }
                 }
             }
             return;
@@ -524,6 +534,42 @@ impl MemoryImage {
             if *slot != value {
                 *slot = value;
                 self.dirty.push((address, value));
+            }
+            let mut guard = perfetto_guard();
+            if let Some(tracer) = guard.as_mut() {
+                match (cycle, crate::llama::eval::perfetto_instr_context()) {
+                    (Some(cyc), _) => {
+                        tracer.record_mem_write_at_cycle(
+                            cyc,
+                            pc,
+                            address,
+                            value as u32,
+                            "external",
+                            8,
+                        );
+                    }
+                    (None, Some((op_idx, pc_ctx))) => {
+                        tracer.record_mem_write(
+                            op_idx,
+                            pc_ctx,
+                            address,
+                            value as u32,
+                            "external",
+                            8,
+                        );
+                    }
+                    _ => {
+                        let pc = pc.or_else(|| Some(perfetto_last_pc()));
+                        tracer.record_mem_write_at_cycle(
+                            0,
+                            pc,
+                            address,
+                            value as u32,
+                            "host_async",
+                            8,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1065,6 +1111,35 @@ mod tests {
         mem.apply_host_write_with_cycle(0x0010, 0xBE, Some(1), None);
         let dirty_after = mem.drain_dirty();
         assert!(dirty_after.is_empty());
+    }
+
+    #[test]
+    fn host_write_without_context_emits_perfetto() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join("perfetto_host_async.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = crate::PERFETTO_TRACER.enter();
+            *guard = Some(crate::PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut mem = MemoryImage::new();
+        mem.apply_host_write_with_cycle(0x0020, 0xAA, None, None);
+
+        if let Some(tracer) = std::mem::take(&mut *crate::PERFETTO_TRACER.enter()) {
+            let _ = tracer.finish();
+        }
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+        assert!(
+            text.contains("host_async"),
+            "perfetto trace should include host_async write marker"
+        );
+        assert!(
+            text.contains("0x000020"),
+            "perfetto trace should include address annotation"
+        );
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
