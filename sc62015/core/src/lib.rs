@@ -1575,8 +1575,14 @@ impl CoreRuntime {
         }
 
         let pc = self.state.pc() & ADDRESS_MASK;
-        let (op_idx, pc_trace) = crate::llama::eval::perfetto_instr_context()
-            .unwrap_or_else(|| (crate::llama::eval::perfetto_last_instr_index(), pc));
+        let (op_idx, pc_trace, tag) = match crate::llama::eval::perfetto_instr_context() {
+            Some((idx, ctx_pc)) => (idx, ctx_pc, None),
+            None => (
+                crate::llama::eval::perfetto_last_instr_index(),
+                pc,
+                Some("irq_delivery_out_of_exec"),
+            ),
+        };
 
         let record_stack_write = |addr: u32, bits: u8, value: u32| {
             let mut guard = PERFETTO_TRACER.enter();
@@ -1681,71 +1687,83 @@ impl CoreRuntime {
         // Emit an IRQ entry marker for perfetto parity with Python.
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.as_mut() {
-                let mut payload = std::collections::HashMap::new();
+            let mut payload = std::collections::HashMap::new();
+            payload.insert(
+                "pc".to_string(),
+                perfetto::AnnotationValue::Pointer(pc as u64),
+            );
+            payload.insert(
+                "from".to_string(),
+                perfetto::AnnotationValue::Pointer(pc as u64),
+            );
+            payload.insert(
+                "vector".to_string(),
+                perfetto::AnnotationValue::Pointer(vec as u64),
+            );
+            payload.insert(
+                "imr_before".to_string(),
+                perfetto::AnnotationValue::UInt(imr as u64),
+            );
+            payload.insert(
+                "imr_after".to_string(),
+                perfetto::AnnotationValue::UInt(cleared_imr as u64),
+            );
+            payload.insert(
+                "isr".to_string(),
+                perfetto::AnnotationValue::UInt(isr as u64),
+            );
+            payload.insert(
+                "s".to_string(),
+                perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
+            );
+            payload.insert(
+                "y".to_string(),
+                perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64),
+            );
+            payload.insert(
+                "src".to_string(),
+                perfetto::AnnotationValue::Str(src_name.to_string()),
+            );
+            if let Some(tag) = tag {
                 payload.insert(
-                    "pc".to_string(),
-                    perfetto::AnnotationValue::Pointer(pc as u64),
+                    "tag".to_string(),
+                    perfetto::AnnotationValue::Str(tag.to_string()),
                 );
-                payload.insert(
-                    "from".to_string(),
-                    perfetto::AnnotationValue::Pointer(pc as u64),
-                );
-                payload.insert(
-                    "vector".to_string(),
-                    perfetto::AnnotationValue::Pointer(vec as u64),
-                );
-                payload.insert(
-                    "imr_before".to_string(),
-                    perfetto::AnnotationValue::UInt(imr as u64),
-                );
-                payload.insert(
-                    "imr_after".to_string(),
-                    perfetto::AnnotationValue::UInt(cleared_imr as u64),
-                );
-                payload.insert(
-                    "isr".to_string(),
-                    perfetto::AnnotationValue::UInt(isr as u64),
-                );
-                payload.insert(
-                    "s".to_string(),
-                    perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
-                );
-                payload.insert(
-                    "y".to_string(),
-                    perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::Y) as u64),
-                );
-                payload.insert(
-                    "src".to_string(),
-                    perfetto::AnnotationValue::Str(src_name.to_string()),
-                );
-                tracer.record_irq_event("IRQ_Enter", payload);
-                let mut delivered = std::collections::HashMap::new();
-                delivered.insert(
-                    "from".to_string(),
-                    perfetto::AnnotationValue::Pointer(pc as u64),
-                );
-                delivered.insert(
-                    "vector".to_string(),
-                    perfetto::AnnotationValue::Pointer(vec as u64),
-                );
-                delivered.insert(
-                    "src".to_string(),
-                    perfetto::AnnotationValue::Str(src_name.to_string()),
-                );
-                delivered.insert(
-                    "imr".to_string(),
-                    perfetto::AnnotationValue::UInt(imr as u64),
-                );
-                delivered.insert(
-                    "isr".to_string(),
-                    perfetto::AnnotationValue::UInt(isr as u64),
-                );
-                delivered.insert(
-                    "s".to_string(),
-                    perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
-                );
-                tracer.record_irq_event("IRQ_Delivered", delivered);
             }
+            tracer.record_irq_event("IRQ_Enter", payload);
+            let mut delivered = std::collections::HashMap::new();
+            delivered.insert(
+                "from".to_string(),
+                perfetto::AnnotationValue::Pointer(pc as u64),
+            );
+            delivered.insert(
+                "vector".to_string(),
+                perfetto::AnnotationValue::Pointer(vec as u64),
+            );
+            delivered.insert(
+                "src".to_string(),
+                perfetto::AnnotationValue::Str(src_name.to_string()),
+            );
+            delivered.insert(
+                "imr".to_string(),
+                perfetto::AnnotationValue::UInt(imr as u64),
+            );
+            delivered.insert(
+                "isr".to_string(),
+                perfetto::AnnotationValue::UInt(isr as u64),
+            );
+            delivered.insert(
+                "s".to_string(),
+                perfetto::AnnotationValue::Pointer(self.state.get_reg(RegName::S) as u64),
+            );
+            if let Some(tag) = tag {
+                delivered.insert(
+                    "tag".to_string(),
+                    perfetto::AnnotationValue::Str(tag.to_string()),
+                );
+            }
+            tracer.record_irq_event("IRQ_Delivered", delivered);
+        }
         Ok(())
     }
 }
@@ -2836,6 +2854,42 @@ mod tests {
             "perfetto trace should tag overlay writes with python_overlay space"
         );
         let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn irq_delivery_out_of_exec_tags_perfetto() {
+        use std::fs;
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("perfetto_irq_out_of_exec.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0x0100);
+        rt.state.set_halted(true);
+        rt.state.set_reg(RegName::S, 0x0100);
+        // Assert KEYI while halted with master enabled.
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+
+        rt.deliver_pending_irq().expect("deliver pending irq");
+
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+            let _ = tracer.finish();
+        }
+        let buf = fs::read(&tmp).expect("read perfetto trace");
+        let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+        assert!(
+            text.contains("irq_delivery_out_of_exec"),
+            "perfetto trace should tag out-of-executor IRQ delivery"
+        );
         let _ = fs::remove_file(&tmp);
     }
 
