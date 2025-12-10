@@ -259,11 +259,8 @@ class PCE500Emulator:
 
         self.memory.set_cpu(self.cpu)
 
-        pure_keyboard_env = os.getenv("RUST_PURE_KEYBOARD")
-        if pure_keyboard_env is not None:
-            disable_keyboard_overlay = pure_keyboard_env == "1"
-        else:
-            disable_keyboard_overlay = False
+        # Always route keyboard I/O through the Rust peripheral even on the Python backend.
+        disable_keyboard_overlay = True
         self.memory.set_keyboard_handler(
             self._keyboard_read_handler,
             self._keyboard_write_handler,
@@ -278,11 +275,8 @@ class PCE500Emulator:
         except Exception:
             pass
 
-        pure_lcd_env = os.getenv("RUST_PURE_LCD")
-        if pure_lcd_env is not None:
-            disable_overlay = pure_lcd_env == "1"
-        else:
-            disable_overlay = False
+        # Always route LCD I/O through the Rust peripheral even on the Python backend.
+        disable_overlay = True
         enable_overlay = not disable_overlay
         self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
         self._llama_pure_lcd = disable_overlay
@@ -2288,17 +2282,6 @@ class PCE500Emulator:
                         "value": new_val,
                     },
                 )
-        # Diagnostic bias: optionally ensure KEY is unmasked when KEYI is asserted.
-        if mask & int(ISRFlag.KEYI):
-            if os.getenv("RUST_KEYI_BIAS") in ("1", "true", "True"):
-                imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                try:
-                    imr_val = self.memory.read_byte(imr_addr) & 0xFF
-                    desired = imr_val | int(IMRFlag.KEY) | int(IMRFlag.IRM)
-                    if desired != imr_val:
-                        self.memory.write_byte(imr_addr, desired & 0xFF)
-                except Exception:
-                    pass
         if IRQ_DEBUG_ENABLED:
             pc = self.cpu.regs.get(RegisterName.PC)
             _log_irq_debug(

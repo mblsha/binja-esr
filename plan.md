@@ -7,10 +7,6 @@ Cross-backend
 - `SC62015_CPU_BACKEND`: backend selector (`python`/`llama`).
 - `LLAMA_TIMER_SCALE`: scales MTI/STI periods; keep consistent across backends.
 
-Python-specific
-- `RUST_PURE_KEYBOARD`, `RUST_PURE_LCD`: force Rust peripherals even on Python backend.
-- `RUST_KEYI_BIAS`: adjust KEYI behavior for LLAMA debug.
-
 Build-time
 - `PYO3_PYTHON`: chooses Python interpreter during Rust bindings build.
 - `OUT_DIR`: cargo build output path (standard Cargo-provided variable).
