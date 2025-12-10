@@ -2361,46 +2361,6 @@ class PCE500Emulator:
                         f"timer fired source=STI cycle={self.cycle_count} next_sti={self._scheduler.next_sti}"
                     )
 
-        # Optional: force a strobe/scan for LLAMA backend when requested to ensure KEYI can assert.
-        if (
-            os.getenv("FORCE_STROBE_LLAMA") in ("1", "true", "True")
-            and getattr(self.cpu, "backend", None) == "llama"
-        ):
-            try:
-                self.keyboard.strobe_count += 1
-                self.keyboard.kol_value = 0xFF
-                self.keyboard.koh_value = 0x0F
-                forced_events = self.keyboard.scan_tick()
-                if forced_events:
-                    self._kb_irq_count += len(forced_events)
-                    self._set_isr_bits(int(ISRFlag.KEYI))
-                    self._irq_pending = True
-                    self._irq_source = IRQSource.KEY
-                    if False:
-                        print(
-                            f"[force-strobe-llama] events={len(forced_events)} "
-                            f"imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} "
-                            f"isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
-                        )
-            except Exception:
-                pass
-        # Fallback: if explicitly requested, force KEYI regardless of scan results for LLAMA debug.
-        if (
-            os.getenv("FORCE_KEYI_LLAMA") in ("1", "true", "True")
-            and getattr(self.cpu, "backend", None) == "llama"
-        ):
-            try:
-                self._set_isr_bits(int(ISRFlag.KEYI))
-                self._irq_pending = True
-                self._irq_source = IRQSource.KEY
-                if False:
-                    print(
-                        f"[force-keyi-llama] imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X} "
-                        f"isr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF:02X}"
-                    )
-            except Exception:
-                pass
-
         # If we have pressed keys but no events surfaced, emit a diagnostic marker.
         if (
             not key_events

@@ -6,7 +6,6 @@ Remaining env toggles (post cleanup)
 Cross-backend
 - `SC62015_CPU_BACKEND`: backend selector (`python`/`llama`).
 - `LLAMA_TIMER_SCALE`: scales MTI/STI periods; keep consistent across backends.
-- `FORCE_STROBE_LLAMA`, `FORCE_KEYI_LLAMA`: force keyboard strobe/KEYI for LLAMA debugging; can mask timing issues.
 
 Python-specific
 - `RUST_PURE_KEYBOARD`, `RUST_PURE_LCD`: force Rust peripherals even on Python backend.
