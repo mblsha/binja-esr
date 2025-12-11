@@ -128,7 +128,9 @@ def main() -> int:
 
     status = 0
     # Compare PRE opcode coverage only (mode pairs are validated by grouping tuples per opcode).
-    status |= diff_sets("PRE opcodes", (e.opcode for e in rust_pre), (e.opcode for e in py_pre))
+    status |= diff_sets(
+        "PRE opcodes", (e.opcode for e in rust_pre), (e.opcode for e in py_pre)
+    )
     # Compare full mode pairs per opcode.
     rust_pairs: Dict[int, List[Tuple[AddressingMode, AddressingMode]]] = {}
     for e in rust_pre:
@@ -140,7 +142,9 @@ def main() -> int:
         r_modes = set(rust_pairs.get(opcode, []))
         p_modes = set(py_pairs.get(opcode, []))
         if r_modes != p_modes:
-            print(f"PRE mode mismatch for 0x{opcode:02X}: rust={sorted(r_modes)} python={sorted(p_modes)}")
+            print(
+                f"PRE mode mismatch for 0x{opcode:02X}: rust={sorted(r_modes)} python={sorted(p_modes)}"
+            )
             status = 1
     status |= diff_sets("SINGLE_ADDRESSABLE_OPCODES", rust_single, py_single)
     return status

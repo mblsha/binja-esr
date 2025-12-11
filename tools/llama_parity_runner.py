@@ -194,7 +194,10 @@ def run_once(payload: str) -> Snapshot:
             }
         )
         ev.add_annotations(
-            {f"reg_{name.lower()}": value & 0xFF_FFFF for name, value in regs_out.items()}
+            {
+                f"reg_{name.lower()}": value & 0xFF_FFFF
+                for name, value in regs_out.items()
+            }
         )
         for addr, bits, value, space in mem.writes():
             mev = builder.add_instant_event(mem_track, f"Write@0x{addr:06X}", ts + 1)

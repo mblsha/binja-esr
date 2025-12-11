@@ -186,13 +186,20 @@ def emit_perfetto_traces(prefix: Path) -> None:
     # 3: ADD A,0x01
     # 5: MV IMem8,0x34 (offset 0x10)
     # 8: MV IMem8,A   (offset 0x11)
-    program = bytes([
-        0x00,                   # NOP
-        0x08, 0x12,             # MV A,0x12
-        0x40, 0x01,             # ADD A,0x01
-        0xCC, 0x10, 0x34,       # MV IMem8,0x34 @0x10
-        0xA0, 0x11,             # MV IMem8,A @0x11
-    ])
+    program = bytes(
+        [
+            0x00,  # NOP
+            0x08,
+            0x12,  # MV A,0x12
+            0x40,
+            0x01,  # ADD A,0x01
+            0xCC,
+            0x10,
+            0x34,  # MV IMem8,0x34 @0x10
+            0xA0,
+            0x11,  # MV IMem8,A @0x11
+        ]
+    )
 
     def _run_trace(backend: str, path: Path) -> None:
         perfetto_tracer.stop()

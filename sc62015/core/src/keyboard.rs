@@ -743,7 +743,9 @@ mod tests {
         let events = kb.scan_tick(&mut mem, false);
         assert!(events > 0, "expected a debounced event");
         kb.write_fifo_to_memory(&mut mem, false);
-        let isr = mem.read_internal_byte(crate::memory::IMEM_ISR_OFFSET).unwrap_or(0);
+        let isr = mem
+            .read_internal_byte(crate::memory::IMEM_ISR_OFFSET)
+            .unwrap_or(0);
         assert_eq!(isr & 0x04, 0, "KEYI should remain clear when IRQs disabled");
         assert!(kb.fifo_len() > 0, "FIFO should still capture the event");
     }

@@ -250,6 +250,7 @@ def compare_instruction_traces(
 
         ann_a = dict(evt_a.annotations)
         ann_b = dict(evt_b.annotations)
+
         # Fallback: parse pc/opcode/op_index from event name when annotations are missing.
         def _parse_name_into(ann: Dict[str, object], name: str) -> None:
             if "pc" in ann and "opcode" in ann and "op_index" in ann:

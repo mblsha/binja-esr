@@ -23,7 +23,6 @@ use sc62015_core::{
 use serde_json::{json, to_value, Value as JsonValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 const IMEM_KOL_OFFSET: u32 = 0xF0;
 const IMEM_KOH_OFFSET: u32 = 0xF1;
@@ -389,7 +388,7 @@ impl LlamaContractBus {
                 &mut self.memory,
                 self.cycles,
                 |mem| {
-                    let events = self.keyboard.scan_tick(kb_irq_enabled);
+                    let events = self.keyboard.scan_tick(mem, kb_irq_enabled);
                     if events > 0 {
                         self.keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
                     }
@@ -468,7 +467,7 @@ impl LlamaContractBus {
                         pc: pc.map(|v| v & ADDRESS_MASK),
                         detail: None,
                     });
-                    return Ok(value);
+                    Ok(value)
                 });
             }
         }
@@ -507,12 +506,12 @@ impl LlamaContractBus {
     fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
         let addr = address & ADDRESS_MASK;
         if self.memory.requires_python(addr) {
-                if let Some(host) = &self.host_memory {
-                    Python::with_gil(|py| {
-                        let bound = host.bind(py);
-                        bound
-                            .call_method1("write_byte", (addr, value, pc))
-                            .or_else(|err| {
+            if let Some(host) = &self.host_memory {
+                Python::with_gil(|py| {
+                    let bound = host.bind(py);
+                    bound
+                        .call_method1("write_byte", (addr, value, pc))
+                        .or_else(|err| {
                             if err.is_instance_of::<PyTypeError>(py) {
                                 bound.call_method1("write_byte", (addr, value))
                             } else {
@@ -520,23 +519,27 @@ impl LlamaContractBus {
                             }
                         })
                         .map(|_| ())
-                    })?;
-                    // Parity: for host-handled IMEM writes, avoid mirroring keyboard/E-port overlays
-                    // into internal memory; Python overlays do not mutate IMEM for KIO/ONK.
-                    let should_mirror = if MemoryImage::is_internal(addr) {
-                        let offset = addr - INTERNAL_MEMORY_START;
-                        !MemoryImage::is_keyboard_offset(offset) && offset != 0xF5 && offset != 0xF6
-                    } else {
-                        true
-                    };
-                    if should_mirror {
-                        self.memory
-                            .apply_host_write_with_cycle(addr, value, None, pc.map(|v| v & ADDRESS_MASK));
-                    }
-                    self.events.push(ContractEvent {
-                        kind: "write",
-                        address: addr,
+                })?;
+                // Parity: for host-handled IMEM writes, avoid mirroring keyboard/E-port overlays
+                // into internal memory; Python overlays do not mutate IMEM for KIO/ONK.
+                let should_mirror = if MemoryImage::is_internal(addr) {
+                    let offset = addr - INTERNAL_MEMORY_START;
+                    !MemoryImage::is_keyboard_offset(offset) && offset != 0xF5 && offset != 0xF6
+                } else {
+                    true
+                };
+                if should_mirror {
+                    self.memory.apply_host_write_with_cycle(
+                        addr,
                         value,
+                        None,
+                        pc.map(|v| v & ADDRESS_MASK),
+                    );
+                }
+                self.events.push(ContractEvent {
+                    kind: "write",
+                    address: addr,
+                    value,
                     pc: pc.map(|v| v & ADDRESS_MASK),
                     detail: None,
                 });
@@ -716,10 +719,7 @@ impl LlamaContractBus {
                 "isr".to_string(),
                 AnnotationValue::UInt(self.timer.irq_isr as u64),
             );
-            payload.insert(
-                "src".to_string(),
-                AnnotationValue::Str("ONK".to_string()),
-            );
+            payload.insert("src".to_string(), AnnotationValue::Str("ONK".to_string()));
             tracer.record_irq_event("KeyIRQ", payload);
         }
     }
@@ -790,6 +790,7 @@ struct LlamaPyBus {
 }
 
 impl LlamaPyBus {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         memory: &Py<PyAny>,
@@ -1095,15 +1096,11 @@ impl LlamaBus for LlamaPyBus {
                     mirror,
                     *cycles_counter,
                     |mem| {
-                        let events = keyboard.scan_tick(kb_irq_enabled);
+                        let events = keyboard.scan_tick(mem, kb_irq_enabled);
                         if events > 0 {
                             keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
                         }
-                        (
-                            events,
-                            keyboard.fifo_len() > 0,
-                            Some(keyboard.telemetry()),
-                        )
+                        (events, keyboard.fifo_len() > 0, Some(keyboard.telemetry()))
                     },
                     None,
                     None,
@@ -1273,7 +1270,11 @@ impl LlamaCpu {
             }
 
             let mem = self.memory.clone_ref(py);
-            let mut bus = ResetBus { py, mem, mirror: &mut self.mirror };
+            let mut bus = ResetBus {
+                py,
+                mem,
+                mirror: &mut self.mirror,
+            };
             power_on_reset(&mut bus, &mut self.state);
             Ok::<(), pyo3::PyErr>(())
         })?;
@@ -1328,7 +1329,10 @@ impl LlamaCpu {
                 "IRQ_Enter",
                 HashMap::from([
                     ("pc", entry_pc & ADDRESS_MASK),
-                    ("vector", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
+                    (
+                        "vector",
+                        self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
+                    ),
                     ("imr", imr as u32),
                     ("isr", isr as u32),
                 ]),
@@ -1524,14 +1528,12 @@ impl LlamaCpu {
     }
 
     fn keyboard_press_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
-        let events = self
-            .keyboard
-            .inject_matrix_event(
-                code & 0x7F,
-                false,
-                &mut self.mirror,
-                self.timer.kb_irq_enabled,
-            );
+        let events = self.keyboard.inject_matrix_event(
+            code & 0x7F,
+            false,
+            &mut self.mirror,
+            self.timer.kb_irq_enabled,
+        );
         if self.timer.kb_irq_enabled && (events > 0 || self.keyboard.fifo_len() > 0) {
             // Mirror Python scheduler: latch KEYI and pending IRQ immediately.
             self.timer.irq_pending = true;
@@ -1548,8 +1550,14 @@ impl LlamaCpu {
             let mut guard = PERFETTO_TRACER.enter();
             if let Some(tracer) = guard.as_mut() {
                 let mut payload = HashMap::new();
-                payload.insert("imr".to_string(), AnnotationValue::UInt(self.timer.irq_imr as u64));
-                payload.insert("isr".to_string(), AnnotationValue::UInt(self.timer.irq_isr as u64));
+                payload.insert(
+                    "imr".to_string(),
+                    AnnotationValue::UInt(self.timer.irq_imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    AnnotationValue::UInt(self.timer.irq_isr as u64),
+                );
                 payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
                 tracer.record_irq_event("KeyIRQ", payload);
             }
@@ -1584,9 +1592,18 @@ impl LlamaCpu {
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.as_mut() {
             let mut payload = HashMap::new();
-            payload.insert("pc".to_string(), AnnotationValue::Pointer(perfetto_last_pc() as u64));
-            payload.insert("imr".to_string(), AnnotationValue::UInt(self.timer.irq_imr as u64));
-            payload.insert("isr".to_string(), AnnotationValue::UInt(self.timer.irq_isr as u64));
+            payload.insert(
+                "pc".to_string(),
+                AnnotationValue::Pointer(perfetto_last_pc() as u64),
+            );
+            payload.insert(
+                "imr".to_string(),
+                AnnotationValue::UInt(self.timer.irq_imr as u64),
+            );
+            payload.insert(
+                "isr".to_string(),
+                AnnotationValue::UInt(self.timer.irq_isr as u64),
+            );
             payload.insert("src".to_string(), AnnotationValue::Str("ONK".to_string()));
             tracer.record_irq_event("KeyIRQ", payload);
         }
@@ -1610,14 +1627,12 @@ impl LlamaCpu {
     }
 
     fn keyboard_release_matrix_code(&mut self, py: Python<'_>, code: u8) -> PyResult<bool> {
-        let events = self
-            .keyboard
-            .inject_matrix_event(
-                code & 0x7F,
-                true,
-                &mut self.mirror,
-                self.timer.kb_irq_enabled,
-            );
+        let events = self.keyboard.inject_matrix_event(
+            code & 0x7F,
+            true,
+            &mut self.mirror,
+            self.timer.kb_irq_enabled,
+        );
         if self.timer.kb_irq_enabled && self.keyboard.fifo_len() > 0 {
             self.timer.irq_pending = true;
             self.timer.irq_source = Some("KEY".to_string());
@@ -1900,10 +1915,7 @@ mod tests {
         let mut bus = LlamaContractBus::new();
         bus.configure_timer(1, 0, true);
         bus.tick_timers(1);
-        let isr = bus
-            .memory
-            .read_internal_byte(0xFC)
-            .unwrap_or(0);
+        let isr = bus.memory.read_internal_byte(0xFC).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI bit should be set in ISR");
         assert!(bus.timer.irq_pending, "MTI should mark irq_pending");
     }
@@ -1922,11 +1934,11 @@ class Mem:
         self.data[addr & 0xFFFFFF] = val & 0xFF
         return None
 "#;
-            let module = PyModule::from_code_bound(py, code, "mem_mod.py", "mem_mod")
-                .expect("mem module");
+            let module =
+                PyModule::from_code_bound(py, code, "mem_mod.py", "mem_mod").expect("mem module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
 
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false).expect("cpu init");
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
             // Seed WAIT at PC=0 and configure a fast timer tick.
             let mem_obj = cpu.memory.clone_ref(py);
             let bound_before = mem_obj.bind(py);
@@ -1940,7 +1952,10 @@ class Mem:
             let (_opcode, _len) = cpu.execute_instruction(py, 0).expect("execute WAIT");
 
             // MTI should have fired during fallback wait_cycles and set IRQ pending.
-            assert!(cpu.timer.irq_pending, "timer should pend after WAIT fallback");
+            assert!(
+                cpu.timer.irq_pending,
+                "timer should pend after WAIT fallback"
+            );
             let bound_after = mem_obj.bind(py);
             let isr = bound_after
                 .call_method1("read_byte", (INTERNAL_MEMORY_START + IMEM_ISR_OFFSET,))

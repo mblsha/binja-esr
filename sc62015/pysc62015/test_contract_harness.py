@@ -152,7 +152,11 @@ def test_onk_press_sets_pending_parity():
     assert py_snap.isr & 0x08 == rs_snap.isr & 0x08 == 0x08
     assert py_snap.metadata.get("irq_pending") is True
     assert rs_snap.metadata.get("irq_pending") is True
-    assert py_snap.metadata.get("irq_source") == rs_snap.metadata.get("irq_source") == "ONK"
+    assert (
+        py_snap.metadata.get("irq_source")
+        == rs_snap.metadata.get("irq_source")
+        == "ONK"
+    )
 
     py_events = [(e.kind, e.address, e.value) for e in py_backend.drain_events()]
     rs_events = [(e.kind, e.address, e.value) for e in rust_backend.drain_events()]
@@ -170,7 +174,11 @@ def test_keyboard_press_helper_sets_pending_parity():
     assert py_snap.isr & 0x04 == rs_snap.isr & 0x04 == 0x04
     assert py_snap.metadata.get("irq_pending") is True
     assert rs_snap.metadata.get("irq_pending") is True
-    assert py_snap.metadata.get("irq_source") == rs_snap.metadata.get("irq_source") == "KEY"
+    assert (
+        py_snap.metadata.get("irq_source")
+        == rs_snap.metadata.get("irq_source")
+        == "KEY"
+    )
 
     py_events = [(e.kind, e.address, e.value) for e in py_backend.drain_events()]
     rs_events = [(e.kind, e.address, e.value) for e in rust_backend.drain_events()]
@@ -278,7 +286,9 @@ def test_requires_python_overlays_are_delegated():
 def test_lcd_reads_stubbed_to_ff_parity():
     py_backend, rust_backend = _init_backends()
     vectors = [
-        AccessVector("write", 0x2000, 0x12, pc=0x090000),  # instruction write (ignored by read stub)
+        AccessVector(
+            "write", 0x2000, 0x12, pc=0x090000
+        ),  # instruction write (ignored by read stub)
         AccessVector("read", 0x2001, pc=0x090002),  # instruction read
         AccessVector("write", 0xA000, 0x34, pc=0x090010),  # high mirror write
         AccessVector("read", 0xA001, pc=0x090012),  # data read

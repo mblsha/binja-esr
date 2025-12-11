@@ -262,13 +262,14 @@ struct StandaloneBus {
 enum AutoKeyKind {
     Matrix(u8),
     OnKey,
+}
+
+impl StandaloneBus {
+    fn log_perfetto(&self, msg: &str) {
+        let _ = msg;
     }
 
-    impl StandaloneBus {
-        fn log_perfetto(&self, msg: &str) {
-            let _ = msg;
-        }
-
+    #[allow(clippy::too_many_arguments)]
     fn new(
         memory: MemoryImage,
         lcd: LcdController,
@@ -411,9 +412,7 @@ enum AutoKeyKind {
     #[allow(dead_code)]
     fn tick_keyboard(&mut self) {
         // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
-        let events = self
-            .keyboard
-            .scan_tick(&mut self.memory, true);
+        let events = self.keyboard.scan_tick(&mut self.memory, true);
         if events > 0 || (self.timer.kb_irq_enabled && self.keyboard.fifo_len() > 0) {
             self.keyboard
                 .write_fifo_to_memory(&mut self.memory, self.timer.kb_irq_enabled);
@@ -595,8 +594,7 @@ enum AutoKeyKind {
         }
     }
 
-    fn log_irq_delivery(&mut self, src: Option<&str>, vec: u32, imr: u8, isr: u8, pc: u32) {
-    }
+    fn log_irq_delivery(&mut self, _src: Option<&str>, _vec: u32, _imr: u8, _isr: u8, _pc: u32) {}
 
     fn deliver_irq(&mut self, state: &mut LlamaState) {
         // Mirror the IR intrinsic: push PC, F, IMR, clear IRM, jump to vector.
@@ -723,8 +721,7 @@ enum AutoKeyKind {
                 // Parity: always count/key-latch events even when IRQs are masked.
                 let events = self.keyboard.scan_tick(mem, true);
                 if events > 0 || (kb_irq_enabled && self.keyboard.fifo_len() > 0) {
-                    self.keyboard
-                        .write_fifo_to_memory(mem, kb_irq_enabled);
+                    self.keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
                 }
                 (
                     events,
@@ -813,19 +810,19 @@ impl LlamaBus for StandaloneBus {
                     #[cfg(feature = "llama-tests")]
                     {
                         let mut guard = PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_kio_read(
-                            Some(self.last_pc),
-                            offset as u8,
-                            byte,
-                            Some(self.instr_index),
-                        );
+                        if let Some(tracer) = guard.as_mut() {
+                            tracer.record_kio_read(
+                                Some(self.last_pc),
+                                offset as u8,
+                                byte,
+                                Some(self.instr_index),
+                            );
+                        }
                     }
                 }
-            }
-            if matches!(
-                offset,
-                IMEM_KIL_OFFSET
+                if matches!(
+                    offset,
+                    IMEM_KIL_OFFSET
                         | IMEM_KOL_OFFSET
                         | IMEM_KOH_OFFSET
                         | IMEM_IMR_OFFSET

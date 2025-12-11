@@ -249,7 +249,11 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
     if let Some(tracer) = guard.as_mut() {
         let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
         let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
-        let op = if op_idx == u64::MAX { None } else { Some(op_idx) };
+        let op = if op_idx == u64::MAX {
+            None
+        } else {
+            Some(op_idx)
+        };
         let pc_val = if pc == u32::MAX { None } else { Some(pc) };
         tracer.record_imem_addr(
             &format!("{mode:?}"),
@@ -398,8 +402,8 @@ impl LlamaExecutor {
             let mut regs = HashMap::new();
             let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
                 (
-                    bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
-                    bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
+                    bus.peek_imem_silent(IMEM_IMR_OFFSET),
+                    bus.peek_imem_silent(IMEM_ISR_OFFSET),
                 )
             });
             for (name, reg) in [
@@ -479,21 +483,13 @@ impl LlamaExecutor {
             } else {
                 value & ((1u32 << bits) - 1)
             };
-            let space =
-                if (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr) {
-                    "internal"
-                } else {
-                    "external"
-                };
-            tracer.record_mem_write_with_substep(
-                op_index,
-                pc,
-                addr,
-                masked,
-                space,
-                bits,
-                substep,
-            );
+            let space = if (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr)
+            {
+                "internal"
+            } else {
+                "external"
+            };
+            tracer.record_mem_write_with_substep(op_index, pc, addr, masked, space, bits, substep);
         }
     }
 
@@ -1634,7 +1630,7 @@ impl LlamaExecutor {
             _ => {
                 // Generic fallback: re-evaluate with simple ALU semantics and write back to lhs.
                 let lhs_is_mem = matches!(
-                    entry.operands.get(0).unwrap_or(&OperandKind::Placeholder),
+                    entry.operands.first().unwrap_or(&OperandKind::Placeholder),
                     OperandKind::IMem(_)
                         | OperandKind::IMemWidth(_)
                         | OperandKind::EMemAddrWidth(_)
@@ -1894,7 +1890,7 @@ impl LlamaExecutor {
         bus: &mut B,
     ) -> Result<u8, &'static str> {
         // Keep IMR in sync with memory regardless of tracing so state is architecture-accurate.
-        let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF);
+        let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
         state.set_reg(RegName::IMR, mem_imr as u32);
 
         let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1930,13 +1926,13 @@ impl LlamaExecutor {
         PERF_CURRENT_PC.store(trace_pc_snapshot, Ordering::Relaxed);
         let _ctx_guard = PerfettoContextGuard;
         // Trace the pre-execution snapshot using the prefix PC/opcode for Python parity.
-            self.trace_instr(
-                trace_opcode_snapshot,
-                state,
-                bus,
-                instr_index,
-                trace_pc_snapshot,
-            );
+        self.trace_instr(
+            trace_opcode_snapshot,
+            state,
+            bus,
+            instr_index,
+            trace_pc_snapshot,
+        );
 
         let result = match entry {
             Some(entry) => self.execute_with(
@@ -2425,10 +2421,7 @@ impl LlamaExecutor {
                         AnnotationValue::Pointer((pc & mask_for(RegName::PC)) as u64),
                     );
                     payload.insert("vector".to_string(), AnnotationValue::Pointer(vec as u64));
-                    payload.insert(
-                        "imr_before".to_string(),
-                        AnnotationValue::UInt(imr as u64),
-                    );
+                    payload.insert("imr_before".to_string(), AnnotationValue::UInt(imr as u64));
                     payload.insert(
                         "imr_after".to_string(),
                         AnnotationValue::UInt(cleared_imr as u64),
@@ -2948,7 +2941,8 @@ mod tests {
         let reads_before = mem.memory_read_count();
         {
             let mut bus = Bus { mem: &mut mem };
-            exec.execute(0x00, &mut state, &mut bus).expect("execute nop");
+            exec.execute(0x00, &mut state, &mut bus)
+                .expect("execute nop");
         }
         let reads_after = mem.memory_read_count();
         assert_eq!(
@@ -2997,7 +2991,10 @@ mod tests {
         let mut bus = NullBus;
         state.set_pc(0x10);
         let res = exec.execute(0x20, &mut state, &mut bus);
-        assert!(res.is_ok(), "default mode should fall back on unknown opcodes");
+        assert!(
+            res.is_ok(),
+            "default mode should fall back on unknown opcodes"
+        );
         assert_eq!(state.pc(), 0x11, "fallback should advance PC by length");
     }
 
@@ -3038,7 +3035,9 @@ mod tests {
             *guard = Some(PerfettoTracer::new(path));
         }
 
-        let len = exec.execute(0x32, &mut state, &mut bus).expect("execute PRE+NOP");
+        let len = exec
+            .execute(0x32, &mut state, &mut bus)
+            .expect("execute PRE+NOP");
         assert_eq!(len, 2, "PRE + NOP should consume two bytes");
 
         let tracer = crate::PERFETTO_TRACER
@@ -3102,11 +3101,19 @@ mod tests {
         let ptr_base = INTERNAL_MEMORY_START + 0x20;
         bus.seed_pointer(ptr_base, base_ptr);
         let (transfer, consumed) = exec
-            .decode_emem_imem_offset(entry, &mut bus, 0, AddressingMode::N, AddressingMode::N, true)
+            .decode_emem_imem_offset(
+                entry,
+                &mut bus,
+                0,
+                AddressingMode::N,
+                AddressingMode::N,
+                true,
+            )
             .expect("positive offset should decode");
         assert_eq!(consumed, 4, "positive offset should consume mode+ptr+disp");
         assert_eq!(
-            transfer.src_addr, base_ptr + 5,
+            transfer.src_addr,
+            base_ptr + 5,
             "positive offset should add displacement"
         );
         assert_eq!(
@@ -3136,7 +3143,8 @@ mod tests {
             .expect("negative offset should decode");
         assert_eq!(consumed_neg, 4);
         assert_eq!(
-            transfer_neg.src_addr, base_ptr_neg - 3,
+            transfer_neg.src_addr,
+            base_ptr_neg - 3,
             "negative offset should subtract displacement"
         );
         assert_eq!(
@@ -3898,7 +3906,7 @@ mod tests {
         bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0x00;
         bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = 0x00;
         bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = 0x01; // would decode to 0x010000
-        // ROM reset vector (0xFFFFD) -> 0x054321
+                                                            // ROM reset vector (0xFFFFD) -> 0x054321
         bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x21;
         bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x43;
         bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x05;
@@ -4252,8 +4260,16 @@ mod tests {
         assert_eq!(state.pc(), 3, "PC should advance by decoded length");
         assert_eq!(bus.mem[0x10], 0x12, "destination should remain unchanged");
         assert_eq!(bus.mem[0x20], 0x34, "source should remain unchanged");
-        assert_eq!(state.get_reg(RegName::FC), 1, "carry flag should be preserved");
-        assert_eq!(state.get_reg(RegName::FZ), 0, "zero flag should be preserved");
+        assert_eq!(
+            state.get_reg(RegName::FC),
+            1,
+            "carry flag should be preserved"
+        );
+        assert_eq!(
+            state.get_reg(RegName::FZ),
+            0,
+            "zero flag should be preserved"
+        );
         assert_eq!(state.get_reg(RegName::I), 0, "I should remain zero");
     }
 
