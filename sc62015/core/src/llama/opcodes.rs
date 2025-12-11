@@ -1416,7 +1416,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
         ops_reversed: None,
         operands: &[
             OperandKind::Reg(RegName::BA, 16),
-            OperandKind::EMemIMemWidth(1),
+            OperandKind::EMemIMemWidth(2),
         ],
     },
     OpcodeEntry {
@@ -1427,7 +1427,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
         ops_reversed: None,
         operands: &[
             OperandKind::Reg(RegName::I, 16),
-            OperandKind::EMemIMemWidth(1),
+            OperandKind::EMemIMemWidth(2),
         ],
     },
     OpcodeEntry {
@@ -1438,7 +1438,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
         ops_reversed: None,
         operands: &[
             OperandKind::Reg(RegName::X, 24),
-            OperandKind::EMemIMemWidth(1),
+            OperandKind::EMemIMemWidth(3),
         ],
     },
     OpcodeEntry {
@@ -1449,7 +1449,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
         ops_reversed: None,
         operands: &[
             OperandKind::Reg(RegName::Y, 24),
-            OperandKind::EMemIMemWidth(1),
+            OperandKind::EMemIMemWidth(3),
         ],
     },
     OpcodeEntry {
@@ -1460,7 +1460,7 @@ pub static OPCODES: [OpcodeEntry; 256] = [
         ops_reversed: None,
         operands: &[
             OperandKind::Reg(RegName::U, 24),
-            OperandKind::EMemIMemWidth(1),
+            OperandKind::EMemIMemWidth(3),
         ],
     },
     OpcodeEntry {

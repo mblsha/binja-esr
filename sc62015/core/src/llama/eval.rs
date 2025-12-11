@@ -3217,8 +3217,8 @@ mod tests {
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
-        assert_eq!(bus.calls, 0, "WAIT should not tick timers");
-        assert_eq!(bus.spins, 0, "WAIT should not burn cycles");
+        assert_eq!(bus.calls, 1, "WAIT should tick timers via wait_cycles");
+        assert_eq!(bus.spins, 5, "WAIT should consume the requested cycles");
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 0);
