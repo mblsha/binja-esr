@@ -1262,20 +1262,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut executor = LlamaExecutor::new();
     power_on_reset(&mut bus, &mut state);
     // Align PC with ROM reset vector.
-    let reset_vec = rom_bytes
-        .get(ROM_RESET_VECTOR_ADDR as usize)
-        .copied()
-        .unwrap_or(0) as u32
-        | ((rom_bytes
-            .get(ROM_RESET_VECTOR_ADDR as usize + 1)
-            .copied()
-            .unwrap_or(0) as u32)
-            << 8)
-        | ((rom_bytes
-            .get(ROM_RESET_VECTOR_ADDR as usize + 2)
-            .copied()
-            .unwrap_or(0) as u32)
-            << 16);
+    let reset_offset = ROM_RESET_VECTOR_ADDR
+        .saturating_sub(rom_start as u32)
+        .saturating_sub(src_start as u32) as usize;
+    let reset_vec = slice.get(reset_offset).copied().unwrap_or(0) as u32
+        | ((slice.get(reset_offset + 1).copied().unwrap_or(0) as u32) << 8)
+        | ((slice.get(reset_offset + 2).copied().unwrap_or(0) as u32) << 16);
     state.set_pc(reset_vec & ADDRESS_MASK);
     // Leave IMR at reset defaults; the ROM will initialize vectors/masks.
 
