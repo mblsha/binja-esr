@@ -61,6 +61,7 @@ pub fn perfetto_last_pc() -> u32 {
 }
 
 pub fn reset_perf_counters() {
+    let _guard = PERFETTO_TRACER.enter();
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
     PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
     PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
@@ -4344,6 +4345,7 @@ mod tests {
 
     #[test]
     fn perfetto_last_pc_tracks_executed_instruction_pc() {
+        let _lock = PERFETTO_TRACER.enter();
         reset_perf_counters();
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
