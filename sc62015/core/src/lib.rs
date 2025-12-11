@@ -39,6 +39,12 @@ pub struct PerfettoGuard<'a> {
     released: bool,
 }
 
+#[derive(Debug)]
+struct PythonOverlayFault {
+    addr: u32,
+    pc: u32,
+}
+
 impl PerfettoHandle {
     pub const fn new() -> Self {
         Self {
@@ -754,7 +760,10 @@ impl CoreRuntime {
                         if self.overlay_fault_addr.is_none() {
                             self.overlay_fault_addr = Some(addr);
                         }
-                        return 0;
+                        std::panic::panic_any(PythonOverlayFault {
+                            addr,
+                            pc: self.pc,
+                        });
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
                     if MemoryImage::is_internal(addr)
@@ -860,7 +869,10 @@ impl CoreRuntime {
                         if self.overlay_fault_addr.is_none() {
                             self.overlay_fault_addr = Some(addr);
                         }
-                        return;
+                        std::panic::panic_any(PythonOverlayFault {
+                            addr,
+                            pc: self.pc,
+                        });
                     }
                     let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
                 }
@@ -875,175 +887,176 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
-            // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
-            let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
-                let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-                let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
-                let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                let pending_src = self
-                    .timer
-                    .irq_source
-                    .as_deref()
-                    .map(str::to_string)
-                    .or_else(|| {
-                        if (isr & ISR_KEYI) != 0 {
-                            Some("KEY".to_string())
-                        } else if (isr & ISR_ONKI) != 0 {
-                            Some("ONK".to_string())
-                        } else if (isr & ISR_MTI) != 0 {
-                            Some("MTI".to_string())
-                        } else if (isr & ISR_STI) != 0 {
-                            Some("STI".to_string())
-                        } else {
-                            None
-                        }
-                    });
-                tracer.record_irq_check(
-                    "IRQ_Check",
-                    self.state.pc() & ADDRESS_MASK,
-                    imr,
-                    isr,
-                    self.timer.irq_pending,
-                    self.timer.in_interrupt,
-                    pending_src.as_deref(),
-                    Some(kil),
-                    Some(imr_reg),
-                );
-            }
-            // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
-            self.refresh_key_irq_latch();
-            // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
-            self.arm_pending_irq_from_isr();
-
-            // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
-            if self.state.is_halted() {
-                if let Some(mut isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                    // When keyboard IRQs are disabled, ignore KEYI for HALT wake to mirror Python gating.
-                    if !self.timer.kb_irq_enabled {
-                        isr &= !ISR_KEYI;
-                    }
-                    if isr != 0 {
-                        self.state.set_halted(false);
-                        self.timer.irq_pending = true;
-                        self.timer.irq_isr = isr;
-                        self.timer.irq_imr = self
-                            .memory
-                            .read_internal_byte(IMEM_IMR_OFFSET)
-                            .unwrap_or(self.timer.irq_imr);
-                        if self.timer.irq_source.is_none() {
-                            let src = if (isr & ISR_KEYI) != 0 {
-                                "KEY"
+            let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
+                let mut guard = PERFETTO_TRACER.enter();
+                if let Some(tracer) = guard.as_mut() {
+                    let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+                    let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
+                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                    let pending_src = self
+                        .timer
+                        .irq_source
+                        .as_deref()
+                        .map(str::to_string)
+                        .or_else(|| {
+                            if (isr & ISR_KEYI) != 0 {
+                                Some("KEY".to_string())
                             } else if (isr & ISR_ONKI) != 0 {
-                                "ONK"
+                                Some("ONK".to_string())
                             } else if (isr & ISR_MTI) != 0 {
-                                "MTI"
+                                Some("MTI".to_string())
                             } else if (isr & ISR_STI) != 0 {
-                                "STI"
+                                Some("STI".to_string())
                             } else {
-                                "IRQ"
-                            };
-                            self.timer.irq_source = Some(src.to_string());
-                        }
-                        self.timer.last_fired = self.timer.irq_source.clone();
-                    }
-                }
-            }
-
-            // Halted cores still consume idle cycles and allow timers/IRQs to run.
-            if self.state.is_halted() {
-                let prev_cycle = self.metadata.cycle_count;
-                let new_cycle = prev_cycle.wrapping_add(1);
-                self.metadata.cycle_count = new_cycle;
-                if !self.timer.in_interrupt {
-                    let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let _ = self.timer.tick_timers_with_keyboard(
-                        &mut self.memory,
-                        new_cycle,
-                        |mem| {
-                            if let Some(kb) = self.keyboard.as_mut() {
-                                let events = kb.scan_tick(kb_irq_enabled);
-                                if events > 0 {
-                                    kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                }
-                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                            } else {
-                                (0, false, None)
+                                None
                             }
-                        },
-                        Some(self.state.get_reg(RegName::Y)),
-                        Some(self.state.get_reg(RegName::PC)),
+                        });
+                    tracer.record_irq_check(
+                        "IRQ_Check",
+                        self.state.pc() & ADDRESS_MASK,
+                        imr,
+                        isr,
+                        self.timer.irq_pending,
+                        self.timer.in_interrupt,
+                        pending_src.as_deref(),
+                        Some(kil),
+                        Some(imr_reg),
                     );
-                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                        self.timer.irq_isr = isr;
-                    }
-                    // Reassert KEYI latch only when enabled, mirroring Python HALT wake behavior.
-                    self.refresh_key_irq_latch();
                 }
-                self.deliver_pending_irq()?;
-                continue;
-            }
+                // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
+                self.refresh_key_irq_latch();
+                // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
+                self.arm_pending_irq_from_isr();
 
-            let keyboard_ptr = self
-                .keyboard
-                .as_mut()
-                .map(|kb| kb as *mut KeyboardMatrix)
-                .unwrap_or(std::ptr::null_mut());
-            let lcd_ptr = self
-                .lcd
-                .as_mut()
-                .map(|lcd| lcd as *mut LcdController)
-                .unwrap_or(std::ptr::null_mut());
-            let host_read = self
-                .host_read
-                .as_mut()
-                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-            let host_write = self
-                .host_write
-                .as_mut()
-                .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
-            let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-            let mut bus = RuntimeBus {
-                mem: &mut self.memory,
-                keyboard_ptr,
-                lcd_ptr,
-                host_read,
-                host_write,
-                onk_level: self.onk_level,
-                cycle: self.metadata.cycle_count,
-                pc,
-                meta_ptr: &self.metadata as *const SnapshotMetadata,
-                state_ptr: &self.state as *const LlamaState,
-                overlay_fault_addr: None,
-            };
-            let opcode = bus.load(pc, 8) as u8;
-            if let Some(addr) = bus.overlay_fault_addr {
-                return Err(CoreError::Other(format!(
-                    "python overlay required for 0x{addr:06X} but no host handler is installed"
-                )));
-            }
-            // Capture WAIT loop count before execution (executor clears I).
-            let wait_loops = if opcode == 0xEF {
-                self.state.get_reg(RegName::I) & mask_for(RegName::I)
-            } else {
-                0
-            };
-            if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
-                return Err(CoreError::Other(format!(
-                    "execute opcode 0x{opcode:02X}: {e}"
-                )));
-            }
-            if let Some(addr) = bus.overlay_fault_addr {
-                return Err(CoreError::Other(format!(
-                    "python overlay required for 0x{addr:06X} but no host handler is installed"
-                )));
-            }
-            if opcode == 0xFF {
-                // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
-                // refresh mirrors from IMEM without clearing counters/bit-watch.
-                self.timer.irq_imr = self
-                    .memory
+                // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
+                if self.state.is_halted() {
+                    if let Some(mut isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                        // When keyboard IRQs are disabled, ignore KEYI for HALT wake to mirror Python gating.
+                        if !self.timer.kb_irq_enabled {
+                            isr &= !ISR_KEYI;
+                        }
+                        if isr != 0 {
+                            self.state.set_halted(false);
+                            self.timer.irq_pending = true;
+                            self.timer.irq_isr = isr;
+                            self.timer.irq_imr = self
+                                .memory
+                                .read_internal_byte(IMEM_IMR_OFFSET)
+                                .unwrap_or(self.timer.irq_imr);
+                            if self.timer.irq_source.is_none() {
+                                let src = if (isr & ISR_KEYI) != 0 {
+                                    "KEY"
+                                } else if (isr & ISR_ONKI) != 0 {
+                                    "ONK"
+                                } else if (isr & ISR_MTI) != 0 {
+                                    "MTI"
+                                } else if (isr & ISR_STI) != 0 {
+                                    "STI"
+                                } else {
+                                    "IRQ"
+                                };
+                                self.timer.irq_source = Some(src.to_string());
+                            }
+                            self.timer.last_fired = self.timer.irq_source.clone();
+                        }
+                    }
+                }
+
+                // Halted cores still consume idle cycles and allow timers/IRQs to run.
+                if self.state.is_halted() {
+                    let prev_cycle = self.metadata.cycle_count;
+                    let new_cycle = prev_cycle.wrapping_add(1);
+                    self.metadata.cycle_count = new_cycle;
+                    if !self.timer.in_interrupt {
+                        let kb_irq_enabled = self.timer.kb_irq_enabled;
+                        let _ = self.timer.tick_timers_with_keyboard(
+                            &mut self.memory,
+                            new_cycle,
+                            |mem| {
+                                if let Some(kb) = self.keyboard.as_mut() {
+                                    let events = kb.scan_tick(kb_irq_enabled);
+                                    if events > 0 {
+                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                    }
+                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                                } else {
+                                    (0, false, None)
+                                }
+                            },
+                            Some(self.state.get_reg(RegName::Y)),
+                            Some(self.state.get_reg(RegName::PC)),
+                        );
+                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                            self.timer.irq_isr = isr;
+                        }
+                        // Reassert KEYI latch only when enabled, mirroring Python HALT wake behavior.
+                        self.refresh_key_irq_latch();
+                    }
+                    self.deliver_pending_irq()?;
+                    return Ok::<(), CoreError>(());
+                }
+
+                let keyboard_ptr = self
+                    .keyboard
+                    .as_mut()
+                    .map(|kb| kb as *mut KeyboardMatrix)
+                    .unwrap_or(std::ptr::null_mut());
+                let lcd_ptr = self
+                    .lcd
+                    .as_mut()
+                    .map(|lcd| lcd as *mut LcdController)
+                    .unwrap_or(std::ptr::null_mut());
+                let host_read = self
+                    .host_read
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                let host_write = self
+                    .host_write
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
+                let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                let mut bus = RuntimeBus {
+                    mem: &mut self.memory,
+                    keyboard_ptr,
+                    lcd_ptr,
+                    host_read,
+                    host_write,
+                    onk_level: self.onk_level,
+                    cycle: self.metadata.cycle_count,
+                    pc,
+                    meta_ptr: &self.metadata as *const SnapshotMetadata,
+                    state_ptr: &self.state as *const LlamaState,
+                    overlay_fault_addr: None,
+                };
+                let opcode = bus.load(pc, 8) as u8;
+                if let Some(addr) = bus.overlay_fault_addr {
+                    return Err(CoreError::Other(format!(
+                        "python overlay required for 0x{addr:06X} but no host handler is installed"
+                    )));
+                }
+                // Capture WAIT loop count before execution (executor clears I).
+                let wait_loops = if opcode == 0xEF {
+                    self.state.get_reg(RegName::I) & mask_for(RegName::I)
+                } else {
+                    0
+                };
+                if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
+                    return Err(CoreError::Other(format!(
+                        "execute opcode 0x{opcode:02X}: {e}"
+                    )));
+                }
+                if let Some(addr) = bus.overlay_fault_addr {
+                    return Err(CoreError::Other(format!(
+                        "python overlay required for 0x{addr:06X} but no host handler is installed"
+                    )));
+                }
+                if opcode == 0xFF {
+                    // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
+                    // refresh mirrors from IMEM without clearing counters/bit-watch.
+                    self.timer.irq_imr = self
+                        .memory
                     .read_internal_byte(IMEM_IMR_OFFSET)
                     .unwrap_or(self.timer.irq_imr);
                 self.timer.irq_isr = self
@@ -1189,13 +1202,28 @@ impl CoreRuntime {
             }
             self.deliver_pending_irq()?;
             let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
-                tracer.update_counters(
-                    self.metadata.instruction_count,
-                    self.state.call_depth(),
-                    self.memory.memory_read_count(),
-                    self.memory.memory_write_count(),
-                );
+                if let Some(tracer) = guard.as_mut() {
+                    tracer.update_counters(
+                        self.metadata.instruction_count,
+                        self.state.call_depth(),
+                        self.memory.memory_read_count(),
+                        self.memory.memory_write_count(),
+                    );
+                }
+                Ok(())
+            }));
+
+            match step_result {
+                Ok(inner) => inner?,
+                Err(payload) => {
+                    if let Some(fault) = payload.downcast_ref::<PythonOverlayFault>() {
+                        return Err(CoreError::Other(format!(
+                            "python overlay required for 0x{:06X} at PC 0x{:06X}",
+                            fault.addr, fault.pc
+                        )));
+                    }
+                    std::panic::resume_unwind(payload);
+                }
             }
         }
         Ok(())
@@ -2930,6 +2958,30 @@ mod tests {
         assert!(
             matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
             "python-required IMEM access should fail without host overlay: {res:?}"
+        );
+    }
+
+    #[test]
+    fn python_overlay_fault_does_not_advance_pc_or_counters() {
+        let mut rt = CoreRuntime::new();
+        // Mark an external range as Python-only and point PC at it.
+        rt.memory.set_python_ranges(vec![(0x0000_3000, 0x0000_3000)]);
+        rt.state.set_reg(RegName::PC, 0x0000_3000);
+        rt.memory.write_external_byte(0x0000_3000, 0x00); // NOP
+
+        let res = rt.step(1);
+        assert!(
+            matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
+            "missing overlay should surface as error"
+        );
+        assert_eq!(
+            rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
+            0x0000_3000,
+            "PC should not advance on overlay fault"
+        );
+        assert_eq!(
+            rt.metadata.instruction_count, 0,
+            "instruction counter should not increment on overlay fault"
         );
     }
 
