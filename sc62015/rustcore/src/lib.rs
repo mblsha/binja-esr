@@ -1076,6 +1076,13 @@ impl LlamaBus for LlamaPyBus {
                         ),
                     );
                 });
+            } else if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
+                Python::with_gil(|py| {
+                    let _ = self.memory.bind(py).call_method1(
+                        "trace_kio_from_rust",
+                        (offset, value & 0xFF, self.pc & ADDRESS_MASK),
+                    );
+                });
             }
         }
         match bits {
