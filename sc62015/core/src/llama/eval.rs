@@ -1754,6 +1754,14 @@ impl LlamaExecutor {
         let mask_dst = Self::mask_for_width(mem_dst.bits);
         let mask_src = Self::mask_for_width(src_bits);
         let length = state.get_reg(RegName::I) & mask_for(RegName::I);
+        if length == 0 {
+            // Parity: zero-length loops are a no-op (no flag/pointer updates), only advance PC.
+            let start_pc = state.pc();
+            if state.pc() == start_pc {
+                state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+            }
+            return Ok(decoded.len);
+        }
         let dst_step_signed = mem_dst
             .side_effect
             .map(|(reg, new_val)| {
@@ -3973,6 +3981,30 @@ mod tests {
         assert_length(0xF0, &[0xF0, 0x80, 0x01, 0x02, 0x03], 5);
         // RegPair selector is always a single byte regardless of data width.
         assert_length(0xED, &[0xED, 0x12], 2);
+    }
+
+    #[test]
+    fn adcl_zero_length_is_noop() {
+        let mut bus = MemBus::with_size(0x40);
+        bus.mem[0] = 0x54; // opcode for context; execute() is driven by opcode param
+        bus.mem[1] = 0x10;
+        bus.mem[2] = 0x20;
+        bus.mem[0x10] = 0x12;
+        bus.mem[0x20] = 0x34;
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        state.set_reg(RegName::I, 0);
+        state.set_reg(RegName::FC, 1);
+        state.set_reg(RegName::FZ, 0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x54, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3, "ADCL length should match encoded bytes");
+        assert_eq!(state.pc(), 3, "PC should advance by decoded length");
+        assert_eq!(bus.mem[0x10], 0x12, "destination should remain unchanged");
+        assert_eq!(bus.mem[0x20], 0x34, "source should remain unchanged");
+        assert_eq!(state.get_reg(RegName::FC), 1, "carry flag should be preserved");
+        assert_eq!(state.get_reg(RegName::FZ), 0, "zero flag should be preserved");
+        assert_eq!(state.get_reg(RegName::I), 0, "I should remain zero");
     }
 
     #[test]
