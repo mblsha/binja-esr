@@ -281,8 +281,8 @@ class PCE500Emulator:
                 except Exception:
                     pass
 
-        # Use Rust keyboard bridge only when LLAMA is active; keep Python overlays otherwise.
-        disable_keyboard_overlay = cpu_backend == "llama"
+        # Keep keyboard overlays active even on LLAMA so Python handlers can trace KIO writes.
+        disable_keyboard_overlay = False
         self.memory.set_keyboard_handler(
             self._keyboard_read_handler,
             self._keyboard_write_handler,
