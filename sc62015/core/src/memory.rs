@@ -458,36 +458,43 @@ impl MemoryImage {
         self.memory_writes
             .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
+        let record_perfetto = |space: &str| {
+            let mut guard = perfetto_guard();
+            if let Some(tracer) = guard.as_mut() {
+                if let Some(cyc) = cycle {
+                    tracer.record_mem_write_at_cycle(cyc, pc, address, value as u32, space, 8);
+                } else if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
+                {
+                    let substep = crate::llama::eval::perfetto_next_substep();
+                    tracer.record_mem_write_with_substep(
+                        op_idx,
+                        pc_ctx,
+                        address,
+                        value as u32,
+                        space,
+                        8,
+                        substep,
+                    );
+                } else {
+                    let pc_val = pc.or_else(|| Some(perfetto_last_pc()));
+                    tracer.record_mem_write_at_cycle(
+                        crate::llama::eval::perfetto_last_instr_index(),
+                        pc_val,
+                        address,
+                        value as u32,
+                        space,
+                        8,
+                    );
+                }
+            }
+        };
         if let Some(index) = Self::internal_index(address) {
             let offset = address - INTERNAL_MEMORY_START;
             let prev = self.internal[index];
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
             self.invoke_imr_isr_hook(offset, prev, value);
-            let mut guard = perfetto_guard();
-            if let Some(tracer) = guard.as_mut() {
-                match cycle {
-                    Some(cyc) => tracer.record_mem_write_at_cycle(
-                        cyc,
-                        pc,
-                        address,
-                        value as u32,
-                        "internal",
-                        8,
-                    ),
-                    None => {
-                        let pc = pc.or_else(|| Some(perfetto_last_pc()));
-                        tracer.record_mem_write_at_cycle(
-                            0,
-                            pc,
-                            address,
-                            value as u32,
-                            "host_async",
-                            8,
-                        );
-                    }
-                }
-            }
+            record_perfetto("internal");
             return;
         }
         if self.is_read_only_range(address, 1) {
@@ -499,30 +506,7 @@ impl MemoryImage {
                 *slot = value;
                 self.dirty.push((address, value));
             }
-            let mut guard = perfetto_guard();
-            if let Some(tracer) = guard.as_mut() {
-                match cycle {
-                    Some(cyc) => tracer.record_mem_write_at_cycle(
-                        cyc,
-                        pc,
-                        address,
-                        value as u32,
-                        "external",
-                        8,
-                    ),
-                    None => {
-                        let pc = pc.or_else(|| Some(perfetto_last_pc()));
-                        tracer.record_mem_write_at_cycle(
-                            0,
-                            pc,
-                            address,
-                            value as u32,
-                            "host_async",
-                            8,
-                        );
-                    }
-                }
-            }
+            record_perfetto("external");
         }
     }
 
@@ -1060,8 +1044,8 @@ mod tests {
         let buf = fs::read(&tmp).expect("read perfetto trace");
         let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
         assert!(
-            text.contains("host_async"),
-            "perfetto trace should include host_async write marker"
+            text.contains("external"),
+            "perfetto trace should include external write marker"
         );
         assert!(
             text.contains("0x000020"),

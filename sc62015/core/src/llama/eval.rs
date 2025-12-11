@@ -2894,6 +2894,41 @@ mod tests {
     }
 
     #[test]
+    fn trace_imr_peek_does_not_bump_memory_reads() {
+        use crate::memory::MemoryImage;
+        let mut mem = MemoryImage::new();
+        mem.write_external_byte(0x0000, 0x00); // NOP
+        let mut state = LlamaState::new();
+        state.set_pc(0x0000);
+        let mut exec = LlamaExecutor::new();
+        struct Bus<'a> {
+            mem: &'a mut MemoryImage,
+        }
+        impl<'a> LlamaBus for Bus<'a> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.mem.load(addr, bits).unwrap_or(0)
+            }
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                let _ = self.mem.store(addr, bits, value);
+            }
+            fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+                self.mem.read_internal_byte_silent(offset).unwrap_or(0)
+            }
+        }
+        let reads_before = mem.memory_read_count();
+        {
+            let mut bus = Bus { mem: &mut mem };
+            exec.execute(0x00, &mut state, &mut bus).expect("execute nop");
+        }
+        let reads_after = mem.memory_read_count();
+        assert_eq!(
+            reads_after.saturating_sub(reads_before),
+            1,
+            "only opcode fetch should bump memory reads"
+        );
+    }
+
+    #[test]
     fn opcode_table_has_coverage() {
         assert_eq!(OPCODES.len(), 256, "expected dense opcode table");
         let mut seen = HashSet::new();

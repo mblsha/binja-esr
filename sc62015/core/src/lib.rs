@@ -981,7 +981,7 @@ impl CoreRuntime {
                             new_cycle,
                             |mem| {
                                 if let Some(kb) = self.keyboard.as_mut() {
-                                    let events = kb.scan_tick(kb_irq_enabled);
+                                    let events = kb.scan_tick(mem, kb_irq_enabled);
                                     if events > 0 {
                                         kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                     }
@@ -1108,7 +1108,7 @@ impl CoreRuntime {
                             cyc,
                             |mem| {
                                 if let Some(kb) = self.keyboard.as_mut() {
-                                    let events = kb.scan_tick(kb_irq_enabled);
+                                    let events = kb.scan_tick(mem, kb_irq_enabled);
                                     if events > 0 {
                                         kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                     }
@@ -2144,7 +2144,7 @@ mod tests {
         kb.handle_write(0xF0, 0xFF, &mut rt.memory);
         kb.handle_write(0xF1, 0x07, &mut rt.memory);
         for _ in 0..8 {
-            events += kb.scan_tick(rt.timer.kb_irq_enabled);
+            events += kb.scan_tick(&mut rt.memory, rt.timer.kb_irq_enabled);
             if events > 0 {
                 break;
             }
@@ -2204,7 +2204,7 @@ mod tests {
         kb.handle_write(0xF1, 0x0F, &mut rt.memory);
         let mut events = 0;
         for _ in 0..8 {
-            events += kb.scan_tick(rt.timer.kb_irq_enabled);
+            events += kb.scan_tick(&mut rt.memory, rt.timer.kb_irq_enabled);
             if events > 0 {
                 break;
             }
@@ -2243,7 +2243,7 @@ mod tests {
         kb.handle_write(0xF0, 0xFF, &mut rt.memory);
         kb.handle_write(0xF1, 0x0F, &mut rt.memory);
         for _ in 0..8 {
-            if kb.scan_tick(rt.timer.kb_irq_enabled) > 0 {
+            if kb.scan_tick(&mut rt.memory, rt.timer.kb_irq_enabled) > 0 {
                 break;
             }
         }

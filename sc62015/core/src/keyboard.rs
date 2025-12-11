@@ -298,14 +298,14 @@ impl KeyboardMatrix {
         self.fifo_count += 1;
         if count_irq {
             self.irq_count = self.irq_count.wrapping_add(1);
+            self.keyi_latch = true;
         }
-        self.keyi_latch = true;
         1
     }
 
     /// Reconcile FIFO head/tail with firmware-written pointers in RAM so drained entries
     /// do not linger in the Rust model (avoids reasserting KEYI after the host consumes data).
-    fn sync_fifo_from_memory(&mut self, memory: &MemoryImage) {
+    pub fn sync_fifo_from_memory(&mut self, memory: &MemoryImage) {
         if let Some(head) = memory.load(FIFO_HEAD_ADDR, 8) {
             let new_head = (head as usize) % FIFO_SIZE;
             if new_head != self.fifo_head {
@@ -664,7 +664,9 @@ impl KeyboardMatrix {
         }
     }
 
-    pub fn scan_tick(&mut self, count_irq: bool) -> usize {
+    pub fn scan_tick(&mut self, memory: &mut MemoryImage, count_irq: bool) -> usize {
+        // Parity: respect firmware-updated head/tail before enqueuing new events.
+        self.sync_fifo_from_memory(memory);
         if !self.scan_enabled {
             return 0;
         }
@@ -729,5 +731,38 @@ mod tests {
         let kil = kb.handle_read(0xF2, &mut mem).unwrap();
         assert_ne!(kil & 0x01, 0, "row 0 should be set for pending press");
         assert_eq!(kb.kil_read_count, 1);
+    }
+
+    #[test]
+    fn scan_tick_respects_irq_disable() {
+        let mut kb = KeyboardMatrix::new();
+        kb.press_threshold = 1;
+        let mut mem = MemoryImage::new();
+        kb.handle_write(0xF0, 0x01, &mut mem);
+        kb.press_matrix_code(0, &mut mem);
+        let events = kb.scan_tick(&mut mem, false);
+        assert!(events > 0, "expected a debounced event");
+        kb.write_fifo_to_memory(&mut mem, false);
+        let isr = mem.read_internal_byte(crate::memory::IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x04, 0, "KEYI should remain clear when IRQs disabled");
+        assert!(kb.fifo_len() > 0, "FIFO should still capture the event");
+    }
+
+    #[test]
+    fn scan_tick_syncs_head_from_memory() {
+        let mut kb = KeyboardMatrix::new();
+        kb.press_threshold = 1;
+        let mut mem = MemoryImage::new();
+        kb.handle_write(0xF0, 0x01, &mut mem);
+        kb.press_matrix_code(0, &mut mem);
+        let events = kb.scan_tick(&mut mem, true);
+        assert!(events > 0, "expected a debounced event");
+        kb.write_fifo_to_memory(&mut mem, true);
+        assert_eq!(kb.fifo_len(), 1);
+        // Simulate firmware consuming one entry by advancing head in RAM.
+        mem.write_external_byte(FIFO_HEAD_ADDR, 1);
+        kb.release_matrix_code(0, &mut mem);
+        let _ = kb.scan_tick(&mut mem, true);
+        assert_eq!(kb.fifo_len(), 0, "head sync should drop consumed entries");
     }
 }
