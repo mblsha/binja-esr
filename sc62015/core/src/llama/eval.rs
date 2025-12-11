@@ -994,13 +994,61 @@ impl LlamaExecutor {
                 OperandKind::RegIMemOffset(kind) => {
                     let width_bits = Self::width_bits_for_kind(entry.kind);
                     let width_bytes = width_bits.div_ceil(8);
-                    let (ptr_mem, consumed_ptr) =
-                        self.decode_ext_reg_ptr(state, bus, pc + offset, width_bytes)?;
+                    let reg_byte = bus.load(pc + offset, 8) as u8;
+                    let mode_code = Self::normalize_ext_reg_mode((reg_byte >> 4) & 0x0F);
+                    let (mode, needs_disp, disp_sign) = match mode_code {
+                        0x0 | 0x1 => (ExtRegMode::Simple, false, 0),
+                        0x2 => (ExtRegMode::PostInc, false, 0),
+                        0x3 => (ExtRegMode::PreDec, false, 0),
+                        0x8 => (ExtRegMode::Offset, true, 1),
+                        0xC => (ExtRegMode::Offset, true, -1),
+                        _ => return Err("unsupported EMEM reg mode"),
+                    };
+                    let reg = Self::reg_from_selector(reg_byte).ok_or("invalid reg selector")?;
+
+                    // RegIMemOffset encoding places the IMEM byte before any displacement.
+                    let mut consumed_ptr = 1u32;
                     let raw_imem = bus.load(pc + offset + consumed_ptr, 8) & 0xFF;
+                    consumed_ptr += 1;
+                    let mut disp: i16 = 0;
+                    if needs_disp {
+                        let magnitude = bus.load(pc + offset + consumed_ptr, 8) as u8;
+                        disp = if disp_sign >= 0 {
+                            magnitude as i16
+                        } else {
+                            -(magnitude as i16)
+                        };
+                        consumed_ptr += 1;
+                    }
+
+                    let base = state.get_reg(reg);
+                    let step = width_bytes as u32;
+                    let mask = mask_for(reg);
+                    let mut addr = base;
+                    let mut side_effect: Option<(RegName, u32)> = None;
+                    match mode {
+                        ExtRegMode::Simple => {}
+                        ExtRegMode::Offset => {
+                            addr = base.wrapping_add(disp as u32);
+                        }
+                        ExtRegMode::PreDec => {
+                            addr = base.wrapping_sub(step) & mask;
+                            side_effect = Some((reg, addr));
+                        }
+                        ExtRegMode::PostInc => {
+                            side_effect = Some((reg, (base.wrapping_add(step)) & mask));
+                        }
+                    }
+                    let ptr_mem = MemOperand {
+                        addr: bus.resolve_emem(addr),
+                        bits: width_bits,
+                        side_effect,
+                    };
+
                     let mode_index = if single_pre { 0 } else { operand_index + 1 };
                     let imem_addr =
                         imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw_imem as u8);
-                    offset += consumed_ptr + 1;
+                    offset += consumed_ptr;
                     let transfer = match kind {
                         super::opcodes::RegImemOffsetKind::DestImem => EmemImemTransfer {
                             dst_addr: imem_addr,
