@@ -428,14 +428,19 @@ impl LlamaExecutor {
                 OperandKind::Imm(bits) => bits.div_ceil(8),
                 OperandKind::IMem(_) | OperandKind::IMemWidth(_) => 1,
                 OperandKind::EMemAddrWidth(_) | OperandKind::EMemAddrWidthOp(_) => 3,
-                OperandKind::EMemReg(_) | OperandKind::EMemIMem(_) => 3,
-                OperandKind::EMemRegWidth(bytes)
-                | OperandKind::EMemRegWidthMode(bytes)
-                | OperandKind::EMemIMemWidth(bytes) => *bytes,
-                OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 2,
-                OperandKind::RegIMemOffset(_) => 1,
-                OperandKind::EMemRegModePostPre => 1,
-                OperandKind::RegPair(size) => *size,
+                // EMemReg/IMem variants encode a mode byte plus an optional displacement.
+                OperandKind::EMemReg(_)
+                | OperandKind::EMemRegWidth(_)
+                | OperandKind::EMemRegWidthMode(_)
+                | OperandKind::EMemRegModePostPre => 2,
+                // EMemIMem uses a mode byte + base + optional displacement.
+                OperandKind::EMemIMem(_) | OperandKind::EMemIMemWidth(_) => 3,
+                // Offset IMEM/EMEM transfer forms consume mode + two IMEM bytes + optional disp.
+                OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 4,
+                // Reg+IMEM offset encodings carry a mode/displacement byte plus IMEM selector.
+                OperandKind::RegIMemOffset(_) => 3,
+                // Reg pair selector is always a single byte regardless of data width.
+                OperandKind::RegPair(_) => 1,
                 _ => 0,
             });
         }
@@ -3935,6 +3940,39 @@ mod tests {
         assert_eq!(len, 4);
         assert_eq!(bus.mem[0x40], 0xCD);
         assert_eq!(state.pc(), 4);
+    }
+
+    #[test]
+    fn estimated_length_tracks_encoded_sizes_for_complex_operands() {
+        fn assert_length(opcode: u8, bytes: &[u8], expected: u8) {
+            let mut bus = MemBus::with_size(512);
+            for (idx, byte) in bytes.iter().enumerate() {
+                bus.mem[idx] = *byte;
+            }
+            let mut state = LlamaState::new();
+            state.set_pc(0);
+            let mut exec = LlamaExecutor::new();
+            let entry = exec.lookup(opcode).expect("opcode entry");
+            let decoded = exec
+                .decode_with_prefix(entry, &mut state, &mut bus, None, None, 0)
+                .expect("decode should succeed");
+            assert_eq!(
+                decoded.len, expected,
+                "decoded length should match encoded bytes for opcode 0x{opcode:02X}"
+            );
+            assert_eq!(
+                LlamaExecutor::estimated_length(entry),
+                expected,
+                "estimated length should reflect encoded size for opcode 0x{opcode:02X}"
+            );
+        }
+
+        // RegIMemOffset (offset form): opcode + reg/mode + disp + IMEM selector.
+        assert_length(0x56, &[0x56, 0x8F, 0x12, 0x34], 4);
+        // EMemImemOffset (offset form): opcode + mode + first IMEM + second IMEM + disp.
+        assert_length(0xF0, &[0xF0, 0x80, 0x01, 0x02, 0x03], 5);
+        // RegPair selector is always a single byte regardless of data width.
+        assert_length(0xED, &[0xED, 0x12], 2);
     }
 
     #[test]
