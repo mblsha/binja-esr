@@ -167,6 +167,7 @@ class PCE500Emulator:
         display_trace_event_limit: int = 2048,
         lcd_trace_file: Optional[str] = None,
         lcd_trace_event_limit: int = 50000,
+        timer_scale: float = 1.0,
     ):
         # Avoid leaking a previously-enabled perfetto tracer into runs that do not
         # request tracing.
@@ -230,6 +231,9 @@ class PCE500Emulator:
             self.lcd.add_write_trace_callback(self._on_lcd_trace_event)
 
         self._keyboard_columns_active_high = keyboard_columns_active_high
+        self._timer_scale = float(timer_scale) if timer_scale else 1.0
+        if self._timer_scale <= 0:
+            self._timer_scale = 1.0
 
         # Keyboard implementation parameterised for column polarity
         self.keyboard = KeyboardHandler(
@@ -251,13 +255,30 @@ class PCE500Emulator:
 
         backend = os.getenv("SC62015_CPU_BACKEND")
         try:
-            self.cpu = CPU(self.memory, reset_on_init=True, backend=backend)
+            self.cpu = CPU(
+                self.memory,
+                reset_on_init=True,
+                backend=backend,
+                timer_scale=self._timer_scale,
+            )
         except RuntimeError as exc:
             # Fall back to the legacy backend if the requested one is unavailable.
             print(f"[pce500] Falling back to python CPU backend: {exc}")
-            self.cpu = CPU(self.memory, reset_on_init=True, backend="python")
+            self.cpu = CPU(
+                self.memory,
+                reset_on_init=True,
+                backend="python",
+                timer_scale=self._timer_scale,
+            )
 
         self.memory.set_cpu(self.cpu)
+        if getattr(self.cpu, "backend", None) == "llama":
+            setter = getattr(self.cpu, "set_timer_scale", None)
+            if callable(setter):
+                try:
+                    setter(self._timer_scale)
+                except Exception:
+                    pass
 
         # Always route keyboard I/O through the Rust peripheral even on the Python backend.
         disable_keyboard_overlay = True
@@ -385,15 +406,15 @@ class PCE500Emulator:
         self._in_interrupt = False
         self._kb_irq_count = 0
         self._key_irq_latched = False
-        timer_scale = 1.0
-        if getattr(self.cpu, "backend", None) == "llama":
-            try:
-                timer_scale = float(os.getenv("LLAMA_TIMER_SCALE", "1.0"))
-            except ValueError:
-                timer_scale = 1.0
+        self._timer_scale = float(timer_scale) if timer_scale else 1.0
+        if self._timer_scale <= 0:
+            self._timer_scale = 1.0
+        effective_timer_scale = (
+            self._timer_scale if getattr(self.cpu, "backend", None) == "llama" else 1.0
+        )
         self._scheduler = TimerScheduler(
-            mti_period=max(1, int(MTI_PERIOD_CYCLES_DEFAULT * timer_scale)),
-            sti_period=max(1, int(STI_PERIOD_CYCLES_DEFAULT * timer_scale)),
+            mti_period=max(1, int(MTI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)),
+            sti_period=max(1, int(STI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)),
         )
         self._irq_source: Optional["IRQSource"] = None
         # Fast mode: minimize step() overhead to run many instructions
@@ -1640,18 +1661,15 @@ class PCE500Emulator:
             timer_info.get("sti_period", self._timer_sti_period)
         )
         # If requested, rescale timers for LLAMA backend regardless of snapshot metadata.
-        timer_scale = 1.0
-        if getattr(self.cpu, "backend", None) == "llama":
-            try:
-                timer_scale = float(os.getenv("LLAMA_TIMER_SCALE", "1.0"))
-            except ValueError:
-                timer_scale = 1.0
-        if timer_scale != 1.0 and getattr(self.cpu, "backend", None) == "llama":
+        effective_timer_scale = (
+            self._timer_scale if getattr(self.cpu, "backend", None) == "llama" else 1.0
+        )
+        if effective_timer_scale != 1.0 and getattr(self.cpu, "backend", None) == "llama":
             self._timer_mti_period = max(
-                1, int(MTI_PERIOD_CYCLES_DEFAULT * timer_scale)
+                1, int(MTI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)
             )
             self._timer_sti_period = max(
-                1, int(STI_PERIOD_CYCLES_DEFAULT * timer_scale)
+                1, int(STI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)
             )
 
         # Capture persisted next-fire offsets before resetting the scheduler. Using

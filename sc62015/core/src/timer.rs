@@ -9,8 +9,6 @@ use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
 use serde_json::json;
 use std::collections::HashMap;
-#[cfg(test)]
-use std::env;
 
 const ISR_OFFSET: u32 = 0xFC;
 
@@ -40,6 +38,7 @@ pub struct TimerContext {
     pub last_irq_vector: Option<u32>,
     pub irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
     pub delivered_masks: Vec<u8>,
+    timer_scale: f64,
 }
 
 fn default_bit_watch_table() -> serde_json::Map<String, serde_json::Value> {
@@ -127,9 +126,18 @@ impl TimerContext {
             last_irq_vector: None,
             irq_bit_watch: None,
             delivered_masks: Vec::new(),
+            timer_scale: 1.0,
         };
         ctx.reset(0);
         ctx
+    }
+
+    pub fn set_timer_scale(&mut self, scale: f64) {
+        self.timer_scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
     }
 
     pub fn reset(&mut self, current_cycle: u64) {
@@ -222,19 +230,13 @@ impl TimerContext {
         let mut mti = timer.mti_period.max(0) as u64;
         let mut sti = timer.sti_period.max(0) as u64;
         // Optional LLAMA timer scaling for parity with Python loader.
-        if _allow_scale {
-            if let Ok(val) = std::env::var("LLAMA_TIMER_SCALE") {
-                if let Ok(scale) = val.parse::<f64>() {
-                    if (scale - 1.0).abs() > f64::EPSILON {
-                        let apply_scale = |v: u64| -> u64 {
-                            let scaled = (v as f64 * scale).round();
-                            scaled.max(1.0) as u64
-                        };
-                        mti = apply_scale(mti);
-                        sti = apply_scale(sti);
-                    }
-                }
-            }
+        if _allow_scale && (self.timer_scale - 1.0).abs() > f64::EPSILON {
+            let apply_scale = |v: u64, scale: f64| -> u64 {
+                let scaled = (v as f64 * scale).round();
+                scaled.max(1.0) as u64
+            };
+            mti = apply_scale(mti, self.timer_scale);
+            sti = apply_scale(sti, self.timer_scale);
         }
         self.mti_period = mti;
         self.sti_period = sti;
@@ -823,10 +825,8 @@ mod tests {
 
     #[test]
     fn apply_snapshot_scales_timers_for_llama() {
-        let prev = env::var("LLAMA_TIMER_SCALE").ok();
-        env::set_var("LLAMA_TIMER_SCALE", "0.5");
-
         let mut timer = TimerContext::new(true, 100, 200);
+        timer.set_timer_scale(0.5);
         timer.apply_snapshot_info(
             &crate::TimerInfo {
                 enabled: true,
@@ -841,15 +841,9 @@ mod tests {
             true,
         );
 
-        // Parity: LLAMA loader scales timers when env is set.
-        assert_eq!(timer.mti_period, 50, "MTI period should scale by env factor");
-        assert_eq!(timer.sti_period, 100, "STI period should scale by env factor");
-
-        if let Some(val) = prev {
-            env::set_var("LLAMA_TIMER_SCALE", val);
-        } else {
-            env::remove_var("LLAMA_TIMER_SCALE");
-        }
+        // Parity: LLAMA loader scales timers when scale is set.
+        assert_eq!(timer.mti_period, 50, "MTI period should scale by configured factor");
+        assert_eq!(timer.sti_period, 100, "STI period should scale by configured factor");
     }
 
     #[test]

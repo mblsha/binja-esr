@@ -5,7 +5,6 @@ Remaining env toggles (post cleanup)
 
 Cross-backend
 - `SC62015_CPU_BACKEND`: backend selector (`python`/`llama`).
-- `LLAMA_TIMER_SCALE`: scales MTI/STI periods; keep consistent across backends.
 
 Build-time
 - `PYO3_PYTHON`: chooses Python interpreter during Rust bindings build.

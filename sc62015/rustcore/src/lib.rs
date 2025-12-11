@@ -360,6 +360,10 @@ impl LlamaContractBus {
         self.memory.requires_python(address)
     }
 
+    fn set_timer_scale(&mut self, scale: f64) {
+        self.timer.set_timer_scale(scale);
+    }
+
     #[pyo3(signature = (mti_period, sti_period, *, enabled = true))]
     fn configure_timer(&mut self, mti_period: i32, sti_period: i32, enabled: bool) {
         self.timer.enabled = enabled;
@@ -1176,8 +1180,8 @@ struct LlamaCpu {
 #[pymethods]
 impl LlamaCpu {
     #[new]
-    #[pyo3(signature = (memory, *, reset_on_init = true))]
-    fn new(memory: PyObject, reset_on_init: bool) -> PyResult<Self> {
+    #[pyo3(signature = (memory, *, reset_on_init = true, timer_scale = 1.0))]
+    fn new(memory: PyObject, reset_on_init: bool, timer_scale: f64) -> PyResult<Self> {
         let mut cpu = Self {
             state: LlamaState::new(),
             executor: LlamaExecutor::new(),
@@ -1192,6 +1196,7 @@ impl LlamaCpu {
             memory_writes: 0,
             cycles: 0,
         };
+        cpu.timer.set_timer_scale(timer_scale);
         if reset_on_init {
             cpu.power_on_reset()?;
         }
