@@ -770,9 +770,9 @@ impl LlamaExecutor {
         let top = mode_byte & 0xC0;
         let (needs_offset, sign) = match top {
             0x00 => (false, 0),
-            0x40 | 0x80 => (true, 1), // tolerate stray bits; treat as +offset
+            0x80 => (true, 1),
             0xC0 => (true, -1),
-            _ => (false, 0),
+            _ => return Err("unsupported EMEM/IMEM mode"),
         };
         let first = bus.load(pc + 1, 8) as u8;
         let second = bus.load(pc + 2, 8) as u8;
@@ -2833,7 +2833,7 @@ mod tests {
     use super::*;
     use crate::llama::opcodes::OPCODES;
     use crate::memory::ADDRESS_MASK;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     struct NullBus;
     impl LlamaBus for NullBus {
@@ -2893,6 +2893,119 @@ mod tests {
         // Side-effect encodes pre-dec by one; three iterations should land at 0x0D.
         LlamaExecutor::apply_pointer_side_effect(&mut state, RegName::X, 0x0F, 3);
         assert_eq!(state.get_reg(RegName::X), 0x0D);
+    }
+
+    struct OffsetBus {
+        data: HashMap<u32, u8>,
+    }
+
+    impl OffsetBus {
+        fn new() -> Self {
+            Self {
+                data: HashMap::new(),
+            }
+        }
+
+        fn seed_pointer(&mut self, ptr_base: u32, pointer: u32) {
+            self.data.insert(ptr_base, (pointer & 0xFF) as u8);
+            self.data
+                .insert(ptr_base + 1, ((pointer >> 8) & 0xFF) as u8);
+            self.data
+                .insert(ptr_base + 2, ((pointer >> 16) & 0xFF) as u8);
+        }
+    }
+
+    impl LlamaBus for OffsetBus {
+        fn load(&mut self, addr: u32, _bits: u8) -> u32 {
+            *self.data.get(&addr).unwrap_or(&0) as u32
+        }
+        fn store(&mut self, addr: u32, _bits: u8, value: u32) {
+            self.data.insert(addr, (value & 0xFF) as u8);
+        }
+        fn resolve_emem(&mut self, base: u32) -> u32 {
+            base
+        }
+    }
+
+    #[test]
+    fn emem_imem_offset_respects_sign() {
+        let entry = dispatch::lookup(0xF0).expect("opcode present");
+        let mut exec = LlamaExecutor::new();
+
+        // Positive offset (+5)
+        let mut bus = OffsetBus::new();
+        bus.data.insert(0, 0x80); // mode = positive offset
+        bus.data.insert(1, 0x10); // first IMEM addr
+        bus.data.insert(2, 0x20); // second IMEM addr (pointer)
+        bus.data.insert(3, 0x05); // offset magnitude
+        let base_ptr = 0x001000;
+        let ptr_base = INTERNAL_MEMORY_START + 0x20;
+        bus.seed_pointer(ptr_base, base_ptr);
+        let (transfer, consumed) = exec
+            .decode_emem_imem_offset(entry, &mut bus, 0, AddressingMode::N, AddressingMode::N, true)
+            .expect("positive offset should decode");
+        assert_eq!(consumed, 4, "positive offset should consume mode+ptr+disp");
+        assert_eq!(
+            transfer.src_addr, base_ptr + 5,
+            "positive offset should add displacement"
+        );
+        assert_eq!(
+            transfer.dst_addr,
+            INTERNAL_MEMORY_START + 0x10,
+            "dest should use first IMEM byte"
+        );
+
+        // Negative offset (-3)
+        let mut bus_neg = OffsetBus::new();
+        bus_neg.data.insert(0, 0xC0); // mode = negative offset
+        bus_neg.data.insert(1, 0x11);
+        bus_neg.data.insert(2, 0x21);
+        bus_neg.data.insert(3, 0x03);
+        let base_ptr_neg = 0x000900;
+        let ptr_base_neg = INTERNAL_MEMORY_START + 0x21;
+        bus_neg.seed_pointer(ptr_base_neg, base_ptr_neg);
+        let (transfer_neg, consumed_neg) = exec
+            .decode_emem_imem_offset(
+                entry,
+                &mut bus_neg,
+                0,
+                AddressingMode::N,
+                AddressingMode::N,
+                true,
+            )
+            .expect("negative offset should decode");
+        assert_eq!(consumed_neg, 4);
+        assert_eq!(
+            transfer_neg.src_addr, base_ptr_neg - 3,
+            "negative offset should subtract displacement"
+        );
+        assert_eq!(
+            transfer_neg.dst_addr,
+            INTERNAL_MEMORY_START + 0x11,
+            "dest should use first IMEM byte"
+        );
+    }
+
+    #[test]
+    fn emem_imem_rejects_unknown_offset_mode() {
+        let entry = dispatch::lookup(0xF0).expect("opcode present");
+        let mut exec = LlamaExecutor::new();
+        let mut bus = OffsetBus::new();
+        bus.data.insert(0, 0x40); // invalid mode per spec
+        bus.data.insert(1, 0x00);
+        bus.data.insert(2, 0x00);
+        bus.data.insert(3, 0x01);
+        let ptr_base = INTERNAL_MEMORY_START;
+        bus.seed_pointer(ptr_base, 0x000100);
+        let res = exec.decode_emem_imem_offset(
+            entry,
+            &mut bus,
+            0,
+            AddressingMode::N,
+            AddressingMode::N,
+            true,
+        );
+        assert!(res.is_err(), "invalid mode should be rejected");
     }
 
     #[test]
