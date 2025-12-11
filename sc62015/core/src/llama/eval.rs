@@ -125,6 +125,7 @@ const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
 ];
 
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
+const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
 
 pub trait LlamaBus {
     fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
@@ -277,6 +278,7 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
 
     write_imem_byte(bus, IMEM_UCR_OFFSET, 0);
     write_imem_byte(bus, IMEM_ISR_OFFSET, 0);
+    write_imem_byte(bus, IMEM_IMR_OFFSET, 0);
     write_imem_byte(bus, IMEM_SCR_OFFSET, 0);
 
     let mut usr = read_imem_byte(bus, IMEM_USR_OFFSET);
@@ -288,13 +290,15 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr &= !0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-    let reset_vector = bus.load(INTERRUPT_VECTOR_ADDR, 8)
-        | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
-        | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
+    // Use ROM reset vector (0xFFFFD) instead of the IRQ vector (0xFFFFA).
+    let reset_vector = bus.load(ROM_RESET_VECTOR_ADDR, 8)
+        | (bus.load(ROM_RESET_VECTOR_ADDR + 1, 8) << 8)
+        | (bus.load(ROM_RESET_VECTOR_ADDR + 2, 8) << 16);
     // Parity: keep register/flag values intact; only adjust IMEM/PC. Drop any saved
     // call-page context so near returns fall back to the current page like Python.
     state.clear_call_page_stack();
     state.set_pc(reset_vector & mask_for(RegName::PC));
+    state.set_reg(RegName::IMR, 0);
     state.set_halted(false);
 }
 
@@ -381,14 +385,12 @@ impl LlamaExecutor {
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.as_mut() {
             let mut regs = HashMap::new();
-            // Refresh IMR from IMEM so register snapshot matches Python when host updates it.
             let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
                 (
                     bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF,
                     bus.peek_imem_silent(IMEM_ISR_OFFSET) & 0xFF,
                 )
             });
-            state.set_reg(RegName::IMR, mem_imr as u32);
             for (name, reg) in [
                 ("A", RegName::A),
                 ("B", RegName::B),
@@ -426,6 +428,7 @@ impl LlamaExecutor {
         for op in entry.operands.iter() {
             len = len.saturating_add(match op {
                 OperandKind::Imm(bits) => bits.div_ceil(8),
+                OperandKind::ImmOffset => 1,
                 OperandKind::IMem(_) | OperandKind::IMemWidth(_) => 1,
                 OperandKind::EMemAddrWidth(_) | OperandKind::EMemAddrWidthOp(_) => 3,
                 // EMemReg/IMem variants encode a mode byte plus an optional displacement.
@@ -1870,6 +1873,10 @@ impl LlamaExecutor {
         state: &mut LlamaState,
         bus: &mut B,
     ) -> Result<u8, &'static str> {
+        // Keep IMR in sync with memory regardless of tracing so state is architecture-accurate.
+        let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET) & 0xFF);
+        state.set_reg(RegName::IMR, mem_imr as u32);
+
         let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let start_pc = state.pc() & mask_for(RegName::PC);
         // Use the actual opcode address (post-PRE) for tracing, not the prefix byte.
@@ -1938,9 +1945,11 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // Python WAIT fast-path: zero I and clear flags. Cycle/timer burn happens in
-                // the host loop, so avoid ticking from inside the executor to prevent double
-                // counting.
+                // Python WAIT fast-path: burn remaining cycles via bus hook, then zero I/flags.
+                let cycles = state.get_reg(RegName::I) & mask_for(RegName::I);
+                if cycles > 0 {
+                    bus.wait_cycles(cycles);
+                }
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
@@ -3054,7 +3063,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_does_not_call_bus_wait_cycles() {
+    fn wait_calls_bus_wait_cycles_with_remaining_i() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = WaitBus { spins: 0 };
@@ -3062,10 +3071,7 @@ mod tests {
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
-        assert_eq!(
-            bus.spins, 0,
-            "WAIT should defer timer burn to the host loop (no executor tick)"
-        );
+        assert_eq!(bus.spins, 5, "WAIT should burn remaining I cycles");
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 0);
@@ -3751,6 +3757,98 @@ mod tests {
     }
 
     #[test]
+    fn power_on_reset_uses_rom_vector_and_clears_irq_state() {
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+        // Interrupt vector set to a different value to catch regressions.
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0x00;
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = 0x00;
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = 0x01; // would decode to 0x010000
+        // ROM reset vector (0xFFFFD) -> 0x054321
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x21;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x43;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x05;
+
+        // Seed IMR/ISR to ensure reset clears them.
+        let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        let isr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
+        bus.mem[imr_idx] = 0xAA;
+        bus.mem[isr_idx] = 0x55;
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::IMR, 0xCC);
+        state.halt();
+
+        power_on_reset(&mut bus, &mut state);
+
+        assert_eq!(state.pc(), 0x054321);
+        assert_eq!(
+            bus.mem[imr_idx], 0,
+            "power_on_reset should clear IMR in memory"
+        );
+        assert_eq!(
+            bus.mem[isr_idx], 0,
+            "power_on_reset should clear ISR in memory"
+        );
+        assert_eq!(state.get_reg(RegName::IMR), 0);
+        assert!(!state.is_halted());
+    }
+
+    #[test]
+    fn reset_opcode_uses_rom_vector_and_clears_irq_state() {
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+        // Opcode stream: RESET at PC 0 (already seeded by default zeroed mem)
+        bus.mem[0] = 0xFF;
+        // ROM reset vector -> 0x00ABCDE
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0xDE;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0xBC;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x0A;
+        // Interrupt vector set differently to ensure it is not used.
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0xFE;
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = 0xED;
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = 0x0D;
+
+        let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        let isr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
+        bus.mem[imr_idx] = 0xF0;
+        bus.mem[isr_idx] = 0x0F;
+
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+        state.set_reg(RegName::IMR, 0xAA);
+        state.halt();
+        let mut exec = LlamaExecutor::new();
+
+        let len = exec.execute(0xFF, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 0x0ABCDE & mask_for(RegName::PC));
+        assert_eq!(bus.mem[imr_idx], 0);
+        assert_eq!(bus.mem[isr_idx], 0);
+        assert_eq!(state.get_reg(RegName::IMR), 0);
+        assert!(!state.is_halted());
+    }
+
+    #[test]
+    fn imr_is_synced_from_memory_even_without_tracer() {
+        // No perfetto tracer is initialized in this test environment.
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
+        let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        bus.mem[imr_idx] = 0xAA;
+        bus.mem[0] = 0x00; // NOP
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::IMR, 0x11);
+        let mut exec = LlamaExecutor::new();
+
+        let len = exec.execute(0x00, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(
+            state.get_reg(RegName::IMR),
+            0xAA,
+            "IMR register should mirror IMEM even when tracing is disabled"
+        );
+    }
+
+    #[test]
     fn mv_emem_post_inc_updates_reg() {
         // 0xB0: MV [r3],A with reg selector byte encoding post-inc X
         let mut bus = MemBus::with_size(0x100);
@@ -3981,6 +4079,20 @@ mod tests {
         assert_length(0xF0, &[0xF0, 0x80, 0x01, 0x02, 0x03], 5);
         // RegPair selector is always a single byte regardless of data width.
         assert_length(0xED, &[0xED, 0x12], 2);
+        // ImmOffset (JR-style): opcode + 1-byte relative offset.
+        let jr_op = OpcodeEntry {
+            opcode: 0x99,
+            kind: InstrKind::Unknown,
+            name: "JR",
+            cond: None,
+            ops_reversed: None,
+            operands: &[OperandKind::ImmOffset],
+        };
+        assert_eq!(
+            LlamaExecutor::estimated_length(&jr_op),
+            2,
+            "ImmOffset operands should add one byte to estimated length"
+        );
     }
 
     #[test]
