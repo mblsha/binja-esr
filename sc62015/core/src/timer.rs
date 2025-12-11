@@ -61,22 +61,17 @@ fn default_bit_watch_table() -> serde_json::Map<String, serde_json::Value> {
 
 fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
     for reg in ["IMR", "ISR"] {
-        if !table
-            .get(reg)
-            .map(|v| v.is_object())
-            .unwrap_or(false)
-        {
-            table.insert(reg.to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        if !table.get(reg).map(|v| v.is_object()).unwrap_or(false) {
+            table.insert(
+                reg.to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            );
         }
-        let reg_entry = table
-            .get_mut(reg)
-            .expect("bit watch reg must exist");
+        let reg_entry = table.get_mut(reg).expect("bit watch reg must exist");
         if !reg_entry.is_object() {
             *reg_entry = serde_json::Value::Object(serde_json::Map::new());
         }
-        let reg_obj = reg_entry
-            .as_object_mut()
-            .expect("bit watch reg is object");
+        let reg_obj = reg_entry.as_object_mut().expect("bit watch reg is object");
         for bit in 0..8u8 {
             if !reg_obj
                 .get(&bit.to_string())
@@ -342,13 +337,23 @@ impl TimerContext {
     }
 
     /// Record IMR/ISR bit transitions (set/clear) keyed by bit number and PC, mirroring Python.
-    pub fn record_bit_watch_transition(&mut self, reg_name: &str, prev_val: u8, new_val: u8, pc: u32) {
+    pub fn record_bit_watch_transition(
+        &mut self,
+        reg_name: &str,
+        prev_val: u8,
+        new_val: u8,
+        pc: u32,
+    ) {
         let table = self
             .irq_bit_watch
             .get_or_insert_with(default_bit_watch_table);
         normalize_bit_watch(table);
-        let Some(reg_entry) = table.get_mut(reg_name) else { return };
-        let Some(reg_obj) = reg_entry.as_object_mut() else { return };
+        let Some(reg_entry) = table.get_mut(reg_name) else {
+            return;
+        };
+        let Some(reg_obj) = reg_entry.as_object_mut() else {
+            return;
+        };
         if prev_val == new_val {
             return;
         }
@@ -359,29 +364,24 @@ impl TimerContext {
                 continue;
             }
             let key = bit.to_string();
-            let Some(bit_entry) = reg_obj.get_mut(&key) else { continue };
-            let Some(bit_obj) = bit_entry.as_object_mut() else { continue };
+            let Some(bit_entry) = reg_obj.get_mut(&key) else {
+                continue;
+            };
+            let Some(bit_obj) = bit_entry.as_object_mut() else {
+                continue;
+            };
             let action = if new == 1 { "set" } else { "clear" };
             if !bit_obj.contains_key(action) {
                 bit_obj.insert(action.to_string(), json!([]));
             }
-            if bit_obj
-                .get(action)
-                .and_then(|v| v.as_array())
-                .is_none()
-            {
+            if bit_obj.get(action).and_then(|v| v.as_array()).is_none() {
                 bit_obj.insert(action.to_string(), json!([]));
             }
             let arr = bit_obj
                 .get_mut(action)
                 .and_then(|v| v.as_array_mut())
                 .expect("array exists");
-            if arr
-                .last()
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32)
-                == Some(pc)
-            {
+            if arr.last().and_then(|v| v.as_u64()).map(|v| v as u32) == Some(pc) {
                 continue;
             }
             arr.push(json!(pc));
@@ -468,7 +468,6 @@ impl TimerContext {
         (fired_mti, fired_sti)
     }
 
-
     /// Tick timers and optionally run a keyboard scan when MTI fires, mirroring Python's _tick_timers.
     /// Returns (mti, sti, key_events).
     pub fn tick_timers_with_keyboard<F>(
@@ -526,9 +525,18 @@ impl TimerContext {
             let mut guard = PERFETTO_TRACER.enter();
             if let Some(tracer) = guard.as_mut() {
                 let mut payload = HashMap::new();
-                payload.insert("events".to_string(), AnnotationValue::UInt(key_events as u64));
-                payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-                payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+                payload.insert(
+                    "events".to_string(),
+                    AnnotationValue::UInt(key_events as u64),
+                );
+                payload.insert(
+                    "imr".to_string(),
+                    AnnotationValue::UInt(self.irq_imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    AnnotationValue::UInt(self.irq_isr as u64),
+                );
                 payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
                 payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                 if let Some(y) = y_reg {
@@ -575,8 +583,14 @@ impl TimerContext {
                 "events".to_string(),
                 AnnotationValue::UInt(key_events as u64),
             );
-            payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-            payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
+            payload.insert(
+                "imr".to_string(),
+                AnnotationValue::UInt(self.irq_imr as u64),
+            );
+            payload.insert(
+                "isr".to_string(),
+                AnnotationValue::UInt(self.irq_isr as u64),
+            );
             payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
             if let Some(stats) = kb_stats.as_ref() {
                 payload.insert(
@@ -623,9 +637,15 @@ impl TimerContext {
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.as_mut() {
             let mut payload = std::collections::HashMap::new();
-            payload.insert("isr".to_string(), AnnotationValue::UInt(self.irq_isr as u64));
-            payload.insert("imr".to_string(), AnnotationValue::UInt(self.irq_imr as u64));
-            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count as u64));
+            payload.insert(
+                "isr".to_string(),
+                AnnotationValue::UInt(self.irq_isr as u64),
+            );
+            payload.insert(
+                "imr".to_string(),
+                AnnotationValue::UInt(self.irq_imr as u64),
+            );
+            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
             if let Some(src) = self.irq_source.as_deref() {
                 payload.insert("src".to_string(), AnnotationValue::Str(src.to_string()));
             }
@@ -820,8 +840,7 @@ mod tests {
             .and_then(|v| v.as_array())
             .expect("'set' array should exist for bit 0");
         assert!(
-            set.iter()
-                .any(|entry| entry.as_u64() == Some(pc as u64)),
+            set.iter().any(|entry| entry.as_u64() == Some(pc as u64)),
             "bit watch should record PC for MTI ISR set"
         );
     }
@@ -835,13 +854,8 @@ mod tests {
         // Force KEYI assertion via keyboard path.
         timer.key_irq_latched = true;
         let pc = 0x234u32;
-        let _ = timer.tick_timers_with_keyboard(
-            &mut mem,
-            0,
-            |_mem| (0, true, None),
-            None,
-            Some(pc),
-        );
+        let _ =
+            timer.tick_timers_with_keyboard(&mut mem, 0, |_mem| (0, true, None), None, Some(pc));
         let watch = timer
             .irq_bit_watch
             .as_ref()
@@ -957,7 +971,11 @@ mod tests {
             "no additional events are needed to surface buffered data"
         );
         let isr_after = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_ne!(isr_after & 0x04, 0, "KEYI should assert once IRQs are enabled");
+        assert_ne!(
+            isr_after & 0x04,
+            0,
+            "KEYI should assert once IRQs are enabled"
+        );
     }
 
     #[test]
@@ -1000,8 +1018,14 @@ mod tests {
         );
 
         // Parity: LLAMA loader scales timers when scale is set.
-        assert_eq!(timer.mti_period, 50, "MTI period should scale by configured factor");
-        assert_eq!(timer.sti_period, 100, "STI period should scale by configured factor");
+        assert_eq!(
+            timer.mti_period, 50,
+            "MTI period should scale by configured factor"
+        );
+        assert_eq!(
+            timer.sti_period, 100,
+            "STI period should scale by configured factor"
+        );
     }
 
     #[test]

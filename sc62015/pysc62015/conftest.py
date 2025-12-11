@@ -11,7 +11,10 @@ try:
 
     _IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - handles optional deps (binja_test_mocks)
-    available_backends = lambda: ()
+
+    def available_backends() -> tuple[str, ...]:
+        return ()
+
     _IMPORT_ERROR = exc
 
 _VALID_BACKENDS = {"python", "llama"}

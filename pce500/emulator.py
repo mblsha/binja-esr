@@ -272,7 +272,8 @@ class PCE500Emulator:
             )
 
         self.memory.set_cpu(self.cpu)
-        if getattr(self.cpu, "backend", None) == "llama":
+        cpu_backend = getattr(self.cpu, "backend", None)
+        if cpu_backend == "llama":
             setter = getattr(self.cpu, "set_timer_scale", None)
             if callable(setter):
                 try:
@@ -280,8 +281,8 @@ class PCE500Emulator:
                 except Exception:
                     pass
 
-        # Always route keyboard I/O through the Rust peripheral even on the Python backend.
-        disable_keyboard_overlay = True
+        # Use Rust keyboard bridge only when LLAMA is active; keep Python overlays otherwise.
+        disable_keyboard_overlay = cpu_backend == "llama"
         self.memory.set_keyboard_handler(
             self._keyboard_read_handler,
             self._keyboard_write_handler,
@@ -296,8 +297,8 @@ class PCE500Emulator:
         except Exception:
             pass
 
-        # Always route LCD I/O through the Rust peripheral even on the Python backend.
-        disable_overlay = True
+        # Use Rust LCD bridge only when LLAMA is active; keep overlays for the Python core.
+        disable_overlay = cpu_backend == "llama"
         enable_overlay = not disable_overlay
         self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
         self._llama_pure_lcd = disable_overlay
@@ -409,9 +410,7 @@ class PCE500Emulator:
         self._timer_scale = float(timer_scale) if timer_scale else 1.0
         if self._timer_scale <= 0:
             self._timer_scale = 1.0
-        effective_timer_scale = (
-            self._timer_scale if getattr(self.cpu, "backend", None) == "llama" else 1.0
-        )
+        effective_timer_scale = self._timer_scale if cpu_backend == "llama" else 1.0
         self._scheduler = TimerScheduler(
             mti_period=max(1, int(MTI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)),
             sti_period=max(1, int(STI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)),
@@ -1664,7 +1663,10 @@ class PCE500Emulator:
         effective_timer_scale = (
             self._timer_scale if getattr(self.cpu, "backend", None) == "llama" else 1.0
         )
-        if effective_timer_scale != 1.0 and getattr(self.cpu, "backend", None) == "llama":
+        if (
+            effective_timer_scale != 1.0
+            and getattr(self.cpu, "backend", None) == "llama"
+        ):
             self._timer_mti_period = max(
                 1, int(MTI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)
             )

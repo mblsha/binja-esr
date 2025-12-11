@@ -601,9 +601,6 @@ def main(
     save_snapshot: str | Path | None = None,
 ):
     """Example with Perfetto tracing enabled."""
-    # Local import for KEYI_DEBUG injection.
-    from sc62015.pysc62015.instr.opcodes import IMEMRegisters
-
     # Enable performance profiling if requested
     if profile_emulator:
         from pce500.tracing.perfetto_tracing import enable_profiling, tracer

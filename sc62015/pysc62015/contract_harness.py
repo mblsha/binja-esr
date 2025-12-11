@@ -97,7 +97,9 @@ class ContractBackend(Protocol):
 
     def release_on_key(self) -> None: ...  # pragma: no cover
 
-    def press_matrix_code(self, code: int, *, release: bool = False) -> bool: ...  # pragma: no cover
+    def press_matrix_code(
+        self, code: int, *, release: bool = False
+    ) -> bool: ...  # pragma: no cover
 
 
 class PythonContractBackend:
@@ -331,7 +333,9 @@ class RustContractBackend:
     def add_ram_overlay(self, start: int, size: int, name: str = "ram_overlay") -> None:
         self._impl.add_ram_overlay(int(start), int(size), str(name))
 
-    def add_rom_overlay(self, start: int, data: bytes, name: str = "rom_overlay") -> None:
+    def add_rom_overlay(
+        self, start: int, data: bytes, name: str = "rom_overlay"
+    ) -> None:
         self._impl.add_rom_overlay(int(start), data, str(name))
 
     def load_memory_card(self, data: bytes) -> None:

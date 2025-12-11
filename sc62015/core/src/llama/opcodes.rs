@@ -134,7 +134,7 @@ pub struct OpcodeEntry {
 /// Synced from sc62015/pysc62015/instr/opcode_table.py via
 /// `uv run python scripts/generate_llama_opcodes.py`.
 pub static OPCODES: [OpcodeEntry; 256] = [
-OpcodeEntry {
+    OpcodeEntry {
         opcode: 0x00,
         kind: InstrKind::Nop,
         name: "NOP",
@@ -1228,7 +1228,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::A, 8), OperandKind::EMemAddrWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::A, 8),
+            OperandKind::EMemAddrWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x89,
@@ -1244,7 +1247,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::BA, 16), OperandKind::EMemAddrWidth(2)],
+        operands: &[
+            OperandKind::Reg(RegName::BA, 16),
+            OperandKind::EMemAddrWidth(2),
+        ],
     },
     OpcodeEntry {
         opcode: 0x8B,
@@ -1252,7 +1258,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::I, 16), OperandKind::EMemAddrWidth(2)],
+        operands: &[
+            OperandKind::Reg(RegName::I, 16),
+            OperandKind::EMemAddrWidth(2),
+        ],
     },
     OpcodeEntry {
         opcode: 0x8C,
@@ -1260,7 +1269,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::X, 24), OperandKind::EMemAddrWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::X, 24),
+            OperandKind::EMemAddrWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x8D,
@@ -1268,7 +1280,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::Y, 24), OperandKind::EMemAddrWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::Y, 24),
+            OperandKind::EMemAddrWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x8E,
@@ -1276,7 +1291,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::U, 24), OperandKind::EMemAddrWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::U, 24),
+            OperandKind::EMemAddrWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x8F,
@@ -1284,7 +1302,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::S, 24), OperandKind::EMemAddrWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::S, 24),
+            OperandKind::EMemAddrWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x90,
@@ -1292,7 +1313,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::A, 8), OperandKind::EMemRegWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::A, 8),
+            OperandKind::EMemRegWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x91,
@@ -1308,7 +1332,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::BA, 16), OperandKind::EMemRegWidth(2)],
+        operands: &[
+            OperandKind::Reg(RegName::BA, 16),
+            OperandKind::EMemRegWidth(2),
+        ],
     },
     OpcodeEntry {
         opcode: 0x93,
@@ -1316,7 +1343,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::I, 16), OperandKind::EMemRegWidth(2)],
+        operands: &[
+            OperandKind::Reg(RegName::I, 16),
+            OperandKind::EMemRegWidth(2),
+        ],
     },
     OpcodeEntry {
         opcode: 0x94,
@@ -1324,7 +1354,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::X, 24), OperandKind::EMemRegWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::X, 24),
+            OperandKind::EMemRegWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x95,
@@ -1332,7 +1365,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::Y, 24), OperandKind::EMemRegWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::Y, 24),
+            OperandKind::EMemRegWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x96,
@@ -1340,7 +1376,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::U, 24), OperandKind::EMemRegWidth(3)],
+        operands: &[
+            OperandKind::Reg(RegName::U, 24),
+            OperandKind::EMemRegWidth(3),
+        ],
     },
     OpcodeEntry {
         opcode: 0x97,
@@ -1356,7 +1395,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::A, 8), OperandKind::EMemIMemWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::A, 8),
+            OperandKind::EMemIMemWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x99,
@@ -1372,7 +1414,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::BA, 16), OperandKind::EMemIMemWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::BA, 16),
+            OperandKind::EMemIMemWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x9B,
@@ -1380,7 +1425,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::I, 16), OperandKind::EMemIMemWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::I, 16),
+            OperandKind::EMemIMemWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x9C,
@@ -1388,7 +1436,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::X, 24), OperandKind::EMemIMemWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::X, 24),
+            OperandKind::EMemIMemWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x9D,
@@ -1396,7 +1447,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::Y, 24), OperandKind::EMemIMemWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::Y, 24),
+            OperandKind::EMemIMemWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x9E,
@@ -1404,7 +1458,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::Reg(RegName::U, 24), OperandKind::EMemIMemWidth(1)],
+        operands: &[
+            OperandKind::Reg(RegName::U, 24),
+            OperandKind::EMemIMemWidth(1),
+        ],
     },
     OpcodeEntry {
         opcode: 0x9F,
@@ -1484,7 +1541,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(1), OperandKind::Reg(RegName::A, 8)],
+        operands: &[
+            OperandKind::EMemAddrWidth(1),
+            OperandKind::Reg(RegName::A, 8),
+        ],
     },
     OpcodeEntry {
         opcode: 0xA9,
@@ -1500,7 +1560,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(2), OperandKind::Reg(RegName::BA, 16)],
+        operands: &[
+            OperandKind::EMemAddrWidth(2),
+            OperandKind::Reg(RegName::BA, 16),
+        ],
     },
     OpcodeEntry {
         opcode: 0xAB,
@@ -1508,7 +1571,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(2), OperandKind::Reg(RegName::I, 16)],
+        operands: &[
+            OperandKind::EMemAddrWidth(2),
+            OperandKind::Reg(RegName::I, 16),
+        ],
     },
     OpcodeEntry {
         opcode: 0xAC,
@@ -1516,7 +1582,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(3), OperandKind::Reg(RegName::X, 24)],
+        operands: &[
+            OperandKind::EMemAddrWidth(3),
+            OperandKind::Reg(RegName::X, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xAD,
@@ -1524,7 +1593,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(3), OperandKind::Reg(RegName::Y, 24)],
+        operands: &[
+            OperandKind::EMemAddrWidth(3),
+            OperandKind::Reg(RegName::Y, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xAE,
@@ -1532,7 +1604,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(3), OperandKind::Reg(RegName::U, 24)],
+        operands: &[
+            OperandKind::EMemAddrWidth(3),
+            OperandKind::Reg(RegName::U, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xAF,
@@ -1540,7 +1615,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemAddrWidth(3), OperandKind::Reg(RegName::S, 24)],
+        operands: &[
+            OperandKind::EMemAddrWidth(3),
+            OperandKind::Reg(RegName::S, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB0,
@@ -1548,7 +1626,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemRegWidth(1), OperandKind::Reg(RegName::A, 8)],
+        operands: &[
+            OperandKind::EMemRegWidth(1),
+            OperandKind::Reg(RegName::A, 8),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB1,
@@ -1564,7 +1645,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemRegWidth(2), OperandKind::Reg(RegName::BA, 16)],
+        operands: &[
+            OperandKind::EMemRegWidth(2),
+            OperandKind::Reg(RegName::BA, 16),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB3,
@@ -1572,7 +1656,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemRegWidth(2), OperandKind::Reg(RegName::I, 16)],
+        operands: &[
+            OperandKind::EMemRegWidth(2),
+            OperandKind::Reg(RegName::I, 16),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB4,
@@ -1580,7 +1667,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemRegWidth(3), OperandKind::Reg(RegName::X, 24)],
+        operands: &[
+            OperandKind::EMemRegWidth(3),
+            OperandKind::Reg(RegName::X, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB5,
@@ -1588,7 +1678,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemRegWidth(3), OperandKind::Reg(RegName::Y, 24)],
+        operands: &[
+            OperandKind::EMemRegWidth(3),
+            OperandKind::Reg(RegName::Y, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB6,
@@ -1596,7 +1689,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemRegWidth(3), OperandKind::Reg(RegName::U, 24)],
+        operands: &[
+            OperandKind::EMemRegWidth(3),
+            OperandKind::Reg(RegName::U, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB7,
@@ -1612,7 +1708,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemIMemWidth(1), OperandKind::Reg(RegName::A, 8)],
+        operands: &[
+            OperandKind::EMemIMemWidth(1),
+            OperandKind::Reg(RegName::A, 8),
+        ],
     },
     OpcodeEntry {
         opcode: 0xB9,
@@ -1628,7 +1727,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemIMemWidth(1), OperandKind::Reg(RegName::BA, 16)],
+        operands: &[
+            OperandKind::EMemIMemWidth(1),
+            OperandKind::Reg(RegName::BA, 16),
+        ],
     },
     OpcodeEntry {
         opcode: 0xBB,
@@ -1636,7 +1738,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemIMemWidth(1), OperandKind::Reg(RegName::I, 16)],
+        operands: &[
+            OperandKind::EMemIMemWidth(1),
+            OperandKind::Reg(RegName::I, 16),
+        ],
     },
     OpcodeEntry {
         opcode: 0xBC,
@@ -1644,7 +1749,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemIMemWidth(1), OperandKind::Reg(RegName::X, 24)],
+        operands: &[
+            OperandKind::EMemIMemWidth(1),
+            OperandKind::Reg(RegName::X, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xBD,
@@ -1652,7 +1760,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemIMemWidth(1), OperandKind::Reg(RegName::Y, 24)],
+        operands: &[
+            OperandKind::EMemIMemWidth(1),
+            OperandKind::Reg(RegName::Y, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xBE,
@@ -1660,7 +1771,10 @@ OpcodeEntry {
         name: "MV",
         cond: None,
         ops_reversed: None,
-        operands: &[OperandKind::EMemIMemWidth(1), OperandKind::Reg(RegName::U, 24)],
+        operands: &[
+            OperandKind::EMemIMemWidth(1),
+            OperandKind::Reg(RegName::U, 24),
+        ],
     },
     OpcodeEntry {
         opcode: 0xBF,

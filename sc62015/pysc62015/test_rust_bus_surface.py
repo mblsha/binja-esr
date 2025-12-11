@@ -91,8 +91,12 @@ def test_overlay_log_parity_with_python():
     backend.add_ram_overlay(0x7000, 2, name="py_overlay")
     backend.write(0x7000, 0xCC, pc=0x0300)
     _ = backend.read(0x7000, pc=0x0400)
-    rs_writes = [log for log in backend.overlay_write_log() if log["overlay"] == "py_overlay"]
-    rs_reads = [log for log in backend.overlay_read_log() if log["overlay"] == "py_overlay"]
+    rs_writes = [
+        log for log in backend.overlay_write_log() if log["overlay"] == "py_overlay"
+    ]
+    rs_reads = [
+        log for log in backend.overlay_read_log() if log["overlay"] == "py_overlay"
+    ]
 
     assert len(py_writes) == len(rs_writes) == 1
     assert len(py_reads) == len(rs_reads) == 1

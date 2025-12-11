@@ -489,7 +489,11 @@ impl Default for LcdController {
 
 fn pixel_on(byte: u8, bit: usize) -> u8 {
     // Match Python helper: pixels are lit when the stored bit is 0.
-    if ((byte >> bit) & 1) == 0 { 1 } else { 0 }
+    if ((byte >> bit) & 1) == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -544,7 +548,10 @@ mod tests {
         let mut lcd = LcdController::new();
         assert!(lcd.handles(0x2000));
         assert!(lcd.handles(0x200F));
-        assert!(lcd.handles(0x2010), "low mirror spans 0x2000-0x2FFF like Python");
+        assert!(
+            lcd.handles(0x2010),
+            "low mirror spans 0x2000-0x2FFF like Python"
+        );
         assert!(lcd.handles(0xA000));
         assert!(lcd.handles(0xAFFF));
 
@@ -559,7 +566,7 @@ mod tests {
         let mut lcd = LcdController::new();
         // Set Y address to 0 via high offset instruction address (bit1=0 => instruction).
         lcd.write(0x2100, 0x40); // SetYAddress=0
-        // Write data using high offset data address (bit1=1).
+                                 // Write data using high offset data address (bit1=1).
         lcd.write(0x2102, 0xAA);
         // Verify write landed in VRAM for both chips at y=0 page 0.
         assert_eq!(lcd.chips[0].vram[0][0], 0xAA);

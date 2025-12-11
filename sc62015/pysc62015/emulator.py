@@ -1,6 +1,5 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple, Callable
 import enum
-import os
 from dataclasses import dataclass
 from binja_test_mocks.coding import FetchDecoder
 

@@ -28,6 +28,6 @@ def test_perfetto_reference_traces_match() -> None:
         text=True,
         check=False,
     )
-    assert (
-        result.returncode == 0
-    ), f"perfetto traces diverged: rc={result.returncode}\n{result.stdout}"
+    assert result.returncode == 0, (
+        f"perfetto traces diverged: rc={result.returncode}\n{result.stdout}"
+    )

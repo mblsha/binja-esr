@@ -41,7 +41,7 @@ fn canonical_address(address: u32) -> u32 {
 }
 
 thread_local! {
-    static IMR_READ_SUPPRESS: Cell<bool> = Cell::new(false);
+    static IMR_READ_SUPPRESS: Cell<bool> = const { Cell::new(false) };
 }
 
 fn perfetto_guard() -> crate::PerfettoGuard<'static> {
@@ -115,13 +115,14 @@ impl MemoryOverlay {
 
     fn offset(&self, address: u32) -> Option<usize> {
         let addr = canonical_address(address);
-        addr.checked_sub(self.start).and_then(|off| usize::try_from(off).ok())
+        addr.checked_sub(self.start)
+            .and_then(|off| usize::try_from(off).ok())
     }
 
     fn read(&self, address: u32, pc: Option<u32>) -> Option<u8> {
         if let Some(handler) = self.read_handler.as_ref() {
             if let Some(val) = handler(address, pc) {
-                return Some(val & 0xFF);
+                return Some(val);
             }
         }
         if let (Some(data), Some(offset)) = (self.data.as_ref(), self.offset(address)) {
@@ -309,8 +310,9 @@ impl MemoryImage {
             return Err(CoreError::Other("memory card data is empty".to_string()));
         }
         let size = data.len();
-        let Some((_, start, end, thread)) =
-            MEMORY_CARD_RANGES.iter().find(|(len, _, _, _)| *len == size)
+        let Some((_, start, end, thread)) = MEMORY_CARD_RANGES
+            .iter()
+            .find(|(len, _, _, _)| *len == size)
         else {
             return Err(CoreError::Other(format!(
                 "unsupported memory card size: {size} bytes"
@@ -560,8 +562,7 @@ impl MemoryImage {
                     self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
                     let mut guard = perfetto_guard();
                     if let Some(tracer) = guard.as_mut() {
-                        if let Some((op_idx, pc_ctx)) =
-                            crate::llama::eval::perfetto_instr_context()
+                        if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
                         {
                             let substep = crate::llama::eval::perfetto_next_substep();
                             tracer.record_mem_write_with_substep(
@@ -692,7 +693,11 @@ impl MemoryImage {
                 tracer.record_imr_read(
                     if op_idx == u64::MAX { None } else { Some(pc) },
                     value as u8,
-                    if op_idx == u64::MAX { None } else { Some(op_idx) },
+                    if op_idx == u64::MAX {
+                        None
+                    } else {
+                        Some(op_idx)
+                    },
                 );
             }
         }
@@ -747,7 +752,11 @@ impl MemoryImage {
                     tracer.record_imr_read(
                         if op_idx == u64::MAX { None } else { Some(pc) },
                         val,
-                        if op_idx == u64::MAX { None } else { Some(op_idx) },
+                        if op_idx == u64::MAX {
+                            None
+                        } else {
+                            Some(op_idx)
+                        },
                     );
                 }
             }
@@ -794,7 +803,11 @@ impl MemoryImage {
                 if op_idx == u64::MAX { None } else { Some(pc) },
                 offset as u8,
                 value,
-                if op_idx == u64::MAX { None } else { Some(op_idx) },
+                if op_idx == u64::MAX {
+                    None
+                } else {
+                    Some(op_idx)
+                },
             );
         }
     }
@@ -915,16 +928,6 @@ impl MemoryImage {
     }
 }
 
-fn mask_bits(bits: u8) -> u32 {
-    if bits >= 32 {
-        u32::MAX
-    } else if bits == 0 {
-        0
-    } else {
-        (1u32 << bits) - 1
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1005,13 +1008,7 @@ mod tests {
         let _ = mem.store(base, 16, 0xBEEF);
         let mut dirty = mem.drain_dirty_internal();
         dirty.sort_by_key(|(addr, _)| *addr);
-        assert_eq!(
-            dirty,
-            vec![
-                (base, 0xEF),
-                (base + 1, 0xBE),
-            ]
-        );
+        assert_eq!(dirty, vec![(base, 0xEF), (base + 1, 0xBE),]);
     }
 
     #[test]
@@ -1069,9 +1066,9 @@ mod tests {
 
     #[test]
     fn host_write_uses_last_pc_fallback_when_no_context() {
-        use std::fs;
-        use crate::llama::eval::{reset_perf_counters, LlamaExecutor, LlamaBus};
+        use crate::llama::eval::{reset_perf_counters, LlamaBus, LlamaExecutor};
         use crate::llama::state::LlamaState;
+        use std::fs;
 
         // Execute a NOP at PC 0x123 to seed perfetto_last_pc without relying on a live context.
         reset_perf_counters();
@@ -1122,7 +1119,11 @@ mod tests {
             pc,
             0x123 & crate::llama::state::mask_for(crate::llama::opcodes::RegName::PC)
         );
-        assert_ne!(seq, u64::MAX, "last instr index should be usable as fallback");
+        assert_ne!(
+            seq,
+            u64::MAX,
+            "last instr index should be usable as fallback"
+        );
     }
 
     #[test]

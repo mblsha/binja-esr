@@ -1,14 +1,12 @@
 // PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
 
-use crate::llama::eval::{
-    perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc,
-};
+use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
 use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
-use std::collections::HashMap;
-use std::path::PathBuf;
 #[cfg(test)]
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
 pub struct PerfettoTracer {
@@ -185,9 +183,11 @@ impl PerfettoTracer {
 
         // Duplicate on the CPU track for parity with Python tracer naming.
         {
-            let mut cpu_ev = self
-                .builder
-                .add_instant_event(self.cpu_track, "Exec".to_string(), self.ts(instr_index, 0));
+            let mut cpu_ev = self.builder.add_instant_event(
+                self.cpu_track,
+                "Exec".to_string(),
+                self.ts(instr_index, 0),
+            );
             cpu_ev.add_annotations([
                 ("pc", AnnotationValue::Pointer(reg_pc as u64)),
                 ("opcode", AnnotationValue::UInt(opcode as u64)),
@@ -235,6 +235,7 @@ impl PerfettoTracer {
         self.record_mem_write_with_substep(instr_index, pc, addr, value, space, size, substep);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_mem_write_with_substep(
         &mut self,
         instr_index: u64,
@@ -252,9 +253,9 @@ impl PerfettoTracer {
         };
         let ts = self.ts(instr_index, substep.max(1));
         {
-            let mut ev = self
-                .builder
-                .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
+            let mut ev =
+                self.builder
+                    .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
             ev.add_annotations([
                 ("backend", AnnotationValue::Str("rust".to_string())),
                 ("pc", AnnotationValue::Pointer(pc as u64)),
@@ -272,9 +273,9 @@ impl PerfettoTracer {
         }
 
         // Also mirror to "Memory" track to match Python tracer naming.
-        let mut mem_alias = self
-            .builder
-            .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
+        let mut mem_alias =
+            self.builder
+                .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
         mem_alias.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("pc", AnnotationValue::Pointer(pc as u64)),
@@ -352,11 +353,10 @@ impl PerfettoTracer {
         mem_alias.finish();
 
         #[cfg(test)]
-        self.test_mem_write_pcs
-            .borrow_mut()
-            .push(pc_effective);
+        self.test_mem_write_pcs.borrow_mut().push(pc_effective);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_lcd_event(
         &mut self,
         name: &str,
@@ -433,17 +433,11 @@ impl PerfettoTracer {
 
         // Mirror Python tracer: update IMR counters.
         if zero {
-            self.builder.update_counter(
-                self.imr_zero_counter,
-                self.imr_read_zero as f64,
-                ts as i64,
-            );
+            self.builder
+                .update_counter(self.imr_zero_counter, self.imr_read_zero as f64, ts);
         } else {
-            self.builder.update_counter(
-                self.imr_nonzero_counter,
-                self.imr_read_nonzero as f64,
-                ts as i64,
-            );
+            self.builder
+                .update_counter(self.imr_nonzero_counter, self.imr_read_nonzero as f64, ts);
         }
 
         let mut ev = self
@@ -460,6 +454,7 @@ impl PerfettoTracer {
     }
 
     /// IMEM effective address diagnostics to align with Python tracing.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_imem_addr(
         &mut self,
         mode: &str,
@@ -572,6 +567,7 @@ impl PerfettoTracer {
     }
 
     /// Diagnostic instants mirroring Python IRQ pending checks (IRQ_Check/IRQ_PendingCheck/IMR_ReadZero).
+    #[allow(clippy::too_many_arguments)]
     pub fn record_irq_check(
         &mut self,
         name: &str,
@@ -667,10 +663,7 @@ fn classify_irq_track(name: &str, payload: &HashMap<String, AnnotationValue>) ->
         });
 
     // Primary routing on event name (matches Python tracer defaults).
-    if matches!(
-        upper_name.as_str(),
-        "TIMERFIRED" | "TIMER" | "MTI" | "STI"
-    ) {
+    if matches!(upper_name.as_str(), "TIMERFIRED" | "TIMER" | "MTI" | "STI") {
         return IrqTrack::Timer;
     }
     if matches!(
@@ -722,7 +715,10 @@ mod tests {
     #[test]
     fn unknown_name_timer_source_routes_to_timer() {
         let mut payload = HashMap::new();
-        payload.insert("source".to_string(), AnnotationValue::Str("STI".to_string()));
+        payload.insert(
+            "source".to_string(),
+            AnnotationValue::Str("STI".to_string()),
+        );
         let track = classify_irq_track("PythonOverlayMissing", &payload);
         assert_eq!(track, IrqTrack::Timer);
     }
@@ -730,7 +726,10 @@ mod tests {
     #[test]
     fn unknown_name_onk_source_routes_to_key() {
         let mut payload = HashMap::new();
-        payload.insert("source".to_string(), AnnotationValue::Str("ONK".to_string()));
+        payload.insert(
+            "source".to_string(),
+            AnnotationValue::Str("ONK".to_string()),
+        );
         let track = classify_irq_track("PythonOverlayMissing", &payload);
         assert_eq!(track, IrqTrack::Key);
     }

@@ -14,8 +14,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::SystemTime;
+use std::{
+    cell::{Cell, UnsafeCell},
+    thread::ThreadId,
+};
 use thiserror::Error;
-use std::{cell::{Cell, UnsafeCell}, thread::ThreadId};
 
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
@@ -45,6 +48,12 @@ struct PythonOverlayFault {
     pc: u32,
 }
 
+impl Default for PerfettoHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerfettoHandle {
     pub const fn new() -> Self {
         Self {
@@ -65,10 +74,7 @@ impl PerfettoHandle {
                 released: false,
             };
         }
-        let gate = self
-            .gate
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
         debug_assert!(self.owner.get().is_none());
         self.owner.set(Some(tid));
         self.depth.set(1);
@@ -442,7 +448,11 @@ impl CoreRuntime {
                 .unwrap_or_else(crate::llama::eval::perfetto_last_pc);
             unsafe {
                 let timer = &mut *timer_ptr;
-                let reg_name = if offset == IMEM_IMR_OFFSET { "IMR" } else { "ISR" };
+                let reg_name = if offset == IMEM_IMR_OFFSET {
+                    "IMR"
+                } else {
+                    "ISR"
+                };
                 timer.record_bit_watch_transition(reg_name, prev, new, pc);
                 if offset == IMEM_IMR_OFFSET {
                     timer.irq_imr = new;
@@ -452,9 +462,18 @@ impl CoreRuntime {
                 let mut guard = PERFETTO_TRACER.enter();
                 if let Some(tracer) = guard.as_mut() {
                     let mut payload = std::collections::HashMap::new();
-                    payload.insert("pc".to_string(), perfetto::AnnotationValue::Pointer(pc as u64));
-                    payload.insert("prev".to_string(), perfetto::AnnotationValue::UInt(prev as u64));
-                    payload.insert("value".to_string(), perfetto::AnnotationValue::UInt(new as u64));
+                    payload.insert(
+                        "pc".to_string(),
+                        perfetto::AnnotationValue::Pointer(pc as u64),
+                    );
+                    payload.insert(
+                        "prev".to_string(),
+                        perfetto::AnnotationValue::UInt(prev as u64),
+                    );
+                    payload.insert(
+                        "value".to_string(),
+                        perfetto::AnnotationValue::UInt(new as u64),
+                    );
                     payload.insert(
                         "imr".to_string(),
                         perfetto::AnnotationValue::UInt(timer.irq_imr as u64),
@@ -480,8 +499,7 @@ impl CoreRuntime {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         if (isr & ISR_ONKI) == 0 {
             let new_isr = isr | ISR_ONKI;
-            self.memory
-                .write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+            self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
             self.timer
                 .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
         }
@@ -703,9 +721,9 @@ impl CoreRuntime {
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
-                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK as u32
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
-                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
                         if let Some(val) = (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
                         {
                             (*self.mem).bump_read_count();
@@ -754,16 +772,13 @@ impl CoreRuntime {
                         if self.overlay_fault_addr.is_none() {
                             self.overlay_fault_addr = Some(addr);
                         }
-                        std::panic::panic_any(PythonOverlayFault {
-                            addr,
-                            pc: self.pc,
-                        });
+                        std::panic::panic_any(PythonOverlayFault { addr, pc: self.pc });
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
                     if MemoryImage::is_internal(addr)
-                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK as u32
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
-                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
                         if offset == 0xFF {
                             let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
@@ -783,21 +798,21 @@ impl CoreRuntime {
                     // Keyboard KOL/KOH/KIL writes.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
-                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK as u32
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
-                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK as u32;
-                        if (0xF0..=0xF2).contains(&offset) {
-                            if (*self.keyboard_ptr).handle_write(
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        if (0xF0..=0xF2).contains(&offset)
+                            && (*self.keyboard_ptr).handle_write(
                                 offset,
                                 value as u8,
                                 &mut *self.mem,
-                            ) {
-                                // Mirror writes into IMEM except when the handler already wrote KIL.
-                                if offset != 0xF2 {
-                                    let _ = (*self.mem).store(addr, bits, value);
-                                }
-                                return;
+                            )
+                        {
+                            // Mirror writes into IMEM except when the handler already wrote KIL.
+                            if offset != 0xF2 {
+                                let _ = (*self.mem).store(addr, bits, value);
                             }
+                            return;
                         }
                         if offset <= 0x0F && !self.lcd_ptr.is_null() {
                             let mapped = crate::lcd::overlay_addr(offset);
@@ -827,7 +842,7 @@ impl CoreRuntime {
                                         op_idx,
                                         pc_ctx,
                                         addr,
-                                        value as u32,
+                                        value,
                                         "python_overlay",
                                         bits,
                                         substep,
@@ -837,7 +852,7 @@ impl CoreRuntime {
                                         self.cycle,
                                         Some(self.pc),
                                         addr,
-                                        value as u32,
+                                        value,
                                         "python_overlay",
                                         bits,
                                     );
@@ -865,10 +880,7 @@ impl CoreRuntime {
                         if self.overlay_fault_addr.is_none() {
                             self.overlay_fault_addr = Some(addr);
                         }
-                        std::panic::panic_any(PythonOverlayFault {
-                            addr,
-                            pc: self.pc,
-                        });
+                        std::panic::panic_any(PythonOverlayFault { addr, pc: self.pc });
                     }
                     let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
                 }
@@ -1095,123 +1107,117 @@ impl CoreRuntime {
                         | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
                     self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
                 }
-            self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
+                self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
-            // Advance cycles: one for the opcode plus simulated WAIT idle cycles, mirroring Python
-            // _simulate_wait which burns I cycles and ticks timers/keyboard each iteration.
-            let run_timer_cycles = true;
-            let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
-            let prev_cycle = self.metadata.cycle_count;
-            let new_cycle = prev_cycle.wrapping_add(cycle_increment);
-            if run_timer_cycles {
-                for cyc in prev_cycle + 1..=new_cycle {
-                    if !self.timer.in_interrupt {
-                        let kb_irq_enabled = self.timer.kb_irq_enabled;
-                        let _ = self.timer.tick_timers_with_keyboard(
-                            &mut self.memory,
-                            cyc,
-                            |mem| {
-                                if let Some(kb) = self.keyboard.as_mut() {
-                                    // Parity: always count/key-latch events even when IRQs are masked.
-                                    let events = kb.scan_tick(mem, true);
-                                    if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                // Advance cycles: one for the opcode plus simulated WAIT idle cycles, mirroring Python
+                // _simulate_wait which burns I cycles and ticks timers/keyboard each iteration.
+                let run_timer_cycles = true;
+                let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
+                let prev_cycle = self.metadata.cycle_count;
+                let new_cycle = prev_cycle.wrapping_add(cycle_increment);
+                if run_timer_cycles {
+                    for cyc in prev_cycle + 1..=new_cycle {
+                        if !self.timer.in_interrupt {
+                            let kb_irq_enabled = self.timer.kb_irq_enabled;
+                            let _ = self.timer.tick_timers_with_keyboard(
+                                &mut self.memory,
+                                cyc,
+                                |mem| {
+                                    if let Some(kb) = self.keyboard.as_mut() {
+                                        // Parity: always count/key-latch events even when IRQs are masked.
+                                        let events = kb.scan_tick(mem, true);
+                                        if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
+                                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                        }
+                                        (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                                    } else {
+                                        (0, false, None)
                                     }
-                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                                } else {
-                                    (0, false, None)
-                                }
-                            },
-                            Some(self.state.get_reg(RegName::Y)),
-                            Some(self.state.get_reg(RegName::PC)),
-                        );
-                        // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
-                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                            self.timer.irq_isr = isr;
+                                },
+                                Some(self.state.get_reg(RegName::Y)),
+                                Some(self.state.get_reg(RegName::PC)),
+                            );
+                            // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
+                            if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                                self.timer.irq_isr = isr;
+                            }
                         }
                     }
                 }
-            }
-            self.metadata.cycle_count = new_cycle;
-            if opcode == 0x01 {
-                let irq_src = self.timer.irq_source.clone();
-                // If irq_source was lost, fall back to the delivered mask stack or live ISR bits.
-                let stack_mask = self.timer.delivered_masks.pop();
-                let clear_mask = irq_src
-                    .as_deref()
-                    .and_then(src_mask_for_name)
-                    .or(stack_mask)
-                    .or_else(|| {
-                        self.memory
-                            .read_internal_byte(IMEM_ISR_OFFSET)
-                            .and_then(|isr| {
-                                if (isr & ISR_KEYI) != 0 {
-                                    Some(ISR_KEYI)
-                                } else if (isr & ISR_ONKI) != 0 {
-                                    Some(ISR_ONKI)
-                                } else if (isr & ISR_MTI) != 0 {
-                                    Some(ISR_MTI)
-                                } else if (isr & ISR_STI) != 0 {
-                                    Some(ISR_STI)
-                                } else {
-                                    None
-                                }
-                            })
-                    });
-                self.timer.in_interrupt = false;
-                if irq_src.as_deref().is_some_and(|s| s == "KEY") {
-                    self.timer.key_irq_latched = false;
-                }
-                self.timer.irq_source = None;
-                // Clear the delivered ISR bit, preferring explicit source but falling back to the saved mask.
-                if let Some(src_mask) = clear_mask {
-                    let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
-                    if let Some(isr_val) = self.memory.load(isr_addr, 8) {
-                        let prev = isr_val as u8;
-                        let cleared = prev & (!src_mask);
-                        let _ = self.memory.store(isr_addr, 8, cleared as u32);
-                        self.timer.record_bit_watch_transition(
-                            "ISR",
-                            prev,
-                            cleared,
-                            pc,
-                        );
+                self.metadata.cycle_count = new_cycle;
+                if opcode == 0x01 {
+                    let irq_src = self.timer.irq_source.clone();
+                    // If irq_source was lost, fall back to the delivered mask stack or live ISR bits.
+                    let stack_mask = self.timer.delivered_masks.pop();
+                    let clear_mask = irq_src
+                        .as_deref()
+                        .and_then(src_mask_for_name)
+                        .or(stack_mask)
+                        .or_else(|| {
+                            self.memory
+                                .read_internal_byte(IMEM_ISR_OFFSET)
+                                .and_then(|isr| {
+                                    if (isr & ISR_KEYI) != 0 {
+                                        Some(ISR_KEYI)
+                                    } else if (isr & ISR_ONKI) != 0 {
+                                        Some(ISR_ONKI)
+                                    } else if (isr & ISR_MTI) != 0 {
+                                        Some(ISR_MTI)
+                                    } else if (isr & ISR_STI) != 0 {
+                                        Some(ISR_STI)
+                                    } else {
+                                        None
+                                    }
+                                })
+                        });
+                    self.timer.in_interrupt = false;
+                    if irq_src.as_deref().is_some_and(|s| s == "KEY") {
+                        self.timer.key_irq_latched = false;
                     }
-                }
-                // Drop any stale interrupt-stack frames (used only for bookkeeping).
-                let _ = self.timer.interrupt_stack.pop();
-                let mut guard = PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
-                    let mut payload = std::collections::HashMap::new();
-                    payload.insert(
-                        "pc".to_string(),
-                        perfetto::AnnotationValue::Pointer(pc as u64),
-                    );
-                    payload.insert(
-                        "ret".to_string(),
-                        perfetto::AnnotationValue::Pointer(self.state.pc() as u64),
-                    );
-                    payload.insert(
-                        "src".to_string(),
-                        perfetto::AnnotationValue::Str(
-                            irq_src.unwrap_or_else(|| "".to_string()),
-                        ),
-                    );
-                    if let Some(mask) = clear_mask {
+                    self.timer.irq_source = None;
+                    // Clear the delivered ISR bit, preferring explicit source but falling back to the saved mask.
+                    if let Some(src_mask) = clear_mask {
+                        let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
+                        if let Some(isr_val) = self.memory.load(isr_addr, 8) {
+                            let prev = isr_val as u8;
+                            let cleared = prev & (!src_mask);
+                            let _ = self.memory.store(isr_addr, 8, cleared as u32);
+                            self.timer
+                                .record_bit_watch_transition("ISR", prev, cleared, pc);
+                        }
+                    }
+                    // Drop any stale interrupt-stack frames (used only for bookkeeping).
+                    let _ = self.timer.interrupt_stack.pop();
+                    let mut guard = PERFETTO_TRACER.enter();
+                    if let Some(tracer) = guard.as_mut() {
+                        let mut payload = std::collections::HashMap::new();
                         payload.insert(
-                            "mask".to_string(),
-                            perfetto::AnnotationValue::UInt(mask as u64),
+                            "pc".to_string(),
+                            perfetto::AnnotationValue::Pointer(pc as u64),
                         );
-                    }
-                    payload.insert(
+                        payload.insert(
+                            "ret".to_string(),
+                            perfetto::AnnotationValue::Pointer(self.state.pc() as u64),
+                        );
+                        payload.insert(
+                            "src".to_string(),
+                            perfetto::AnnotationValue::Str(irq_src.unwrap_or_default()),
+                        );
+                        if let Some(mask) = clear_mask {
+                            payload.insert(
+                                "mask".to_string(),
+                                perfetto::AnnotationValue::UInt(mask as u64),
+                            );
+                        }
+                        payload.insert(
                         "imr".to_string(),
                         perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
                     );
-                    tracer.record_irq_event("IRQ_Return", payload);
+                        tracer.record_irq_event("IRQ_Return", payload);
+                    }
                 }
-            }
-            self.deliver_pending_irq()?;
-            let mut guard = PERFETTO_TRACER.enter();
+                self.deliver_pending_irq()?;
+                let mut guard = PERFETTO_TRACER.enter();
                 if let Some(tracer) = guard.as_mut() {
                     tracer.update_counters(
                         self.metadata.instruction_count,
@@ -1311,7 +1317,7 @@ impl CoreRuntime {
             allow_timer_scale,
         );
         if let Some(watch) = self.metadata.interrupts.irq_bit_watch.as_ref() {
-            self.timer.irq_bit_watch = watch.as_object().map(|obj| obj.clone());
+            self.timer.irq_bit_watch = watch.as_object().cloned();
         }
         if self.keyboard.is_none() {
             self.keyboard = Some(KeyboardMatrix::new());
@@ -1496,13 +1502,7 @@ impl CoreRuntime {
                 };
                 let substep = crate::llama::eval::perfetto_next_substep();
                 tracer.record_mem_write_with_substep(
-                    op_idx,
-                    pc_trace,
-                    addr,
-                    value,
-                    space,
-                    bits,
-                    substep,
+                    op_idx, pc_trace, addr, value, space, bits, substep,
                 );
             }
         };
@@ -1725,7 +1725,7 @@ mod tests {
         rt.state.call_depth_inc();
         rt.state.call_depth_inc();
         rt.state.set_call_sub_level(3);
-        rt.state.set_reg(RegName::Temp(0), 0x00AA_BB);
+        rt.state.set_reg(RegName::Temp(0), 0x0000_AABB);
         rt.state.set_reg(RegName::Temp(5), 0x123456);
         rt.state.set_reg(RegName::PC, 0x12345);
         rt.save_snapshot(&tmp).expect("save snapshot");
@@ -1734,7 +1734,7 @@ mod tests {
         rt2.load_snapshot(&tmp).expect("load snapshot");
         assert_eq!(rt2.state.call_depth(), 2);
         assert_eq!(rt2.state.call_sub_level(), 3);
-        assert_eq!(rt2.state.get_reg(RegName::Temp(0)) & 0xFFFFFF, 0x00AA_BB);
+        assert_eq!(rt2.state.get_reg(RegName::Temp(0)) & 0xFFFFFF, 0x0000_AABB);
         assert_eq!(rt2.state.get_reg(RegName::Temp(5)) & 0xFFFFFF, 0x123456);
         assert_eq!(rt2.state.get_reg(RegName::PC) & 0x0F_FFFF, 0x12345);
     }
@@ -1908,8 +1908,8 @@ mod tests {
             impl<'a> crate::llama::eval::LlamaBus for TestBus<'a> {
                 fn load(&mut self, addr: u32, bits: u8) -> u32 {
                     if crate::memory::MemoryImage::is_internal(addr) {
-                        let offset =
-                            (addr - crate::memory::INTERNAL_MEMORY_START) & crate::memory::INTERNAL_ADDR_MASK as u32;
+                        let offset = (addr - crate::memory::INTERNAL_MEMORY_START)
+                            & crate::memory::INTERNAL_ADDR_MASK;
                         if offset == crate::memory::IMEM_SSR_OFFSET {
                             let mut val = self.mem.read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
@@ -1941,7 +1941,11 @@ mod tests {
             .memory
             .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
             .unwrap_or(0);
-        assert_eq!(ssr_clear & 0x08, 0, "SSR ONK bit should clear after release");
+        assert_eq!(
+            ssr_clear & 0x08,
+            0,
+            "SSR ONK bit should clear after release"
+        );
     }
 
     #[test]
@@ -1961,10 +1965,10 @@ mod tests {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 if crate::memory::MemoryImage::is_internal(addr)
                     && (addr - crate::memory::INTERNAL_MEMORY_START)
-                        <= crate::memory::INTERNAL_ADDR_MASK as u32
+                        <= crate::memory::INTERNAL_ADDR_MASK
                 {
                     let offset = (addr - crate::memory::INTERNAL_MEMORY_START)
-                        & crate::memory::INTERNAL_ADDR_MASK as u32;
+                        & crate::memory::INTERNAL_ADDR_MASK;
                     if let Some(val) = self.kb.handle_read(offset, self.mem) {
                         self.mem.bump_read_count();
                         self.mem.log_kio_read(offset, val);
@@ -2064,7 +2068,8 @@ mod tests {
         let mut rt = CoreRuntime::new();
         rt.timer.set_keyboard_irq_enabled(false);
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
-        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
         rt.timer.irq_pending = false;
         rt.timer.irq_source = None;
 
@@ -2122,7 +2127,10 @@ mod tests {
         rt.timer.irq_pending = false;
         rt.timer.irq_source = None;
         rt.arm_pending_irq_from_isr();
-        assert!(rt.timer.irq_pending, "pending should arm when IMR allows it");
+        assert!(
+            rt.timer.irq_pending,
+            "pending should arm when IMR allows it"
+        );
         assert_eq!(rt.timer.irq_source.as_deref(), Some("KEY"));
     }
 
@@ -2158,12 +2166,12 @@ mod tests {
         kb.handle_write(0xF0, 0xFF, &mut rt.memory);
         kb.handle_write(0xF1, 0x07, &mut rt.memory);
         let mut events = 0;
-            for _ in 0..8 {
-                events += kb.scan_tick(&mut rt.memory, true);
-                if events > 0 {
-                    break;
-                }
+        for _ in 0..8 {
+            events += kb.scan_tick(&mut rt.memory, true);
+            if events > 0 {
+                break;
             }
+        }
         kb.write_fifo_to_memory(&mut rt.memory, true);
         assert!(kb.fifo_len() > 0, "fifo should have data after scan");
         // Simulate firmware clearing ISR and dropping the latch.
@@ -2265,7 +2273,10 @@ mod tests {
         kb.write_fifo_to_memory(&mut rt.memory, rt.timer.kb_irq_enabled);
         rt.timer.key_irq_latched = true;
         rt.refresh_key_irq_latch();
-        assert!(rt.timer.key_irq_latched, "latch should be set while enabled");
+        assert!(
+            rt.timer.key_irq_latched,
+            "latch should be set while enabled"
+        );
         // Disable IRQs and clear ISR, then ensure refresh keeps the latch active.
         rt.timer.set_keyboard_irq_enabled(false);
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
@@ -2274,8 +2285,14 @@ mod tests {
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "KEYI should stay asserted while latched");
-        assert!(rt.timer.key_irq_latched, "latch should persist across gating");
-        assert!(rt.timer.irq_pending, "pending IRQ should remain set while latched");
+        assert!(
+            rt.timer.key_irq_latched,
+            "latch should persist across gating"
+        );
+        assert!(
+            rt.timer.irq_pending,
+            "pending IRQ should remain set while latched"
+        );
         assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
     }
 
@@ -2290,7 +2307,11 @@ mod tests {
         rt.refresh_key_irq_latch();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & ISR_KEYI, 0, "ISR should not change while in interrupt");
+        assert_eq!(
+            isr & ISR_KEYI,
+            0,
+            "ISR should not change while in interrupt"
+        );
         assert!(
             !rt.timer.irq_pending,
             "pending IRQ should remain clear while in interrupt"
@@ -2351,7 +2372,8 @@ mod tests {
         rt.timer.next_mti = 1;
         rt.state.set_halted(true);
         rt.state.set_reg(RegName::S, 0x0200);
-        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
         rt.memory.write_external_byte(0x0000, 0x00); // NOP placeholder
         rt.state.set_pc(0);
 
@@ -2364,7 +2386,7 @@ mod tests {
 
         rt.step(1).expect("halt idle tick");
 
-        if let Some(mut tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
             let counters = tracer.test_counters.borrow().clone();
             assert!(
                 !counters.is_empty(),
@@ -2393,7 +2415,10 @@ mod tests {
         let _ = rt.step(1);
 
         // HALT should remain and no pending IRQ when kb IRQs are disabled.
-        assert!(rt.state.is_halted(), "HALT should not wake on KEYI when kb IRQs disabled");
+        assert!(
+            rt.state.is_halted(),
+            "HALT should not wake on KEYI when kb IRQs disabled"
+        );
         assert!(
             !rt.timer.irq_pending,
             "pending IRQ should not arm for KEYI when kb IRQs disabled"
@@ -2721,9 +2746,9 @@ mod tests {
 
     #[test]
     fn host_overlay_write_counts_and_traces() {
+        use std::fs;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
-        use std::fs;
         let _lock = perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_host_overlay.perfetto-trace");
         let _ = fs::remove_file(&tmp);
@@ -2841,8 +2866,10 @@ mod tests {
         rt.timer.irq_sti = 1;
         rt.timer.irq_pending = true;
         rt.timer.irq_source = Some("KEY".to_string());
-        rt.timer.record_bit_watch_transition("IMR", 0x00, 0x80, 0x0100);
-        rt.timer.record_bit_watch_transition("ISR", 0x00, 0x04, 0x0100);
+        rt.timer
+            .record_bit_watch_transition("IMR", 0x00, 0x80, 0x0100);
+        rt.timer
+            .record_bit_watch_transition("ISR", 0x00, 0x04, 0x0100);
 
         // Program RESET at PC=0.
         rt.memory.write_external_byte(0x0000, 0xFF);
@@ -2971,7 +2998,11 @@ mod tests {
         rt.timer.irq_source = Some("KEY".to_string());
 
         rt.step(1).expect("deliver irq to vector");
-        assert_eq!(rt.state.call_depth(), 1, "interrupt should raise call depth");
+        assert_eq!(
+            rt.state.call_depth(),
+            1,
+            "interrupt should raise call depth"
+        );
         rt.step(1).expect("execute RETI");
         assert_eq!(rt.state.call_depth(), 0, "RETI should restore call depth");
     }
@@ -3047,7 +3078,11 @@ mod tests {
         // Timers should fire across the idle cycles and pend IRQs.
         assert!(rt.timer.irq_pending, "WAIT idle loop should pend IRQs");
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_ne!(isr & (ISR_MTI | ISR_STI), 0, "ISR should reflect timer fire");
+        assert_ne!(
+            isr & (ISR_MTI | ISR_STI),
+            0,
+            "ISR should reflect timer fire"
+        );
         // Cycle counter should advance for opcode + I loops.
         assert_eq!(rt.metadata.cycle_count, 6);
     }
@@ -3056,7 +3091,8 @@ mod tests {
     fn requires_python_without_host_errors() {
         let mut rt = CoreRuntime::new();
         // Mark an external range as Python-only and point PC at it.
-        rt.memory.set_python_ranges(vec![(0x0000_2000, 0x0000_2000)]);
+        rt.memory
+            .set_python_ranges(vec![(0x0000_2000, 0x0000_2000)]);
         rt.state.set_reg(RegName::PC, 0x0000_2000);
         // Seed a NOP opcode so the fetch path is taken.
         rt.memory.write_external_byte(0x0000_2000, 0x00);
@@ -3085,7 +3121,8 @@ mod tests {
     fn python_overlay_fault_does_not_advance_pc_or_counters() {
         let mut rt = CoreRuntime::new();
         // Mark an external range as Python-only and point PC at it.
-        rt.memory.set_python_ranges(vec![(0x0000_3000, 0x0000_3000)]);
+        rt.memory
+            .set_python_ranges(vec![(0x0000_3000, 0x0000_3000)]);
         rt.state.set_reg(RegName::PC, 0x0000_3000);
         rt.memory.write_external_byte(0x0000_3000, 0x00); // NOP
 
@@ -3128,18 +3165,33 @@ mod tests {
         rt.step(1).expect("execute RESET");
 
         assert!(!rt.timer.irq_pending, "reset should clear pending IRQ");
-        assert!(!rt.timer.in_interrupt, "reset should exit interrupt context");
+        assert!(
+            !rt.timer.in_interrupt,
+            "reset should exit interrupt context"
+        );
         assert!(rt.timer.irq_source.is_none(), "irq_source should clear");
         assert!(!rt.timer.key_irq_latched, "KEY latch should clear");
-        assert!(rt.timer.delivered_masks.is_empty(), "delivered masks cleared");
-        assert!(rt.timer.interrupt_stack.is_empty(), "interrupt stack cleared");
+        assert!(
+            rt.timer.delivered_masks.is_empty(),
+            "delivered masks cleared"
+        );
+        assert!(
+            rt.timer.interrupt_stack.is_empty(),
+            "interrupt stack cleared"
+        );
         assert_eq!(rt.timer.next_interrupt_id, 0, "interrupt id reset");
         assert!(rt.timer.last_irq_src.is_none(), "last_irq_src cleared");
         assert!(rt.timer.last_irq_pc.is_none(), "last_irq_pc cleared");
-        assert!(rt.timer.last_irq_vector.is_none(), "last_irq_vector cleared");
+        assert!(
+            rt.timer.last_irq_vector.is_none(),
+            "last_irq_vector cleared"
+        );
         assert_eq!(rt.state.call_depth(), 0, "call depth reset");
         assert_eq!(rt.state.call_sub_level(), 0, "call sub-level reset");
-        assert!(rt.state.peek_call_page().is_none(), "call page stack cleared");
+        assert!(
+            rt.state.peek_call_page().is_none(),
+            "call page stack cleared"
+        );
     }
 
     #[test]
@@ -3147,9 +3199,7 @@ mod tests {
         let mut rt = CoreRuntime::new();
         rt.add_ram_overlay(0x8000, 2, "runtime_ram");
         rt.clear_overlay_logs();
-        let _ = rt
-            .memory
-            .store_with_pc(0x8000, 16, 0xBEEF, Some(0x0100));
+        let _ = rt.memory.store_with_pc(0x8000, 16, 0xBEEF, Some(0x0100));
         let writes = rt.overlay_write_log();
         assert_eq!(writes.len(), 2, "should log 2 overlay byte writes");
         assert!(writes.iter().all(|entry| entry.overlay == "runtime_ram"));
