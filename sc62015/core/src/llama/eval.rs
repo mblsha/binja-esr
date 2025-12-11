@@ -1321,6 +1321,7 @@ impl LlamaExecutor {
                 OperandKind::Reg(RegName::A, _) => {
                     // nothing to fetch
                 }
+                // Parity: Python never decodes other reg/imm shapes.
                 _ => return Err("unsupported operand pattern"),
             }
         }
@@ -1388,6 +1389,7 @@ impl LlamaExecutor {
                 carry_flag = Some(borrow);
                 lhs.wrapping_sub(rhs_masked).wrapping_sub(c) & mask
             }
+            // Parity: Python only defines these A+imm arithmetic opcodes.
             _ => return Err("unsupported reg/imm kind"),
         };
         state.set_reg(RegName::A, result);
@@ -2044,6 +2046,7 @@ impl LlamaExecutor {
                 let src_val = match entry.operands.get(1) {
                     Some(OperandKind::Imm(_)) => decoded.imm.ok_or("missing immediate")?.0,
                     Some(OperandKind::Reg(RegName::A, _)) => state.get_reg(RegName::A) & 0xFF,
+                    // Parity: Python only encodes PMDF with Imm8 or A sources.
                     _ => return Err("unsupported PMDF operands"),
                 } & 0xFF;
                 let dst = bus.load(mem.addr, 8) & 0xFF;
@@ -2060,6 +2063,7 @@ impl LlamaExecutor {
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let mem_dst = decoded.mem.ok_or("missing destination")?;
                 if mem_dst.bits != 8 {
+                    // Parity: Python only supports byte-wide DADL/DSBL encodings.
                     return Err("unsupported width for DADL/DSBL");
                 }
                 let mut dst_addr = mem_dst.addr;
@@ -2284,6 +2288,7 @@ impl LlamaExecutor {
                             let borrow = lhs < rhs;
                             (lhs.wrapping_sub(rhs) & mask, Some(borrow))
                         }
+                        // Parity: only ADD/SUB reg-reg forms are valid in Python decode.
                         _ => return Err("unsupported operand pattern"),
                     };
                     state.set_reg(r1, res);
@@ -2684,6 +2689,7 @@ impl LlamaExecutor {
                         decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
                 } else {
+                    // Parity: Python decode does not emit other CMP/TEST operand shapes.
                     return Err("unsupported operand pattern");
                 }
                 let mask = Self::mask_for_width(bits);
