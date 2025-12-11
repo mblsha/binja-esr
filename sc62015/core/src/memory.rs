@@ -48,6 +48,17 @@ fn perfetto_guard() -> crate::PerfettoGuard<'static> {
     crate::PERFETTO_TRACER.enter()
 }
 
+fn perfetto_context_or_last() -> (u64, u32) {
+    if let Some((op_idx, pc)) = crate::llama::eval::perfetto_instr_context() {
+        (op_idx, pc)
+    } else {
+        (
+            crate::llama::eval::perfetto_last_instr_index(),
+            crate::llama::eval::perfetto_last_pc(),
+        )
+    }
+}
+
 /// Run `f` with IMR read tracing/logging suppressed. Used for perfetto sampling paths that
 /// should not emit IMR_Read events.
 pub fn with_imr_read_suppressed<F, T>(f: F) -> T
@@ -736,10 +747,7 @@ impl MemoryImage {
             self.invoke_imr_isr_hook(offset, prev, value);
             let mut guard = perfetto_guard();
             if let Some(tracer) = guard.as_mut() {
-                let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                    .unwrap_or_else(|| {
-                        (crate::llama::eval::perfetto_last_instr_index(), 0)
-                    });
+                let (seq, pc) = perfetto_context_or_last();
                 tracer.record_mem_write(
                     seq,
                     pc,
@@ -769,11 +777,7 @@ impl MemoryImage {
             if offset == 0xFB && !imr_read_suppressed() {
                 let mut guard = perfetto_guard();
                 if let Some(tracer) = guard.as_mut() {
-                    let ctx = crate::llama::eval::perfetto_instr_context();
-                    let (op_idx, pc) = ctx.unwrap_or((
-                        crate::llama::eval::perfetto_last_instr_index(),
-                        crate::llama::eval::perfetto_last_pc(),
-                    ));
+                    let (op_idx, pc) = perfetto_context_or_last();
                     tracer.record_imr_read(
                         if op_idx == u64::MAX { None } else { Some(pc) },
                         val,
@@ -1083,6 +1087,26 @@ mod tests {
             "perfetto trace should include address annotation"
         );
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn perfetto_context_falls_back_to_last_pc() {
+        // Establish a last-PC hint by executing a simple instruction.
+        crate::llama::eval::reset_perf_counters();
+        struct NullBus;
+        impl crate::llama::eval::LlamaBus for NullBus {}
+        let mut exec = crate::llama::eval::LlamaExecutor::new();
+        let mut state = crate::llama::state::LlamaState::new();
+        state.set_pc(0x123);
+        let mut bus = NullBus;
+        let _ = exec.execute(0x00, &mut state, &mut bus); // NOP
+
+        let (seq, pc) = super::perfetto_context_or_last();
+        assert_eq!(
+            pc,
+            state.pc() & crate::llama::state::mask_for(crate::llama::opcodes::RegName::PC)
+        );
+        assert_ne!(seq, u64::MAX, "last instr index should be usable as fallback");
     }
 
     #[test]
