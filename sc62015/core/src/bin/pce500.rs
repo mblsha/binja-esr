@@ -49,7 +49,7 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const PF2_MENU_PC: u32 = 0x0F1FBF; // observed Python PC after PF2 menu renders
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
+const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFA;
 
 struct IrqPerfetto {
     builder: PerfettoTraceBuilder,
@@ -1691,5 +1691,61 @@ mod tests {
         );
         assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));
         assert!(bus.in_interrupt);
+    }
+
+    #[test]
+    fn reset_vector_matches_python_address() {
+        let python_reset_addr = 0xFFFFAusize;
+        let python_bytes = [0x45u8, 0x23, 0x01]; // little-endian 0x012345
+        let runner_bytes = if ROM_RESET_VECTOR_ADDR as usize == python_reset_addr {
+            python_bytes
+        } else {
+            [0xCDu8, 0xAB, 0x02] // distinct pattern to catch address drift
+        };
+        let max_addr = std::cmp::max(python_reset_addr, ROM_RESET_VECTOR_ADDR as usize);
+        let mut rom = vec![0u8; max_addr + 3];
+        for (i, byte) in python_bytes.iter().enumerate() {
+            rom[python_reset_addr + i] = *byte;
+        }
+        if ROM_RESET_VECTOR_ADDR as usize != python_reset_addr {
+            for (i, byte) in runner_bytes.iter().enumerate() {
+                rom[ROM_RESET_VECTOR_ADDR as usize + i] = *byte;
+            }
+        }
+        let expected_pc = (python_bytes[0] as u32)
+            | ((python_bytes[1] as u32) << 8)
+            | ((python_bytes[2] as u32) << 16);
+
+        let mut memory = MemoryImage::new();
+        memory.load_external(&rom);
+        let mut bus = StandaloneBus::new(
+            memory,
+            LcdController::new(),
+            TimerContext::new(false, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut state = LlamaState::new();
+        power_on_reset(&mut bus, &mut state);
+        let pc_mask = 0x0F_FFFFu32;
+        assert_eq!(
+            state.pc(),
+            expected_pc & pc_mask,
+            "power_on_reset should use the Python reset vector at 0xFFFFA"
+        );
+
+        let runner_vec = (rom[ROM_RESET_VECTOR_ADDR as usize] as u32)
+            | ((rom[ROM_RESET_VECTOR_ADDR as usize + 1] as u32) << 8)
+            | ((rom[ROM_RESET_VECTOR_ADDR as usize + 2] as u32) << 16);
+        state.set_pc(runner_vec & pc_mask);
+        assert_eq!(
+            state.pc(),
+            expected_pc & pc_mask,
+            "standalone runner PC seed must match the Python reset vector"
+        );
     }
 }
