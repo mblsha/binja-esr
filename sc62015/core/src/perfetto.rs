@@ -37,6 +37,8 @@ pub struct PerfettoTracer {
     mem_write_counter: TrackId,
     cpu_track: TrackId,
     #[cfg(test)]
+    test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
+    #[cfg(test)]
     test_timestamps: RefCell<Vec<i64>>,
 }
 
@@ -95,6 +97,8 @@ impl PerfettoTracer {
             mem_read_counter,
             mem_write_counter,
             cpu_track,
+            #[cfg(test)]
+            test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_timestamps: RefCell::new(Vec::new()),
         }
@@ -202,6 +206,12 @@ impl PerfettoTracer {
             instr_index as f64 + 1.0,
             self.ts(instr_index, 0),
         );
+        #[cfg(test)]
+        {
+            self.test_exec_events
+                .borrow_mut()
+                .push((pc, opcode, instr_index));
+        }
     }
 
     pub fn record_mem_write(
@@ -588,6 +598,11 @@ impl PerfettoTracer {
         payload.insert("to".to_string(), AnnotationValue::Pointer(pc_to as u64));
         payload.insert("depth".to_string(), AnnotationValue::UInt(depth as u64));
         self.record_irq_event(name, payload);
+    }
+
+    #[cfg(test)]
+    pub fn test_exec_events(&self) -> Vec<(u32, u8, u64)> {
+        self.test_exec_events.borrow().clone()
     }
 }
 

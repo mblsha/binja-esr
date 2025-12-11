@@ -955,18 +955,7 @@ impl LlamaBus for LlamaPyBus {
         let absolute = addr & ADDRESS_MASK;
         if absolute >= INTERNAL_MEMORY_START {
             let offset = absolute - INTERNAL_MEMORY_START;
-            if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
-                Python::with_gil(|py| {
-                    let _ = self
-                        .memory
-                        .bind(py)
-                        .call_method1("trace_kio_from_rust", (offset, value & 0xFF, self.pc));
-                });
-                let mut guard = PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
-                    tracer.record_kio_read(Some(self.pc), offset as u8, value as u8, None);
-                }
-            } else if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET | IMEM_SCR_OFFSET) {
+            if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET | IMEM_SCR_OFFSET) {
                 // Mirror IRQ register writes into Python tracer for parity runs.
                 Python::with_gil(|py| {
                     let payload = PyDict::new_bound(py);

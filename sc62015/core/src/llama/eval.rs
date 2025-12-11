@@ -137,7 +137,7 @@ const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
 ];
 
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
+const ROM_RESET_VECTOR_ADDR: u32 = INTERRUPT_VECTOR_ADDR;
 
 pub trait LlamaBus {
     fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
@@ -302,7 +302,7 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr &= !0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-    // Use ROM reset vector (0xFFFFD) instead of the IRQ vector (0xFFFFA).
+    // Use the IRQ/reset vector at 0xFFFFA (Python parity).
     let reset_vector = bus.load(ROM_RESET_VECTOR_ADDR, 8)
         | (bus.load(ROM_RESET_VECTOR_ADDR + 1, 8) << 8)
         | (bus.load(ROM_RESET_VECTOR_ADDR + 2, 8) << 16);
@@ -1900,24 +1900,27 @@ impl LlamaExecutor {
 
         let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let start_pc = state.pc() & mask_for(RegName::PC);
-        // Use the actual opcode address (post-PRE) for tracing, not the prefix byte.
-        let mut trace_pc = start_pc;
-        let mut trace_opcode = opcode;
+        // For perfetto parity with Python, keep tracing anchored to the prefix byte/PC.
+        let trace_pc_snapshot = start_pc;
+        let trace_opcode_snapshot = opcode;
+        // Execute using the resolved opcode after any PRE bytes.
+        let mut exec_pc = start_pc;
+        let mut exec_opcode = opcode;
         let mut prefix_len = 0u8;
         let mut pre_modes_opt: Option<PreModes> = None;
         let mut pc_override = None;
-        let mut entry = self.lookup(opcode);
+        let mut entry = self.lookup(exec_opcode);
         perfetto_reset_substep();
 
         while let Some(e) = entry {
             if e.kind != InstrKind::Pre {
                 break;
             }
-            let pre_modes = pre_modes_for(trace_opcode).ok_or("unknown PRE opcode")?;
-            let next_pc = trace_pc.wrapping_add(1) & mask_for(RegName::PC);
+            let pre_modes = pre_modes_for(exec_opcode).ok_or("unknown PRE opcode")?;
+            let next_pc = exec_pc.wrapping_add(1) & mask_for(RegName::PC);
             let next_opcode = bus.load(next_pc, 8) as u8;
-            trace_opcode = next_opcode;
-            trace_pc = next_pc;
+            exec_opcode = next_opcode;
+            exec_pc = next_pc;
             prefix_len = prefix_len.saturating_add(1);
             pre_modes_opt = Some(pre_modes);
             pc_override = Some(next_pc);
@@ -1925,14 +1928,20 @@ impl LlamaExecutor {
         }
 
         PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
-        PERF_CURRENT_PC.store(trace_pc, Ordering::Relaxed);
+        PERF_CURRENT_PC.store(trace_pc_snapshot, Ordering::Relaxed);
         let _ctx_guard = PerfettoContextGuard;
-        // Trace the pre-execution snapshot using the resolved opcode/PC (post-PRE).
-            self.trace_instr(trace_opcode, state, bus, instr_index, trace_pc);
+        // Trace the pre-execution snapshot using the prefix PC/opcode for Python parity.
+            self.trace_instr(
+                trace_opcode_snapshot,
+                state,
+                bus,
+                instr_index,
+                trace_pc_snapshot,
+            );
 
         let result = match entry {
             Some(entry) => self.execute_with(
-                trace_opcode,
+                exec_opcode,
                 entry,
                 state,
                 bus,
@@ -2893,6 +2902,32 @@ mod tests {
         fn wait_cycles(&mut self, _cycles: u32) {}
     }
 
+    struct ResetBus {
+        bytes: std::collections::HashMap<u32, u8>,
+    }
+
+    impl ResetBus {
+        fn new(vector: [u8; 3]) -> Self {
+            let mut bytes = std::collections::HashMap::new();
+            // IRQ/reset vector is at 0xFFFFA (little-endian).
+            bytes.insert(0xFFFFA, vector[0]);
+            bytes.insert(0xFFFFB, vector[1]);
+            bytes.insert(0xFFFFC, vector[2]);
+            // Seed a different pattern at 0xFFFFD to catch regressions.
+            bytes.insert(0xFFFFD, 0xEE);
+            bytes.insert(0xFFFFE, 0xDD);
+            bytes.insert(0xFFFFF, 0xCC);
+            Self { bytes }
+        }
+    }
+
+    impl LlamaBus for ResetBus {
+        fn load(&mut self, addr: u32, _bits: u8) -> u32 {
+            *self.bytes.get(&addr).unwrap_or(&0) as u32
+        }
+        fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {}
+    }
+
     #[test]
     fn trace_imr_peek_does_not_bump_memory_reads() {
         use crate::memory::MemoryImage;
@@ -2972,12 +3007,57 @@ mod tests {
     }
 
     #[test]
+    fn reset_vector_matches_python_irq_vector() {
+        let mut state = LlamaState::new();
+        let mut bus = ResetBus::new([0xAA, 0xBB, 0x0C]);
+        power_on_reset(&mut bus, &mut state);
+        // Expected little-endian vector at 0xFFFFA.
+        assert_eq!(state.pc(), 0x0C_BB_AA & mask_for(RegName::PC));
+    }
+
+    #[test]
     fn apply_pointer_side_effect_handles_predec_over_multiple_iterations() {
         let mut state = LlamaState::new();
         state.set_reg(RegName::X, 0x10);
         // Side-effect encodes pre-dec by one; three iterations should land at 0x0D.
         LlamaExecutor::apply_pointer_side_effect(&mut state, RegName::X, 0x0F, 3);
         assert_eq!(state.get_reg(RegName::X), 0x0D);
+    }
+
+    #[test]
+    fn perfetto_trace_anchors_to_prefix_pc_and_opcode() {
+        use crate::PerfettoTracer;
+        // Program: PRE (0x32) followed by NOP (0x00)
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0x32;
+        bus.mem[1] = 0x00;
+
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        state.set_pc(0);
+
+        let path = std::env::temp_dir().join("llama_pref_trace.perfetto-trace");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut guard = crate::PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(path));
+        }
+
+        let len = exec.execute(0x32, &mut state, &mut bus).expect("execute PRE+NOP");
+        assert_eq!(len, 2, "PRE + NOP should consume two bytes");
+
+        let tracer = crate::PERFETTO_TRACER
+            .enter()
+            .take()
+            .expect("tracer should be installed");
+        let events = tracer.test_exec_events();
+        assert!(
+            !events.is_empty(),
+            "perfetto tracer should record at least one Exec event"
+        );
+        let (pc, opcode, _idx) = events[0];
+        assert_eq!(pc, 0, "Exec PC should use prefix address");
+        assert_eq!(opcode, 0x32, "Exec opcode should reflect prefix byte");
     }
 
     struct OffsetBus {
