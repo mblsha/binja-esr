@@ -489,6 +489,11 @@ impl TimerContext {
                 if (isr & 0x04) == 0 {
                     let new_isr = isr | 0x04;
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
+                    let pc_trace = crate::llama::eval::perfetto_instr_context()
+                        .map(|(_, pc)| pc)
+                        .or(pc_hint)
+                        .unwrap_or_else(perfetto_last_pc);
+                    self.record_bit_watch_transition("ISR", isr, new_isr, pc_trace);
                 }
             }
             // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
@@ -579,11 +584,7 @@ impl TimerContext {
         }
         // Maintain bit-watch parity even when KEYI was already set prior to the scan.
         if should_assert {
-            if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                if (isr & 0x04) != 0 {
-                    self.record_bit_watch_transition("ISR", isr, isr, pc_trace);
-                }
-            }
+            let _ = memory.read_internal_byte(ISR_OFFSET);
         }
         (mti, sti, key_events, kb_stats)
     }
@@ -807,6 +808,42 @@ mod tests {
             set.iter()
                 .any(|entry| entry.as_u64() == Some(pc as u64)),
             "bit watch should record PC for MTI ISR set"
+        );
+    }
+
+    #[test]
+    fn bit_watch_tracks_keyi_assertion() {
+        let mut timer = TimerContext::new(true, 0, 0);
+        let mut mem = MemoryImage::new();
+        // Simulate ISR initially cleared.
+        mem.write_internal_byte(ISR_OFFSET, 0x00);
+        // Force KEYI assertion via keyboard path.
+        timer.key_irq_latched = true;
+        let pc = 0x234u32;
+        let _ = timer.tick_timers_with_keyboard(
+            &mut mem,
+            0,
+            |_mem| (0, true, None),
+            None,
+            Some(pc),
+        );
+        let watch = timer
+            .irq_bit_watch
+            .as_ref()
+            .and_then(|w| w.get("ISR"))
+            .and_then(|v| v.as_object())
+            .expect("bit watch table should capture ISR");
+        let bit2 = watch
+            .get("2")
+            .and_then(|v| v.as_object())
+            .expect("bit 2 entry should exist for KEYI");
+        let set = bit2
+            .get("set")
+            .and_then(|v| v.as_array())
+            .expect("'set' array should exist for bit 2");
+        assert!(
+            set.iter().any(|entry| entry.as_u64() == Some(pc as u64)),
+            "bit watch should record KEYI assertion PC"
         );
     }
 
