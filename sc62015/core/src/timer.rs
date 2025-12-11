@@ -420,6 +420,11 @@ impl TimerContext {
                 }
                 if new_isr != current_isr {
                     memory.write_internal_byte(ISR_OFFSET, new_isr);
+                    let pc_trace = crate::llama::eval::perfetto_instr_context()
+                        .map(|(_, pc)| pc)
+                        .or(pc_hint)
+                        .unwrap_or_else(perfetto_last_pc);
+                    self.record_bit_watch_transition("ISR", current_isr, new_isr, pc_trace);
                 }
             }
             // Match Python: when both fire, the later source wins (STI overwrites MTI).
@@ -775,6 +780,34 @@ mod tests {
         assert_eq!(isr & 0x04, 0);
         // Timer fires should still mark irq_pending, but KEYI must stay clear when disabled.
         assert!(timer.irq_pending, "timer fire should still pend an IRQ");
+    }
+
+    #[test]
+    fn bit_watch_tracks_mti_isr_transition() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        // First fire at cycle 1 should set ISR bit 0 and record a transition.
+        let pc = 0x123u32;
+        timer.tick_timers(&mut mem, 1, Some(pc));
+        let watch = timer
+            .irq_bit_watch
+            .as_ref()
+            .and_then(|w| w.get("ISR"))
+            .and_then(|v| v.as_object())
+            .expect("bit watch table should capture ISR");
+        let bit0 = watch
+            .get("0")
+            .and_then(|v| v.as_object())
+            .expect("bit 0 entry should exist");
+        let set = bit0
+            .get("set")
+            .and_then(|v| v.as_array())
+            .expect("'set' array should exist for bit 0");
+        assert!(
+            set.iter()
+                .any(|entry| entry.as_u64() == Some(pc as u64)),
+            "bit watch should record PC for MTI ISR set"
+        );
     }
 
     #[test]
