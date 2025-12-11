@@ -284,13 +284,13 @@ fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
 /// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
 pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
+    // Parity: IMR is intentionally left unchanged.
     let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
     lcc &= !0x80;
     write_imem_byte(bus, IMEM_LCC_OFFSET, lcc);
 
     write_imem_byte(bus, IMEM_UCR_OFFSET, 0);
     write_imem_byte(bus, IMEM_ISR_OFFSET, 0);
-    write_imem_byte(bus, IMEM_IMR_OFFSET, 0);
     write_imem_byte(bus, IMEM_SCR_OFFSET, 0);
 
     let mut usr = read_imem_byte(bus, IMEM_USR_OFFSET);
@@ -310,7 +310,6 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     // call-page context so near returns fall back to the current page like Python.
     state.clear_call_page_stack();
     state.set_pc(reset_vector & mask_for(RegName::PC));
-    state.set_reg(RegName::IMR, 0);
     state.set_halted(false);
 }
 
@@ -1976,11 +1975,7 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // Python WAIT fast-path: burn remaining cycles via bus hook, then zero I/flags.
-                let cycles = state.get_reg(RegName::I) & mask_for(RegName::I);
-                if cycles > 0 {
-                    bus.wait_cycles(cycles);
-                }
+                // Python WAIT fast-path: zero I/flags and advance PC without ticking timers.
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
@@ -3191,24 +3186,27 @@ mod tests {
 
     struct WaitBus {
         spins: u32,
+        calls: u32,
     }
 
     impl LlamaBus for WaitBus {
         fn wait_cycles(&mut self, cycles: u32) {
+            self.calls = self.calls.saturating_add(1);
             self.spins = self.spins.saturating_add(cycles);
         }
     }
 
     #[test]
-    fn wait_calls_bus_wait_cycles_with_remaining_i() {
+    fn wait_does_not_tick_timers() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
-        let mut bus = WaitBus { spins: 0 };
+        let mut bus = WaitBus { spins: 0, calls: 0 };
         state.set_reg(RegName::I, 5);
         let len = exec.execute(0xEF, &mut state, &mut bus).unwrap(); // WAIT
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
-        assert_eq!(bus.spins, 5, "WAIT should burn remaining I cycles");
+        assert_eq!(bus.calls, 0, "WAIT should not tick timers");
+        assert_eq!(bus.spins, 0, "WAIT should not burn cycles");
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 0);
@@ -3894,7 +3892,7 @@ mod tests {
     }
 
     #[test]
-    fn power_on_reset_uses_rom_vector_and_clears_irq_state() {
+    fn power_on_reset_uses_rom_vector_and_preserves_imr() {
         let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
         // Interrupt vector set to a different value to catch regressions.
         bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0x00;
@@ -3919,14 +3917,18 @@ mod tests {
 
         assert_eq!(state.pc(), 0x054321);
         assert_eq!(
-            bus.mem[imr_idx], 0,
-            "power_on_reset should clear IMR in memory"
+            bus.mem[imr_idx], 0xAA,
+            "power_on_reset should preserve IMR in memory"
         );
         assert_eq!(
             bus.mem[isr_idx], 0,
             "power_on_reset should clear ISR in memory"
         );
-        assert_eq!(state.get_reg(RegName::IMR), 0);
+        assert_eq!(
+            state.get_reg(RegName::IMR),
+            0xCC,
+            "power_on_reset should leave IMR register intact"
+        );
         assert!(!state.is_halted());
     }
 
@@ -3939,10 +3941,6 @@ mod tests {
         bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0xDE;
         bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0xBC;
         bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x0A;
-        // Interrupt vector set differently to ensure it is not used.
-        bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0xFE;
-        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = 0xED;
-        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = 0x0D;
 
         let imr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
         let isr_idx = MemBus::translate(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
@@ -3958,9 +3956,12 @@ mod tests {
         let len = exec.execute(0xFF, &mut state, &mut bus).unwrap();
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 0x0ABCDE & mask_for(RegName::PC));
-        assert_eq!(bus.mem[imr_idx], 0);
+        assert_eq!(
+            bus.mem[imr_idx], 0xF0,
+            "RESET opcode should not modify IMR in memory"
+        );
         assert_eq!(bus.mem[isr_idx], 0);
-        assert_eq!(state.get_reg(RegName::IMR), 0);
+        assert_eq!(state.get_reg(RegName::IMR), 0xF0);
         assert!(!state.is_halted());
     }
 

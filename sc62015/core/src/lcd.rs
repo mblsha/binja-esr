@@ -488,8 +488,8 @@ impl Default for LcdController {
 }
 
 fn pixel_on(byte: u8, bit: usize) -> u8 {
-    // Match Python helper: return 1 for lit pixels, 0 for off.
-    ((byte >> bit) & 1) as u8
+    // Match Python helper: pixels are lit when the stored bit is 0.
+    if ((byte >> bit) & 1) == 0 { 1 } else { 0 }
 }
 
 #[cfg(test)]
@@ -531,12 +531,12 @@ mod tests {
     }
 
     #[test]
-    fn pixel_on_matches_bit_set_semantics() {
-        // Bit set -> lit (1); bit clear -> off (0)
-        assert_eq!(super::pixel_on(0b0000_0001, 0), 1);
-        assert_eq!(super::pixel_on(0b0000_0000, 0), 0);
-        assert_eq!(super::pixel_on(0b1000_0000, 7), 1);
-        assert_eq!(super::pixel_on(0b0111_1111, 7), 0);
+    fn pixel_on_matches_python_polarity() {
+        // Parity with Python: cleared bits are lit, set bits are off.
+        assert_eq!(super::pixel_on(0b0000_0001, 0), 0);
+        assert_eq!(super::pixel_on(0b0000_0000, 0), 1);
+        assert_eq!(super::pixel_on(0b1000_0000, 7), 0);
+        assert_eq!(super::pixel_on(0b0111_1111, 7), 1);
     }
 
     #[test]
