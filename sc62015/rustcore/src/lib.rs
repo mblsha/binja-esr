@@ -724,6 +724,106 @@ impl LlamaContractBus {
         }
     }
 
+    fn keyboard_press_matrix_code(&mut self, code: u8) -> PyResult<bool> {
+        let isr_offset = IMEM_ISR_OFFSET;
+        let isr_addr = INTERNAL_MEMORY_START + isr_offset;
+        let prev_isr = self.memory.read_internal_byte(isr_offset).unwrap_or(0);
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: isr_addr,
+            value: prev_isr,
+            pc: None,
+            detail: None,
+        });
+        let events = self.keyboard.inject_matrix_event(
+            code & 0x7F,
+            false,
+            &mut self.memory,
+            self.timer.kb_irq_enabled,
+        );
+        let new_isr = self
+            .memory
+            .read_internal_byte(isr_offset)
+            .unwrap_or(prev_isr);
+        if new_isr != prev_isr {
+            self.events.push(ContractEvent {
+                kind: "write",
+                address: isr_addr,
+                value: new_isr,
+                pc: None,
+                detail: None,
+            });
+        }
+        if self.timer.kb_irq_enabled && (events > 0 || self.keyboard.fifo_len() > 0) {
+            self.timer.irq_pending = true;
+            self.timer.irq_source = Some("KEY".to_string());
+            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.irq_isr = new_isr;
+            self.timer.irq_imr = self
+                .memory
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.timer.irq_imr);
+            let mut guard = PERFETTO_TRACER.enter();
+            if let Some(tracer) = guard.as_mut() {
+                let mut payload = HashMap::new();
+                payload.insert(
+                    "imr".to_string(),
+                    AnnotationValue::UInt(self.timer.irq_imr as u64),
+                );
+                payload.insert(
+                    "isr".to_string(),
+                    AnnotationValue::UInt(self.timer.irq_isr as u64),
+                );
+                payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
+                tracer.record_irq_event("KeyIRQ", payload);
+            }
+        }
+        Ok(events > 0)
+    }
+
+    fn keyboard_release_matrix_code(&mut self, code: u8) -> PyResult<bool> {
+        let isr_offset = IMEM_ISR_OFFSET;
+        let isr_addr = INTERNAL_MEMORY_START + isr_offset;
+        let prev_isr = self.memory.read_internal_byte(isr_offset).unwrap_or(0);
+        self.events.push(ContractEvent {
+            kind: "read",
+            address: isr_addr,
+            value: prev_isr,
+            pc: None,
+            detail: None,
+        });
+        let events = self.keyboard.inject_matrix_event(
+            code & 0x7F,
+            true,
+            &mut self.memory,
+            self.timer.kb_irq_enabled,
+        );
+        let new_isr = self
+            .memory
+            .read_internal_byte(isr_offset)
+            .unwrap_or(prev_isr);
+        if new_isr != prev_isr {
+            self.events.push(ContractEvent {
+                kind: "write",
+                address: isr_addr,
+                value: new_isr,
+                pc: None,
+                detail: None,
+            });
+        }
+        if self.timer.kb_irq_enabled && self.keyboard.fifo_len() > 0 {
+            self.timer.irq_pending = true;
+            self.timer.irq_source = Some("KEY".to_string());
+            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.irq_isr = new_isr;
+            self.timer.irq_imr = self
+                .memory
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.timer.irq_imr);
+        }
+        Ok(events > 0)
+    }
+
     fn release_on_key(&mut self) {
         let ssr_offset = IMEM_SSR_OFFSET;
         let isr_offset = IMEM_ISR_OFFSET;
