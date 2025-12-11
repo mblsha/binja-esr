@@ -466,28 +466,16 @@ impl MemoryImage {
             self.invoke_imr_isr_hook(offset, prev, value);
             let mut guard = perfetto_guard();
             if let Some(tracer) = guard.as_mut() {
-                match (cycle, crate::llama::eval::perfetto_instr_context()) {
-                    (Some(cyc), _) => {
-                        tracer.record_mem_write_at_cycle(
-                            cyc,
-                            pc,
-                            address,
-                            value as u32,
-                            "internal",
-                            8,
-                        );
-                    }
-                    (None, Some((op_idx, pc_ctx))) => {
-                        tracer.record_mem_write(
-                            op_idx,
-                            pc_ctx,
-                            address,
-                            value as u32,
-                            "internal",
-                            8,
-                        );
-                    }
-                    _ => {
+                match cycle {
+                    Some(cyc) => tracer.record_mem_write_at_cycle(
+                        cyc,
+                        pc,
+                        address,
+                        value as u32,
+                        "internal",
+                        8,
+                    ),
+                    None => {
                         let pc = pc.or_else(|| Some(perfetto_last_pc()));
                         tracer.record_mem_write_at_cycle(
                             0,
@@ -513,28 +501,16 @@ impl MemoryImage {
             }
             let mut guard = perfetto_guard();
             if let Some(tracer) = guard.as_mut() {
-                match (cycle, crate::llama::eval::perfetto_instr_context()) {
-                    (Some(cyc), _) => {
-                        tracer.record_mem_write_at_cycle(
-                            cyc,
-                            pc,
-                            address,
-                            value as u32,
-                            "external",
-                            8,
-                        );
-                    }
-                    (None, Some((op_idx, pc_ctx))) => {
-                        tracer.record_mem_write(
-                            op_idx,
-                            pc_ctx,
-                            address,
-                            value as u32,
-                            "external",
-                            8,
-                        );
-                    }
-                    _ => {
+                match cycle {
+                    Some(cyc) => tracer.record_mem_write_at_cycle(
+                        cyc,
+                        pc,
+                        address,
+                        value as u32,
+                        "external",
+                        8,
+                    ),
+                    None => {
                         let pc = pc.or_else(|| Some(perfetto_last_pc()));
                         tracer.record_mem_write_at_cycle(
                             0,

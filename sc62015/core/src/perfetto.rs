@@ -487,41 +487,26 @@ impl PerfettoTracer {
         });
 
         // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
-        let (op_idx, _pc) = perfetto_instr_context()
+        let (ctx_idx, _pc) = perfetto_instr_context()
             .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
-        let have_ctx = op_idx != u64::MAX && cycle_ts.is_none();
+        let ctx_idx = (ctx_idx != u64::MAX).then_some(ctx_idx);
+        let last_idx = {
+            let last = perfetto_last_instr_index();
+            (last != u64::MAX).then_some(last)
+        };
 
-        let ts = cycle_ts.unwrap_or_else(|| {
-            if have_ctx {
-                self.ts(op_idx, 0)
-            } else if op_idx != u64::MAX {
-                self.ts(op_idx, 0)
-            } else {
-                self.irq_seq as i64
-            }
-        });
+        let ts = irq_timestamp(
+            cycle_ts,
+            ctx_idx,
+            last_idx,
+            self.units_per_instr,
+            self.irq_seq,
+        );
         self.irq_seq = self.irq_seq.saturating_add(1);
-        let track = match name {
-            "TimerFired" | "Timer" | "MTI" | "STI" => self.irq_timer_track,
-            "KEYI_Set" | "KeyScan" | "KeyScanEvent" | "KeyScanEmpty" | "KEYI" | "KeyDeliver" => {
-                self.irq_key_track
-            }
-            "IRQ_Enter" | "IRQ_Return" | "IRQ_Delivered" | "IRQ_Exit" => {
-                // Derive track from src payload when available; default to misc.
-                let src_track = payload
-                    .get("src")
-                    .and_then(|v| match v {
-                        AnnotationValue::Str(s) => Some(s.as_str()),
-                        _ => None,
-                    })
-                    .map(|s| s.to_ascii_uppercase());
-                match src_track.as_deref() {
-                    Some("KEY") | Some("ONK") => self.irq_key_track,
-                    Some("MTI") | Some("STI") => self.irq_timer_track,
-                    _ => self.irq_misc_track,
-                }
-            }
-            _ => self.irq_misc_track,
+        let track = match classify_irq_track(name, &payload) {
+            IrqTrack::Timer => self.irq_timer_track,
+            IrqTrack::Key => self.irq_key_track,
+            IrqTrack::Misc => self.irq_misc_track,
         };
         let mut ev = self.builder.add_instant_event(track, name.to_string(), ts);
         for (k, v) in payload {
@@ -577,5 +562,145 @@ impl PerfettoTracer {
         payload.insert("to".to_string(), AnnotationValue::Pointer(pc_to as u64));
         payload.insert("depth".to_string(), AnnotationValue::UInt(depth as u64));
         self.record_irq_event(name, payload);
+    }
+}
+
+/// Compute a Perfetto timestamp for IRQ/key events, honoring a manual clock when present,
+/// otherwise falling back to the current/last instruction index with a small substep to
+/// avoid collapsing multiple host events into the same instant.
+fn irq_timestamp(
+    cycle_ts: Option<i64>,
+    instr_idx: Option<u64>,
+    last_idx: Option<u64>,
+    units_per_instr: u64,
+    seq: u64,
+) -> i64 {
+    if let Some(cycle) = cycle_ts {
+        return cycle;
+    }
+    if let Some(idx) = instr_idx {
+        return (idx.saturating_mul(units_per_instr)) as i64;
+    }
+    if let Some(last) = last_idx {
+        return (last.saturating_mul(units_per_instr).saturating_add(1)) as i64;
+    }
+    seq as i64
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IrqTrack {
+    Timer,
+    Key,
+    Misc,
+}
+
+/// Decide which Perfetto track to use for IRQ/key events based on the name and src payload.
+fn classify_irq_track(name: &str, payload: &HashMap<String, AnnotationValue>) -> IrqTrack {
+    let upper_name = name.to_ascii_uppercase();
+    let src = payload
+        .get("src")
+        .or_else(|| payload.get("source"))
+        .and_then(|v| match v {
+            AnnotationValue::Str(s) => Some(s.to_ascii_uppercase()),
+            _ => None,
+        });
+
+    // Primary routing on event name (matches Python tracer defaults).
+    if matches!(
+        upper_name.as_str(),
+        "TIMERFIRED" | "TIMER" | "MTI" | "STI"
+    ) {
+        return IrqTrack::Timer;
+    }
+    if matches!(
+        upper_name.as_str(),
+        "KEYI_SET" | "KEYSCAN" | "KEYSCANEVENT" | "KEYSCANEMPTY" | "KEYI" | "KEYDELIVER" | "KEYIRQ"
+    ) {
+        return IrqTrack::Key;
+    }
+
+    // Secondary routing based on src tag.
+    if let Some(src) = src.as_deref() {
+        if src.contains("MTI") || src.contains("STI") {
+            return IrqTrack::Timer;
+        }
+        if src == "KEY" || src == "ONK" || src.contains("KEY") {
+            return IrqTrack::Key;
+        }
+    }
+
+    IrqTrack::Misc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyirq_routes_to_key_track_by_name() {
+        let track = classify_irq_track("KeyIRQ", &HashMap::new());
+        assert_eq!(track, IrqTrack::Key);
+    }
+
+    #[test]
+    fn keyirq_routes_to_key_track_by_src() {
+        let mut payload = HashMap::new();
+        payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
+        let track = classify_irq_track("PythonOverlayMissing", &payload);
+        assert_eq!(track, IrqTrack::Key);
+    }
+
+    #[test]
+    fn timer_src_routes_to_timer_track() {
+        let mut payload = HashMap::new();
+        payload.insert("src".to_string(), AnnotationValue::Str("MTI".to_string()));
+        let track = classify_irq_track("IRQ_Delivered", &payload);
+        assert_eq!(track, IrqTrack::Timer);
+    }
+
+    #[test]
+    fn unknown_name_timer_source_routes_to_timer() {
+        let mut payload = HashMap::new();
+        payload.insert("source".to_string(), AnnotationValue::Str("STI".to_string()));
+        let track = classify_irq_track("PythonOverlayMissing", &payload);
+        assert_eq!(track, IrqTrack::Timer);
+    }
+
+    #[test]
+    fn unknown_name_onk_source_routes_to_key() {
+        let mut payload = HashMap::new();
+        payload.insert("source".to_string(), AnnotationValue::Str("ONK".to_string()));
+        let track = classify_irq_track("PythonOverlayMissing", &payload);
+        assert_eq!(track, IrqTrack::Key);
+    }
+
+    #[test]
+    fn unknown_defaults_to_misc() {
+        let track = classify_irq_track("PythonOverlayMissing", &HashMap::new());
+        assert_eq!(track, IrqTrack::Misc);
+    }
+
+    #[test]
+    fn irq_timestamp_prefers_cycle() {
+        let ts = irq_timestamp(Some(1234), Some(5), Some(4), 1, 7);
+        assert_eq!(ts, 1234);
+    }
+
+    #[test]
+    fn irq_timestamp_uses_instr_index_when_present() {
+        let ts = irq_timestamp(None, Some(10), None, 1, 3);
+        assert_eq!(ts, 10);
+    }
+
+    #[test]
+    fn irq_timestamp_falls_back_to_last_index_with_substep() {
+        let ts = irq_timestamp(None, None, Some(8), 1, 5);
+        assert_eq!(ts, 9);
+    }
+
+    #[test]
+    fn irq_timestamp_uses_seq_when_no_context() {
+        let ts = irq_timestamp(None, None, None, 1, 42);
+        assert_eq!(ts, 42);
     }
 }
