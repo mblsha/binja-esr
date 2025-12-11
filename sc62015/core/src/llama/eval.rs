@@ -3440,9 +3440,9 @@ mod tests {
             8,
             u32::from(imr_saved),
         );
-        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x21; // reset vector low
-        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x43; // mid
-        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x05; // high -> 0x054321
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize] = 0x21; // vector low
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = 0x43; // mid
+        bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = 0x05; // high -> 0x054321
 
         assert_eq!(
             bus.load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8,
