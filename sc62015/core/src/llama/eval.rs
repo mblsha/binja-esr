@@ -1970,7 +1970,7 @@ impl LlamaExecutor {
             }
             InstrKind::Wait => {
                 // Python WAIT fast-path: zero I/flags and advance PC.
-                let wait_cycles = state.get_reg(RegName::I) as u32;
+                let wait_cycles = state.get_reg(RegName::I);
                 // If the host does not expose wait_cycles, tick timers/keyboard locally to avoid
                 // stalling MTI/STI/KEYI.
                 bus.wait_cycles(wait_cycles.max(1));
