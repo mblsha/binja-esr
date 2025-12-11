@@ -351,9 +351,10 @@ impl MemoryImage {
             if matches!(offset, 0xF0..=0xF2) && self.keyboard_bridge {
                 return false;
             }
-            // Keyboard matrix (when not bridged) and E-port input registers require
-            // host-side handlers that emulate dynamic hardware state.
-            if matches!(offset, 0xF0..=0xF2 | 0xF5 | 0xF6) {
+            // Keyboard matrix (when not bridged) requires host-side handlers that emulate dynamic
+            // hardware state. E-port inputs (EIL/EIH: 0xF5/0xF6) are modeled locally so LLAMA can
+            // run without Python overlays.
+            if matches!(offset, 0xF0..=0xF2) {
                 return true;
             }
             // LCD controller overlay addresses (internal remap used by Python)
@@ -953,6 +954,18 @@ mod tests {
     }
 
     #[test]
+    fn e_port_offsets_do_not_require_python_overlay() {
+        let mem = MemoryImage::new();
+        for offset in [0xF5, 0xF6] {
+            let addr = INTERNAL_MEMORY_START + offset;
+            assert!(
+                !mem.requires_python(addr),
+                "offset 0x{offset:02X} should not require Python overlay"
+            );
+        }
+    }
+
+    #[test]
     fn external_reset_vector_is_not_aliased() {
         let mut mem = MemoryImage::new();
         // Populate the ROM reset vector region (0x0FFFFA-0x0FFFFC) in external space.
@@ -1039,7 +1052,7 @@ mod tests {
         mem.apply_host_write_with_cycle(0x0020, 0xAA, None, None);
 
         if let Some(tracer) = std::mem::take(&mut *crate::PERFETTO_TRACER.enter()) {
-            let _ = tracer.finish();
+            tracer.finish().expect("perfetto save");
         }
         let buf = fs::read(&tmp).expect("read perfetto trace");
         let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
@@ -1051,6 +1064,44 @@ mod tests {
             text.contains("0x000020"),
             "perfetto trace should include address annotation"
         );
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn host_write_uses_last_pc_fallback_when_no_context() {
+        use std::fs;
+        use crate::llama::eval::{reset_perf_counters, LlamaExecutor, LlamaBus};
+        use crate::llama::state::LlamaState;
+
+        // Execute a NOP at PC 0x123 to seed perfetto_last_pc without relying on a live context.
+        reset_perf_counters();
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        state.set_pc(0x0123);
+        struct NullBus;
+        impl LlamaBus for NullBus {}
+        let mut bus = NullBus;
+        let _ = exec.execute(0x00, &mut state, &mut bus);
+
+        let tmp = std::env::temp_dir().join("perfetto_host_pc_fallback.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = crate::PERFETTO_TRACER.enter();
+            *guard = Some(crate::PerfettoTracer::new(tmp.clone()));
+        }
+
+        let mut mem = MemoryImage::new();
+        mem.apply_host_write_with_cycle(0x0020, 0xAA, None, None);
+
+        if let Some(tracer) = std::mem::take(&mut *crate::PERFETTO_TRACER.enter()) {
+            let pcs = tracer.test_mem_write_pcs.borrow().clone();
+            assert_eq!(
+                pcs.last().copied().flatten(),
+                Some(0x0123),
+                "host write should use last executed PC when no live context"
+            );
+            let _ = tracer.finish();
+        }
         let _ = fs::remove_file(&tmp);
     }
 
@@ -1069,7 +1120,7 @@ mod tests {
         let (seq, pc) = super::perfetto_context_or_last();
         assert_eq!(
             pc,
-            state.pc() & crate::llama::state::mask_for(crate::llama::opcodes::RegName::PC)
+            0x123 & crate::llama::state::mask_for(crate::llama::opcodes::RegName::PC)
         );
         assert_ne!(seq, u64::MAX, "last instr index should be usable as fallback");
     }

@@ -204,6 +204,13 @@ impl LlamaState {
     pub fn peek_call_page(&self) -> Option<u32> {
         self.call_page_stack.last().copied()
     }
+
+    /// Clear call-depth bookkeeping used only for tracing/metrics; does not alter registers.
+    pub fn reset_call_metrics(&mut self) {
+        self.call_depth = 0;
+        self.call_sub_level = 0;
+        self.call_page_stack.clear();
+    }
 }
 
 #[cfg(test)]

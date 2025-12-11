@@ -413,8 +413,8 @@ enum AutoKeyKind {
         // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
         let events = self
             .keyboard
-            .scan_tick(&mut self.memory, self.timer.kb_irq_enabled);
-        if events > 0 {
+            .scan_tick(&mut self.memory, true);
+        if events > 0 || (self.timer.kb_irq_enabled && self.keyboard.fifo_len() > 0) {
             self.keyboard
                 .write_fifo_to_memory(&mut self.memory, self.timer.kb_irq_enabled);
             self.pending_kil = self.keyboard.fifo_len() > 0;
@@ -720,10 +720,9 @@ enum AutoKeyKind {
             &mut self.memory,
             self.cycle_count,
             |mem| {
-                let events = self
-                    .keyboard
-                    .scan_tick(mem, kb_irq_enabled);
-                if events > 0 {
+                // Parity: always count/key-latch events even when IRQs are masked.
+                let events = self.keyboard.scan_tick(mem, true);
+                if events > 0 || (kb_irq_enabled && self.keyboard.fifo_len() > 0) {
                     self.keyboard
                         .write_fifo_to_memory(mem, kb_irq_enabled);
                 }

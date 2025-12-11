@@ -40,6 +40,10 @@ pub struct PerfettoTracer {
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
     test_timestamps: RefCell<Vec<i64>>,
+    #[cfg(test)]
+    pub(crate) test_mem_write_pcs: RefCell<Vec<Option<u32>>>,
+    #[cfg(test)]
+    pub(crate) test_counters: RefCell<Vec<(u64, u32, u64, u64)>>, // (instr_index, call_depth, reads, writes)
 }
 
 impl PerfettoTracer {
@@ -101,6 +105,10 @@ impl PerfettoTracer {
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_timestamps: RefCell::new(Vec::new()),
+            #[cfg(test)]
+            test_mem_write_pcs: RefCell::new(Vec::new()),
+            #[cfg(test)]
+            test_counters: RefCell::new(Vec::new()),
         }
     }
 
@@ -295,6 +303,9 @@ impl PerfettoTracer {
             value & ((1u32 << size) - 1)
         };
         let ctx = perfetto_instr_context();
+        let pc_effective = pc
+            .or(ctx.map(|(_, pc)| pc))
+            .or_else(|| Some(perfetto_last_pc()));
         let ts = ctx
             .map(|(op, _)| self.ts(op, 1))
             // Align to provided manual cycle when no live instruction context.
@@ -310,7 +321,7 @@ impl PerfettoTracer {
                 ("space", AnnotationValue::Str(space.to_string())),
                 ("size", AnnotationValue::UInt(size as u64)),
             ]);
-            if let Some(pc_val) = pc.or(ctx.map(|(_, pc)| pc)) {
+            if let Some(pc_val) = pc_effective {
                 ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
             }
             if let Some((op_idx, _)) = ctx {
@@ -332,13 +343,18 @@ impl PerfettoTracer {
             ("size", AnnotationValue::UInt(size as u64)),
             ("cycle", AnnotationValue::UInt(cycle)),
         ]);
-        if let Some(pc_val) = pc.or(ctx.map(|(_, pc)| pc)) {
+        if let Some(pc_val) = pc_effective {
             mem_alias.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
         }
         if let Some((op_idx, _)) = ctx {
             mem_alias.add_annotation("op_index", AnnotationValue::UInt(op_idx));
         }
         mem_alias.finish();
+
+        #[cfg(test)]
+        self.test_mem_write_pcs
+            .borrow_mut()
+            .push(pc_effective);
     }
 
     pub fn record_lcd_event(
@@ -387,6 +403,10 @@ impl PerfettoTracer {
             .update_counter(self.mem_read_counter, mem_reads as f64, ts);
         self.builder
             .update_counter(self.mem_write_counter, mem_writes as f64, ts);
+        #[cfg(test)]
+        self.test_counters
+            .borrow_mut()
+            .push((instr_index, call_depth, mem_reads, mem_writes));
     }
 
     pub fn finish(self) -> Result<()> {

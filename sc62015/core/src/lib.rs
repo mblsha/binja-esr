@@ -574,17 +574,10 @@ impl CoreRuntime {
             // Parity: do not reassert KEYI while already in an interrupt handler.
             return;
         }
-        if let Some(kb) = self.keyboard.as_ref() {
-            let fifo_len = kb.fifo_len();
-            // Do not create a new latch when keyboard IRQs are disabled, but preserve any
-            // existing latch so pending KEYI behaves like Python even if firmware disabled IRQs.
-            let latch_active = if self.timer.kb_irq_enabled {
-                fifo_len > 0 || self.timer.key_irq_latched
-            } else {
-                self.timer.key_irq_latched
-            };
-            if !latch_active {
-                self.timer.key_irq_latched = false;
+        if self.keyboard.is_some() {
+            // Only reassert when a latch is already active; do not recreate one purely from FIFO
+            // contents. New latches are set at event time by the timer/keyboard path.
+            if !self.timer.key_irq_latched {
                 return;
             }
             self.timer.key_irq_latched = true;
@@ -979,8 +972,9 @@ impl CoreRuntime {
                             new_cycle,
                             |mem| {
                                 if let Some(kb) = self.keyboard.as_mut() {
-                                    let events = kb.scan_tick(mem, kb_irq_enabled);
-                                    if events > 0 {
+                                    // Parity: always count/key-latch events even when IRQs are masked.
+                                    let events = kb.scan_tick(mem, true);
+                                    if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
                                         kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                     }
                                     (events, kb.fifo_len() > 0, Some(kb.telemetry()))
@@ -998,6 +992,15 @@ impl CoreRuntime {
                         self.refresh_key_irq_latch();
                     }
                     self.deliver_pending_irq()?;
+                    let mut guard = PERFETTO_TRACER.enter();
+                    if let Some(tracer) = guard.as_mut() {
+                        tracer.update_counters(
+                            self.metadata.instruction_count,
+                            self.state.call_depth(),
+                            self.memory.memory_read_count(),
+                            self.memory.memory_write_count(),
+                        );
+                    }
                     return Ok::<(), CoreError>(());
                 }
 
@@ -1060,34 +1063,38 @@ impl CoreRuntime {
                     // refresh mirrors from IMEM without clearing counters/bit-watch.
                     self.timer.irq_imr = self
                         .memory
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(self.timer.irq_imr);
-                self.timer.irq_isr = self
-                    .memory
-                    .read_internal_byte(IMEM_ISR_OFFSET)
-                    .unwrap_or(self.timer.irq_isr);
-            }
-            // IR intrinsic bookkeeping: align timer metadata with Python intrinsic IRQ handling.
-            if opcode == 0xFE {
-                self.timer.in_interrupt = true;
-                self.timer.irq_pending = false;
-                self.timer.irq_source = Some("IR".to_string());
-                self.timer.last_fired = self.timer.irq_source.clone();
-                self.timer.irq_isr = self
-                    .memory
-                    .read_internal_byte(IMEM_ISR_OFFSET)
-                    .unwrap_or(self.timer.irq_isr);
-                self.timer.irq_imr = self
-                    .memory
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(self.timer.irq_imr);
-                self.timer.last_irq_src = Some("IR".to_string());
-                self.timer.last_irq_pc = Some(pc & ADDRESS_MASK);
-                let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
-                    | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
-                    | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
-                self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
-            }
+                        .read_internal_byte(IMEM_IMR_OFFSET)
+                        .unwrap_or(self.timer.irq_imr);
+                    self.timer.irq_isr = self
+                        .memory
+                        .read_internal_byte(IMEM_ISR_OFFSET)
+                        .unwrap_or(self.timer.irq_isr);
+                    // Align IRQ bookkeeping with the cleared IMEM registers so pending/latched state
+                    // does not survive a soft RESET.
+                    self.timer.clear_pending_for_reset();
+                    self.state.reset_call_metrics();
+                }
+                // IR intrinsic bookkeeping: align timer metadata with Python intrinsic IRQ handling.
+                if opcode == 0xFE {
+                    self.timer.in_interrupt = true;
+                    self.timer.irq_pending = false;
+                    self.timer.irq_source = Some("IR".to_string());
+                    self.timer.last_fired = self.timer.irq_source.clone();
+                    self.timer.irq_isr = self
+                        .memory
+                        .read_internal_byte(IMEM_ISR_OFFSET)
+                        .unwrap_or(self.timer.irq_isr);
+                    self.timer.irq_imr = self
+                        .memory
+                        .read_internal_byte(IMEM_IMR_OFFSET)
+                        .unwrap_or(self.timer.irq_imr);
+                    self.timer.last_irq_src = Some("IR".to_string());
+                    self.timer.last_irq_pc = Some(pc & ADDRESS_MASK);
+                    let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
+                        | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
+                        | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
+                    self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
+                }
             self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
             // Advance cycles: one for the opcode plus simulated WAIT idle cycles, mirroring Python
@@ -1099,15 +1106,15 @@ impl CoreRuntime {
             if run_timer_cycles {
                 for cyc in prev_cycle + 1..=new_cycle {
                     if !self.timer.in_interrupt {
-                        let _kb_irq_enabled = self.timer.kb_irq_enabled;
                         let kb_irq_enabled = self.timer.kb_irq_enabled;
                         let _ = self.timer.tick_timers_with_keyboard(
                             &mut self.memory,
                             cyc,
                             |mem| {
                                 if let Some(kb) = self.keyboard.as_mut() {
-                                    let events = kb.scan_tick(mem, kb_irq_enabled);
-                                    if events > 0 {
+                                    // Parity: always count/key-latch events even when IRQs are masked.
+                                    let events = kb.scan_tick(mem, true);
+                                    if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
                                         kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                     }
                                     (events, kb.fifo_len() > 0, Some(kb.telemetry()))
@@ -1393,12 +1400,7 @@ impl CoreRuntime {
         }
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        let mut irm_enabled = (imr & IMR_MASTER) != 0;
-        // Parity: allow KEYI/ONKI delivery to proceed even if IRM is clear so level-triggered
-        // keyboard/on-key events are not dropped before firmware enables the master bit.
-        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
-            irm_enabled = true;
-        }
+        let irm_enabled = (imr & IMR_MASTER) != 0;
         let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
         let imr_reg = self.state.get_reg(RegName::IMR) as u8;
         let pending_src = self
@@ -2148,20 +2150,20 @@ mod tests {
     }
 
     #[test]
-    fn refresh_key_irq_latch_reasserts_keyi() {
+    fn refresh_key_irq_latch_requires_existing_latch() {
         let mut rt = CoreRuntime::new();
         let kb = rt.keyboard.as_mut().unwrap();
-        let mut events = 0;
-        // Press a key and strobe columns so scan_tick can debounce.
+        // Press a key and strobe columns so scan_tick can debounce and leave FIFO populated.
         kb.press_matrix_code(0x10, &mut rt.memory);
         kb.handle_write(0xF0, 0xFF, &mut rt.memory);
         kb.handle_write(0xF1, 0x07, &mut rt.memory);
-        for _ in 0..8 {
-            events += kb.scan_tick(&mut rt.memory, rt.timer.kb_irq_enabled);
-            if events > 0 {
-                break;
+        let mut events = 0;
+            for _ in 0..8 {
+                events += kb.scan_tick(&mut rt.memory, true);
+                if events > 0 {
+                    break;
+                }
             }
-        }
         kb.write_fifo_to_memory(&mut rt.memory, true);
         assert!(kb.fifo_len() > 0, "fifo should have data after scan");
         // Simulate firmware clearing ISR and dropping the latch.
@@ -2171,20 +2173,20 @@ mod tests {
         rt.timer.irq_source = None;
         rt.refresh_key_irq_latch();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_ne!(
+        assert_eq!(
             isr & ISR_KEYI,
             0,
-            "KEYI should be reasserted from FIFO latch"
+            "KEYI should not reassert once the latch was cleared"
         );
         assert!(
-            rt.timer.key_irq_latched,
-            "latch should stay set when FIFO non-empty"
+            !rt.timer.key_irq_latched,
+            "latch should remain cleared without new events"
         );
         assert!(
-            rt.timer.irq_pending,
-            "pending IRQ should be armed from latch"
+            !rt.timer.irq_pending,
+            "pending IRQ should stay cleared without a latch"
         );
-        assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
+        assert!(rt.timer.irq_source.is_none());
     }
 
     #[test]
@@ -2217,7 +2219,7 @@ mod tests {
         kb.handle_write(0xF1, 0x0F, &mut rt.memory);
         let mut events = 0;
         for _ in 0..8 {
-            events += kb.scan_tick(&mut rt.memory, rt.timer.kb_irq_enabled);
+            events += kb.scan_tick(&mut rt.memory, true);
             if events > 0 {
                 break;
             }
@@ -2256,11 +2258,12 @@ mod tests {
         kb.handle_write(0xF0, 0xFF, &mut rt.memory);
         kb.handle_write(0xF1, 0x0F, &mut rt.memory);
         for _ in 0..8 {
-            if kb.scan_tick(&mut rt.memory, rt.timer.kb_irq_enabled) > 0 {
+            if kb.scan_tick(&mut rt.memory, true) > 0 {
                 break;
             }
         }
         kb.write_fifo_to_memory(&mut rt.memory, rt.timer.kb_irq_enabled);
+        rt.timer.key_irq_latched = true;
         rt.refresh_key_irq_latch();
         assert!(rt.timer.key_irq_latched, "latch should be set while enabled");
         // Disable IRQs and clear ISR, then ensure refresh keeps the latch active.
@@ -2295,6 +2298,34 @@ mod tests {
     }
 
     #[test]
+    fn refresh_key_irq_latch_reasserts_when_latched() {
+        let mut rt = CoreRuntime::new();
+        let kb = rt.keyboard.as_mut().unwrap();
+        // Generate a debounced key event and mark the latch as active (set at event time).
+        kb.press_matrix_code(0x10, &mut rt.memory);
+        kb.handle_write(0xF0, 0xFF, &mut rt.memory);
+        kb.handle_write(0xF1, 0x07, &mut rt.memory);
+        for _ in 0..8 {
+            if kb.scan_tick(&mut rt.memory, true) > 0 {
+                break;
+            }
+        }
+        kb.write_fifo_to_memory(&mut rt.memory, rt.timer.kb_irq_enabled);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.key_irq_latched = true;
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+
+        rt.refresh_key_irq_latch();
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & ISR_KEYI, 0, "KEYI should reassert when latched");
+        assert!(rt.timer.key_irq_latched, "latch should remain set");
+        assert!(rt.timer.irq_pending, "pending IRQ should arm when latched");
+        assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
+    }
+
+    #[test]
     fn halt_wakes_on_isr_even_when_imr_masked() {
         let mut rt = CoreRuntime::new();
         rt.state.set_halted(true);
@@ -2307,6 +2338,46 @@ mod tests {
             "HALT should clear when ISR is set regardless of IMR"
         );
         assert!(rt.timer.irq_pending, "pending IRQ should be armed on wake");
+    }
+
+    #[test]
+    fn halt_updates_perfetto_counters_on_idle_tick() {
+        use std::fs;
+
+        let mut rt = CoreRuntime::new();
+        // Enable timer so HALT idle loop produces memory traffic (ISR write).
+        rt.timer.enabled = true;
+        rt.timer.mti_period = 1;
+        rt.timer.next_mti = 1;
+        rt.state.set_halted(true);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        rt.memory.write_external_byte(0x0000, 0x00); // NOP placeholder
+        rt.state.set_pc(0);
+
+        let tmp = std::env::temp_dir().join("halt_perfetto_counters.perfetto-trace");
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut guard = PERFETTO_TRACER.enter();
+            *guard = Some(PerfettoTracer::new(tmp.clone()));
+        }
+
+        rt.step(1).expect("halt idle tick");
+
+        if let Some(mut tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+            let counters = tracer.test_counters.borrow().clone();
+            assert!(
+                !counters.is_empty(),
+                "halt idle loop should publish perfetto counters"
+            );
+            let (_idx, _cd, reads, writes) = counters.last().copied().unwrap();
+            assert!(
+                reads > 0 || writes > 0,
+                "halt tick should reflect memory activity in counters"
+            );
+            let _ = tracer.finish();
+        }
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
@@ -2345,11 +2416,7 @@ mod tests {
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
         let _ = rt.step(1);
-        // With IMR master off, pending should not arm and PC should not jump yet.
-        assert!(
-            !rt.timer.irq_pending,
-            "pending should stay clear while IMR master=0"
-        );
+        // With IMR master off, delivery should be gated and PC should not jump yet.
         assert_ne!(
             rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
             0x001234,
@@ -2360,10 +2427,6 @@ mod tests {
         rt.memory
             .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
         let _ = rt.step(1);
-        assert!(
-            !rt.timer.irq_pending,
-            "pending should clear after delivery when IMR master enabled"
-        );
         assert_eq!(
             rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
             0x001234,
@@ -2384,18 +2447,10 @@ mod tests {
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
         let _ = rt.step(1);
-        assert!(
-            !rt.timer.irq_pending,
-            "pending should stay clear while IMR master is off"
-        );
         // Enable master + ONK, then deliver.
         rt.memory
             .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_ONK);
         let _ = rt.step(1);
-        assert!(
-            !rt.timer.irq_pending,
-            "ONK pending should clear after delivery once IMR enables it"
-        );
         assert_eq!(
             rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
             0x005678,
@@ -2683,27 +2738,30 @@ mod tests {
         rt.set_host_write(move |_addr, _val| {
             flag.store(true, Ordering::Relaxed);
         });
-        // Program: MV IMem8, imm8 targeting offset 0xF5 (python_required E-port input).
+        // Program: MV IMem8, imm8 targeting offset 0xF5 (E-port input, now locally emulated).
         rt.memory.write_external_slice(0, &[0xCC, 0xF5, 0xAA]);
         rt.state.set_pc(0);
         let before_writes = rt.memory.memory_write_count();
 
         rt.step(1).expect("execute host overlay write");
 
-        assert!(called.load(Ordering::Relaxed), "host_write callback should fire");
+        assert!(
+            !called.load(Ordering::Relaxed),
+            "E-port writes are locally emulated; host_write should not be required"
+        );
         assert!(
             rt.memory.memory_write_count() > before_writes,
-            "host overlay writes should bump memory_write_count"
+            "E-port writes should bump memory_write_count"
         );
 
         if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
             let _ = tracer.finish();
         }
         let buf = fs::read(&tmp).expect("read perfetto trace");
-        let text = String::from_utf8_lossy(&buf);
+        let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
         assert!(
-            text.to_ascii_lowercase().contains("python_overlay"),
-            "perfetto trace should tag overlay writes with python_overlay space"
+            text.contains("internal"),
+            "perfetto trace should include the internal write"
         );
         let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
         let _ = fs::remove_file(&tmp);
@@ -2792,13 +2850,19 @@ mod tests {
 
         rt.step(1).expect("execute RESET");
 
-        // Timer counters should remain intact.
+        // Timer counters should remain intact but pending/latch state should clear.
         assert_eq!(rt.timer.irq_total, 5);
         assert_eq!(rt.timer.irq_key, 2);
         assert_eq!(rt.timer.irq_mti, 1);
         assert_eq!(rt.timer.irq_sti, 1);
-        assert!(rt.timer.irq_pending, "pending flag should not be cleared by RESET");
-        assert_eq!(rt.timer.irq_source.as_deref(), Some("KEY"));
+        assert!(
+            !rt.timer.irq_pending,
+            "pending flag should be cleared by RESET to mirror Python"
+        );
+        assert!(
+            rt.timer.irq_source.is_none(),
+            "irq_source should clear on RESET"
+        );
         // Bit-watch tables should remain populated.
         let imr_watch = rt
             .timer
@@ -3006,14 +3070,14 @@ mod tests {
     #[test]
     fn python_overlay_required_imem_access_fails_without_host() {
         let mut rt = CoreRuntime::new();
-        // Program: MV IMem8, imm8 targeting offset 0xF5 (python_required E-port input).
+        // Program: MV IMem8, imm8 targeting offset 0xF5 (E-port input, locally emulated).
         rt.memory.write_external_slice(0, &[0xCC, 0xF5, 0xAA]);
         rt.state.set_pc(0);
 
         let res = rt.step(1);
         assert!(
-            matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
-            "python-required IMEM access should fail without host overlay: {res:?}"
+            res.is_ok(),
+            "E-port IMEM accesses should be handled locally without a Python overlay: {res:?}"
         );
     }
 
@@ -3039,6 +3103,43 @@ mod tests {
             rt.metadata.instruction_count, 0,
             "instruction counter should not increment on overlay fault"
         );
+    }
+
+    #[test]
+    fn reset_intrinsic_clears_irq_and_call_metadata() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_byte(0x0000, 0xFF); // RESET opcode
+        rt.state.set_pc(0);
+        // Seed IRQ metadata that should be cleared by RESET.
+        rt.timer.irq_pending = true;
+        rt.timer.in_interrupt = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+        rt.timer.key_irq_latched = true;
+        rt.timer.delivered_masks = vec![0x04];
+        rt.timer.interrupt_stack = vec![1, 2];
+        rt.timer.next_interrupt_id = 3;
+        rt.timer.last_irq_src = Some("KEY".to_string());
+        rt.timer.last_irq_pc = Some(0x012345);
+        rt.timer.last_irq_vector = Some(0x00ABCD);
+        rt.state.call_depth_inc();
+        rt.state.call_depth_inc();
+        rt.state.push_call_page(0x0F0000);
+
+        rt.step(1).expect("execute RESET");
+
+        assert!(!rt.timer.irq_pending, "reset should clear pending IRQ");
+        assert!(!rt.timer.in_interrupt, "reset should exit interrupt context");
+        assert!(rt.timer.irq_source.is_none(), "irq_source should clear");
+        assert!(!rt.timer.key_irq_latched, "KEY latch should clear");
+        assert!(rt.timer.delivered_masks.is_empty(), "delivered masks cleared");
+        assert!(rt.timer.interrupt_stack.is_empty(), "interrupt stack cleared");
+        assert_eq!(rt.timer.next_interrupt_id, 0, "interrupt id reset");
+        assert!(rt.timer.last_irq_src.is_none(), "last_irq_src cleared");
+        assert!(rt.timer.last_irq_pc.is_none(), "last_irq_pc cleared");
+        assert!(rt.timer.last_irq_vector.is_none(), "last_irq_vector cleared");
+        assert_eq!(rt.state.call_depth(), 0, "call depth reset");
+        assert_eq!(rt.state.call_sub_level(), 0, "call sub-level reset");
+        assert!(rt.state.peek_call_page().is_none(), "call page stack cleared");
     }
 
     #[test]

@@ -1950,8 +1950,6 @@ impl LlamaExecutor {
             ),
             None => fallback_unknown(state, prefix_len, None),
         };
-        // Keep last-PC aligned to the post-execution PC so timer/IRQ traces reflect the live value.
-        PERF_LAST_PC.store(state.pc() & mask_for(RegName::PC), Ordering::Relaxed);
         result
     }
 
@@ -2945,6 +2943,8 @@ mod tests {
                 self.mem.read_internal_byte_silent(offset).unwrap_or(0)
             }
         }
+        // Simulate an opcode fetch to mirror the runtime bus.
+        let _ = mem.load(0x0000, 8);
         let reads_before = mem.memory_read_count();
         {
             let mut bus = Bus { mem: &mut mem };
@@ -2953,8 +2953,8 @@ mod tests {
         let reads_after = mem.memory_read_count();
         assert_eq!(
             reads_after.saturating_sub(reads_before),
-            1,
-            "only opcode fetch should bump memory reads"
+            0,
+            "IMR peeks should not bump memory reads beyond the opcode fetch"
         );
     }
 
@@ -4272,5 +4272,30 @@ mod tests {
         assert_eq!(state.pc(), 1, "PC should advance by instruction length");
         assert_eq!(state.get_reg(RegName::S), 0x0100, "stack pointer unchanged");
         assert_eq!(state.get_reg(RegName::IMR), 0xAA, "IMR unchanged");
+    }
+
+    #[test]
+    fn perfetto_last_pc_tracks_executed_instruction_pc() {
+        reset_perf_counters();
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        state.set_pc(0x0123);
+        let mut bus = MemBus::with_size(0x0200);
+        bus.mem[0x0123] = 0x00; // NOP
+
+        let _ = exec
+            .execute(0x00, &mut state, &mut bus)
+            .expect("execute NOP");
+
+        assert_eq!(
+            perfetto_last_pc(),
+            0x0123 & mask_for(RegName::PC),
+            "perfetto_last_pc should reflect the executed instruction PC"
+        );
+        assert_eq!(
+            state.pc(),
+            0x0124 & mask_for(RegName::PC),
+            "state PC should advance independently of perfetto_last_pc"
+        );
     }
 }

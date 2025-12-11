@@ -180,6 +180,22 @@ impl TimerContext {
         self.irq_bit_watch = None;
     }
 
+    /// Clear pending/active interrupt bookkeeping after a RESET intrinsic so mirrors reflect
+    /// the cleared IMEM state (ISR/SCR/UCR/USR/SSR) instead of stale latched values.
+    pub fn clear_pending_for_reset(&mut self) {
+        self.irq_pending = false;
+        self.in_interrupt = false;
+        self.irq_source = None;
+        self.last_fired = None;
+        self.key_irq_latched = false;
+        self.delivered_masks.clear();
+        self.interrupt_stack.clear();
+        self.next_interrupt_id = 0;
+        self.last_irq_src = None;
+        self.last_irq_pc = None;
+        self.last_irq_vector = None;
+    }
+
     pub fn snapshot_info(&self) -> (TimerInfo, InterruptInfo) {
         let timer = TimerInfo {
             enabled: self.enabled,
@@ -470,24 +486,21 @@ impl TimerContext {
         let mut key_events = 0usize;
         // Preserve any existing latch even if keyboard IRQs are disabled; Python keeps KEYI latched
         // across IRQ gating so firmware can re-enable later without losing events.
-        let mut fifo_has_data = self.key_irq_latched;
+        let had_latch = self.key_irq_latched;
         let mut kb_stats: Option<KeyboardTelemetry> = None;
         if mti {
-            let (events, has_data, stats) = keyboard_scan(memory);
+            let (events, _has_data, stats) = keyboard_scan(memory);
             kb_stats = stats;
             key_events = events;
-            fifo_has_data = fifo_has_data || has_data;
         }
         let pc_trace = crate::llama::eval::perfetto_instr_context()
             .map(|(_, pc)| pc)
             .or(pc_hint)
             .unwrap_or_else(perfetto_last_pc);
-        // Keep prior latch when IRQs are disabled; avoid creating a new one until re-enabled.
-        let latch_active = if self.kb_irq_enabled {
-            key_events > 0 || fifo_has_data
-        } else {
-            self.key_irq_latched
-        };
+        // Only create a new latch when fresh events arrive while IRQs are enabled; otherwise
+        // preserve any existing latch without reviving a cleared one from FIFO contents.
+        let new_latch = self.kb_irq_enabled && key_events > 0;
+        let latch_active = had_latch || new_latch;
         let should_assert = latch_active;
         if should_assert {
             if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
@@ -876,9 +889,82 @@ mod tests {
     }
 
     #[test]
+    fn key_latch_requires_new_events() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        timer.key_irq_latched = false;
+        // MTI fires, but keyboard reports only buffered data and no new events.
+        let (_mti, _sti, events, _stats) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None), None, None);
+        assert_eq!(events, 0);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x04, 0, "KEYI should not assert without new events");
+        assert!(
+            !timer.key_irq_latched,
+            "latch should remain clear without fresh events"
+        );
+    }
+
+    #[test]
+    fn key_latch_sets_on_new_events_when_enabled() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        let mut mem = MemoryImage::new();
+        timer.key_irq_latched = false;
+        let (_mti, _sti, events, _stats) =
+            timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, false, None), None, None);
+        assert_eq!(events, 1);
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & 0x04, 0, "KEYI should assert on new events");
+        assert!(timer.key_irq_latched, "latch should set on new events");
+        assert_eq!(timer.irq_source, Some("KEY".to_string()));
+    }
+
+    #[test]
+    fn key_events_count_while_irq_masked_and_reassert_on_enable() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        timer.set_keyboard_irq_enabled(false);
+        let mut mem = MemoryImage::new();
+        let mut kb = crate::keyboard::KeyboardMatrix::new();
+        // Inject a debounced event while IRQs are masked.
+        let injected = kb.inject_matrix_event(0x10, false, &mut mem, false);
+        assert_eq!(injected, 1);
+        let snap = kb.snapshot_state();
+        assert_eq!(
+            snap.irq_count, 1,
+            "irq_count should increment even when IRQs are masked"
+        );
+        let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & 0x04, 0, "KEYI should stay clear while IRQs disabled");
+
+        // Re-enable IRQs and let the buffered FIFO assert KEYI.
+        timer.set_keyboard_irq_enabled(true);
+        let (_mti2, _sti2, events2, _stats2) = timer.tick_timers_with_keyboard(
+            &mut mem,
+            2,
+            |mem| {
+                // No new events, but FIFO holds data; mirror to memory now that IRQs are enabled.
+                let ev = kb.scan_tick(mem, true);
+                if ev > 0 || kb.fifo_len() > 0 {
+                    kb.write_fifo_to_memory(mem, true);
+                }
+                (ev, kb.fifo_len() > 0, Some(kb.telemetry()))
+            },
+            None,
+            None,
+        );
+        assert_eq!(
+            events2, 0,
+            "no additional events are needed to surface buffered data"
+        );
+        let isr_after = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr_after & 0x04, 0, "KEYI should assert once IRQs are enabled");
+    }
+
+    #[test]
     fn tick_timers_with_keyboard_reasserts_keyi_without_events() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
+        timer.key_irq_latched = true;
         // No new events, but FIFO already has data -> KEYI should still assert on MTI.
         let (_mti, _sti, events, _) =
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None), None, None);
