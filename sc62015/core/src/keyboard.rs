@@ -361,7 +361,16 @@ impl KeyboardMatrix {
                     crate::llama::eval::perfetto_last_pc(),
                 )
             });
-            tracer.record_mem_write(seq, pc, addr, value as u32, "external", 8);
+            let substep = crate::llama::eval::perfetto_next_substep();
+            tracer.record_mem_write_with_substep(
+                seq,
+                pc,
+                addr,
+                value as u32,
+                "external",
+                8,
+                substep,
+            );
         }
     }
 
@@ -398,13 +407,15 @@ impl KeyboardMatrix {
                                     crate::llama::eval::perfetto_last_pc(),
                                 )
                             });
-                        tracer.record_mem_write(
+                        let substep = crate::llama::eval::perfetto_next_substep();
+                        tracer.record_mem_write_with_substep(
                             seq,
                             pc,
                             crate::INTERNAL_MEMORY_START + 0xFC,
                             (isr | 0x04) as u32,
                             "internal",
                             8,
+                            substep,
                         );
                     }
                 }
@@ -620,7 +631,8 @@ impl KeyboardMatrix {
             0xF0 => Some(self.kol),
             0xF1 => Some(self.koh),
             0xF2 => {
-                self.kil_latch = self.compute_kil(false);
+                // Parity: Python KIL reads expose pending (nearly debounced) presses.
+                self.kil_latch = self.compute_kil(true);
                 self.kil_read_count = self.kil_read_count.wrapping_add(1);
                 Some(self.kil_latch)
             }
@@ -694,5 +706,28 @@ impl KeyboardMatrix {
             self.keyi_latch = false;
         }
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::MemoryImage;
+
+    #[test]
+    fn kil_read_includes_pending_press() {
+        let mut kb = KeyboardMatrix::new();
+        let mut mem = MemoryImage::new();
+        // Activate column 0 (row 0 belongs to matrix code 0).
+        kb.handle_write(0xF0, 0x01, &mut mem);
+        // Mark a key as physically pressed but not yet debounced.
+        if let Some(state) = kb.states.get_mut(0) {
+            state.pressed = true;
+            state.debounced = false;
+            state.press_ticks = DEFAULT_PRESS_TICKS.saturating_sub(1);
+        }
+        let kil = kb.handle_read(0xF2, &mut mem).unwrap();
+        assert_ne!(kil & 0x01, 0, "row 0 should be set for pending press");
+        assert_eq!(kb.kil_read_count, 1);
     }
 }

@@ -575,15 +575,18 @@ impl MemoryImage {
                     self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
                     let mut guard = perfetto_guard();
                     if let Some(tracer) = guard.as_mut() {
-                        if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
+                        if let Some((op_idx, pc_ctx)) =
+                            crate::llama::eval::perfetto_instr_context()
                         {
-                            tracer.record_mem_write(
+                            let substep = crate::llama::eval::perfetto_next_substep();
+                            tracer.record_mem_write_with_substep(
                                 op_idx,
                                 pc_ctx,
                                 addr,
                                 byte as u32,
                                 &name,
                                 8,
+                                substep,
                             );
                         } else {
                             tracer.record_mem_write_at_cycle(0, pc, addr, byte as u32, &name, 8);
@@ -724,13 +727,15 @@ impl MemoryImage {
             let mut guard = perfetto_guard();
             if let Some(tracer) = guard.as_mut() {
                 let (seq, pc) = perfetto_context_or_last();
-                tracer.record_mem_write(
+                let substep = crate::llama::eval::perfetto_next_substep();
+                tracer.record_mem_write_with_substep(
                     seq,
                     pc,
                     INTERNAL_MEMORY_START + offset,
                     value as u32,
                     "internal",
                     8,
+                    substep,
                 );
                 // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
                 if offset == 0xFC && (value & 0x04) != 0 {

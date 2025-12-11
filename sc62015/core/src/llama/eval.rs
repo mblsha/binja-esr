@@ -28,12 +28,14 @@ static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
 static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
 static PERF_LAST_PC: AtomicU32 = AtomicU32::new(0);
+static PERF_SUBSTEP: AtomicU32 = AtomicU32::new(0);
 
 struct PerfettoContextGuard;
 impl Drop for PerfettoContextGuard {
     fn drop(&mut self) {
         PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
         PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
+        PERF_SUBSTEP.store(0, Ordering::Relaxed);
     }
 }
 
@@ -63,6 +65,16 @@ pub fn reset_perf_counters() {
     PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
     PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
     PERF_LAST_PC.store(0, Ordering::Relaxed);
+    PERF_SUBSTEP.store(0, Ordering::Relaxed);
+}
+
+/// Next per-instruction substep for Perfetto manual clock parity.
+pub fn perfetto_next_substep() -> u64 {
+    PERF_SUBSTEP.fetch_add(1, Ordering::Relaxed) as u64 + 1
+}
+
+fn perfetto_reset_substep() {
+    PERF_SUBSTEP.store(0, Ordering::Relaxed);
 }
 
 fn fallback_unknown(
@@ -462,6 +474,7 @@ impl LlamaExecutor {
         if let Some(tracer) = guard.as_mut() {
             let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
             let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+            let substep = perfetto_next_substep();
             let masked = if bits == 0 || bits >= 32 {
                 value
             } else {
@@ -473,7 +486,15 @@ impl LlamaExecutor {
                 } else {
                     "external"
                 };
-            tracer.record_mem_write(op_index, pc, addr, masked, space, bits);
+            tracer.record_mem_write_with_substep(
+                op_index,
+                pc,
+                addr,
+                masked,
+                space,
+                bits,
+                substep,
+            );
         }
     }
 
@@ -1886,6 +1907,7 @@ impl LlamaExecutor {
         let mut pre_modes_opt: Option<PreModes> = None;
         let mut pc_override = None;
         let mut entry = self.lookup(opcode);
+        perfetto_reset_substep();
 
         while let Some(e) = entry {
             if e.kind != InstrKind::Pre {
@@ -4122,12 +4144,12 @@ mod tests {
     #[test]
     fn tcl_is_no_op_and_advances_pc() {
         // TCL (0xCE) should be a no-op intrinsic: no stack/IMR changes, just PC advance.
-        let mut bus = MemBus::with_size(4);
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[IMEM_IMR_OFFSET as usize] = 0xAA;
         bus.mem[0] = 0xCE;
         let mut state = LlamaState::new();
         state.set_pc(0);
         state.set_reg(RegName::S, 0x0100);
-        state.set_reg(RegName::IMR, 0xAA);
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0xCE, &mut state, &mut bus).unwrap();
         assert_eq!(len, 1);

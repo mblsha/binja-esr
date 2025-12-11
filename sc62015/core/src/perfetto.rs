@@ -1,10 +1,14 @@
 // PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
 
-use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
+use crate::llama::eval::{
+    perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc,
+};
 use crate::Result;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::cell::RefCell;
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
 pub struct PerfettoTracer {
@@ -32,6 +36,8 @@ pub struct PerfettoTracer {
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
     cpu_track: TrackId,
+    #[cfg(test)]
+    test_timestamps: RefCell<Vec<i64>>,
 }
 
 impl PerfettoTracer {
@@ -89,6 +95,8 @@ impl PerfettoTracer {
             mem_read_counter,
             mem_write_counter,
             cpu_track,
+            #[cfg(test)]
+            test_timestamps: RefCell::new(Vec::new()),
         }
     }
 
@@ -205,12 +213,26 @@ impl PerfettoTracer {
         space: &str,
         size: u8,
     ) {
+        let substep = 1;
+        self.record_mem_write_with_substep(instr_index, pc, addr, value, space, size, substep);
+    }
+
+    pub fn record_mem_write_with_substep(
+        &mut self,
+        instr_index: u64,
+        pc: u32,
+        addr: u32,
+        value: u32,
+        space: &str,
+        size: u8,
+        substep: u64,
+    ) {
         let masked_value = if size == 0 || size >= 32 {
             value
         } else {
             value & ((1u32 << size) - 1)
         };
-        let ts = self.ts(instr_index, 1);
+        let ts = self.ts(instr_index, substep.max(1));
         {
             let mut ev = self
                 .builder
@@ -225,6 +247,10 @@ impl PerfettoTracer {
                 ("op_index", AnnotationValue::UInt(instr_index)),
             ]);
             ev.finish();
+        }
+        #[cfg(test)]
+        {
+            self.test_timestamps.borrow_mut().push(ts);
         }
 
         // Also mirror to "Memory" track to match Python tracer naming.
@@ -702,5 +728,17 @@ mod tests {
     fn irq_timestamp_uses_seq_when_no_context() {
         let ts = irq_timestamp(None, None, None, 1, 42);
         assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn record_mem_write_uses_substep_for_timestamp() {
+        let path = std::env::temp_dir().join("perfetto_substep_test.perfetto-trace");
+        let _ = std::fs::remove_file(&path);
+        let mut tracer = PerfettoTracer::new(path);
+        tracer.record_mem_write_with_substep(0, 0, 0x10, 0xAA, "internal", 8, 1);
+        tracer.record_mem_write_with_substep(0, 0, 0x11, 0xBB, "internal", 8, 2);
+        let ts = tracer.test_timestamps.borrow().clone();
+        assert_eq!(ts.len(), 2);
+        assert!(ts[0] < ts[1], "substeps should advance timestamps");
     }
 }

@@ -7,7 +7,7 @@ use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
     llama::{
-        eval::{power_on_reset, LlamaBus, LlamaExecutor},
+        eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
         state::LlamaState,
     },
@@ -390,13 +390,15 @@ enum AutoKeyKind {
             } else {
                 "external"
             };
-            tracer.record_mem_write(
+            let substep = perfetto_next_substep();
+            tracer.record_mem_write_with_substep(
                 self.instr_index,
                 self.last_pc,
                 addr & ADDRESS_MASK,
                 value & mask_bits(bits),
                 space,
                 bits,
+                substep,
             );
         }
     }

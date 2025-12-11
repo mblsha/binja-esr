@@ -574,36 +574,39 @@ impl CoreRuntime {
             // Parity: do not reassert KEYI while already in an interrupt handler.
             return;
         }
-        if !self.timer.kb_irq_enabled {
-            self.timer.key_irq_latched = false;
-            return;
-        }
         if let Some(kb) = self.keyboard.as_ref() {
             let fifo_len = kb.fifo_len();
-            if fifo_len > 0 || self.timer.key_irq_latched {
-                self.timer.key_irq_latched = true;
-                let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                if (isr & ISR_KEYI) == 0 {
-                    let new_isr = isr | ISR_KEYI;
-                    self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
-                    self.timer
-                        .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
-                    self.timer.irq_isr = new_isr;
-                } else {
-                    self.timer.irq_isr = isr;
-                }
-                self.timer.irq_pending = true;
-                if self.timer.irq_source.is_none() {
-                    self.timer.irq_source = Some("KEY".to_string());
-                }
-                self.timer.last_fired = self.timer.irq_source.clone();
-                self.timer.irq_imr = self
-                    .memory
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(self.timer.irq_imr);
+            // Do not create a new latch when keyboard IRQs are disabled, but preserve any
+            // existing latch so pending KEYI behaves like Python even if firmware disabled IRQs.
+            let latch_active = if self.timer.kb_irq_enabled {
+                fifo_len > 0 || self.timer.key_irq_latched
             } else {
+                self.timer.key_irq_latched
+            };
+            if !latch_active {
                 self.timer.key_irq_latched = false;
+                return;
             }
+            self.timer.key_irq_latched = true;
+            let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+            if (isr & ISR_KEYI) == 0 {
+                let new_isr = isr | ISR_KEYI;
+                self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+                self.timer
+                    .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
+                self.timer.irq_isr = new_isr;
+            } else {
+                self.timer.irq_isr = isr;
+            }
+            self.timer.irq_pending = true;
+            if self.timer.irq_source.is_none() {
+                self.timer.irq_source = Some("KEY".to_string());
+            }
+            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.irq_imr = self
+                .memory
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.timer.irq_imr);
         }
     }
 
@@ -828,13 +831,15 @@ impl CoreRuntime {
                                 if let Some((op_idx, pc_ctx)) =
                                     crate::llama::eval::perfetto_instr_context()
                                 {
-                                    tracer.record_mem_write(
+                                    let substep = crate::llama::eval::perfetto_next_substep();
+                                    tracer.record_mem_write_with_substep(
                                         op_idx,
                                         pc_ctx,
                                         addr,
                                         value as u32,
                                         "python_overlay",
                                         bits,
+                                        substep,
                                     );
                                 } else {
                                     tracer.record_mem_write_at_cycle(
@@ -1489,7 +1494,16 @@ impl CoreRuntime {
                 } else {
                     "external"
                 };
-                tracer.record_mem_write(op_idx, pc_trace, addr, value, space, bits);
+                let substep = crate::llama::eval::perfetto_next_substep();
+                tracer.record_mem_write_with_substep(
+                    op_idx,
+                    pc_trace,
+                    addr,
+                    value,
+                    space,
+                    bits,
+                    substep,
+                );
             }
         };
         // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
@@ -2218,6 +2232,35 @@ mod tests {
             !rt.timer.key_irq_latched,
             "latch should clear while kb IRQs are disabled"
         );
+    }
+
+    #[test]
+    fn refresh_key_irq_latch_preserves_latch_when_irq_disabled() {
+        let mut rt = CoreRuntime::new();
+        let kb = rt.keyboard.as_mut().unwrap();
+        // Create a latched KEYI while IRQs are enabled.
+        kb.press_matrix_code(0x10, &mut rt.memory);
+        kb.handle_write(0xF0, 0xFF, &mut rt.memory);
+        kb.handle_write(0xF1, 0x0F, &mut rt.memory);
+        for _ in 0..8 {
+            if kb.scan_tick(rt.timer.kb_irq_enabled) > 0 {
+                break;
+            }
+        }
+        kb.write_fifo_to_memory(&mut rt.memory, rt.timer.kb_irq_enabled);
+        rt.refresh_key_irq_latch();
+        assert!(rt.timer.key_irq_latched, "latch should be set while enabled");
+        // Disable IRQs and clear ISR, then ensure refresh keeps the latch active.
+        rt.timer.set_keyboard_irq_enabled(false);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.irq_pending = false;
+        rt.refresh_key_irq_latch();
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & ISR_KEYI, 0, "KEYI should stay asserted while latched");
+        assert!(rt.timer.key_irq_latched, "latch should persist across gating");
+        assert!(rt.timer.irq_pending, "pending IRQ should remain set while latched");
+        assert_eq!(rt.timer.irq_source, Some("KEY".to_string()));
     }
 
     #[test]
