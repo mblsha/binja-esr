@@ -1056,6 +1056,17 @@ impl LlamaBus for LlamaPyBus {
         let absolute = addr & ADDRESS_MASK;
         if absolute >= INTERNAL_MEMORY_START {
             let offset = absolute - INTERNAL_MEMORY_START;
+            if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
+                unsafe {
+                    if !self.keyboard.is_null() && !self.mirror.is_null() {
+                        let keyboard = &mut *self.keyboard;
+                        let mirror = &mut *self.mirror;
+                        // Keep the Rust keyboard/mirror in sync with Python overlays so timer-driven
+                        // scans observe fresh strobe/column state.
+                        keyboard.handle_write(offset, value as u8, mirror);
+                    }
+                }
+            }
             if matches!(offset, IMEM_IMR_OFFSET | IMEM_ISR_OFFSET | IMEM_SCR_OFFSET) {
                 // Mirror IRQ register writes into Python tracer for parity runs.
                 Python::with_gil(|py| {
