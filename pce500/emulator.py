@@ -297,8 +297,8 @@ class PCE500Emulator:
         except Exception:
             pass
 
-        # Use Rust LCD bridge only when LLAMA is active; keep overlays for the Python core.
-        disable_overlay = cpu_backend == "llama"
+        # Keep LCD overlays enabled so Python snapshots and traces stay in sync with LLAMA.
+        disable_overlay = False
         enable_overlay = not disable_overlay
         self.memory.set_lcd_controller(self.lcd, enable_overlay=enable_overlay)
         self._llama_pure_lcd = disable_overlay
