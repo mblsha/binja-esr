@@ -138,7 +138,8 @@ const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
 ];
 
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const ROM_RESET_VECTOR_ADDR: u32 = INTERRUPT_VECTOR_ADDR;
+// Reset vector is stored in the top three bytes of the address space.
+const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
 
 pub trait LlamaBus {
     fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
@@ -307,7 +308,7 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr &= !0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-    // Use the IRQ/reset vector at 0xFFFFA (Python parity).
+    // Use the ROM reset vector at 0xFFFFD (interrupt vector remains at 0xFFFFA).
     let reset_vector = bus.load(ROM_RESET_VECTOR_ADDR, 8)
         | (bus.load(ROM_RESET_VECTOR_ADDR + 1, 8) << 8)
         | (bus.load(ROM_RESET_VECTOR_ADDR + 2, 8) << 16);
@@ -2948,14 +2949,13 @@ mod tests {
     impl ResetBus {
         fn new(vector: [u8; 3]) -> Self {
             let mut bytes = std::collections::HashMap::new();
-            // IRQ/reset vector is at 0xFFFFA (little-endian).
-            bytes.insert(0xFFFFA, vector[0]);
-            bytes.insert(0xFFFFB, vector[1]);
-            bytes.insert(0xFFFFC, vector[2]);
-            // Seed a different pattern at 0xFFFFD to catch regressions.
-            bytes.insert(0xFFFFD, 0xEE);
-            bytes.insert(0xFFFFE, 0xDD);
-            bytes.insert(0xFFFFF, 0xCC);
+            // Interrupt vector is at 0xFFFFA; reset vector is at 0xFFFFD (little-endian).
+            bytes.insert(INTERRUPT_VECTOR_ADDR, 0xEE);
+            bytes.insert(INTERRUPT_VECTOR_ADDR + 1, 0xDD);
+            bytes.insert(INTERRUPT_VECTOR_ADDR + 2, 0xCC);
+            bytes.insert(ROM_RESET_VECTOR_ADDR, vector[0]);
+            bytes.insert(ROM_RESET_VECTOR_ADDR + 1, vector[1]);
+            bytes.insert(ROM_RESET_VECTOR_ADDR + 2, vector[2]);
             Self { bytes }
         }
     }
@@ -3056,7 +3056,7 @@ mod tests {
         let mut state = LlamaState::new();
         let mut bus = ResetBus::new([0xAA, 0xBB, 0x0C]);
         power_on_reset(&mut bus, &mut state);
-        // Expected little-endian vector at 0xFFFFA.
+        // Expected little-endian vector at 0xFFFFD.
         assert_eq!(state.pc(), 0x0C_BB_AA & mask_for(RegName::PC));
     }
 
@@ -3440,9 +3440,9 @@ mod tests {
             8,
             u32::from(imr_saved),
         );
-        bus.mem[0x0FFFFA] = 0x21; // reset vector low
-        bus.mem[0x0FFFFB] = 0x43; // mid
-        bus.mem[0x0FFFFC] = 0x05; // high -> 0x054321
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x21; // reset vector low
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x43; // mid
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x05; // high -> 0x054321
 
         assert_eq!(
             bus.load(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET, 8) as u8,
