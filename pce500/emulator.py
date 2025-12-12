@@ -798,7 +798,9 @@ class PCE500Emulator:
                                 "pc": pc_for_irq,
                                 "imr": imr_probe,
                                 "isr": isr_probe,
-                                "pending_src": pending_src.name if pending_src else None,
+                                "pending_src": pending_src.name
+                                if pending_src
+                                else None,
                             },
                         )
                 self._trace_irq_instant(
