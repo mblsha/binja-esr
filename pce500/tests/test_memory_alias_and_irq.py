@@ -71,8 +71,8 @@ def test_internal_memory_alias_writes(alias_base: int) -> None:
     assert alias_val == 0xAA
 
 
-def test_reti_clears_isr_bit_python() -> None:
-    # Use Python emulator as reference: set ISR key bit, deliver IRQ, ensure RETI clears it
+def test_reti_keeps_isr_bit_until_firmware_clears_python() -> None:
+    # Use Python emulator as reference: set ISR key bit, deliver IRQ, ensure RETI does not auto-clear.
     with _backend("python"):
         emu = Emulator()
 
@@ -101,7 +101,7 @@ def test_reti_clears_isr_bit_python() -> None:
     emu.step()
 
     isr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
-    assert isr_after & 0x04 == 0
+    assert isr_after & 0x04 == 0x04
     imr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)
     assert imr_after == 0x84
 
@@ -126,7 +126,7 @@ def test_kil_respects_ksd(backend: str) -> None:
     assert kil_val == 0x00
 
 
-def test_reti_clears_isr_bit_llama() -> None:
+def test_reti_keeps_isr_bit_until_firmware_clears_llama() -> None:
     if "llama" not in available_backends():
         pytest.skip("LLAMA backend not available")
 
@@ -155,7 +155,7 @@ def test_reti_clears_isr_bit_llama() -> None:
     emu.step()
 
     isr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
-    assert isr_after & 0x04 == 0
+    assert isr_after & 0x04 == 0x04
     imr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)
     assert imr_after == 0x84
 
