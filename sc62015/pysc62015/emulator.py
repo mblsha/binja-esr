@@ -304,6 +304,10 @@ class Registers:
         info = self._SUBREG_INFO.get(reg)
         if info is not None:
             base, shift, mask = info
+            if reg is RegisterName.IL:
+                # Hardware behaviour: writing IL clears IH.
+                self._values[base] = value & mask
+                return
             full_mask = (1 << (REGISTER_SIZE[base] * 8)) - 1
             cur = self._values[base] & full_mask
             cur &= ~(mask << shift)

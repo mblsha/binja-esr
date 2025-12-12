@@ -37,7 +37,7 @@ def _run(cpu: CPU, addr: int = 0) -> None:
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
-def test_il_write_preserves_ih(backend: str) -> None:
+def test_il_write_clears_ih(backend: str) -> None:
     if backend == "llama":
         assert "llama" in available_backends(), "LLAMA backend not available"
 
@@ -47,11 +47,12 @@ def test_il_write_preserves_ih(backend: str) -> None:
     cpu = CPU(memory, reset_on_init=False, backend=backend)
     cpu.regs.set(RegisterName.I, 0x1234)
 
-    # Write low byte only; high should remain 0x12
+    # Write low byte only; IH is cleared by hardware
     cpu.regs.set(RegisterName.IL, 0x56)
     _run(cpu)
 
-    assert cpu.regs.get(RegisterName.I) == 0x1256
+    assert cpu.regs.get(RegisterName.I) == 0x0056
+    assert cpu.regs.get(RegisterName.IH) == 0
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
