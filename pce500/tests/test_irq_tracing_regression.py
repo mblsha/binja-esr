@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from pce500.emulator import PCE500Emulator as Emulator
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from sc62015.pysc62015 import RegisterName
