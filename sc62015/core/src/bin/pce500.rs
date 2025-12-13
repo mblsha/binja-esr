@@ -622,10 +622,9 @@ impl StandaloneBus {
             None
         };
         if let Some(src) = pending_src {
-            if self.last_irq_src.is_none() {
-                self.last_irq_src = Some(src.to_string());
-            } else if matches!(src, "KEY" | "ONK")
-                && !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK"))
+            if self.last_irq_src.is_none()
+                || (matches!(src, "KEY" | "ONK")
+                    && !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK")))
             {
                 self.last_irq_src = Some(src.to_string());
             }

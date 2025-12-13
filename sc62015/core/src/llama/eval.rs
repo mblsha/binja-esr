@@ -400,7 +400,7 @@ impl LlamaExecutor {
         pc_trace: u32,
     ) {
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
                 (
                     bus.peek_imem_silent(IMEM_IMR_OFFSET),
@@ -416,7 +416,7 @@ impl LlamaExecutor {
                 mem_imr,
                 mem_isr,
             );
-        }
+        });
         PERF_LAST_PC.store(pc_trace, Ordering::Relaxed);
     }
 
@@ -1960,8 +1960,8 @@ impl LlamaExecutor {
         PERF_CURRENT_PC.store(trace_pc_snapshot, Ordering::Relaxed);
         let _ctx_guard = PerfettoContextGuard;
         let trace_regs = {
-            let guard = PERFETTO_TRACER.enter();
-            guard.is_some()
+            let mut guard = PERFETTO_TRACER.enter();
+            guard.with_some(|_| ()).is_some()
         }
         .then(|| {
             let mut regs = HashMap::new();

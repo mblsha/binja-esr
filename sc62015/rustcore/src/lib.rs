@@ -991,9 +991,9 @@ impl LlamaBus for LlamaPyBus {
                 let offset = absolute - INTERNAL_MEMORY_START;
                 if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
                     let mut guard = PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
+                    guard.with_some(|tracer| {
                         tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
-                    }
+                    });
                     // Mirror into Python's dispatcher so the main Perfetto trace sees KIO reads.
                     Python::with_gil(|py| {
                         let _ = self

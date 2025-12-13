@@ -365,7 +365,7 @@ impl KeyboardMatrix {
                     value |= 1 << (state.location.row & 0x07);
                 }
             }
-            self.kil_latch = value & 0xFF;
+            self.kil_latch = value;
         } else {
             self.kil_latch = self.compute_kil(true);
         }

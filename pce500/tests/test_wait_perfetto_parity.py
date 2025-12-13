@@ -53,8 +53,12 @@ def _run_wait_once(
         emu.close()
 
 
-def test_wait_side_effects_match_without_tracing(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert "llama" in available_backends(), "LLAMA backend must be available for parity tests"
+def test_wait_side_effects_match_without_tracing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert "llama" in available_backends(), (
+        "LLAMA backend must be available for parity tests"
+    )
 
     isr_py = _run_wait_once(
         backend="python", perfetto=False, trace_path=None, monkeypatch=monkeypatch
@@ -66,8 +70,12 @@ def test_wait_side_effects_match_without_tracing(monkeypatch: pytest.MonkeyPatch
     assert isr_py & 0x01, "WAIT should advance timers enough to raise MTI at least once"
 
 
-def test_wait_perfetto_trace_matches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    assert "llama" in available_backends(), "LLAMA backend must be available for parity tests"
+def test_wait_perfetto_trace_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    assert "llama" in available_backends(), (
+        "LLAMA backend must be available for parity tests"
+    )
 
     repo_root = Path(__file__).resolve().parents[2]
     compare_script = repo_root / "scripts" / "compare_perfetto_traces.py"
@@ -96,4 +104,3 @@ def test_wait_perfetto_trace_matches(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert out.returncode == 0, (
         f"Perfetto traces diverged (exit {out.returncode})\nSTDOUT:\n{out.stdout}\nSTDERR:\n{out.stderr}"
     )
-
