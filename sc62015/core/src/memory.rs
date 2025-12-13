@@ -1059,6 +1059,7 @@ mod tests {
         use crate::llama::state::LlamaState;
         use std::fs;
 
+        let mut guard = perfetto_guard();
         // Execute a NOP at PC 0x123 to seed perfetto_last_pc without relying on a live context.
         reset_perf_counters();
         let mut exec = LlamaExecutor::new();
@@ -1071,15 +1072,12 @@ mod tests {
 
         let tmp = std::env::temp_dir().join("perfetto_host_pc_fallback.perfetto-trace");
         let _ = fs::remove_file(&tmp);
-        {
-            let mut guard = crate::PERFETTO_TRACER.enter();
-            *guard = Some(crate::PerfettoTracer::new(tmp.clone()));
-        }
+        *guard = Some(crate::PerfettoTracer::new(tmp.clone()));
 
         let mut mem = MemoryImage::new();
         mem.apply_host_write_with_cycle(0x0020, 0xAA, None, None);
 
-        if let Some(tracer) = std::mem::take(&mut *crate::PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = guard.take() {
             let pcs = tracer.test_mem_write_pcs.borrow().clone();
             assert_eq!(
                 pcs.last().copied().flatten(),
@@ -1093,6 +1091,7 @@ mod tests {
 
     #[test]
     fn perfetto_context_falls_back_to_last_pc() {
+        let _guard = perfetto_guard();
         // Establish a last-PC hint by executing a simple instruction.
         crate::llama::eval::reset_perf_counters();
         struct NullBus;
