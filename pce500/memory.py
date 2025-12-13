@@ -954,6 +954,25 @@ class PCE500Memory:
         # Internal memory is stored in the last 256 bytes of external_memory
         return bytes(self.external_memory[-256:])
 
+    def wait_cycles(self, cycles: int) -> None:
+        """Advance emulator cycle/timer state for LLAMA WAIT handling.
+
+        The Rust LLAMA core can delegate WAIT-loop timing to the Python scheduler via this
+        hook so that ISR bits and Perfetto traces stay aligned with the Python backend.
+        """
+
+        emu = getattr(self, "_emulator", None)
+        if emu is None:
+            return
+        try:
+            cycles_i = max(1, int(cycles))
+        except Exception:
+            return
+        try:
+            emu._simulate_wait(cycles_i)
+        except Exception:
+            return
+
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing for memory operations."""
         self.perfetto_enabled = enabled

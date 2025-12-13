@@ -1138,7 +1138,13 @@ class PCE500Emulator:
                 self.instruction_count += 1
                 # If this was WAIT, simulate the skipped loop to keep timers aligned
                 if wait_sim_count:
-                    self._simulate_wait(wait_sim_count)
+                    if getattr(self.cpu, "backend", None) == "llama" and hasattr(
+                        self.memory, "wait_cycles"
+                    ):
+                        # LLAMA core delegated WAIT-cycle timing via memory.wait_cycles().
+                        pass
+                    else:
+                        self._simulate_wait(wait_sim_count)
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
@@ -1195,7 +1201,13 @@ class PCE500Emulator:
                 self.instruction_count += 1
                 # If this was WAIT, simulate the skipped loop to keep timers aligned
                 if wait_sim_count:
-                    self._simulate_wait(wait_sim_count)
+                    if getattr(self.cpu, "backend", None) == "llama" and hasattr(
+                        self.memory, "wait_cycles"
+                    ):
+                        # LLAMA core delegated WAIT-cycle timing via memory.wait_cycles().
+                        pass
+                    else:
+                        self._simulate_wait(wait_sim_count)
 
                 # Only compute disassembly when tracing is enabled to avoid overhead
                 if self.trace is not None:

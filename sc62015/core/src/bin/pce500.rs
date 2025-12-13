@@ -35,7 +35,6 @@ const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const VEC_RANGE_START: u32 = 0x00BFCC6;
 const VEC_RANGE_END: u32 = 0x00BFCCC;
-const HANDLER_JP_Y_PC: u32 = 0x0F2053;
 const ISR_KEYI: u8 = 0x04;
 const ISR_ONKI: u8 = 0x08;
 const ISR_MTI: u8 = 0x01;
@@ -211,6 +210,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     trace_kbd: bool,
 
+    /// Trace the ROM's `JP Y` IRQ dispatch stub (very noisy).
+    #[arg(long, default_value_t = false)]
+    trace_jp_y: bool,
+
     /// Bridge PF2 by jumping to the PF2 menu PC after pressing PF2 (diagnostic only).
     #[arg(long, default_value_t = false)]
     force_pf2_jump: bool,
@@ -238,6 +241,7 @@ struct StandaloneBus {
     log_lcd: bool,
     log_lcd_count: u32,
     log_lcd_limit: u32,
+    irq_pending: bool,
     in_interrupt: bool,
     delivered_irq_count: u32,
     pending_kil: bool,
@@ -293,6 +297,7 @@ impl StandaloneBus {
             log_lcd,
             log_lcd_count: 0,
             log_lcd_limit,
+            irq_pending: false,
             in_interrupt: false,
             delivered_irq_count: 0,
             pending_kil: false,
@@ -456,11 +461,35 @@ impl StandaloneBus {
     }
 
     fn press_key(&mut self, code: u8) {
-        self.keyboard.press_matrix_code(code, &mut self.memory);
+        let kb_irq_enabled = self.timer.keyboard_irq_enabled();
+        // Parity with `pce500/run_pce500.py`: scripted key presses inject a debounced
+        // FIFO event so the ROM observes the key immediately (no debounce delay).
+        self.keyboard
+            .inject_matrix_event(code, false, &mut self.memory, kb_irq_enabled);
+        self.pending_kil = self.keyboard.fifo_len() > 0;
+        if kb_irq_enabled {
+            self.timer.key_irq_latched = true;
+            self.raise_key_irq();
+            self.irq_pending = true;
+            if !self.in_interrupt {
+                self.last_irq_src = Some("KEY".to_string());
+            }
+        }
     }
 
     fn release_key(&mut self, code: u8) {
-        self.keyboard.release_matrix_code(code, &mut self.memory);
+        let kb_irq_enabled = self.timer.keyboard_irq_enabled();
+        // Parity: scripted releases enqueue a release FIFO entry (like Python inject_event).
+        self.keyboard
+            .inject_matrix_event(code, true, &mut self.memory, kb_irq_enabled);
+        self.pending_kil = self.keyboard.fifo_len() > 0;
+        if kb_irq_enabled {
+            self.raise_key_irq();
+            self.irq_pending = true;
+            if !self.in_interrupt {
+                self.last_irq_src = Some("KEY".to_string());
+            }
+        }
     }
 
     fn press_on_key(&mut self) {
@@ -475,6 +504,10 @@ impl StandaloneBus {
             }
         }
         self.pending_onk = true;
+        self.irq_pending = true;
+        if !self.in_interrupt {
+            self.last_irq_src = Some("ONK".to_string());
+        }
     }
 
     fn clear_on_key(&mut self) {
@@ -540,16 +573,6 @@ impl StandaloneBus {
     fn irq_pending(&mut self) -> bool {
         let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        // Parity: if KEYI events are latched (FIFO pending) but ISR was cleared while masked,
-        // reassert KEYI so the level-triggered IRQ is not lost.
-        if self.pending_kil && self.keyboard.fifo_len() > 0 && (isr & ISR_KEYI) == 0 {
-            self.memory
-                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_KEYI);
-            isr |= ISR_KEYI;
-        }
-        if self.keyboard.fifo_len() == 0 {
-            self.pending_kil = false;
-        }
         if self.in_interrupt {
             let active = self.active_irq_mask;
             let still_active = active != 0 && (isr & active) != 0;
@@ -558,9 +581,22 @@ impl StandaloneBus {
             if (imr & IMR_MASTER) != 0 && !still_active {
                 self.in_interrupt = false;
                 self.active_irq_mask = 0;
+                if !self.irq_pending {
+                    self.last_irq_src = None;
+                }
             } else {
                 // Avoid duplicate IMR/ISR KIO logging; Python tracer does not emit these here.
                 return false;
+            }
+        }
+        // Reassert latched KEYI if firmware clears ISR while key IRQ latch remains set.
+        if self.timer.key_irq_latched && (isr & ISR_KEYI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_KEYI);
+            isr |= ISR_KEYI;
+            self.irq_pending = true;
+            if !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK")) {
+                self.last_irq_src = Some("KEY".to_string());
             }
         }
         // ONK is level-triggered like KEYI; if latched and cleared while masked, reassert.
@@ -568,23 +604,41 @@ impl StandaloneBus {
             self.memory
                 .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
             isr |= ISR_ONKI;
+            self.irq_pending = true;
+            if !self.in_interrupt {
+                self.last_irq_src = Some("ONK".to_string());
+            }
         }
-        // Master bit set means interrupts enabled. Keyboard IRQs are level-triggered, so allow
-        // them to pend even if IRM is still masked to mirror the Python emulator.
-        let irm_enabled = (imr & IMR_MASTER) != 0 || (isr & ISR_KEYI != 0) || (isr & ISR_ONKI != 0);
-        if !irm_enabled {
-            return false;
+        // If we have a pending source but no latched irq_source, adopt one from ISR bits.
+        let pending_src = if (isr & ISR_KEYI) != 0 {
+            Some("KEY")
+        } else if (isr & ISR_ONKI) != 0 {
+            Some("ONK")
+        } else if (isr & ISR_MTI) != 0 {
+            Some("MTI")
+        } else if (isr & ISR_STI) != 0 {
+            Some("STI")
+        } else {
+            None
+        };
+        if let Some(src) = pending_src {
+            if self.last_irq_src.is_none()
+                || (matches!(src, "KEY" | "ONK")
+                    && !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK")))
+            {
+                self.last_irq_src = Some(src.to_string());
+            }
         }
-        // Per-bit masks are "enabled when set".
-        let pending = ((isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0))
-            || ((isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0))
-            || ((isr & ISR_MTI != 0) && (imr & IMR_MTI != 0))
-            || ((isr & ISR_STI != 0) && (imr & IMR_STI != 0));
-        // If IMR masks everything, remember pending ISRs so we can restore on RETI.
-        if !pending && isr != 0 && self.active_irq_mask == 0 {
-            self.last_irq_src = Some("masked".to_string());
+        // Python parity: if a level-triggered KEY/ONK request is pending while IRM is still
+        // masked, treat IRM as enabled so the event is not lost before the ROM flips IMR into its
+        // runtime state.
+        let mut irm_enabled = (imr & IMR_MASTER) != 0;
+        if !irm_enabled && (isr & (ISR_KEYI | ISR_ONKI)) != 0 {
+            irm_enabled = true;
         }
-        pending
+        // Match Python gating: attempt delivery only when a pending IRQ is latched and
+        // IRM is enabled and (IMR & ISR) != 0.
+        self.irq_pending && irm_enabled && (imr & isr) != 0
     }
 
     #[cfg(feature = "llama-tests")]
@@ -629,17 +683,20 @@ impl StandaloneBus {
         let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
         state.set_reg(RegName::IMR, u32::from(cleared_imr));
 
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         // Ensure the vector table is patched before reading the vector.
         self.maybe_patch_vectors();
-        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
-        state.set_pc(vec & ADDRESS_MASK);
-        state.set_halted(false);
-        self.in_interrupt = true;
         // Deliver highest-priority pending respecting masks.
-        let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
+        let (src, mask) = if self.pending_onk && (isr & ISR_ONKI != 0) {
+            // Python parity: prefer a newly pending ONK even if IMR doesn't yet mask it in.
+            (Some("ONK"), ISR_ONKI)
+        } else if self.pending_kil && (isr & ISR_KEYI != 0) {
+            // Python parity: prefer a newly pending KEY even if IMR doesn't yet mask it in.
+            (Some("KEY"), ISR_KEYI)
+        } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
             (Some("ONK"), ISR_ONKI)
         } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY) != 0 {
             (Some("KEY"), ISR_KEYI)
@@ -656,9 +713,13 @@ impl StandaloneBus {
             sp = sp.wrapping_add(1); // F
             sp = sp.wrapping_add(3); // PC (24-bit)
             state.set_reg(RegName::S, sp);
-            self.in_interrupt = false;
+            state.set_pc(pc);
             return;
         };
+        state.set_pc(vec & ADDRESS_MASK);
+        state.set_halted(false);
+        self.in_interrupt = true;
+        self.irq_pending = false;
         self.last_irq_src = src.map(|s| s.to_string());
         self.active_irq_mask = mask;
         let src_clone = self.last_irq_src.clone();
@@ -715,6 +776,9 @@ impl StandaloneBus {
     }
 
     fn tick_timers_only(&mut self) {
+        if self.in_interrupt {
+            return;
+        }
         let kb_irq_enabled = self.timer.kb_irq_enabled;
         let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
             &mut self.memory,
@@ -734,10 +798,23 @@ impl StandaloneBus {
             None,
             Some(self.last_pc),
         );
+        if mti {
+            self.irq_pending = true;
+            self.last_irq_src = Some("MTI".to_string());
+        }
+        if sti {
+            self.irq_pending = true;
+            self.last_irq_src = Some("STI".to_string());
+        }
         if mti && key_events > 0 {
             self.pending_kil = self.keyboard.fifo_len() > 0;
             if self.pending_kil {
                 self.raise_key_irq();
+                if kb_irq_enabled {
+                    self.timer.key_irq_latched = true;
+                    self.irq_pending = true;
+                    self.last_irq_src = Some("KEY".to_string());
+                }
             }
             self.last_kbd_access = Some("scan".to_string());
             self.log_irq_event(
@@ -809,7 +886,6 @@ impl LlamaBus for StandaloneBus {
                 }
                 if offset == IMEM_KIL_OFFSET {
                     // Emit perfetto event for KIL read with PC/value.
-                    #[cfg(feature = "llama-tests")]
                     {
                         let mut guard = PERFETTO_TRACER.enter();
                         guard.with_some(|tracer| {
@@ -861,17 +937,8 @@ impl LlamaBus for StandaloneBus {
                 }
             }
         }
-        if MemoryImage::is_internal(addr) {
-            if let Some(offset) = MemoryImage::internal_offset(addr) {
-                if offset < 0x10 && bits == 8 {
-                    let lcd_addr = 0x02000 + offset;
-                    if let Some(byte) = self.lcd.read(lcd_addr) {
-                        return byte as u32;
-                    }
-                    return self.lcd.read_placeholder(lcd_addr);
-                }
-            }
-        }
+        // Parity: IMEM offsets 0x00-0x0F are normal internal RAM for the PC-E500 ROM
+        // (used for BP-relative locals). LCD is memory-mapped at 0x2000/0xA000.
         if self.trace_kbd && (VEC_RANGE_START..=VEC_RANGE_END).contains(&addr) {
             println!(
                 "[vec-trace-read] pc=0x{pc:05X} addr=0x{addr:06X} bits={bits} value=0x{val:06X}",
@@ -956,26 +1023,7 @@ impl LlamaBus for StandaloneBus {
                 return;
             }
         }
-        if MemoryImage::is_internal(addr) {
-            if let Some(offset) = MemoryImage::internal_offset(addr) {
-                if offset < 0x10 && bits == 8 {
-                    let lcd_addr = 0x02000 + offset;
-                    self.lcd.write(lcd_addr, value as u8);
-                    self.lcd_writes = self.lcd_writes.saturating_add(1);
-                    if self.log_lcd && self.log_lcd_count < self.log_lcd_limit {
-                        println!(
-                            "[lcd-write] addr=0x{addr:05X} value=0x{val:02X} count={cnt}",
-                            addr = lcd_addr,
-                            val = value as u8,
-                            cnt = self.lcd_writes
-                        );
-                        self.log_lcd_count += 1;
-                    }
-                    self.trace_mem_write(lcd_addr, bits, value);
-                    return;
-                }
-            }
-        }
+        // Parity: do not alias IMEM 0x00-0x0F onto LCD; those bytes are used as scratch RAM.
         if self.lcd.handles(addr) {
             if bits == 8 {
                 self.lcd.write(addr, value as u8);
@@ -1215,6 +1263,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut trace_window_active: u64 = 0;
     let mut trace_window_anchor: Option<u32> = None;
     let trace_regs = args.trace_regs;
+    let trace_jp_y = args.trace_jp_y;
     let mut last_y_trace: Option<u32> = None;
 
     let mut memory = MemoryImage::new();
@@ -1281,26 +1330,76 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         auto_release_after = args.steps;
     }
     let mut pressed_key = false;
+    let mut auto_press_consumed = false;
     let mut release_at: u64 = 0;
     let max_steps = args.steps;
     let mut _halted_after_pf1 = false;
     log_dbg(&format!("entering execute loop for {max_steps} steps"));
-    for step_idx in 0..max_steps {
+    while executed < max_steps {
         // Ensure vector table is patched once before executing instructions.
         if !bus.vec_patched {
             bus.maybe_patch_vectors();
         }
-        // Drive timers using current cycle count (before this instruction executes).
-        bus.advance_cycle();
+        // Drive timers using the current cycle count (before this instruction executes).
+        bus.tick_timers_only();
+        if let Some(code) = auto_key {
+            if !pressed_key && !auto_press_consumed && executed >= auto_press_step {
+                match code {
+                    AutoKeyKind::Matrix(code) => {
+                        bus.press_key(code);
+                        if args.force_pf2_jump && code == PF2_CODE {
+                            state.set_pc(PF2_MENU_PC);
+                        }
+                    }
+                    AutoKeyKind::OnKey => bus.press_on_key(),
+                }
+                pressed_key = true;
+                auto_press_consumed = true;
+                release_at = executed.saturating_add(auto_release_after);
+            } else if pressed_key && executed >= release_at {
+                match code {
+                    AutoKeyKind::Matrix(code) => bus.release_key(code),
+                    AutoKeyKind::OnKey => bus.clear_on_key(),
+                }
+                pressed_key = false;
+            }
+        }
         if bus.irq_pending() {
-            bus.deliver_irq(&mut state);
+            // Parity: do not deliver IRQs until firmware initializes the stack pointer.
+            // The Python emulator defers delivery in this state to avoid corrupting RAM/IMEM.
+            let sp = state.get_reg(RegName::S) & 0x00FF_FFFF;
+            if sp >= 5 {
+                bus.deliver_irq(&mut state);
+            }
         } else if state.is_halted() {
-            continue;
+            // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
+            // The Python emulator uses this to prevent the ROM from stalling in low-power
+            // loops when timers/keyboard events are pending.
+            let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+            if isr == 0 {
+                // Remain halted; model passage of one cycle of idle time.
+                bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                continue;
+            }
+            state.set_halted(false);
+            bus.irq_pending = true;
+            bus.last_irq_src = None;
+            for (mask, src) in [
+                (ISR_MTI, "MTI"),
+                (ISR_STI, "STI"),
+                (ISR_KEYI, "KEY"),
+                (ISR_ONKI, "ONK"),
+            ] {
+                if (isr & mask) != 0 {
+                    bus.last_irq_src = Some(src.to_string());
+                    break;
+                }
+            }
         }
         let pc = state.pc();
         bus.set_pc(pc);
         bus.set_instr_index(executed);
-        if pc == HANDLER_JP_Y_PC {
+        if trace_jp_y && pc == 0x0F2053 {
             let y = state.get_reg(RegName::Y) & 0xFFFFFF;
             if last_y_trace != Some(y) {
                 println!(
@@ -1398,27 +1497,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if perfetto_dbg {
             eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
         }
-        if let Some(code) = auto_key {
-            if !pressed_key && executed >= auto_press_step {
-                match code {
-                    AutoKeyKind::Matrix(code) => {
-                        bus.press_key(code);
-                        if args.force_pf2_jump && code == PF2_CODE {
-                            state.set_pc(PF2_MENU_PC);
-                        }
-                    }
-                    AutoKeyKind::OnKey => bus.press_on_key(),
-                }
-                pressed_key = true;
-                release_at = executed + auto_release_after;
-            } else if pressed_key && executed >= release_at {
-                match code {
-                    AutoKeyKind::Matrix(code) => bus.release_key(code),
-                    AutoKeyKind::OnKey => bus.clear_on_key(),
-                }
-                pressed_key = false;
-            }
-        }
         match executor.execute(opcode, &mut state, &mut bus) {
             Ok(_) => {
                 if opcode == 0x01 {
@@ -1445,22 +1523,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             ),
                         ],
                     );
-                    // Clear the ISR bit that triggered this interrupt (parity with Python emulator).
-                    if bus.active_irq_mask != 0 {
-                        if let Some(cur_isr) = bus.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                            let new_isr = cur_isr & !bus.active_irq_mask;
-                            bus.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
-                        }
-                        if bus.active_irq_mask == ISR_KEYI {
-                            bus.pending_kil = false;
-                        }
-                        if bus.active_irq_mask == ISR_ONKI {
-                            bus.pending_onk = false;
-                        }
-                    }
                     bus.in_interrupt = false;
-                    bus.last_irq_src = None;
                     bus.active_irq_mask = 0;
+                    bus.last_irq_src = None;
                 }
                 bus.cycle_count = bus.cycle_count.wrapping_add(1);
                 executed += 1;
@@ -1478,7 +1543,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 if perfetto_dbg {
                     eprintln!(
                         "[perfetto-debug] execute error at step {} opcode=0x{opcode:02X}: {err}",
-                        step_idx + 1
+                        executed + 1
                     );
                 }
                 break;
@@ -1487,7 +1552,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if perfetto_dbg {
             eprintln!(
                 "[perfetto-debug] step {} complete: pc=0x{:05X} cycles={}",
-                step_idx + 1,
+                executed,
                 state.pc() & ADDRESS_MASK,
                 bus.cycle_count
             );
@@ -1543,6 +1608,18 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             bus.rom_koh_reads,
             bus.rom_kil_reads,
             fifo
+        );
+        let mut fifo_ram = Vec::new();
+        for addr in FIFO_BASE_ADDR..=FIFO_TAIL_ADDR {
+            fifo_ram.push(bus.memory.load(addr, 8).unwrap_or(0) as u8);
+        }
+        println!(
+            "FIFO RAM [0x{start:06X}..0x{end:06X}]: {fifo_ram:02X?} (bus.in_interrupt={in_interrupt}, active_irq_mask=0x{mask:02X})",
+            start = FIFO_BASE_ADDR,
+            end = FIFO_TAIL_ADDR,
+            fifo_ram = fifo_ram,
+            in_interrupt = bus.in_interrupt,
+            mask = bus.active_irq_mask
         );
     }
 
@@ -1647,14 +1724,14 @@ mod tests {
             bus.irq_pending(),
             "ONK should make IRQ pending when unmasked"
         );
-        // Simulate RETI clearing the active IRQ mask.
+        // Simulate firmware clearing ISR while ON key remains latched: irq_pending should
+        // reassert ONKI (level-triggered) to avoid losing the event.
+        bus.in_interrupt = true;
         bus.active_irq_mask = super::ISR_ONKI;
         if let Some(cur_isr) = bus.memory.read_internal_byte(super::IMEM_ISR_OFFSET) {
             bus.memory
-                .write_internal_byte(super::IMEM_ISR_OFFSET, cur_isr & !bus.active_irq_mask);
+                .write_internal_byte(super::IMEM_ISR_OFFSET, cur_isr & !super::ISR_ONKI);
         }
-        bus.pending_onk = true;
-        // irq_pending should reassert ONKI when pending_onk is true.
         assert!(
             bus.irq_pending(),
             "pending_onk should reassert ONKI after clear"
@@ -1682,6 +1759,7 @@ mod tests {
         bus.memory
             .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_ONKI);
         bus.pending_onk = true;
+        bus.irq_pending = true;
         assert!(bus.irq_pending(), "ONK pending should signal irq_pending");
         bus.deliver_irq(&mut state);
         assert_eq!(

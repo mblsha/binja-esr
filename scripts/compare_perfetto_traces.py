@@ -240,7 +240,9 @@ def compare_instruction_traces(
     """Return earliest differing op_index and the associated events."""
 
     all_indices = sorted(set(lhs.keys()) & set(rhs.keys()))
-    keys_of_interest = {"pc", "opcode"}  # Always compare PC + opcode.
+    # Always compare PC + opcode, plus IMR/ISR snapshots so WAIT/timer parity regressions
+    # show up directly at the divergent instruction.
+    keys_of_interest = {"pc", "opcode", "mem_imr", "mem_isr"}
 
     for index in all_indices:
         evt_a = lhs.get(index)

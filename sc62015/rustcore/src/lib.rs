@@ -990,13 +990,10 @@ impl LlamaBus for LlamaPyBus {
             if absolute >= INTERNAL_MEMORY_START {
                 let offset = absolute - INTERNAL_MEMORY_START;
                 if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
-                    let tracer_ok = {
-                        let mut guard = PERFETTO_TRACER.enter();
-                        guard.with_some(|tracer| {
-                            tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
-                        })
-                        .is_some()
-                    };
+                    let mut guard = PERFETTO_TRACER.enter();
+                    guard.with_some(|tracer| {
+                        tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
+                    });
                     // Mirror into Python's dispatcher so the main Perfetto trace sees KIO reads.
                     Python::with_gil(|py| {
                         let _ = self
@@ -1004,13 +1001,6 @@ impl LlamaBus for LlamaPyBus {
                             .bind(py)
                             .call_method1("trace_kio_from_rust", (offset, byte, self.pc));
                     });
-                    eprintln!(
-                        "[kio-read-pybus] pc=0x{pc:06X} offset=0x{offset:02X} value=0x{val:02X} tracer={tracer}",
-                        pc = self.pc,
-                        offset = offset,
-                        val = byte,
-                        tracer = if tracer_ok { "Y" } else { "N" }
-                    );
                 } else if should_trace_addr(absolute) && trace_loads() {
                     eprintln!(
                         "[pybus-load] pc=0x{pc:06X} addr=0x{addr:06X} bits={bits} byte=0x{val:02X}",

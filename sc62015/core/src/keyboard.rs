@@ -269,8 +269,7 @@ impl KeyboardMatrix {
         let mut value = 0u8;
         let active = self.active_columns();
         for state in &self.states {
-            let col_active = active.contains(&state.location.column);
-            if !col_active && !allow_pending && !state.pressed {
+            if !active.contains(&state.location.column) {
                 continue;
             }
             if state.debounced
@@ -336,14 +335,39 @@ impl KeyboardMatrix {
         memory: &mut MemoryImage,
         kb_irq_enabled: bool,
     ) -> usize {
+        if let Some(state) = self.states.get_mut(code as usize) {
+            if release {
+                state.pressed = false;
+                state.debounced = false;
+                state.press_ticks = 0;
+                state.release_ticks = 0;
+                state.repeat_ticks = 0;
+            } else {
+                state.pressed = true;
+                state.debounced = true;
+                state.press_ticks = self.press_threshold;
+                state.release_ticks = 0;
+                state.repeat_ticks = self.repeat_delay;
+            }
+        }
         self.sync_fifo_from_memory(memory);
         let events = self.enqueue_event(code & 0x7F, release, true);
-        // Update KIL latch directly for bridge calls (row is low 3 bits).
-        let row_mask = 1u8 << (code & 0x07);
-        if release {
-            self.kil_latch &= !row_mask;
+        // Parity: matrix injection is used by host bridges/tests that do not always strobe KOL/KOH.
+        // When no columns are active, expose pressed rows in the latch so scripted key presses are
+        // observable immediately (matches expectations in llama backend smoke tests).
+        if self.active_columns().is_empty() {
+            let mut value = 0u8;
+            for state in &self.states {
+                if state.debounced
+                    || (state.pressed
+                        && state.press_ticks.saturating_add(1) >= self.press_threshold)
+                {
+                    value |= 1 << (state.location.row & 0x07);
+                }
+            }
+            self.kil_latch = value;
         } else {
-            self.kil_latch |= row_mask;
+            self.kil_latch = self.compute_kil(true);
         }
         memory.write_internal_byte(0xF2, self.kil_latch);
         if events > 0 {
@@ -376,21 +400,19 @@ impl KeyboardMatrix {
 
     pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
         self.sync_fifo_from_memory(memory);
+        // Parity: mirror only occupied FIFO entries. The ROM seeds bytes in this region (including
+        // FIFO pointers), so writing zeros over the whole window can clobber firmware state.
         let mut idx = self.fifo_head;
-        for slot in 0..FIFO_SIZE {
-            let value = if slot < self.fifo_count {
-                let byte = self.fifo_storage[idx];
-                idx = (idx + 1) % FIFO_SIZE;
-                byte
-            } else {
-                0
-            };
-            let addr = FIFO_BASE_ADDR + slot as u32;
-            memory.write_external_byte(addr, value);
-            Self::log_fifo_write(addr, value);
+        for _ in 0..self.fifo_count {
+            let addr = FIFO_BASE_ADDR + idx as u32;
+            // Firmware owns FIFO_HEAD_ADDR; avoid clobbering it when mirroring.
+            if addr != FIFO_HEAD_ADDR {
+                let value = self.fifo_storage[idx];
+                memory.write_external_byte(addr, value);
+                Self::log_fifo_write(addr, value);
+            }
+            idx = (idx + 1) % FIFO_SIZE;
         }
-        memory.write_external_byte(FIFO_HEAD_ADDR, self.fifo_head as u8);
-        Self::log_fifo_write(FIFO_HEAD_ADDR, self.fifo_head as u8);
         memory.write_external_byte(FIFO_TAIL_ADDR, self.fifo_tail as u8);
         Self::log_fifo_write(FIFO_TAIL_ADDR, self.fifo_tail as u8);
         // Assert KEYI only if keyboard IRQs are enabled, matching Python gating.
@@ -631,7 +653,15 @@ impl KeyboardMatrix {
             0xF0 => Some(self.kol),
             0xF1 => Some(self.koh),
             0xF2 => {
-                // Parity: Python KIL reads expose pending (nearly debounced) presses.
+                if !self.scan_enabled {
+                    return Some(0);
+                }
+                // Parity: KIL reads advance the debounce state and expose pending presses.
+                // Python's handler scans on each KIL read but does not assert KEYI.
+                let events = self.scan_tick(_memory, false);
+                if events > 0 || self.fifo_len() > 0 {
+                    self.write_fifo_to_memory(_memory, false);
+                }
                 self.kil_latch = self.compute_kil(true);
                 self.kil_read_count = self.kil_read_count.wrapping_add(1);
                 Some(self.kil_latch)
@@ -677,26 +707,42 @@ impl KeyboardMatrix {
             {
                 let state = &mut self.states[idx];
                 let strobed = active.contains(&state.location.column);
+                // Match Python debounce/repeat semantics (KeyboardMatrix._update_key_state).
                 if state.pressed && strobed {
                     if !state.debounced {
                         state.press_ticks = state.press_ticks.saturating_add(1);
                         if state.press_ticks >= self.press_threshold {
                             state.debounced = true;
+                            state.press_ticks = self.press_threshold;
+                            state.release_ticks = 0;
+                            state.repeat_ticks = self.repeat_delay;
                             enqueue = Some((state.matrix_code(), false));
                         }
-                    } else if self.repeat_enabled {
-                        state.repeat_ticks = state.repeat_ticks.saturating_sub(1);
-                        if state.repeat_ticks == 0 {
-                            state.repeat_ticks = self.repeat_interval;
-                            enqueue = Some((state.matrix_code(), false));
+                    } else {
+                        state.release_ticks = 0;
+                        if self.repeat_enabled {
+                            state.repeat_ticks = state.repeat_ticks.saturating_sub(1);
+                            if state.repeat_ticks == 0 {
+                                state.repeat_ticks = self.repeat_interval;
+                                enqueue = Some((state.matrix_code(), false));
+                            }
                         }
                     }
-                } else if state.debounced && !strobed {
-                    state.release_ticks = state.release_ticks.saturating_add(1);
-                    if state.release_ticks >= self.release_threshold {
-                        state.debounced = false;
-                        enqueue = Some((state.matrix_code(), true));
+                } else {
+                    state.press_ticks = 0;
+                    if state.debounced {
+                        state.release_ticks = state.release_ticks.saturating_add(1);
+                        if state.release_ticks >= self.release_threshold {
+                            state.debounced = false;
+                            state.release_ticks = 0;
+                            state.repeat_ticks = 0;
+                            enqueue = Some((state.matrix_code(), true));
+                        }
                     }
+                }
+
+                if !state.pressed && !state.debounced {
+                    state.repeat_ticks = 0;
                 }
             }
             if let Some((code, release)) = enqueue {

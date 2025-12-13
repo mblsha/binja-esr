@@ -136,3 +136,37 @@ fn defaults_match_python_keyboard_matrix() {
     assert_eq!(snap.fifo_len, 0);
     assert!(snap.fifo.iter().all(|b| *b == 0));
 }
+
+#[test]
+fn held_key_does_not_generate_spurious_release_events() {
+    let mut mem = MemoryImage::new();
+    let mut kb = KeyboardMatrix::new();
+    // Disable repeats so FIFO length reflects only press/release transitions.
+    kb.set_repeat_enabled(false);
+
+    // Press a key and strobe all columns so it stays visible throughout the hold.
+    kb.press_matrix_code(0x10, &mut mem);
+    kb.handle_write(0xF0, 0xFF, &mut mem);
+    kb.handle_write(0xF1, 0x07, &mut mem);
+
+    // Debounce until the initial press event is enqueued.
+    for _ in 0..8 {
+        if kb.scan_tick(&mut mem, true) > 0 {
+            break;
+        }
+    }
+    assert_eq!(kb.fifo_len(), 1, "expected exactly one press event after debounce");
+
+    // Hold the key for many more scan ticks: no release event should be generated.
+    for _ in 0..200 {
+        kb.scan_tick(&mut mem, true);
+    }
+    assert_eq!(
+        kb.fifo_len(),
+        1,
+        "held key should not enqueue release events"
+    );
+    let fifo = kb.fifo_snapshot();
+    assert_eq!(fifo.len(), 1);
+    assert_eq!(fifo[0] & 0x80, 0, "FIFO entry should be a press, not release");
+}
