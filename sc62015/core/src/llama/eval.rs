@@ -248,7 +248,7 @@ fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8)
 fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
     // Optional perfetto emit when the builder is available (llama-tests builds).
     let mut guard = crate::PERFETTO_TRACER.enter();
-    if let Some(tracer) = guard.as_mut() {
+    guard.with_some(|tracer| {
         let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
         let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
         let op = if op_idx == u64::MAX {
@@ -266,7 +266,7 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
             op,
             pc_val,
         );
-    }
+    });
 }
 
 fn imem_addr_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -> u32 {
@@ -400,7 +400,7 @@ impl LlamaExecutor {
         pc_trace: u32,
     ) {
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut regs = HashMap::new();
             let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
                 (
@@ -436,7 +436,7 @@ impl LlamaExecutor {
                 mem_imr,
                 mem_isr,
             );
-        }
+        });
         PERF_LAST_PC.store(pc_trace, Ordering::Relaxed);
     }
 
@@ -476,7 +476,7 @@ impl LlamaExecutor {
 
     fn trace_mem_write(addr: u32, bits: u8, value: u32) {
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
             let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
             let substep = perfetto_next_substep();
@@ -492,7 +492,7 @@ impl LlamaExecutor {
                 "external"
             };
             tracer.record_mem_write_with_substep(op_index, pc, addr, masked, space, bits, substep);
-        }
+        });
     }
 
     fn store_traced<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8, value: u32) {
@@ -2471,7 +2471,7 @@ impl LlamaExecutor {
                 state.set_pc(vec & mask_for(RegName::PC));
                 // Parity: emit perfetto IRQ entry like Python IR intrinsic.
                 let mut guard = crate::PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     let mut payload = std::collections::HashMap::new();
                     payload.insert(
                         "pc".to_string(),
@@ -2485,7 +2485,7 @@ impl LlamaExecutor {
                     );
                     payload.insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
                     tracer.record_irq_event("IRQ_Enter", payload);
-                }
+                });
                 Ok(instr_len)
             }
             InstrKind::Tcl => {
@@ -2581,14 +2581,14 @@ impl LlamaExecutor {
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
                 let mut guard = crate::PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     tracer.record_call_flow(
                         "CALL",
                         pc_before & mask_for(RegName::PC),
                         dest & 0xFFFFF,
                         state.call_depth(),
                     );
-                }
+                });
                 Ok(decoded.len)
             }
             InstrKind::Ret => {
@@ -2604,14 +2604,14 @@ impl LlamaExecutor {
                 state.set_pc(dest);
                 state.call_depth_dec();
                 let mut guard = crate::PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     tracer.record_call_flow(
                         "RET",
                         pc_before & mask_for(RegName::PC),
                         dest,
                         state.call_depth(),
                     );
-                }
+                });
                 Ok(1)
             }
             InstrKind::RetF => {
@@ -2621,14 +2621,14 @@ impl LlamaExecutor {
                 state.set_pc(dest);
                 state.call_depth_dec();
                 let mut guard = crate::PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     tracer.record_call_flow(
                         "RETF",
                         pc_before & mask_for(RegName::PC),
                         dest,
                         state.call_depth(),
                     );
-                }
+                });
                 Ok(1)
             }
             InstrKind::RetI => {
@@ -3096,7 +3096,7 @@ mod tests {
         let path = std::env::temp_dir().join("llama_pref_trace.perfetto-trace");
         let _ = std::fs::remove_file(&path);
         let mut guard = crate::PERFETTO_TRACER.enter();
-        *guard = Some(PerfettoTracer::new(path));
+        guard.replace(Some(PerfettoTracer::new(path)));
 
         let len = exec
             .execute(0x32, &mut state, &mut bus)
@@ -3904,7 +3904,7 @@ mod tests {
         let path = std::env::temp_dir().join("llama_pushu_imr.perfetto-trace");
         let _ = std::fs::remove_file(&path);
         let mut guard = crate::PERFETTO_TRACER.enter();
-        *guard = Some(PerfettoTracer::new(path));
+        guard.replace(Some(PerfettoTracer::new(path)));
 
         let mut exec = LlamaExecutor::new();
         let len_push = exec.execute(0x2F, &mut state, &mut bus).unwrap(); // PUSHU IMR

@@ -387,7 +387,7 @@ impl StandaloneBus {
 
     fn trace_mem_write(&self, addr: u32, bits: u8, value: u32) {
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let space = if MemoryImage::is_internal(addr) {
                 "internal"
             } else {
@@ -403,7 +403,7 @@ impl StandaloneBus {
                 bits,
                 substep,
             );
-        }
+        });
     }
 
     /// Parity: leave vectors to the ROM; no patching.
@@ -591,9 +591,9 @@ impl StandaloneBus {
     #[allow(dead_code)]
     fn trace_kio(&self, pc: u32, offset: u8, value: u8) {
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             tracer.record_kio_read(Some(pc), offset, value, None);
-        }
+        });
     }
 
     fn log_irq_delivery(&mut self, _src: Option<&str>, _vec: u32, _imr: u8, _isr: u8, _pc: u32) {}
@@ -812,14 +812,14 @@ impl LlamaBus for StandaloneBus {
                     #[cfg(feature = "llama-tests")]
                     {
                         let mut guard = PERFETTO_TRACER.enter();
-                        if let Some(tracer) = guard.as_mut() {
+                        guard.with_some(|tracer| {
                             tracer.record_kio_read(
                                 Some(self.last_pc),
                                 offset as u8,
                                 byte,
                                 Some(self.instr_index),
                             );
-                        }
+                        });
                     }
                 }
                 if matches!(
@@ -1185,7 +1185,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     if args.perfetto {
         let mut guard = PERFETTO_TRACER.enter();
-        *guard = Some(PerfettoTracer::new(args.perfetto_path.clone()));
+        guard.replace(Some(PerfettoTracer::new(args.perfetto_path.clone())));
     }
 
     let auto_key = if args.pf1 {

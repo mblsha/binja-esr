@@ -463,7 +463,7 @@ impl MemoryImage {
         let address = canonical_address(address);
         let record_perfetto = |space: &str| {
             let mut guard = perfetto_guard();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 if let Some(cyc) = cycle {
                     tracer.record_mem_write_at_cycle(cyc, pc, address, value as u32, space, 8);
                 } else if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
@@ -489,7 +489,7 @@ impl MemoryImage {
                         8,
                     );
                 }
-            }
+            });
         };
         if let Some(index) = Self::internal_index(address) {
             let offset = address - INTERNAL_MEMORY_START;
@@ -561,7 +561,7 @@ impl MemoryImage {
                 if ok {
                     self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
                     let mut guard = perfetto_guard();
-                    if let Some(tracer) = guard.as_mut() {
+                    guard.with_some(|tracer| {
                         if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
                         {
                             let substep = crate::llama::eval::perfetto_next_substep();
@@ -577,7 +577,7 @@ impl MemoryImage {
                         } else {
                             tracer.record_mem_write_at_cycle(0, pc, addr, byte as u32, &name, 8);
                         }
-                    }
+                    });
                     handled = true;
                     break;
                 }
@@ -684,7 +684,7 @@ impl MemoryImage {
         }
         if address == INTERNAL_MEMORY_START + 0xFB && !imr_read_suppressed() {
             let mut guard = perfetto_guard();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let ctx = crate::llama::eval::perfetto_instr_context();
                 let (op_idx, pc) = ctx.unwrap_or((
                     crate::llama::eval::perfetto_last_instr_index(),
@@ -699,7 +699,7 @@ impl MemoryImage {
                         Some(op_idx)
                     },
                 );
-            }
+            });
         }
         Some(value)
     }
@@ -715,7 +715,7 @@ impl MemoryImage {
                 .push((INTERNAL_MEMORY_START + offset, value));
             self.invoke_imr_isr_hook(offset, prev, value);
             let mut guard = perfetto_guard();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let (seq, pc) = perfetto_context_or_last();
                 let substep = crate::llama::eval::perfetto_next_substep();
                 tracer.record_mem_write_with_substep(
@@ -736,7 +736,7 @@ impl MemoryImage {
                         Some(pc),
                     );
                 }
-            }
+            });
         }
     }
 
@@ -747,7 +747,7 @@ impl MemoryImage {
             let val = self.internal[offset as usize];
             if offset == 0xFB && !imr_read_suppressed() {
                 let mut guard = perfetto_guard();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     let (op_idx, pc) = perfetto_context_or_last();
                     tracer.record_imr_read(
                         if op_idx == u64::MAX { None } else { Some(pc) },
@@ -758,7 +758,7 @@ impl MemoryImage {
                             Some(op_idx)
                         },
                     );
-                }
+                });
             }
             if (0xF0..=0xF2).contains(&offset) {
                 self.log_kio_read(offset, val);
@@ -793,7 +793,7 @@ impl MemoryImage {
     /// Perfetto/logging helper for KIO (KOL/KOH/KIL) reads, preserving instruction context.
     pub fn log_kio_read(&self, offset: u32, value: u8) {
         let mut guard = perfetto_guard();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let ctx = crate::llama::eval::perfetto_instr_context();
             let (op_idx, pc) = ctx.unwrap_or((
                 crate::llama::eval::perfetto_last_instr_index(),
@@ -809,7 +809,7 @@ impl MemoryImage {
                     Some(op_idx)
                 },
             );
-        }
+        });
     }
 
     pub fn is_read_only_range(&self, start: u32, len: u32) -> bool {
@@ -1041,13 +1041,13 @@ mod tests {
         let tmp = std::env::temp_dir().join("perfetto_host_async.perfetto-trace");
         let _ = fs::remove_file(&tmp);
         let mut guard = crate::PERFETTO_TRACER.enter();
-        *guard = Some(crate::PerfettoTracer::new(tmp.clone()));
+        guard.replace(Some(crate::PerfettoTracer::new(tmp.clone())));
 
         let mut mem = MemoryImage::new();
         mem.apply_host_write_with_cycle(0x0020, 0xAA, None, None);
         assert_eq!(mem.memory_write_count(), 1);
 
-        if let Some(tracer) = std::mem::take(&mut *guard) {
+        if let Some(tracer) = guard.take() {
             let _ = tracer.finish();
         }
         let _ = fs::remove_file(&tmp);
@@ -1072,7 +1072,7 @@ mod tests {
 
         let tmp = std::env::temp_dir().join("perfetto_host_pc_fallback.perfetto-trace");
         let _ = fs::remove_file(&tmp);
-        *guard = Some(crate::PerfettoTracer::new(tmp.clone()));
+        guard.replace(Some(crate::PerfettoTracer::new(tmp.clone())));
 
         let mut mem = MemoryImage::new();
         mem.apply_host_write_with_cycle(0x0020, 0xAA, None, None);

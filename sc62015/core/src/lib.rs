@@ -14,10 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::SystemTime;
-use std::{
-    cell::{Cell, UnsafeCell},
-    thread::ThreadId,
-};
 use thiserror::Error;
 
 pub use keyboard::KeyboardMatrix;
@@ -29,107 +25,14 @@ pub use memory::{
     INTERNAL_SPACE,
 };
 pub use perfetto::PerfettoTracer;
-pub struct PerfettoHandle {
-    owner: Cell<Option<ThreadId>>,
-    depth: Cell<usize>,
-    inner: UnsafeCell<Option<PerfettoTracer>>,
-    gate: std::sync::Mutex<()>,
-}
-
-pub struct PerfettoGuard<'a> {
-    handle: &'a PerfettoHandle,
-    gate: Option<std::sync::MutexGuard<'a, ()>>,
-    released: bool,
-}
+pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>;
+pub type PerfettoGuard<'a> = retrobus_perfetto::ReentrantGuard<'a, Option<PerfettoTracer>>;
+pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new(None);
 
 #[derive(Debug)]
 struct PythonOverlayFault {
     addr: u32,
     pc: u32,
-}
-
-impl Default for PerfettoHandle {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PerfettoHandle {
-    pub const fn new() -> Self {
-        Self {
-            owner: Cell::new(None),
-            depth: Cell::new(0),
-            inner: UnsafeCell::new(None),
-            gate: std::sync::Mutex::new(()),
-        }
-    }
-
-    pub fn enter(&self) -> PerfettoGuard<'_> {
-        let tid = std::thread::current().id();
-        if self.owner.get() == Some(tid) {
-            self.depth.set(self.depth.get().saturating_add(1));
-            return PerfettoGuard {
-                handle: self,
-                gate: None,
-                released: false,
-            };
-        }
-        let gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
-        debug_assert!(self.owner.get().is_none());
-        self.owner.set(Some(tid));
-        self.depth.set(1);
-        PerfettoGuard {
-            handle: self,
-            gate: Some(gate),
-            released: false,
-        }
-    }
-}
-
-unsafe impl Sync for PerfettoHandle {}
-
-impl<'a> PerfettoGuard<'a> {
-    pub fn tracer_mut(&mut self) -> Option<&mut PerfettoTracer> {
-        unsafe { &mut *self.handle.inner.get() }.as_mut()
-    }
-
-    pub fn take(&mut self) -> Option<PerfettoTracer> {
-        std::mem::take(unsafe { &mut *self.handle.inner.get() })
-    }
-}
-
-impl<'a> Drop for PerfettoGuard<'a> {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        let depth = self.handle.depth.get();
-        if depth <= 1 {
-            self.handle.depth.set(0);
-            self.handle.owner.set(None);
-            // Drop the gate guard on the root acquisition to allow other threads in.
-            drop(self.gate.take());
-        } else {
-            self.handle.depth.set(depth - 1);
-        }
-        self.released = true;
-    }
-}
-
-impl<'a> std::ops::Deref for PerfettoGuard<'a> {
-    type Target = Option<PerfettoTracer>;
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.handle.inner.get() }
-    }
-}
-
-impl<'a> std::ops::DerefMut for PerfettoGuard<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.handle.inner.get() }
-    }
-}
-lazy_static::lazy_static! {
-    pub static ref PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new();
 }
 pub use snapshot::{
     load_snapshot, pack_registers, save_snapshot, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC,
@@ -460,7 +363,7 @@ impl CoreRuntime {
                     timer.irq_isr = new;
                 }
                 let mut guard = PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     let mut payload = std::collections::HashMap::new();
                     payload.insert(
                         "pc".to_string(),
@@ -488,7 +391,7 @@ impl CoreRuntime {
                         "ISR_Write"
                     };
                     tracer.record_irq_event(name, payload);
-                }
+                });
             }
         }));
     }
@@ -515,7 +418,7 @@ impl CoreRuntime {
             .read_internal_byte(IMEM_IMR_OFFSET)
             .unwrap_or(self.timer.irq_imr);
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut payload = std::collections::HashMap::new();
             payload.insert(
                 "pc".to_string(),
@@ -534,7 +437,7 @@ impl CoreRuntime {
                 perfetto::AnnotationValue::Str("ONK".to_string()),
             );
             tracer.record_irq_event("KeyIRQ", payload);
-        }
+        });
     }
 
     /// Clear the ON key level and deassert ONKI in ISR (firmware may also clear ONKI).
@@ -668,10 +571,13 @@ impl CoreRuntime {
             }
         }
         self.timer.last_fired = self.timer.irq_source.clone();
+        let kil = self
+            .memory
+            .read_internal_byte_silent(IMEM_KIL_OFFSET)
+            .unwrap_or(0);
+        let imr_reg = self.state.get_reg(RegName::IMR) as u8;
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
-            let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
-            let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+        guard.with_some(|tracer| {
             tracer.record_irq_check(
                 "IRQ_PendingArm",
                 self.state.pc() & ADDRESS_MASK,
@@ -683,7 +589,7 @@ impl CoreRuntime {
                 Some(kil),
                 Some(imr_reg),
             );
-        }
+        });
     }
 
     pub fn load_rom(&mut self, blob: &[u8], start: usize) {
@@ -757,7 +663,7 @@ impl CoreRuntime {
                         // If we reach here, the address requires Python handling but no callback is present.
                         // Emit a perfetto warning so traces surface the divergence and stop execution.
                         let mut guard = PERFETTO_TRACER.enter();
-                        if let Some(tracer) = guard.as_mut() {
+                        guard.with_some(|tracer| {
                             let mut payload = std::collections::HashMap::new();
                             payload.insert(
                                 "addr".to_string(),
@@ -768,7 +674,7 @@ impl CoreRuntime {
                                 perfetto::AnnotationValue::Pointer(self.pc as u64),
                             );
                             tracer.record_irq_event("PythonOverlayMissing", payload);
-                        }
+                        });
                         if self.overlay_fault_addr.is_none() {
                             self.overlay_fault_addr = Some(addr);
                         }
@@ -833,7 +739,7 @@ impl CoreRuntime {
                             // Parity: overlay writes should still count as memory writes and emit Perfetto traces.
                             (*self.mem).bump_write_count();
                             let mut guard = PERFETTO_TRACER.enter();
-                            if let Some(tracer) = guard.as_mut() {
+                            guard.with_some(|tracer| {
                                 if let Some((op_idx, pc_ctx)) =
                                     crate::llama::eval::perfetto_instr_context()
                                 {
@@ -857,11 +763,11 @@ impl CoreRuntime {
                                         bits,
                                     );
                                 }
-                            }
+                            });
                             return;
                         }
                         let mut guard = PERFETTO_TRACER.enter();
-                        if let Some(tracer) = guard.as_mut() {
+                        guard.with_some(|tracer| {
                             let mut payload = std::collections::HashMap::new();
                             payload.insert(
                                 "addr".to_string(),
@@ -876,7 +782,7 @@ impl CoreRuntime {
                                 perfetto::AnnotationValue::UInt(value as u64),
                             );
                             tracer.record_irq_event("PythonOverlayMissing", payload);
-                        }
+                        });
                         if self.overlay_fault_addr.is_none() {
                             self.overlay_fault_addr = Some(addr);
                         }
@@ -897,30 +803,39 @@ impl CoreRuntime {
         for _ in 0..instructions {
             let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
+                let imr = self
+                    .memory
+                    .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                    .unwrap_or(0);
+                let isr = self
+                    .memory
+                    .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                    .unwrap_or(0);
+                let kil = self
+                    .memory
+                    .read_internal_byte_silent(IMEM_KIL_OFFSET)
+                    .unwrap_or(0);
+                let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                let pending_src = self
+                    .timer
+                    .irq_source
+                    .as_deref()
+                    .map(str::to_string)
+                    .or_else(|| {
+                        if (isr & ISR_KEYI) != 0 {
+                            Some("KEY".to_string())
+                        } else if (isr & ISR_ONKI) != 0 {
+                            Some("ONK".to_string())
+                        } else if (isr & ISR_MTI) != 0 {
+                            Some("MTI".to_string())
+                        } else if (isr & ISR_STI) != 0 {
+                            Some("STI".to_string())
+                        } else {
+                            None
+                        }
+                    });
                 let mut guard = PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
-                    let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-                    let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                    let kil = self.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0);
-                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                    let pending_src = self
-                        .timer
-                        .irq_source
-                        .as_deref()
-                        .map(str::to_string)
-                        .or_else(|| {
-                            if (isr & ISR_KEYI) != 0 {
-                                Some("KEY".to_string())
-                            } else if (isr & ISR_ONKI) != 0 {
-                                Some("ONK".to_string())
-                            } else if (isr & ISR_MTI) != 0 {
-                                Some("MTI".to_string())
-                            } else if (isr & ISR_STI) != 0 {
-                                Some("STI".to_string())
-                            } else {
-                                None
-                            }
-                        });
+                guard.with_some(|tracer| {
                     tracer.record_irq_check(
                         "IRQ_Check",
                         self.state.pc() & ADDRESS_MASK,
@@ -932,7 +847,7 @@ impl CoreRuntime {
                         Some(kil),
                         Some(imr_reg),
                     );
-                }
+                });
                 // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
                 self.refresh_key_irq_latch();
                 // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
@@ -1005,14 +920,14 @@ impl CoreRuntime {
                     }
                     self.deliver_pending_irq()?;
                     let mut guard = PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
+                    guard.with_some(|tracer| {
                         tracer.update_counters(
                             self.metadata.instruction_count,
                             self.state.call_depth(),
                             self.memory.memory_read_count(),
                             self.memory.memory_write_count(),
                         );
-                    }
+                    });
                     return Ok::<(), CoreError>(());
                 }
 
@@ -1189,7 +1104,7 @@ impl CoreRuntime {
                     // Drop any stale interrupt-stack frames (used only for bookkeeping).
                     let _ = self.timer.interrupt_stack.pop();
                     let mut guard = PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
+                    guard.with_some(|tracer| {
                         let mut payload = std::collections::HashMap::new();
                         payload.insert(
                             "pc".to_string(),
@@ -1210,22 +1125,22 @@ impl CoreRuntime {
                             );
                         }
                         payload.insert(
-                        "imr".to_string(),
-                        perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
-                    );
+                            "imr".to_string(),
+                            perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
+                        );
                         tracer.record_irq_event("IRQ_Return", payload);
-                    }
+                    });
                 }
                 self.deliver_pending_irq()?;
                 let mut guard = PERFETTO_TRACER.enter();
-                if let Some(tracer) = guard.as_mut() {
+                guard.with_some(|tracer| {
                     tracer.update_counters(
                         self.metadata.instruction_count,
                         self.state.call_depth(),
                         self.memory.memory_read_count(),
                         self.memory.memory_write_count(),
                     );
-                }
+                });
                 Ok(())
             }));
 
@@ -1428,7 +1343,7 @@ impl CoreRuntime {
                 }
             });
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             tracer.record_irq_check(
                 "IRQ_PendingCheck",
                 pc,
@@ -1453,7 +1368,7 @@ impl CoreRuntime {
                     Some(imr_reg),
                 );
             }
-        }
+        });
         if !irm_enabled {
             return Ok(());
         }
@@ -1494,7 +1409,7 @@ impl CoreRuntime {
 
         let record_stack_write = |addr: u32, bits: u8, value: u32| {
             let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let space = if MemoryImage::is_internal(addr) {
                     "internal"
                 } else {
@@ -1504,7 +1419,7 @@ impl CoreRuntime {
                 tracer.record_mem_write_with_substep(
                     op_idx, pc_trace, addr, value, space, bits, substep,
                 );
-            }
+            });
         };
         // Stack push order mirrors IR intrinsic: PC (24 LE), F, IMR.
         self.push_stack(RegName::S, pc, 24);
@@ -1530,7 +1445,7 @@ impl CoreRuntime {
         // Emit a single delivery marker (matches Python tracer).
         if src_name == "KEY" {
             let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let mut payload = std::collections::HashMap::new();
                 payload.insert(
                     "from".to_string(),
@@ -1557,7 +1472,7 @@ impl CoreRuntime {
                     perfetto::AnnotationValue::Str(src_name.to_string()),
                 );
                 tracer.record_irq_event("KeyDeliver", payload);
-            }
+            });
         }
         self.state.set_pc(vec & ADDRESS_MASK);
         self.state.set_halted(false);
@@ -1597,7 +1512,7 @@ impl CoreRuntime {
 
         // Emit an IRQ entry marker for perfetto parity with Python.
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut payload = std::collections::HashMap::new();
             payload.insert(
                 "pc".to_string(),
@@ -1674,7 +1589,7 @@ impl CoreRuntime {
                 );
             }
             tracer.record_irq_event("IRQ_Delivered", delivered);
-        }
+        });
         Ok(())
     }
 }
@@ -2382,12 +2297,12 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         rt.step(1).expect("halt idle tick");
 
-        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = PERFETTO_TRACER.enter().take() {
             let counters = tracer.test_counters.borrow().clone();
             assert!(
                 !counters.is_empty(),
@@ -2582,7 +2497,7 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         let mut rt = CoreRuntime::new();
@@ -2603,7 +2518,7 @@ mod tests {
         rt.step(1).expect("execute RETI");
 
         // Flush perfetto trace to disk before reading.
-        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = PERFETTO_TRACER.enter().take() {
             let _ = tracer.finish();
         }
 
@@ -2628,7 +2543,7 @@ mod tests {
             text.contains("src"),
             "trace should encode src annotation for IRQ"
         );
-        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = PERFETTO_TRACER.enter().take();
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2641,13 +2556,14 @@ mod tests {
 
         {
             let mut root = PERFETTO_TRACER.enter();
-            *root = Some(PerfettoTracer::new(tmp.clone()));
+            root.replace(Some(PerfettoTracer::new(tmp.clone())));
             {
                 let mut nested = PERFETTO_TRACER.enter();
-                assert!(nested.is_some(), "nested guard should see tracer");
-                if let Some(tracer) = nested.tracer_mut() {
-                    tracer.record_call_flow("NESTED", 0x10, 0x20, 1);
-                }
+                assert!(
+                    nested.with_ref(|opt| opt.is_some()),
+                    "nested guard should see tracer"
+                );
+                let _ = nested.with_some(|tracer| tracer.record_call_flow("NESTED", 0x10, 0x20, 1));
             }
             if let Some(tracer) = root.take() {
                 let _ = tracer.finish();
@@ -2667,7 +2583,7 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         let mut rt = CoreRuntime::new();
@@ -2685,7 +2601,7 @@ mod tests {
         rt.step(1).expect("tick timer and deliver MTI");
 
         // Flush perfetto trace to disk before reading.
-        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = PERFETTO_TRACER.enter().take() {
             let _ = tracer.finish();
         }
 
@@ -2703,7 +2619,7 @@ mod tests {
             text.contains("src"),
             "trace should encode src annotation for MTI"
         );
-        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = PERFETTO_TRACER.enter().take();
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2715,7 +2631,7 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         let mut lcd = LcdController::new();
@@ -2723,7 +2639,7 @@ mod tests {
         lcd.write(0x02000, 0x81); // SetPage page=1, CS=both, write
         lcd.write(0x02002, 0xAA); // Data write to both chips
 
-        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = PERFETTO_TRACER.enter().take() {
             let _ = tracer.finish();
         }
 
@@ -2741,7 +2657,7 @@ mod tests {
             text.contains("VRAM_Write"),
             "VRAM_Write data events should be traced"
         );
-        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = PERFETTO_TRACER.enter().take();
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2754,7 +2670,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("perfetto_host_overlay.perfetto-trace");
         let _ = fs::remove_file(&tmp);
         let mut guard = PERFETTO_TRACER.enter();
-        *guard = Some(PerfettoTracer::new(tmp.clone()));
+        guard.replace(Some(PerfettoTracer::new(tmp.clone())));
 
         let called = Arc::new(AtomicBool::new(false));
         let flag = called.clone();
@@ -2778,10 +2694,10 @@ mod tests {
             "E-port writes should bump memory_write_count"
         );
 
-        if let Some(tracer) = std::mem::take(&mut *guard) {
+        if let Some(tracer) = guard.take() {
             let _ = tracer.finish();
         }
-        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = PERFETTO_TRACER.enter().take();
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2793,7 +2709,7 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         let mut rt = CoreRuntime::new();
@@ -2809,7 +2725,7 @@ mod tests {
 
         rt.deliver_pending_irq().expect("deliver pending irq");
 
-        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = PERFETTO_TRACER.enter().take() {
             let _ = tracer.finish();
         }
         let buf = fs::read(&tmp).expect("read perfetto trace");
@@ -2829,14 +2745,14 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         let mut mem = MemoryImage::new();
         mem.add_ram_overlay(0x8000, 1, "ram_overlay");
         let _ = mem.store_with_pc(0x8000, 8, 0xAA, Some(0x0123));
 
-        if let Some(tracer) = std::mem::take(&mut *PERFETTO_TRACER.enter()) {
+        if let Some(tracer) = PERFETTO_TRACER.enter().take() {
             let _ = tracer.finish();
         }
         let buf = fs::read(&tmp).expect("read perfetto overlay trace");
@@ -2845,7 +2761,7 @@ mod tests {
             text.contains("ram_overlay"),
             "overlay name should be present in perfetto output"
         );
-        let _ = std::mem::take(&mut *PERFETTO_TRACER.enter());
+        let _ = PERFETTO_TRACER.enter().take();
         let _ = fs::remove_file(&tmp);
     }
 
@@ -2909,7 +2825,7 @@ mod tests {
         let _ = fs::remove_file(&tmp);
         {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(tmp.clone()));
+            guard.replace(Some(PerfettoTracer::new(tmp.clone())));
         }
 
         // Emit diagnostics without running the runtime loop.

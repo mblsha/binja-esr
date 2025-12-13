@@ -705,7 +705,7 @@ impl LlamaContractBus {
             .read_internal_byte(IMEM_IMR_OFFSET)
             .unwrap_or(self.timer.irq_imr);
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut payload = HashMap::new();
             payload.insert(
                 "pc".to_string(),
@@ -721,7 +721,7 @@ impl LlamaContractBus {
             );
             payload.insert("src".to_string(), AnnotationValue::Str("ONK".to_string()));
             tracer.record_irq_event("KeyIRQ", payload);
-        }
+        });
     }
 
     fn keyboard_press_matrix_code(&mut self, code: u8) -> PyResult<bool> {
@@ -764,7 +764,7 @@ impl LlamaContractBus {
                 .read_internal_byte(IMEM_IMR_OFFSET)
                 .unwrap_or(self.timer.irq_imr);
             let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let mut payload = HashMap::new();
                 payload.insert(
                     "imr".to_string(),
@@ -776,7 +776,7 @@ impl LlamaContractBus {
                 );
                 payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
                 tracer.record_irq_event("KeyIRQ", payload);
-            }
+            });
         }
         Ok(events > 0)
     }
@@ -992,10 +992,11 @@ impl LlamaBus for LlamaPyBus {
                 let mut tracer_ok = false;
                 if matches!(offset, IMEM_KIL_OFFSET | IMEM_KOL_OFFSET | IMEM_KOH_OFFSET) {
                     let mut guard = PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
-                        tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
-                        tracer_ok = true;
-                    }
+                    tracer_ok = guard
+                        .with_some(|tracer| {
+                            tracer.record_kio_read(Some(self.pc), offset as u8, byte as u8, None);
+                        })
+                        .is_some();
                     // Mirror into Python's dispatcher so the main Perfetto trace sees KIO reads.
                     Python::with_gil(|py| {
                         let _ = self
@@ -1666,7 +1667,7 @@ impl LlamaCpu {
                 .read_internal_byte(IMEM_IMR_OFFSET)
                 .unwrap_or(self.timer.irq_imr);
             let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let mut payload = HashMap::new();
                 payload.insert(
                     "imr".to_string(),
@@ -1678,7 +1679,7 @@ impl LlamaCpu {
                 );
                 payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
                 tracer.record_irq_event("KeyIRQ", payload);
-            }
+            });
         }
         self.sync_mirror(py);
         Ok(events > 0)
@@ -1708,7 +1709,7 @@ impl LlamaCpu {
             .read_internal_byte(IMEM_IMR_OFFSET)
             .unwrap_or(self.timer.irq_imr);
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut payload = HashMap::new();
             payload.insert(
                 "pc".to_string(),
@@ -1724,7 +1725,7 @@ impl LlamaCpu {
             );
             payload.insert("src".to_string(), AnnotationValue::Str("ONK".to_string()));
             tracer.record_irq_event("KeyIRQ", payload);
-        }
+        });
         self.sync_mirror(py);
         Ok(true)
     }
@@ -1976,11 +1977,11 @@ impl LlamaCpu {
             reset_perf_counters();
             let tracer = PerfettoTracer::new(PathBuf::from(p));
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = Some(tracer);
+            guard.replace(Some(tracer));
             println!("[perfetto-tracer] started at {}", p);
         } else {
             let mut guard = PERFETTO_TRACER.enter();
-            *guard = None;
+            guard.replace(None);
             println!("[perfetto-tracer] cleared");
         }
         Ok(())
@@ -2107,14 +2108,14 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
 
 /// Helper to emit an IRQ event from Python into the Rust tracer when available.
 #[pyfunction]
-fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
-    let mut guard = PERFETTO_TRACER.enter();
-    if let Some(tracer) = guard.as_mut() {
-        let mut converted = HashMap::new();
-        for (k, v) in payload {
-            converted.insert(k, AnnotationValue::UInt(v));
-        }
-        tracer.record_irq_event(name, converted);
+    fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
+        let mut guard = PERFETTO_TRACER.enter();
+        guard.with_some(|tracer| {
+            let mut converted = HashMap::new();
+            for (k, v) in payload {
+                converted.insert(k, AnnotationValue::UInt(v));
+            }
+            tracer.record_irq_event(name, converted);
+        });
+        Ok(())
     }
-    Ok(())
-}
