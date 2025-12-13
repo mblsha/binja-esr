@@ -2365,6 +2365,7 @@ mod tests {
     fn halt_updates_perfetto_counters_on_idle_tick() {
         use std::fs;
 
+        let _lock = perfetto_test_guard();
         let mut rt = CoreRuntime::new();
         // Enable timer so HALT idle loop produces memory traffic (ISR write).
         rt.timer.enabled = true;

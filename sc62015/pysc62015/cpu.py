@@ -59,7 +59,7 @@ def _normalise_backend_name(name: str) -> CPUBackendName:
     lowered = name.strip().lower()
     if lowered in {"py", "python"}:
         return "python"
-    if lowered in {"llama"}:
+    if lowered in {"llama", "rust", "native"}:
         return "llama"
     raise ValueError(f"Unknown SC62015 backend '{name}'")
 

@@ -1236,8 +1236,11 @@ impl LlamaExecutor {
         // Special-case RegPair-only move (e.g., opcode 0xFD)
         if entry.operands.len() == 1 {
             if let Some((dst, src, bits)) = decoded.reg_pair {
-                let mask = Self::mask_for_width(bits);
-                let val = state.get_reg(src) & mask;
+                // Parity: Python treats `MV` reg-pair as a full register move for the selected
+                // registers (e.g. `MV Y, X` copies all 24 bits). Do not mask to the operand-width
+                // annotation because opcode 0xFD uses the same encoding for 8/16/24-bit regs.
+                let _ = bits;
+                let val = state.get_reg(src);
                 state.set_reg(dst, val);
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -2676,6 +2679,15 @@ impl LlamaExecutor {
                     RegName::S
                 };
                 Self::push_stack(state, bus, sp_reg, value, bits, false);
+                if reg == RegName::IMR {
+                    // Parity: `PUSH{U,S} IMR` is used by the ROM as a critical-section
+                    // primitive. The Python emulator clears the IRM bit (bit 7) as part of the
+                    // PUSH, and the corresponding `POP{U,S} IMR` restores the original value.
+                    let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
+                    let cleared = (value & 0xFF) & 0x7F;
+                    Self::store_traced(bus, imr_addr, 8, cleared);
+                    state.set_reg(RegName::IMR, cleared);
+                }
                 let len = decoded.len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -3083,20 +3095,15 @@ mod tests {
 
         let path = std::env::temp_dir().join("llama_pref_trace.perfetto-trace");
         let _ = std::fs::remove_file(&path);
-        {
-            let mut guard = crate::PERFETTO_TRACER.enter();
-            *guard = Some(PerfettoTracer::new(path));
-        }
+        let mut guard = crate::PERFETTO_TRACER.enter();
+        *guard = Some(PerfettoTracer::new(path));
 
         let len = exec
             .execute(0x32, &mut state, &mut bus)
             .expect("execute PRE+NOP");
         assert_eq!(len, 2, "PRE + NOP should consume two bytes");
 
-        let tracer = crate::PERFETTO_TRACER
-            .enter()
-            .take()
-            .expect("tracer should be installed");
+        let tracer = guard.take().expect("tracer should be installed");
         let events = tracer.test_exec_events();
         assert!(
             !events.is_empty(),
@@ -3850,9 +3857,79 @@ mod tests {
         assert_eq!(new_sp, sp.wrapping_sub(1));
         let stored = bus.load(new_sp, 8) & 0xFF;
         let imr_after = bus.peek_imem(IMEM_IMR_OFFSET) as u32;
+        let expected_cleared = 0xAAu32 & 0x7F;
         assert_eq!(stored, 0xAA, "stack should capture IMR from memory");
-        assert_eq!(imr_after, 0xAA, "IMR in memory should be unchanged by PUSH");
+        assert_eq!(
+            imr_after, expected_cleared,
+            "PUSHU IMR should clear IRM (bit 7) after saving"
+        );
         assert_eq!(state.get_reg(RegName::IMR), imr_after);
+    }
+
+    #[test]
+    fn pushu_imr_clears_irm_and_popu_restores() {
+        let mut bus = MemBus::with_size(0x200);
+        let imr_saved: u8 = 0xAA;
+        bus.mem[IMEM_IMR_OFFSET as usize] = imr_saved;
+
+        let sp = INTERNAL_MEMORY_START + 0x40;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::U, sp);
+
+        let mut exec = LlamaExecutor::new();
+        let len_push = exec.execute(0x2F, &mut state, &mut bus).unwrap(); // PUSHU IMR
+        assert_eq!(len_push, 1);
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved & 0x7F));
+        assert_eq!(bus.peek_imem(IMEM_IMR_OFFSET), imr_saved & 0x7F);
+
+        let len_pop = exec.execute(0x3F, &mut state, &mut bus).unwrap(); // POPU IMR
+        assert_eq!(len_pop, 1);
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved));
+        assert_eq!(bus.peek_imem(IMEM_IMR_OFFSET), imr_saved);
+        assert_eq!(state.get_reg(RegName::U), sp);
+    }
+
+    #[test]
+    fn pushu_imr_clears_irm_with_perfetto_enabled() {
+        use crate::PerfettoTracer;
+
+        let mut bus = MemBus::with_size(0x200);
+        let imr_saved: u8 = 0xAA;
+        bus.mem[IMEM_IMR_OFFSET as usize] = imr_saved;
+
+        let sp = INTERNAL_MEMORY_START + 0x40;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::U, sp);
+
+        let path = std::env::temp_dir().join("llama_pushu_imr.perfetto-trace");
+        let _ = std::fs::remove_file(&path);
+        let mut guard = crate::PERFETTO_TRACER.enter();
+        *guard = Some(PerfettoTracer::new(path));
+
+        let mut exec = LlamaExecutor::new();
+        let len_push = exec.execute(0x2F, &mut state, &mut bus).unwrap(); // PUSHU IMR
+        assert_eq!(len_push, 1);
+        assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved & 0x7F));
+        assert_eq!(bus.peek_imem(IMEM_IMR_OFFSET), imr_saved & 0x7F);
+
+        let _ = guard.take();
+    }
+
+    #[test]
+    fn mv_regpair_copies_full_register_value() {
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0xFD;
+        // RegPair encoding: upper nibble selects dst, lower bits select src (bit 3 ignored).
+        // dst=Y (5), src=X (4).
+        bus.mem[1] = 0x54;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x123456);
+        state.set_reg(RegName::Y, 0);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xFD, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(state.get_reg(RegName::Y), 0x123456);
+        assert_eq!(state.pc(), 2);
     }
 
     #[test]
