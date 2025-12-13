@@ -354,7 +354,7 @@ impl KeyboardMatrix {
 
     fn log_fifo_write(addr: u32, value: u8) {
         let mut guard = crate::PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
                 (
                     crate::llama::eval::perfetto_last_instr_index(),
@@ -371,7 +371,7 @@ impl KeyboardMatrix {
                 8,
                 substep,
             );
-        }
+        });
     }
 
     pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
@@ -399,7 +399,7 @@ impl KeyboardMatrix {
                 if (isr & 0x04) == 0 {
                     memory.write_internal_byte(0xFC, isr | 0x04);
                     let mut guard = crate::PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
+                    guard.with_some(|tracer| {
                         let (seq, pc) = crate::llama::eval::perfetto_instr_context()
                             .unwrap_or_else(|| {
                                 (
@@ -417,7 +417,7 @@ impl KeyboardMatrix {
                             8,
                             substep,
                         );
-                    }
+                    });
                 }
             }
         }

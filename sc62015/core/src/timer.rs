@@ -523,7 +523,7 @@ impl TimerContext {
                 .unwrap_or(self.irq_isr);
             // Perfetto parity: emit a KeyIRQ marker with PC/cycle context.
             let mut guard = PERFETTO_TRACER.enter();
-            if let Some(tracer) = guard.as_mut() {
+            guard.with_some(|tracer| {
                 let mut payload = HashMap::new();
                 payload.insert(
                     "events".to_string(),
@@ -543,13 +543,13 @@ impl TimerContext {
                     payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
                 }
                 tracer.record_irq_event("KeyIRQ", payload);
-            }
+            });
         }
         if key_events == 0 {
             if let Some(stats) = kb_stats.as_ref() {
                 if stats.pressed > 0 {
                     let mut guard = PERFETTO_TRACER.enter();
-                    if let Some(tracer) = guard.as_mut() {
+                    guard.with_some(|tracer| {
                         let mut payload = HashMap::new();
                         payload.insert(
                             "pressed".to_string(),
@@ -568,7 +568,7 @@ impl TimerContext {
                         payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
                         payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
                         tracer.record_irq_event("KeyScanEmpty", payload);
-                    }
+                    });
                 }
             }
         }
@@ -577,7 +577,7 @@ impl TimerContext {
         // When IRQs are disabled, keep the existing latch state but avoid creating a new one.
         // Perfetto parity: emit a scan event regardless of new key events.
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut payload = HashMap::new();
             payload.insert(
                 "events".to_string(),
@@ -610,7 +610,7 @@ impl TimerContext {
             }
             payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
             tracer.record_irq_event("KeyScanEvent", payload);
-        }
+        });
         // Maintain bit-watch parity even when KEYI was already set prior to the scan.
         if should_assert {
             let _ = memory.read_internal_byte(ISR_OFFSET);
@@ -635,7 +635,7 @@ impl TimerContext {
         pc_hint: Option<u32>,
     ) {
         let mut guard = PERFETTO_TRACER.enter();
-        if let Some(tracer) = guard.as_mut() {
+        guard.with_some(|tracer| {
             let mut payload = std::collections::HashMap::new();
             payload.insert(
                 "isr".to_string(),
@@ -657,7 +657,7 @@ impl TimerContext {
             }
             // Align event naming with Python tracer ("TimerFired").
             tracer.record_irq_event("TimerFired", payload);
-        }
+        });
     }
 }
 

@@ -293,12 +293,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
-name = "lazy_static"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
 name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -631,7 +625,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "retrobus-perfetto"
 version = "0.1.0"
-source = "git+https://github.com/mblsha/retrobus-perfetto.git#99930dba00e5c4894ab0dd280f501e46bad2e7af"
+source = "git+https://github.com/mblsha/retrobus-perfetto.git#4e1bfd72069c14718ee0c31bbcd989093761a1ab"
 dependencies = [
  "anyhow",
  "perfetto-writer",
@@ -674,7 +668,6 @@ name = "sc62015-core"
 version = "0.1.0"
 dependencies = [
  "clap",
- "lazy_static",
  "retrobus-perfetto",
  "serde",
  "serde_json",

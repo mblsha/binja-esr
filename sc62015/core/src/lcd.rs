@@ -268,7 +268,7 @@ impl LcdController {
                             LcdInstruction::SetYAddress => "LCD_SET_Y_ADDRESS",
                         };
                         let mut guard = PERFETTO_TRACER.enter();
-                        if let Some(tracer) = guard.as_mut() {
+                        guard.with_some(|tracer| {
                             tracer.record_lcd_event(
                                 name,
                                 address & 0x00FF_FFFF,
@@ -279,7 +279,7 @@ impl LcdController {
                                 pc,
                                 op_index,
                             );
-                        }
+                        });
                     }
                     CommandKind::Data(data) => {
                         let page_before = chip.state.page;
@@ -287,7 +287,7 @@ impl LcdController {
                         chip.write_data(data);
                         let column = (column_before as usize % LCD_WIDTH) as u8;
                         let mut guard = PERFETTO_TRACER.enter();
-                        if let Some(tracer) = guard.as_mut() {
+                        guard.with_some(|tracer| {
                             tracer.record_lcd_event(
                                 "VRAM_Write",
                                 address & 0x00FF_FFFF,
@@ -298,7 +298,7 @@ impl LcdController {
                                 pc,
                                 op_index,
                             );
-                        }
+                        });
                     }
                 }
             }
