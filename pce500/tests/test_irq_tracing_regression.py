@@ -19,7 +19,7 @@ def _collect_imem_reads(emu: Emulator) -> list[str]:
     return reads
 
 
-def test_irq_probe_skipped_without_tracing() -> None:
+def test_irq_probe_runs_without_tracing() -> None:
     # Ensure tracer state is clean between runs.
     try:
         new_tracer.safe_stop()
@@ -34,8 +34,8 @@ def test_irq_probe_skipped_without_tracing() -> None:
     )
     reads = _collect_imem_reads(emu)
 
-    assert "IMR" not in reads
-    assert "ISR" not in reads
+    assert "IMR" in reads
+    assert "ISR" in reads
 
 
 def test_irq_probe_runs_with_tracing_enabled() -> None:
