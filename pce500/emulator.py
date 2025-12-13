@@ -421,7 +421,8 @@ class PCE500Emulator:
 
         # Peripheral adapters and IMEM callbacks
         self.peripherals = PeripheralManager(self.memory, self._scheduler)
-        self.memory.set_imem_access_callback(self._handle_imem_access)
+        self._default_imem_access_callback = self._handle_imem_access
+        self.memory.set_imem_access_callback(self._default_imem_access_callback)
         try:
             # Tap into keyboard scan events to surface KEYI progression in logs/perfetto.
             if hasattr(self.keyboard, "_matrix"):
@@ -761,48 +762,65 @@ class PCE500Emulator:
                 },
             )
 
-        # Always surface IMR/ISR snapshot each step to Perfetto to observe dispatcher state.
-        # Only run when tracing is enabled to avoid perturbing IRQ delivery in normal runs.
-        if self.perfetto_enabled or new_tracer.enabled:
+        # Always probe IMR/ISR so tests and diagnostics can observe dispatcher state, but only
+        # arm synthetic pending IRQs from the IMR/ISR snapshot while we're already in an
+        # interrupt. This prevents repeatedly re-arming the same latched ISR bit after RETI.
+        try:
+            imr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+            isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+            pc_for_irq = pc
+
+            trace_imem = False
             try:
-                imr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                pc_for_irq = pc
-                imr_probe = (
-                    self.memory.read_byte(imr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+                active_cb = getattr(self.memory, "_imem_access_callback", None)
+                trace_imem = (
+                    active_cb is not None
+                    and getattr(self, "_default_imem_access_callback", None) is not None
+                    and active_cb is not self._default_imem_access_callback
                 )
-                isr_probe = (
-                    self.memory.read_byte(isr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
-                )
-                pending_src = None
-                for b, src in (
-                    (IRQSource.KEY.value, IRQSource.KEY),
-                    (IRQSource.ONK.value, IRQSource.ONK),
-                    (IRQSource.MTI.value, IRQSource.MTI),
-                    (IRQSource.STI.value, IRQSource.STI),
-                ):
-                    if isr_probe & (1 << b):
-                        pending_src = src
-                        break
-                if not getattr(self, "_irq_pending", False):
-                    if (imr_probe & int(IMRFlag.IRM)) != 0 and (
-                        imr_probe & isr_probe
-                    ) != 0:
-                        self._irq_pending = True
-                        if pending_src is not None:
-                            self._irq_source = pending_src
-                        self._trace_irq_instant(
-                            "IRQ_PendingArm",
-                            pending_src,
-                            {
-                                "pc": pc_for_irq,
-                                "imr": imr_probe,
-                                "isr": isr_probe,
-                                "pending_src": pending_src.name
-                                if pending_src
-                                else None,
-                            },
-                        )
+            except Exception:
+                trace_imem = False
+
+            if self.perfetto_enabled or new_tracer.enabled or trace_imem:
+                imr_probe = self.memory.read_byte(imr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+                isr_probe = self.memory.read_byte(isr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+            else:
+                imr_probe = self.memory.read_byte(imr_addr_chk) & 0xFF
+                isr_probe = self.memory.read_byte(isr_addr_chk) & 0xFF
+
+            pending_src = None
+            for b, src in (
+                (IRQSource.KEY.value, IRQSource.KEY),
+                (IRQSource.ONK.value, IRQSource.ONK),
+                (IRQSource.MTI.value, IRQSource.MTI),
+                (IRQSource.STI.value, IRQSource.STI),
+            ):
+                if isr_probe & (1 << b):
+                    pending_src = src
+                    break
+
+            if (
+                getattr(self, "_in_interrupt", False)
+                and not getattr(self, "_irq_pending", False)
+                and (imr_probe & int(IMRFlag.IRM)) != 0
+                and (imr_probe & isr_probe) != 0
+            ):
+                self._irq_pending = True
+                if pending_src is not None:
+                    self._irq_source = pending_src
+                if self.perfetto_enabled or new_tracer.enabled:
+                    self._trace_irq_instant(
+                        "IRQ_PendingArm",
+                        pending_src,
+                        {
+                            "pc": pc_for_irq,
+                            "imr": imr_probe,
+                            "isr": isr_probe,
+                            "pending_src": pending_src.name if pending_src else None,
+                        },
+                    )
+
+            if self.perfetto_enabled or new_tracer.enabled:
                 self._trace_irq_instant(
                     "IRQ_Check",
                     pending_src,
@@ -815,8 +833,8 @@ class PCE500Emulator:
                         "pending_src": pending_src.name if pending_src else None,
                     },
                 )
-            except Exception:
-                pass
+        except Exception:
+            pass
         # Check for pending synthetic interrupt before executing next instruction
         if getattr(self, "_irq_pending", False) and not getattr(
             self, "_in_interrupt", False
