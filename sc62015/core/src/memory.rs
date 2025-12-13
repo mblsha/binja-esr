@@ -402,7 +402,7 @@ impl MemoryImage {
         if let Some(value) = self.load_overlay_value(address, bits, pc) {
             return Some(value);
         }
-        let bytes = (bits / 8).max(1) as usize;
+        let bytes = bits.div_ceil(8).max(1) as usize;
         let mut value = 0u32;
         for offset in 0..bytes {
             let idx = (address as usize + offset) & (EXTERNAL_SPACE - 1);
@@ -431,7 +431,7 @@ impl MemoryImage {
         if self.store_overlay_value(address, bits, value, pc).is_some() {
             return Some(());
         }
-        let bytes = (bits / 8).max(1) as usize;
+        let bytes = bits.div_ceil(8).max(1) as usize;
         if self.is_read_only_range(address, bytes as u32) {
             return Some(());
         }
@@ -673,7 +673,7 @@ impl MemoryImage {
     }
 
     pub fn load_internal_value(&self, address: u32, bits: u8) -> Option<u32> {
-        let bytes = (bits / 8).max(1) as usize;
+        let bytes = bits.div_ceil(8).max(1) as usize;
         let index = Self::internal_index(address)?;
         if index + bytes > self.internal.len() {
             return None;
@@ -827,7 +827,7 @@ impl MemoryImage {
     }
 
     pub fn store_internal_value(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
-        let bytes = (bits / 8).max(1) as usize;
+        let bytes = bits.div_ceil(8).max(1) as usize;
         let index = Self::internal_index(address)?;
         if index + bytes > self.internal.len() {
             return None;

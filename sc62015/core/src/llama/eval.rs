@@ -394,49 +394,29 @@ impl LlamaExecutor {
     fn trace_instr<B: LlamaBus>(
         &self,
         opcode: u8,
-        state: &mut LlamaState,
+        regs: &HashMap<String, u32>,
         bus: &mut B,
         instr_index: u64,
         pc_trace: u32,
     ) {
         let mut guard = PERFETTO_TRACER.enter();
-        guard.with_some(|tracer| {
-            let mut regs = HashMap::new();
+        if let Some(tracer) = guard.as_mut() {
             let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
                 (
                     bus.peek_imem_silent(IMEM_IMR_OFFSET),
                     bus.peek_imem_silent(IMEM_ISR_OFFSET),
                 )
             });
-            for (name, reg) in [
-                ("A", RegName::A),
-                ("B", RegName::B),
-                ("BA", RegName::BA),
-                ("IL", RegName::IL),
-                ("IH", RegName::IH),
-                ("I", RegName::I),
-                ("X", RegName::X),
-                ("Y", RegName::Y),
-                ("U", RegName::U),
-                ("S", RegName::S),
-                ("PC", RegName::PC),
-                ("F", RegName::F),
-                ("FC", RegName::FC),
-                ("FZ", RegName::FZ),
-                ("IMR", RegName::IMR),
-            ] {
-                regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
-            }
             tracer.record_regs(
                 instr_index,
                 pc_trace & mask_for(RegName::PC),
                 pc_trace & mask_for(RegName::PC),
                 opcode,
-                &regs,
+                regs,
                 mem_imr,
                 mem_isr,
             );
-        });
+        }
         PERF_LAST_PC.store(pc_trace, Ordering::Relaxed);
     }
 
@@ -1951,6 +1931,7 @@ impl LlamaExecutor {
         // For perfetto parity with Python, keep tracing anchored to the prefix byte/PC.
         let trace_pc_snapshot = start_pc;
         let trace_opcode_snapshot = opcode;
+        PERF_LAST_PC.store(trace_pc_snapshot, Ordering::Relaxed);
         // Execute using the resolved opcode after any PRE bytes.
         let mut exec_pc = start_pc;
         let mut exec_opcode = opcode;
@@ -1978,14 +1959,32 @@ impl LlamaExecutor {
         PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
         PERF_CURRENT_PC.store(trace_pc_snapshot, Ordering::Relaxed);
         let _ctx_guard = PerfettoContextGuard;
-        // Trace the pre-execution snapshot using the prefix PC/opcode for Python parity.
-        self.trace_instr(
-            trace_opcode_snapshot,
-            state,
-            bus,
-            instr_index,
-            trace_pc_snapshot,
-        );
+        let trace_regs = {
+            let guard = PERFETTO_TRACER.enter();
+            guard.is_some()
+        }
+        .then(|| {
+            let mut regs = HashMap::new();
+            for (name, reg) in [
+                ("A", RegName::A),
+                ("B", RegName::B),
+                ("BA", RegName::BA),
+                ("IL", RegName::IL),
+                ("IH", RegName::IH),
+                ("I", RegName::I),
+                ("X", RegName::X),
+                ("Y", RegName::Y),
+                ("U", RegName::U),
+                ("S", RegName::S),
+                ("PC", RegName::PC),
+                ("F", RegName::F),
+                ("FC", RegName::FC),
+                ("FZ", RegName::FZ),
+            ] {
+                regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
+            }
+            regs
+        });
 
         let result = match entry {
             Some(entry) => self.execute_with(
@@ -1999,6 +1998,17 @@ impl LlamaExecutor {
             ),
             None => fallback_unknown(state, prefix_len, None),
         };
+        // Parity: record InstructionTrace after executing, but using the pre-execution
+        // register snapshot (Python captures regs before execution, IMR/ISR after).
+        if let Some(regs) = trace_regs.as_ref() {
+            self.trace_instr(
+                trace_opcode_snapshot,
+                regs,
+                bus,
+                instr_index,
+                trace_pc_snapshot,
+            );
+        }
         result
     }
 
