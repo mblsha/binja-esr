@@ -782,8 +782,12 @@ class PCE500Emulator:
                 trace_imem = False
 
             if self.perfetto_enabled or new_tracer.enabled or trace_imem:
-                imr_probe = self.memory.read_byte(imr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
-                isr_probe = self.memory.read_byte(isr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+                imr_probe = (
+                    self.memory.read_byte(imr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+                )
+                isr_probe = (
+                    self.memory.read_byte(isr_addr_chk, cpu_pc=pc_for_irq) & 0xFF
+                )
             else:
                 imr_probe = self.memory.read_byte(imr_addr_chk) & 0xFF
                 isr_probe = self.memory.read_byte(isr_addr_chk) & 0xFF
