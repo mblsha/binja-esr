@@ -60,6 +60,18 @@ def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None
     return None
 
 
+def _iter_interned_entries(container: object, *field_names: str):
+    """Yield entries for the first matching repeated field name."""
+
+    for field in field_names:
+        try:
+            entries = getattr(container, field)
+        except AttributeError:
+            continue
+        return entries
+    return ()
+
+
 def _load_trace(path: Path) -> List[TraceEvent]:
     """Load and decode all TrackEvents from a Perfetto trace."""
 
@@ -75,10 +87,15 @@ def _load_trace(path: Path) -> List[TraceEvent]:
 
     for packet in trace.packet:
         if has_interned and packet.HasField("interned_data"):
-            for entry in packet.interned_data.debug_annotation_name:
+            interned = packet.interned_data
+            for entry in _iter_interned_entries(
+                interned, "debug_annotation_name", "debug_annotation_names"
+            ):
                 if entry.HasField("iid") and entry.HasField("name"):
                     name_intern[entry.iid] = entry.name
-            for entry in packet.interned_data.debug_annotation_string_value:
+            for entry in _iter_interned_entries(
+                interned, "debug_annotation_string_value", "debug_annotation_string_values"
+            ):
                 if entry.HasField("iid") and entry.HasField("string_value"):
                     value_intern[entry.iid] = entry.string_value
 
