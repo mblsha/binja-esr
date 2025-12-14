@@ -21,6 +21,18 @@
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
+	const IMEM_BASE = 0x100000;
+	const FIFO_BASE_ADDR = 0x00bfc96;
+	const FIFO_HEAD_ADDR = 0x00bfc9d;
+	const FIFO_TAIL_ADDR = 0x00bfc9e;
+
+	function isDevBuild(): boolean {
+		try {
+			return Boolean((import.meta as any)?.env?.DEV) && !Boolean((import.meta as any)?.env?.VITEST);
+		} catch {
+			return false;
+		}
+	}
 
 	function safeJson(value: any): string {
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
@@ -140,6 +152,71 @@
 		debugState = emulator.debug_state?.() ?? null;
 	}
 
+	function dumpKeyboardState(tag = 'dump') {
+		if (!emulator) {
+			console.log(`[pce500] ${tag}: emulator not ready`);
+			return;
+		}
+		try {
+			const pc = emulator.get_reg?.('PC');
+			const instr = emulator.instruction_count?.();
+			const imr = emulator.imr?.();
+			const isr = emulator.isr?.();
+			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0);
+			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1);
+			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2);
+			const fifoHead = emulator.read_u8?.(FIFO_HEAD_ADDR);
+			const fifoTail = emulator.read_u8?.(FIFO_TAIL_ADDR);
+			const fifo = Array.from({ length: 8 }, (_, i) => emulator.read_u8?.(FIFO_BASE_ADDR + i) ?? 0);
+			console.log(`[pce500] ${tag}`, {
+				pc,
+				instr,
+				imr,
+				isr,
+				kol,
+				koh,
+				kil,
+				fifoHead,
+				fifoTail,
+				fifo,
+				pressedCodes: Array.from(pressedCodes.values()),
+				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries())
+			});
+		} catch (err) {
+			console.log(`[pce500] ${tag}: dump failed`, err);
+		}
+	}
+
+	function installDevtoolsDebugHelpers() {
+		if (!isDevBuild()) return;
+		(globalThis as any).__pce500 = {
+			get emulator() {
+				return emulator;
+			},
+			dump: dumpKeyboardState,
+			step: (n: number) => stepOnce(n),
+			read: (addr: number) => emulator?.read_u8?.(addr),
+			readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
+			press: (code: number) => virtualPress(code),
+			release: (code: number) => virtualRelease(code),
+			tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				virtualPress(code);
+				stepOnce(stepCount);
+				virtualRelease(code);
+			},
+			pressPF1: () => virtualPress(0x56),
+			releasePF1: () => virtualRelease(0x56),
+			tapPF1: (stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				virtualPress(0x56);
+				stepOnce(stepCount);
+				virtualRelease(0x56);
+			}
+		};
+		console.log(
+			'[pce500] devtools helpers installed: __pce500.dump(), __pce500.tapPF1(), __pce500.readInternal(0xF2)'
+		);
+	}
+
 	$: halted = Boolean(debugState?.halted);
 	$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
 	$: pc = pcReg;
@@ -213,6 +290,7 @@
 
 	onMount(() => {
 		void tryAutoLoadRom();
+		installDevtoolsDebugHelpers();
 		window.addEventListener('keydown', onKeyDown, { passive: false });
 		window.addEventListener('keyup', onKeyUp, { passive: false });
 	});
