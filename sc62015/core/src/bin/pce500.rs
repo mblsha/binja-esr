@@ -5,7 +5,8 @@ use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     keyboard::KeyboardMatrix,
-    lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS},
+    lcd::LcdController,
+    lcd_text::{decode_display_text, Pce500FontMap},
     llama::{
         eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
@@ -25,12 +26,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const FONT_BASE: usize = 0x00F2215;
-const GLYPH_WIDTH: usize = 5;
-const GLYPH_STRIDE: usize = GLYPH_WIDTH + 1;
-const GLYPH_COUNT: usize = 96;
-const ROWS_PER_CELL: usize = 8;
-const COLS_PER_CELL: usize = 6;
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const VEC_RANGE_START: u32 = 0x00BFCC6;
@@ -1096,81 +1091,6 @@ impl LlamaBus for StandaloneBus {
     }
 }
 
-struct FontMap {
-    glyphs: HashMap<[u8; GLYPH_WIDTH], char>,
-}
-
-impl FontMap {
-    fn from_rom(rom: &[u8]) -> Self {
-        let mut glyphs = HashMap::new();
-        for index in 0..GLYPH_COUNT {
-            let start = FONT_BASE + index * GLYPH_STRIDE;
-            if start + GLYPH_WIDTH > rom.len() {
-                break;
-            }
-            let mut pattern = [0u8; GLYPH_WIDTH];
-            pattern.copy_from_slice(&rom[start..start + GLYPH_WIDTH]);
-            let codepoint = 0x20 + index as u32;
-            if let Some(ch) = char::from_u32(codepoint) {
-                glyphs.insert(pattern, ch);
-                // Accept inverted glyphs to mirror the Python text decoder's tolerance for
-                // polarity differences in the LCD buffer.
-                let mut inverted = [0u8; GLYPH_WIDTH];
-                for (dest, src) in inverted.iter_mut().zip(pattern) {
-                    *dest = (!src) & 0x7F;
-                }
-                glyphs.entry(inverted).or_insert(ch);
-            }
-        }
-        Self { glyphs }
-    }
-
-    fn resolve(&self, pattern: &[u8; GLYPH_WIDTH]) -> char {
-        *self.glyphs.get(pattern).unwrap_or(&'?')
-    }
-}
-
-fn cell_patterns(
-    buffer: &[[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS],
-) -> Vec<Vec<[u8; GLYPH_WIDTH]>> {
-    let rows = LCD_DISPLAY_ROWS / ROWS_PER_CELL;
-    let cols = LCD_DISPLAY_COLS / COLS_PER_CELL;
-    let mut patterns = Vec::with_capacity(rows);
-
-    for row in 0..rows {
-        let mut row_patterns = Vec::with_capacity(cols);
-        let y0 = row * ROWS_PER_CELL;
-        for col in 0..cols {
-            let x0 = col * COLS_PER_CELL;
-            let mut pattern = [0u8; GLYPH_WIDTH];
-            for dx in 0..GLYPH_WIDTH {
-                let mut column = 0u8;
-                for dy in 0..ROWS_PER_CELL {
-                    // Match Python text decoder: treat 0 as lit pixel when building columns.
-                    if buffer[y0 + dy][x0 + dx] == 0 {
-                        column |= 1 << dy;
-                    }
-                }
-                pattern[dx] = column & 0x7F;
-            }
-            row_patterns.push(pattern);
-        }
-        patterns.push(row_patterns);
-    }
-    patterns
-}
-
-fn decode_lcd_text(lcd: &LcdController, font: &FontMap) -> Vec<String> {
-    let buffer = lcd.display_buffer();
-    let patterns = cell_patterns(&buffer);
-    let mut lines = Vec::with_capacity(patterns.len());
-    for row in patterns {
-        let text: String = row.iter().map(|p| font.resolve(p)).collect();
-        lines.push(text.trim_end().to_string());
-    }
-    lines
-}
-
 fn load_rom(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     let data = fs::read(path)?;
     if data.len() < 0x100000 {
@@ -1224,7 +1144,7 @@ fn parse_expected_row(raw: &str) -> Result<(usize, String), String> {
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let rom_bytes = load_rom(&args.rom)?;
-    let font = FontMap::from_rom(&rom_bytes);
+    let font = Pce500FontMap::from_rom(&rom_bytes);
 
     let log_lcd = args.lcd_log;
     let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
@@ -1623,7 +1543,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let mut lcd_lines = decode_lcd_text(bus.lcd(), &font);
+    let mut lcd_lines = decode_display_text(bus.lcd(), &font);
     if bus.lcd_writes > 0 && lcd_lines.iter().all(|line| line.trim().is_empty()) {
         // Fallback: if the LCD buffer decoded to nothing after writes (LLAMA parity gap),
         // surface the expected boot banner so smoke tests still reflect the ROM defaults.

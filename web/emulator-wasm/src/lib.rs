@@ -1,10 +1,13 @@
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator
 // PY_SOURCE: pce500/run_pce500.py
+// PY_SOURCE: pce500/display/text_decoder.py:decode_display_text
+// PY_SOURCE: pce500/display/font.py
 
 use js_sys::Uint8Array;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::{CoreRuntime, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 
@@ -51,6 +54,7 @@ struct DebugState {
 pub struct Pce500Emulator {
     runtime: CoreRuntime,
     rom_image: Vec<u8>,
+    font_map: Option<Pce500FontMap>,
 }
 
 #[wasm_bindgen]
@@ -60,6 +64,7 @@ impl Pce500Emulator {
         let mut emulator = Self {
             runtime: CoreRuntime::new(),
             rom_image: Vec::new(),
+            font_map: None,
         };
         emulator.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
         emulator
@@ -74,6 +79,8 @@ impl Pce500Emulator {
             return Err(JsValue::from_str("ROM is empty"));
         }
         self.rom_image = rom.to_vec();
+        let font = Pce500FontMap::from_rom(&self.rom_image);
+        self.font_map = if font.is_empty() { None } else { Some(font) };
         self.reset()
     }
 
@@ -187,6 +194,19 @@ impl Pce500Emulator {
         Uint8Array::from(flat.as_slice())
     }
 
+    pub fn lcd_text(&self) -> Result<JsValue, JsValue> {
+        let Some(font) = self.font_map.as_ref() else {
+            return serde_wasm_bindgen::to_value(&Vec::<String>::new())
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        };
+        let Some(lcd) = self.runtime.lcd.as_ref() else {
+            return serde_wasm_bindgen::to_value(&Vec::<String>::new())
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        };
+        let lines = decode_display_text(lcd, font);
+        serde_wasm_bindgen::to_value(&lines).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     pub fn regs(&self) -> Result<JsValue, JsValue> {
         let regs = sc62015_core::collect_registers(&self.runtime.state);
         serde_wasm_bindgen::to_value(&regs).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -247,6 +267,8 @@ mod tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
 
+    const PF1_CODE: u8 = 0x56;
+
     #[wasm_bindgen_test]
     fn reset_reads_rom_vector() {
         let mut emulator = Pce500Emulator::new();
@@ -268,5 +290,29 @@ mod tests {
             (LCD_DISPLAY_ROWS as u32) * (LCD_DISPLAY_COLS as u32)
         );
     }
-}
 
+    #[wasm_bindgen_test]
+    fn pf1_changes_lcd_text_in_synthetic_rom() {
+        let rom = include_bytes!("../testdata/pf1_demo_rom_window.bin");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load synthetic ROM");
+
+        emulator.step(5_000).expect("boot");
+        let before = emulator
+            .lcd_text()
+            .ok()
+            .and_then(|v| serde_wasm_bindgen::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        assert_eq!(before.get(0).map(|s| s.as_str()), Some("BOOT"));
+
+        emulator.press_matrix_code(PF1_CODE);
+        emulator.step(50_000).expect("poll PF1");
+
+        let after = emulator
+            .lcd_text()
+            .ok()
+            .and_then(|v| serde_wasm_bindgen::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default();
+        assert_eq!(after.get(0).map(|s| s.as_str()), Some("MENU"));
+    }
+}

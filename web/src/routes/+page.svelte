@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
+	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 	import { matrixCodeForKeyEvent } from '$lib/keymap';
 
 	let wasm: any = null;
 	let emulator: any = null;
 
 	let lcdPixels: Uint8Array | null = null;
+	let lcdText: string[] | null = null;
 	let debugState: any = null;
 	let lastError: string | null = null;
+	let romSource: string | null = null;
 
 	let running = false;
 	let instructionsPerFrame = 20_000;
@@ -30,9 +33,25 @@
 		return emulator;
 	}
 
+	async function tryAutoLoadRom() {
+		if (emulator?.has_rom?.()) return;
+		try {
+			const res = await fetch('/api/rom');
+			if (!res.ok) return;
+			romSource = res.headers.get('x-rom-source');
+			const bytes = new Uint8Array(await res.arrayBuffer());
+			const emu = await ensureEmulator();
+			emu.load_rom(bytes);
+			refresh();
+		} catch (err) {
+			lastError = `Auto-load failed: ${String(err)}`;
+		}
+	}
+
 	function refresh() {
 		if (!emulator) return;
 		lcdPixels = emulator.lcd_pixels();
+		lcdText = emulator.lcd_text?.() ?? null;
 		debugState = emulator.debug_state();
 	}
 
@@ -99,6 +118,7 @@
 	}
 
 	onMount(() => {
+		void tryAutoLoadRom();
 		window.addEventListener('keydown', onKeyDown, { passive: false });
 		window.addEventListener('keyup', onKeyUp, { passive: false });
 	});
@@ -117,6 +137,10 @@
 		<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
 	</label>
 
+	{#if romSource}
+		<p class="hint">Auto-loaded ROM via {romSource}</p>
+	{/if}
+
 	<div class="controls">
 		<button on:click={() => stepOnce(1_000)} disabled={!emulator}>Step 1k</button>
 		<button on:click={() => stepOnce(20_000)} disabled={!emulator}>Step 20k</button>
@@ -130,6 +154,19 @@
 
 	<LcdCanvas pixels={lcdPixels} />
 
+	<VirtualKeyboard
+		disabled={!emulator}
+		onPress={(code) => emulator?.press_matrix_code?.(code)}
+		onRelease={(code) => emulator?.release_matrix_code?.(code)}
+	/>
+
+	{#if lcdText}
+		<details open>
+			<summary>LCD (decoded text)</summary>
+			<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
+		</details>
+	{/if}
+
 	{#if lastError}
 		<p class="error">{lastError}</p>
 	{/if}
@@ -142,7 +179,7 @@
 	{/if}
 
 	<p class="hint">
-		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys).
+		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.
 	</p>
 </main>
 
