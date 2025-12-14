@@ -1,17 +1,24 @@
 // PY_SOURCE: pce500/emulator.py:save_snapshot
 // PY_SOURCE: pce500/emulator.py:load_snapshot
 
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use crate::memory::{
     MemoryImage, INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
 };
 use crate::{CoreError, Result, SnapshotMetadata};
 use serde::Deserialize;
 use std::collections::HashMap;
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use std::fs::File;
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use std::io::{Read, Write};
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use std::path::Path;
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use zip::read::ZipArchive;
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use zip::write::FileOptions;
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use zip::{CompressionMethod, ZipWriter};
 
 pub const SNAPSHOT_MAGIC: &str = "pc-e500.snapshot";
@@ -102,6 +109,7 @@ pub fn unpack_registers(payload: &[u8]) -> Result<HashMap<String, u32>> {
     Ok(regs)
 }
 
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub fn save_snapshot(
     path: &Path,
     metadata: &SnapshotMetadata,
@@ -158,6 +166,7 @@ pub fn save_snapshot(
     Ok(())
 }
 
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub fn load_snapshot(path: &Path, memory: &mut MemoryImage) -> Result<SnapshotLoad> {
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file)?;
