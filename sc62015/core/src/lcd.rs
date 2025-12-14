@@ -10,6 +10,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 const LCD_WIDTH: usize = 64;
 const LCD_PAGES: usize = 8;
@@ -69,6 +70,14 @@ impl Default for Hd61202Chip {
 pub struct LcdWriteTrace {
     pub pc: u32,
     pub call_stack: PerfettoCallStack,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct LcdDisplayWrite {
+    pub page: u8,
+    pub col: u16,
+    pub value: u8,
+    pub trace: LcdWriteTrace,
 }
 
 impl Hd61202Chip {
@@ -214,6 +223,7 @@ pub struct LcdController {
     cs_left_count: u32,
     cs_right_count: u32,
     last_status: Option<u8>,
+    display_write_capture: Option<HashMap<u16, LcdDisplayWrite>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -234,6 +244,7 @@ impl LcdController {
             cs_left_count: 0,
             cs_right_count: 0,
             last_status: None,
+            display_write_capture: None,
         }
     }
 
@@ -243,6 +254,46 @@ impl LcdController {
         self.cs_left_count = 0;
         self.cs_right_count = 0;
         self.last_status = None;
+        self.display_write_capture = None;
+    }
+
+    pub fn begin_display_write_capture(&mut self) {
+        self.display_write_capture = Some(HashMap::new());
+    }
+
+    pub fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite> {
+        let Some(map) = self.display_write_capture.take() else {
+            return Vec::new();
+        };
+        let mut out: Vec<LcdDisplayWrite> = map.into_values().collect();
+        out.sort_by_key(|ev| ((ev.page as u32) << 16) | (ev.col as u32));
+        out
+    }
+
+    fn record_display_write_capture(
+        &mut self,
+        chip_index: usize,
+        page: u8,
+        chip_col: u8,
+        value: u8,
+        trace: LcdWriteTrace,
+    ) {
+        let Some(map) = self.display_write_capture.as_mut() else {
+            return;
+        };
+        let Some(display_col) = map_chip_col_to_display_col(chip_index, page, chip_col) else {
+            return;
+        };
+        let key = ((page as u16) << 8) | (display_col & 0xFF);
+        map.insert(
+            key,
+            LcdDisplayWrite {
+                page,
+                col: display_col,
+                value,
+                trace,
+            },
+        );
     }
 
     fn chip_indices(cs: ChipSelect) -> &'static [usize] {
@@ -304,6 +355,7 @@ impl LcdController {
                         let column_before = chip.state.y_address;
                         chip.write_data(data, trace);
                         let column = (column_before as usize % LCD_WIDTH) as u8;
+                        self.record_display_write_capture(*idx, page_before, column, data, trace);
                         let mut guard = PERFETTO_TRACER.enter();
                         guard.with_some(|tracer| {
                             tracer.record_lcd_event(
@@ -618,6 +670,24 @@ fn copy_vram_region(
     }
 }
 
+fn map_chip_col_to_display_col(chip_index: usize, page: u8, chip_col: u8) -> Option<u16> {
+    let page = (page as usize) % LCD_PAGES;
+    let chip_col = (chip_col as usize) % LCD_WIDTH;
+    if page < 4 {
+        match chip_index {
+            1 => Some(chip_col as u16),
+            0 if chip_col < 56 => Some((64 + chip_col) as u16),
+            _ => None,
+        }
+    } else {
+        match chip_index {
+            0 if chip_col < 56 => Some((120 + (55 - chip_col)) as u16),
+            1 => Some((176 + (63 - chip_col)) as u16),
+            _ => None,
+        }
+    }
+}
+
 impl Default for LcdController {
     fn default() -> Self {
         Self::new()
@@ -708,5 +778,48 @@ mod tests {
         // Verify write landed in VRAM for both chips at y=0 page 0.
         assert_eq!(lcd.chips[0].vram[0][0], 0xAA);
         assert_eq!(lcd.chips[1].vram[0][0], 0xAA);
+    }
+
+    #[test]
+    fn display_write_capture_records_display_mapped_coordinates() {
+        let mut lcd = LcdController::new();
+        lcd.begin_display_write_capture();
+
+        // Left chip instruction port: 0x2000 + cs(Left=0b10)<<2 + di(Instruction=0)<<1 + rw(Write=0)
+        let left_instr = 0x2008;
+        // Left chip data port: same but di(Data=1)
+        let left_data = 0x200A;
+
+        // Set page=1, y=0, then write one byte.
+        lcd.write(left_instr, 0x80 | 0x01);
+        lcd.write(left_instr, 0x40 | 0x00);
+        lcd.write(left_data, 0xAA);
+
+        let events = lcd.take_display_write_capture();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].page, 1);
+        // For page<4: left chip columns 0..55 map to display columns 64..119.
+        assert_eq!(events[0].col, 64);
+        assert_eq!(events[0].value, 0xAA);
+    }
+
+    #[test]
+    fn display_write_capture_keeps_only_last_value_per_addressing_point() {
+        let mut lcd = LcdController::new();
+        lcd.begin_display_write_capture();
+
+        let left_instr = 0x2008;
+        let left_data = 0x200A;
+
+        lcd.write(left_instr, 0x80 | 0x01);
+        lcd.write(left_instr, 0x40 | 0x00);
+        lcd.write(left_data, 0x11);
+        // Rewind y back to 0 and overwrite.
+        lcd.write(left_instr, 0x40 | 0x00);
+        lcd.write(left_data, 0x22);
+
+        let events = lcd.take_display_write_capture();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].value, 0x22);
     }
 }

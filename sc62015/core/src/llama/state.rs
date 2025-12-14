@@ -31,6 +31,14 @@ pub struct LlamaState {
     call_stack: Vec<u32>,
 }
 
+#[derive(Clone, Debug)]
+pub struct CallMetricsSnapshot {
+    pub call_stack: Vec<u32>,
+    pub call_depth: u32,
+    pub call_sub_level: u32,
+    pub call_page_stack: Vec<u32>,
+}
+
 impl LlamaState {
     pub fn new() -> Self {
         Self {
@@ -225,6 +233,22 @@ impl LlamaState {
         self.call_sub_level = 0;
         self.call_page_stack.clear();
         self.call_stack.clear();
+    }
+
+    pub fn snapshot_call_metrics(&self) -> CallMetricsSnapshot {
+        CallMetricsSnapshot {
+            call_stack: self.call_stack.clone(),
+            call_depth: self.call_depth,
+            call_sub_level: self.call_sub_level,
+            call_page_stack: self.call_page_stack.clone(),
+        }
+    }
+
+    pub fn restore_call_metrics(&mut self, snapshot: CallMetricsSnapshot) {
+        self.call_stack = snapshot.call_stack;
+        self.call_depth = snapshot.call_depth;
+        self.call_sub_level = snapshot.call_sub_level;
+        self.call_page_stack = snapshot.call_page_stack;
     }
 }
 

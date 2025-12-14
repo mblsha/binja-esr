@@ -8,6 +8,7 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
+use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::pce500::{
     load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
@@ -46,6 +47,35 @@ struct DebugState {
     isr: u8,
     timer: TimerState,
     irq: IrqState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MemoryWriteByte {
+    addr: u32,
+    value: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CallReport {
+    reason: String,
+    steps: u32,
+    pc: u32,
+    sp: u32,
+    halted: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CallArtifacts {
+    address: u32,
+    before_pc: u32,
+    after_pc: u32,
+    before_sp: u32,
+    after_sp: u32,
+    before_regs: std::collections::HashMap<String, u32>,
+    after_regs: std::collections::HashMap<String, u32>,
+    memory_writes: Vec<MemoryWriteByte>,
+    lcd_writes: Vec<sc62015_core::lcd::LcdDisplayWrite>,
+    report: CallReport,
 }
 
 #[wasm_bindgen]
@@ -180,6 +210,107 @@ impl Pce500Emulator {
         self.runtime.timer.mti_period = mti_period;
         self.runtime.timer.sti_period = sti_period;
         self.runtime.timer.reset(self.runtime.cycle_count());
+    }
+
+    /// Run a ROM function at `addr` with a bounded instruction budget, capturing last-value
+    /// memory writes and display-mapped LCD writes performed during the run.
+    ///
+    /// Notes:
+    /// - This is a debugging helper for the web UI; it restores PC/SP/call-metrics on exit so
+    ///   the harness does not perturb subsequent execution.
+    /// - The function is entered by setting `PC=addr` and pushing a sentinel return address
+    ///   onto the S stack; the loop stops when execution returns to that sentinel PC.
+    pub fn call_function(&mut self, addr: u32, max_instructions: u32) -> Result<JsValue, JsValue> {
+        let addr = addr & 0x000f_ffff;
+        let max_instructions = max_instructions.max(1);
+        let before_pc = self.runtime.state.pc();
+        let before_sp = self.runtime.state.get_reg(RegName::S);
+        let before_call_metrics = self.runtime.state.snapshot_call_metrics();
+        let before_regs = sc62015_core::collect_registers(&self.runtime.state);
+
+        let sentinel_low16: u32 = 0xD00D;
+        let sentinel_pc = ((addr & 0x0f_0000) | sentinel_low16) & 0x000f_ffff;
+
+        // Push a 24-bit sentinel return address (little-endian) onto the S stack.
+        let new_sp = before_sp.wrapping_sub(3) & 0x00ff_ffff;
+        for i in 0..3u32 {
+            let byte = ((sentinel_pc >> (8 * i)) & 0xff) as u32;
+            let _ = self.runtime.memory.store(new_sp.wrapping_add(i), 8, byte);
+        }
+        self.runtime.state.set_reg(RegName::S, new_sp);
+        // Bookkeeping for call-stack tracing; RET/RETF will unwind this.
+        self.runtime.state.push_call_stack(addr);
+        self.runtime.state.call_depth_inc();
+
+        // Enable last-value write capture.
+        self.runtime.memory.begin_write_capture();
+        if let Some(lcd) = self.runtime.lcd.as_mut() {
+            lcd.begin_display_write_capture();
+        }
+
+        // Enter the function.
+        self.runtime.state.set_pc(addr);
+
+        let mut steps: u32 = 0;
+        let mut reason = "timeout".to_string();
+        while steps < max_instructions {
+            if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
+                reason = "halted".to_string();
+                break;
+            }
+            self.runtime
+                .step(1)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            steps += 1;
+            if self.runtime.state.pc() == sentinel_pc {
+                reason = "returned".to_string();
+                break;
+            }
+        }
+
+        let after_pc = self.runtime.state.pc();
+        let after_sp = self.runtime.state.get_reg(RegName::S);
+        let memory_writes = self
+            .runtime
+            .memory
+            .take_write_capture()
+            .into_iter()
+            .map(|(addr, value)| MemoryWriteByte { addr, value })
+            .collect();
+        let lcd_writes = self
+            .runtime
+            .lcd
+            .as_mut()
+            .map(|lcd| lcd.take_display_write_capture())
+            .unwrap_or_default();
+
+        // Restore state so the harness does not leave a sentinel PC/SP or call metrics behind.
+        self.runtime.state.set_pc(before_pc);
+        self.runtime.state.set_reg(RegName::S, before_sp);
+        self.runtime.state.restore_call_metrics(before_call_metrics);
+
+        let after_regs = sc62015_core::collect_registers(&self.runtime.state);
+
+        let report = CallReport {
+            reason,
+            steps,
+            pc: after_pc,
+            sp: after_sp,
+            halted: self.runtime.state.is_halted(),
+        };
+        let artifacts = CallArtifacts {
+            address: addr,
+            before_pc,
+            after_pc,
+            before_sp,
+            after_sp,
+            before_regs,
+            after_regs,
+            memory_writes,
+            lcd_writes,
+            report,
+        };
+        serde_wasm_bindgen::to_value(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn lcd_pixels(&self) -> Uint8Array {

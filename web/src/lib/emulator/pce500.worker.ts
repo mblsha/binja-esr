@@ -13,6 +13,7 @@ type WorkerRequest =
 	| { id: number; type: 'stop' }
 	| { id: number; type: 'snapshot' }
 	| { id: number; type: 'lcd_trace' }
+	| { id: number; type: 'eval_js'; source: string }
 	| { id: number; type: 'set_options'; targetFps?: number; debug?: Partial<DebugOptions> }
 	| { id: number; type: 'virtual_key'; code: number; down: boolean }
 	| { id: number; type: 'physical_key'; code: number; down: boolean };
@@ -84,6 +85,34 @@ const pendingVirtualRelease = new Map<number, number>();
 
 function safeJson(value: any): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
+}
+
+async function evalScript(source: string): Promise<any> {
+	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
+	const { runUserJs } = await import('../debug/run_user_js');
+	const api = createEvalApi({
+		callFunction: async (address: number, maxInstructions: number) =>
+			Promise.resolve(emulator.call_function(address, maxInstructions)),
+		getReg: (name: string) => emulator.get_reg?.(name) ?? 0,
+		setReg: (name: string, value: number) => emulator.set_reg?.(name, value),
+		read8: (addr: number) => emulator.read_u8?.(addr) ?? 0,
+		write8: (addr: number, value: number) => emulator.write_u8?.(addr, value)
+	});
+	let resultJson: string | null = null;
+	let error: string | null = null;
+	try {
+		const result = await runUserJs(source, api, Reg, Flag);
+		resultJson = safeJson(result);
+	} catch (err) {
+		error = err instanceof Error ? err.message : String(err);
+	}
+	return {
+		events: api.events,
+		calls: api.calls,
+		prints: api.prints,
+		resultJson,
+		error
+	};
 }
 
 async function ensureEmulator(): Promise<any> {
@@ -304,6 +333,12 @@ async function handleRequest(msg: WorkerRequest) {
 				await ensureEmulator();
 				const trace = emulator.lcd_trace?.() ?? null;
 				replyOk(msg.id, trace);
+				return;
+			}
+			case 'eval_js': {
+				await ensureEmulator();
+				const res = await evalScript(msg.source);
+				replyOk(msg.id, res);
 				return;
 			}
 			case 'start': {

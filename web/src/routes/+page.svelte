@@ -3,6 +3,9 @@
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 		import { matrixCodeForKeyEvent } from '$lib/keymap';
+		import { createEvalApi, Flag, Reg, type CallHandle } from '$lib/debug/sc62015_eval_api';
+		import { formatAddress } from '$lib/debug/memory_write_blocks';
+		import { runUserJs } from '$lib/debug/run_user_js';
 
 		let wasm: any = null;
 		let emulator: any = null;
@@ -28,6 +31,22 @@
 
 	let running = false;
 	let targetFps = 30;
+
+	let functionRunnerOpen = false;
+	let functionSource = `// Example:
+// const handle = await e.call(0x00F2A87);
+// e.print(handle.artifacts.result);
+`;
+	let functionRunnerBusy = false;
+	let functionRunnerOutput:
+		| {
+				events: any[];
+				calls: CallHandle[];
+				prints: any[];
+				resultJson: string | null;
+				error: string | null;
+		  }
+		| null = null;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
@@ -163,6 +182,55 @@
 
 	function safeJson(value: any): string {
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
+	}
+
+	async function runFunctionRunner() {
+		if (!romLoaded) return;
+		functionRunnerBusy = true;
+		functionRunnerOutput = null;
+		try {
+			await ensureWorker();
+			if (worker) {
+				functionRunnerOutput = await workerCall('eval_js', { source: functionSource });
+				return;
+			}
+
+			const emu = await ensureEmulator();
+			const api = createEvalApi({
+				callFunction: async (address: number, maxInstructions: number) =>
+					Promise.resolve(emu.call_function(address, maxInstructions)),
+				getReg: (name: string) => emu.get_reg?.(name) ?? 0,
+				setReg: (name: string, value: number) => emu.set_reg?.(name, value),
+				read8: (addr: number) => emu.read_u8?.(addr) ?? 0,
+				write8: (addr: number, value: number) => emu.write_u8?.(addr, value)
+			});
+
+			let resultJson: string | null = null;
+			let error: string | null = null;
+			try {
+				const result = await runUserJs(functionSource, api, Reg, Flag);
+				resultJson = safeJson(result);
+			} catch (err) {
+				error = err instanceof Error ? err.message : String(err);
+			}
+			functionRunnerOutput = {
+				events: api.events,
+				calls: api.calls,
+				prints: api.prints,
+				resultJson,
+				error
+			};
+		} catch (err) {
+			functionRunnerOutput = {
+				events: [],
+				calls: [],
+				prints: [],
+				resultJson: null,
+				error: err instanceof Error ? err.message : String(err)
+			};
+		} finally {
+			functionRunnerBusy = false;
+		}
 	}
 
 	function hex(value: number | null | undefined, width = 5): string {
@@ -821,6 +889,96 @@
 				</details>
 			{/if}
 
+			{#if romLoaded}
+				<details bind:open={functionRunnerOpen}>
+					<summary>Debug (function runner)</summary>
+					<div class="debug-row">
+						<button
+							type="button"
+							on:click={() => runFunctionRunner()}
+							disabled={!romLoaded || functionRunnerBusy}
+						>
+							{functionRunnerBusy ? 'Running…' : 'Run script'}
+						</button>
+						<button
+							type="button"
+							on:click={() => (functionRunnerOutput = null)}
+							disabled={functionRunnerBusy}
+						>
+							Clear
+						</button>
+					</div>
+					<textarea
+						class="editor"
+						rows="10"
+						bind:value={functionSource}
+						placeholder="Write async JS here. Available: e (Eval API), Reg, Flag."
+					></textarea>
+
+					{#if functionRunnerOutput?.error}
+						<p class="error">Script error: {functionRunnerOutput.error}</p>
+					{/if}
+
+					{#if functionRunnerOutput?.prints?.length}
+						<details open>
+							<summary>Prints ({functionRunnerOutput.prints.length})</summary>
+							<pre class="log" data-testid="function-runner-prints">
+{safeJson(functionRunnerOutput.prints.map((p) => p.value))}</pre
+							>
+						</details>
+					{/if}
+
+					{#if functionRunnerOutput?.calls?.length}
+						<details open>
+							<summary>Calls ({functionRunnerOutput.calls.length})</summary>
+							{#each functionRunnerOutput.calls as call (call.index)}
+								<div class="call">
+									<div class="call-title">
+										<strong>{call.name ?? formatFunction(call.address)}</strong>
+										({formatAddress(call.address)})
+									</div>
+									<div class="hint">{call.artifacts.infoLog.join(' • ')}</div>
+									{#if call.artifacts.changed.length}
+										<div class="hint">Changed regs: {call.artifacts.changed.join(', ')}</div>
+									{/if}
+									{#if call.artifacts.memoryBlocks.length}
+										<details>
+											<summary>Memory writes ({call.artifacts.memoryBlocks.length} block(s))</summary>
+											{#each call.artifacts.memoryBlocks as block (block.start)}
+												<pre class="log">
+{formatAddress(block.start)}:
+{block.lines.join('\n')}</pre
+												>
+											{/each}
+										</details>
+									{/if}
+									{#if call.artifacts.lcdWrites.length}
+										<details>
+											<summary>LCD writes ({call.artifacts.lcdWrites.length})</summary>
+											<pre class="log">
+{call.artifacts.lcdWrites
+	.slice(0, 64)
+	.map((w) => `page=${w.page} col=${w.col} val=${hex(w.value, 2)} pc=${hex(w.trace.pc, 6)}`)
+	.join('\n')}{call.artifacts.lcdWrites.length > 64 ? '\n…' : ''}</pre
+											>
+										</details>
+									{/if}
+								</div>
+							{/each}
+						</details>
+					{:else if functionRunnerOutput}
+						<p class="hint">No function calls executed.</p>
+					{/if}
+
+					{#if functionRunnerOutput?.resultJson}
+						<details>
+							<summary>Return value (JSON)</summary>
+							<pre class="log">{functionRunnerOutput.resultJson}</pre>
+						</details>
+					{/if}
+				</details>
+			{/if}
+
 	<p class="hint">
 		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.
 	</p>
@@ -900,5 +1058,26 @@
 	.log {
 		margin: 8px 0 0;
 		max-height: 200px;
+	}
+
+	.editor {
+		width: 100%;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+		background: #0c0f12;
+		color: #dbe7ff;
+		border: 1px solid #243041;
+		border-radius: 8px;
+		padding: 12px;
+	}
+
+	.call {
+		border: 1px solid #243041;
+		border-radius: 8px;
+		padding: 10px;
+		margin: 10px 0;
+	}
+
+	.call-title {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 	}
 	</style>
