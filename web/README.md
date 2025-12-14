@@ -14,6 +14,11 @@ npm ci
 npm run dev
 ```
 
+`npm run dev` listens on all interfaces (`0.0.0.0`) so you can connect via LAN/public IPs. To restrict it back to localhost, run `npm run dev -- --host 127.0.0.1`.
+
+If you access the dev server via a hostname (e.g. `vibe-qemu2.local`) and see a “host is not allowed” error, set `VITE_ALLOWED_HOSTS` (comma-separated) or set it to `true` to allow any Host header:
+`VITE_ALLOWED_HOSTS=vibe-qemu2.local npm run dev`
+
 Open the dev server, then use the ROM file picker.
 
 ## Build
