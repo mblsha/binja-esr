@@ -72,6 +72,28 @@ def _iter_interned_entries(container: object, *field_names: str):
     return ()
 
 
+def _interned_iid(entry: object) -> int | None:
+    if not hasattr(entry, "DESCRIPTOR"):
+        return None
+    descriptor = entry.DESCRIPTOR
+    if "iid" not in descriptor.fields_by_name:
+        return None
+    return entry.iid
+
+
+def _interned_string(entry: object, *field_names: str) -> str | None:
+    if not hasattr(entry, "DESCRIPTOR"):
+        return None
+    descriptor = entry.DESCRIPTOR
+    for field in field_names:
+        if field not in descriptor.fields_by_name:
+            continue
+        value = getattr(entry, field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _load_trace(path: Path) -> List[TraceEvent]:
     """Load and decode all TrackEvents from a Perfetto trace."""
 
@@ -91,13 +113,19 @@ def _load_trace(path: Path) -> List[TraceEvent]:
             for entry in _iter_interned_entries(
                 interned, "debug_annotation_name", "debug_annotation_names"
             ):
-                if entry.HasField("iid") and entry.HasField("name"):
-                    name_intern[entry.iid] = entry.name
+                iid = _interned_iid(entry)
+                name = _interned_string(entry, "name", "str", "string_value")
+                if iid and name:
+                    name_intern[iid] = name
             for entry in _iter_interned_entries(
-                interned, "debug_annotation_string_value", "debug_annotation_string_values"
+                interned,
+                "debug_annotation_string_value",
+                "debug_annotation_string_values",
             ):
-                if entry.HasField("iid") and entry.HasField("string_value"):
-                    value_intern[entry.iid] = entry.string_value
+                iid = _interned_iid(entry)
+                value = _interned_string(entry, "string_value", "str", "name")
+                if iid and value:
+                    value_intern[iid] = value
 
         if packet.HasField("track_descriptor"):
             desc = packet.track_descriptor
