@@ -4,6 +4,7 @@
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_text;
+pub mod pce500;
 pub mod llama;
 pub mod memory;
 pub mod perfetto;
