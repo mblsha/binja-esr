@@ -181,17 +181,21 @@
 		return null;
 	}
 
-	function regsEntries(input: any): [string, number][] {
-		if (!input) return [];
-		try {
-			if (typeof input.entries === 'function') {
-				return Array.from(input.entries()).filter(
+		function regsEntries(input: any): [string, number][] {
+			if (!input) return [];
+			try {
+				if (typeof input.entries === 'function') {
+					return (Array.from(input.entries()) as [unknown, unknown][]).filter(
+						(entry): entry is [string, number] =>
+							Array.isArray(entry) &&
+							entry.length === 2 &&
+							typeof entry[0] === 'string' &&
+							typeof entry[1] === 'number'
+					);
+				}
+				return Object.entries(input).filter(
 					([k, v]) => typeof k === 'string' && typeof v === 'number'
-				);
-			}
-			return Object.entries(input).filter(
-				([k, v]) => typeof k === 'string' && typeof v === 'number'
-			) as [string, number][];
+				) as [string, number][];
 		} catch {
 			return [];
 		}

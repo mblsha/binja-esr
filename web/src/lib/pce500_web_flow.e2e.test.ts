@@ -52,7 +52,7 @@ describe('PC-E500 web emulator', () => {
 			const url = asFetchUrl(input);
 
 			if (url === '/api/rom' || url.endsWith('/api/rom')) {
-				return new Response(romBytes, {
+				return new Response(romBytes as any, {
 					status: 200,
 					headers: {
 						'content-type': 'application/octet-stream',
@@ -64,7 +64,7 @@ describe('PC-E500 web emulator', () => {
 
 			if (url.endsWith('pce500_wasm_bg.wasm')) {
 				const wasmBytes = await loadWasmBytes(url);
-				return new Response(wasmBytes, {
+				return new Response(wasmBytes as any, {
 					status: 200,
 					headers: {
 						'content-type': 'application/wasm',
