@@ -20,6 +20,7 @@
 
 	let running = false;
 	let targetFps = 30;
+	let turbo = false;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
@@ -39,9 +40,9 @@
 	$: targetFrameIntervalMs = 1000 / Math.max(1, targetFps);
 
 	const RUN_SLICE_MIN_INSTRUCTIONS = 1;
-	const RUN_SLICE_MAX_INSTRUCTIONS = 20_000;
-	const RUN_SLICE_TARGET_MS = 0.4;
-	const RUN_MAX_WORK_MS = 4;
+	const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
+	$: runSliceTargetMs = turbo ? 1.5 : 0.4;
+	$: runMaxWorkMs = turbo ? 12 : 4;
 	const RUN_YIELD_MS = 0;
 	let runLoopId = 0;
 	let runSliceInstructions = 2000;
@@ -365,12 +366,12 @@
 		if (!running || !emulator || id !== runLoopId) return;
 		const startMs = performance.now();
 		try {
-			while (performance.now() - startMs < RUN_MAX_WORK_MS) {
+			while (performance.now() - startMs < runMaxWorkMs) {
 				const sliceStart = performance.now();
 				stepCore(runSliceInstructions);
 				const sliceMs = performance.now() - sliceStart;
 				if (sliceMs > 0) {
-					const scaled = Math.floor(runSliceInstructions * (RUN_SLICE_TARGET_MS / sliceMs));
+					const scaled = Math.floor(runSliceInstructions * (runSliceTargetMs / sliceMs));
 					runSliceInstructions = Math.max(
 						RUN_SLICE_MIN_INSTRUCTIONS,
 						Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled)
@@ -479,6 +480,10 @@
 			<label>
 				Target FPS:
 				<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
+			</label>
+			<label>
+				<input type="checkbox" bind:checked={turbo} />
+				Turbo
 			</label>
 		</div>
 
