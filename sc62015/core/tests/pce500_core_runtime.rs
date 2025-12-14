@@ -37,7 +37,7 @@ fn pce500_boots_and_decodes_lcd_text_via_core_runtime() {
     let lcd = rt.lcd.as_ref().expect("lcd present");
     let lines = decode_display_text(lcd, &font);
     assert!(
-        lines.get(0).is_some_and(|s| s.contains("S2(CARD):NEW CARD")),
+        lines.first().is_some_and(|s| s.contains("S2(CARD):NEW CARD")),
         "expected boot header in row 0, got {lines:?}"
     );
     assert!(
@@ -84,7 +84,7 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
     let lcd = rt.lcd.as_ref().expect("lcd present");
     let lines = decode_display_text(lcd, &font);
     assert!(
-        lines.get(0).is_some_and(|s| s.contains("S1(MAIN):NEW CARD")),
+        lines.first().is_some_and(|s| s.contains("S1(MAIN):NEW CARD")),
         "expected main menu header after PF1, got {lines:?}"
     );
 }
