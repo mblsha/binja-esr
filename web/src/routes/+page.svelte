@@ -9,6 +9,8 @@
 
 	let lcdPixels: Uint8Array | null = null;
 	let lcdText: string[] | null = null;
+	let regs: Record<string, number> | null = null;
+	let callStack: number[] | null = null;
 	let debugState: any = null;
 	let lastError: string | null = null;
 	let romSource: string | null = null;
@@ -18,6 +20,15 @@
 
 	function safeJson(value: any): string {
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
+	}
+
+	function hex(value: number | null | undefined, width = 5): string {
+		if (value === null || value === undefined) return '—';
+		return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
+	}
+
+	function formatFunction(pc: number): string {
+		return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
 	}
 
 	async function ensureEmulator(): Promise<any> {
@@ -52,7 +63,18 @@
 		if (!emulator) return;
 		lcdPixels = emulator.lcd_pixels();
 		lcdText = emulator.lcd_text?.() ?? null;
-		debugState = emulator.debug_state();
+		regs = emulator.regs?.() ?? null;
+		callStack = emulator.call_stack?.() ?? null;
+		debugState = emulator.debug_state?.() ?? null;
+	}
+
+	$: halted = Boolean(debugState?.halted);
+	$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
+	$: pc = regs?.PC ?? null;
+
+	function sortedRegs(input: Record<string, number> | null): [string, number][] {
+		if (!input) return [];
+		return Object.entries(input).sort(([a], [b]) => a.localeCompare(b));
 	}
 
 	function stepOnce(count: number) {
@@ -152,6 +174,8 @@
 		</label>
 	</div>
 
+	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {debugState?.instruction_count ?? '—'}</p>
+
 	<LcdCanvas pixels={lcdPixels} />
 
 	<VirtualKeyboard
@@ -159,6 +183,37 @@
 		onPress={(code) => emulator?.press_matrix_code?.(code)}
 		onRelease={(code) => emulator?.release_matrix_code?.(code)}
 	/>
+
+	{#if callStack}
+		<details open>
+			<summary>Call stack</summary>
+			{#if callStack.length === 0}
+				<p class="hint" data-testid="call-stack-empty">No frames</p>
+			{:else}
+				<ol class="stack" data-testid="call-stack">
+					{#each callStack as frame}
+						<li>{formatFunction(frame)} ({hex(frame)})</li>
+					{/each}
+				</ol>
+			{/if}
+		</details>
+	{/if}
+
+	{#if regs}
+		<details>
+			<summary>Registers</summary>
+			<table class="regs" data-testid="regs-table">
+				<tbody>
+					{#each sortedRegs(regs) as [name, value]}
+						<tr>
+							<td class="name">{name}</td>
+							<td class="val">{hex(value, 6)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</details>
+	{/if}
 
 	{#if lcdText}
 		<details open>
@@ -225,5 +280,25 @@
 		display: inline-flex;
 		gap: 8px;
 		align-items: center;
+	}
+
+	.stack {
+		margin: 0;
+		padding-left: 18px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+	}
+
+	.regs {
+		border-collapse: collapse;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+	}
+
+	.regs td {
+		padding: 2px 8px;
+		border-bottom: 1px solid #243041;
+	}
+
+	.regs td.name {
+		color: #9aa4b2;
 	}
 	</style>

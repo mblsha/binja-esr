@@ -28,6 +28,7 @@ pub struct LlamaState {
     call_depth: u32,
     call_sub_level: u32,
     call_page_stack: Vec<u32>,
+    call_stack: Vec<u32>,
 }
 
 impl LlamaState {
@@ -38,6 +39,7 @@ impl LlamaState {
             call_depth: 0,
             call_sub_level: 0,
             call_page_stack: Vec::new(),
+            call_stack: Vec::new(),
         }
     }
 
@@ -157,6 +159,7 @@ impl LlamaState {
         self.call_depth = 0;
         self.call_sub_level = 0;
         self.call_page_stack.clear();
+        self.call_stack.clear();
     }
 
     pub fn call_depth_inc(&mut self) {
@@ -179,6 +182,18 @@ impl LlamaState {
 
     pub fn call_sub_level(&self) -> u32 {
         self.call_sub_level
+    }
+
+    pub fn call_stack(&self) -> &[u32] {
+        &self.call_stack
+    }
+
+    pub fn push_call_stack(&mut self, dest: u32) {
+        self.call_stack.push(dest & mask_for(RegName::PC));
+    }
+
+    pub fn pop_call_stack(&mut self) -> Option<u32> {
+        self.call_stack.pop()
     }
 
     pub fn set_call_sub_level(&mut self, value: u32) {
@@ -209,6 +224,7 @@ impl LlamaState {
         self.call_depth = 0;
         self.call_sub_level = 0;
         self.call_page_stack.clear();
+        self.call_stack.clear();
     }
 }
 

@@ -210,6 +210,11 @@ impl Pce500Emulator {
         serde_wasm_bindgen::to_value(&regs).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    pub fn call_stack(&self) -> Result<JsValue, JsValue> {
+        let frames = self.runtime.state.call_stack().to_vec();
+        serde_wasm_bindgen::to_value(&frames).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     pub fn debug_state(&self) -> Result<JsValue, JsValue> {
         let timer = TimerState {
             enabled: self.runtime.timer.enabled,

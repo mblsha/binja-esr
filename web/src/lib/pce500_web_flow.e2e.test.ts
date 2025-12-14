@@ -86,6 +86,8 @@ describe('PC-E500 web emulator', () => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
 			expect(text).toContain('BOOT');
 		});
+		expect((getByTestId('emu-status').textContent ?? '').toUpperCase()).toContain('STOPPED');
+		expect(getByTestId('call-stack-empty').textContent ?? '').toContain('No frames');
 
 		const pf1 = getByTestId('vk-pf1') as HTMLButtonElement;
 		await fireEvent.pointerDown(pf1);
@@ -98,5 +100,10 @@ describe('PC-E500 web emulator', () => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
 			expect(text).toContain('MENU');
 		});
+		await waitFor(() => {
+			const status = (getByTestId('emu-status').textContent ?? '').toUpperCase();
+			expect(status).toContain('STOPPED');
+		});
+		expect(getByTestId('regs-table')).toBeTruthy();
 	});
 });
