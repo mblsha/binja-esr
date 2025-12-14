@@ -36,18 +36,11 @@ pce500 = [
     "maturin>=1.0.0",
     "maturin-import-hook>=0.2.0",
 ]
-web = [
-    "Flask>=2.3.0",
-    "flask-cors>=4.0.0",
-    "Pillow>=10.0.0",
-    "numpy>=1.24.0",
-]
 
 [tool.hatch.build.targets.wheel]
 packages = [
     "sc62015",
     "pce500",
-    "web",
     "__init__.py",
 ]
 exclude = [

@@ -3,7 +3,7 @@
 Goal: catch drift between the Rust LLAMA core and the Python emulator early. Run this checklist before releases and when large changes land in bus/peripherals/executor.
 
 ## Quick Checks (local)
-- `uv sync --extra dev --extra pce500 --extra web` to ensure tooling is present.
+- `uv sync --extra dev --extra pce500` to ensure tooling is present.
 - `FORCE_BINJA_MOCK=1 uv run pytest sc62015/pysc62015` (core/unit coverage).
 - `FORCE_BINJA_MOCK=1 uv run pytest pce500/tests` (device-level parity/regressions).
 - `uv run pytest sc62015/pysc62015/test_contract_harness.py` (cross-backend contract vectors).
@@ -19,7 +19,7 @@ Goal: catch drift between the Rust LLAMA core and the Python emulator early. Run
 - **Perfetto**: regenerate `trace_ref_python.trace`/`trace_ref_llama.trace` after intentional trace schema changes; rerun `test_perfetto_compare.py`.
 
 ## CI Expectations
-- Lint/type/tests: `uv run ruff check .`, `uv run pyright sc62015/pysc62015`, `FORCE_BINJA_MOCK=1 uv run pytest --cov` (core + pce500 + web).
+- Lint/type/tests: `uv run ruff check .`, `uv run pyright sc62015/pysc62015`, `FORCE_BINJA_MOCK=1 uv run pytest --cov` (core + pce500).
 - Contract harness/Perfetto smoke wired into CI (ensure `test_contract_harness.py`, `test_perfetto_compare.py`, and snapshot round-trips run in your pipeline).
 - Perfetto comparison job should fail on drift; refresh reference traces intentionally and commit updates with rationale.
 

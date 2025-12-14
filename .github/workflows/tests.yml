@@ -31,7 +31,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        uv sync --extra dev --extra pce500 --extra web
+        uv sync --extra dev --extra pce500
 
     - name: Build Rust LLAMA backend
       env:
@@ -72,12 +72,6 @@ jobs:
         FORCE_BINJA_MOCK: 1
       run: |
         uv run pytest pce500 -v --cov=pce500 --cov-report=term-missing
-    
-    - name: Run Web tests
-      env:
-        FORCE_BINJA_MOCK: 1
-      run: |
-        cd web && uv run pytest tests/ -v --cov=. --cov-report=term-missing
     
     - name: Run linting
       continue-on-error: true
