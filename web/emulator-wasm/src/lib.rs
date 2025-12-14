@@ -108,6 +108,10 @@ impl Pce500Emulator {
         self.runtime.cycle_count()
     }
 
+    pub fn halted(&self) -> bool {
+        self.runtime.state.is_halted()
+    }
+
     pub fn get_reg(&self, name: &str) -> u32 {
         self.runtime.get_reg(name)
     }

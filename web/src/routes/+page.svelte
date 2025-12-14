@@ -15,6 +15,8 @@
 	let lastError: string | null = null;
 	let romSource: string | null = null;
 	let pcReg: number | null = null;
+	let halted = false;
+	let instructionCount: string | null = null;
 
 	let running = false;
 	let instructionsPerFrame = 20_000;
@@ -26,6 +28,16 @@
 	const FIFO_HEAD_ADDR = 0x00bfc9d;
 	const FIFO_TAIL_ADDR = 0x00bfc9e;
 	const debugLog: string[] = [];
+	let keyboardDebugOpen = false;
+	let regsOpen = false;
+	let callStackOpen = true;
+	let lcdTextOpen = true;
+	let debugStateOpen = false;
+
+	const UI_UPDATE_INTERVAL_MS = 100;
+	const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
+	let lastUiUpdateMs = 0;
+	let lastLcdTextUpdateMs = 0;
 
 	let debugKio: {
 		pc: number | null;
@@ -171,29 +183,60 @@
 			const bytes = new Uint8Array(await res.arrayBuffer());
 			const emu = await ensureEmulator();
 			emu.load_rom(bytes);
-			refresh();
+			refreshAllNow();
 		} catch (err) {
 			lastError = `Auto-load failed: ${String(err)}`;
 		}
 	}
 
-	function refresh() {
-		if (!emulator) return;
-		lcdPixels = emulator.lcd_pixels();
-		lcdText = emulator.lcd_text?.() ?? null;
-		regs = emulator.regs?.() ?? null;
-		try {
-			pcReg = emulator.get_reg?.('PC') ?? null;
-		} catch {
-			pcReg = null;
+		function refreshFast() {
+			if (!emulator) return;
+			lcdPixels = emulator.lcd_pixels();
+			try {
+				pcReg = emulator.get_reg?.('PC') ?? null;
+			} catch {
+				pcReg = null;
+			}
+			try {
+				halted = Boolean(emulator.halted?.());
+			} catch {
+				halted = false;
+			}
+			try {
+				const count = emulator.instruction_count?.();
+				instructionCount = count?.toString?.() ?? null;
+			} catch {
+				instructionCount = null;
+			}
 		}
-		callStack = emulator.call_stack?.() ?? null;
-		debugState = emulator.debug_state?.() ?? null;
-	}
 
-	function snapshotKeyboardState() {
-		if (!emulator) {
-			debugKio = null;
+		function refreshUi(nowMs: number) {
+			if (!emulator) return;
+			if (regsOpen) regs = emulator.regs?.() ?? regs;
+			if (callStackOpen) callStack = emulator.call_stack?.() ?? callStack;
+			debugState = debugStateOpen ? emulator.debug_state?.() ?? debugState : null;
+			if (
+				lcdTextOpen &&
+				(!running || nowMs - lastLcdTextUpdateMs >= LCD_TEXT_UPDATE_INTERVAL_MS)
+			) {
+				lastLcdTextUpdateMs = nowMs;
+				lcdText = emulator.lcd_text?.() ?? lcdText;
+			}
+		}
+
+		function refreshAllNow() {
+			if (!emulator) return;
+			lastUiUpdateMs = 0;
+			lastLcdTextUpdateMs = 0;
+			refreshFast();
+			regs = emulator.regs?.() ?? regs;
+			callStack = emulator.call_stack?.() ?? callStack;
+			refreshUi(performance.now());
+		}
+
+		function snapshotKeyboardState() {
+			if (!emulator) {
+				debugKio = null;
 			debugKioJson = null;
 			return;
 		}
@@ -285,9 +328,8 @@
 		);
 	}
 
-	$: halted = Boolean(debugState?.halted);
-	$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
-	$: pc = pcReg;
+		$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
+		$: pc = pcReg;
 
 	function sortedRegs(input: any): [string, number][] {
 		return regsEntries(input).sort(([a], [b]) => a.localeCompare(b));
@@ -298,8 +340,15 @@
 		try {
 			emulator.step(count);
 			applyVirtualReleaseBudget(count);
-			refresh();
-			snapshotKeyboardState();
+			refreshFast();
+			const nowMs = performance.now();
+			if (!running || nowMs - lastUiUpdateMs >= UI_UPDATE_INTERVAL_MS) {
+				lastUiUpdateMs = nowMs;
+				refreshUi(nowMs);
+			}
+			if (keyboardDebugOpen) {
+				snapshotKeyboardState();
+			}
 		} catch (err) {
 			lastError = String(err);
 			running = false;
@@ -323,7 +372,7 @@
 			const emu = await ensureEmulator();
 			const bytes = new Uint8Array(await file.arrayBuffer());
 			emu.load_rom(bytes);
-			refresh();
+			refreshAllNow();
 		} catch (err) {
 			lastError = String(err);
 		}
@@ -332,6 +381,8 @@
 	function start() {
 		if (!emulator) return;
 		if (running) return;
+		lastUiUpdateMs = 0;
+		lastLcdTextUpdateMs = 0;
 		running = true;
 		requestAnimationFrame(tick);
 	}
@@ -362,7 +413,6 @@
 		installDevtoolsDebugHelpers();
 		window.addEventListener('keydown', onKeyDown, { passive: false });
 		window.addEventListener('keyup', onKeyUp, { passive: false });
-		snapshotKeyboardState();
 	});
 
 	onDestroy(() => {
@@ -394,7 +444,7 @@
 		</label>
 	</div>
 
-	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {debugState?.instruction_count ?? '—'}</p>
+	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
 
 	<LcdCanvas pixels={lcdPixels} />
 
@@ -405,7 +455,7 @@
 	/>
 
 	{#if emulator}
-		<details>
+		<details bind:open={keyboardDebugOpen}>
 			<summary>Debug (keyboard)</summary>
 			<div class="debug-row">
 				<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
@@ -475,54 +525,82 @@
 		</details>
 	{/if}
 
-	{#if callStack}
-		<details open>
-			<summary>Call stack</summary>
-			{#if callStack.length === 0}
-				<p class="hint" data-testid="call-stack-empty">No frames</p>
-			{:else}
-				<ol class="stack" data-testid="call-stack">
-					{#each callStack as frame}
-						<li>{formatFunction(frame)} ({hex(frame)})</li>
-					{/each}
-				</ol>
-			{/if}
-		</details>
-	{/if}
+		{#if emulator}
+			<details
+				bind:open={callStackOpen}
+				on:toggle={() => {
+					if (callStackOpen) refreshAllNow();
+				}}
+			>
+				<summary>Call stack</summary>
+				{#if callStack && callStack.length > 0}
+					<ol class="stack" data-testid="call-stack">
+						{#each callStack as frame}
+							<li>{formatFunction(frame)} ({hex(frame)})</li>
+						{/each}
+					</ol>
+				{:else}
+					<p class="hint" data-testid="call-stack-empty">No frames</p>
+				{/if}
+			</details>
 
-	{#if regs}
-		<details>
-			<summary>Registers</summary>
-			<table class="regs" data-testid="regs-table">
-				<tbody>
-					{#each sortedRegs(regs) as [name, value]}
-						<tr>
-							<td class="name">{name}</td>
-							<td class="val">{hex(value, 6)}</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</details>
-	{/if}
+			<details
+				bind:open={regsOpen}
+				on:toggle={() => {
+					if (regsOpen) refreshAllNow();
+				}}
+			>
+				<summary>Registers</summary>
+				{#if regs}
+					<table class="regs" data-testid="regs-table">
+						<tbody>
+							{#each sortedRegs(regs) as [name, value]}
+								<tr>
+									<td class="name">{name}</td>
+									<td class="val">{hex(value, 6)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{:else}
+					<p class="hint">Open to fetch registers.</p>
+				{/if}
+			</details>
 
-	{#if lcdText}
-		<details open>
-			<summary>LCD (decoded text)</summary>
-			<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
-		</details>
-	{/if}
+			<details
+				bind:open={lcdTextOpen}
+				on:toggle={() => {
+					if (lcdTextOpen) refreshAllNow();
+				}}
+			>
+				<summary>LCD (decoded text)</summary>
+				{#if lcdText && lcdText.length > 0}
+					<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
+				{:else}
+					<p class="hint">Open to decode LCD text.</p>
+				{/if}
+			</details>
+		{/if}
 
 	{#if lastError}
 		<p class="error">{lastError}</p>
 	{/if}
 
-	{#if debugState}
-		<details>
-			<summary>Debug state</summary>
-			<pre>{safeJson(debugState)}</pre>
-		</details>
-	{/if}
+		{#if emulator}
+			<details
+				bind:open={debugStateOpen}
+				on:toggle={() => {
+					if (debugStateOpen) refreshAllNow();
+				}}
+			>
+				<summary>Debug state</summary>
+				{#if debugState}
+					<pre>{safeJson(debugState)}</pre>
+				{:else}
+					<p class="hint">Open to fetch debug state.</p>
+				{/if}
+			</details>
+		{/if}
 
 	<p class="hint">
 		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.
