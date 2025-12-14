@@ -35,12 +35,13 @@
 	let debugStateOpen = false;
 
 	const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
-	let lastUiUpdateMs = 0;
 	let lastLcdTextUpdateMs = 0;
 	$: targetFrameIntervalMs = 1000 / Math.max(1, targetFps);
 
 	const RUN_STEP_SLICE_INSTRUCTIONS = 2000;
-	const RUN_MAX_WORK_MS = 8;
+	const RUN_MAX_WORK_MS = 4;
+	const RUN_YIELD_MS = 0;
+	let runLoopId = 0;
 
 	let debugKio: {
 		pc: number | null;
@@ -229,7 +230,6 @@
 
 		function refreshAllNow() {
 			if (!emulator) return;
-			lastUiUpdateMs = 0;
 			lastLcdTextUpdateMs = 0;
 			refreshFast();
 			regs = emulator.regs?.() ?? regs;
@@ -344,7 +344,6 @@
 			stepCore(count);
 			refreshFast();
 			const nowMs = performance.now();
-			lastUiUpdateMs = nowMs;
 			refreshUi(nowMs);
 			if (keyboardDebugOpen) snapshotKeyboardState();
 		} catch (err) {
@@ -359,29 +358,31 @@
 		applyVirtualReleaseBudget(count);
 	}
 
-	function tick() {
-		if (!running || !emulator) return;
+	function pumpEmulator(id: number) {
+		if (!running || !emulator || id !== runLoopId) return;
 		const startMs = performance.now();
-		while (performance.now() - startMs < RUN_MAX_WORK_MS) {
-			try {
+		try {
+			while (performance.now() - startMs < RUN_MAX_WORK_MS) {
 				stepCore(RUN_STEP_SLICE_INSTRUCTIONS);
-			} catch (err) {
-				lastError = String(err);
-				running = false;
-				break;
+				if (!running || id !== runLoopId) return;
 			}
+		} catch (err) {
+			lastError = String(err);
+			running = false;
+			return;
 		}
-		const nowMs = performance.now();
-		if (!running || nowMs - lastUiUpdateMs >= targetFrameIntervalMs) {
-			lastUiUpdateMs = nowMs;
-			refreshFast();
-			refreshUi(nowMs);
-			if (keyboardDebugOpen) {
-				snapshotKeyboardState();
-			}
-		}
-		if (!running) return;
-		requestAnimationFrame(tick);
+		setTimeout(() => pumpEmulator(id), RUN_YIELD_MS);
+	}
+
+	function pumpRender(id: number) {
+		if (!running || !emulator || id !== runLoopId) return;
+		const startMs = performance.now();
+		refreshFast();
+		refreshUi(startMs);
+		if (keyboardDebugOpen) snapshotKeyboardState();
+		const elapsedMs = performance.now() - startMs;
+		const delayMs = Math.max(0, targetFrameIntervalMs - elapsedMs);
+		setTimeout(() => pumpRender(id), delayMs);
 	}
 
 	async function onSelectRom(event: Event) {
@@ -403,14 +404,16 @@
 	function start() {
 		if (!emulator) return;
 		if (running) return;
-		lastUiUpdateMs = 0;
 		lastLcdTextUpdateMs = 0;
 		running = true;
-		requestAnimationFrame(tick);
+		runLoopId += 1;
+		pumpEmulator(runLoopId);
+		pumpRender(runLoopId);
 	}
 
 	function stop() {
 		running = false;
+		runLoopId += 1;
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
