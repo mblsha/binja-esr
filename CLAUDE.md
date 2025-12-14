@@ -11,7 +11,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # or on macOS: brew install uv
 
 # Install dependencies and create virtual environment
-uv sync --extra dev --extra pce500 --extra web  # Install ALL dependencies (required for full functionality)
+uv sync --extra dev --extra pce500  # Install ALL dependencies (required for full functionality)
 ```
 
 ### Code Quality Commands
@@ -33,7 +33,6 @@ uv run pytest path/to/test_file.py::test_function_name
 # Run tests for specific modules (requires all extras installed)
 FORCE_BINJA_MOCK=1 uv run pytest  # SC62015 core tests (353 tests)
 FORCE_BINJA_MOCK=1 uv run pytest pce500/ -v  # PCE500 tests (140 tests)
-cd web && FORCE_BINJA_MOCK=1 uv run pytest tests/ -v  # Web tests (22 tests)
 
 # Continuous testing with file watching (requires Fish shell and fswatch)
 ./run-tests.fish
@@ -237,76 +236,10 @@ def read_byte(self, address: int) -> int:
 - SC62015 emulator integration via `memory.set_perf_tracer()` for cross-module tracing
 - Trace files are binary protobuf format compatible with Perfetto ecosystem
 
-## Web-Based PC-E500 Emulator
-
-The web emulator (`web/`) provides a browser-based interface to the PC-E500 emulator:
-
-### Architecture
-- **Backend**: Flask server (`app.py`) managing emulator state and providing REST API
-- **Frontend**: JavaScript SPA with virtual keyboard and real-time display updates
-- **Keyboard**: Single keyboard handler implementation (matrix via KOL/KOH/KIL)
-
-### Key Implementation Details
-
-1. **State Updates**: Triggered by either:
-   - 100ms elapsed (10 FPS target)
-   - 100,000 instructions executed
-
-2. **Keyboard Matrix**:
-   - Output registers KOL (0xF0) and KOH (0xF1) select keyboard columns (KO0–KO10)
-     - KOL bits 0–7 map to KO0–KO7; KOH bits 0–2 map to KO8–KO10
-     - Compat semantics: bits set = column active
-   - Input register KIL (0xF2) reads row states (KI0–KI7)
-   - Keys mapped to specific column/row intersections; columns are outputs, rows are inputs
-
-3. **Critical Initialization**:
-   ```python
-   # Load only the ROM portion (last 256KB of 1MB file)
-   rom_portion = rom_data[0xC0000:0x100000]
-   emulator.load_rom(rom_portion)
-   emulator.reset()  # Must reset after loading to set PC from entry point
-   ```
-
-4. **API Endpoints**:
-   - `GET /api/v1/state`: Returns screen (base64 PNG), registers, flags, instruction count
-   - `POST /api/v1/control`: Commands: run, pause, step, reset
-   - `POST /api/v1/key`: Keyboard input with press/release actions
-
-### Running the Web Emulator
-
-```bash
-cd web
-pip install -r requirements.txt
-FORCE_BINJA_MOCK=1 python run.py
-# Open http://localhost:8080
-```
-
-### Testing
-
-The web emulator has comprehensive test coverage (51 tests):
-```bash
-cd web
-FORCE_BINJA_MOCK=1 python run_tests.py
-```
-
 ## Keyboard Implementation Details
 
 The project uses a single keyboard handler implementation (`pce500/keyboard_handler.py`):
 - **Column Selection**: KOL (bits 0–7) and KOH (bits 0–2) control columns KO0–KO10 (active-high)
 - **Row Reading**: KIL returns row bits KI0–KI7 according to currently strobed columns
 - **Debouncing**: Queue-based press/release debouncing with configurable read thresholds
-- **Layout**: The layout mapping matches the PC‑E500 matrix and is used by the Web UI
-
-### Virtual Keyboard Layout
-The web UI virtual keyboard is split into two sections matching the physical PC-E500:
-- **Left Section**: QWERTY keyboard with function keys
-- **Right Section**: Scientific calculator layout
-- **Special Keys**: Tall Enter key spanning two rows, OFF/ON key pair
-- **Superscript Labels**: Keys show secondary functions where applicable
-
-### Debugging Features
-The implementation provides visibility for keyboard debugging:
-- **Internal Register Watch**: KOL/KOH/KIL accesses tracked with PC addresses
-- **Key Queue Display**: Queued keys with KOL/KOH/KIL and read progress
-- **Keyboard Statistics**: Read counts and detection of stuck keys
-- **Visual Feedback**: Progress bars and status indicators in the web UI
+- **Layout**: The layout mapping matches the PC‑E500 matrix.

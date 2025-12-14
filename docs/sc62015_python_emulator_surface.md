@@ -78,7 +78,6 @@ The following files are under `sc62015/pysc62015/tests` and define the behaviour
 
 **Downstream integration tests** (outside this package) rely on these APIs as well:
 - `pce500/emulator.py` and associated tests instantiate `Emulator` and `CPUStepper` for the handheld device model.
-- Web UI tests import `RegisterName`, `IMRFlag`, and IMEM register constants to drive state displays.
 
 ## Open Questions / Follow-ups
 - Documented downstream usages indicate that `Registers` and `RegisterName` must remain importable at their current module paths. The Rust bindings should mirror those names to avoid churn.
