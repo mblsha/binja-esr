@@ -39,6 +39,7 @@
 		fifoTail: number | null;
 		fifo: number[];
 	} | null = null;
+	let debugKioJson: string | null = null;
 
 	function isDevBuild(): boolean {
 		try {
@@ -87,6 +88,16 @@
 	function logDebug(line: string) {
 		debugLog.unshift(line);
 		if (debugLog.length > 50) debugLog.pop();
+	}
+
+	async function copyDebugJson() {
+		if (!debugKioJson) return;
+		try {
+			await navigator.clipboard.writeText(debugKioJson);
+			logDebug('copied debug JSON to clipboard');
+		} catch {
+			logDebug('failed to copy debug JSON (clipboard unavailable)');
+		}
 	}
 
 	function setMatrixCode(code: number, down: boolean) {
@@ -176,6 +187,7 @@
 	function snapshotKeyboardState() {
 		if (!emulator) {
 			debugKio = null;
+			debugKioJson = null;
 			return;
 		}
 		try {
@@ -190,8 +202,14 @@
 			const fifoTail = emulator.read_u8?.(FIFO_TAIL_ADDR) ?? null;
 			const fifo = Array.from({ length: 16 }, (_, i) => emulator.read_u8?.(FIFO_BASE_ADDR + i) ?? 0);
 			debugKio = { pc, instr, imr, isr, kol, koh, kil, fifoHead, fifoTail, fifo };
+			debugKioJson = safeJson({
+				...debugKio,
+				pressedCodes: Array.from(pressedCodes.values()),
+				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries())
+			});
 		} catch {
 			debugKio = null;
+			debugKioJson = null;
 		}
 	}
 
@@ -386,6 +404,7 @@
 				<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
 				<button type="button" on:click={() => dumpKeyboardState('ui')}>Dump to console</button>
 				<button type="button" on:click={() => (debugLog.length = 0)}>Clear log</button>
+				<button type="button" on:click={() => copyDebugJson()} disabled={!debugKioJson}>Copy JSON</button>
 			</div>
 			{#if debugKio}
 				<table class="regs" data-testid="keyboard-debug-table">
@@ -434,6 +453,10 @@
 						</tr>
 					</tbody>
 				</table>
+				<details>
+					<summary>Debug JSON</summary>
+					<pre class="log" data-testid="keyboard-debug-json">{debugKioJson ?? ''}</pre>
+				</details>
 			{:else}
 				<p class="hint">No keyboard snapshot available yet.</p>
 			{/if}

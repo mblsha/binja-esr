@@ -16,9 +16,11 @@
 		"prebuild": "npm run wasm:build",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"e2e": "playwright test"
 	},
 	"devDependencies": {
+		"@playwright/test": "^1.55.0",
 		"@testing-library/svelte": "^5.2.8",
 		"@types/node": "^22.15.3",
 		"@sveltejs/adapter-auto": "^7.0.0",

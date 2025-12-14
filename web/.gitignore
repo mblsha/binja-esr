@@ -30,3 +30,7 @@ vite.config.ts.timestamp-*
 
 # wasm-pack output
 /src/lib/wasm/pce500_wasm
+
+# Playwright
+/test-results
+/playwright-report

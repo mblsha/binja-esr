@@ -50,3 +50,8 @@ jobs:
       - name: Build web app
         run: npm run build
 
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser e2e tests
+        run: npm run e2e
