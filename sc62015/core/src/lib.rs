@@ -2077,6 +2077,28 @@ mod tests {
     }
 
     #[test]
+    fn call_stack_tracks_call_targets() {
+        use crate::llama::opcodes::RegName;
+        let mut rt = CoreRuntime::new();
+        // Program:
+        //   CALL 0x0005
+        //   NOP
+        //   NOP
+        //   HALT
+        rt.memory
+            .write_external_slice(0, &[0x04, 0x05, 0x00, 0x00, 0x00, 0xDE]);
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::S, 0x001000);
+
+        rt.step(1).expect("execute CALL");
+        assert_eq!(rt.state.call_stack(), &[0x0005]);
+
+        rt.step(1).expect("execute HALT");
+        assert!(rt.state.is_halted());
+        assert_eq!(rt.state.call_stack(), &[0x0005], "HALT should not unwind call stack");
+    }
+
+    #[test]
     fn e_port_inputs_are_written_into_imem() {
         let mut rt = CoreRuntime::new();
         rt.set_e_port_inputs(0xAA, 0x55);
