@@ -110,7 +110,7 @@ def build_rom_window() -> bytes:
 
 
 def main() -> None:
-    out_path = Path(__file__).with_name("pf1_demo_rom_window.bin")
+    out_path = Path(__file__).with_name("pf1_demo_rom_window.rom")
     out_path.write_bytes(build_rom_window())
     print(f"Wrote {out_path} ({out_path.stat().st_size} bytes)")
 
