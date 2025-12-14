@@ -25,6 +25,20 @@
 	const FIFO_BASE_ADDR = 0x00bfc96;
 	const FIFO_HEAD_ADDR = 0x00bfc9d;
 	const FIFO_TAIL_ADDR = 0x00bfc9e;
+	const debugLog: string[] = [];
+
+	let debugKio: {
+		pc: number | null;
+		instr: any;
+		imr: number | null;
+		isr: number | null;
+		kol: number | null;
+		koh: number | null;
+		kil: number | null;
+		fifoHead: number | null;
+		fifoTail: number | null;
+		fifo: number[];
+	} | null = null;
 
 	function isDevBuild(): boolean {
 		try {
@@ -70,6 +84,11 @@
 		}
 	}
 
+	function logDebug(line: string) {
+		debugLog.unshift(line);
+		if (debugLog.length > 50) debugLog.pop();
+	}
+
 	function setMatrixCode(code: number, down: boolean) {
 		if (!emulator) return;
 		if (down) {
@@ -78,12 +97,14 @@
 			// Inject directly so short taps are observable even if firmware polling is sparse.
 			emulator.inject_matrix_event?.(code, false);
 			emulator.press_matrix_code?.(code);
+			logDebug(`press ${hex(code, 2)}`);
 		} else {
 			if (!pressedCodes.has(code)) return;
 			pressedCodes.delete(code);
 			pendingVirtualRelease.delete(code);
 			emulator.inject_matrix_event?.(code, true);
 			emulator.release_matrix_code?.(code);
+			logDebug(`release ${hex(code, 2)}`);
 		}
 	}
 
@@ -150,6 +171,28 @@
 		}
 		callStack = emulator.call_stack?.() ?? null;
 		debugState = emulator.debug_state?.() ?? null;
+	}
+
+	function snapshotKeyboardState() {
+		if (!emulator) {
+			debugKio = null;
+			return;
+		}
+		try {
+			const pc = emulator.get_reg?.('PC') ?? null;
+			const instr = emulator.instruction_count?.() ?? null;
+			const imr = emulator.imr?.() ?? null;
+			const isr = emulator.isr?.() ?? null;
+			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
+			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
+			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
+			const fifoHead = emulator.read_u8?.(FIFO_HEAD_ADDR) ?? null;
+			const fifoTail = emulator.read_u8?.(FIFO_TAIL_ADDR) ?? null;
+			const fifo = Array.from({ length: 16 }, (_, i) => emulator.read_u8?.(FIFO_BASE_ADDR + i) ?? 0);
+			debugKio = { pc, instr, imr, isr, kol, koh, kil, fifoHead, fifoTail, fifo };
+		} catch {
+			debugKio = null;
+		}
 	}
 
 	function dumpKeyboardState(tag = 'dump') {
@@ -231,6 +274,7 @@
 			emulator.step(count);
 			applyVirtualReleaseBudget(count);
 			refresh();
+			snapshotKeyboardState();
 		} catch (err) {
 			lastError = String(err);
 			running = false;
@@ -293,6 +337,7 @@
 		installDevtoolsDebugHelpers();
 		window.addEventListener('keydown', onKeyDown, { passive: false });
 		window.addEventListener('keyup', onKeyUp, { passive: false });
+		snapshotKeyboardState();
 	});
 
 	onDestroy(() => {
@@ -333,6 +378,72 @@
 		onPress={(code) => virtualPress(code)}
 		onRelease={(code) => virtualRelease(code)}
 	/>
+
+	{#if emulator}
+		<details>
+			<summary>Debug (keyboard)</summary>
+			<div class="debug-row">
+				<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
+				<button type="button" on:click={() => dumpKeyboardState('ui')}>Dump to console</button>
+				<button type="button" on:click={() => (debugLog.length = 0)}>Clear log</button>
+			</div>
+			{#if debugKio}
+				<table class="regs" data-testid="keyboard-debug-table">
+					<tbody>
+						<tr>
+							<td class="name">PC</td>
+							<td class="val">{hex(debugKio.pc)}</td>
+						</tr>
+						<tr>
+							<td class="name">Instr</td>
+							<td class="val">{debugKio.instr?.toString?.() ?? '—'}</td>
+						</tr>
+						<tr>
+							<td class="name">IMR</td>
+							<td class="val">{hex(debugKio.imr, 2)}</td>
+						</tr>
+						<tr>
+							<td class="name">ISR</td>
+							<td class="val">{hex(debugKio.isr, 2)}</td>
+						</tr>
+						<tr>
+							<td class="name">KOL/KOH/KIL</td>
+							<td class="val">
+								{hex(debugKio.kol, 2)} / {hex(debugKio.koh, 2)} / {hex(debugKio.kil, 2)}
+							</td>
+						</tr>
+						<tr>
+							<td class="name">FIFO head/tail</td>
+							<td class="val">{hex(debugKio.fifoHead, 2)} / {hex(debugKio.fifoTail, 2)}</td>
+						</tr>
+						<tr>
+							<td class="name">FIFO[0..15]</td>
+							<td class="val">{debugKio.fifo.map((b) => hex(b, 2)).join(' ')}</td>
+						</tr>
+						<tr>
+							<td class="name">Pressed</td>
+							<td class="val">{Array.from(pressedCodes).map((c) => hex(c, 2)).join(' ') || '—'}</td>
+						</tr>
+						<tr>
+							<td class="name">Pending release</td>
+							<td class="val">
+								{Array.from(pendingVirtualRelease.entries())
+									.map(([c, n]) => `${hex(c, 2)}:${n}`)
+									.join(' ') || '—'}
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			{:else}
+				<p class="hint">No keyboard snapshot available yet.</p>
+			{/if}
+			{#if debugLog.length > 0}
+				<pre class="log" data-testid="keyboard-debug-log">{debugLog.join('\n')}</pre>
+			{:else}
+				<p class="hint">No events yet.</p>
+			{/if}
+		</details>
+	{/if}
 
 	{#if callStack}
 		<details open>
@@ -404,6 +515,13 @@
 		align-items: center;
 	}
 
+	.debug-row {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		margin: 8px 0;
+	}
+
 	.error {
 		color: #ff5c5c;
 	}
@@ -450,5 +568,10 @@
 
 	.regs td.name {
 		color: #9aa4b2;
+	}
+
+	.log {
+		margin: 8px 0 0;
+		max-height: 200px;
 	}
 	</style>
