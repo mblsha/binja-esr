@@ -293,7 +293,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn pf1_changes_lcd_text_in_synthetic_rom() {
-        let rom = include_bytes!("../testdata/pf1_demo_rom_window.bin");
+        let rom = include_bytes!("../testdata/pf1_demo_rom_window.rom");
         let mut emulator = Pce500Emulator::new();
         emulator.load_rom(rom).expect("load synthetic ROM");
 
