@@ -7,7 +7,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from sc62015.pysc62015.sc_asm import Assembler
+from sc62015.pysc62015.sc_asm import Assembler  # noqa: E402
 
 ROM_WINDOW_LEN = 0x40000
 ROM_WINDOW_START = 0x0C0000

@@ -82,7 +82,7 @@ pub fn decode_display_text(lcd: &LcdController, font: &Pce500FontMap) -> Vec<Str
         for char_index in 0..char_cols {
             let col_base = char_index * COLS_PER_CELL;
             let mut pattern = [0u8; GLYPH_WIDTH];
-            for glyph_col in 0..GLYPH_WIDTH {
+            for (glyph_col, pattern_col) in pattern.iter_mut().enumerate() {
                 let mut bits = 0u8;
                 let col = col_base + glyph_col;
                 for dy in 0..ROWS_PER_CELL {
@@ -91,7 +91,7 @@ pub fn decode_display_text(lcd: &LcdController, font: &Pce500FontMap) -> Vec<Str
                         bits |= 1 << dy;
                     }
                 }
-                pattern[glyph_col] = bits & 0x7F;
+                *pattern_col = bits & 0x7F;
             }
             row_chars.push(font.resolve(&pattern));
         }
@@ -99,4 +99,3 @@ pub fn decode_display_text(lcd: &LcdController, font: &Pce500FontMap) -> Vec<Str
     }
     lines
 }
-
