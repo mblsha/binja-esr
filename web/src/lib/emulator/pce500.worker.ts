@@ -12,7 +12,7 @@ type WorkerRequest =
 	| { id: number; type: 'start' }
 	| { id: number; type: 'stop' }
 	| { id: number; type: 'snapshot' }
-	| { id: number; type: 'set_options'; targetFps?: number; turbo?: boolean; debug?: Partial<DebugOptions> }
+	| { id: number; type: 'set_options'; targetFps?: number; debug?: Partial<DebugOptions> }
 	| { id: number; type: 'virtual_key'; code: number; down: boolean }
 	| { id: number; type: 'physical_key'; code: number; down: boolean };
 
@@ -63,7 +63,6 @@ let emulator: any = null;
 
 let running = false;
 let targetFps = 30;
-let turbo = false;
 let debugOptions: DebugOptions = {
 	regsOpen: false,
 	callStackOpen: true,
@@ -229,8 +228,8 @@ function postFrame(frame: Frame) {
 
 function pumpEmulator(id: number) {
 	if (!running || !emulator || id !== runLoopId) return;
-	const runMaxWorkMs = turbo ? 12 : 4;
-	const runSliceTargetMs = turbo ? 1.5 : 0.4;
+	const runMaxWorkMs = 4;
+	const runSliceTargetMs = 0.4;
 	const startMs = performance.now();
 	try {
 		while (performance.now() - startMs < runMaxWorkMs) {
@@ -270,7 +269,6 @@ async function handleRequest(msg: WorkerRequest) {
 		switch (msg.type) {
 			case 'set_options': {
 				if (typeof msg.targetFps === 'number') targetFps = msg.targetFps;
-				if (typeof msg.turbo === 'boolean') turbo = msg.turbo;
 				if (msg.debug) debugOptions = { ...debugOptions, ...msg.debug };
 				replyOk(msg.id);
 				return;
@@ -352,4 +350,3 @@ async function handleRequest(msg: WorkerRequest) {
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 	void handleRequest(event.data);
 };
-
