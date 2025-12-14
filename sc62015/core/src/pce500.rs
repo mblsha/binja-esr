@@ -38,5 +38,9 @@ pub fn load_pce500_rom_window_into_memory(memory: &mut MemoryImage, rom: &[u8]) 
 
 pub fn pce500_font_map_from_rom(rom: &[u8]) -> Option<Pce500FontMap> {
     let font = Pce500FontMap::from_rom(rom);
-    if font.is_empty() { None } else { Some(font) }
+    if font.is_empty() {
+        None
+    } else {
+        Some(font)
+    }
 }

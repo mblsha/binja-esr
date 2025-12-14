@@ -12,11 +12,14 @@ type WorkerRequest =
 	| { id: number; type: 'start' }
 	| { id: number; type: 'stop' }
 	| { id: number; type: 'snapshot' }
+	| { id: number; type: 'lcd_trace' }
 	| { id: number; type: 'set_options'; targetFps?: number; debug?: Partial<DebugOptions> }
 	| { id: number; type: 'virtual_key'; code: number; down: boolean }
 	| { id: number; type: 'physical_key'; code: number; down: boolean };
 
-type WorkerReply = { type: 'reply'; id: number; ok: true } | { type: 'reply'; id: number; ok: false; error: string };
+type WorkerReply =
+	| { type: 'reply'; id: number; ok: true; result?: any }
+	| { type: 'reply'; id: number; ok: false; error: string };
 
 type KeyboardDebug = {
 	pc: number | null;
@@ -96,8 +99,8 @@ async function ensureEmulator(): Promise<any> {
 	return emulator;
 }
 
-function replyOk(id: number) {
-	(self as any).postMessage({ type: 'reply', id, ok: true } satisfies WorkerReply);
+function replyOk(id: number, result?: any) {
+	(self as any).postMessage({ type: 'reply', id, ok: true, ...(result !== undefined ? { result } : {}) } satisfies WorkerReply);
 }
 
 function replyErr(id: number, error: unknown) {
@@ -295,6 +298,12 @@ async function handleRequest(msg: WorkerRequest) {
 				await ensureEmulator();
 				postFrame(captureFrame(true));
 				replyOk(msg.id);
+				return;
+			}
+			case 'lcd_trace': {
+				await ensureEmulator();
+				const trace = emulator.lcd_trace?.() ?? null;
+				replyOk(msg.id, trace);
 				return;
 			}
 			case 'start': {

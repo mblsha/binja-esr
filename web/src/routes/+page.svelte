@@ -8,7 +8,7 @@
 		let emulator: any = null;
 		let worker: Worker | null = null;
 		let workerNextId = 1;
-		const workerPending = new Map<number, { resolve: () => void; reject: (err: unknown) => void }>();
+		const workerPending = new Map<number, { resolve: (value: any) => void; reject: (err: unknown) => void }>();
 		const canUseWorker =
 			typeof window !== 'undefined' &&
 			typeof Worker !== 'undefined' &&
@@ -102,7 +102,7 @@
 			else worker.postMessage(message);
 		}
 
-		function workerCall(type: string, payload: any = {}, transfer?: Transferable[]): Promise<void> {
+		function workerCall<T = any>(type: string, payload: any = {}, transfer?: Transferable[]): Promise<T> {
 			if (!worker) return Promise.reject(new Error('worker not ready'));
 			const id = workerNextId++;
 			const message = { id, type, ...payload };
@@ -133,7 +133,7 @@
 					const pending = workerPending.get(data.id);
 					if (!pending) return;
 					workerPending.delete(data.id);
-					if (data.ok) pending.resolve();
+					if (data.ok) pending.resolve(data.result);
 					else pending.reject(new Error(data.error ?? 'worker error'));
 					return;
 				}
@@ -443,21 +443,25 @@
 		}
 	}
 
-	function installDevtoolsDebugHelpers() {
-		if (!isDevBuild()) return;
-		(globalThis as any).__pce500 = {
-			get emulator() {
-				return worker ? null : emulator;
-			},
-			dump: dumpKeyboardState,
-			step: (n: number) => stepOnce(n),
-			read: (addr: number) => emulator?.read_u8?.(addr),
-			readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
-			press: (code: number) => virtualPress(code),
-			release: (code: number) => virtualRelease(code),
-			tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
-				virtualPress(code);
-				stepOnce(stepCount);
+		function installDevtoolsDebugHelpers() {
+			if (!isDevBuild()) return;
+			(globalThis as any).__pce500 = {
+				get emulator() {
+					return worker ? null : emulator;
+				},
+				dump: dumpKeyboardState,
+				step: (n: number) => stepOnce(n),
+				read: (addr: number) => emulator?.read_u8?.(addr),
+				readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
+				lcdTrace: async () => {
+					if (worker) return await workerCall('lcd_trace');
+					return emulator?.lcd_trace?.();
+				},
+				press: (code: number) => virtualPress(code),
+				release: (code: number) => virtualRelease(code),
+				tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+					virtualPress(code);
+					stepOnce(stepCount);
 				virtualRelease(code);
 			},
 			pressPF1: () => virtualPress(0x56),

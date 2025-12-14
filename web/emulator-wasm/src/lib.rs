@@ -209,6 +209,17 @@ impl Pce500Emulator {
         serde_wasm_bindgen::to_value(&lines).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
+        let Some(lcd) = self.runtime.lcd.as_ref() else {
+            return serde_wasm_bindgen::to_value(&Vec::<Vec<sc62015_core::lcd::LcdWriteTrace>>::new())
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        };
+        let grid = lcd.display_trace_buffer();
+        let out: Vec<Vec<sc62015_core::lcd::LcdWriteTrace>> =
+            grid.iter().map(|row| row.to_vec()).collect();
+        serde_wasm_bindgen::to_value(&out).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     pub fn regs(&self) -> Result<JsValue, JsValue> {
         let regs = sc62015_core::collect_registers(&self.runtime.state);
         serde_wasm_bindgen::to_value(&regs).map_err(|e| JsValue::from_str(&e.to_string()))

@@ -6,8 +6,8 @@ use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::LcdController,
+    lcd::LcdWriteTrace,
     lcd_text::{decode_display_text, Pce500FontMap},
-    pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
     llama::{
         eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
@@ -17,6 +17,7 @@ use sc62015_core::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
         IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
     },
+    pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
     timer::TimerContext,
     PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
@@ -26,6 +27,8 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use serde::Serialize;
 
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
@@ -218,6 +221,20 @@ struct Args {
     /// Path to write the Perfetto trace.
     #[arg(long, value_name = "PATH", default_value = "pc-e500.perfetto-trace")]
     perfetto_path: PathBuf,
+
+    /// Dump LCD write trace (PC + call stack per addressing unit) as JSON.
+    #[arg(long, value_name = "PATH")]
+    dump_lcd_trace: Option<PathBuf>,
+}
+
+#[derive(Serialize)]
+struct LcdTraceDump {
+    executed: u64,
+    pc: u32,
+    halted: bool,
+    lcd_lines: Vec<String>,
+    vram: Vec<Vec<u8>>,
+    trace: Vec<Vec<LcdWriteTrace>>,
 }
 
 fn default_rom_path() -> PathBuf {
@@ -1545,6 +1562,28 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     println!("LCD (decoded text):");
     for line in &lcd_lines {
         println!("  {}", line);
+    }
+
+    if let Some(path) = &args.dump_lcd_trace {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let trace = bus.lcd().display_trace_buffer();
+        let trace = trace.map(|row| row.to_vec()).to_vec();
+        let vram = bus.lcd().display_vram_bytes();
+        let vram = vram.map(|row| row.to_vec()).to_vec();
+        let dump = LcdTraceDump {
+            executed,
+            pc: state.pc(),
+            halted: state.is_halted(),
+            lcd_lines: lcd_lines.clone(),
+            vram,
+            trace,
+        };
+        fs::write(path, serde_json::to_string_pretty(&dump)?)?;
+        println!("Wrote LCD trace dump: {}", path.display());
     }
 
     bus.finish_perfetto();

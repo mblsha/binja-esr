@@ -37,15 +37,21 @@ fn pce500_boots_and_decodes_lcd_text_via_core_runtime() {
     let lcd = rt.lcd.as_ref().expect("lcd present");
     let lines = decode_display_text(lcd, &font);
     assert!(
-        lines.first().is_some_and(|s| s.contains("S2(CARD):NEW CARD")),
+        lines
+            .first()
+            .is_some_and(|s| s.contains("S2(CARD):NEW CARD")),
         "expected boot header in row 0, got {lines:?}"
     );
     assert!(
-        lines.get(2).is_some_and(|s| s.contains("PF1 --- INITIALIZE")),
+        lines
+            .get(2)
+            .is_some_and(|s| s.contains("PF1 --- INITIALIZE")),
         "expected PF1 hint in row 2, got {lines:?}"
     );
     assert!(
-        lines.get(3).is_some_and(|s| s.contains("PF2 --- DO NOT INITIALIZE")),
+        lines
+            .get(3)
+            .is_some_and(|s| s.contains("PF2 --- DO NOT INITIALIZE")),
         "expected PF2 hint in row 3, got {lines:?}"
     );
 }
@@ -84,7 +90,9 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
     let lcd = rt.lcd.as_ref().expect("lcd present");
     let lines = decode_display_text(lcd, &font);
     assert!(
-        lines.first().is_some_and(|s| s.contains("S1(MAIN):NEW CARD")),
+        lines
+            .first()
+            .is_some_and(|s| s.contains("S1(MAIN):NEW CARD")),
         "expected main menu header after PF1, got {lines:?}"
     );
 }

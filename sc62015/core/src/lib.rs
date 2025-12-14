@@ -4,9 +4,9 @@
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_text;
-pub mod pce500;
 pub mod llama;
 pub mod memory;
+pub mod pce500;
 pub mod perfetto;
 pub mod snapshot;
 pub mod timer;
@@ -84,12 +84,12 @@ struct PythonOverlayFault {
     addr: u32,
     pc: u32,
 }
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+pub use snapshot::{load_snapshot, save_snapshot};
 pub use snapshot::{
     pack_registers, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC, SNAPSHOT_REGISTER_LAYOUT,
     SNAPSHOT_VERSION,
 };
-#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
-pub use snapshot::{load_snapshot, save_snapshot};
 pub use timer::TimerContext;
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
@@ -720,8 +720,7 @@ impl CoreRuntime {
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
-                        if let Some(val) =
-                            (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
+                        if let Some(val) = (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
                         {
                             (*self.mem).bump_read_count();
                             (*self.mem).log_kio_read(offset, val);
@@ -2012,8 +2011,7 @@ mod tests {
 
         let mut rt = CoreRuntime::new();
         // Program: MV A, [0x2001] (LCD read, RW=1).
-        rt.memory
-            .write_external_slice(0, &[0x88, 0x01, 0x20, 0x00]);
+        rt.memory.write_external_slice(0, &[0x88, 0x01, 0x20, 0x00]);
         rt.state.set_pc(0);
 
         rt.step(1).expect("execute LCD read");
@@ -2095,7 +2093,11 @@ mod tests {
 
         rt.step(1).expect("execute HALT");
         assert!(rt.state.is_halted());
-        assert_eq!(rt.state.call_stack(), &[0x0005], "HALT should not unwind call stack");
+        assert_eq!(
+            rt.state.call_stack(),
+            &[0x0005],
+            "HALT should not unwind call stack"
+        );
     }
 
     #[test]

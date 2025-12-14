@@ -155,7 +155,11 @@ fn held_key_does_not_generate_spurious_release_events() {
             break;
         }
     }
-    assert_eq!(kb.fifo_len(), 1, "expected exactly one press event after debounce");
+    assert_eq!(
+        kb.fifo_len(),
+        1,
+        "expected exactly one press event after debounce"
+    );
 
     // Hold the key for many more scan ticks: no release event should be generated.
     for _ in 0..200 {
@@ -168,5 +172,9 @@ fn held_key_does_not_generate_spurious_release_events() {
     );
     let fifo = kb.fifo_snapshot();
     assert_eq!(fifo.len(), 1);
-    assert_eq!(fifo[0] & 0x80, 0, "FIFO entry should be a press, not release");
+    assert_eq!(
+        fifo[0] & 0x80,
+        0,
+        "FIFO entry should be a press, not release"
+    );
 }
