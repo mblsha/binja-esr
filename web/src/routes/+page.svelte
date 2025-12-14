@@ -28,7 +28,6 @@
 
 	let running = false;
 	let targetFps = 30;
-	let turbo = false;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
@@ -49,8 +48,8 @@
 
 	const RUN_SLICE_MIN_INSTRUCTIONS = 1;
 	const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
-	$: runSliceTargetMs = turbo ? 1.5 : 0.4;
-	$: runMaxWorkMs = turbo ? 12 : 4;
+	const runSliceTargetMs = 0.4;
+	const runMaxWorkMs = 4;
 	const RUN_YIELD_MS = 0;
 	let runLoopId = 0;
 	let runSliceInstructions = 2000;
@@ -120,7 +119,6 @@
 				id,
 				type: 'set_options',
 				targetFps,
-				turbo,
 				debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen }
 			});
 		}
@@ -475,7 +473,6 @@
 		$: pc = pcReg;
 		$: if (worker) {
 			targetFps;
-			turbo;
 			regsOpen;
 			callStackOpen;
 			lcdTextOpen;
@@ -655,10 +652,6 @@
 			<label>
 				Target FPS:
 				<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
-			</label>
-			<label>
-				<input type="checkbox" bind:checked={turbo} />
-				Turbo
 			</label>
 		</div>
 
