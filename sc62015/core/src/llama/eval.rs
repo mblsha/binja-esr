@@ -21,14 +21,18 @@ use crate::{
     perfetto::AnnotationValue,
     PERFETTO_TRACER,
 };
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
 static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
-static PERF_LAST_PC: AtomicU32 = AtomicU32::new(0);
 static PERF_SUBSTEP: AtomicU32 = AtomicU32::new(0);
+
+thread_local! {
+    static PERF_LAST_PC: Cell<u32> = const { Cell::new(0) };
+}
 
 struct PerfettoContextGuard;
 impl Drop for PerfettoContextGuard {
@@ -57,7 +61,7 @@ pub fn perfetto_last_instr_index() -> u64 {
 
 /// Last-seen PC (masked) even outside executor context; useful for host-side tracing.
 pub fn perfetto_last_pc() -> u32 {
-    PERF_LAST_PC.load(Ordering::Relaxed)
+    PERF_LAST_PC.with(|value| value.get())
 }
 
 pub fn reset_perf_counters() {
@@ -65,7 +69,7 @@ pub fn reset_perf_counters() {
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
     PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
     PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
-    PERF_LAST_PC.store(0, Ordering::Relaxed);
+    PERF_LAST_PC.with(|value| value.set(0));
     PERF_SUBSTEP.store(0, Ordering::Relaxed);
 }
 
@@ -417,7 +421,7 @@ impl LlamaExecutor {
                 mem_isr,
             );
         });
-        PERF_LAST_PC.store(pc_trace, Ordering::Relaxed);
+        PERF_LAST_PC.with(|value| value.set(pc_trace));
     }
 
     fn estimated_length(entry: &OpcodeEntry) -> u8 {
@@ -1931,7 +1935,7 @@ impl LlamaExecutor {
         // For perfetto parity with Python, keep tracing anchored to the prefix byte/PC.
         let trace_pc_snapshot = start_pc;
         let trace_opcode_snapshot = opcode;
-        PERF_LAST_PC.store(trace_pc_snapshot, Ordering::Relaxed);
+        PERF_LAST_PC.with(|value| value.set(trace_pc_snapshot));
         // Execute using the resolved opcode after any PRE bytes.
         let mut exec_pc = start_pc;
         let mut exec_opcode = opcode;
