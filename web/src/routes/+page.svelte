@@ -19,7 +19,7 @@
 	let instructionCount: string | null = null;
 
 	let running = false;
-	let instructionsPerFrame = 1_000;
+	let targetFps = 30;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
@@ -34,10 +34,13 @@
 	let lcdTextOpen = true;
 	let debugStateOpen = false;
 
-	const UI_UPDATE_INTERVAL_MS = 100;
 	const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 	let lastUiUpdateMs = 0;
 	let lastLcdTextUpdateMs = 0;
+	$: targetFrameIntervalMs = 1000 / Math.max(1, targetFps);
+
+	const RUN_STEP_SLICE_INSTRUCTIONS = 2000;
+	const RUN_MAX_WORK_MS = 8;
 
 	let debugKio: {
 		pc: number | null;
@@ -338,26 +341,45 @@
 	function stepOnce(count: number) {
 		if (!emulator) return;
 		try {
-			emulator.step(count);
-			applyVirtualReleaseBudget(count);
+			stepCore(count);
 			refreshFast();
 			const nowMs = performance.now();
-			if (!running || nowMs - lastUiUpdateMs >= UI_UPDATE_INTERVAL_MS) {
-				lastUiUpdateMs = nowMs;
-				refreshUi(nowMs);
-			}
-			if (keyboardDebugOpen) {
-				snapshotKeyboardState();
-			}
+			lastUiUpdateMs = nowMs;
+			refreshUi(nowMs);
+			if (keyboardDebugOpen) snapshotKeyboardState();
 		} catch (err) {
 			lastError = String(err);
 			running = false;
 		}
 	}
 
+	function stepCore(count: number) {
+		if (!emulator) return;
+		emulator.step(count);
+		applyVirtualReleaseBudget(count);
+	}
+
 	function tick() {
 		if (!running || !emulator) return;
-		stepOnce(instructionsPerFrame);
+		const startMs = performance.now();
+		while (performance.now() - startMs < RUN_MAX_WORK_MS) {
+			try {
+				stepCore(RUN_STEP_SLICE_INSTRUCTIONS);
+			} catch (err) {
+				lastError = String(err);
+				running = false;
+				break;
+			}
+		}
+		const nowMs = performance.now();
+		if (!running || nowMs - lastUiUpdateMs >= targetFrameIntervalMs) {
+			lastUiUpdateMs = nowMs;
+			refreshFast();
+			refreshUi(nowMs);
+			if (keyboardDebugOpen) {
+				snapshotKeyboardState();
+			}
+		}
 		if (!running) return;
 		requestAnimationFrame(tick);
 	}
@@ -433,16 +455,16 @@
 		<p class="hint">Auto-loaded ROM via {romSource}</p>
 	{/if}
 
-	<div class="controls">
-		<button on:click={() => stepOnce(1_000)} disabled={!emulator}>Step 1k</button>
-		<button on:click={() => stepOnce(20_000)} disabled={!emulator}>Step 20k</button>
-		<button on:click={start} disabled={!emulator || running}>Run</button>
-		<button on:click={stop} disabled={!running}>Stop</button>
-		<label>
-			Instr/frame:
-			<input type="number" min="1" step="1000" bind:value={instructionsPerFrame} />
-		</label>
-	</div>
+		<div class="controls">
+			<button on:click={() => stepOnce(1_000)} disabled={!emulator}>Step 1k</button>
+			<button on:click={() => stepOnce(20_000)} disabled={!emulator}>Step 20k</button>
+			<button on:click={start} disabled={!emulator || running}>Run</button>
+			<button on:click={stop} disabled={!running}>Stop</button>
+			<label>
+				Target FPS:
+				<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
+			</label>
+		</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
 
