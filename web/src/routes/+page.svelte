@@ -1,22 +1,30 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
-	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
-	import { matrixCodeForKeyEvent } from '$lib/keymap';
+		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
+		import { matrixCodeForKeyEvent } from '$lib/keymap';
 
-	let wasm: any = null;
-	let emulator: any = null;
+		let wasm: any = null;
+		let emulator: any = null;
+		let worker: Worker | null = null;
+		let workerNextId = 1;
+		const workerPending = new Map<number, { resolve: () => void; reject: (err: unknown) => void }>();
+		const canUseWorker =
+			typeof window !== 'undefined' &&
+			typeof Worker !== 'undefined' &&
+			!Boolean((import.meta as any)?.env?.VITEST);
 
-	let lcdPixels: Uint8Array | null = null;
-	let lcdText: string[] | null = null;
-	let regs: any = null;
+		let lcdPixels: Uint8Array | null = null;
+		let lcdText: string[] | null = null;
+		let regs: any = null;
 	let callStack: number[] | null = null;
 	let debugState: any = null;
 	let lastError: string | null = null;
-	let romSource: string | null = null;
-	let pcReg: number | null = null;
-	let halted = false;
-	let instructionCount: string | null = null;
+		let romSource: string | null = null;
+		let pcReg: number | null = null;
+		let halted = false;
+		let instructionCount: string | null = null;
+		let romLoaded = false;
 
 	let running = false;
 	let targetFps = 30;
@@ -59,7 +67,93 @@
 		fifoTail: number | null;
 		fifo: number[];
 	} | null = null;
-	let debugKioJson: string | null = null;
+		let debugKioJson: string | null = null;
+
+		function applyWorkerFrame(frame: any) {
+			try {
+				if (frame?.lcdPixels instanceof ArrayBuffer) {
+					lcdPixels = new Uint8Array(frame.lcdPixels);
+				}
+				lcdText = frame?.lcdText ?? null;
+				regs = frame?.regs ?? regs;
+				callStack = frame?.callStack ?? callStack;
+				debugState = frame?.debugState ?? null;
+				pcReg = frame?.pc ?? pcReg;
+				halted = Boolean(frame?.halted);
+				instructionCount = frame?.instructionCount ?? instructionCount;
+
+				if (frame?.keyboardDebug) {
+					debugKio = frame.keyboardDebug;
+					debugKioJson = frame.keyboardDebugJson ?? null;
+					pressedCodes.clear();
+					for (const code of frame.keyboardDebug.pressedCodes ?? []) pressedCodes.add(code);
+					pendingVirtualRelease.clear();
+					for (const [code, remaining] of frame.keyboardDebug.pendingVirtualRelease ?? []) {
+						pendingVirtualRelease.set(code, remaining);
+					}
+				}
+			} catch (err) {
+				lastError = String(err);
+			}
+		}
+
+		function workerPost(message: any, transfer?: Transferable[]) {
+			if (!worker) return;
+			if (transfer) worker.postMessage(message, transfer);
+			else worker.postMessage(message);
+		}
+
+		function workerCall(type: string, payload: any = {}, transfer?: Transferable[]): Promise<void> {
+			if (!worker) return Promise.reject(new Error('worker not ready'));
+			const id = workerNextId++;
+			const message = { id, type, ...payload };
+			return new Promise((resolve, reject) => {
+				workerPending.set(id, { resolve, reject });
+				workerPost(message, transfer);
+			});
+		}
+
+		function pushWorkerOptions() {
+			if (!worker) return;
+			const id = workerNextId++;
+			workerPost({
+				id,
+				type: 'set_options',
+				targetFps,
+				turbo,
+				debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen }
+			});
+		}
+
+		async function ensureWorker(): Promise<void> {
+			if (!canUseWorker || worker) return;
+			worker = new Worker(new URL('../lib/emulator/pce500.worker.ts', import.meta.url), { type: 'module' });
+			worker.onmessage = (event: MessageEvent<any>) => {
+				const data = event.data;
+				if (!data) return;
+				if (data.type === 'reply') {
+					const pending = workerPending.get(data.id);
+					if (!pending) return;
+					workerPending.delete(data.id);
+					if (data.ok) pending.resolve();
+					else pending.reject(new Error(data.error ?? 'worker error'));
+					return;
+				}
+				if (data.type === 'frame') {
+					applyWorkerFrame(data.frame);
+					return;
+				}
+				if (data.type === 'fatal') {
+					lastError = `Worker error: ${data.error ?? 'unknown error'}`;
+					running = false;
+				}
+			};
+			worker.onerror = (event) => {
+				lastError = `Worker crashed: ${String(event)}`;
+				running = false;
+			};
+			pushWorkerOptions();
+		}
 
 	function isDevBuild(): boolean {
 		try {
@@ -121,6 +215,12 @@
 	}
 
 	function setMatrixCode(code: number, down: boolean) {
+		if (worker) {
+			const id = workerNextId++;
+			workerPost({ id, type: 'virtual_key', code, down });
+			logDebug(`${down ? 'press' : 'release'} ${hex(code, 2)}`);
+			return;
+		}
 		if (!emulator) return;
 		if (down) {
 			if (pressedCodes.has(code)) return;
@@ -138,6 +238,11 @@
 	}
 
 	function setPhysicalMatrixCode(code: number, down: boolean) {
+		if (worker) {
+			const id = workerNextId++;
+			workerPost({ id, type: 'physical_key', code, down });
+			return;
+		}
 		if (!emulator) return;
 		if (down) {
 			emulator.press_matrix_code?.(code);
@@ -147,11 +252,19 @@
 	}
 
 	function virtualPress(code: number) {
+		if (worker) {
+			setMatrixCode(code, true);
+			return;
+		}
 		setMatrixCode(code, true);
 		pendingVirtualRelease.delete(code);
 	}
 
 	function virtualRelease(code: number) {
+		if (worker) {
+			setMatrixCode(code, false);
+			return;
+		}
 		if (!pressedCodes.has(code)) return;
 		pendingVirtualRelease.set(code, MIN_VIRTUAL_HOLD_INSTRUCTIONS);
 	}
@@ -183,67 +296,82 @@
 	}
 
 	async function tryAutoLoadRom() {
-		if (emulator?.has_rom?.()) return;
+		await ensureWorker();
+		if (!worker && emulator?.has_rom?.()) return;
 		try {
 			const res = await fetch('/api/rom');
 			if (!res.ok) return;
 			romSource = res.headers.get('x-rom-source');
-			const bytes = new Uint8Array(await res.arrayBuffer());
-			const emu = await ensureEmulator();
-			emu.load_rom(bytes);
-			refreshAllNow();
-		} catch (err) {
-			lastError = `Auto-load failed: ${String(err)}`;
+				const bytes = new Uint8Array(await res.arrayBuffer());
+				if (worker) {
+					await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
+					romLoaded = true;
+					return;
+				}
+				const emu = await ensureEmulator();
+				emu.load_rom(bytes);
+				romLoaded = true;
+				refreshAllNow();
+			} catch (err) {
+				lastError = `Auto-load failed: ${String(err)}`;
+				romLoaded = false;
+			}
+		}
+
+	function refreshFast() {
+		if (worker) return;
+		if (!emulator) return;
+		lcdPixels = emulator.lcd_pixels();
+		try {
+			pcReg = emulator.get_reg?.('PC') ?? null;
+		} catch {
+			pcReg = null;
+		}
+		try {
+			halted = Boolean(emulator.halted?.());
+		} catch {
+			halted = false;
+		}
+		try {
+			const count = emulator.instruction_count?.();
+			instructionCount = count?.toString?.() ?? null;
+		} catch {
+			instructionCount = null;
 		}
 	}
 
-		function refreshFast() {
-			if (!emulator) return;
-			lcdPixels = emulator.lcd_pixels();
-			try {
-				pcReg = emulator.get_reg?.('PC') ?? null;
-			} catch {
-				pcReg = null;
-			}
-			try {
-				halted = Boolean(emulator.halted?.());
-			} catch {
-				halted = false;
-			}
-			try {
-				const count = emulator.instruction_count?.();
-				instructionCount = count?.toString?.() ?? null;
-			} catch {
-				instructionCount = null;
-			}
+	function refreshUi(nowMs: number) {
+		if (worker) return;
+		if (!emulator) return;
+		if (regsOpen) regs = emulator.regs?.() ?? regs;
+		if (callStackOpen) callStack = emulator.call_stack?.() ?? callStack;
+		debugState = debugStateOpen ? emulator.debug_state?.() ?? debugState : null;
+		if (lcdTextOpen && (!running || nowMs - lastLcdTextUpdateMs >= LCD_TEXT_UPDATE_INTERVAL_MS)) {
+			lastLcdTextUpdateMs = nowMs;
+			lcdText = emulator.lcd_text?.() ?? lcdText;
 		}
+	}
 
-		function refreshUi(nowMs: number) {
-			if (!emulator) return;
-			if (regsOpen) regs = emulator.regs?.() ?? regs;
-			if (callStackOpen) callStack = emulator.call_stack?.() ?? callStack;
-			debugState = debugStateOpen ? emulator.debug_state?.() ?? debugState : null;
-			if (
-				lcdTextOpen &&
-				(!running || nowMs - lastLcdTextUpdateMs >= LCD_TEXT_UPDATE_INTERVAL_MS)
-			) {
-				lastLcdTextUpdateMs = nowMs;
-				lcdText = emulator.lcd_text?.() ?? lcdText;
-			}
+	function refreshAllNow() {
+		if (worker) {
+			void workerCall('snapshot');
+			return;
 		}
+		if (!emulator) return;
+		lastLcdTextUpdateMs = 0;
+		refreshFast();
+		regs = emulator.regs?.() ?? regs;
+		callStack = emulator.call_stack?.() ?? callStack;
+		refreshUi(performance.now());
+	}
 
-		function refreshAllNow() {
-			if (!emulator) return;
-			lastLcdTextUpdateMs = 0;
-			refreshFast();
-			regs = emulator.regs?.() ?? regs;
-			callStack = emulator.call_stack?.() ?? callStack;
-			refreshUi(performance.now());
+	function snapshotKeyboardState() {
+		if (worker) {
+			void workerCall('snapshot');
+			return;
 		}
-
-		function snapshotKeyboardState() {
-			if (!emulator) {
-				debugKio = null;
+		if (!emulator) {
+			debugKio = null;
 			debugKioJson = null;
 			return;
 		}
@@ -271,6 +399,14 @@
 	}
 
 	function dumpKeyboardState(tag = 'dump') {
+		if (worker) {
+			if (debugKioJson) {
+				console.log(`[pce500] ${tag}`, debugKioJson);
+			} else {
+				console.log(`[pce500] ${tag}: no snapshot yet (use Refresh)`);
+			}
+			return;
+		}
 		if (!emulator) {
 			console.log(`[pce500] ${tag}: emulator not ready`);
 			return;
@@ -309,7 +445,7 @@
 		if (!isDevBuild()) return;
 		(globalThis as any).__pce500 = {
 			get emulator() {
-				return emulator;
+				return worker ? null : emulator;
 			},
 			dump: dumpKeyboardState,
 			step: (n: number) => stepOnce(n),
@@ -337,18 +473,37 @@
 
 		$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
 		$: pc = pcReg;
+		$: if (worker) {
+			targetFps;
+			turbo;
+			regsOpen;
+			callStackOpen;
+			lcdTextOpen;
+			debugStateOpen;
+			keyboardDebugOpen;
+			pushWorkerOptions();
+		}
 
 	function sortedRegs(input: any): [string, number][] {
 		return regsEntries(input).sort(([a], [b]) => a.localeCompare(b));
 	}
 
-	function stepOnce(count: number) {
-		if (!emulator) return;
-		try {
-			stepCore(count);
-			refreshFast();
-			const nowMs = performance.now();
-			refreshUi(nowMs);
+		async function stepOnce(count: number) {
+			if (worker) {
+				try {
+					await workerCall('step', { instructions: count });
+				} catch (err) {
+					lastError = String(err);
+					running = false;
+				}
+				return;
+			}
+			if (!emulator) return;
+			try {
+				stepCore(count);
+				refreshFast();
+				const nowMs = performance.now();
+				refreshUi(nowMs);
 			if (keyboardDebugOpen) snapshotKeyboardState();
 		} catch (err) {
 			lastError = String(err);
@@ -398,66 +553,86 @@
 		setTimeout(() => pumpRender(id), delayMs);
 	}
 
-	async function onSelectRom(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file) return;
+		async function onSelectRom(event: Event) {
+			const input = event.currentTarget as HTMLInputElement;
+			const file = input.files?.[0];
+			if (!file) return;
 
-		lastError = null;
-		try {
-			const emu = await ensureEmulator();
-			const bytes = new Uint8Array(await file.arrayBuffer());
-			emu.load_rom(bytes);
-			refreshAllNow();
-		} catch (err) {
-			lastError = String(err);
+			lastError = null;
+			try {
+				const bytes = new Uint8Array(await file.arrayBuffer());
+				romSource = file.name;
+				await ensureWorker();
+				if (worker) {
+					await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
+					romLoaded = true;
+					return;
+				}
+				const emu = await ensureEmulator();
+				emu.load_rom(bytes);
+				romLoaded = true;
+				refreshAllNow();
+			} catch (err) {
+				lastError = String(err);
+				romLoaded = false;
+			}
 		}
-	}
 
-	function start() {
-		if (!emulator) return;
-		if (running) return;
-		lastLcdTextUpdateMs = 0;
-		runSliceInstructions = 2000;
-		running = true;
-		runLoopId += 1;
-		pumpEmulator(runLoopId);
-		pumpRender(runLoopId);
-	}
+		function start() {
+			if (!romLoaded) return;
+			if (running) return;
+			lastLcdTextUpdateMs = 0;
+			running = true;
+			if (worker) {
+				void workerCall('start');
+				return;
+			}
+			runSliceInstructions = 2000;
+			runLoopId += 1;
+			pumpEmulator(runLoopId);
+			pumpRender(runLoopId);
+		}
 
-	function stop() {
-		running = false;
-		runLoopId += 1;
-	}
+		function stop() {
+			running = false;
+			if (worker) {
+				void workerCall('stop');
+				return;
+			}
+			runLoopId += 1;
+		}
 
-	function onKeyDown(event: KeyboardEvent) {
-		if (!emulator) return;
-		if (event.repeat) return;
-		const code = matrixCodeForKeyEvent(event);
-		if (code === null) return;
-		setPhysicalMatrixCode(code, true);
+		function onKeyDown(event: KeyboardEvent) {
+			if (event.repeat) return;
+			const code = matrixCodeForKeyEvent(event);
+			if (code === null) return;
+			setPhysicalMatrixCode(code, true);
 		event.preventDefault();
 	}
 
-	function onKeyUp(event: KeyboardEvent) {
-		if (!emulator) return;
-		const code = matrixCodeForKeyEvent(event);
-		if (code === null) return;
-		setPhysicalMatrixCode(code, false);
-		event.preventDefault();
+		function onKeyUp(event: KeyboardEvent) {
+			const code = matrixCodeForKeyEvent(event);
+			if (code === null) return;
+			setPhysicalMatrixCode(code, false);
+			event.preventDefault();
 	}
 
-	onMount(() => {
-		void tryAutoLoadRom();
-		installDevtoolsDebugHelpers();
-		window.addEventListener('keydown', onKeyDown, { passive: false });
-		window.addEventListener('keyup', onKeyUp, { passive: false });
-	});
+		onMount(() => {
+			void tryAutoLoadRom();
+			void ensureWorker();
+			installDevtoolsDebugHelpers();
+			window.addEventListener('keydown', onKeyDown, { passive: false });
+			window.addEventListener('keyup', onKeyUp, { passive: false });
+		});
 
-	onDestroy(() => {
-		window.removeEventListener('keydown', onKeyDown);
-		window.removeEventListener('keyup', onKeyUp);
-	});
+		onDestroy(() => {
+			if (worker) {
+				worker.terminate();
+				worker = null;
+			}
+			window.removeEventListener('keydown', onKeyDown);
+			window.removeEventListener('keyup', onKeyUp);
+		});
 </script>
 
 <main>
@@ -472,11 +647,11 @@
 		<p class="hint">Auto-loaded ROM via {romSource}</p>
 	{/if}
 
-		<div class="controls">
-			<button on:click={() => stepOnce(1_000)} disabled={!emulator}>Step 1k</button>
-			<button on:click={() => stepOnce(20_000)} disabled={!emulator}>Step 20k</button>
-			<button on:click={start} disabled={!emulator || running}>Run</button>
-			<button on:click={stop} disabled={!running}>Stop</button>
+			<div class="controls">
+				<button on:click={() => stepOnce(1_000)} disabled={!romLoaded}>Step 1k</button>
+				<button on:click={() => stepOnce(20_000)} disabled={!romLoaded}>Step 20k</button>
+				<button on:click={start} disabled={!romLoaded || running}>Run</button>
+				<button on:click={stop} disabled={!running}>Stop</button>
 			<label>
 				Target FPS:
 				<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
@@ -491,14 +666,14 @@
 
 	<LcdCanvas pixels={lcdPixels} />
 
-	<VirtualKeyboard
-		disabled={!emulator}
-		onPress={(code) => virtualPress(code)}
-		onRelease={(code) => virtualRelease(code)}
-	/>
+		<VirtualKeyboard
+			disabled={!romLoaded}
+			onPress={(code) => virtualPress(code)}
+			onRelease={(code) => virtualRelease(code)}
+		/>
 
-	{#if emulator}
-		<details bind:open={keyboardDebugOpen}>
+		{#if romLoaded}
+			<details bind:open={keyboardDebugOpen}>
 			<summary>Debug (keyboard)</summary>
 			<div class="debug-row">
 				<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
@@ -568,11 +743,11 @@
 		</details>
 	{/if}
 
-		{#if emulator}
-			<details
-				bind:open={callStackOpen}
-				on:toggle={() => {
-					if (callStackOpen) refreshAllNow();
+			{#if romLoaded}
+				<details
+					bind:open={callStackOpen}
+					on:toggle={() => {
+						if (callStackOpen) refreshAllNow();
 				}}
 			>
 				<summary>Call stack</summary>
@@ -622,18 +797,18 @@
 				{:else}
 					<p class="hint">Open to decode LCD text.</p>
 				{/if}
-			</details>
-		{/if}
+				</details>
+			{/if}
 
 	{#if lastError}
 		<p class="error">{lastError}</p>
 	{/if}
 
-		{#if emulator}
-			<details
-				bind:open={debugStateOpen}
-				on:toggle={() => {
-					if (debugStateOpen) refreshAllNow();
+			{#if romLoaded}
+				<details
+					bind:open={debugStateOpen}
+					on:toggle={() => {
+						if (debugStateOpen) refreshAllNow();
 				}}
 			>
 				<summary>Debug state</summary>
@@ -642,8 +817,8 @@
 				{:else}
 					<p class="hint">Open to fetch debug state.</p>
 				{/if}
-			</details>
-		{/if}
+				</details>
+			{/if}
 
 	<p class="hint">
 		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.
