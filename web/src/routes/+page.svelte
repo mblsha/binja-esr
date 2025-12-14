@@ -19,7 +19,7 @@
 	let instructionCount: string | null = null;
 
 	let running = false;
-	let instructionsPerFrame = 20_000;
+	let instructionsPerFrame = 1_000;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
