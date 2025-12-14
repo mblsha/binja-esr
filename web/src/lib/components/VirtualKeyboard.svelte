@@ -12,10 +12,10 @@
 	const keys: VirtualKey[] = [
 		{ label: 'PF1', code: 0x56, testId: 'vk-pf1' },
 		{ label: 'PF2', code: 0x55, testId: 'vk-pf2' },
-		{ label: '↑', code: 0x53, testId: 'vk-up' },
-		{ label: '←', code: 0x5C, testId: 'vk-left' },
-		{ label: '→', code: 0x54, testId: 'vk-right' },
-		{ label: '↓', code: 0x52, testId: 'vk-down' }
+		{ label: '↑', code: 0x1e, testId: 'vk-up' },
+		{ label: '←', code: 0x27, testId: 'vk-left' },
+		{ label: '→', code: 0x26, testId: 'vk-right' },
+		{ label: '↓', code: 0x17, testId: 'vk-down' }
 	];
 
 	function press(code: number, event: Event) {
