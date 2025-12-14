@@ -792,7 +792,7 @@ mod tests {
 
         // Set page=1, y=0, then write one byte.
         lcd.write(left_instr, 0x80 | 0x01);
-        lcd.write(left_instr, 0x40 | 0x00);
+        lcd.write(left_instr, 0x40);
         lcd.write(left_data, 0xAA);
 
         let events = lcd.take_display_write_capture();
@@ -812,10 +812,10 @@ mod tests {
         let left_data = 0x200A;
 
         lcd.write(left_instr, 0x80 | 0x01);
-        lcd.write(left_instr, 0x40 | 0x00);
+        lcd.write(left_instr, 0x40);
         lcd.write(left_data, 0x11);
         // Rewind y back to 0 and overwrite.
-        lcd.write(left_instr, 0x40 | 0x00);
+        lcd.write(left_instr, 0x40);
         lcd.write(left_data, 0x22);
 
         let events = lcd.take_display_write_capture();
