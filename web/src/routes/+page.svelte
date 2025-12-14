@@ -3,9 +3,10 @@
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 		import { matrixCodeForKeyEvent } from '$lib/keymap';
-		import { createEvalApi, Flag, Reg, type CallHandle } from '$lib/debug/sc62015_eval_api';
-		import { formatAddress } from '$lib/debug/memory_write_blocks';
+		import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
 		import { runUserJs } from '$lib/debug/run_user_js';
+		import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
+		import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
 
 		let wasm: any = null;
 		let emulator: any = null;
@@ -32,26 +33,7 @@
 	let running = false;
 	let targetFps = 30;
 
-	let functionRunnerOpen = false;
-	let functionSource = `// Examples:
-// await e.reset({ fresh: true, warmupTicks: 20_000 });
-// await e.keyboard.tap(0x56); // PF1 (virtual injection), holds ~40k instr by default
-// await e.call(0x00F2A87, undefined, { maxInstructions: 200_000, trace: true });
-//
-// await e.withProbe(0x00F299C, (s) => e.print({ hit: s.count, pc: s.pc, A: s.regs.A }), async () => {
-//   await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });
-// });
-`;
 	let functionRunnerBusy = false;
-	let functionRunnerOutput:
-		| {
-				events: any[];
-				calls: CallHandle[];
-				prints: any[];
-				resultJson: string | null;
-				error: string | null;
-		  }
-		| null = null;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
@@ -189,30 +171,13 @@
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 	}
 
-	function downloadTraceEvents(call: CallHandle) {
-		const events = call.artifacts.traceEvents ?? [];
-		if (!events.length) return;
-		const blob = new Blob([JSON.stringify(events, null, 2)], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `pce500_call_${call.index}.trace.json`;
-		document.body.appendChild(a);
-		a.click();
-		a.remove();
-		URL.revokeObjectURL(url);
-	}
-
-	async function runFunctionRunner() {
-		if (!romLoaded) return;
+	async function runFunctionRunner(source: string): Promise<FunctionRunnerOutput> {
 		functionRunnerBusy = true;
-		functionRunnerOutput = null;
 		try {
 			if (running) stop();
 			await ensureWorker();
 			if (worker) {
-				functionRunnerOutput = await workerCall('eval_js', { source: functionSource });
-				return;
+				return await workerCall('eval_js', { source });
 			}
 
 			const emu = await ensureEmulator();
@@ -247,12 +212,12 @@
 			let resultJson: string | null = null;
 			let error: string | null = null;
 			try {
-				const result = await runUserJs(functionSource, api, Reg, Flag);
+				const result = await runUserJs(source, api, Reg, Flag);
 				resultJson = safeJson(result);
 			} catch (err) {
 				error = err instanceof Error ? err.message : String(err);
 			}
-			functionRunnerOutput = {
+			return {
 				events: api.events,
 				calls: api.calls,
 				prints: api.prints,
@@ -260,7 +225,7 @@
 				error
 			};
 		} catch (err) {
-			functionRunnerOutput = {
+			return {
 				events: [],
 				calls: [],
 				prints: [],
@@ -929,104 +894,14 @@
 			{/if}
 
 			{#if romLoaded}
-				<details bind:open={functionRunnerOpen}>
-					<summary>Debug (function runner)</summary>
-					<div class="debug-row">
-						<button
-							type="button"
-							on:click={() => runFunctionRunner()}
-							disabled={!romLoaded || functionRunnerBusy}
-						>
-							{functionRunnerBusy ? 'Running…' : 'Run script'}
-						</button>
-						<button
-							type="button"
-							on:click={() => (functionRunnerOutput = null)}
-							disabled={functionRunnerBusy}
-						>
-							Clear
-						</button>
-					</div>
-					<textarea
-						class="editor"
-						rows="10"
-						bind:value={functionSource}
-						placeholder="Write async JS here. Available: e (Eval API), Reg, Flag."
-					></textarea>
-
-					{#if functionRunnerOutput?.error}
-						<p class="error">Script error: {functionRunnerOutput.error}</p>
-					{/if}
-
-					{#if functionRunnerOutput?.prints?.length}
-						<details open>
-							<summary>Prints ({functionRunnerOutput.prints.length})</summary>
-							<pre class="log" data-testid="function-runner-prints">
-{safeJson(functionRunnerOutput.prints.map((p) => p.value))}</pre
-							>
-						</details>
-					{/if}
-
-					{#if functionRunnerOutput?.calls?.length}
-						<details open>
-							<summary>Calls ({functionRunnerOutput.calls.length})</summary>
-							{#each functionRunnerOutput.calls as call (call.index)}
-								<div class="call">
-									<div class="call-title">
-										<strong>{call.name ?? formatFunction(call.address)}</strong>
-										({formatAddress(call.address)})
-									</div>
-									<div class="hint">{call.artifacts.infoLog.join(' • ')}</div>
-									{#if call.artifacts.changed.length}
-										<div class="hint">Changed regs: {call.artifacts.changed.join(', ')}</div>
-									{/if}
-									{#if call.artifacts.memoryBlocks.length}
-										<details>
-											<summary>Memory writes ({call.artifacts.memoryBlocks.length} block(s))</summary>
-											{#each call.artifacts.memoryBlocks as block (block.start)}
-												<pre class="log">
-{formatAddress(block.start)}:
-{block.lines.join('\n')}</pre
-												>
-											{/each}
-										</details>
-									{/if}
-									{#if call.artifacts.lcdWrites.length}
-										<details>
-											<summary>LCD writes ({call.artifacts.lcdWrites.length})</summary>
-											<pre class="log">
-{call.artifacts.lcdWrites
-	.slice(0, 64)
-	.map((w) => `page=${w.page} col=${w.col} val=${hex(w.value, 2)} pc=${hex(w.trace.pc, 6)}`)
-	.join('\n')}{call.artifacts.lcdWrites.length > 64 ? '\n…' : ''}</pre
-											>
-										</details>
-									{/if}
-									{#if call.artifacts.traceEvents?.length}
-										<div class="debug-row">
-											<span class="hint">
-												Trace events: {call.artifacts.traceEvents.length}
-												{call.artifacts.traceTruncated ? ' (truncated)' : ''}
-											</span>
-											<button type="button" on:click={() => downloadTraceEvents(call)}>
-												Download
-											</button>
-										</div>
-									{/if}
-								</div>
-							{/each}
-						</details>
-					{:else if functionRunnerOutput}
-						<p class="hint">No function calls executed.</p>
-					{/if}
-
-					{#if functionRunnerOutput?.resultJson}
-						<details>
-							<summary>Return value (JSON)</summary>
-							<pre class="log">{functionRunnerOutput.resultJson}</pre>
-						</details>
-					{/if}
-				</details>
+				<FunctionRunnerPanel
+					disabled={!romLoaded}
+					busy={functionRunnerBusy}
+					onRun={runFunctionRunner}
+					onBeforeRun={() => {
+						if (running) stop();
+					}}
+				/>
 			{/if}
 
 	<p class="hint">
@@ -1110,24 +985,5 @@
 		max-height: 200px;
 	}
 
-	.editor {
-		width: 100%;
-		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-		background: #0c0f12;
-		color: #dbe7ff;
-		border: 1px solid #243041;
-		border-radius: 8px;
-		padding: 12px;
-	}
-
-	.call {
-		border: 1px solid #243041;
-		border-radius: 8px;
-		padding: 10px;
-		margin: 10px 0;
-	}
-
-	.call-title {
-		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-	}
+	/* Function runner styles live in FunctionRunnerPanel/Results components. */
 	</style>
