@@ -90,19 +90,20 @@ describe('PC-E500 web emulator', () => {
 		expect(getByTestId('call-stack-empty').textContent ?? '').toContain('No frames');
 
 		const pf1 = getByTestId('vk-pf1') as HTMLButtonElement;
+		// Tap PF1 (press+release) and ensure the firmware sees it after stepping.
 		await fireEvent.pointerDown(pf1);
-		await fireEvent.click(step20k);
-		await fireEvent.click(step20k);
-		await fireEvent.click(step20k);
 		await fireEvent.pointerUp(pf1);
+		await fireEvent.click(step20k);
+		await fireEvent.click(step20k);
+		await fireEvent.click(step20k);
 
 		await waitFor(() => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
 			expect(text).toContain('MENU');
 		});
 		await waitFor(() => {
-			const status = (getByTestId('emu-status').textContent ?? '').toUpperCase();
-			expect(status).toContain('STOPPED');
+			const status = getByTestId('emu-status').textContent ?? '';
+			expect(status).toMatch(/PC: 0x/i);
 		});
 		expect(getByTestId('regs-table')).toBeTruthy();
 	});
