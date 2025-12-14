@@ -9,14 +9,18 @@
 
 	let lcdPixels: Uint8Array | null = null;
 	let lcdText: string[] | null = null;
-	let regs: Record<string, number> | null = null;
+	let regs: any = null;
 	let callStack: number[] | null = null;
 	let debugState: any = null;
 	let lastError: string | null = null;
 	let romSource: string | null = null;
+	let pcReg: number | null = null;
 
 	let running = false;
 	let instructionsPerFrame = 20_000;
+	const pressedCodes = new Set<number>();
+	const pendingVirtualRelease = new Map<number, number>();
+	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 
 	function safeJson(value: any): string {
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
@@ -29,6 +33,69 @@
 
 	function formatFunction(pc: number): string {
 		return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
+	}
+
+	function getReg(name: string): number | null {
+		for (const [key, value] of regsEntries(regs)) {
+			if (key === name) return value;
+		}
+		return null;
+	}
+
+	function regsEntries(input: any): [string, number][] {
+		if (!input) return [];
+		try {
+			if (typeof input.entries === 'function') {
+				return Array.from(input.entries()).filter(
+					([k, v]) => typeof k === 'string' && typeof v === 'number'
+				);
+			}
+			return Object.entries(input).filter(
+				([k, v]) => typeof k === 'string' && typeof v === 'number'
+			) as [string, number][];
+		} catch {
+			return [];
+		}
+	}
+
+	function setMatrixCode(code: number, down: boolean) {
+		if (!emulator) return;
+		if (down) {
+			if (pressedCodes.has(code)) return;
+			pressedCodes.add(code);
+			// Inject directly so short taps are observable even if firmware polling is sparse.
+			emulator.inject_matrix_event?.(code, false);
+			emulator.press_matrix_code?.(code);
+		} else {
+			if (!pressedCodes.has(code)) return;
+			pressedCodes.delete(code);
+			pendingVirtualRelease.delete(code);
+			emulator.inject_matrix_event?.(code, true);
+			emulator.release_matrix_code?.(code);
+		}
+	}
+
+	function virtualPress(code: number) {
+		setMatrixCode(code, true);
+		pendingVirtualRelease.delete(code);
+	}
+
+	function virtualRelease(code: number) {
+		if (!pressedCodes.has(code)) return;
+		pendingVirtualRelease.set(code, MIN_VIRTUAL_HOLD_INSTRUCTIONS);
+	}
+
+	function applyVirtualReleaseBudget(stepped: number) {
+		if (pendingVirtualRelease.size === 0) return;
+		for (const [code, remaining] of pendingVirtualRelease.entries()) {
+			const next = remaining - stepped;
+			if (next <= 0) {
+				pendingVirtualRelease.delete(code);
+				setMatrixCode(code, false);
+			} else {
+				pendingVirtualRelease.set(code, next);
+			}
+		}
 	}
 
 	async function ensureEmulator(): Promise<any> {
@@ -64,23 +131,28 @@
 		lcdPixels = emulator.lcd_pixels();
 		lcdText = emulator.lcd_text?.() ?? null;
 		regs = emulator.regs?.() ?? null;
+		try {
+			pcReg = emulator.get_reg?.('PC') ?? null;
+		} catch {
+			pcReg = null;
+		}
 		callStack = emulator.call_stack?.() ?? null;
 		debugState = emulator.debug_state?.() ?? null;
 	}
 
 	$: halted = Boolean(debugState?.halted);
 	$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
-	$: pc = regs?.PC ?? null;
+	$: pc = pcReg;
 
-	function sortedRegs(input: Record<string, number> | null): [string, number][] {
-		if (!input) return [];
-		return Object.entries(input).sort(([a], [b]) => a.localeCompare(b));
+	function sortedRegs(input: any): [string, number][] {
+		return regsEntries(input).sort(([a], [b]) => a.localeCompare(b));
 	}
 
 	function stepOnce(count: number) {
 		if (!emulator) return;
 		try {
 			emulator.step(count);
+			applyVirtualReleaseBudget(count);
 			refresh();
 		} catch (err) {
 			lastError = String(err);
@@ -127,7 +199,7 @@
 		if (event.repeat) return;
 		const code = matrixCodeForKeyEvent(event);
 		if (code === null) return;
-		emulator.press_matrix_code(code);
+		setMatrixCode(code, true);
 		event.preventDefault();
 	}
 
@@ -135,7 +207,7 @@
 		if (!emulator) return;
 		const code = matrixCodeForKeyEvent(event);
 		if (code === null) return;
-		emulator.release_matrix_code(code);
+		setMatrixCode(code, false);
 		event.preventDefault();
 	}
 
@@ -180,8 +252,8 @@
 
 	<VirtualKeyboard
 		disabled={!emulator}
-		onPress={(code) => emulator?.press_matrix_code?.(code)}
-		onRelease={(code) => emulator?.release_matrix_code?.(code)}
+		onPress={(code) => virtualPress(code)}
+		onRelease={(code) => virtualRelease(code)}
 	/>
 
 	{#if callStack}
