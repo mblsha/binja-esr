@@ -9,6 +9,7 @@
 		"preview": "vite preview",
 		"wasm:build": "cd emulator-wasm && wasm-pack build --target web --out-dir ../src/lib/wasm/pce500_wasm",
 		"wasm:test": "cd emulator-wasm && wasm-pack test --node",
+		"pretest": "npm run wasm:build",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"predev": "npm run wasm:build",

@@ -2025,6 +2025,58 @@ mod tests {
     }
 
     #[test]
+    fn imem_low_offsets_are_plain_ram_not_lcd_overlay() {
+        let mut rt = CoreRuntime::new();
+        // Program:
+        //   MV (IMEM 0x00), 0x12
+        //   MV A, (IMEM 0x00)
+        //   MV [0x000010], A
+        //
+        // Regression: CoreRuntime previously aliased IMEM 0x00..0x0F to the LCD overlay,
+        // but PC-E500 ROM uses those bytes as scratch RAM.
+        rt.memory.write_external_slice(
+            0,
+            &[
+                0xCC, 0x00, 0x12, // MV IMem8, imm8
+                0x80, 0x00, // MV A, IMem8
+                0xA8, 0x10, 0x00, 0x00, // MV [abs20], A
+            ],
+        );
+        rt.state.set_pc(0);
+
+        let lcd_before = rt.lcd.as_ref().expect("lcd present").stats();
+        rt.step(3).expect("execute IMEM scratch program");
+
+        let stored = rt.memory.load(0x000010, 8).unwrap_or(0) as u8;
+        assert_eq!(
+            stored, 0x12,
+            "IMEM low offsets must behave like RAM (expected scratch value to roundtrip)"
+        );
+
+        let lcd_after = rt.lcd.as_ref().expect("lcd present").stats();
+        assert_eq!(
+            lcd_after.instruction_counts, lcd_before.instruction_counts,
+            "IMEM scratch writes must not become LCD instructions"
+        );
+        assert_eq!(
+            lcd_after.data_write_counts, lcd_before.data_write_counts,
+            "IMEM scratch writes must not become LCD data writes"
+        );
+        assert_eq!(
+            lcd_after.cs_both_count, lcd_before.cs_both_count,
+            "IMEM scratch writes must not select LCD chips"
+        );
+        assert_eq!(
+            lcd_after.cs_left_count, lcd_before.cs_left_count,
+            "IMEM scratch writes must not select LCD chips"
+        );
+        assert_eq!(
+            lcd_after.cs_right_count, lcd_before.cs_right_count,
+            "IMEM scratch writes must not select LCD chips"
+        );
+    }
+
+    #[test]
     fn e_port_inputs_are_written_into_imem() {
         let mut rt = CoreRuntime::new();
         rt.set_e_port_inputs(0xAA, 0x55);
