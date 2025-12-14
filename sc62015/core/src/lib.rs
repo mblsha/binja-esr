@@ -3,6 +3,7 @@
 
 pub mod keyboard;
 pub mod lcd;
+pub mod lcd_text;
 pub mod llama;
 pub mod memory;
 pub mod perfetto;
