@@ -17,6 +17,10 @@ export type RegisterName =
 
 export type StatusFlag = 'C' | 'Z';
 
+export type ProbeRegisters = Record<string, number>;
+export type ProbeSample = { pc: number; count: number; regs: ProbeRegisters };
+export type ProbeHandler = (sample: ProbeSample) => void;
+
 export type CallArtifacts = {
 	address: number;
 	before_pc: number;
@@ -32,7 +36,17 @@ export type CallArtifacts = {
 		value: number;
 		trace: { pc: number; call_stack: { len: number; frames: number[] } };
 	}>;
-	report: { reason: string; steps: number; pc: number; sp: number; halted: boolean };
+	probe_samples: ProbeSample[];
+	trace_events: Array<{ op_index: number; pc: number; opcode: number; regs: Record<string, number> }>;
+	trace_truncated: boolean;
+	report: {
+		reason: string;
+		steps: number;
+		pc: number;
+		sp: number;
+		halted: boolean;
+		fault: { kind: string; message: string } | null;
+	};
 };
 
 export type CallHandle = {
@@ -45,6 +59,9 @@ export type CallHandle = {
 		changed: string[];
 		memoryBlocks: MemoryWriteBlock[];
 		lcdWrites: CallArtifacts['lcd_writes'];
+		probeSamples: ProbeSample[];
+		traceEvents: CallArtifacts['trace_events'];
+		traceTruncated: boolean;
 		result: CallArtifacts['report'];
 		infoLog: string[];
 	};
@@ -59,17 +76,36 @@ export type EvalEvent =
 
 export type EvalCallOptions = {
 	maxInstructions?: number;
+	trace?: boolean;
 	zeroMissing?: boolean;
+};
+
+export type EvalResetOptions = {
+	fresh?: boolean;
+	warmupTicks?: number;
 };
 
 export type EvalApiOptions = {};
 
 export interface EmulatorAdapter {
-	callFunction(address: number, maxInstructions: number): Promise<CallArtifacts>;
+	callFunction(
+		address: number,
+		maxInstructions: number,
+		options?: {
+			trace?: boolean;
+			traceMaxEvents?: number;
+			probe?: { pc: number; maxSamples?: number };
+		} | null
+	): Promise<CallArtifacts>;
+	reset(fresh?: boolean): Promise<void> | void;
+	step(instructions: number): Promise<void> | void;
 	getReg(name: string): number;
 	setReg(name: string, value: number): void;
 	read8(addr: number): number;
 	write8(addr: number, value: number): void;
+	pressMatrixCode?(code: number): void;
+	releaseMatrixCode?(code: number): void;
+	injectMatrixEvent?(code: number, release: boolean): void;
 }
 
 export interface EvalApi {
@@ -77,6 +113,7 @@ export interface EvalApi {
 	readonly prints: PrintEntry[];
 	readonly events: EvalEvent[];
 	last(): CallHandle | null;
+	reset(options?: EvalResetOptions): Promise<void>;
 	call(
 		reference: string | number,
 		registers?: Partial<Record<RegisterName, number>>,
@@ -86,13 +123,23 @@ export interface EvalApi {
 	flag(flag: StatusFlag): boolean;
 	assert(condition: unknown, message?: string): void;
 	print(...items: unknown[]): void;
+	withProbe<T>(pc: number, handler: ProbeHandler, body: () => Promise<T> | T): Promise<T>;
 	memory: {
 		read(address: number, size?: 1 | 2 | 3): Promise<number>;
 		write(address: number, size: 1 | 2 | 3, value: number): Promise<void>;
 	};
+	keyboard: {
+		press(code: number): Promise<void>;
+		release(code: number): Promise<void>;
+		tap(code: number, holdInstructions?: number): Promise<void>;
+		injectEvent(code: number, release: boolean): Promise<void>;
+	};
 }
 
 const DEFAULT_MAX_INSTRUCTIONS = 200_000;
+const DEFAULT_WARMUP_TICKS = 0;
+const DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
+const DEFAULT_PROBE_MAX_SAMPLES = 256;
 
 const RESULT_REGISTER_ORDER: RegisterName[] = [
 	'A',
@@ -180,22 +227,52 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	const events: EvalEvent[] = [];
 	let sequence = 0;
 	let callIndex = 0;
+	const probeStack: Array<{ pc: number; handler: ProbeHandler; maxSamples: number }> = [];
 
 	const api: EvalApi = {
 		calls,
 		prints,
 		events,
 		last: () => (calls.length ? calls[calls.length - 1] : null),
+		reset: async (options?: EvalResetOptions) => {
+			const fresh = options?.fresh ?? true;
+			const warmupTicks = options?.warmupTicks ?? DEFAULT_WARMUP_TICKS;
+			await Promise.resolve(adapter.reset(fresh));
+			if (warmupTicks > 0) {
+				await Promise.resolve(adapter.step(warmupTicks));
+			}
+		},
 		call: async (reference, registers, options) => {
 			const { address, name } = resolveReference(reference);
 			const maxInstructions = options?.maxInstructions ?? DEFAULT_MAX_INSTRUCTIONS;
 			const zeroMissing = options?.zeroMissing ?? true;
+			const trace = options?.trace ?? false;
 			const assignments = buildAssignments(registers, zeroMissing);
 			for (const [regName, value] of assignments.entries()) {
 				adapter.setReg(regName, value);
 			}
 
-			const artifacts = await adapter.callFunction(address, maxInstructions);
+			const activeProbe = probeStack.length ? probeStack[probeStack.length - 1] : null;
+			const artifacts = await adapter.callFunction(
+				address,
+				maxInstructions,
+				activeProbe
+					? {
+							trace,
+							probe: { pc: activeProbe.pc, maxSamples: activeProbe.maxSamples }
+						}
+					: { trace }
+			);
+
+			if (activeProbe && artifacts.probe_samples?.length) {
+				for (const sample of artifacts.probe_samples) {
+					try {
+						activeProbe.handler(sample);
+					} catch {
+						/* ignore probe handler errors */
+					}
+				}
+			}
 
 			const memoryEvents: MemoryWriteEvent[] = artifacts.memory_writes.map((e) => ({
 				addr: e.addr >>> 0,
@@ -207,15 +284,20 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			const after = artifacts.after_regs;
 			const changed = diffRegisters(before, after);
 
+			const fault = artifacts.report.fault;
 			const infoLog: string[] = [
 				`Execution reason: ${artifacts.report.reason}`,
+				fault ? `Fault: ${fault.kind}: ${fault.message}` : '',
 				memoryEvents.length
 					? `Captured ${memoryEvents.length} memory write byte(s) (${memoryBlocks.length} block(s)).`
 					: 'No memory writes captured.',
 				artifacts.lcd_writes.length
 					? `Captured ${artifacts.lcd_writes.length} LCD addressing-unit write(s).`
-					: 'No LCD writes captured.'
-			];
+					: 'No LCD writes captured.',
+				artifacts.trace_events?.length
+					? `Trace events: ${artifacts.trace_events.length}${artifacts.trace_truncated ? ' (truncated)' : ''}.`
+					: ''
+			].filter(Boolean);
 
 			const handle: CallHandle = {
 				index: callIndex++,
@@ -227,6 +309,9 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					changed,
 					memoryBlocks,
 					lcdWrites: artifacts.lcd_writes,
+					probeSamples: artifacts.probe_samples ?? [],
+					traceEvents: artifacts.trace_events ?? [],
+					traceTruncated: Boolean(artifacts.trace_truncated),
 					result: artifacts.report,
 					infoLog
 				}
@@ -249,6 +334,21 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				const entry: PrintEntry = { index: prints.length, value };
 				prints.push(entry);
 				events.push({ kind: 'print', sequence: sequence++, entry });
+			}
+		},
+		withProbe: async <T>(pc: number, handler: ProbeHandler, body: () => Promise<T> | T) => {
+			if (typeof handler !== 'function') throw new Error('withProbe requires a handler function');
+			if (typeof body !== 'function') throw new Error('withProbe requires a callback');
+			const normalizedPc = normalizeAddress(pc);
+			probeStack.push({
+				pc: normalizedPc,
+				handler,
+				maxSamples: DEFAULT_PROBE_MAX_SAMPLES
+			});
+			try {
+				return await body();
+			} finally {
+				probeStack.pop();
 			}
 		},
 		memory: {
@@ -283,9 +383,24 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				}
 				throw new Error(`Unsupported write size ${size}`);
 			}
+		},
+		keyboard: {
+			press: async (code: number) => {
+				adapter.pressMatrixCode?.(code & 0xff);
+			},
+			release: async (code: number) => {
+				adapter.releaseMatrixCode?.(code & 0xff);
+			},
+			injectEvent: async (code: number, release: boolean) => {
+				adapter.injectMatrixEvent?.(code & 0xff, Boolean(release));
+			},
+			tap: async (code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				adapter.injectMatrixEvent?.(code & 0xff, false);
+				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+				adapter.injectMatrixEvent?.(code & 0xff, true);
+			}
 		}
 	};
 
 	return api;
 }
-

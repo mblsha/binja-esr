@@ -62,6 +62,40 @@ struct CallReport {
     pc: u32,
     sp: u32,
     halted: bool,
+    fault: Option<CallFault>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CallFault {
+    kind: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProbeSample {
+    pc: u32,
+    count: u32,
+    regs: std::collections::HashMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TraceEvent {
+    op_index: u64,
+    pc: u32,
+    opcode: u8,
+    regs: std::collections::HashMap<String, u32>,
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+struct CallOptions {
+    #[serde(default)]
+    trace: bool,
+    #[serde(default)]
+    trace_max_events: u32,
+    #[serde(default)]
+    probe_pc: Option<u32>,
+    #[serde(default)]
+    probe_max_samples: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +109,9 @@ struct CallArtifacts {
     after_regs: std::collections::HashMap<String, u32>,
     memory_writes: Vec<MemoryWriteByte>,
     lcd_writes: Vec<sc62015_core::lcd::LcdDisplayWrite>,
+    probe_samples: Vec<ProbeSample>,
+    trace_events: Vec<TraceEvent>,
+    trace_truncated: bool,
     report: CallReport,
 }
 
@@ -221,8 +258,28 @@ impl Pce500Emulator {
     /// - The function is entered by setting `PC=addr` and pushing a sentinel return address
     ///   onto the S stack; the loop stops when execution returns to that sentinel PC.
     pub fn call_function(&mut self, addr: u32, max_instructions: u32) -> Result<JsValue, JsValue> {
+        self.call_function_ex(addr, max_instructions, JsValue::UNDEFINED)
+    }
+
+    /// Like `call_function`, but allows optional capture controls via `options`:
+    /// - `{ trace: true }` enables Perfetto capture for the duration of the call and returns the trace bytes.
+    /// - `{ probe_pc: 0x00F123, probe_max_samples: 100 }` records register snapshots whenever `PC == probe_pc`.
+    #[wasm_bindgen]
+    pub fn call_function_ex(
+        &mut self,
+        addr: u32,
+        max_instructions: u32,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
         let addr = addr & 0x000f_ffff;
         let max_instructions = max_instructions.max(1);
+        let mut opts: CallOptions = serde_wasm_bindgen::from_value(options).unwrap_or_default();
+        if opts.probe_max_samples == 0 {
+            opts.probe_max_samples = 256;
+        }
+        if opts.trace_max_events == 0 {
+            opts.trace_max_events = max_instructions.min(50_000);
+        }
         let before_pc = self.runtime.state.pc();
         let before_sp = self.runtime.state.get_reg(RegName::S);
         let before_call_metrics = self.runtime.state.snapshot_call_metrics();
@@ -253,14 +310,50 @@ impl Pce500Emulator {
 
         let mut steps: u32 = 0;
         let mut reason = "timeout".to_string();
+        let mut fault: Option<CallFault> = None;
+        let mut probe_samples: Vec<ProbeSample> = Vec::new();
+        let mut probe_hits: u32 = 0;
+        let mut trace_events: Vec<TraceEvent> = Vec::new();
+        let mut trace_truncated = false;
         while steps < max_instructions {
             if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
                 reason = "halted".to_string();
                 break;
             }
-            self.runtime
-                .step(1)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            if opts.trace {
+                if (trace_events.len() as u32) < opts.trace_max_events {
+                    let pc = self.runtime.state.pc();
+                    let opcode = self.runtime.memory.load(pc, 8).unwrap_or(0) as u8;
+                    trace_events.push(TraceEvent {
+                        op_index: self.runtime.instruction_count(),
+                        pc,
+                        opcode,
+                        regs: sc62015_core::collect_registers(&self.runtime.state),
+                    });
+                } else {
+                    trace_truncated = true;
+                }
+            }
+            if let Some(probe_pc) = opts.probe_pc {
+                if self.runtime.state.pc() == (probe_pc & 0x000f_ffff)
+                    && (probe_samples.len() as u32) < opts.probe_max_samples
+                {
+                    probe_hits = probe_hits.saturating_add(1);
+                    probe_samples.push(ProbeSample {
+                        pc: self.runtime.state.pc(),
+                        count: probe_hits,
+                        regs: sc62015_core::collect_registers(&self.runtime.state),
+                    });
+                }
+            }
+            if let Err(err) = self.runtime.step(1) {
+                reason = "fault".to_string();
+                fault = Some(CallFault {
+                    kind: "CoreError".to_string(),
+                    message: err.to_string(),
+                });
+                break;
+            }
             steps += 1;
             if self.runtime.state.pc() == sentinel_pc {
                 reason = "returned".to_string();
@@ -297,6 +390,7 @@ impl Pce500Emulator {
             pc: after_pc,
             sp: after_sp,
             halted: self.runtime.state.is_halted(),
+            fault,
         };
         let artifacts = CallArtifacts {
             address: addr,
@@ -308,6 +402,9 @@ impl Pce500Emulator {
             after_regs,
             memory_writes,
             lcd_writes,
+            probe_samples,
+            trace_events,
+            trace_truncated,
             report,
         };
         serde_wasm_bindgen::to_value(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -423,6 +520,38 @@ mod tests {
         assert_eq!(
             pixels.length(),
             (LCD_DISPLAY_ROWS as u32) * (LCD_DISPLAY_COLS as u32)
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_can_capture_trace_events() {
+        #[derive(serde::Deserialize)]
+        struct CallArtifactsDecoded {
+            trace_events: Vec<TraceEventDecoded>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct TraceEventDecoded {
+            pc: u32,
+        }
+
+        #[derive(Serialize)]
+        struct Opts {
+            trace: bool,
+        }
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let js = emulator
+            .call_function_ex(pc, 64, serde_wasm_bindgen::to_value(&Opts { trace: true }).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded = serde_wasm_bindgen::from_value(js).expect("decode");
+        assert!(
+            decoded.trace_events.iter().any(|ev| ev.pc == pc),
+            "expected at least one trace event at start pc=0x{pc:06X}"
         );
     }
 

@@ -33,9 +33,14 @@
 	let targetFps = 30;
 
 	let functionRunnerOpen = false;
-	let functionSource = `// Example:
-// const handle = await e.call(0x00F2A87);
-// e.print(handle.artifacts.result);
+	let functionSource = `// Examples:
+// await e.reset({ fresh: true, warmupTicks: 20_000 });
+// await e.keyboard.tap(0x56); // PF1 (virtual injection), holds ~40k instr by default
+// await e.call(0x00F2A87, undefined, { maxInstructions: 200_000, trace: true });
+//
+// await e.withProbe(0x00F299C, (s) => e.print({ hit: s.count, pc: s.pc, A: s.regs.A }), async () => {
+//   await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });
+// });
 `;
 	let functionRunnerBusy = false;
 	let functionRunnerOutput:
@@ -184,11 +189,26 @@
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 	}
 
+	function downloadTraceEvents(call: CallHandle) {
+		const events = call.artifacts.traceEvents ?? [];
+		if (!events.length) return;
+		const blob = new Blob([JSON.stringify(events, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `pce500_call_${call.index}.trace.json`;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		URL.revokeObjectURL(url);
+	}
+
 	async function runFunctionRunner() {
 		if (!romLoaded) return;
 		functionRunnerBusy = true;
 		functionRunnerOutput = null;
 		try {
+			if (running) stop();
 			await ensureWorker();
 			if (worker) {
 				functionRunnerOutput = await workerCall('eval_js', { source: functionSource });
@@ -197,12 +217,31 @@
 
 			const emu = await ensureEmulator();
 			const api = createEvalApi({
-				callFunction: async (address: number, maxInstructions: number) =>
-					Promise.resolve(emu.call_function(address, maxInstructions)),
+				callFunction: async (
+					address: number,
+					maxInstructions: number,
+					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
+				) =>
+					Promise.resolve(
+						emu.call_function_ex?.(address, maxInstructions, {
+							trace: Boolean(options?.trace),
+							probe_pc: options?.probe ? options.probe.pc : null,
+							probe_max_samples: options?.probe?.maxSamples ?? 256
+						}) ?? emu.call_function(address, maxInstructions)
+					),
+				reset: async () => {
+					await Promise.resolve(emu.reset?.());
+				},
+				step: async (instructions: number) => {
+					await Promise.resolve(emu.step?.(instructions));
+				},
 				getReg: (name: string) => emu.get_reg?.(name) ?? 0,
 				setReg: (name: string, value: number) => emu.set_reg?.(name, value),
 				read8: (addr: number) => emu.read_u8?.(addr) ?? 0,
-				write8: (addr: number, value: number) => emu.write_u8?.(addr, value)
+				write8: (addr: number, value: number) => emu.write_u8?.(addr, value),
+				pressMatrixCode: (code: number) => emu.press_matrix_code?.(code),
+				releaseMatrixCode: (code: number) => emu.release_matrix_code?.(code),
+				injectMatrixEvent: (code: number, release: boolean) => emu.inject_matrix_event?.(code, release)
 			});
 
 			let resultJson: string | null = null;
@@ -962,6 +1001,17 @@
 	.join('\n')}{call.artifacts.lcdWrites.length > 64 ? '\n…' : ''}</pre
 											>
 										</details>
+									{/if}
+									{#if call.artifacts.traceEvents?.length}
+										<div class="debug-row">
+											<span class="hint">
+												Trace events: {call.artifacts.traceEvents.length}
+												{call.artifacts.traceTruncated ? ' (truncated)' : ''}
+											</span>
+											<button type="button" on:click={() => downloadTraceEvents(call)}>
+												Download
+											</button>
+										</div>
 									{/if}
 								</div>
 							{/each}
