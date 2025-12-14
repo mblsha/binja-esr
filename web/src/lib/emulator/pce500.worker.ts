@@ -362,6 +362,7 @@ async function handleRequest(msg: WorkerRequest) {
 				}
 				await ensureEmulator();
 				const res = await evalScript(msg.source);
+				postFrame(captureFrame(true));
 				replyOk(msg.id, res);
 				return;
 			}

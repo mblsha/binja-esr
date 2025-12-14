@@ -83,7 +83,9 @@
 		{/each}
 	</details>
 {:else if output}
-	<p class="hint">No function calls executed.</p>
+	{#if !output.prints?.length && !output.resultJson}
+		<p class="hint">Script executed (no calls).</p>
+	{/if}
 {/if}
 
 {#if output?.resultJson}

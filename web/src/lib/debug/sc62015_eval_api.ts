@@ -72,7 +72,8 @@ export type PrintEntry = { index: number; value: unknown };
 export type EvalEvent =
 	| { kind: 'call'; sequence: number; handle: CallHandle }
 	| { kind: 'print'; sequence: number; entry: PrintEntry }
-	| { kind: 'error'; sequence: number; message: string };
+	| { kind: 'error'; sequence: number; message: string }
+	| { kind: 'reset'; sequence: number; fresh: boolean; warmupTicks: number };
 
 export type EvalCallOptions = {
 	maxInstructions?: number;
@@ -237,10 +238,18 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		reset: async (options?: EvalResetOptions) => {
 			const fresh = options?.fresh ?? true;
 			const warmupTicks = options?.warmupTicks ?? DEFAULT_WARMUP_TICKS;
+			if (fresh) {
+				calls.length = 0;
+				prints.length = 0;
+				events.length = 0;
+				sequence = 0;
+				callIndex = 0;
+			}
 			await Promise.resolve(adapter.reset(fresh));
 			if (warmupTicks > 0) {
 				await Promise.resolve(adapter.step(warmupTicks));
 			}
+			events.push({ kind: 'reset', sequence: sequence++, fresh, warmupTicks });
 		},
 		call: async (reference, registers, options) => {
 			const { address, name } = resolveReference(reference);

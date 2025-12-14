@@ -78,6 +78,7 @@ describe('createEvalApi', () => {
 		const api = createEvalApi(adapter as any);
 		await api.reset({ fresh: true, warmupTicks: 123 });
 		expect(ops).toEqual(['reset', 'step:123']);
+		expect(api.events[0]?.kind).toBe('reset');
 	});
 
 	it('withProbe forwards probe to callFunction and invokes handler for returned samples', async () => {
