@@ -18,6 +18,9 @@ function parseAllowedHosts(): string[] | true | undefined {
 
 export default defineConfig({
 	plugins: [sveltekit()],
+	worker: {
+		format: 'es'
+	},
 	resolve: {
 		conditions: isVitest ? ['browser'] : undefined
 	},
