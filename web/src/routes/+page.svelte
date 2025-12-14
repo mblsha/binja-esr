@@ -38,10 +38,13 @@
 	let lastLcdTextUpdateMs = 0;
 	$: targetFrameIntervalMs = 1000 / Math.max(1, targetFps);
 
-	const RUN_STEP_SLICE_INSTRUCTIONS = 2000;
+	const RUN_SLICE_MIN_INSTRUCTIONS = 1;
+	const RUN_SLICE_MAX_INSTRUCTIONS = 20_000;
+	const RUN_SLICE_TARGET_MS = 0.4;
 	const RUN_MAX_WORK_MS = 4;
 	const RUN_YIELD_MS = 0;
 	let runLoopId = 0;
+	let runSliceInstructions = 2000;
 
 	let debugKio: {
 		pc: number | null;
@@ -363,7 +366,16 @@
 		const startMs = performance.now();
 		try {
 			while (performance.now() - startMs < RUN_MAX_WORK_MS) {
-				stepCore(RUN_STEP_SLICE_INSTRUCTIONS);
+				const sliceStart = performance.now();
+				stepCore(runSliceInstructions);
+				const sliceMs = performance.now() - sliceStart;
+				if (sliceMs > 0) {
+					const scaled = Math.floor(runSliceInstructions * (RUN_SLICE_TARGET_MS / sliceMs));
+					runSliceInstructions = Math.max(
+						RUN_SLICE_MIN_INSTRUCTIONS,
+						Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled)
+					);
+				}
 				if (!running || id !== runLoopId) return;
 			}
 		} catch (err) {
@@ -405,6 +417,7 @@
 		if (!emulator) return;
 		if (running) return;
 		lastLcdTextUpdateMs = 0;
+		runSliceInstructions = 2000;
 		running = true;
 		runLoopId += 1;
 		pumpEmulator(runLoopId);
