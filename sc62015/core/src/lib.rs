@@ -720,19 +720,12 @@ impl CoreRuntime {
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
-                        if let Some(val) = (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
+                        if let Some(val) =
+                            (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
                         {
                             (*self.mem).bump_read_count();
                             (*self.mem).log_kio_read(offset, val);
                             return val as u32;
-                        }
-                        if offset <= 0x0F && !self.lcd_ptr.is_null() {
-                            // IMEM overlay for the LCD controller; mirror to the 0x2000 map.
-                            let mapped = crate::lcd::overlay_addr(offset);
-                            if let Some(val) = (*self.lcd_ptr).read(mapped) {
-                                (*self.mem).bump_read_count();
-                                return val as u32;
-                            }
                         }
                     }
                     // LCD controller mirrored at 0x2000/0xA000.
@@ -808,12 +801,6 @@ impl CoreRuntime {
                             if offset != 0xF2 {
                                 let _ = (*self.mem).store(addr, bits, value);
                             }
-                            return;
-                        }
-                        if offset <= 0x0F && !self.lcd_ptr.is_null() {
-                            let mapped = crate::lcd::overlay_addr(offset);
-                            (*self.mem).bump_write_count();
-                            (*self.lcd_ptr).write(mapped, value as u8);
                             return;
                         }
                     }
@@ -1999,14 +1986,15 @@ mod tests {
     }
 
     #[test]
-    fn lcd_overlay_write_counts_as_memory_write() {
+    fn lcd_mapped_write_counts_as_memory_write() {
         let mut rt = CoreRuntime::new();
-        // Program: MV IMem8, imm8 targeting LCD overlay offset 0x00.
-        rt.memory.write_external_slice(0, &[0xCC, 0x00, 0xC0]); // ON instruction byte
+        // Program: MV A, 0xC0 ; MV [0x2000], A (LCD instruction write, CS=both).
+        rt.memory
+            .write_external_slice(0, &[0x08, 0xC0, 0xA8, 0x00, 0x20, 0x00]);
         rt.state.set_pc(0);
 
         assert_eq!(rt.memory.memory_write_count(), 0);
-        rt.step(1).expect("execute overlay write");
+        rt.step(2).expect("execute LCD write");
         assert!(
             rt.memory.memory_write_count() >= 1,
             "overlay write should increment memory_write_count"
@@ -2014,7 +2002,7 @@ mod tests {
     }
 
     #[test]
-    fn lcd_overlay_read_counts_as_memory_read() {
+    fn lcd_mapped_read_counts_as_memory_read() {
         // Establish baseline read overhead (IRQ probes, opcode fetch) using a NOP.
         let mut baseline = CoreRuntime::new();
         baseline.memory.write_external_byte(0x0000, 0x00); // NOP
@@ -2023,11 +2011,12 @@ mod tests {
         let base_reads = baseline.memory.memory_read_count();
 
         let mut rt = CoreRuntime::new();
-        // Program: MV A, IMem8 targeting LCD overlay offset 0x00.
-        rt.memory.write_external_slice(0, &[0x80, 0x00]);
+        // Program: MV A, [0x2001] (LCD read, RW=1).
+        rt.memory
+            .write_external_slice(0, &[0x88, 0x01, 0x20, 0x00]);
         rt.state.set_pc(0);
 
-        rt.step(1).expect("execute overlay read");
+        rt.step(1).expect("execute LCD read");
         let overlay_reads = rt.memory.memory_read_count();
         assert!(
             overlay_reads >= base_reads + 2,
