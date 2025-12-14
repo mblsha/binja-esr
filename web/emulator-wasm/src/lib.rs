@@ -9,12 +9,10 @@ use wasm_bindgen::prelude::*;
 
 use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
+use sc62015_core::pce500::{
+    load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
+};
 use sc62015_core::{CoreRuntime, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
-
-const ROM_WINDOW_START: usize = 0xC0000;
-const ROM_WINDOW_LEN: usize = 0x40000;
-const DEFAULT_MTI_PERIOD: u64 = 500;
-const DEFAULT_STI_PERIOD: u64 = 5000;
 
 #[derive(Debug, Default, Clone, Serialize)]
 struct TimerState {
@@ -79,8 +77,7 @@ impl Pce500Emulator {
             return Err(JsValue::from_str("ROM is empty"));
         }
         self.rom_image = rom.to_vec();
-        let font = Pce500FontMap::from_rom(&self.rom_image);
-        self.font_map = if font.is_empty() { None } else { Some(font) };
+        self.font_map = pce500_font_map_from_rom(&self.rom_image);
         self.reset()
     }
 
@@ -91,7 +88,8 @@ impl Pce500Emulator {
         let rom = self.rom_image.clone();
         self.runtime = CoreRuntime::new();
         self.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
-        self.load_pce500_rom_window(&rom)?;
+        load_pce500_rom_window(&mut self.runtime, &rom)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.runtime.power_on_reset();
         Ok(())
     }
@@ -244,27 +242,13 @@ impl Pce500Emulator {
         serde_wasm_bindgen::to_value(&state).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    fn load_pce500_rom_window(&mut self, rom: &[u8]) -> Result<(), JsValue> {
-        let rom_len = ROM_WINDOW_LEN;
-        let src_start = rom.len().saturating_sub(rom_len);
-        let slice = &rom[src_start..];
-        let copy_len = slice.len().min(rom_len);
-        let start_in_slice = slice.len().saturating_sub(copy_len);
-        self.runtime
-            .memory
-            .write_external_slice(ROM_WINDOW_START, &slice[start_in_slice..]);
-        self.runtime.memory.set_readonly_ranges(vec![(
-            ROM_WINDOW_START as u32,
-            (ROM_WINDOW_START + rom_len - 1) as u32,
-        )]);
-        self.runtime.memory.set_keyboard_bridge(false);
-        Ok(())
-    }
+    // ROM window loading lives in sc62015-core so the CLI runner and WASM wrapper share it.
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sc62015_core::pce500::ROM_WINDOW_LEN;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const PF1_CODE: u8 = 0x56;

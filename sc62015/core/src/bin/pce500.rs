@@ -7,6 +7,7 @@ use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::LcdController,
     lcd_text::{decode_display_text, Pce500FontMap},
+    pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
     llama::{
         eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
@@ -43,9 +44,6 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const PF2_MENU_PC: u32 = 0x0F1FBF; // observed Python PC after PF2 menu renders
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-// PC-E500 reset vector lives at the top of the address space (FFFFD-FFFFF), separate
-// from the IRQ vector at 0xFFFFA.
-const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
 
 struct IrqPerfetto {
     builder: PerfettoTraceBuilder,
@@ -1188,13 +1186,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     let mut memory = MemoryImage::new();
     // Load only ROM region (top 256KB) to mirror Python; leave RAM zeroed.
-    let rom_start: usize = 0xC0000;
-    let rom_len: usize = 0x40000;
-    let src_start = rom_bytes.len().saturating_sub(rom_len);
-    let slice = &rom_bytes[src_start..];
-    let copy_len = slice.len().min(rom_len);
-    memory.write_external_slice(rom_start, &slice[slice.len() - copy_len..]);
-    memory.set_readonly_ranges(vec![(rom_start as u32, (rom_start + rom_len - 1) as u32)]);
+    load_pce500_rom_window_into_memory(&mut memory, &rom_bytes);
+    memory.set_readonly_ranges(vec![(
+        ROM_WINDOW_START as u32,
+        (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
+    )]);
     memory.set_keyboard_bridge(false);
 
     // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)
@@ -1232,15 +1228,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut state = LlamaState::new();
     let mut executor = LlamaExecutor::new();
     power_on_reset(&mut bus, &mut state);
-    // Align PC with ROM reset vector.
-    // The ROM slice is already aligned to `rom_start`, so indexing the reset vector only
-    // needs to subtract that base address (no double adjustment for `src_start`).
-    let reset_offset = ROM_RESET_VECTOR_ADDR.saturating_sub(rom_start as u32) as usize;
-    let reset_vec = slice.get(reset_offset).copied().unwrap_or(0) as u32
-        | ((slice.get(reset_offset + 1).copied().unwrap_or(0) as u32) << 8)
-        | ((slice.get(reset_offset + 2).copied().unwrap_or(0) as u32) << 16);
-    state.set_pc(reset_vec & ADDRESS_MASK);
-    // Leave IMR at reset defaults; the ROM will initialize vectors/masks.
+    // power_on_reset seeds PC from the ROM reset vector at 0xFFFFD.
 
     let start = Instant::now();
     let mut executed: u64 = 0;
@@ -1615,6 +1603,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sc62015_core::pce500::ROM_RESET_VECTOR_ADDR;
 
     #[test]
     fn on_key_sets_isr_and_triggers_pending_irq() {
