@@ -407,7 +407,10 @@ impl Pce500Emulator {
             trace_truncated,
             report,
         };
-        serde_wasm_bindgen::to_value(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))
+        // Return JSON to avoid browser-specific structured-object aliasing errors observed with
+        // `serde_wasm_bindgen` + `HashMap` (wasm-bindgen re-entrancy guard).
+        let json = serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(JsValue::from_str(&json))
     }
 
     pub fn lcd_pixels(&self) -> Uint8Array {
@@ -548,7 +551,7 @@ mod tests {
         let js = emulator
             .call_function_ex(pc, 64, serde_wasm_bindgen::to_value(&Opts { trace: true }).unwrap())
             .expect("call");
-        let decoded: CallArtifactsDecoded = serde_wasm_bindgen::from_value(js).expect("decode");
+        let decoded: CallArtifactsDecoded = serde_json::from_str(&js.as_string().unwrap()).expect("decode");
         assert!(
             decoded.trace_events.iter().any(|ev| ev.pc == pc),
             "expected at least one trace event at start pc=0x{pc:06X}"

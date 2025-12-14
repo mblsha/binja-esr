@@ -95,14 +95,16 @@ async function evalScript(source: string): Promise<any> {
 			address: number,
 			maxInstructions: number,
 			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
-		) =>
-			Promise.resolve(
+		) => {
+			const raw =
 				emulator.call_function_ex?.(address, maxInstructions, {
 					trace: Boolean(options?.trace),
 					probe_pc: options?.probe ? options.probe.pc : null,
 					probe_max_samples: options?.probe?.maxSamples ?? 256
-				}) ?? emulator.call_function(address, maxInstructions)
-			),
+				}) ?? emulator.call_function(address, maxInstructions);
+			if (typeof raw === 'string') return JSON.parse(raw);
+			return raw;
+		},
 		reset: async () => {
 			await Promise.resolve(emulator.reset?.());
 		},

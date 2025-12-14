@@ -186,14 +186,16 @@
 					address: number,
 					maxInstructions: number,
 					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
-				) =>
-					Promise.resolve(
+				) => {
+					const raw =
 						emu.call_function_ex?.(address, maxInstructions, {
 							trace: Boolean(options?.trace),
 							probe_pc: options?.probe ? options.probe.pc : null,
 							probe_max_samples: options?.probe?.maxSamples ?? 256
-						}) ?? emu.call_function(address, maxInstructions)
-					),
+						}) ?? emu.call_function(address, maxInstructions);
+					if (typeof raw === 'string') return JSON.parse(raw);
+					return raw;
+				},
 				reset: async () => {
 					await Promise.resolve(emu.reset?.());
 				},
