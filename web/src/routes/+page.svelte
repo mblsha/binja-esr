@@ -107,15 +107,22 @@
 			pressedCodes.add(code);
 			// Inject directly so short taps are observable even if firmware polling is sparse.
 			emulator.inject_matrix_event?.(code, false);
-			emulator.press_matrix_code?.(code);
 			logDebug(`press ${hex(code, 2)}`);
 		} else {
 			if (!pressedCodes.has(code)) return;
 			pressedCodes.delete(code);
 			pendingVirtualRelease.delete(code);
 			emulator.inject_matrix_event?.(code, true);
-			emulator.release_matrix_code?.(code);
 			logDebug(`release ${hex(code, 2)}`);
+		}
+	}
+
+	function setPhysicalMatrixCode(code: number, down: boolean) {
+		if (!emulator) return;
+		if (down) {
+			emulator.press_matrix_code?.(code);
+		} else {
+			emulator.release_matrix_code?.(code);
 		}
 	}
 
@@ -338,7 +345,7 @@
 		if (event.repeat) return;
 		const code = matrixCodeForKeyEvent(event);
 		if (code === null) return;
-		setMatrixCode(code, true);
+		setPhysicalMatrixCode(code, true);
 		event.preventDefault();
 	}
 
@@ -346,7 +353,7 @@
 		if (!emulator) return;
 		const code = matrixCodeForKeyEvent(event);
 		if (code === null) return;
-		setMatrixCode(code, false);
+		setPhysicalMatrixCode(code, false);
 		event.preventDefault();
 	}
 
