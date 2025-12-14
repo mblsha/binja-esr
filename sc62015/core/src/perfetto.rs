@@ -1,14 +1,26 @@
 // PY_SOURCE: pce500/tracing/perfetto_tracing.py:PerfettoTracer
 
-use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
 use crate::Result;
-pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
-#[cfg(test)]
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[cfg(feature = "perfetto")]
+use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
+#[cfg(feature = "perfetto")]
+pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
+#[cfg(all(test, feature = "perfetto"))]
+use std::cell::RefCell;
+
+#[cfg(not(feature = "perfetto"))]
+#[derive(Clone, Debug)]
+pub enum AnnotationValue {
+    Pointer(u64),
+    UInt(u64),
+    Str(String),
+}
+
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
+#[cfg(feature = "perfetto")]
 pub struct PerfettoTracer {
     builder: PerfettoTraceBuilder,
     exec_track: TrackId,
@@ -44,6 +56,7 @@ pub struct PerfettoTracer {
     pub(crate) test_counters: RefCell<Vec<(u64, u32, u64, u64)>>, // (instr_index, call_depth, reads, writes)
 }
 
+#[cfg(feature = "perfetto")]
 impl PerfettoTracer {
     pub fn new(path: PathBuf) -> Self {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
@@ -622,9 +635,148 @@ impl PerfettoTracer {
     }
 }
 
+#[cfg(not(feature = "perfetto"))]
+pub struct PerfettoTracer {
+    _path: PathBuf,
+}
+
+#[cfg(not(feature = "perfetto"))]
+impl PerfettoTracer {
+    pub fn new(path: PathBuf) -> Self {
+        Self { _path: path }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_regs(
+        &mut self,
+        _instr_index: u64,
+        _pc: u32,
+        _reg_pc: u32,
+        _opcode: u8,
+        _regs: &HashMap<String, u32>,
+        _mem_imr: u8,
+        _mem_isr: u8,
+    ) {
+    }
+
+    pub fn record_mem_write(
+        &mut self,
+        _instr_index: u64,
+        _pc: u32,
+        _addr: u32,
+        _value: u32,
+        _space: &str,
+        _size: u8,
+    ) {
+    }
+
+    pub fn record_mem_write_with_substep(
+        &mut self,
+        _instr_index: u64,
+        _pc: u32,
+        _addr: u32,
+        _value: u32,
+        _space: &str,
+        _size: u8,
+        _substep: u64,
+    ) {
+    }
+
+    pub fn record_mem_write_at_cycle(
+        &mut self,
+        _cycle: u64,
+        _pc: Option<u32>,
+        _addr: u32,
+        _value: u32,
+        _space: &str,
+        _size: u8,
+    ) {
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_lcd_event(
+        &mut self,
+        _name: &str,
+        _addr: u32,
+        _value: u8,
+        _chip: usize,
+        _page: u8,
+        _column: u8,
+        _pc: Option<u32>,
+        _op_index: Option<u64>,
+    ) {
+    }
+
+    pub fn update_counters(
+        &mut self,
+        _instr_index: u64,
+        _call_depth: u32,
+        _mem_reads: u64,
+        _mem_writes: u64,
+    ) {
+    }
+
+    pub fn finish(self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn record_imr_read(&mut self, _pc: Option<u32>, _value: u8, _instr_index: Option<u64>) {}
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_imem_addr(
+        &mut self,
+        _mode: &str,
+        _base: u32,
+        _bp: u32,
+        _px: u32,
+        _py: u32,
+        _op_index: Option<u64>,
+        _pc: Option<u32>,
+    ) {
+    }
+
+    pub fn record_keyi_set(
+        &mut self,
+        _addr: u32,
+        _value: u8,
+        _op_index: Option<u64>,
+        _pc: Option<u32>,
+    ) {
+    }
+
+    pub fn record_kio_read(
+        &mut self,
+        _pc: Option<u32>,
+        _offset: u8,
+        _value: u8,
+        _op_index: Option<u64>,
+    ) {
+    }
+
+    pub fn record_irq_event(&mut self, _name: &str, _payload: HashMap<String, AnnotationValue>) {}
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_irq_check(
+        &mut self,
+        _name: &str,
+        _pc: u32,
+        _imr: u8,
+        _isr: u8,
+        _pending: bool,
+        _in_interrupt: bool,
+        _pending_src: Option<&str>,
+        _kil: Option<u8>,
+        _imr_reg: Option<u8>,
+    ) {
+    }
+
+    pub fn record_call_flow(&mut self, _name: &str, _pc_from: u32, _pc_to: u32, _depth: u32) {}
+}
+
 /// Compute a Perfetto timestamp for IRQ/key events, honoring a manual clock when present,
 /// otherwise falling back to the current/last instruction index with a small substep to
 /// avoid collapsing multiple host events into the same instant.
+#[cfg(feature = "perfetto")]
 fn irq_timestamp(
     cycle_ts: Option<i64>,
     instr_idx: Option<u64>,
@@ -644,6 +796,7 @@ fn irq_timestamp(
     seq as i64
 }
 
+#[cfg(feature = "perfetto")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IrqTrack {
     Timer,
@@ -652,6 +805,7 @@ enum IrqTrack {
 }
 
 /// Decide which Perfetto track to use for IRQ/key events based on the name and src payload.
+#[cfg(feature = "perfetto")]
 fn classify_irq_track(name: &str, payload: &HashMap<String, AnnotationValue>) -> IrqTrack {
     let upper_name = name.to_ascii_uppercase();
     let src = payload
@@ -686,7 +840,7 @@ fn classify_irq_track(name: &str, payload: &HashMap<String, AnnotationValue>) ->
     IrqTrack::Misc
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "perfetto"))]
 mod tests {
     use super::*;
 

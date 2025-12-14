@@ -9,16 +9,22 @@ description = "Pure-Rust SC62015 core scaffold (to be wrapped by PyO3)."
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
-retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git" }
+zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
+retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git", optional = true }
 
 [dependencies.clap]
 version = "4.5"
 features = ["derive"]
+optional = true
 
 [features]
+default = ["cli", "perfetto", "snapshot"]
 llama-tests = []
+cli = ["dep:clap"]
+perfetto = ["dep:retrobus-perfetto"]
+snapshot = ["dep:zip"]
 
 [[bin]]
 name = "pce500"
 path = "src/bin/pce500.rs"
+required-features = ["cli"]

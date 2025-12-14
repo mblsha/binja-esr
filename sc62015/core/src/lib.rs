@@ -11,8 +11,10 @@ pub mod timer;
 
 use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use serde_json::json;
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 use thiserror::Error;
 
@@ -25,9 +27,55 @@ pub use memory::{
     INTERNAL_SPACE,
 };
 pub use perfetto::PerfettoTracer;
+#[cfg(feature = "perfetto")]
 pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>;
+#[cfg(feature = "perfetto")]
 pub type PerfettoGuard<'a> = retrobus_perfetto::ReentrantGuard<'a, Option<PerfettoTracer>>;
+
+#[cfg(not(feature = "perfetto"))]
+pub struct PerfettoHandle;
+
+#[cfg(not(feature = "perfetto"))]
+pub struct PerfettoGuard<'a> {
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+#[cfg(not(feature = "perfetto"))]
+impl PerfettoHandle {
+    pub const fn new() -> Self {
+        Self
+    }
+
+    pub fn enter(&self) -> PerfettoGuard<'_> {
+        PerfettoGuard {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(not(feature = "perfetto"))]
+impl<'a> PerfettoGuard<'a> {
+    pub fn with_some<F, R>(&mut self, _f: F) -> Option<R>
+    where
+        F: FnOnce(&mut PerfettoTracer) -> R,
+    {
+        None
+    }
+
+    pub fn take(&mut self) -> Option<PerfettoTracer> {
+        None
+    }
+
+    pub fn replace(&mut self, _value: Option<PerfettoTracer>) -> Option<PerfettoTracer> {
+        None
+    }
+}
+
+#[cfg(feature = "perfetto")]
 pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new(None);
+
+#[cfg(not(feature = "perfetto"))]
+pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new();
 
 #[derive(Debug)]
 struct PythonOverlayFault {
@@ -35,11 +83,14 @@ struct PythonOverlayFault {
     pc: u32,
 }
 pub use snapshot::{
-    load_snapshot, pack_registers, save_snapshot, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC,
-    SNAPSHOT_REGISTER_LAYOUT, SNAPSHOT_VERSION,
+    pack_registers, unpack_registers, SnapshotLoad, SNAPSHOT_MAGIC, SNAPSHOT_REGISTER_LAYOUT,
+    SNAPSHOT_VERSION,
 };
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+pub use snapshot::{load_snapshot, save_snapshot};
 pub use timer::TimerContext;
 
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::mask_for;
@@ -51,6 +102,7 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 pub enum CoreError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[cfg(feature = "snapshot")]
     #[error("zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
     #[error("serialize error: {0}")]
@@ -189,6 +241,13 @@ impl Default for SnapshotMetadata {
 }
 
 pub fn now_timestamp() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // `std::time::SystemTime::now` is not supported on wasm32-unknown-unknown.
+        return "0Z".to_string();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
         Ok(duration) => format!("{}Z", duration.as_secs()),
         Err(_) => "0Z".to_string(),
@@ -318,6 +377,35 @@ impl CoreRuntime {
         };
         rt.install_imr_isr_hook();
         rt
+    }
+
+    pub fn instruction_count(&self) -> u64 {
+        self.metadata.instruction_count
+    }
+
+    pub fn cycle_count(&self) -> u64 {
+        self.metadata.cycle_count
+    }
+
+    pub fn power_on_reset(&mut self) {
+        struct ResetBus<'a> {
+            mem: &'a mut MemoryImage,
+        }
+
+        impl LlamaBus for ResetBus<'_> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.mem.load(addr, bits).unwrap_or(0)
+            }
+
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                let _ = self.mem.store(addr, bits, value);
+            }
+        }
+
+        let mut bus = ResetBus {
+            mem: &mut self.memory,
+        };
+        crate::llama::eval::power_on_reset(&mut bus, &mut self.state);
     }
 
     /// Provide an optional host overlay reader for IMEM regions that require Python/device handling
@@ -1160,6 +1248,7 @@ impl CoreRuntime {
         Ok(())
     }
 
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     pub fn save_snapshot(&self, path: &std::path::Path) -> Result<()> {
         let mut metadata = self.metadata.clone();
         metadata.instruction_count = self.metadata.instruction_count;
@@ -1212,6 +1301,7 @@ impl CoreRuntime {
         snapshot::save_snapshot(path, &metadata, &regs, &self.memory, lcd_payload.as_deref())
     }
 
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     pub fn load_snapshot(&mut self, path: &std::path::Path) -> Result<()> {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
