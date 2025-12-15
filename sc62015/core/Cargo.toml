@@ -10,7 +10,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 zip = { version = "0.6", default-features = false, features = ["deflate"], optional = true }
-retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git", optional = true }
+retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git", tag = "v0.3.0", optional = true }
 
 [dependencies.clap]
 version = "4.5"

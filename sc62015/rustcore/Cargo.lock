@@ -718,7 +718,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "retrobus-perfetto"
 version = "0.1.0"
-source = "git+https://github.com/mblsha/retrobus-perfetto.git#4e1bfd72069c14718ee0c31bbcd989093761a1ab"
+source = "git+https://github.com/mblsha/retrobus-perfetto.git?tag=v0.3.0#4f47a82311a24fa56111f06aa75a2c9d611c5dfa"
 dependencies = [
  "anyhow",
  "perfetto-writer",

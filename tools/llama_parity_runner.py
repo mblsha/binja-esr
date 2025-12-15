@@ -176,11 +176,7 @@ def run_once(payload: str) -> Snapshot:
 
     perfetto_out: str | None = None
     if HAVE_PERFETTO:
-        builder = (
-            PerfettoTraceBuilder.new("PythonParity")
-            if hasattr(PerfettoTraceBuilder, "new")
-            else PerfettoTraceBuilder("PythonParity")
-        )
+        builder = PerfettoTraceBuilder("PythonParity")
         instr_track = builder.add_thread("InstructionTrace")
         mem_track = builder.add_thread("MemoryWrites")
         ts = 0

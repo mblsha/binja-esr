@@ -16,6 +16,7 @@ from typing import List, Dict, Tuple, Optional, Iterator
 import difflib
 
 # Import perfetto protobuf definitions
+from retrobus_perfetto import resolve_interned_trace
 from retrobus_perfetto.proto import perfetto_pb2
 
 
@@ -61,6 +62,7 @@ class PerfettoTraceComparator:
         trace = perfetto_pb2.Trace()
         with open(trace_path, "rb") as f:
             trace.ParseFromString(f.read())
+        resolve_interned_trace(trace, inplace=True)
         return trace
 
     def extract_execution_events(
@@ -73,7 +75,13 @@ class PerfettoTraceComparator:
         track_names = {}
         for packet in trace.packet:
             if packet.HasField("track_descriptor"):
-                track_names[packet.track_descriptor.uuid] = packet.track_descriptor.name
+                desc = packet.track_descriptor
+                track_names[desc.uuid] = (
+                    desc.thread.thread_name
+                    or desc.name
+                    or desc.process.process_name
+                    or f"track_{desc.uuid}"
+                )
 
         # Find the Execution thread UUID
         execution_uuid = None
