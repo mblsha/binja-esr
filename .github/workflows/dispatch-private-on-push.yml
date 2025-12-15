@@ -5,6 +5,7 @@ on:
 
 jobs:
   dispatch:
+    name: private/rom-tests
     runs-on: ubuntu-latest
     steps:
       - name: Trigger private run for this commit
