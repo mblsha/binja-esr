@@ -107,4 +107,76 @@ describe('PC-E500 web emulator', () => {
 		});
 		expect(getByTestId('regs-table')).toBeTruthy();
 	});
+
+	it('function runner can call with trace enabled (no wasm-bindgen aliasing)', async () => {
+		const romBytes = await loadTestRom();
+
+		vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+			createImageData: (width: number, height: number) => ({
+				data: new Uint8ClampedArray(width * height * 4)
+			}),
+			putImageData: () => {}
+		} as any);
+
+		vi.stubGlobal('fetch', async (input: any) => {
+			const url = asFetchUrl(input);
+
+			if (url === '/api/rom' || url.endsWith('/api/rom')) {
+				return new Response(romBytes as any, {
+					status: 200,
+					headers: {
+						'content-type': 'application/octet-stream',
+						'cache-control': 'no-store',
+						'x-rom-source': 'test:pf1_demo_rom_window.rom'
+					}
+				});
+			}
+
+			if (url.endsWith('pce500_wasm_bg.wasm')) {
+				const wasmBytes = await loadWasmBytes(url);
+				return new Response(wasmBytes as any, {
+					status: 200,
+					headers: {
+						'content-type': 'application/wasm',
+						'cache-control': 'no-store'
+					}
+				});
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+
+		const { getByTestId, getByText, queryByTestId, getAllByTestId } = render(Page);
+
+		const step20k = getByText('Step 20k') as HTMLButtonElement;
+		await waitFor(() => expect(step20k.disabled).toBe(false));
+
+		// Ensure ROM is loaded (the function runner uses the same emulator instance).
+		await fireEvent.click(step20k);
+		await waitFor(() => {
+			const text = (getByTestId('lcd-text').textContent ?? '').trim();
+			expect(text).toContain('BOOT');
+		});
+
+		// Open function runner panel.
+		const panel = getByTestId('fnr-panel') as HTMLDetailsElement;
+		panel.open = true;
+
+		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
+		const script = `
+await e.reset({ fresh: true, warmupTicks: 1_000 });
+await e.keyboard.tap(0x56, 100); // PF1
+const pc = e.reg(Reg.PC);
+await e.call(pc, undefined, { maxInstructions: 2_000, trace: true });
+`;
+		await fireEvent.input(editor, { target: { value: script } });
+
+		const run = getByTestId('fnr-run') as HTMLButtonElement;
+		await fireEvent.click(run);
+
+		await waitFor(() => {
+			expect(queryByTestId('fnr-error')).toBeNull();
+			expect(getAllByTestId('fnr-call').length).toBeGreaterThanOrEqual(1);
+		});
+	});
 });
