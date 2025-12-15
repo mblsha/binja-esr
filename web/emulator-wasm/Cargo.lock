@@ -332,7 +332,6 @@ name = "pce500-wasm"
 version = "0.1.0"
 dependencies = [
  "base64",
- "getrandom",
  "js-sys",
  "sc62015-core",
  "serde",
@@ -345,6 +344,7 @@ dependencies = [
 [[package]]
 name = "perfetto-writer"
 version = "0.3.2"
+source = "git+https://github.com/mblsha/retrobus-perfetto.git?rev=e3bd7e53256dfff3689978efa90b331b51301a1f#e3bd7e53256dfff3689978efa90b331b51301a1f"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -587,9 +587,10 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "retrobus-perfetto"
 version = "0.1.0"
-source = "git+https://github.com/mblsha/retrobus-perfetto.git#4f47a82311a24fa56111f06aa75a2c9d611c5dfa"
+source = "git+https://github.com/mblsha/retrobus-perfetto.git?rev=e3bd7e53256dfff3689978efa90b331b51301a1f#e3bd7e53256dfff3689978efa90b331b51301a1f"
 dependencies = [
  "anyhow",
+ "getrandom",
  "perfetto-writer",
 ]
 
