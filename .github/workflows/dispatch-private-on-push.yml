@@ -5,7 +5,6 @@ on:
 
 jobs:
   dispatch:
-    name: private/rom-tests
     runs-on: ubuntu-latest
     steps:
       - name: Trigger private run for this commit
@@ -18,3 +17,10 @@ jobs:
             -H "Authorization: token $TOKEN" \
             https://api.github.com/repos/mblsha/binja-esr-tests/dispatches \
             -d "{\"event_type\":\"rom-tests\",\"client_payload\":{\"sha\":\"$SHA\"}}"
+
+  rom_tests_check:
+    name: private/rom-tests
+    needs: dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Triggered private ROM tests via repository_dispatch."
