@@ -28,7 +28,7 @@ fn call_with_sentinel(rt: &mut CoreRuntime, addr: u32, max_instructions: u32) {
     // Push the sentinel return address (little-endian 3-byte PC) onto the stack.
     let new_sp = before_sp.wrapping_sub(3) & 0x00ff_ffff;
     for i in 0..3u32 {
-        let byte = ((sentinel_pc >> (8 * i)) & 0xff) as u32;
+        let byte = (sentinel_pc >> (8 * i)) & 0xff;
         let _ = rt.memory.store(new_sp.wrapping_add(i), 8, byte);
     }
     rt.state.set_reg(RegName::S, new_sp);
