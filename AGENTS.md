@@ -10,9 +10,7 @@
 - Root: `plugin.json`, `pyproject.toml`, lint/type configs.
 
 ## Reference Docs
-- `plan_llama.md`: LLAMA roadmap and current progress.
-- `docs/llama_design.md`: LLAMA design notes (decode/eval layout, runtime interfaces).
-- `docs/llama_parity_plan.md`: Perfetto/pytest parity guardrails for LLAMA.
+- `docs/sc62015_python_emulator_surface.md`: Python emulator contract that Rust core must mirror.
 - `.github/workflows/llama-perfetto-smoke.yml`: nightly/dispatch Perfetto trace smoke (NOP/CALL/EMEM MV/DSBL/EMEM reg-indirect/PUSHU).
 
 ## Setup, Build, and Dev Commands
