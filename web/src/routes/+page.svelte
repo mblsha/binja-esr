@@ -366,12 +366,20 @@
 		}
 	}
 
-	async function ensureEmulator(): Promise<any> {
-		if (!wasm) {
-			wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
-			if (typeof wasm.default === 'function') {
-				await wasm.default();
-			}
+		async function ensureEmulator(): Promise<any> {
+			if (!wasm) {
+				wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
+				if (typeof wasm.default === 'function') {
+					const url = new URL('$lib/wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
+					try {
+						if (Boolean((import.meta as any)?.env?.DEV)) {
+							url.searchParams.set('v', String(Date.now()));
+						}
+					} catch {
+						// ignore
+					}
+					await wasm.default(url);
+				}
 			}
 			if (!emulator) {
 				emulator = new wasm.Pce500Emulator();

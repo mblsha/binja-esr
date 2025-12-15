@@ -142,7 +142,15 @@ async function ensureEmulator(): Promise<any> {
 	if (!wasm) {
 		wasm = await import('../wasm/pce500_wasm/pce500_wasm.js');
 		if (typeof wasm.default === 'function') {
-			await wasm.default();
+			const url = new URL('../wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
+			try {
+				if (Boolean((import.meta as any)?.env?.DEV)) {
+					url.searchParams.set('v', String(Date.now()));
+				}
+			} catch {
+				// ignore
+			}
+			await wasm.default(url);
 		}
 	}
 	if (!emulator) {

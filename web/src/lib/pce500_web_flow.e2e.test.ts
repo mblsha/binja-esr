@@ -22,7 +22,7 @@ async function loadTestRom(): Promise<Uint8Array> {
 
 async function loadWasmBytes(url: string): Promise<Uint8Array> {
 	if (url.startsWith('file:')) {
-		const wasmPath = fileURLToPath(url);
+		const wasmPath = fileURLToPath(new URL(url).pathname);
 		const bytes = await readFile(wasmPath);
 		return new Uint8Array(bytes);
 	}
@@ -62,7 +62,7 @@ describe('PC-E500 web emulator', () => {
 				});
 			}
 
-			if (url.endsWith('pce500_wasm_bg.wasm')) {
+			if (url.includes('pce500_wasm_bg.wasm')) {
 				const wasmBytes = await loadWasmBytes(url);
 				return new Response(wasmBytes as any, {
 					status: 200,
@@ -136,7 +136,7 @@ describe('PC-E500 web emulator', () => {
 				});
 			}
 
-			if (url.endsWith('pce500_wasm_bg.wasm')) {
+			if (url.includes('pce500_wasm_bg.wasm')) {
 				const wasmBytes = await loadWasmBytes(url);
 				return new Response(wasmBytes as any, {
 					status: 200,
