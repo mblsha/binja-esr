@@ -254,7 +254,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		call: async (reference, registers, options) => {
 			const { address, name } = resolveReference(reference);
 			const maxInstructions = options?.maxInstructions ?? DEFAULT_MAX_INSTRUCTIONS;
-			const zeroMissing = options?.zeroMissing ?? true;
+			const zeroMissing = options?.zeroMissing ?? false;
 			const trace = options?.trace ?? false;
 			const assignments = buildAssignments(registers, zeroMissing);
 			for (const [regName, value] of assignments.entries()) {

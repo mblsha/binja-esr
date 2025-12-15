@@ -92,34 +92,92 @@ function safeJson(value: any): string {
 async function evalScript(source: string): Promise<any> {
 	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
 	const { runUserJs } = await import('../debug/run_user_js');
+	function wrapError(context: string, err: unknown): Error {
+		const msg = err instanceof Error ? err.message : String(err);
+		return new Error(`${context}: ${msg}`);
+	}
 	const api = createEvalApi({
 		callFunction: async (
 			address: number,
 			maxInstructions: number,
 			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
 		) => {
-			const raw =
-				emulator.call_function_ex?.(address, maxInstructions, {
-					trace: Boolean(options?.trace),
-					probe_pc: options?.probe ? options.probe.pc : null,
-					probe_max_samples: options?.probe?.maxSamples ?? 256
-				}) ?? emulator.call_function(address, maxInstructions);
-			if (typeof raw === 'string') return JSON.parse(raw);
-			return raw;
+			try {
+				const raw =
+					emulator.call_function_ex?.(address, maxInstructions, {
+						trace: Boolean(options?.trace),
+						probe_pc: options?.probe ? options.probe.pc : null,
+						probe_max_samples: options?.probe?.maxSamples ?? 256
+					}) ?? emulator.call_function(address, maxInstructions);
+				if (typeof raw === 'string') return JSON.parse(raw);
+				return raw;
+			} catch (err) {
+				throw wrapError(`call(0x${address.toString(16).toUpperCase()})`, err);
+			}
 		},
 		reset: async () => {
-			await Promise.resolve(emulator.reset?.());
+			try {
+				await Promise.resolve(emulator.reset?.());
+			} catch (err) {
+				throw wrapError('reset()', err);
+			}
 		},
 		step: async (instructions: number) => {
-			await Promise.resolve(emulator.step?.(instructions));
+			try {
+				await Promise.resolve(emulator.step?.(instructions));
+			} catch (err) {
+				throw wrapError(`step(${instructions})`, err);
+			}
 		},
-		getReg: (name: string) => emulator.get_reg?.(name) ?? 0,
-		setReg: (name: string, value: number) => emulator.set_reg?.(name, value),
-		read8: (addr: number) => emulator.read_u8?.(addr) ?? 0,
-		write8: (addr: number, value: number) => emulator.write_u8?.(addr, value),
-		pressMatrixCode: (code: number) => emulator.press_matrix_code?.(code),
-		releaseMatrixCode: (code: number) => emulator.release_matrix_code?.(code),
-		injectMatrixEvent: (code: number, release: boolean) => emulator.inject_matrix_event?.(code, release)
+		getReg: (name: string) => {
+			try {
+				return emulator.get_reg?.(name) ?? 0;
+			} catch (err) {
+				throw wrapError(`getReg(${name})`, err);
+			}
+		},
+		setReg: (name: string, value: number) => {
+			try {
+				emulator.set_reg?.(name, value);
+			} catch (err) {
+				throw wrapError(`setReg(${name}=${value})`, err);
+			}
+		},
+		read8: (addr: number) => {
+			try {
+				return emulator.read_u8?.(addr) ?? 0;
+			} catch (err) {
+				throw wrapError(`read8(0x${addr.toString(16).toUpperCase()})`, err);
+			}
+		},
+		write8: (addr: number, value: number) => {
+			try {
+				emulator.write_u8?.(addr, value);
+			} catch (err) {
+				throw wrapError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, err);
+			}
+		},
+		pressMatrixCode: (code: number) => {
+			try {
+				emulator.press_matrix_code?.(code);
+			} catch (err) {
+				throw wrapError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, err);
+			}
+		},
+		releaseMatrixCode: (code: number) => {
+			try {
+				emulator.release_matrix_code?.(code);
+			} catch (err) {
+				throw wrapError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, err);
+			}
+		},
+		injectMatrixEvent: (code: number, release: boolean) => {
+			try {
+				emulator.inject_matrix_event?.(code, release);
+			} catch (err) {
+				throw wrapError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, err);
+			}
+		}
 	});
 	let resultJson: string | null = null;
 	let error: string | null = null;
@@ -380,7 +438,14 @@ async function handleRequest(msg: WorkerRequest) {
 				}
 				await ensureEmulator();
 				const res = await evalScript(msg.source);
-				postFrame(captureFrame(true));
+				try {
+					postFrame(captureFrame(true));
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					if (res && typeof res === 'object') {
+						res.error = res.error ? `${res.error}\n(postFrame) ${msg}` : `(postFrame) ${msg}`;
+					}
+				}
 				replyOk(msg.id, res);
 				return;
 			}
