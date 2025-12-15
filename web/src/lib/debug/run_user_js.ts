@@ -4,7 +4,8 @@ export async function runUserJs(
 	source: string,
 	api: EvalApi,
 	Reg: unknown,
-	Flag: unknown
+	Flag: unknown,
+	IOCS: unknown
 ): Promise<unknown> {
 	// Best-effort sandbox: shadow common escape hatches, but this is not a hard security boundary.
 	const prelude = 'const Function = undefined; const AsyncFunction = undefined;\n';
@@ -12,6 +13,7 @@ export async function runUserJs(
 		'e',
 		'Reg',
 		'Flag',
+		'IOCS',
 		'globalThis',
 		'self',
 		'window',
@@ -42,10 +44,18 @@ export async function runUserJs(
 			/* ignore freeze errors */
 		}
 	}
+	if (typeof IOCS === 'object' && IOCS !== null) {
+		try {
+			Object.freeze(IOCS);
+		} catch {
+			/* ignore freeze errors */
+		}
+	}
 	return runner(
 		api,
 		Reg,
 		Flag,
+		IOCS,
 		undefined,
 		undefined,
 		undefined,
@@ -61,4 +71,3 @@ export async function runUserJs(
 		undefined
 	);
 }
-

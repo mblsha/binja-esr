@@ -92,6 +92,7 @@ function safeJson(value: any): string {
 async function evalScript(source: string): Promise<any> {
 	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
 	const { runUserJs } = await import('../debug/run_user_js');
+	const { IOCS } = await import('../debug/iocs');
 	function wrapError(context: string, err: unknown): Error {
 		const msg = err instanceof Error ? err.message : String(err);
 		return new Error(`${context}: ${msg}`);
@@ -182,7 +183,7 @@ async function evalScript(source: string): Promise<any> {
 	let resultJson: string | null = null;
 	let error: string | null = null;
 	try {
-		const result = await runUserJs(source, api, Reg, Flag);
+		const result = await runUserJs(source, api, Reg, Flag, IOCS);
 		resultJson = safeJson(result);
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
