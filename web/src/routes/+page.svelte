@@ -248,7 +248,23 @@
 
 		function formatBuildInfo(info: typeof buildInfo): string {
 			if (!info) return '—';
-			const ts = info.build_timestamp ? `ts=${info.build_timestamp}` : 'ts=?';
+			const ts = (() => {
+				if (!info.build_timestamp) return 'ts=?';
+				const raw = Number.parseInt(info.build_timestamp, 10);
+				if (!Number.isFinite(raw)) return `ts=${info.build_timestamp}`;
+				const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
+				const date = new Date(ms);
+				if (Number.isNaN(date.getTime())) return `ts=${info.build_timestamp}`;
+				const offsetMinutes = -date.getTimezoneOffset();
+				const sign = offsetMinutes >= 0 ? '+' : '-';
+				const abs = Math.abs(offsetMinutes);
+				const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+				const mm = String(abs % 60).padStart(2, '0');
+				const localIso = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+					.toISOString()
+					.replace('Z', '');
+				return `ts=${localIso}${sign}${hh}:${mm}`;
+			})();
 			return `v${info.version} ${info.git_commit} ${ts}`;
 		}
 
