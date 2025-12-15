@@ -86,6 +86,10 @@ describe('PC-E500 web emulator', () => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
 			expect(text).toContain('BOOT');
 		});
+		await waitFor(() => {
+			const info = (getByTestId('build-info').textContent ?? '').trim();
+			expect(info).toMatch(/WASM:\s*v\d+\./i);
+		});
 		expect((getByTestId('emu-status').textContent ?? '').toUpperCase()).toContain('STOPPED');
 		expect(getByTestId('call-stack-empty').textContent ?? '').toContain('No frames');
 

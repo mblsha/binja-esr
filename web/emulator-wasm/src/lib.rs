@@ -15,6 +15,21 @@ use sc62015_core::pce500::{
 };
 use sc62015_core::{CoreRuntime, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 
+#[derive(Debug, Clone, Serialize)]
+struct BuildInfo {
+    version: String,
+    git_commit: String,
+    build_timestamp: String,
+}
+
+fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_commit: option_env!("GIT_COMMIT").unwrap_or("unknown").to_string(),
+        build_timestamp: option_env!("BUILD_TIMESTAMP").unwrap_or("unknown").to_string(),
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize)]
 struct TimerState {
     enabled: bool,
@@ -137,6 +152,10 @@ impl Pce500Emulator {
 
     pub fn has_rom(&self) -> bool {
         !self.rom_image.is_empty()
+    }
+
+    pub fn build_info(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&build_info()).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), JsValue> {

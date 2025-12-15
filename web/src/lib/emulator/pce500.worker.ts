@@ -42,6 +42,7 @@ type Frame = {
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
+	buildInfo: { version: string; git_commit: string; build_timestamp: string } | null;
 	lcdText: string[] | null;
 	regs: any | null;
 	callStack: number[] | null;
@@ -64,6 +65,7 @@ const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 
 let wasm: any = null;
 let emulator: any = null;
+let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 
 let running = false;
 let targetFps = 30;
@@ -145,6 +147,11 @@ async function ensureEmulator(): Promise<any> {
 	}
 	if (!emulator) {
 		emulator = new wasm.Pce500Emulator();
+		try {
+			buildInfo = emulator.build_info?.() ?? null;
+		} catch {
+			buildInfo = null;
+		}
 	}
 	return emulator;
 }
@@ -266,6 +273,7 @@ function captureFrame(forceText: boolean): Frame {
 		pc,
 		instructionCount,
 		halted,
+		buildInfo,
 		lcdText,
 		regs,
 		callStack,

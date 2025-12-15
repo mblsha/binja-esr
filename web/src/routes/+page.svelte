@@ -25,10 +25,11 @@
 	let debugState: any = null;
 	let lastError: string | null = null;
 		let romSource: string | null = null;
-		let pcReg: number | null = null;
-		let halted = false;
-		let instructionCount: string | null = null;
-		let romLoaded = false;
+			let pcReg: number | null = null;
+			let halted = false;
+			let instructionCount: string | null = null;
+			let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
+			let romLoaded = false;
 
 	let running = false;
 	let targetFps = 30;
@@ -80,6 +81,7 @@
 					lcdPixels = new Uint8Array(frame.lcdPixels);
 				}
 				lcdText = frame?.lcdText ?? null;
+				buildInfo = frame?.buildInfo ?? buildInfo;
 				regs = frame?.regs ?? regs;
 				callStack = frame?.callStack ?? callStack;
 				debugState = frame?.debugState ?? null;
@@ -239,14 +241,20 @@
 		}
 	}
 
-	function hex(value: number | null | undefined, width = 5): string {
-		if (value === null || value === undefined) return '—';
-		return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
-	}
+		function hex(value: number | null | undefined, width = 5): string {
+			if (value === null || value === undefined) return '—';
+			return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
+		}
 
-	function formatFunction(pc: number): string {
-		return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
-	}
+		function formatBuildInfo(info: typeof buildInfo): string {
+			if (!info) return '—';
+			const ts = info.build_timestamp ? `ts=${info.build_timestamp}` : 'ts=?';
+			return `v${info.version} ${info.git_commit} ${ts}`;
+		}
+
+		function formatFunction(pc: number): string {
+			return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
+		}
 
 	function getReg(name: string): number | null {
 		for (const [key, value] of regsEntries(regs)) {
@@ -364,12 +372,17 @@
 			if (typeof wasm.default === 'function') {
 				await wasm.default();
 			}
+			}
+			if (!emulator) {
+				emulator = new wasm.Pce500Emulator();
+				try {
+					buildInfo = emulator.build_info?.() ?? null;
+				} catch {
+					buildInfo = null;
+				}
+			}
+			return emulator;
 		}
-		if (!emulator) {
-			emulator = new wasm.Pce500Emulator();
-		}
-		return emulator;
-	}
 
 	async function tryAutoLoadRom() {
 		await ensureWorker();
@@ -738,6 +751,7 @@
 		</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
+	<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
 
 	<LcdCanvas pixels={lcdPixels} />
 
