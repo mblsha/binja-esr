@@ -50,5 +50,40 @@ describe('FunctionRunnerPanel', () => {
 		const prints = await findByTestId('fnr-prints');
 		expect(prints.textContent ?? '').toContain('ok');
 	});
-});
 
+	it('shows perfetto download button when trace captured', async () => {
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
+		const onRun = vi.fn(async (_source: string) => ({
+			events: [],
+			prints: [],
+			resultJson: null,
+			error: null,
+			calls: [
+				{
+					index: 0,
+					address: 0x10,
+					name: null,
+					artifacts: {
+						before: {},
+						after: {},
+						changed: [],
+						memoryBlocks: [],
+						lcdWrites: [],
+						probeSamples: [],
+						perfettoTraceB64: 'ZHVtbXk=',
+						result: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
+						infoLog: []
+					}
+				}
+			]
+		}));
+		const { getByTestId, findByText } = render(FunctionRunnerPanel, {
+			disabled: false,
+			busy: false,
+			onRun
+		});
+		await fireEvent.click(getByTestId('fnr-run'));
+		expect(onRun).toHaveBeenCalled();
+		expect(await findByText('Download')).toBeTruthy();
+	});
+});

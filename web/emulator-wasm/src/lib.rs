@@ -7,6 +7,7 @@ use js_sys::Uint8Array;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+use base64::Engine;
 use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
@@ -93,20 +94,10 @@ struct ProbeSample {
     regs: std::collections::HashMap<String, u32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct TraceEvent {
-    op_index: u64,
-    pc: u32,
-    opcode: u8,
-    regs: std::collections::HashMap<String, u32>,
-}
-
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 struct CallOptions {
     #[serde(default)]
     trace: bool,
-    #[serde(default)]
-    trace_max_events: u32,
     #[serde(default)]
     probe_pc: Option<u32>,
     #[serde(default)]
@@ -125,8 +116,7 @@ struct CallArtifacts {
     memory_writes: Vec<MemoryWriteByte>,
     lcd_writes: Vec<sc62015_core::lcd::LcdDisplayWrite>,
     probe_samples: Vec<ProbeSample>,
-    trace_events: Vec<TraceEvent>,
-    trace_truncated: bool,
+    perfetto_trace_b64: Option<String>,
     report: CallReport,
 }
 
@@ -281,7 +271,7 @@ impl Pce500Emulator {
     }
 
     /// Like `call_function`, but allows optional capture controls via `options`:
-    /// - `{ trace: true }` enables Perfetto capture for the duration of the call and returns the trace bytes.
+    /// - `{ trace: true }` captures a Perfetto trace for the duration of the call.
     /// - `{ probe_pc: 0x00F123, probe_max_samples: 100 }` records register snapshots whenever `PC == probe_pc`.
     #[wasm_bindgen]
     pub fn call_function_ex(
@@ -295,9 +285,6 @@ impl Pce500Emulator {
         let mut opts: CallOptions = serde_wasm_bindgen::from_value(options).unwrap_or_default();
         if opts.probe_max_samples == 0 {
             opts.probe_max_samples = 256;
-        }
-        if opts.trace_max_events == 0 {
-            opts.trace_max_events = max_instructions.min(50_000);
         }
         let before_pc = self.runtime.state.pc();
         let before_sp = self.runtime.state.get_reg(RegName::S);
@@ -324,6 +311,15 @@ impl Pce500Emulator {
             lcd.begin_display_write_capture();
         }
 
+        // Optional perfetto capture for this call (serialized on wasm32).
+        let mut previous_tracer: Option<sc62015_core::PerfettoTracer> = None;
+        if opts.trace {
+            let mut guard = sc62015_core::PERFETTO_TRACER.enter();
+            previous_tracer = guard.replace(Some(sc62015_core::PerfettoTracer::new(
+                std::path::PathBuf::from("call.perfetto-trace"),
+            )));
+        }
+
         // Enter the function.
         self.runtime.state.set_pc(addr);
 
@@ -332,26 +328,10 @@ impl Pce500Emulator {
         let mut fault: Option<CallFault> = None;
         let mut probe_samples: Vec<ProbeSample> = Vec::new();
         let mut probe_hits: u32 = 0;
-        let mut trace_events: Vec<TraceEvent> = Vec::new();
-        let mut trace_truncated = false;
         while steps < max_instructions {
             if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
                 reason = "halted".to_string();
                 break;
-            }
-            if opts.trace {
-                if (trace_events.len() as u32) < opts.trace_max_events {
-                    let pc = self.runtime.state.pc();
-                    let opcode = self.runtime.memory.load(pc, 8).unwrap_or(0) as u8;
-                    trace_events.push(TraceEvent {
-                        op_index: self.runtime.instruction_count(),
-                        pc,
-                        opcode,
-                        regs: sc62015_core::collect_registers(&self.runtime.state),
-                    });
-                } else {
-                    trace_truncated = true;
-                }
             }
             if let Some(probe_pc) = opts.probe_pc {
                 if self.runtime.state.pc() == (probe_pc & 0x000f_ffff)
@@ -396,6 +376,19 @@ impl Pce500Emulator {
             .map(|lcd| lcd.take_display_write_capture())
             .unwrap_or_default();
 
+        let perfetto_trace_b64 = if opts.trace {
+            let mut guard = sc62015_core::PERFETTO_TRACER.enter();
+            let trace_bytes = guard
+                .take()
+                .map(|tracer| tracer.serialize())
+                .transpose()
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            guard.replace(previous_tracer.take());
+            trace_bytes.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+        } else {
+            None
+        };
+
         // Restore state so the harness does not leave a sentinel PC/SP or call metrics behind.
         self.runtime.state.set_pc(before_pc);
         self.runtime.state.set_reg(RegName::S, before_sp);
@@ -422,8 +415,7 @@ impl Pce500Emulator {
             memory_writes,
             lcd_writes,
             probe_samples,
-            trace_events,
-            trace_truncated,
+            perfetto_trace_b64,
             report,
         };
         // Return JSON to avoid browser-specific structured-object aliasing errors observed with
@@ -546,15 +538,10 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn call_function_ex_can_capture_trace_events() {
+    fn call_function_ex_can_capture_perfetto_trace() {
         #[derive(serde::Deserialize)]
         struct CallArtifactsDecoded {
-            trace_events: Vec<TraceEventDecoded>,
-        }
-
-        #[derive(serde::Deserialize)]
-        struct TraceEventDecoded {
-            pc: u32,
+            perfetto_trace_b64: Option<String>,
         }
 
         #[derive(Serialize)]
@@ -572,8 +559,11 @@ mod tests {
             .expect("call");
         let decoded: CallArtifactsDecoded = serde_json::from_str(&js.as_string().unwrap()).expect("decode");
         assert!(
-            decoded.trace_events.iter().any(|ev| ev.pc == pc),
-            "expected at least one trace event at start pc=0x{pc:06X}"
+            decoded
+                .perfetto_trace_b64
+                .as_ref()
+                .is_some_and(|val| !val.is_empty()),
+            "expected a non-empty perfetto trace when trace=true"
         );
     }
 
