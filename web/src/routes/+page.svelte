@@ -36,6 +36,7 @@
 
 	let functionRunnerBusy = false;
 	const pressedCodes = new Set<number>();
+	const physicalHeldCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 	const IMEM_BASE = 0x100000;
@@ -43,11 +44,14 @@
 	const FIFO_HEAD_ADDR = 0x00bfc9d;
 	const FIFO_TAIL_ADDR = 0x00bfc9e;
 	const debugLog: string[] = [];
+	let physicalKeyboardEnabled = false;
 	let keyboardDebugOpen = false;
 	let regsOpen = false;
 	let callStackOpen = true;
 	let lcdTextOpen = true;
 	let debugStateOpen = false;
+	let physicalKeyboardHookInstalled = false;
+	let mounted = false;
 
 	const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 	let lastLcdTextUpdateMs = 0;
@@ -349,6 +353,28 @@
 		} else {
 			emulator.release_matrix_code?.(code);
 		}
+	}
+
+	function releaseAllPhysicalHeldCodes() {
+		if (physicalHeldCodes.size === 0) return;
+		for (const code of physicalHeldCodes.values()) {
+			setPhysicalMatrixCode(code, false);
+		}
+		physicalHeldCodes.clear();
+	}
+
+	function installPhysicalKeyboardHook() {
+		if (physicalKeyboardHookInstalled) return;
+		window.addEventListener('keydown', onKeyDown, { passive: false });
+		window.addEventListener('keyup', onKeyUp, { passive: false });
+		physicalKeyboardHookInstalled = true;
+	}
+
+	function uninstallPhysicalKeyboardHook() {
+		if (!physicalKeyboardHookInstalled) return;
+		window.removeEventListener('keydown', onKeyDown);
+		window.removeEventListener('keyup', onKeyUp);
+		physicalKeyboardHookInstalled = false;
 	}
 
 	function virtualPress(code: number) {
@@ -718,37 +744,49 @@
 			runLoopId += 1;
 		}
 
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.repeat) return;
-			const code = matrixCodeForKeyEvent(event);
-			if (code === null) return;
-			setPhysicalMatrixCode(code, true);
+	function onKeyDown(event: KeyboardEvent) {
+		if (event.repeat) return;
+		const code = matrixCodeForKeyEvent(event);
+		if (code === null) return;
+		if (physicalHeldCodes.has(code)) return;
+		physicalHeldCodes.add(code);
+		setPhysicalMatrixCode(code, true);
 		event.preventDefault();
 	}
 
-		function onKeyUp(event: KeyboardEvent) {
-			const code = matrixCodeForKeyEvent(event);
-			if (code === null) return;
-			setPhysicalMatrixCode(code, false);
-			event.preventDefault();
+	function onKeyUp(event: KeyboardEvent) {
+		const code = matrixCodeForKeyEvent(event);
+		if (code === null) return;
+		if (!physicalHeldCodes.has(code)) return;
+		physicalHeldCodes.delete(code);
+		setPhysicalMatrixCode(code, false);
+		event.preventDefault();
 	}
 
-		onMount(() => {
-			void tryAutoLoadRom();
-			void ensureWorker();
-			installDevtoolsDebugHelpers();
-			window.addEventListener('keydown', onKeyDown, { passive: false });
-			window.addEventListener('keyup', onKeyUp, { passive: false });
-		});
+	onMount(() => {
+		mounted = true;
+		void tryAutoLoadRom();
+		void ensureWorker();
+		installDevtoolsDebugHelpers();
+	});
 
-		onDestroy(() => {
-			if (worker) {
-				worker.terminate();
-				worker = null;
-			}
-			window.removeEventListener('keydown', onKeyDown);
-			window.removeEventListener('keyup', onKeyUp);
-		});
+	$: if (mounted) {
+		if (physicalKeyboardEnabled) {
+			installPhysicalKeyboardHook();
+		} else {
+			uninstallPhysicalKeyboardHook();
+			releaseAllPhysicalHeldCodes();
+		}
+	}
+
+	onDestroy(() => {
+		if (worker) {
+			worker.terminate();
+			worker = null;
+		}
+		uninstallPhysicalKeyboardHook();
+		releaseAllPhysicalHeldCodes();
+	});
 </script>
 
 <main>
@@ -779,11 +817,20 @@
 
 	<LcdCanvas pixels={lcdPixels} />
 
-		<VirtualKeyboard
-			disabled={!romLoaded}
-			onPress={(code) => virtualPress(code)}
-			onRelease={(code) => virtualRelease(code)}
+	<VirtualKeyboard
+		disabled={!romLoaded}
+		onPress={(code) => virtualPress(code)}
+		onRelease={(code) => virtualRelease(code)}
+	/>
+
+	<label>
+		<input
+			type="checkbox"
+			data-testid="physical-keyboard-toggle"
+			bind:checked={physicalKeyboardEnabled}
 		/>
+		Enable physical keyboard input (F1/F2, arrows)
+	</label>
 
 		{#if romLoaded}
 			<details bind:open={keyboardDebugOpen}>
