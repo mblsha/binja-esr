@@ -12,6 +12,7 @@ describe('runUserJs', () => {
 		};
 		const Reg = { A: 'A' };
 		const Flag = { Z: 'Z' };
+		const IOCS = { LCD_PUTC: 0x0d };
 
 		const result = await runUserJs(
 			`
@@ -20,13 +21,14 @@ return { hasGlobalThis: typeof globalThis !== "undefined", hasWindow: typeof win
 			`,
 			api as any,
 			Reg,
-			Flag
+			Flag,
+			IOCS
 		);
 
 		expect(prints).toEqual(['hello']);
 		expect(result).toEqual({ hasGlobalThis: false, hasWindow: false });
 		expect(Object.isFrozen(Reg)).toBe(true);
 		expect(Object.isFrozen(Flag)).toBe(true);
+		expect(Object.isFrozen(IOCS)).toBe(true);
 	});
 });
-

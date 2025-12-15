@@ -16,6 +16,10 @@
 // await e.keyboard.tap(0x56); // PF1 (virtual injection), holds ~40k instr by default
 // await e.call(0x00F2A87, undefined, { maxInstructions: 200_000, trace: true });
 //
+// // IOCS experimentation (public entry is CALLF 0xFFFE8):
+// await e.iocs.putc('~', { trace: true });
+// await e.iocs.text('HELLO', { trace: true });
+//
 // await e.withProbe(0x00F299C, (s) => e.print({ hit: s.count, pc: s.pc, A: s.regs.A }), async () => {
 //   await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });
 // });

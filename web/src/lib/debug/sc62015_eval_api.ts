@@ -1,9 +1,12 @@
+import { IOCS, IOCS_PUBLIC_ENTRY_ADDR } from './iocs';
 import { buildMemoryWriteBlocks, type MemoryWriteBlock, type MemoryWriteEvent } from './memory_write_blocks';
 
 export type RegisterName =
 	| 'A'
 	| 'B'
 	| 'BA'
+	| 'IL'
+	| 'IH'
 	| 'I'
 	| 'X'
 	| 'Y'
@@ -132,6 +135,10 @@ export interface EvalApi {
 		tap(code: number, holdInstructions?: number): Promise<void>;
 		injectEvent(code: number, release: boolean): Promise<void>;
 	};
+	iocs: {
+		putc(ch: string | number, options?: EvalCallOptions): Promise<CallHandle>;
+		text(text: string, options?: EvalCallOptions): Promise<CallHandle[]>;
+	};
 }
 
 const DEFAULT_MAX_INSTRUCTIONS = 200_000;
@@ -143,6 +150,8 @@ const RESULT_REGISTER_ORDER: RegisterName[] = [
 	'A',
 	'B',
 	'BA',
+	'IL',
+	'IH',
 	'I',
 	'X',
 	'Y',
@@ -172,7 +181,8 @@ function resolveReference(reference: string | number): { address: number; name: 
 }
 
 function normalizeRegValue(name: RegisterName, value: number): number {
-	if (name === 'A' || name === 'B' || name === 'F' || name === 'IMR') return value & 0xff;
+	if (name === 'A' || name === 'B' || name === 'IL' || name === 'IH' || name === 'F' || name === 'IMR')
+		return value & 0xff;
 	if (name === 'BA' || name === 'I') return value & 0xffff;
 	if (name === 'PC') return value & 0x0f_ffff;
 	return value >>> 0;
@@ -401,6 +411,30 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.injectMatrixEvent?.(code & 0xff, false);
 				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 				adapter.injectMatrixEvent?.(code & 0xff, true);
+			}
+		},
+		iocs: {
+			putc: async (ch: string | number, options?: EvalCallOptions) => {
+				let byte: number;
+				if (typeof ch === 'number') {
+					byte = ch & 0xff;
+				} else if (typeof ch === 'string') {
+					if (!ch.length) throw new Error('iocs.putc requires a character');
+					byte = ch.codePointAt(0) ?? 0;
+					if (byte > 0xff) throw new Error('iocs.putc only supports single-byte characters');
+				} else {
+					throw new Error('iocs.putc requires a string or number');
+				}
+				return await api.call(
+					IOCS_PUBLIC_ENTRY_ADDR,
+					{ IL: IOCS.LCD_PUTC, A: byte },
+					options ? { ...options, zeroMissing: false } : { zeroMissing: false }
+				);
+			},
+			text: async (text: string, options?: EvalCallOptions) => {
+				const out: CallHandle[] = [];
+				for (const ch of text) out.push(await api.iocs.putc(ch, options));
+				return out;
 			}
 		}
 	};

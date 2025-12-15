@@ -4,6 +4,7 @@
 		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 		import { matrixCodeForKeyEvent } from '$lib/keymap';
 		import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
+		import { IOCS } from '$lib/debug/iocs';
 		import { runUserJs } from '$lib/debug/run_user_js';
 		import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 		import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
@@ -216,7 +217,7 @@
 			let resultJson: string | null = null;
 			let error: string | null = null;
 			try {
-				const result = await runUserJs(source, api, Reg, Flag);
+				const result = await runUserJs(source, api, Reg, Flag, IOCS);
 				resultJson = safeJson(result);
 			} catch (err) {
 				error = err instanceof Error ? err.message : String(err);
