@@ -70,12 +70,9 @@
 					</details>
 				{/if}
 
-				{#if call.artifacts.traceEvents?.length}
+				{#if call.artifacts.perfettoTraceB64}
 					<div class="debug-row">
-						<span class="hint">
-							Trace events: {call.artifacts.traceEvents.length}
-							{call.artifacts.traceTruncated ? ' (truncated)' : ''}
-						</span>
+						<span class="hint">Perfetto trace captured.</span>
 						<button type="button" on:click={() => onDownloadTrace(call)}>Download</button>
 					</div>
 				{/if}

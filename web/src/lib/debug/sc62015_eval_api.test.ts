@@ -26,8 +26,7 @@ describe('createEvalApi', () => {
 					],
 					lcd_writes: [],
 					probe_samples: [],
-					trace_events: [],
-					trace_truncated: false,
+					perfetto_trace_b64: 'ZHVtbXk=',
 					report: { reason: 'returned', steps: 3, pc: 0, sp: 0, halted: false, fault: null }
 				};
 			},
@@ -101,8 +100,7 @@ describe('createEvalApi', () => {
 						{ pc: 0x123, count: 1, regs: { A: 1 } },
 						{ pc: 0x123, count: 2, regs: { A: 2 } }
 					],
-					trace_events: [],
-					trace_truncated: false,
+					perfetto_trace_b64: null,
 					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null }
 				};
 			},

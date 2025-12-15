@@ -37,8 +37,7 @@ export type CallArtifacts = {
 		trace: { pc: number; call_stack: { len: number; frames: number[] } };
 	}>;
 	probe_samples: ProbeSample[];
-	trace_events: Array<{ op_index: number; pc: number; opcode: number; regs: Record<string, number> }>;
-	trace_truncated: boolean;
+	perfetto_trace_b64?: string | null;
 	report: {
 		reason: string;
 		steps: number;
@@ -60,8 +59,7 @@ export type CallHandle = {
 		memoryBlocks: MemoryWriteBlock[];
 		lcdWrites: CallArtifacts['lcd_writes'];
 		probeSamples: ProbeSample[];
-		traceEvents: CallArtifacts['trace_events'];
-		traceTruncated: boolean;
+		perfettoTraceB64: string | null;
 		result: CallArtifacts['report'];
 		infoLog: string[];
 	};
@@ -94,7 +92,6 @@ export interface EmulatorAdapter {
 		maxInstructions: number,
 		options?: {
 			trace?: boolean;
-			traceMaxEvents?: number;
 			probe?: { pc: number; maxSamples?: number };
 		} | null
 	): Promise<CallArtifacts>;
@@ -303,9 +300,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				artifacts.lcd_writes.length
 					? `Captured ${artifacts.lcd_writes.length} LCD addressing-unit write(s).`
 					: 'No LCD writes captured.',
-				artifacts.trace_events?.length
-					? `Trace events: ${artifacts.trace_events.length}${artifacts.trace_truncated ? ' (truncated)' : ''}.`
-					: ''
+				artifacts.perfetto_trace_b64 ? `Perfetto trace captured (${artifacts.perfetto_trace_b64.length} b64 chars).` : ''
 			].filter(Boolean);
 
 			const handle: CallHandle = {
@@ -319,8 +314,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					memoryBlocks,
 					lcdWrites: artifacts.lcd_writes,
 					probeSamples: artifacts.probe_samples ?? [],
-					traceEvents: artifacts.trace_events ?? [],
-					traceTruncated: Boolean(artifacts.trace_truncated),
+					perfettoTraceB64: artifacts.perfetto_trace_b64 ?? null,
 					result: artifacts.report,
 					infoLog
 				}

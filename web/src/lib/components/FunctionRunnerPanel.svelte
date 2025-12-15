@@ -25,13 +25,16 @@
 	let output: FunctionRunnerOutput | null = null;
 
 	function downloadTrace(call: any) {
-		const events = call?.artifacts?.traceEvents ?? [];
-		if (!events.length) return;
-		const blob = new Blob([JSON.stringify(events, null, 2)], { type: 'application/json' });
+		const b64 = call?.artifacts?.perfettoTraceB64 ?? null;
+		if (!b64) return;
+		const binary = atob(b64);
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+		const blob = new Blob([bytes], { type: 'application/octet-stream' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `pce500_call_${call.index}.trace.json`;
+		a.download = `pce500_call_${call.index}.perfetto-trace`;
 		document.body.appendChild(a);
 		a.click();
 		a.remove();
