@@ -2,6 +2,7 @@
 
 use crate::{llama::eval::perfetto_last_pc, CoreError, Result};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
@@ -168,6 +169,7 @@ pub struct MemoryImage {
     overlays: Vec<MemoryOverlay>,
     read_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_log: RefCell<VecDeque<MemoryAccessLog>>,
+    write_capture: Option<HashMap<u32, u8>>,
 }
 
 impl Default for MemoryImage {
@@ -199,6 +201,26 @@ impl MemoryImage {
             overlays: Vec::new(),
             read_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
+            write_capture: None,
+        }
+    }
+
+    pub fn begin_write_capture(&mut self) {
+        self.write_capture = Some(HashMap::new());
+    }
+
+    pub fn take_write_capture(&mut self) -> Vec<(u32, u8)> {
+        let Some(map) = self.write_capture.take() else {
+            return Vec::new();
+        };
+        let mut out: Vec<(u32, u8)> = map.into_iter().collect();
+        out.sort_by_key(|(addr, _)| *addr);
+        out
+    }
+
+    fn record_write_capture(&mut self, address: u32, value: u8) {
+        if let Some(map) = self.write_capture.as_mut() {
+            map.insert(canonical_address(address), value);
         }
     }
 
@@ -437,6 +459,7 @@ impl MemoryImage {
         }
         for offset in 0..bytes {
             let byte = ((value >> (offset * 8)) & 0xFF) as u8;
+            self.record_write_capture(address + offset as u32, byte);
             let slot = &mut self.external[(address as usize + offset) & (EXTERNAL_SPACE - 1)];
             if *slot != byte {
                 *slot = byte;
@@ -559,6 +582,7 @@ impl MemoryImage {
                     overlay.write(addr, byte, pc)
                 };
                 if ok {
+                    self.record_write_capture(addr, byte);
                     self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
                     let mut guard = perfetto_guard();
                     guard.with_some(|tracer| {
@@ -632,6 +656,7 @@ impl MemoryImage {
         self.memory_writes
             .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
+        self.record_write_capture(address, value);
         let idx = (address as usize) & (EXTERNAL_SPACE - 1);
         if self.external[idx] != value {
             self.external[idx] = value;
@@ -711,6 +736,7 @@ impl MemoryImage {
                 .set(self.memory_writes.get().saturating_add(1));
             let prev = self.internal[index];
             self.internal[index] = value;
+            self.record_write_capture(INTERNAL_MEMORY_START + offset, value);
             self.dirty_internal
                 .push((INTERNAL_MEMORY_START + offset, value));
             self.invoke_imr_isr_hook(offset, prev, value);
@@ -836,6 +862,7 @@ impl MemoryImage {
         let prev = self.internal[index];
         for byte_offset in 0..bytes {
             let byte = ((value >> (byte_offset * 8)) & 0xFF) as u8;
+            self.record_write_capture(address + byte_offset as u32, byte);
             let slot = &mut self.internal[index + byte_offset];
             if *slot != byte {
                 *slot = byte;

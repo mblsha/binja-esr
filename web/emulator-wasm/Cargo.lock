@@ -130,6 +130,7 @@ dependencies = [
  "sc62015-core",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
 ]

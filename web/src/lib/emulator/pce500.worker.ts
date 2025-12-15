@@ -12,11 +12,15 @@ type WorkerRequest =
 	| { id: number; type: 'start' }
 	| { id: number; type: 'stop' }
 	| { id: number; type: 'snapshot' }
+	| { id: number; type: 'lcd_trace' }
+	| { id: number; type: 'eval_js'; source: string }
 	| { id: number; type: 'set_options'; targetFps?: number; debug?: Partial<DebugOptions> }
 	| { id: number; type: 'virtual_key'; code: number; down: boolean }
 	| { id: number; type: 'physical_key'; code: number; down: boolean };
 
-type WorkerReply = { type: 'reply'; id: number; ok: true } | { type: 'reply'; id: number; ok: false; error: string };
+type WorkerReply =
+	| { type: 'reply'; id: number; ok: true; result?: any }
+	| { type: 'reply'; id: number; ok: false; error: string };
 
 type KeyboardDebug = {
 	pc: number | null;
@@ -38,6 +42,7 @@ type Frame = {
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
+	buildInfo: { version: string; git_commit: string; build_timestamp: string } | null;
 	lcdText: string[] | null;
 	regs: any | null;
 	callStack: number[] | null;
@@ -60,6 +65,7 @@ const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 
 let wasm: any = null;
 let emulator: any = null;
+let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 
 let running = false;
 let targetFps = 30;
@@ -83,21 +89,141 @@ function safeJson(value: any): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 }
 
+async function evalScript(source: string): Promise<any> {
+	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
+	const { runUserJs } = await import('../debug/run_user_js');
+	function wrapError(context: string, err: unknown): Error {
+		const msg = err instanceof Error ? err.message : String(err);
+		return new Error(`${context}: ${msg}`);
+	}
+	const api = createEvalApi({
+		callFunction: async (
+			address: number,
+			maxInstructions: number,
+			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
+		) => {
+			try {
+				const raw =
+					emulator.call_function_ex?.(address, maxInstructions, {
+						trace: Boolean(options?.trace),
+						probe_pc: options?.probe ? options.probe.pc : null,
+						probe_max_samples: options?.probe?.maxSamples ?? 256
+					}) ?? emulator.call_function(address, maxInstructions);
+				if (typeof raw === 'string') return JSON.parse(raw);
+				return raw;
+			} catch (err) {
+				throw wrapError(`call(0x${address.toString(16).toUpperCase()})`, err);
+			}
+		},
+		reset: async () => {
+			try {
+				await Promise.resolve(emulator.reset?.());
+			} catch (err) {
+				throw wrapError('reset()', err);
+			}
+		},
+		step: async (instructions: number) => {
+			try {
+				await Promise.resolve(emulator.step?.(instructions));
+			} catch (err) {
+				throw wrapError(`step(${instructions})`, err);
+			}
+		},
+		getReg: (name: string) => {
+			try {
+				return emulator.get_reg?.(name) ?? 0;
+			} catch (err) {
+				throw wrapError(`getReg(${name})`, err);
+			}
+		},
+		setReg: (name: string, value: number) => {
+			try {
+				emulator.set_reg?.(name, value);
+			} catch (err) {
+				throw wrapError(`setReg(${name}=${value})`, err);
+			}
+		},
+		read8: (addr: number) => {
+			try {
+				return emulator.read_u8?.(addr) ?? 0;
+			} catch (err) {
+				throw wrapError(`read8(0x${addr.toString(16).toUpperCase()})`, err);
+			}
+		},
+		write8: (addr: number, value: number) => {
+			try {
+				emulator.write_u8?.(addr, value);
+			} catch (err) {
+				throw wrapError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, err);
+			}
+		},
+		pressMatrixCode: (code: number) => {
+			try {
+				emulator.press_matrix_code?.(code);
+			} catch (err) {
+				throw wrapError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, err);
+			}
+		},
+		releaseMatrixCode: (code: number) => {
+			try {
+				emulator.release_matrix_code?.(code);
+			} catch (err) {
+				throw wrapError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, err);
+			}
+		},
+		injectMatrixEvent: (code: number, release: boolean) => {
+			try {
+				emulator.inject_matrix_event?.(code, release);
+			} catch (err) {
+				throw wrapError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, err);
+			}
+		}
+	});
+	let resultJson: string | null = null;
+	let error: string | null = null;
+	try {
+		const result = await runUserJs(source, api, Reg, Flag);
+		resultJson = safeJson(result);
+	} catch (err) {
+		error = err instanceof Error ? err.message : String(err);
+	}
+	return {
+		events: api.events,
+		calls: api.calls,
+		prints: api.prints,
+		resultJson,
+		error
+	};
+}
+
 async function ensureEmulator(): Promise<any> {
 	if (!wasm) {
 		wasm = await import('../wasm/pce500_wasm/pce500_wasm.js');
 		if (typeof wasm.default === 'function') {
-			await wasm.default();
+			const url = new URL('../wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
+			try {
+				if (Boolean((import.meta as any)?.env?.DEV)) {
+					url.searchParams.set('v', String(Date.now()));
+				}
+			} catch {
+				// ignore
+			}
+			await wasm.default(url);
 		}
 	}
 	if (!emulator) {
 		emulator = new wasm.Pce500Emulator();
+		try {
+			buildInfo = emulator.build_info?.() ?? null;
+		} catch {
+			buildInfo = null;
+		}
 	}
 	return emulator;
 }
 
-function replyOk(id: number) {
-	(self as any).postMessage({ type: 'reply', id, ok: true } satisfies WorkerReply);
+function replyOk(id: number, result?: any) {
+	(self as any).postMessage({ type: 'reply', id, ok: true, ...(result !== undefined ? { result } : {}) } satisfies WorkerReply);
 }
 
 function replyErr(id: number, error: unknown) {
@@ -213,6 +339,7 @@ function captureFrame(forceText: boolean): Frame {
 		pc,
 		instructionCount,
 		halted,
+		buildInfo,
 		lcdText,
 		regs,
 		callStack,
@@ -295,6 +422,31 @@ async function handleRequest(msg: WorkerRequest) {
 				await ensureEmulator();
 				postFrame(captureFrame(true));
 				replyOk(msg.id);
+				return;
+			}
+			case 'lcd_trace': {
+				await ensureEmulator();
+				const trace = emulator.lcd_trace?.() ?? null;
+				replyOk(msg.id, trace);
+				return;
+			}
+			case 'eval_js': {
+				// Ensure we don't race the run loop while mutating state.
+				if (running) {
+					running = false;
+					runLoopId += 1;
+				}
+				await ensureEmulator();
+				const res = await evalScript(msg.source);
+				try {
+					postFrame(captureFrame(true));
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					if (res && typeof res === 'object') {
+						res.error = res.error ? `${res.error}\n(postFrame) ${msg}` : `(postFrame) ${msg}`;
+					}
+				}
+				replyOk(msg.id, res);
 				return;
 			}
 			case 'start': {

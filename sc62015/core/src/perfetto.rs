@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[cfg(feature = "perfetto")]
+use crate::CoreError;
+#[cfg(feature = "perfetto")]
 use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
 #[cfg(feature = "perfetto")]
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
@@ -423,9 +425,25 @@ impl PerfettoTracer {
     }
 
     pub fn finish(self) -> Result<()> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = self;
+            Err(CoreError::Other(
+                "PerfettoTracer::finish is not supported on wasm32; use serialize()".to_string(),
+            ))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.builder
+                .save(&self.path)
+                .map_err(|e| CoreError::Other(format!("perfetto save: {e}")))
+        }
+    }
+
+    pub fn serialize(self) -> Result<Vec<u8>> {
         self.builder
-            .save(&self.path)
-            .map_err(|e| crate::CoreError::Other(format!("perfetto save: {e}")))
+            .serialize()
+            .map_err(|e| CoreError::Other(format!("perfetto serialize: {e}")))
     }
 
     /// IMR read diagnostics: log each read and keep running zero/non-zero counters.

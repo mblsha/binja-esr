@@ -3,12 +3,16 @@
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 		import { matrixCodeForKeyEvent } from '$lib/keymap';
+		import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
+		import { runUserJs } from '$lib/debug/run_user_js';
+		import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
+		import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
 
 		let wasm: any = null;
 		let emulator: any = null;
 		let worker: Worker | null = null;
 		let workerNextId = 1;
-		const workerPending = new Map<number, { resolve: () => void; reject: (err: unknown) => void }>();
+		const workerPending = new Map<number, { resolve: (value: any) => void; reject: (err: unknown) => void }>();
 		const canUseWorker =
 			typeof window !== 'undefined' &&
 			typeof Worker !== 'undefined' &&
@@ -21,13 +25,16 @@
 	let debugState: any = null;
 	let lastError: string | null = null;
 		let romSource: string | null = null;
-		let pcReg: number | null = null;
-		let halted = false;
-		let instructionCount: string | null = null;
-		let romLoaded = false;
+			let pcReg: number | null = null;
+			let halted = false;
+			let instructionCount: string | null = null;
+			let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
+			let romLoaded = false;
 
 	let running = false;
 	let targetFps = 30;
+
+	let functionRunnerBusy = false;
 	const pressedCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
@@ -74,6 +81,7 @@
 					lcdPixels = new Uint8Array(frame.lcdPixels);
 				}
 				lcdText = frame?.lcdText ?? null;
+				buildInfo = frame?.buildInfo ?? buildInfo;
 				regs = frame?.regs ?? regs;
 				callStack = frame?.callStack ?? callStack;
 				debugState = frame?.debugState ?? null;
@@ -102,7 +110,7 @@
 			else worker.postMessage(message);
 		}
 
-		function workerCall(type: string, payload: any = {}, transfer?: Transferable[]): Promise<void> {
+		function workerCall<T = any>(type: string, payload: any = {}, transfer?: Transferable[]): Promise<T> {
 			if (!worker) return Promise.reject(new Error('worker not ready'));
 			const id = workerNextId++;
 			const message = { id, type, ...payload };
@@ -133,7 +141,7 @@
 					const pending = workerPending.get(data.id);
 					if (!pending) return;
 					workerPending.delete(data.id);
-					if (data.ok) pending.resolve();
+					if (data.ok) pending.resolve(data.result);
 					else pending.reject(new Error(data.error ?? 'worker error'));
 					return;
 				}
@@ -165,14 +173,104 @@
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 	}
 
-	function hex(value: number | null | undefined, width = 5): string {
-		if (value === null || value === undefined) return '—';
-		return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
+	async function runFunctionRunner(source: string): Promise<FunctionRunnerOutput> {
+		functionRunnerBusy = true;
+		try {
+			if (running) stop();
+			await ensureWorker();
+			if (worker) {
+				return await workerCall('eval_js', { source });
+			}
+
+			const emu = await ensureEmulator();
+			const api = createEvalApi({
+				callFunction: async (
+					address: number,
+					maxInstructions: number,
+					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
+				) => {
+					const raw =
+						emu.call_function_ex?.(address, maxInstructions, {
+							trace: Boolean(options?.trace),
+							probe_pc: options?.probe ? options.probe.pc : null,
+							probe_max_samples: options?.probe?.maxSamples ?? 256
+						}) ?? emu.call_function(address, maxInstructions);
+					if (typeof raw === 'string') return JSON.parse(raw);
+					return raw;
+				},
+				reset: async () => {
+					await Promise.resolve(emu.reset?.());
+				},
+				step: async (instructions: number) => {
+					await Promise.resolve(emu.step?.(instructions));
+				},
+				getReg: (name: string) => emu.get_reg?.(name) ?? 0,
+				setReg: (name: string, value: number) => emu.set_reg?.(name, value),
+				read8: (addr: number) => emu.read_u8?.(addr) ?? 0,
+				write8: (addr: number, value: number) => emu.write_u8?.(addr, value),
+				pressMatrixCode: (code: number) => emu.press_matrix_code?.(code),
+				releaseMatrixCode: (code: number) => emu.release_matrix_code?.(code),
+				injectMatrixEvent: (code: number, release: boolean) => emu.inject_matrix_event?.(code, release)
+			});
+
+			let resultJson: string | null = null;
+			let error: string | null = null;
+			try {
+				const result = await runUserJs(source, api, Reg, Flag);
+				resultJson = safeJson(result);
+			} catch (err) {
+				error = err instanceof Error ? err.message : String(err);
+			}
+			return {
+				events: api.events,
+				calls: api.calls,
+				prints: api.prints,
+				resultJson,
+				error
+			};
+		} catch (err) {
+			return {
+				events: [],
+				calls: [],
+				prints: [],
+				resultJson: null,
+				error: err instanceof Error ? err.message : String(err)
+			};
+		} finally {
+			functionRunnerBusy = false;
+		}
 	}
 
-	function formatFunction(pc: number): string {
-		return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
-	}
+		function hex(value: number | null | undefined, width = 5): string {
+			if (value === null || value === undefined) return '—';
+			return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
+		}
+
+		function formatBuildInfo(info: typeof buildInfo): string {
+			if (!info) return '—';
+			const ts = (() => {
+				if (!info.build_timestamp) return 'ts=?';
+				const raw = Number.parseInt(info.build_timestamp, 10);
+				if (!Number.isFinite(raw)) return `ts=${info.build_timestamp}`;
+				const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
+				const date = new Date(ms);
+				if (Number.isNaN(date.getTime())) return `ts=${info.build_timestamp}`;
+				const offsetMinutes = -date.getTimezoneOffset();
+				const sign = offsetMinutes >= 0 ? '+' : '-';
+				const abs = Math.abs(offsetMinutes);
+				const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+				const mm = String(abs % 60).padStart(2, '0');
+				const localIso = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+					.toISOString()
+					.replace('Z', '');
+				return `ts=${localIso}${sign}${hh}:${mm}`;
+			})();
+			return `v${info.version} ${info.git_commit} ${ts}`;
+		}
+
+		function formatFunction(pc: number): string {
+			return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
+		}
 
 	function getReg(name: string): number | null {
 		for (const [key, value] of regsEntries(regs)) {
@@ -284,18 +382,31 @@
 		}
 	}
 
-	async function ensureEmulator(): Promise<any> {
-		if (!wasm) {
-			wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
-			if (typeof wasm.default === 'function') {
-				await wasm.default();
+		async function ensureEmulator(): Promise<any> {
+			if (!wasm) {
+				wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
+				if (typeof wasm.default === 'function') {
+					const url = new URL('$lib/wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
+					try {
+						if (Boolean((import.meta as any)?.env?.DEV)) {
+							url.searchParams.set('v', String(Date.now()));
+						}
+					} catch {
+						// ignore
+					}
+					await wasm.default(url);
+				}
 			}
+			if (!emulator) {
+				emulator = new wasm.Pce500Emulator();
+				try {
+					buildInfo = emulator.build_info?.() ?? null;
+				} catch {
+					buildInfo = null;
+				}
+			}
+			return emulator;
 		}
-		if (!emulator) {
-			emulator = new wasm.Pce500Emulator();
-		}
-		return emulator;
-	}
 
 	async function tryAutoLoadRom() {
 		await ensureWorker();
@@ -443,21 +554,25 @@
 		}
 	}
 
-	function installDevtoolsDebugHelpers() {
-		if (!isDevBuild()) return;
-		(globalThis as any).__pce500 = {
-			get emulator() {
-				return worker ? null : emulator;
-			},
-			dump: dumpKeyboardState,
-			step: (n: number) => stepOnce(n),
-			read: (addr: number) => emulator?.read_u8?.(addr),
-			readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
-			press: (code: number) => virtualPress(code),
-			release: (code: number) => virtualRelease(code),
-			tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
-				virtualPress(code);
-				stepOnce(stepCount);
+		function installDevtoolsDebugHelpers() {
+			if (!isDevBuild()) return;
+			(globalThis as any).__pce500 = {
+				get emulator() {
+					return worker ? null : emulator;
+				},
+				dump: dumpKeyboardState,
+				step: (n: number) => stepOnce(n),
+				read: (addr: number) => emulator?.read_u8?.(addr),
+				readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
+				lcdTrace: async () => {
+					if (worker) return await workerCall('lcd_trace');
+					return emulator?.lcd_trace?.();
+				},
+				press: (code: number) => virtualPress(code),
+				release: (code: number) => virtualRelease(code),
+				tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+					virtualPress(code);
+					stepOnce(stepCount);
 				virtualRelease(code);
 			},
 			pressPF1: () => virtualPress(0x56),
@@ -660,6 +775,7 @@
 		</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
+	<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
 
 	<LcdCanvas pixels={lcdPixels} />
 
@@ -817,6 +933,17 @@
 				</details>
 			{/if}
 
+			{#if romLoaded}
+				<FunctionRunnerPanel
+					disabled={!romLoaded}
+					busy={functionRunnerBusy}
+					onRun={runFunctionRunner}
+					onBeforeRun={() => {
+						if (running) stop();
+					}}
+				/>
+			{/if}
+
 	<p class="hint">
 		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.
 	</p>
@@ -897,4 +1024,6 @@
 		margin: 8px 0 0;
 		max-height: 200px;
 	}
+
+	/* Function runner styles live in FunctionRunnerPanel/Results components. */
 	</style>

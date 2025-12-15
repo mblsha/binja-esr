@@ -21,6 +21,7 @@ use crate::{
     perfetto::AnnotationValue,
     PERFETTO_TRACER,
 };
+use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -30,8 +31,17 @@ static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
 static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
 static PERF_SUBSTEP: AtomicU32 = AtomicU32::new(0);
 
+pub const PERFETTO_CALL_STACK_MAX_FRAMES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerfettoCallStack {
+    pub len: u8,
+    pub frames: [u32; PERFETTO_CALL_STACK_MAX_FRAMES],
+}
+
 thread_local! {
     static PERF_LAST_PC: Cell<u32> = const { Cell::new(0) };
+    static PERF_LAST_CALL_STACK: Cell<PerfettoCallStack> = const { Cell::new(PerfettoCallStack { len: 0, frames: [0; PERFETTO_CALL_STACK_MAX_FRAMES] }) };
 }
 
 struct PerfettoContextGuard;
@@ -64,12 +74,18 @@ pub fn perfetto_last_pc() -> u32 {
     PERF_LAST_PC.with(|value| value.get())
 }
 
+/// Last-seen call stack (truncated) even outside executor context; useful for host-side tracing.
+pub fn perfetto_last_call_stack() -> PerfettoCallStack {
+    PERF_LAST_CALL_STACK.with(|value| value.get())
+}
+
 pub fn reset_perf_counters() {
     let _guard = PERFETTO_TRACER.enter();
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
     PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
     PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
     PERF_LAST_PC.with(|value| value.set(0));
+    PERF_LAST_CALL_STACK.with(|value| value.set(PerfettoCallStack::default()));
     PERF_SUBSTEP.store(0, Ordering::Relaxed);
 }
 
@@ -1936,6 +1952,16 @@ impl LlamaExecutor {
         let trace_pc_snapshot = start_pc;
         let trace_opcode_snapshot = opcode;
         PERF_LAST_PC.with(|value| value.set(trace_pc_snapshot));
+        PERF_LAST_CALL_STACK.with(|value| {
+            let mut snapshot = PerfettoCallStack::default();
+            let frames = state.call_stack();
+            let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
+            snapshot.len = take as u8;
+            for (dst, src) in snapshot.frames.iter_mut().take(take).zip(frames.iter()) {
+                *dst = *src & mask_for(RegName::PC);
+            }
+            value.set(snapshot);
+        });
         // Execute using the resolved opcode after any PRE bytes.
         let mut exec_pc = start_pc;
         let mut exec_opcode = opcode;

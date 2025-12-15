@@ -8,11 +8,27 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
+use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::pce500::{
     load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
 };
 use sc62015_core::{CoreRuntime, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+
+#[derive(Debug, Clone, Serialize)]
+struct BuildInfo {
+    version: String,
+    git_commit: String,
+    build_timestamp: String,
+}
+
+fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_commit: option_env!("GIT_COMMIT").unwrap_or("unknown").to_string(),
+        build_timestamp: option_env!("BUILD_TIMESTAMP").unwrap_or("unknown").to_string(),
+    }
+}
 
 #[derive(Debug, Default, Clone, Serialize)]
 struct TimerState {
@@ -48,6 +64,72 @@ struct DebugState {
     irq: IrqState,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct MemoryWriteByte {
+    addr: u32,
+    value: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CallReport {
+    reason: String,
+    steps: u32,
+    pc: u32,
+    sp: u32,
+    halted: bool,
+    fault: Option<CallFault>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CallFault {
+    kind: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProbeSample {
+    pc: u32,
+    count: u32,
+    regs: std::collections::HashMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TraceEvent {
+    op_index: u64,
+    pc: u32,
+    opcode: u8,
+    regs: std::collections::HashMap<String, u32>,
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+struct CallOptions {
+    #[serde(default)]
+    trace: bool,
+    #[serde(default)]
+    trace_max_events: u32,
+    #[serde(default)]
+    probe_pc: Option<u32>,
+    #[serde(default)]
+    probe_max_samples: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CallArtifacts {
+    address: u32,
+    before_pc: u32,
+    after_pc: u32,
+    before_sp: u32,
+    after_sp: u32,
+    before_regs: std::collections::HashMap<String, u32>,
+    after_regs: std::collections::HashMap<String, u32>,
+    memory_writes: Vec<MemoryWriteByte>,
+    lcd_writes: Vec<sc62015_core::lcd::LcdDisplayWrite>,
+    probe_samples: Vec<ProbeSample>,
+    trace_events: Vec<TraceEvent>,
+    trace_truncated: bool,
+    report: CallReport,
+}
+
 #[wasm_bindgen]
 pub struct Pce500Emulator {
     runtime: CoreRuntime,
@@ -70,6 +152,10 @@ impl Pce500Emulator {
 
     pub fn has_rom(&self) -> bool {
         !self.rom_image.is_empty()
+    }
+
+    pub fn build_info(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&build_info()).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), JsValue> {
@@ -182,6 +268,170 @@ impl Pce500Emulator {
         self.runtime.timer.reset(self.runtime.cycle_count());
     }
 
+    /// Run a ROM function at `addr` with a bounded instruction budget, capturing last-value
+    /// memory writes and display-mapped LCD writes performed during the run.
+    ///
+    /// Notes:
+    /// - This is a debugging helper for the web UI; it restores PC/SP/call-metrics on exit so
+    ///   the harness does not perturb subsequent execution.
+    /// - The function is entered by setting `PC=addr` and pushing a sentinel return address
+    ///   onto the S stack; the loop stops when execution returns to that sentinel PC.
+    pub fn call_function(&mut self, addr: u32, max_instructions: u32) -> Result<JsValue, JsValue> {
+        self.call_function_ex(addr, max_instructions, JsValue::UNDEFINED)
+    }
+
+    /// Like `call_function`, but allows optional capture controls via `options`:
+    /// - `{ trace: true }` enables Perfetto capture for the duration of the call and returns the trace bytes.
+    /// - `{ probe_pc: 0x00F123, probe_max_samples: 100 }` records register snapshots whenever `PC == probe_pc`.
+    #[wasm_bindgen]
+    pub fn call_function_ex(
+        &mut self,
+        addr: u32,
+        max_instructions: u32,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let addr = addr & 0x000f_ffff;
+        let max_instructions = max_instructions.max(1);
+        let mut opts: CallOptions = serde_wasm_bindgen::from_value(options).unwrap_or_default();
+        if opts.probe_max_samples == 0 {
+            opts.probe_max_samples = 256;
+        }
+        if opts.trace_max_events == 0 {
+            opts.trace_max_events = max_instructions.min(50_000);
+        }
+        let before_pc = self.runtime.state.pc();
+        let before_sp = self.runtime.state.get_reg(RegName::S);
+        let before_call_metrics = self.runtime.state.snapshot_call_metrics();
+        let before_regs = sc62015_core::collect_registers(&self.runtime.state);
+
+        let sentinel_low16: u32 = 0xD00D;
+        let sentinel_pc = ((addr & 0x0f_0000) | sentinel_low16) & 0x000f_ffff;
+
+        // Push a 24-bit sentinel return address (little-endian) onto the S stack.
+        let new_sp = before_sp.wrapping_sub(3) & 0x00ff_ffff;
+        for i in 0..3u32 {
+            let byte = ((sentinel_pc >> (8 * i)) & 0xff) as u32;
+            let _ = self.runtime.memory.store(new_sp.wrapping_add(i), 8, byte);
+        }
+        self.runtime.state.set_reg(RegName::S, new_sp);
+        // Bookkeeping for call-stack tracing; RET/RETF will unwind this.
+        self.runtime.state.push_call_stack(addr);
+        self.runtime.state.call_depth_inc();
+
+        // Enable last-value write capture.
+        self.runtime.memory.begin_write_capture();
+        if let Some(lcd) = self.runtime.lcd.as_mut() {
+            lcd.begin_display_write_capture();
+        }
+
+        // Enter the function.
+        self.runtime.state.set_pc(addr);
+
+        let mut steps: u32 = 0;
+        let mut reason = "timeout".to_string();
+        let mut fault: Option<CallFault> = None;
+        let mut probe_samples: Vec<ProbeSample> = Vec::new();
+        let mut probe_hits: u32 = 0;
+        let mut trace_events: Vec<TraceEvent> = Vec::new();
+        let mut trace_truncated = false;
+        while steps < max_instructions {
+            if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
+                reason = "halted".to_string();
+                break;
+            }
+            if opts.trace {
+                if (trace_events.len() as u32) < opts.trace_max_events {
+                    let pc = self.runtime.state.pc();
+                    let opcode = self.runtime.memory.load(pc, 8).unwrap_or(0) as u8;
+                    trace_events.push(TraceEvent {
+                        op_index: self.runtime.instruction_count(),
+                        pc,
+                        opcode,
+                        regs: sc62015_core::collect_registers(&self.runtime.state),
+                    });
+                } else {
+                    trace_truncated = true;
+                }
+            }
+            if let Some(probe_pc) = opts.probe_pc {
+                if self.runtime.state.pc() == (probe_pc & 0x000f_ffff)
+                    && (probe_samples.len() as u32) < opts.probe_max_samples
+                {
+                    probe_hits = probe_hits.saturating_add(1);
+                    probe_samples.push(ProbeSample {
+                        pc: self.runtime.state.pc(),
+                        count: probe_hits,
+                        regs: sc62015_core::collect_registers(&self.runtime.state),
+                    });
+                }
+            }
+            if let Err(err) = self.runtime.step(1) {
+                reason = "fault".to_string();
+                fault = Some(CallFault {
+                    kind: "CoreError".to_string(),
+                    message: err.to_string(),
+                });
+                break;
+            }
+            steps += 1;
+            if self.runtime.state.pc() == sentinel_pc {
+                reason = "returned".to_string();
+                break;
+            }
+        }
+
+        let after_pc = self.runtime.state.pc();
+        let after_sp = self.runtime.state.get_reg(RegName::S);
+        let memory_writes = self
+            .runtime
+            .memory
+            .take_write_capture()
+            .into_iter()
+            .map(|(addr, value)| MemoryWriteByte { addr, value })
+            .collect();
+        let lcd_writes = self
+            .runtime
+            .lcd
+            .as_mut()
+            .map(|lcd| lcd.take_display_write_capture())
+            .unwrap_or_default();
+
+        // Restore state so the harness does not leave a sentinel PC/SP or call metrics behind.
+        self.runtime.state.set_pc(before_pc);
+        self.runtime.state.set_reg(RegName::S, before_sp);
+        self.runtime.state.restore_call_metrics(before_call_metrics);
+
+        let after_regs = sc62015_core::collect_registers(&self.runtime.state);
+
+        let report = CallReport {
+            reason,
+            steps,
+            pc: after_pc,
+            sp: after_sp,
+            halted: self.runtime.state.is_halted(),
+            fault,
+        };
+        let artifacts = CallArtifacts {
+            address: addr,
+            before_pc,
+            after_pc,
+            before_sp,
+            after_sp,
+            before_regs,
+            after_regs,
+            memory_writes,
+            lcd_writes,
+            probe_samples,
+            trace_events,
+            trace_truncated,
+            report,
+        };
+        // Return JSON to avoid browser-specific structured-object aliasing errors observed with
+        // `serde_wasm_bindgen` + `HashMap` (wasm-bindgen re-entrancy guard).
+        let json = serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(JsValue::from_str(&json))
+    }
+
     pub fn lcd_pixels(&self) -> Uint8Array {
         let rows = LCD_DISPLAY_ROWS as usize;
         let cols = LCD_DISPLAY_COLS as usize;
@@ -207,6 +457,17 @@ impl Pce500Emulator {
         };
         let lines = decode_display_text(lcd, font);
         serde_wasm_bindgen::to_value(&lines).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
+        let Some(lcd) = self.runtime.lcd.as_ref() else {
+            return serde_wasm_bindgen::to_value(&Vec::<Vec<sc62015_core::lcd::LcdWriteTrace>>::new())
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        };
+        let grid = lcd.display_trace_buffer();
+        let out: Vec<Vec<sc62015_core::lcd::LcdWriteTrace>> =
+            grid.iter().map(|row| row.to_vec()).collect();
+        serde_wasm_bindgen::to_value(&out).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn regs(&self) -> Result<JsValue, JsValue> {
@@ -281,6 +542,38 @@ mod tests {
         assert_eq!(
             pixels.length(),
             (LCD_DISPLAY_ROWS as u32) * (LCD_DISPLAY_COLS as u32)
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_can_capture_trace_events() {
+        #[derive(serde::Deserialize)]
+        struct CallArtifactsDecoded {
+            trace_events: Vec<TraceEventDecoded>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct TraceEventDecoded {
+            pc: u32,
+        }
+
+        #[derive(Serialize)]
+        struct Opts {
+            trace: bool,
+        }
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let js = emulator
+            .call_function_ex(pc, 64, serde_wasm_bindgen::to_value(&Opts { trace: true }).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded = serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+        assert!(
+            decoded.trace_events.iter().any(|ev| ev.pc == pc),
+            "expected at least one trace event at start pc=0x{pc:06X}"
         );
     }
 

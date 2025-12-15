@@ -20,3 +20,11 @@ jobs:
             -H "Authorization: token $TOKEN" \
             https://api.github.com/repos/mblsha/binja-esr-tests/dispatches \
             -d "{\"event_type\":\"rom-tests\",\"client_payload\":{\"sha\":\"$SHA\",\"pr\":$PR}}"
+
+  rom_tests_check:
+    name: private/rom-tests
+    needs: dispatch
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Triggered private ROM tests via repository_dispatch."
