@@ -10,6 +10,7 @@ from PIL import Image
 # Import the HD61202 components from the main module
 from .hd61202 import HD61202, ChipSelect, parse_command, render_combined_image
 
+from retrobus_perfetto import resolve_interned_trace
 from retrobus_perfetto.proto import perfetto_pb2
 
 # --- Perfetto Trace Parsing ---
@@ -22,6 +23,7 @@ def load_perfetto_trace(trace_path: str) -> Optional["perfetto_pb2.Trace"]:
         with open(trace_path, "rb") as f:
             trace_data = f.read()
             trace.ParseFromString(trace_data)
+            resolve_interned_trace(trace, inplace=True)
             return trace
     except FileNotFoundError:
         print(f"Error: Trace file not found at '{trace_path}'", file=sys.stderr)

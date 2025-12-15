@@ -20,6 +20,7 @@ from sc62015.pysc62015.constants import (  # noqa: E402
     INTERNAL_MEMORY_START,
 )
 
+from retrobus_perfetto import resolve_interned_trace  # noqa: E402
 from retrobus_perfetto.proto import perfetto_pb2  # noqa: E402
 
 
@@ -36,11 +37,6 @@ class TraceEvent:
 def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None:
     """Extract the user-supplied value from a DebugAnnotation."""
 
-    # Resolve interned names/values if present to handle traces that use iid/name_iid.
-    name = annotation.name or ""
-    if not name and annotation.HasField("name_iid"):
-        name = annotation.name_iid
-
     if annotation.HasField("int_value"):
         return annotation.int_value
     if annotation.HasField("uint_value"):
@@ -53,44 +49,8 @@ def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None
         return annotation.bool_value
     if annotation.HasField("string_value"):
         return annotation.string_value
-    if annotation.HasField("string_value_iid"):
-        return annotation.string_value_iid
     if annotation.HasField("legacy_json_value"):
         return annotation.legacy_json_value
-    return None
-
-
-def _iter_interned_entries(container: object, *field_names: str):
-    """Yield entries for the first matching repeated field name."""
-
-    for field in field_names:
-        try:
-            entries = getattr(container, field)
-        except AttributeError:
-            continue
-        return entries
-    return ()
-
-
-def _interned_iid(entry: object) -> int | None:
-    if not hasattr(entry, "DESCRIPTOR"):
-        return None
-    descriptor = entry.DESCRIPTOR
-    if "iid" not in descriptor.fields_by_name:
-        return None
-    return entry.iid
-
-
-def _interned_string(entry: object, *field_names: str) -> str | None:
-    if not hasattr(entry, "DESCRIPTOR"):
-        return None
-    descriptor = entry.DESCRIPTOR
-    for field in field_names:
-        if field not in descriptor.fields_by_name:
-            continue
-        value = getattr(entry, field)
-        if isinstance(value, str) and value:
-            return value
     return None
 
 
@@ -99,34 +59,12 @@ def _load_trace(path: Path) -> List[TraceEvent]:
 
     trace = perfetto_pb2.Trace()
     trace.ParseFromString(path.read_bytes())
+    resolve_interned_trace(trace, inplace=True)
 
     track_names: Dict[int, str] = {}
-    name_intern: Dict[int, str] = {}
-    value_intern: Dict[int, object] = {}
     events: List[TraceEvent] = []
 
-    has_interned = "interned_data" in perfetto_pb2.TracePacket.DESCRIPTOR.fields_by_name
-
     for packet in trace.packet:
-        if has_interned and packet.HasField("interned_data"):
-            interned = packet.interned_data
-            for entry in _iter_interned_entries(
-                interned, "debug_annotation_name", "debug_annotation_names"
-            ):
-                iid = _interned_iid(entry)
-                name = _interned_string(entry, "name", "str", "string_value")
-                if iid and name:
-                    name_intern[iid] = name
-            for entry in _iter_interned_entries(
-                interned,
-                "debug_annotation_string_value",
-                "debug_annotation_string_values",
-            ):
-                iid = _interned_iid(entry)
-                value = _interned_string(entry, "string_value", "str", "name")
-                if iid and value:
-                    value_intern[iid] = value
-
         if packet.HasField("track_descriptor"):
             desc = packet.track_descriptor
             name = (
@@ -144,12 +82,8 @@ def _load_trace(path: Path) -> List[TraceEvent]:
             for ann in packet.track_event.debug_annotations:
                 name = ann.name
                 if not name:
-                    name = name_intern.get(ann.name_iid, "")
-                if not name:
                     continue
                 value = _annotation_value(ann)
-                if isinstance(value, int) and ann.HasField("string_value_iid"):
-                    value = value_intern.get(value, value)
                 annotations[name] = value
             events.append(
                 TraceEvent(
