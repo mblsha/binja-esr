@@ -85,15 +85,33 @@ let lastLcdText: string[] | null = null;
 
 const pressedCodes = new Set<number>();
 const pendingVirtualRelease = new Map<number, number>();
+let perfettoSymbolsPromise: Promise<void> | null = null;
 
 function safeJson(value: any): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
+}
+
+async function ensurePerfettoSymbols(): Promise<void> {
+	if (perfettoSymbolsPromise) return perfettoSymbolsPromise;
+	perfettoSymbolsPromise = (async () => {
+		try {
+			await ensureEmulator();
+			const res = await fetch('/api/symbols');
+			if (!res.ok) return;
+			const payload = (await res.json()) as any;
+			emulator.set_perfetto_function_symbols(payload.symbols);
+		} catch {
+			// Ignore missing symbol sources (public CI does not ship private rom-analysis).
+		}
+	})();
+	return perfettoSymbolsPromise;
 }
 
 async function evalScript(source: string): Promise<any> {
 	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
 	const { runUserJs } = await import('../debug/run_user_js');
 	const { IOCS } = await import('../debug/iocs');
+
 	function wrapError(context: string, err: unknown): Error {
 		const msg = err instanceof Error ? err.message : String(err);
 		return new Error(`${context}: ${msg}`);
@@ -119,6 +137,7 @@ async function evalScript(source: string): Promise<any> {
 			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
+				if (options?.trace) await ensurePerfettoSymbols();
 				const raw =
 					emulator.call_function_ex?.(address, maxInstructions, {
 						trace: Boolean(options?.trace),

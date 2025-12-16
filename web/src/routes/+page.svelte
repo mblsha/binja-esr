@@ -188,6 +188,24 @@
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 	}
 
+	let perfettoSymbolsPromise: Promise<void> | null = null;
+
+	async function ensurePerfettoSymbols(): Promise<void> {
+		if (perfettoSymbolsPromise) return perfettoSymbolsPromise;
+		perfettoSymbolsPromise = (async () => {
+			try {
+				await ensureEmulator();
+				const res = await fetch('/api/symbols');
+				if (!res.ok) return;
+				const payload = (await res.json()) as any;
+				emulator.set_perfetto_function_symbols(payload.symbols);
+			} catch {
+				// Ignore missing symbol sources (public CI does not ship private rom-analysis).
+			}
+		})();
+		return perfettoSymbolsPromise;
+	}
+
 	async function runFunctionRunner(source: string): Promise<FunctionRunnerOutput> {
 		functionRunnerBusy = true;
 		try {
@@ -204,6 +222,7 @@
 					maxInstructions: number,
 					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
 				) => {
+					if (options?.trace) await ensurePerfettoSymbols();
 					const raw =
 						emu.call_function_ex?.(address, maxInstructions, {
 							trace: Boolean(options?.trace),

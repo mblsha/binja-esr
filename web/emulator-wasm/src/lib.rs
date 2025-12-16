@@ -106,6 +106,12 @@ struct CallOptions {
     probe_max_samples: u32,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PerfettoFunctionSymbol {
+    addr: u32,
+    name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct CallArtifacts {
     address: u32,
@@ -148,6 +154,22 @@ impl Pce500Emulator {
 
     pub fn build_info(&self) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&build_info()).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Install a symbol map used to label Call-UI Perfetto traces (the "Functions" track).
+    pub fn set_perfetto_function_symbols(&mut self, symbols: JsValue) -> Result<(), JsValue> {
+        let entries: Vec<PerfettoFunctionSymbol> = serde_wasm_bindgen::from_value(symbols)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let mut map = std::collections::HashMap::with_capacity(entries.len());
+        for entry in entries {
+            let name = entry.name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            map.insert(entry.addr & 0x000f_ffff, name.to_string());
+        }
+        sc62015_core::perfetto::set_call_ui_function_names(map);
+        Ok(())
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), JsValue> {
