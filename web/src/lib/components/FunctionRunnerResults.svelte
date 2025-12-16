@@ -23,7 +23,11 @@
 {#if output?.prints?.length}
 	<details open>
 		<summary>Prints ({output.prints.length})</summary>
-		<pre class="log" data-testid="fnr-prints">{JSON.stringify(output.prints.map((p) => p.value), null, 2)}</pre>
+		<pre class="log" data-testid="fnr-prints">{JSON.stringify(
+				output.prints.map((p) => p.value),
+				null,
+				2,
+			)}</pre>
 	</details>
 {/if}
 
@@ -52,8 +56,7 @@
 						<summary>Memory writes ({call.artifacts.memoryBlocks.length} block(s))</summary>
 						{#each call.artifacts.memoryBlocks as block (block.start)}
 							<pre class="log">{formatAddress(block.start)}:
-{block.lines.join('\n')}</pre
-							>
+{block.lines.join('\n')}</pre>
 						{/each}
 					</details>
 				{/if}
@@ -63,10 +66,9 @@
 						<summary>LCD writes ({call.artifacts.lcdWrites.length})</summary>
 						<pre class="log">
 {call.artifacts.lcdWrites
-	.slice(0, 64)
-	.map((w) => `page=${w.page} col=${w.col} val=${hex(w.value, 2)} pc=${hex(w.trace.pc, 6)}`)
-	.join('\n')}{call.artifacts.lcdWrites.length > 64 ? '\n…' : ''}</pre
-						>
+								.slice(0, 64)
+								.map((w) => `page=${w.page} col=${w.col} val=${hex(w.value, 2)} pc=${hex(w.trace.pc, 6)}`)
+								.join('\n')}{call.artifacts.lcdWrites.length > 64 ? '\n…' : ''}</pre>
 					</details>
 				{/if}
 

@@ -27,7 +27,9 @@ fn build_info() -> BuildInfo {
     BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         git_commit: option_env!("GIT_COMMIT").unwrap_or("unknown").to_string(),
-        build_timestamp: option_env!("BUILD_TIMESTAMP").unwrap_or("unknown").to_string(),
+        build_timestamp: option_env!("BUILD_TIMESTAMP")
+            .unwrap_or("unknown")
+            .to_string(),
     }
 }
 
@@ -420,7 +422,8 @@ impl Pce500Emulator {
         };
         // Return JSON to avoid browser-specific structured-object aliasing errors observed with
         // `serde_wasm_bindgen` + `HashMap` (wasm-bindgen re-entrancy guard).
-        let json = serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let json =
+            serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(JsValue::from_str(&json))
     }
 
@@ -470,8 +473,10 @@ impl Pce500Emulator {
 
     pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
         let Some(lcd) = self.runtime.lcd.as_ref() else {
-            return serde_wasm_bindgen::to_value(&Vec::<Vec<sc62015_core::lcd::LcdWriteTrace>>::new())
-                .map_err(|e| JsValue::from_str(&e.to_string()));
+            return serde_wasm_bindgen::to_value(
+                &Vec::<Vec<sc62015_core::lcd::LcdWriteTrace>>::new(),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()));
         };
         let grid = lcd.display_trace_buffer();
         let out: Vec<Vec<sc62015_core::lcd::LcdWriteTrace>> =
@@ -572,9 +577,14 @@ mod tests {
 
         let pc = emulator.get_reg("PC");
         let js = emulator
-            .call_function_ex(pc, 64, serde_wasm_bindgen::to_value(&Opts { trace: true }).unwrap())
+            .call_function_ex(
+                pc,
+                64,
+                serde_wasm_bindgen::to_value(&Opts { trace: true }).unwrap(),
+            )
             .expect("call");
-        let decoded: CallArtifactsDecoded = serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+        let decoded: CallArtifactsDecoded =
+            serde_json::from_str(&js.as_string().unwrap()).expect("decode");
         assert!(
             decoded
                 .perfetto_trace_b64

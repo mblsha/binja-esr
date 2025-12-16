@@ -11,4 +11,3 @@ describe('matrixCodeForKeyEvent', () => {
 		expect(matrixCodeForKeyEvent({ code: 'KeyA' } as KeyboardEvent)).toBeNull();
 	});
 });
-

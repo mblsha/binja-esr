@@ -15,7 +15,7 @@
 		{ label: '↑', code: 0x1e, testId: 'vk-up' },
 		{ label: '←', code: 0x27, testId: 'vk-left' },
 		{ label: '→', code: 0x26, testId: 'vk-right' },
-		{ label: '↓', code: 0x17, testId: 'vk-down' }
+		{ label: '↓', code: 0x17, testId: 'vk-down' },
 	];
 
 	function press(code: number, event: Event) {
@@ -38,7 +38,7 @@
 				type="button"
 				class="key"
 				data-testid={key.testId}
-				disabled={disabled}
+				{disabled}
 				on:pointerdown={(e) => press(key.code, e)}
 				on:pointerup={(e) => release(key.code, e)}
 				on:pointerleave={(e) => release(key.code, e)}

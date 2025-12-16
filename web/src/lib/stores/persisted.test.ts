@@ -11,12 +11,9 @@ describe('createPersistedStore', () => {
 			getItem: (key: string) => backing.get(key) ?? null,
 			setItem: (key: string, value: string) => backing.set(key, value),
 			removeItem: (key: string) => backing.delete(key),
-			clear: () => backing.clear()
+			clear: () => backing.clear(),
 		};
-		vi.stubGlobal(
-			'window',
-			{ localStorage: localStorageMock } as unknown as Window & typeof globalThis
-		);
+		vi.stubGlobal('window', { localStorage: localStorageMock } as unknown as Window & typeof globalThis);
 
 		backing.set('k', JSON.stringify({ a: 1 }));
 		const store = createPersistedStore('k', { a: 0 });

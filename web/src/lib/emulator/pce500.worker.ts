@@ -75,7 +75,7 @@ let debugOptions: DebugOptions = {
 	callStackOpen: true,
 	lcdTextOpen: true,
 	debugStateOpen: false,
-	keyboardDebugOpen: false
+	keyboardDebugOpen: false,
 };
 
 let runLoopId = 0;
@@ -116,14 +116,14 @@ async function evalScript(source: string): Promise<any> {
 		callFunction: async (
 			address: number,
 			maxInstructions: number,
-			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
+			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
 				const raw =
 					emulator.call_function_ex?.(address, maxInstructions, {
 						trace: Boolean(options?.trace),
 						probe_pc: options?.probe ? options.probe.pc : null,
-						probe_max_samples: options?.probe?.maxSamples ?? 256
+						probe_max_samples: options?.probe?.maxSamples ?? 256,
 					}) ?? emulator.call_function(address, maxInstructions);
 				if (typeof raw === 'string') return JSON.parse(raw);
 				return raw;
@@ -137,21 +137,17 @@ async function evalScript(source: string): Promise<any> {
 		read8: (addr: number) =>
 			runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
 		write8: (addr: number, value: number) =>
-			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () =>
-				emulator.write_u8?.(addr, value)
-			),
+			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
 		pressMatrixCode: (code: number) =>
-			runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () =>
-				emulator.press_matrix_code?.(code)
-			),
+			runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () => emulator.press_matrix_code?.(code)),
 		releaseMatrixCode: (code: number) =>
 			runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
-				emulator.release_matrix_code?.(code)
+				emulator.release_matrix_code?.(code),
 			),
 		injectMatrixEvent: (code: number, release: boolean) =>
 			runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
-				emulator.inject_matrix_event?.(code, release)
-			)
+				emulator.inject_matrix_event?.(code, release),
+			),
 	});
 	let resultJson: string | null = null;
 	let error: string | null = null;
@@ -166,7 +162,7 @@ async function evalScript(source: string): Promise<any> {
 		calls: api.calls,
 		prints: api.prints,
 		resultJson,
-		error
+		error,
 	};
 }
 
@@ -197,7 +193,12 @@ async function ensureEmulator(): Promise<any> {
 }
 
 function replyOk(id: number, result?: any) {
-	(self as any).postMessage({ type: 'reply', id, ok: true, ...(result !== undefined ? { result } : {}) } satisfies WorkerReply);
+	(self as any).postMessage({
+		type: 'reply',
+		id,
+		ok: true,
+		...(result !== undefined ? { result } : {}),
+	} satisfies WorkerReply);
 }
 
 function replyErr(id: number, error: unknown) {
@@ -205,7 +206,7 @@ function replyErr(id: number, error: unknown) {
 		type: 'reply',
 		id,
 		ok: false,
-		error: error instanceof Error ? error.message : String(error)
+		error: error instanceof Error ? error.message : String(error),
 	} satisfies WorkerReply);
 }
 
@@ -254,7 +255,7 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 			fifoTail,
 			fifo,
 			pressedCodes: Array.from(pressedCodes.values()),
-			pendingVirtualRelease: Array.from(pendingVirtualRelease.entries())
+			pendingVirtualRelease: Array.from(pendingVirtualRelease.entries()),
 		};
 		return { keyboardDebug, keyboardDebugJson: safeJson(keyboardDebug) };
 	} catch {
@@ -296,8 +297,7 @@ function captureFrame(forceText: boolean): Frame {
 
 	let lcdText: string[] | null = null;
 	if (debugOptions.lcdTextOpen) {
-		const shouldUpdate =
-			forceText || !running || nowMs - lastLcdTextUpdateMs >= LCD_TEXT_UPDATE_INTERVAL_MS;
+		const shouldUpdate = forceText || !running || nowMs - lastLcdTextUpdateMs >= LCD_TEXT_UPDATE_INTERVAL_MS;
 		if (shouldUpdate) {
 			lastLcdTextUpdateMs = nowMs;
 			lastLcdText = emulator.lcd_text?.() ?? lastLcdText;
@@ -305,9 +305,9 @@ function captureFrame(forceText: boolean): Frame {
 		lcdText = lastLcdText ?? null;
 	}
 
-	const regs = debugOptions.regsOpen ? emulator.regs?.() ?? null : null;
-	const callStack = debugOptions.callStackOpen ? emulator.call_stack?.() ?? null : null;
-	const debugState = debugOptions.debugStateOpen ? emulator.debug_state?.() ?? null : null;
+	const regs = debugOptions.regsOpen ? (emulator.regs?.() ?? null) : null;
+	const callStack = debugOptions.callStackOpen ? (emulator.call_stack?.() ?? null) : null;
+	const debugState = debugOptions.debugStateOpen ? (emulator.debug_state?.() ?? null) : null;
 
 	const kb = snapshotKeyboard();
 	return {
@@ -322,7 +322,7 @@ function captureFrame(forceText: boolean): Frame {
 		callStack,
 		debugState,
 		keyboardDebug: kb?.keyboardDebug ?? null,
-		keyboardDebugJson: kb?.keyboardDebugJson ?? null
+		keyboardDebugJson: kb?.keyboardDebugJson ?? null,
 	};
 }
 
@@ -342,10 +342,7 @@ function pumpEmulator(id: number) {
 			const sliceMs = performance.now() - sliceStart;
 			if (sliceMs > 0) {
 				const scaled = Math.floor(runSliceInstructions * (runSliceTargetMs / sliceMs));
-				runSliceInstructions = Math.max(
-					RUN_SLICE_MIN_INSTRUCTIONS,
-					Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled)
-				);
+				runSliceInstructions = Math.max(RUN_SLICE_MIN_INSTRUCTIONS, Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled));
 			}
 			if (!running || id !== runLoopId) return;
 		}

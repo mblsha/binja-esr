@@ -47,6 +47,10 @@
   - Examples: `Fix load_rom…`, `Add KO/KI labels…`.
 - PRs must include: clear description, rationale, linked issues, test plan, coverage results, and screenshots/GIFs for UI or LCD changes.
 - CI must pass (lint, type, tests); avoid decreasing coverage.
+- Before opening a PR, run formatters locally:
+  - Python: `uv run ruff format .` then `uv run ruff check .`
+  - Rust: `cargo fmt --manifest-path sc62015/core/Cargo.toml --all` (and `sc62015/rustcore`, `web/emulator-wasm` if touched)
+  - Web (TS/Svelte): `cd web && npm run format:check` (or `npm run format` to fix)
 
 ## Runtime & Dev Tips
 - PC‑E500 ROM: Ensure `data/pc-e500.bin` exists. Without it, some emulator features/tests will be skipped.

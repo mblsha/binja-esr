@@ -6,7 +6,9 @@ fn git_output(args: &[&str]) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
+    String::from_utf8(out.stdout)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn main() {
@@ -16,7 +18,8 @@ fn main() {
         .unwrap_or_else(|_| "0".to_string());
     println!("cargo:rustc-env=BUILD_TIMESTAMP={timestamp}");
 
-    let git_commit = git_output(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+    let git_commit =
+        git_output(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=GIT_COMMIT={git_commit}");
 
     // Ensure `BUILD_TIMESTAMP`/`GIT_COMMIT` are refreshed when HEAD changes, even if

@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[cfg(feature = "perfetto")]
-use crate::CoreError;
-#[cfg(feature = "perfetto")]
 use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
+#[cfg(feature = "perfetto")]
+use crate::CoreError;
 #[cfg(feature = "perfetto")]
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 #[cfg(all(test, feature = "perfetto"))]
@@ -199,11 +199,8 @@ impl PerfettoTracer {
         }
         self.builder.end_slice(self.instructions_track, ts_end);
 
-        self.builder.update_counter(
-            self.instr_counter_track,
-            instr_index as f64 + 1.0,
-            ts_start,
-        );
+        self.builder
+            .update_counter(self.instr_counter_track, instr_index as f64 + 1.0, ts_start);
 
         #[cfg(test)]
         {
@@ -249,9 +246,9 @@ impl PerfettoTracer {
         } else {
             self.ewrites_track
         };
-        let mut ev =
-            self.builder
-                .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
+        let mut ev = self
+            .builder
+            .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
         ev.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("pc", AnnotationValue::Pointer(pc as u64)),
@@ -627,7 +624,9 @@ impl PerfettoTracer {
     /// Function enter/exit markers to mirror Python call/return tracing.
     pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
         let ctx = perfetto_instr_context();
-        let op = ctx.map(|(idx, _)| idx).unwrap_or_else(perfetto_last_instr_index);
+        let op = ctx
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(perfetto_last_instr_index);
         let ts = self.ts(op, 0);
         if name == "CALL" || name == "CALLF" {
             let mut ev =

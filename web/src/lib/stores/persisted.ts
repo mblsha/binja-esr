@@ -7,7 +7,7 @@ type PersistCodec<T> = {
 
 const jsonCodec = <T>(): PersistCodec<T> => ({
 	serialize: (value) => JSON.stringify(value),
-	deserialize: (raw) => JSON.parse(raw) as T
+	deserialize: (raw) => JSON.parse(raw) as T,
 });
 
 function hasStorage(): boolean {
@@ -21,7 +21,7 @@ function hasStorage(): boolean {
 export function createPersistedStore<T>(
 	key: string,
 	initialValue: T,
-	codec: PersistCodec<T> = jsonCodec<T>()
+	codec: PersistCodec<T> = jsonCodec<T>(),
 ): Writable<T> {
 	let startValue = initialValue;
 	if (hasStorage()) {

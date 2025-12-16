@@ -14,7 +14,7 @@ export async function runUserJs(
 	api: EvalApi,
 	Reg: unknown,
 	Flag: unknown,
-	IOCS: unknown
+	IOCS: unknown,
 ): Promise<unknown> {
 	// Best-effort sandbox: shadow common escape hatches, but this is not a hard security boundary.
 	const prelude = 'const Function = undefined; const AsyncFunction = undefined;\n';
@@ -37,7 +37,7 @@ export async function runUserJs(
 		'MessageChannel',
 		'setTimeout',
 		'setInterval',
-		`"use strict";\n${prelude}return (async () => {\n${source}\n})();`
+		`"use strict";\n${prelude}return (async () => {\n${source}\n})();`,
 	);
 	freezeIfObject(Reg);
 	freezeIfObject(Flag);
@@ -59,6 +59,6 @@ export async function runUserJs(
 		undefined,
 		undefined,
 		undefined,
-		undefined
+		undefined,
 	);
 }

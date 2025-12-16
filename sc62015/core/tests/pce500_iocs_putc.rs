@@ -90,7 +90,12 @@ fn pce500_iocs_putc_emits_lcd_writes() {
     let (lcd_writes, after_lines) = rt
         .lcd
         .as_mut()
-        .map(|lcd| (lcd.take_display_write_capture(), decode_display_text(lcd, &font)))
+        .map(|lcd| {
+            (
+                lcd.take_display_write_capture(),
+                decode_display_text(lcd, &font),
+            )
+        })
         .expect("lcd present");
     assert!(
         !lcd_writes.is_empty(),

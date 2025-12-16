@@ -27,7 +27,7 @@
 // await e.withProbe(0x00F299C, (s) => e.print({ hit: s.count, pc: s.pc, A: s.regs.A }), async () => {
 //   await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });
 // });
-`
+`,
 	);
 
 	let output: FunctionRunnerOutput | null = null;
@@ -79,8 +79,7 @@
 		const lines = block.split('\n');
 
 		const nonEmpty = lines.filter((l) => l.trim().length > 0);
-		const allCommented =
-			nonEmpty.length > 0 && nonEmpty.every((line) => /^\s*\/\//.test(line));
+		const allCommented = nonEmpty.length > 0 && nonEmpty.every((line) => /^\s*\/\//.test(line));
 
 		const updatedLines = lines.map((line) => {
 			if (line.trim().length === 0) return line;

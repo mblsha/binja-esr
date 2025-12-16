@@ -10,7 +10,7 @@ export function pixelsToRgba(
 	cols = LCD_COLS,
 	rows = LCD_ROWS,
 	on: Rgba = [255, 255, 255, 255],
-	off: Rgba = [0, 0, 0, 255]
+	off: Rgba = [0, 0, 0, 255],
 ): Uint8ClampedArray {
 	if (pixels.length !== rows * cols) {
 		throw new Error(`expected ${rows * cols} pixels, got ${pixels.length}`);

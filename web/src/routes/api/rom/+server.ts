@@ -31,8 +31,8 @@ export const GET: RequestHandler = async () => {
 				headers: {
 					'content-type': 'application/octet-stream',
 					'cache-control': 'no-store',
-					'x-rom-source': candidate.source
-				}
+					'x-rom-source': candidate.source,
+				},
 			});
 		} catch {
 			// Continue probing.
@@ -43,8 +43,7 @@ export const GET: RequestHandler = async () => {
 		status: 404,
 		headers: {
 			'content-type': 'text/plain; charset=utf-8',
-			'cache-control': 'no-store'
-		}
+			'cache-control': 'no-store',
+		},
 	});
 };
-

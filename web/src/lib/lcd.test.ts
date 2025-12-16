@@ -17,4 +17,3 @@ describe('pixelsToRgba', () => {
 		expect(rgba.slice(4, 8)).toEqual(new Uint8ClampedArray([10, 20, 30, 40]));
 	});
 });
-

@@ -25,7 +25,7 @@ function eventBytes(event: MemoryWriteEvent): Array<{ addr: number; value: numbe
 		const byte = (value >>> shift) & 0xff;
 		bytes.push({
 			addr: normalizeAddress(baseAddr + i),
-			value: byte
+			value: byte,
 		});
 	}
 	return bytes;
@@ -37,9 +37,7 @@ type BlockFormatOptions = {
 };
 
 function defaultLineFormatter(_addr: number, bytes: number[]): string {
-	return bytes
-		.map((b) => b.toString(16).padStart(2, '0').toUpperCase())
-		.join(' ');
+	return bytes.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
 }
 
 function makeBlock(start: number, bytes: number[], options: BlockFormatOptions): MemoryWriteBlock {
@@ -52,7 +50,7 @@ function makeBlock(start: number, bytes: number[], options: BlockFormatOptions):
 	return {
 		start,
 		lines,
-		byteCount: bytes.length
+		byteCount: bytes.length,
 	};
 }
 
@@ -69,10 +67,7 @@ function normalizeRange(range: { start: number; end: number }): { start: number;
 	return { start, end };
 }
 
-function shouldIgnore(
-	addr: number,
-	ignoreRanges: Array<{ start: number; end: number }> | undefined
-): boolean {
+function shouldIgnore(addr: number, ignoreRanges: Array<{ start: number; end: number }> | undefined): boolean {
 	if (!ignoreRanges || ignoreRanges.length === 0) return false;
 	for (const range of ignoreRanges) {
 		if (addr >= range.start && addr <= range.end) {
@@ -85,7 +80,7 @@ function shouldIgnore(
 // Reduce a write stream down to "last value per byte address", then render contiguous spans.
 export function buildMemoryWriteBlocks(
 	events: MemoryWriteEvent[],
-	options?: MemoryWriteBlockOptions
+	options?: MemoryWriteBlockOptions,
 ): MemoryWriteBlock[] {
 	if (!events.length) return [];
 
@@ -96,7 +91,7 @@ export function buildMemoryWriteBlocks(
 
 	const formatOptions: BlockFormatOptions = {
 		groupSize: Math.max(1, options?.groupSize ?? 16),
-		lineFormatter: options?.lineFormatter ?? defaultLineFormatter
+		lineFormatter: options?.lineFormatter ?? defaultLineFormatter,
 	};
 
 	const finalBytes = new Map<number, number>();
@@ -134,4 +129,3 @@ export function buildMemoryWriteBlocks(
 export function formatAddress(value: number): string {
 	return '0x' + (value >>> 0).toString(16).padStart(6, '0').toUpperCase();
 }
-
