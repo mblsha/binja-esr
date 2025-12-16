@@ -91,96 +91,69 @@ function safeJson(value: any): string {
 }
 
 async function evalScript(source: string): Promise<any> {
-	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
-	const { runUserJs } = await import('../debug/run_user_js');
-	const { IOCS } = await import('../debug/iocs');
-	function wrapError(context: string, err: unknown): Error {
-		const msg = err instanceof Error ? err.message : String(err);
-		return new Error(`${context}: ${msg}`);
-	}
-	const api = createEvalApi({
-		callFunction: async (
-			address: number,
-			maxInstructions: number,
-			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
-		) => {
-			try {
-				const raw =
-					emulator.call_function_ex?.(address, maxInstructions, {
-						trace: Boolean(options?.trace),
-						probe_pc: options?.probe ? options.probe.pc : null,
-						probe_max_samples: options?.probe?.maxSamples ?? 256
-					}) ?? emulator.call_function(address, maxInstructions);
-				if (typeof raw === 'string') return JSON.parse(raw);
-				return raw;
-			} catch (err) {
-				throw wrapError(`call(0x${address.toString(16).toUpperCase()})`, err);
-			}
-		},
-		reset: async () => {
-			try {
-				await Promise.resolve(emulator.reset?.());
-			} catch (err) {
-				throw wrapError('reset()', err);
-			}
-		},
-		step: async (instructions: number) => {
-			try {
-				await Promise.resolve(emulator.step?.(instructions));
-			} catch (err) {
-				throw wrapError(`step(${instructions})`, err);
-			}
-		},
-		getReg: (name: string) => {
-			try {
-				return emulator.get_reg?.(name) ?? 0;
-			} catch (err) {
-				throw wrapError(`getReg(${name})`, err);
-			}
-		},
-		setReg: (name: string, value: number) => {
-			try {
-				emulator.set_reg?.(name, value);
-			} catch (err) {
-				throw wrapError(`setReg(${name}=${value})`, err);
-			}
-		},
-		read8: (addr: number) => {
-			try {
-				return emulator.read_u8?.(addr) ?? 0;
-			} catch (err) {
-				throw wrapError(`read8(0x${addr.toString(16).toUpperCase()})`, err);
-			}
-		},
-		write8: (addr: number, value: number) => {
-			try {
-				emulator.write_u8?.(addr, value);
-			} catch (err) {
-				throw wrapError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, err);
-			}
-		},
-		pressMatrixCode: (code: number) => {
-			try {
-				emulator.press_matrix_code?.(code);
-			} catch (err) {
-				throw wrapError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, err);
-			}
-		},
-		releaseMatrixCode: (code: number) => {
-			try {
-				emulator.release_matrix_code?.(code);
-			} catch (err) {
-				throw wrapError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, err);
-			}
-		},
-		injectMatrixEvent: (code: number, release: boolean) => {
-			try {
-				emulator.inject_matrix_event?.(code, release);
-			} catch (err) {
-				throw wrapError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, err);
-			}
-		}
-	});
+        const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
+        const { runUserJs } = await import('../debug/run_user_js');
+        const { IOCS } = await import('../debug/iocs');
+        function wrapError(context: string, err: unknown): Error {
+                const msg = err instanceof Error ? err.message : String(err);
+                return new Error(`${context}: ${msg}`);
+        }
+        const runWithError = <T>(context: string, fn: () => T): T => {
+                try {
+                        return fn();
+                } catch (err) {
+                        throw wrapError(context, err);
+                }
+        };
+        const runWithErrorAsync = async <T>(context: string, fn: () => Promise<T> | T): Promise<T> => {
+                try {
+                        return await fn();
+                } catch (err) {
+                        throw wrapError(context, err);
+                }
+        };
+        const api = createEvalApi({
+                callFunction: async (
+                        address: number,
+                        maxInstructions: number,
+                        options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
+                ) =>
+                        runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
+                                const raw =
+                                        emulator.call_function_ex?.(address, maxInstructions, {
+                                                trace: Boolean(options?.trace),
+                                                probe_pc: options?.probe ? options.probe.pc : null,
+                                                probe_max_samples: options?.probe?.maxSamples ?? 256
+                                        }) ?? emulator.call_function(address, maxInstructions);
+                                if (typeof raw === 'string') return JSON.parse(raw);
+                                return raw;
+                        }),
+                reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
+                step: async (instructions: number) =>
+                        runWithErrorAsync(`step(${instructions})`, () => Promise.resolve(emulator.step?.(instructions))),
+                getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
+                setReg: (name: string, value: number) =>
+                        runWithError(`setReg(${name}=${value})`, () => emulator.set_reg?.(name, value)),
+                read8: (addr: number) =>
+                        runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
+                write8: (addr: number, value: number) =>
+                        runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () =>
+                                emulator.write_u8?.(addr, value)
+                        ),
+                pressMatrixCode: (code: number) =>
+                        runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () =>
+                                emulator.press_matrix_code?.(code)
+                        ),
+                releaseMatrixCode: (code: number) =>
+                        runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
+                                emulator.release_matrix_code?.(code)
+                        ),
+                injectMatrixEvent: (code: number, release: boolean) =>
+                        runWithError(
+                                `keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`,
+                                () => emulator.inject_matrix_event?.(code, release)
+                        )
+        });
 	let resultJson: string | null = null;
 	let error: string | null = null;
 	try {
