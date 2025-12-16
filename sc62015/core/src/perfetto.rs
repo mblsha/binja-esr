@@ -23,21 +23,9 @@ pub enum AnnotationValue {
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
 #[cfg(feature = "perfetto")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PerfettoLayout {
-    /// Python-compatible track names/events used by parity tooling.
-    PythonCompat,
-    /// UI-oriented call traces used by the web Function Runner `e.call(..., { trace: true })`.
-    CallUi,
-}
-
-/// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
-#[cfg(feature = "perfetto")]
 pub struct PerfettoTracer {
     builder: PerfettoTraceBuilder,
-    layout: PerfettoLayout,
     exec_track: TrackId,
-    timeline_track: TrackId,
     mem_track: TrackId,
     memory_track: TrackId,
     instr_counter_track: TrackId,
@@ -58,7 +46,6 @@ pub struct PerfettoTracer {
     call_depth_counter: TrackId,
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
-    cpu_track: TrackId,
     functions_track: TrackId,
     instructions_track: TrackId,
     ewrites_track: TrackId,
@@ -77,30 +64,21 @@ pub struct PerfettoTracer {
 #[cfg(feature = "perfetto")]
 impl PerfettoTracer {
     pub fn new(path: PathBuf) -> Self {
-        Self::new_with_layout(path, PerfettoLayout::PythonCompat)
-    }
-
-    pub fn new_call_ui(path: PathBuf) -> Self {
-        Self::new_with_layout(path, PerfettoLayout::CallUi)
-    }
-
-    fn new_with_layout(path: PathBuf, layout: PerfettoLayout) -> Self {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
-        // Default to Python-compatible layout/timestamps.
-        let compat_python = true;
+        // Single Perfetto format (shared by Rust + Python):
+        // - `Functions`: slices for CALL/RET spanning full function duration
+        // - `Instructions`: per-instruction slices with pre-state regs/IMR/ISR, dur=1 tick
+        // - `EWrites`/`IWrites`: instants for external/internal memory writes
+        //
+        // Timestamps are deterministic instruction-index ticks. retrobus-perfetto stores
+        // timestamps in microseconds; it converts input nanoseconds by dividing by 1000.
+        // Use 1000ns per tick so each instruction advances Perfetto time by 1us.
 
-        // Match Python trace naming so compare_perfetto_traces.py can ingest directly.
         let exec_track = builder.add_thread("InstructionTrace");
-        // Optional visual parity: emit parallel Execution/CPU tracks regardless of layout flag.
-        let timeline_track = builder.add_thread("Execution");
-        let mem_track = if compat_python {
-            builder.add_thread("Memory")
-        } else {
-            builder.add_thread("MemoryWrites")
-        };
-        // Track aliases to match Python tracer naming.
+        let _timeline_track = builder.add_thread("Execution");
+        let mem_track = builder.add_thread("Memory");
         let memory_track = builder.add_thread("Memory");
-        let cpu_track = builder.add_thread("CPU");
+        let _cpu_track = builder.add_thread("CPU");
         let instr_counter_track = builder.add_counter_track("instructions", Some("count"), None);
         let imr_track = builder.add_thread("IMR");
         let imr_zero_counter = builder.add_counter_track("IMR_ReadZero", Some("count"), None);
@@ -117,17 +95,9 @@ impl PerfettoTracer {
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
-        let units_per_instr = match layout {
-            // retrobus-perfetto stores timestamps in microseconds; it converts our input
-            // nanoseconds by dividing by 1000. Use >=1000ns so short traces don't collapse to 0.
-            PerfettoLayout::CallUi => 1_000, // 1 "tick" (instruction) = 1µs
-            PerfettoLayout::PythonCompat => 1,
-        };
         Self {
             builder,
-            layout,
             exec_track,
-            timeline_track,
             mem_track,
             memory_track,
             instr_counter_track,
@@ -138,7 +108,7 @@ impl PerfettoTracer {
             irq_key_track,
             irq_misc_track,
             display_track,
-            units_per_instr,
+            units_per_instr: 1_000,
             path,
             imr_seq: 0,
             imr_read_zero: 0,
@@ -148,7 +118,6 @@ impl PerfettoTracer {
             call_depth_counter,
             mem_read_counter,
             mem_write_counter,
-            cpu_track,
             functions_track,
             instructions_track,
             ewrites_track,
@@ -176,9 +145,6 @@ impl PerfettoTracer {
     }
 
     fn call_ui_close_open_function_slices(&mut self) {
-        if self.layout != PerfettoLayout::CallUi {
-            return;
-        }
         // Close any unbalanced nested slices (e.call can stop mid-call).
         let end_ts = self.ts(perfetto_last_instr_index(), 0);
         while self.call_ui_functions_depth > 0 {
@@ -199,59 +165,17 @@ impl PerfettoTracer {
         mem_imr: u8,
         mem_isr: u8,
     ) {
-        if self.layout == PerfettoLayout::CallUi {
-            let ts_start = self.ts(instr_index, 0);
-            let ts_end = self.ts(instr_index.saturating_add(1), 0);
-            let ts_counter = ts_start;
-            let name = if let Some(m) = mnemonic {
-                format!("{m} @0x{pc:06X}")
-            } else {
-                format!("op=0x{opcode:02X} @0x{pc:06X}")
-            };
-            {
-                let mut ev = self
-                    .builder
-                    .begin_slice(self.instructions_track, name, ts_start);
-                ev.add_annotations([
-                    ("backend", AnnotationValue::Str("rust".to_string())),
-                    ("pc", AnnotationValue::Pointer(reg_pc as u64)),
-                    ("opcode", AnnotationValue::UInt(opcode as u64)),
-                    ("op_index", AnnotationValue::UInt(instr_index)),
-                    ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
-                    ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
-                ]);
-                for (name, value) in regs {
-                    let key = format!("reg_{}", name.to_ascii_lowercase());
-                    let masked = if name == "BA" {
-                        *value & 0xFFFF
-                    } else if name == "F" {
-                        *value & 0xFF
-                    } else {
-                        *value & 0xFF_FFFF
-                    };
-                    ev.add_annotation(key, masked as u64);
-                }
-                ev.finish();
-            }
-            self.builder.end_slice(self.instructions_track, ts_end);
-
-            self.builder.update_counter(
-                self.instr_counter_track,
-                instr_index as f64 + 1.0,
-                ts_counter,
-            );
-            return;
-        }
-
+        let ts_start = self.ts(instr_index, 0);
+        let ts_end = self.ts(instr_index.saturating_add(1), 0);
+        let name = if let Some(m) = mnemonic {
+            format!("{m} @0x{pc:06X}")
+        } else {
+            format!("op=0x{opcode:02X} @0x{pc:06X}")
+        };
         {
-            // Encode key fields in the event name so readers without interned annotations
-            // can still recover pc/opcode/op_index.
-            let mut ev = self.builder.add_instant_event(
-                self.exec_track,
-                format!("Exec@0x{pc:06X}/op=0x{opcode:02X}/idx={instr_index}"),
-                self.ts(instr_index, 0),
-            );
-            // Duplicate annotations with explicit, non-interned keys to keep compatibility with Python proto parsers.
+            let mut ev = self
+                .builder
+                .begin_slice(self.instructions_track, name, ts_start);
             ev.add_annotations([
                 ("backend", AnnotationValue::Str("rust".to_string())),
                 ("pc", AnnotationValue::Pointer(reg_pc as u64)),
@@ -259,10 +183,6 @@ impl PerfettoTracer {
                 ("op_index", AnnotationValue::UInt(instr_index)),
                 ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
                 ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
-                // Redundant, uninferred keys to bypass interned name lookups.
-                ("pc_raw", AnnotationValue::Pointer(reg_pc as u64)),
-                ("opcode_raw", AnnotationValue::UInt(opcode as u64)),
-                ("op_index_raw", AnnotationValue::UInt(instr_index)),
             ]);
             for (name, value) in regs {
                 let key = format!("reg_{}", name.to_ascii_lowercase());
@@ -277,60 +197,20 @@ impl PerfettoTracer {
             }
             ev.finish();
         }
+        self.builder.end_slice(self.instructions_track, ts_end);
 
-        // Duplicate on the Execution track for UI parity with Python traces.
-        {
-            let mut exec = self.builder.add_instant_event(
-                self.timeline_track,
-                "Execution".to_string(),
-                self.ts(instr_index, 0),
-            );
-            exec.add_annotations([
-                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
-                ("opcode", AnnotationValue::UInt(opcode as u64)),
-                ("op_index", AnnotationValue::UInt(instr_index)),
-            ]);
-            exec.finish();
-        }
-
-        // Duplicate on the CPU track for parity with Python tracer naming.
-        {
-            let mut cpu_ev = self.builder.add_instant_event(
-                self.cpu_track,
-                "Exec".to_string(),
-                self.ts(instr_index, 0),
-            );
-            cpu_ev.add_annotations([
-                ("pc", AnnotationValue::Pointer(reg_pc as u64)),
-                ("opcode", AnnotationValue::UInt(opcode as u64)),
-                ("op_index", AnnotationValue::UInt(instr_index)),
-                ("backend", AnnotationValue::Str("rust".to_string())),
-            ]);
-            for (name, value) in regs {
-                let key = format!("reg_{}", name.to_ascii_lowercase());
-                let masked = if name == "BA" {
-                    *value & 0xFFFF
-                } else if name == "F" {
-                    *value & 0xFF
-                } else {
-                    *value & 0xFF_FFFF
-                };
-                cpu_ev.add_annotation(key, masked as u64);
-            }
-            cpu_ev.finish();
-        }
-
-        // Keep an explicit instruction counter aligned to InstructionTrace.
         self.builder.update_counter(
             self.instr_counter_track,
             instr_index as f64 + 1.0,
-            self.ts(instr_index, 0),
+            ts_start,
         );
+
         #[cfg(test)]
         {
-        self.test_exec_events
-            .borrow_mut()
-            .push((pc, opcode, instr_index));
+            self.test_exec_events
+                .borrow_mut()
+                .push((pc, opcode, instr_index));
+            self.test_timestamps.borrow_mut().push(ts_start);
         }
     }
 
@@ -364,52 +244,15 @@ impl PerfettoTracer {
             value & ((1u32 << size) - 1)
         };
         let ts = self.ts(instr_index, substep.max(1));
-        if self.layout == PerfettoLayout::CallUi {
-            let track = if space == "internal" {
-                self.iwrites_track
-            } else {
-                self.ewrites_track
-            };
-            let mut ev =
-                self.builder
-                    .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
-            ev.add_annotations([
-                ("backend", AnnotationValue::Str("rust".to_string())),
-                ("pc", AnnotationValue::Pointer(pc as u64)),
-                ("address", AnnotationValue::Pointer(addr as u64)),
-                ("value", AnnotationValue::UInt(masked_value as u64)),
-                ("space", AnnotationValue::Str(space.to_string())),
-                ("size", AnnotationValue::UInt(size as u64)),
-                ("op_index", AnnotationValue::UInt(instr_index)),
-            ]);
-            ev.finish();
-            return;
-        }
-        {
-            let mut ev =
-                self.builder
-                    .add_instant_event(self.mem_track, format!("Write@0x{addr:06X}"), ts);
-            ev.add_annotations([
-                ("backend", AnnotationValue::Str("rust".to_string())),
-                ("pc", AnnotationValue::Pointer(pc as u64)),
-                ("address", AnnotationValue::Pointer(addr as u64)),
-                ("value", AnnotationValue::UInt(masked_value as u64)),
-                ("space", AnnotationValue::Str(space.to_string())),
-                ("size", AnnotationValue::UInt(size as u64)),
-                ("op_index", AnnotationValue::UInt(instr_index)),
-            ]);
-            ev.finish();
-        }
-        #[cfg(test)]
-        {
-            self.test_timestamps.borrow_mut().push(ts);
-        }
-
-        // Also mirror to "Memory" track to match Python tracer naming.
-        let mut mem_alias =
+        let track = if space == "internal" {
+            self.iwrites_track
+        } else {
+            self.ewrites_track
+        };
+        let mut ev =
             self.builder
-                .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
-        mem_alias.add_annotations([
+                .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
+        ev.add_annotations([
             ("backend", AnnotationValue::Str("rust".to_string())),
             ("pc", AnnotationValue::Pointer(pc as u64)),
             ("address", AnnotationValue::Pointer(addr as u64)),
@@ -418,7 +261,9 @@ impl PerfettoTracer {
             ("size", AnnotationValue::UInt(size as u64)),
             ("op_index", AnnotationValue::UInt(instr_index)),
         ]);
-        mem_alias.finish();
+        ev.finish();
+        #[cfg(test)]
+        self.test_timestamps.borrow_mut().push(ts);
     }
 
     /// Record a memory write at a specific manual-clock cycle (used for host/applied writes outside executor).
@@ -705,17 +550,9 @@ impl PerfettoTracer {
 
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
     pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, AnnotationValue>) {
-        // Prefer explicit cycle payload (manual clock) when present to align with Python traces.
-        // For CallUi traces, timestamp against the instruction timeline so all instants have
-        // sensible ordering (some callers use `cycle=0` as a placeholder).
-        let cycle_ts = if self.layout == PerfettoLayout::CallUi {
-            None
-        } else {
-            payload.get("cycle").and_then(|v| match v {
-                AnnotationValue::UInt(c) => Some(*c as i64),
-                _ => None,
-            })
-        };
+        // Always timestamp against the instruction timeline. Some callers use `cycle=0` as a
+        // placeholder; relying on it collapses start times to 0.
+        let cycle_ts = None;
 
         // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
         let (ctx_idx, _pc) = perfetto_instr_context()
@@ -789,38 +626,28 @@ impl PerfettoTracer {
 
     /// Function enter/exit markers to mirror Python call/return tracing.
     pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
-        if self.layout == PerfettoLayout::CallUi {
-            let ctx = perfetto_instr_context();
-            let op = ctx.map(|(idx, _)| idx).unwrap_or_else(perfetto_last_instr_index);
-            let ts = self.ts(op, 0);
-            if name == "CALL" || name == "CALLF" {
-                let mut ev = self.builder.begin_slice(
-                    self.functions_track,
-                    format!("fn@0x{pc_to:06X}"),
-                    ts,
-                );
-                ev.add_annotations([
-                    ("from", AnnotationValue::Pointer(pc_from as u64)),
-                    ("to", AnnotationValue::Pointer(pc_to as u64)),
-                    ("depth", AnnotationValue::UInt(depth as u64)),
-                    ("op_index", AnnotationValue::UInt(op)),
-                ]);
-                ev.finish();
-                self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_add(1);
-            } else if name == "RET" || name == "RETF" {
-                self.builder.end_slice(
-                    self.functions_track,
-                    ts.saturating_add(self.units_per_instr as i64),
-                );
-                self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_sub(1);
-            }
-            return;
+        let ctx = perfetto_instr_context();
+        let op = ctx.map(|(idx, _)| idx).unwrap_or_else(perfetto_last_instr_index);
+        let ts = self.ts(op, 0);
+        if name == "CALL" || name == "CALLF" {
+            let mut ev =
+                self.builder
+                    .begin_slice(self.functions_track, format!("fn@0x{pc_to:06X}"), ts);
+            ev.add_annotations([
+                ("from", AnnotationValue::Pointer(pc_from as u64)),
+                ("to", AnnotationValue::Pointer(pc_to as u64)),
+                ("depth", AnnotationValue::UInt(depth as u64)),
+                ("op_index", AnnotationValue::UInt(op)),
+            ]);
+            ev.finish();
+            self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_add(1);
+        } else if name == "RET" || name == "RETF" {
+            self.builder.end_slice(
+                self.functions_track,
+                ts.saturating_add(self.units_per_instr as i64),
+            );
+            self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_sub(1);
         }
-        let mut payload = HashMap::new();
-        payload.insert("from".to_string(), AnnotationValue::Pointer(pc_from as u64));
-        payload.insert("to".to_string(), AnnotationValue::Pointer(pc_to as u64));
-        payload.insert("depth".to_string(), AnnotationValue::UInt(depth as u64));
-        self.record_irq_event(name, payload);
     }
 
     #[cfg(test)]
@@ -847,6 +674,7 @@ impl PerfettoTracer {
         _pc: u32,
         _reg_pc: u32,
         _opcode: u8,
+        _mnemonic: Option<&str>,
         _regs: &HashMap<String, u32>,
         _mem_imr: u8,
         _mem_isr: u8,
