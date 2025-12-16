@@ -29,6 +29,7 @@
 
 	let output: FunctionRunnerOutput | null = null;
 	let editor: HTMLTextAreaElement | null = null;
+	const INDENT = '  ';
 
 	function downloadTrace(call: any) {
 		const b64 = call?.artifacts?.perfettoTraceB64 ?? null;
@@ -94,7 +95,68 @@
 		editor.selectionEnd = selection.start + updatedBlock.length;
 	}
 
+	async function indentSelection(delta: 1 | -1) {
+		if (!editor) return;
+		const text = editor.value ?? '';
+		const selStart = editor.selectionStart ?? 0;
+		const selEnd = editor.selectionEnd ?? 0;
+
+		// When nothing is selected, treat Tab as inserting indentation at the cursor.
+		if (selStart === selEnd) {
+			if (delta === 1) {
+				const updated = text.slice(0, selStart) + INDENT + text.slice(selEnd);
+				$sourceStore = updated;
+				await tick();
+				editor.selectionStart = selStart + INDENT.length;
+				editor.selectionEnd = selStart + INDENT.length;
+			} else {
+				const lineStart = text.lastIndexOf('\n', selStart - 1) + 1;
+				const prefix = text.slice(lineStart, Math.min(lineStart + INDENT.length, text.length));
+				const remove = prefix.startsWith(INDENT) ? INDENT.length : prefix.startsWith(' ') ? 1 : 0;
+				if (remove > 0) {
+					const updated = text.slice(0, lineStart) + text.slice(lineStart + remove);
+					$sourceStore = updated;
+					await tick();
+					const newCursor = Math.max(lineStart, selStart - remove);
+					editor.selectionStart = newCursor;
+					editor.selectionEnd = newCursor;
+				}
+			}
+			return;
+		}
+
+		const selection = resolveLineRange(text, selStart, selEnd);
+		const block = text.slice(selection.start, selection.end);
+		const lines = block.split('\n');
+
+		const updatedLines = lines.map((line) => {
+			if (delta === 1) return INDENT + line;
+			if (line.startsWith(INDENT)) {
+				return line.slice(INDENT.length);
+			}
+			if (line.startsWith(' ')) {
+				return line.slice(1);
+			}
+			return line;
+		});
+		const updatedBlock = updatedLines.join('\n');
+		const updated = text.slice(0, selection.start) + updatedBlock + text.slice(selection.end);
+
+		$sourceStore = updated;
+		await tick();
+
+		// Keep selection spanning the same logical lines after editing.
+		editor.selectionStart = selection.start;
+		editor.selectionEnd = selection.start + updatedBlock.length;
+	}
+
 	function onEditorKeydown(ev: KeyboardEvent) {
+		if (ev.key === 'Tab') {
+			ev.preventDefault();
+			void indentSelection(ev.shiftKey ? -1 : 1);
+			return;
+		}
+
 		const mod = ev.metaKey || ev.ctrlKey;
 		if (!mod) return;
 		if (ev.key === 'Enter') {
