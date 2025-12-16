@@ -128,4 +128,44 @@ describe('FunctionRunnerPanel', () => {
 		await new Promise((r) => setTimeout(r, 0));
 		expect(editor.value).toBe('line1\n  line2\n\nline3');
 	});
+
+	it('Tab indents selection by two spaces and Shift+Tab unindents', async () => {
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
+		const onRun = vi.fn(async () => ({ events: [], calls: [], prints: [], resultJson: null, error: null }));
+		const { getByTestId } = render(FunctionRunnerPanel, {
+			disabled: false,
+			busy: false,
+			onRun
+		});
+		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
+		await fireEvent.input(editor, { target: { value: 'a\n  b\nc' } });
+		editor.selectionStart = 0;
+		editor.selectionEnd = editor.value.length;
+
+		await fireEvent.keyDown(editor, { key: 'Tab' });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(editor.value).toBe('  a\n    b\n  c');
+
+		await fireEvent.keyDown(editor, { key: 'Tab', shiftKey: true });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(editor.value).toBe('a\n  b\nc');
+	});
+
+	it('Tab inserts two spaces at cursor when no selection', async () => {
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
+		const onRun = vi.fn(async () => ({ events: [], calls: [], prints: [], resultJson: null, error: null }));
+		const { getByTestId } = render(FunctionRunnerPanel, {
+			disabled: false,
+			busy: false,
+			onRun
+		});
+		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
+		await fireEvent.input(editor, { target: { value: 'ab' } });
+		editor.selectionStart = 1;
+		editor.selectionEnd = 1;
+
+		await fireEvent.keyDown(editor, { key: 'Tab' });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(editor.value).toBe('a  b');
+	});
 });
