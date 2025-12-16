@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import FunctionRunnerResults from '$lib/components/FunctionRunnerResults.svelte';
-	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
-	import { tick } from 'svelte';
+        import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
+        import type { CallHandle } from '$lib/debug/sc62015_eval_api';
+        import { tick } from 'svelte';
 
 	export let disabled = false;
 	export let busy = false;
@@ -33,8 +34,8 @@
 	let editor: HTMLTextAreaElement | null = null;
 	const INDENT = '  ';
 
-	function downloadTrace(call: any) {
-		const b64 = call?.artifacts?.perfettoTraceB64 ?? null;
+        function downloadTrace(call: CallHandle) {
+                const b64 = call?.artifacts?.perfettoTraceB64 ?? null;
 		if (!b64) return;
 		const binary = atob(b64);
 		const bytes = new Uint8Array(binary.length);
