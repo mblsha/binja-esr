@@ -14,7 +14,7 @@ use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::pce500::{
     load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
 };
-use sc62015_core::{CoreRuntime, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+use sc62015_core::{CoreRuntime, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 
 #[derive(Debug, Clone, Serialize)]
 struct BuildInfo {
@@ -433,6 +433,23 @@ impl Pce500Emulator {
             for (row, row_buf) in buf.iter().enumerate().take(rows) {
                 let start = row * cols;
                 flat[start..start + cols].copy_from_slice(row_buf);
+            }
+        }
+        Uint8Array::from(flat.as_slice())
+    }
+
+    pub fn lcd_chip_pixels(&self) -> Uint8Array {
+        let rows = LCD_CHIP_ROWS as usize;
+        let cols = LCD_CHIP_COLS as usize;
+        let mut flat = vec![0u8; rows * cols * 2];
+        if let Some(lcd) = self.runtime.lcd.as_ref() {
+            for chip_index in 0..2 {
+                let buf = lcd.chip_display_buffer(chip_index);
+                let base = chip_index * rows * cols;
+                for (row, row_buf) in buf.iter().enumerate().take(rows) {
+                    let start = base + row * cols;
+                    flat[start..start + cols].copy_from_slice(row_buf);
+                }
             }
         }
         Uint8Array::from(flat.as_slice())

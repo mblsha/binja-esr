@@ -11,5 +11,12 @@ describe('LcdCanvas', () => {
 		expect(canvas?.width).toBe(LCD_COLS);
 		expect(canvas?.height).toBe(LCD_ROWS);
 	});
-});
 
+	it('supports custom dimensions', () => {
+		const { container } = render(LcdCanvas, { pixels: null, cols: 64, rows: 64, scale: 1 });
+		const canvas = container.querySelector('canvas') as HTMLCanvasElement | null;
+		expect(canvas).not.toBeNull();
+		expect(canvas?.width).toBe(64);
+		expect(canvas?.height).toBe(64);
+	});
+});

@@ -14,6 +14,8 @@ use std::collections::HashMap;
 
 const LCD_WIDTH: usize = 64;
 const LCD_PAGES: usize = 8;
+pub const LCD_CHIP_ROWS: usize = LCD_PAGES * 8;
+pub const LCD_CHIP_COLS: usize = LCD_WIDTH;
 #[allow(dead_code)]
 const LCD_RANGE_LOW: u32 = 0x2000;
 #[allow(dead_code)]
@@ -551,6 +553,23 @@ impl LcdController {
         buffer
     }
 
+    pub fn chip_display_buffer(&self, chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS] {
+        let mut out = [[0u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS];
+        let Some(chip) = self.chips.get(chip_index) else {
+            return out;
+        };
+        let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
+        for y_display in 0..LCD_CHIP_ROWS {
+            let y_vram = (y_display + start_line) % LCD_CHIP_ROWS;
+            let page = y_vram / 8;
+            let bit = y_vram % 8;
+            for x in 0..LCD_CHIP_COLS {
+                out[y_display][x] = pixel_on(chip.vram[page][x], bit);
+            }
+        }
+        out
+    }
+
     pub fn stats(&self) -> LcdStats {
         let mut stats = LcdStats::default();
         for (idx, chip) in self.chips.iter().enumerate() {
@@ -573,9 +592,12 @@ fn copy_region(
     dest_start_col: usize,
     mirror: bool,
 ) {
+    let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
     for (row, row_buf) in buffer.iter_mut().enumerate().take(LCD_DISPLAY_ROWS) {
-        let page = start_page + row / 8;
-        let bit = row % 8;
+        let y_display = start_page * 8 + row;
+        let y_vram = (y_display + start_line) % LCD_CHIP_ROWS;
+        let page = y_vram / 8;
+        let bit = y_vram % 8;
         if mirror {
             for (dest_offset, src_col) in column_range.clone().rev().enumerate() {
                 if let Some(byte) = chip.vram.get(page).and_then(|page| page.get(src_col)) {
@@ -821,5 +843,52 @@ mod tests {
         let events = lcd.take_display_write_capture();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].value, 0x22);
+    }
+
+    #[test]
+    fn chip_display_buffer_scrolls_by_start_line() {
+        let mut lcd = LcdController::new();
+        for chip in lcd.chips.iter_mut() {
+            for page in chip.vram.iter_mut() {
+                for byte in page.iter_mut() {
+                    *byte = 0xFF;
+                }
+            }
+        }
+        // Light a single pixel at VRAM row 0, col 0 on the right chip (bit 0 cleared => on).
+        lcd.chips[1].vram[0][0] = 0xFE;
+
+        lcd.chips[1].state.start_line = 0;
+        let buf0 = lcd.chip_display_buffer(1);
+        assert_eq!(buf0[0][0], 1);
+        assert_eq!(buf0[63][0], 0);
+
+        lcd.chips[1].state.start_line = 1;
+        let buf1 = lcd.chip_display_buffer(1);
+        assert_eq!(buf1[0][0], 0);
+        assert_eq!(buf1[63][0], 1);
+    }
+
+    #[test]
+    fn display_buffer_applies_start_line_rotation() {
+        let mut lcd = LcdController::new();
+        for chip in lcd.chips.iter_mut() {
+            for page in chip.vram.iter_mut() {
+                for byte in page.iter_mut() {
+                    *byte = 0xFF;
+                }
+            }
+        }
+        lcd.chips[1].vram[0][0] = 0xFE;
+
+        lcd.chips[1].state.start_line = 0;
+        let buf0 = lcd.display_buffer();
+        assert_eq!(buf0[0][0], 1);
+
+        lcd.chips[1].state.start_line = 1;
+        let buf1 = lcd.display_buffer();
+        assert_eq!(buf1[0][0], 0);
+        // Chip display row 63 maps to the mirrored right-half segment at row 31, col 239.
+        assert_eq!(buf1[31][239], 1);
     }
 }

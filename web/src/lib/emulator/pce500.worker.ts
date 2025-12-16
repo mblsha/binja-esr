@@ -39,6 +39,7 @@ type KeyboardDebug = {
 
 type Frame = {
 	lcdPixels: ArrayBuffer;
+	lcdChipPixels: ArrayBuffer;
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
@@ -291,6 +292,8 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 function captureFrame(forceText: boolean): Frame {
 	const pixels = emulator.lcd_pixels();
 	const pixelsCopy = new Uint8Array(pixels);
+	const chipPixels = emulator.lcd_chip_pixels();
+	const chipPixelsCopy = new Uint8Array(chipPixels);
 	const nowMs = performance.now();
 
 	const pc = (() => {
@@ -336,6 +339,7 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		lcdChipPixels: chipPixelsCopy.buffer,
 		pc,
 		instructionCount,
 		halted,
@@ -350,7 +354,7 @@ function captureFrame(forceText: boolean): Frame {
 }
 
 function postFrame(frame: Frame) {
-	(self as any).postMessage({ type: 'frame', frame }, [frame.lcdPixels]);
+	(self as any).postMessage({ type: 'frame', frame }, [frame.lcdPixels, frame.lcdChipPixels]);
 }
 
 function pumpEmulator(id: number) {

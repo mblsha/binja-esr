@@ -21,7 +21,7 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 pub use keyboard::KeyboardMatrix;
-pub use lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+pub use lcd::{LcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 pub use llama::state::LlamaState as CpuState;
 pub use memory::{
     AccessKind, MemoryAccessLog, MemoryImage, MemoryOverlay, ADDRESS_MASK, EXTERNAL_SPACE,
