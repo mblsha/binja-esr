@@ -31,6 +31,7 @@ class TraceEvent:
     track: str
     name: str
     timestamp: int
+    event_type: int
     annotations: Dict[str, object]
 
 
@@ -85,11 +86,16 @@ def _load_trace(path: Path) -> List[TraceEvent]:
                     continue
                 value = _annotation_value(ann)
                 annotations[name] = value
+            ts = (
+                getattr(packet.track_event, "timestamp_absolute_us", 0)
+                or packet.timestamp
+            )
             events.append(
                 TraceEvent(
                     track=track_name,
                     name=packet.track_event.name,
-                    timestamp=packet.timestamp,
+                    timestamp=ts,
+                    event_type=int(packet.track_event.type),
                     annotations=annotations,
                 )
             )
@@ -100,12 +106,12 @@ def _load_trace(path: Path) -> List[TraceEvent]:
 
 
 def _index_instruction_events(events: Sequence[TraceEvent]) -> Dict[int, TraceEvent]:
-    """Map op_index -> TraceEvent for InstructionTrace events."""
+    """Map op_index -> TraceEvent for per-instruction events."""
 
     indexed: Dict[int, TraceEvent] = {}
     fallback_index = 0
     for evt in events:
-        if evt.track != "InstructionTrace":
+        if evt.track not in {"Instructions", "InstructionTrace"}:
             continue
         op_index = evt.annotations.get("op_index")
         if op_index is None:
@@ -140,7 +146,8 @@ def _memory_write_events(events: Sequence[TraceEvent]) -> List[TraceEvent]:
     filtered = [
         evt
         for evt in events
-        if evt.track in {"MemoryWrites", "Memory_Internal", "Memory"}
+        if evt.track
+        in {"EWrites", "IWrites", "MemoryWrites", "Memory_Internal", "Memory"}
     ]
     filtered.sort(key=lambda evt: evt.timestamp)
     return filtered

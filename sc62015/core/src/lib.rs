@@ -3009,8 +3009,8 @@ mod tests {
             "trace should include IRQ_Check diagnostic"
         );
         assert!(
-            text.contains("CALL"),
-            "trace should include CALL flow marker"
+            text.contains("fn@0x020000"),
+            "trace should include call-flow slice for destination"
         );
         let _ = fs::remove_file(&tmp);
     }

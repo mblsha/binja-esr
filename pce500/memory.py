@@ -179,6 +179,7 @@ class PCE500Memory:
             return
 
         payload: Dict[str, Any] = {
+            "backend": "python",
             "address": address & 0xFFFFFF,
             "value": value & 0xFF,
             "space": space,
@@ -199,11 +200,8 @@ class PCE500Memory:
                 if units is not None and callable(setter):
                     setter(units)
 
-        tracer.instant(
-            "MemoryWrites",
-            f"write@0x{address & 0xFFFFFF:06X}",
-            payload,
-        )
+        track = "IWrites" if "internal" in space.lower() else "EWrites"
+        tracer.instant(track, f"Write@0x{address & 0xFFFFFF:06X}", payload)
 
     def _record_imr_read(self, value: int, effective_pc: Optional[int]) -> None:
         """Log IMR reads for debugging/perfetto correlation."""
