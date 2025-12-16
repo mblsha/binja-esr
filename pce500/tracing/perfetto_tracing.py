@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class PerfettoTracer:
     """
     Perfetto tracer using retrobus-perfetto protobuf format.
-    Wall-clock timestamps via time.perf_counter().
+    Default timestamps via time.perf_counter(); supports deterministic manual clocking.
     Off by default; safe to leave in production.
     """
 
@@ -101,19 +101,32 @@ class PerfettoTracer:
             self._manual_clock_units = 0
             self._manual_tick_ns = 1
 
-            # Create the trace builder
-            self._builder = PerfettoTraceBuilder("PC-E500 Emulator")
+            # Create the trace builder.
+            self._builder = PerfettoTraceBuilder("SC62015")
 
-            # Pre-create common tracks
-            for t in ("CPU", "Execution", "Memory", "I/O"):
+            # Canonical tracks shared with the Rust tracer.
+            for t in (
+                "Functions",
+                "Instructions",
+                "EWrites",
+                "IWrites",
+                "irq.timer",
+                "irq.key",
+                "irq.misc",
+                "Display",
+                "IMR",
+                "KIO",
+            ):
                 self._ensure_track(t)
 
-            # Add performance profiling tracks
-            for t in ("Emulation", "Opcodes", "Display", "Lifting", "System"):
-                self._ensure_track(t)
-
-            # Pre-create counter track
-            self._ensure_counter_track("instructions", "count")
+            # Counters shared with the Rust tracer.
+            for name, unit in (
+                ("instructions", "count"),
+                ("call_depth", "depth"),
+                ("read_ops", "count"),
+                ("write_ops", "count"),
+            ):
+                self._ensure_counter_track(name, unit)
 
             atexit.register(self.safe_stop)
 

@@ -378,7 +378,9 @@ class PCE500Emulator:
         if self._new_trace_enabled:
             if not new_tracer.enabled:
                 new_tracer.start(self._trace_path)
-            new_tracer.set_manual_clock_mode(True, tick_ns=1)
+            # Keep Perfetto timestamps aligned to instruction indices:
+            # 1 instruction tick == 1us in the final Perfetto UI.
+            new_tracer.set_manual_clock_mode(True, tick_ns=1_000)
             self.memory.set_perf_tracer(new_tracer)
             # Ensure the Rust LLAMA core writes into the same Perfetto trace file.
             try:
@@ -547,6 +549,11 @@ class PCE500Emulator:
             & 0xFF,
         }
         if new_tracer.enabled:
+            if getattr(self, "_new_trace_enabled", False):
+                op_index = getattr(self, "_active_trace_instruction", None)
+                if not isinstance(op_index, int):
+                    op_index = int(getattr(self, "instruction_count", 0))
+                new_tracer.set_manual_clock_units(op_index)
             new_tracer.instant("irq.key", "KeyScanEvent", payload)
         elif self.perfetto_enabled or trace_dispatcher.has_observers():
             trace_dispatcher.record_instant("irq.key", "KeyScanEvent", payload)
@@ -1180,15 +1187,20 @@ class PCE500Emulator:
                 # Clear current instruction accesses before execution
                 self._reset_instruction_access_log()
 
-                with new_tracer.slice(
-                    "Opcodes",
-                    opcode_name,
-                    {
-                        "pc": f"0x{pc:06X}",
-                        "opcode": f"0x{opcode:02X}" if opcode else None,
-                        "op_num": self.instruction_count,
-                    },
-                ):
+                if new_tracer.enabled and not self._new_trace_enabled:
+                    with new_tracer.slice(
+                        "Opcodes",
+                        opcode_name,
+                        {
+                            "pc": f"0x{pc:06X}",
+                            "opcode": f"0x{opcode:02X}" if opcode else None,
+                            "op_num": self.instruction_count,
+                        },
+                    ):
+                        eval_info = self.cpu.execute_instruction(pc)
+                        if PYTHON_PC_TRACE_ENABLED:
+                            print(f"[python-pc] PC=0x{pc:06X}")
+                else:
                     eval_info = self.cpu.execute_instruction(pc)
                     if PYTHON_PC_TRACE_ENABLED:
                         print(f"[python-pc] PC=0x{pc:06X}")
@@ -1901,26 +1913,38 @@ class PCE500Emulator:
         }
 
     def _emit_instruction_trace_event(self, snapshot: Optional[Dict[str, Any]]) -> None:
-        """Emit the captured instruction snapshot as a Perfetto instant event."""
+        """Emit the captured instruction snapshot as a Perfetto slice event."""
 
         if not snapshot or not new_tracer.enabled:
             return
-        units = snapshot.get("units")
-        if isinstance(units, int):
-            new_tracer.set_manual_clock_units(units)
+        op_index = snapshot.get("op_index")
+        if not isinstance(op_index, int):
+            return
+        new_tracer.set_manual_clock_units(op_index)
         pc = snapshot.get("pc")
-        name = f"Exec@0x{pc:06X}" if isinstance(pc, int) else "Exec@?"
+        opcode = snapshot.get("opcode")
+        mnemonic: Optional[str] = None
+        if isinstance(pc, int):
+            try:
+                mnemonic = self.cpu.decode_instruction(pc).name()
+            except Exception:
+                mnemonic = None
+        if isinstance(pc, int) and isinstance(mnemonic, str) and mnemonic:
+            name = f"{mnemonic} @0x{pc:06X}"
+        elif isinstance(pc, int) and isinstance(opcode, int):
+            name = f"op=0x{opcode & 0xFF:02X} @0x{pc:06X}"
+        elif isinstance(pc, int):
+            name = f"@0x{pc:06X}"
+        else:
+            name = "instruction"
         payload: Dict[str, Any] = {
-            "backend": getattr(self.cpu, "backend", "python"),
+            "backend": "python",
         }
         if isinstance(pc, int):
             payload["pc"] = pc & 0xFFFFFF
-        opcode = snapshot.get("opcode")
         if isinstance(opcode, int):
             payload["opcode"] = opcode & 0xFF
-        op_index = snapshot.get("op_index")
-        if isinstance(op_index, int):
-            payload["op_index"] = op_index
+        payload["op_index"] = op_index
         # Include IMR/ISR from internal memory so perfetto comparisons can catch
         # interrupt masking regressions across backends.
         try:
@@ -1947,8 +1971,12 @@ class PCE500Emulator:
         registers = snapshot.get("registers", {})
         for reg_name, value in registers.items():
             payload[f"reg_{reg_name.lower()}"] = int(value)
-        new_tracer.instant("InstructionTrace", name, payload)
-        self._trace_instr_count = int(snapshot.get("op_index", 0)) + 1
+        new_tracer.begin_slice("Instructions", name, payload)
+        new_tracer.set_manual_clock_units(op_index + 1)
+        new_tracer.end_slice("Instructions")
+
+        self._trace_instr_count = op_index + 1
+        new_tracer.set_manual_clock_units(op_index)
         new_tracer.counter(
             "InstructionClock", "instructions", float(self._trace_instr_count)
         )
@@ -2026,9 +2054,7 @@ class PCE500Emulator:
         instr_index = self._active_trace_instruction
         if instr_index is None:
             return None
-        # Space out memory writes within the same instruction.
-        self._trace_substep += 1
-        return instr_index * self._trace_units_per_instruction + self._trace_substep
+        return int(instr_index)
 
     def _trace_execution(self, pc: int, opcode: Optional[int]):
         payload: Dict[str, Any] = {"pc": f"0x{pc:06X}"}
@@ -2038,7 +2064,7 @@ class PCE500Emulator:
         # Always dispatch to legacy observers for register snapshots, even when
         # the perfetto tracer is active.
         trace_dispatcher.record_instant("Execution", f"Exec@0x{pc:06X}", payload)
-        if new_tracer.enabled:
+        if new_tracer.enabled and not getattr(self, "_new_trace_enabled", False):
             new_tracer.instant("Execution", f"Exec@0x{pc:06X}", payload)
 
     def _update_perfetto_counters(self):
@@ -2081,12 +2107,37 @@ class PCE500Emulator:
             )
             if isinstance(dest_addr, int):
                 self._push_display_trace(dest_addr, pc_before)
+            if (
+                self._new_trace_enabled
+                and new_tracer.enabled
+                and isinstance(dest_addr, int)
+            ):
+                op_index = max(0, int(self.instruction_count) - 1)
+                new_tracer.set_manual_clock_units(op_index)
+                new_tracer.begin_slice(
+                    "Functions",
+                    f"fn@0x{dest_addr:06X}",
+                    {
+                        "from": pc_before & 0xFFFFFF,
+                        "to": dest_addr & 0xFFFFFF,
+                        "depth": int(self.call_depth),
+                        "op_index": op_index,
+                    },
+                )
 
         elif isinstance(instr, RetInstruction):
             ret_depth = self.call_depth
             trace_dispatcher.end_function("CPU", pc_before)
             self.call_depth = max(0, self.call_depth - 1)
             instr_name = type(instr).__name__
+            if (
+                self._new_trace_enabled
+                and new_tracer.enabled
+                and instr_name in {"RET", "RETF"}
+            ):
+                op_index = max(0, int(self.instruction_count) - 1)
+                new_tracer.set_manual_clock_units(op_index + 1)
+                new_tracer.end_slice("Functions")
             if instr_name == "RETI" and self._interrupt_stack:
                 flow_id = self._interrupt_stack.pop()
                 trace_dispatcher.end_flow("CPU", flow_id, f"RETI@0x{pc_before:06X}")
