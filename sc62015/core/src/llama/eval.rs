@@ -432,6 +432,7 @@ impl LlamaExecutor {
                 pc_trace & mask_for(RegName::PC),
                 pc_trace & mask_for(RegName::PC),
                 opcode,
+                dispatch::lookup(opcode).map(|entry| entry.name),
                 regs,
                 mem_imr,
                 mem_isr,

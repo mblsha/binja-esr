@@ -23,8 +23,19 @@ pub enum AnnotationValue {
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
 #[cfg(feature = "perfetto")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PerfettoLayout {
+    /// Python-compatible track names/events used by parity tooling.
+    PythonCompat,
+    /// UI-oriented per-call traces for the web Function Runner.
+    CallUi,
+}
+
+/// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
+#[cfg(feature = "perfetto")]
 pub struct PerfettoTracer {
     builder: PerfettoTraceBuilder,
+    layout: PerfettoLayout,
     exec_track: TrackId,
     timeline_track: TrackId,
     mem_track: TrackId,
@@ -48,6 +59,11 @@ pub struct PerfettoTracer {
     mem_read_counter: TrackId,
     mem_write_counter: TrackId,
     cpu_track: TrackId,
+    // Call UI tracks (used when `layout == CallUi`).
+    functions_track: TrackId,
+    instructions_track: TrackId,
+    ewrites_track: TrackId,
+    iwrites_track: TrackId,
     #[cfg(test)]
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
@@ -61,6 +77,14 @@ pub struct PerfettoTracer {
 #[cfg(feature = "perfetto")]
 impl PerfettoTracer {
     pub fn new(path: PathBuf) -> Self {
+        Self::new_with_layout(path, PerfettoLayout::PythonCompat)
+    }
+
+    pub fn new_call_ui(path: PathBuf) -> Self {
+        Self::new_with_layout(path, PerfettoLayout::CallUi)
+    }
+
+    fn new_with_layout(path: PathBuf, layout: PerfettoLayout) -> Self {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
         // Default to Python-compatible layout/timestamps.
         let compat_python = true;
@@ -86,11 +110,22 @@ impl PerfettoTracer {
         let irq_key_track = builder.add_thread("irq.key");
         let irq_misc_track = builder.add_thread("irq.misc");
         let display_track = builder.add_thread("Display");
+        let functions_track = builder.add_thread("Functions");
+        let instructions_track = builder.add_thread("Instructions");
+        let ewrites_track = builder.add_thread("EWrites");
+        let iwrites_track = builder.add_thread("IWrites");
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
+        let units_per_instr = match layout {
+            // retrobus-perfetto stores timestamps in microseconds; it converts our input
+            // nanoseconds by dividing by 1000. Use >=1000ns so short traces don't collapse to 0.
+            PerfettoLayout::CallUi => 1_000, // 1 "tick" (instruction) = 1µs
+            PerfettoLayout::PythonCompat => 1,
+        };
         Self {
             builder,
+            layout,
             exec_track,
             timeline_track,
             mem_track,
@@ -103,7 +138,7 @@ impl PerfettoTracer {
             irq_key_track,
             irq_misc_track,
             display_track,
-            units_per_instr: 1,
+            units_per_instr,
             path,
             imr_seq: 0,
             imr_read_zero: 0,
@@ -114,6 +149,10 @@ impl PerfettoTracer {
             mem_read_counter,
             mem_write_counter,
             cpu_track,
+            functions_track,
+            instructions_track,
+            ewrites_track,
+            iwrites_track,
             #[cfg(test)]
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
@@ -142,10 +181,48 @@ impl PerfettoTracer {
         pc: u32,
         reg_pc: u32,
         opcode: u8,
+        mnemonic: Option<&str>,
         regs: &HashMap<String, u32>,
         mem_imr: u8,
         mem_isr: u8,
     ) {
+        if self.layout == PerfettoLayout::CallUi {
+            let ts_start = self.ts(instr_index, 0);
+            let ts_end = ts_start.saturating_add(self.units_per_instr as i64);
+            let name = if let Some(m) = mnemonic {
+                format!("{m} @0x{pc:06X}")
+            } else {
+                format!("op=0x{opcode:02X} @0x{pc:06X}")
+            };
+            {
+                let mut ev = self.builder.begin_slice(self.instructions_track, name, ts_start);
+                ev.add_annotations([
+                    ("pc", AnnotationValue::Pointer(reg_pc as u64)),
+                    ("opcode", AnnotationValue::UInt(opcode as u64)),
+                    ("op_index", AnnotationValue::UInt(instr_index)),
+                    ("ticks", AnnotationValue::UInt(1)),
+                    ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
+                    ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
+                ]);
+                for (name, value) in regs {
+                    let key = format!("reg_{}", name.to_ascii_lowercase());
+                    let masked = if name == "BA" {
+                        *value & 0xFFFF
+                    } else if name == "F" {
+                        *value & 0xFF
+                    } else {
+                        *value & 0xFF_FFFF
+                    };
+                    ev.add_annotation(key, masked as u64);
+                }
+                ev.finish();
+            }
+            self.builder.end_slice(self.instructions_track, ts_end);
+            self.builder
+                .update_counter(self.instr_counter_track, instr_index as f64 + 1.0, ts_start);
+            return;
+        }
+
         {
             // Encode key fields in the event name so readers without interned annotations
             // can still recover pc/opcode/op_index.
@@ -267,6 +344,26 @@ impl PerfettoTracer {
             value & ((1u32 << size) - 1)
         };
         let ts = self.ts(instr_index, substep.max(1));
+        if self.layout == PerfettoLayout::CallUi {
+            let track = if space == "internal" {
+                self.iwrites_track
+            } else {
+                self.ewrites_track
+            };
+            let mut ev =
+                self.builder
+                    .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
+            ev.add_annotations([
+                ("pc", AnnotationValue::Pointer(pc as u64)),
+                ("address", AnnotationValue::Pointer(addr as u64)),
+                ("value", AnnotationValue::UInt(masked_value as u64)),
+                ("space", AnnotationValue::Str(space.to_string())),
+                ("size", AnnotationValue::UInt(size as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+            ]);
+            ev.finish();
+            return;
+        }
         {
             let mut ev =
                 self.builder
@@ -640,6 +737,29 @@ impl PerfettoTracer {
 
     /// Function enter/exit markers to mirror Python call/return tracing.
     pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
+        if self.layout == PerfettoLayout::CallUi {
+            let ctx = perfetto_instr_context();
+            let op = ctx.map(|(idx, _)| idx).unwrap_or_else(perfetto_last_instr_index);
+            let ts_start = self.ts(op, 0);
+            let ts_end = ts_start.saturating_add(self.units_per_instr as i64);
+            if name == "CALL" || name == "CALLF" {
+                let mut ev = self.builder.begin_slice(
+                    self.functions_track,
+                    format!("fn@0x{pc_to:06X}"),
+                    ts_start,
+                );
+                ev.add_annotations([
+                    ("from", AnnotationValue::Pointer(pc_from as u64)),
+                    ("to", AnnotationValue::Pointer(pc_to as u64)),
+                    ("depth", AnnotationValue::UInt(depth as u64)),
+                    ("op_index", AnnotationValue::UInt(op)),
+                ]);
+                ev.finish();
+            } else if name == "RET" || name == "RETF" {
+                self.builder.end_slice(self.functions_track, ts_end);
+            }
+            return;
+        }
         let mut payload = HashMap::new();
         payload.insert("from".to_string(), AnnotationValue::Pointer(pc_from as u64));
         payload.insert("to".to_string(), AnnotationValue::Pointer(pc_to as u64));
