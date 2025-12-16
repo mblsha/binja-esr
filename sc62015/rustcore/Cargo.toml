@@ -10,7 +10,7 @@ build = "build.rs"
 pyo3 = { version = "0.22.2", features = ["extension-module"] }
 sc62015-core = { path = "../core" }
 serde_json = "1.0"
-retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git", rev = "e3bd7e53256dfff3689978efa90b331b51301a1f" }
+retrobus-perfetto = { git = "https://github.com/mblsha/retrobus-perfetto.git", rev = "f506895e5247b63d24ba551b2205022fdf00221f" }
 
 [build-dependencies]
 pyo3-build-config = "0.22"
