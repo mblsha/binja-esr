@@ -13,13 +13,16 @@ describe('createPersistedStore', () => {
 			removeItem: (key: string) => backing.delete(key),
 			clear: () => backing.clear()
 		};
-		vi.stubGlobal('window', { localStorage: localStorageMock } as any);
+                vi.stubGlobal(
+                        'window',
+                        { localStorage: localStorageMock } as unknown as Window & typeof globalThis
+                );
 
-		backing.set('k', JSON.stringify({ a: 1 }));
-		const store = createPersistedStore('k', { a: 0 } as any);
-		expect(get(store)).toEqual({ a: 1 });
+                backing.set('k', JSON.stringify({ a: 1 }));
+                const store = createPersistedStore('k', { a: 0 });
+                expect(get(store)).toEqual({ a: 1 });
 
-		store.set({ a: 2 } as any);
+                store.set({ a: 2 });
 		expect(backing.get('k')).toBe(JSON.stringify({ a: 2 }));
 	});
 });
