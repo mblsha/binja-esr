@@ -86,4 +86,46 @@ describe('FunctionRunnerPanel', () => {
 		expect(onRun).toHaveBeenCalled();
 		expect(await findByText('Download')).toBeTruthy();
 	});
+
+	it('Cmd+Enter runs the script from the editor', async () => {
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
+		const onRun = vi.fn(async (_source: string) => ({
+			events: [],
+			calls: [],
+			prints: [],
+			resultJson: null,
+			error: null
+		}));
+		const { getByTestId } = render(FunctionRunnerPanel, {
+			disabled: false,
+			busy: false,
+			onRun
+		});
+		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
+		await fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(onRun).toHaveBeenCalled();
+	});
+
+	it('Cmd+/ toggles line comments for the selection', async () => {
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
+		const onRun = vi.fn(async () => ({ events: [], calls: [], prints: [], resultJson: null, error: null }));
+		const { getByTestId } = render(FunctionRunnerPanel, {
+			disabled: false,
+			busy: false,
+			onRun
+		});
+		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
+		await fireEvent.input(editor, { target: { value: 'line1\n  line2\n\nline3' } });
+		editor.selectionStart = 0;
+		editor.selectionEnd = editor.value.length;
+
+		await fireEvent.keyDown(editor, { key: '/', metaKey: true });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(editor.value).toBe('// line1\n  // line2\n\n// line3');
+
+		await fireEvent.keyDown(editor, { key: '/', metaKey: true });
+		await new Promise((r) => setTimeout(r, 0));
+		expect(editor.value).toBe('line1\n  line2\n\nline3');
+	});
 });

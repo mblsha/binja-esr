@@ -2,6 +2,7 @@
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import FunctionRunnerResults from '$lib/components/FunctionRunnerResults.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
+	import { tick } from 'svelte';
 
 	export let disabled = false;
 	export let busy = false;
@@ -27,6 +28,7 @@
 	);
 
 	let output: FunctionRunnerOutput | null = null;
+	let editor: HTMLTextAreaElement | null = null;
 
 	function downloadTrace(call: any) {
 		const b64 = call?.artifacts?.perfettoTraceB64 ?? null;
@@ -51,6 +53,60 @@
 		output = null;
 		output = await onRun($sourceStore);
 	}
+
+	function resolveLineRange(text: string, start: number, end: number): { start: number; end: number } {
+		const clamp = (n: number) => Math.max(0, Math.min(text.length, n));
+		const s = clamp(start);
+		const e = clamp(end);
+		const left = Math.min(s, e);
+		const right = Math.max(s, e);
+
+		const lineStart = text.lastIndexOf('\n', left - 1) + 1;
+		const nl = text.indexOf('\n', right);
+		const lineEnd = nl === -1 ? text.length : nl;
+		return { start: lineStart, end: lineEnd };
+	}
+
+	async function toggleLineComments() {
+		if (!editor) return;
+		const text = editor.value ?? '';
+		const selection = resolveLineRange(text, editor.selectionStart ?? 0, editor.selectionEnd ?? 0);
+		const block = text.slice(selection.start, selection.end);
+		const lines = block.split('\n');
+
+		const nonEmpty = lines.filter((l) => l.trim().length > 0);
+		const allCommented =
+			nonEmpty.length > 0 && nonEmpty.every((line) => /^\s*\/\//.test(line));
+
+		const updatedLines = lines.map((line) => {
+			if (line.trim().length === 0) return line;
+			if (allCommented) return line.replace(/^(\s*)\/\/ ?/, '$1');
+			const m = /^(\s*)(.*)$/.exec(line);
+			if (!m) return `// ${line}`;
+			return `${m[1]}// ${m[2]}`;
+		});
+		const updatedBlock = updatedLines.join('\n');
+		const updated = text.slice(0, selection.start) + updatedBlock + text.slice(selection.end);
+
+		$sourceStore = updated;
+		await tick();
+		editor.selectionStart = selection.start;
+		editor.selectionEnd = selection.start + updatedBlock.length;
+	}
+
+	function onEditorKeydown(ev: KeyboardEvent) {
+		const mod = ev.metaKey || ev.ctrlKey;
+		if (!mod) return;
+		if (ev.key === 'Enter') {
+			ev.preventDefault();
+			void runNow();
+			return;
+		}
+		if (ev.key === '/') {
+			ev.preventDefault();
+			void toggleLineComments();
+		}
+	}
 </script>
 
 <details bind:open={$openStore} data-testid="fnr-panel">
@@ -66,7 +122,9 @@
 	<textarea
 		class="editor"
 		rows="10"
+		bind:this={editor}
 		bind:value={$sourceStore}
+		on:keydown={onEditorKeydown}
 		placeholder="Write async JS here. Available: e (Eval API), Reg, Flag."
 		data-testid="fnr-editor"
 	></textarea>
