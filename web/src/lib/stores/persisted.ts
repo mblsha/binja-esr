@@ -1,14 +1,14 @@
 import { writable, type Writable } from 'svelte/store';
 
 type PersistCodec<T> = {
-	serialize: (value: T) => string;
-	deserialize: (raw: string) => T;
+        serialize: (value: T) => string;
+        deserialize: (raw: string) => T;
 };
 
-const defaultCodec: PersistCodec<any> = {
-	serialize: (value) => JSON.stringify(value),
-	deserialize: (raw) => JSON.parse(raw)
-};
+const jsonCodec = <T>(): PersistCodec<T> => ({
+        serialize: (value) => JSON.stringify(value),
+        deserialize: (raw) => JSON.parse(raw) as T
+});
 
 function hasStorage(): boolean {
 	try {
@@ -19,9 +19,9 @@ function hasStorage(): boolean {
 }
 
 export function createPersistedStore<T>(
-	key: string,
-	initialValue: T,
-	codec: PersistCodec<T> = defaultCodec
+        key: string,
+        initialValue: T,
+        codec: PersistCodec<T> = jsonCodec<T>()
 ): Writable<T> {
 	let startValue = initialValue;
 	if (hasStorage()) {
