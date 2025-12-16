@@ -3009,7 +3009,7 @@ mod tests {
             "trace should include IRQ_Check diagnostic"
         );
         assert!(
-            text.contains("fn@0x020000"),
+            text.contains("sub_020000"),
             "trace should include call-flow slice for destination"
         );
         let _ = fs::remove_file(&tmp);

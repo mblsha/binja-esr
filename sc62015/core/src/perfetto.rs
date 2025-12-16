@@ -12,6 +12,8 @@ use crate::CoreError;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 #[cfg(all(test, feature = "perfetto"))]
 use std::cell::RefCell;
+#[cfg(feature = "perfetto")]
+use std::sync::{OnceLock, RwLock};
 
 #[cfg(not(feature = "perfetto"))]
 #[derive(Clone, Debug)]
@@ -19,6 +21,33 @@ pub enum AnnotationValue {
     Pointer(u64),
     UInt(u64),
     Str(String),
+}
+
+#[cfg(feature = "perfetto")]
+static CALL_UI_FUNCTION_NAMES: OnceLock<RwLock<HashMap<u32, String>>> = OnceLock::new();
+
+/// Install an address→name mapping for Call-UI Perfetto traces.
+///
+/// This mapping is used to label the "Functions" track in traces emitted by the Web Function Runner
+/// (`e.call(..., { trace: true })` / IOCS helpers with `{ trace: true }`). Missing entries fall back
+/// to `sub_XXXXXX` labels.
+#[cfg(feature = "perfetto")]
+pub fn set_call_ui_function_names(symbols: HashMap<u32, String>) {
+    let lock = CALL_UI_FUNCTION_NAMES.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(mut guard) = lock.write() {
+        *guard = symbols;
+    }
+}
+
+#[cfg(not(feature = "perfetto"))]
+pub fn set_call_ui_function_names(_symbols: HashMap<u32, String>) {}
+
+#[cfg(feature = "perfetto")]
+fn lookup_call_ui_function_name(addr: u32) -> Option<String> {
+    CALL_UI_FUNCTION_NAMES
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .and_then(|map| map.get(&addr).cloned())
 }
 
 /// Perfetto protobuf trace writer powered by `retrobus-perfetto`.
@@ -55,6 +84,8 @@ pub struct PerfettoTracer {
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
     test_timestamps: RefCell<Vec<i64>>,
+    #[cfg(test)]
+    test_function_slices: RefCell<Vec<String>>,
     #[cfg(test)]
     pub(crate) test_mem_write_pcs: RefCell<Vec<Option<u32>>>,
     #[cfg(test)]
@@ -127,6 +158,8 @@ impl PerfettoTracer {
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_timestamps: RefCell::new(Vec::new()),
+            #[cfg(test)]
+            test_function_slices: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_mem_write_pcs: RefCell::new(Vec::new()),
             #[cfg(test)]
@@ -629,9 +662,12 @@ impl PerfettoTracer {
             .unwrap_or_else(perfetto_last_instr_index);
         let ts = self.ts(op, 0);
         if name == "CALL" || name == "CALLF" {
-            let mut ev =
-                self.builder
-                    .begin_slice(self.functions_track, format!("fn@0x{pc_to:06X}"), ts);
+            let label = lookup_call_ui_function_name(pc_to & 0x000f_ffff)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| format!("sub_{pc_to:06X}"));
+            #[cfg(test)]
+            self.test_function_slices.borrow_mut().push(label.clone());
+            let mut ev = self.builder.begin_slice(self.functions_track, label, ts);
             ev.add_annotations([
                 ("from", AnnotationValue::Pointer(pc_from as u64)),
                 ("to", AnnotationValue::Pointer(pc_to as u64)),
@@ -949,5 +985,20 @@ mod tests {
         let ts = tracer.test_timestamps.borrow().clone();
         assert_eq!(ts.len(), 2);
         assert!(ts[0] < ts[1], "substeps should advance timestamps");
+    }
+
+    #[test]
+    fn call_ui_function_slices_use_symbol_map_when_present() {
+        let mut symbols = HashMap::new();
+        symbols.insert(0x000E_07D0, "pne".to_string());
+        set_call_ui_function_names(symbols);
+
+        let path = std::env::temp_dir().join("perfetto_call_symbols_test.perfetto-trace");
+        let _ = std::fs::remove_file(&path);
+        let mut tracer = PerfettoTracer::new(path);
+        tracer.record_call_flow("CALLF", 0x000E_0000, 0x000E_07D0, 1);
+        let names = tracer.test_function_slices.borrow().clone();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0], "pne");
     }
 }
