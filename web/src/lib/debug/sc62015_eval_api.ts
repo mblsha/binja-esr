@@ -108,6 +108,12 @@ export type EvalIocsImemArgs = {
 
 export type EvalIocsCallOptions = EvalCallOptions & EvalIocsImemArgs;
 
+export type EvalIocsDisplayPutcOptions = EvalCallOptions &
+	EvalIocsImemArgs & {
+		bl: number;
+		bh: number;
+	};
+
 export type EvalResetOptions = {
 	fresh?: boolean;
 	warmupTicks?: number;
@@ -164,6 +170,7 @@ export interface EvalApi {
 	iocs: {
 		putc(ch: string | number, options?: EvalIocsCallOptions): Promise<CallHandle>;
 		text(text: string, options?: EvalIocsCallOptions): Promise<CallHandle[]>;
+		putcXY(ch: string | number, options: EvalIocsDisplayPutcOptions): Promise<CallHandle>;
 	};
 }
 
@@ -263,6 +270,25 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	let sequence = 0;
 	let callIndex = 0;
 	const probeStack: Array<{ pc: number; handler: ProbeHandler; maxSamples: number }> = [];
+
+	async function writeIocsImemArgs(args: EvalIocsImemArgs | undefined) {
+		if (!args) return;
+		if (args.bl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd4, 1, args.bl);
+		if (args.bh !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd5, 1, args.bh);
+		if (args.cl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd6, 1, args.cl);
+		if (args.ch !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd7, 1, args.ch);
+	}
+
+	function resolvePutcByte(ch: string | number): number {
+		if (typeof ch === 'number') return ch & 0xff;
+		if (typeof ch === 'string') {
+			if (!ch.length) throw new Error('iocs.putc requires a character');
+			const byte = ch.codePointAt(0) ?? 0;
+			if (byte > 0xff) throw new Error('iocs.putc only supports single-byte characters');
+			return byte;
+		}
+		throw new Error('iocs.putc requires a string or number');
+	}
 
 	const api: EvalApi = {
 		calls,
@@ -442,20 +468,8 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		},
 		iocs: {
 			putc: async (ch: string | number, options?: EvalIocsCallOptions) => {
-				let byte: number;
-				if (typeof ch === 'number') {
-					byte = ch & 0xff;
-				} else if (typeof ch === 'string') {
-					if (!ch.length) throw new Error('iocs.putc requires a character');
-					byte = ch.codePointAt(0) ?? 0;
-					if (byte > 0xff) throw new Error('iocs.putc only supports single-byte characters');
-				} else {
-					throw new Error('iocs.putc requires a string or number');
-				}
-				if (options?.bl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd4, 1, options.bl);
-				if (options?.bh !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd5, 1, options.bh);
-				if (options?.cl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd6, 1, options.cl);
-				if (options?.ch !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd7, 1, options.ch);
+				const byte = resolvePutcByte(ch);
+				await writeIocsImemArgs(options);
 				return await api.call(
 					IOCS_PUBLIC_ENTRY_ADDR,
 					{ IL: IOCS.LCD_PUTC, A: byte },
@@ -466,6 +480,15 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				const out: CallHandle[] = [];
 				for (const ch of text) out.push(await api.iocs.putc(ch, options));
 				return out;
+			},
+			putcXY: async (ch: string | number, options: EvalIocsDisplayPutcOptions) => {
+				const byte = resolvePutcByte(ch);
+				await writeIocsImemArgs(options);
+				return await api.call(
+					IOCS_PUBLIC_ENTRY_ADDR,
+					{ I: IOCS.DISPLAY_PUTCHAR_XY, A: byte },
+					{ ...options, zeroMissing: false }
+				);
 			}
 		}
 	};
