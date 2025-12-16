@@ -12,7 +12,7 @@ describe('runUserJs', () => {
 		};
 		const Reg = { A: 'A' };
 		const Flag = { Z: 'Z' };
-		const IOCS = { LCD_PUTC: 0x0d };
+		const IOCS = { LCD_PUTC: 0x0d, DISPLAY_PUTCHAR_XY: 0x0041 };
 
 		const result = await runUserJs(
 			`

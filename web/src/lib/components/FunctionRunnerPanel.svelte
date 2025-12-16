@@ -20,6 +20,8 @@
 // // IOCS experimentation (public entry is CALLF 0xFFFE8):
 // await e.iocs.putc('~', { trace: true });
 // await e.iocs.text('HELLO', { trace: true });
+// // Display-level output at X/Y (TRM IOCS 0x0041):
+// await e.iocs.putcXY('A', { bl: 1, bh: 1, cl: 0, ch: 0, trace: true });
 //
 // await e.withProbe(0x00F299C, (s) => e.print({ hit: s.count, pc: s.pc, A: s.regs.A }), async () => {
 //   await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });
