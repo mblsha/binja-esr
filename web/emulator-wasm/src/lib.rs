@@ -315,11 +315,9 @@ impl Pce500Emulator {
         let mut previous_tracer: Option<sc62015_core::PerfettoTracer> = None;
         if opts.trace {
             let mut guard = sc62015_core::PERFETTO_TRACER.enter();
-            let mut tracer =
-                sc62015_core::PerfettoTracer::new_call_ui(std::path::PathBuf::from("call.perfetto-trace"));
-            sc62015_core::llama::eval::reset_perf_counters();
-            tracer.call_ui_begin_root(addr);
-            previous_tracer = guard.replace(Some(tracer));
+            previous_tracer = guard.replace(Some(sc62015_core::PerfettoTracer::new_call_ui(
+                std::path::PathBuf::from("call.perfetto-trace"),
+            )));
         }
 
         // Enter the function.

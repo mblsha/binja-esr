@@ -63,10 +63,7 @@ pub struct PerfettoTracer {
     instructions_track: TrackId,
     ewrites_track: TrackId,
     iwrites_track: TrackId,
-    call_ui_root_open: bool,
-    call_ui_root_addr: u32,
     call_ui_functions_depth: u32,
-    call_ui_last_instr_index: u64,
     #[cfg(test)]
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
@@ -156,10 +153,7 @@ impl PerfettoTracer {
             instructions_track,
             ewrites_track,
             iwrites_track,
-            call_ui_root_open: false,
-            call_ui_root_addr: 0,
             call_ui_functions_depth: 0,
-            call_ui_last_instr_index: 0,
             #[cfg(test)]
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
@@ -181,45 +175,16 @@ impl PerfettoTracer {
             .saturating_add(substep)) as i64
     }
 
-    /// Begin a fake top-level function slice for web `e.call` traces.
-    ///
-    /// This provides a stable "root" slice on the `Functions` track named by the
-    /// target address, even though the call harness enters the function by setting
-    /// `PC=addr` rather than executing a real CALL instruction.
-    pub fn call_ui_begin_root(&mut self, addr: u32) {
-        if self.layout != PerfettoLayout::CallUi || self.call_ui_root_open {
+    fn call_ui_close_open_function_slices(&mut self) {
+        if self.layout != PerfettoLayout::CallUi {
             return;
         }
-        let addr = addr & 0x000f_ffff;
-        let mut ev = self.builder.begin_slice(
-            self.functions_track,
-            format!("root@0x{addr:06X}"),
-            self.ts(0, 0),
-        );
-        ev.add_annotations([
-            ("to", AnnotationValue::Pointer(addr as u64)),
-            ("depth", AnnotationValue::UInt(0)),
-        ]);
-        ev.finish();
-        self.call_ui_root_open = true;
-        self.call_ui_root_addr = addr;
-        self.call_ui_functions_depth = 1;
-    }
-
-    fn call_ui_end_root(&mut self) {
-        if self.layout != PerfettoLayout::CallUi || !self.call_ui_root_open {
-            return;
-        }
-        let end_idx = self
-            .call_ui_last_instr_index
-            .max(perfetto_last_instr_index());
-        let end_ts = self.ts(end_idx, 0);
-        // Close any unbalanced nested slices first (e.call can stop mid-call).
+        // Close any unbalanced nested slices (e.call can stop mid-call).
+        let end_ts = self.ts(perfetto_last_instr_index(), 0);
         while self.call_ui_functions_depth > 0 {
             self.builder.end_slice(self.functions_track, end_ts);
             self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_sub(1);
         }
-        self.call_ui_root_open = false;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -238,9 +203,6 @@ impl PerfettoTracer {
             let ts_start = self.ts(instr_index, 0);
             let ts_end = self.ts(instr_index.saturating_add(1), 0);
             let ts_counter = ts_start;
-            self.call_ui_last_instr_index = self
-                .call_ui_last_instr_index
-                .max(instr_index.saturating_add(1));
             let name = if let Some(m) = mnemonic {
                 format!("{m} @0x{pc:06X}")
             } else {
@@ -591,7 +553,7 @@ impl PerfettoTracer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let mut this = self;
-            this.call_ui_end_root();
+            this.call_ui_close_open_function_slices();
             this.builder
                 .save(&this.path)
                 .map_err(|e| CoreError::Other(format!("perfetto save: {e}")))
@@ -600,7 +562,7 @@ impl PerfettoTracer {
 
     pub fn serialize(self) -> Result<Vec<u8>> {
         let mut this = self;
-        this.call_ui_end_root();
+        this.call_ui_close_open_function_slices();
         this.builder
             .serialize()
             .map_err(|e| CoreError::Other(format!("perfetto serialize: {e}")))
