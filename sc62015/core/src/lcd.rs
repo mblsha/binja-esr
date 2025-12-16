@@ -14,6 +14,8 @@ use std::collections::HashMap;
 
 const LCD_WIDTH: usize = 64;
 const LCD_PAGES: usize = 8;
+pub const LCD_CHIP_ROWS: usize = LCD_PAGES * 8;
+pub const LCD_CHIP_COLS: usize = LCD_WIDTH;
 #[allow(dead_code)]
 const LCD_RANGE_LOW: u32 = 0x2000;
 #[allow(dead_code)]
@@ -389,7 +391,11 @@ impl LcdController {
     }
 
     /// Return a display-mapped [page][col] trace buffer (8 pages x 240 columns) that matches
-    /// the pixel buffer mapping used by `display_buffer()`.
+    /// the pixel buffer mapping used by `display_buffer()`, including `START_LINE` scrolling.
+    ///
+    /// Note: when `START_LINE` is not page-aligned (`start_line % 8 != 0`), a displayed byte is
+    /// composed from two underlying VRAM pages. In that case the trace is taken from the source
+    /// page that contributes the majority of bits to the displayed byte.
     pub fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; LCD_PAGES] {
         let mut out = [[LcdWriteTrace::default(); LCD_DISPLAY_COLS]; LCD_PAGES];
         let left = &self.chips[0];
@@ -403,7 +409,8 @@ impl LcdController {
     }
 
     /// Return a display-mapped [page][col] VRAM byte buffer (8 pages x 240 columns) that matches
-    /// the chip-mirror layout used by `display_buffer()` and `display_trace_buffer()`.
+    /// the chip-mirror layout used by `display_buffer()` and `display_trace_buffer()`, including
+    /// `START_LINE` scrolling (bytes are derived when `start_line % 8 != 0`).
     pub fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_PAGES] {
         let mut out = [[0u8; LCD_DISPLAY_COLS]; LCD_PAGES];
         let left = &self.chips[0];
@@ -551,6 +558,23 @@ impl LcdController {
         buffer
     }
 
+    pub fn chip_display_buffer(&self, chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS] {
+        let mut out = [[0u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS];
+        let Some(chip) = self.chips.get(chip_index) else {
+            return out;
+        };
+        let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
+        for (y_display, row_out) in out.iter_mut().enumerate().take(LCD_CHIP_ROWS) {
+            let y_vram = (y_display + start_line) % LCD_CHIP_ROWS;
+            let page = y_vram / 8;
+            let bit = y_vram % 8;
+            for (x, pixel) in row_out.iter_mut().enumerate().take(LCD_CHIP_COLS) {
+                *pixel = pixel_on(chip.vram[page][x], bit);
+            }
+        }
+        out
+    }
+
     pub fn stats(&self) -> LcdStats {
         let mut stats = LcdStats::default();
         for (idx, chip) in self.chips.iter().enumerate() {
@@ -573,9 +597,12 @@ fn copy_region(
     dest_start_col: usize,
     mirror: bool,
 ) {
+    let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
     for (row, row_buf) in buffer.iter_mut().enumerate().take(LCD_DISPLAY_ROWS) {
-        let page = start_page + row / 8;
-        let bit = row % 8;
+        let y_display = start_page * 8 + row;
+        let y_vram = (y_display + start_line) % LCD_CHIP_ROWS;
+        let page = y_vram / 8;
+        let bit = y_vram % 8;
         if mirror {
             for (dest_offset, src_col) in column_range.clone().rev().enumerate() {
                 if let Some(byte) = chip.vram.get(page).and_then(|page| page.get(src_col)) {
@@ -600,32 +627,28 @@ fn copy_trace_region(
     dest_start_col: usize,
     mirror: bool,
 ) {
+    let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
+    let page_shift = start_line / 8;
+    let bit_shift = start_line % 8;
     for page_offset in 0..(LCD_DISPLAY_ROWS / 8) {
-        let page = start_page + page_offset;
-        if page >= LCD_PAGES {
+        let out_page = start_page + page_offset;
+        if out_page >= LCD_PAGES {
             continue;
         }
+        let src_page0 = (out_page + page_shift) % LCD_PAGES;
+        let src_page1 = (src_page0 + 1) % LCD_PAGES;
+        let src_page = if bit_shift == 0 || bit_shift <= 4 {
+            src_page0
+        } else {
+            src_page1
+        };
         if mirror {
             for (dest_offset, src_col) in column_range.clone().rev().enumerate() {
-                if let Some(trace) = chip
-                    .vram_trace
-                    .get(page)
-                    .and_then(|row| row.get(src_col))
-                    .copied()
-                {
-                    buffer[page][dest_start_col + dest_offset] = trace;
-                }
+                buffer[out_page][dest_start_col + dest_offset] = chip.vram_trace[src_page][src_col];
             }
         } else {
             for (dest_offset, src_col) in column_range.clone().enumerate() {
-                if let Some(trace) = chip
-                    .vram_trace
-                    .get(page)
-                    .and_then(|row| row.get(src_col))
-                    .copied()
-                {
-                    buffer[page][dest_start_col + dest_offset] = trace;
-                }
+                buffer[out_page][dest_start_col + dest_offset] = chip.vram_trace[src_page][src_col];
             }
         }
     }
@@ -639,32 +662,36 @@ fn copy_vram_region(
     dest_start_col: usize,
     mirror: bool,
 ) {
+    let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
+    let page_shift = start_line / 8;
+    let bit_shift = start_line % 8;
+    let shift = bit_shift as u32;
     for page_offset in 0..(LCD_DISPLAY_ROWS / 8) {
-        let page = start_page + page_offset;
-        if page >= LCD_PAGES {
+        let out_page = start_page + page_offset;
+        if out_page >= LCD_PAGES {
             continue;
         }
+        let src_page0 = (out_page + page_shift) % LCD_PAGES;
+        let src_page1 = (src_page0 + 1) % LCD_PAGES;
         if mirror {
             for (dest_offset, src_col) in column_range.clone().rev().enumerate() {
-                if let Some(byte) = chip
-                    .vram
-                    .get(page)
-                    .and_then(|row| row.get(src_col))
-                    .copied()
-                {
-                    buffer[page][dest_start_col + dest_offset] = byte;
-                }
+                let byte0 = chip.vram[src_page0][src_col];
+                buffer[out_page][dest_start_col + dest_offset] = if bit_shift == 0 {
+                    byte0
+                } else {
+                    let byte1 = chip.vram[src_page1][src_col];
+                    (byte0 >> shift) | (byte1 << (8 - shift))
+                };
             }
         } else {
             for (dest_offset, src_col) in column_range.clone().enumerate() {
-                if let Some(byte) = chip
-                    .vram
-                    .get(page)
-                    .and_then(|row| row.get(src_col))
-                    .copied()
-                {
-                    buffer[page][dest_start_col + dest_offset] = byte;
-                }
+                let byte0 = chip.vram[src_page0][src_col];
+                buffer[out_page][dest_start_col + dest_offset] = if bit_shift == 0 {
+                    byte0
+                } else {
+                    let byte1 = chip.vram[src_page1][src_col];
+                    (byte0 >> shift) | (byte1 << (8 - shift))
+                };
             }
         }
     }
@@ -821,5 +848,156 @@ mod tests {
         let events = lcd.take_display_write_capture();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].value, 0x22);
+    }
+
+    #[test]
+    fn chip_display_buffer_scrolls_by_start_line() {
+        let mut lcd = LcdController::new();
+        for chip in lcd.chips.iter_mut() {
+            for page in chip.vram.iter_mut() {
+                for byte in page.iter_mut() {
+                    *byte = 0xFF;
+                }
+            }
+        }
+        // Light a single pixel at VRAM row 0, col 0 on the right chip (bit 0 cleared => on).
+        lcd.chips[1].vram[0][0] = 0xFE;
+
+        lcd.chips[1].state.start_line = 0;
+        let buf0 = lcd.chip_display_buffer(1);
+        assert_eq!(buf0[0][0], 1);
+        assert_eq!(buf0[63][0], 0);
+
+        lcd.chips[1].state.start_line = 1;
+        let buf1 = lcd.chip_display_buffer(1);
+        assert_eq!(buf1[0][0], 0);
+        assert_eq!(buf1[63][0], 1);
+    }
+
+    #[test]
+    fn display_buffer_applies_start_line_rotation() {
+        let mut lcd = LcdController::new();
+        for chip in lcd.chips.iter_mut() {
+            for page in chip.vram.iter_mut() {
+                for byte in page.iter_mut() {
+                    *byte = 0xFF;
+                }
+            }
+        }
+        lcd.chips[1].vram[0][0] = 0xFE;
+
+        lcd.chips[1].state.start_line = 0;
+        let buf0 = lcd.display_buffer();
+        assert_eq!(buf0[0][0], 1);
+
+        lcd.chips[1].state.start_line = 1;
+        let buf1 = lcd.display_buffer();
+        assert_eq!(buf1[0][0], 0);
+        // Chip display row 63 maps to the mirrored right-half segment at row 31, col 239.
+        assert_eq!(buf1[31][239], 1);
+    }
+
+    #[test]
+    fn display_vram_bytes_applies_start_line_page_shift() {
+        let mut lcd = LcdController::new();
+        lcd.chips[1].vram[0][0] = 0x11;
+        lcd.chips[1].vram[1][0] = 0x22;
+        lcd.chips[1].vram[4][0] = 0x33;
+
+        lcd.chips[1].state.start_line = 8;
+        let vram = lcd.display_vram_bytes();
+        assert_eq!(vram[0][0], 0x22);
+        assert_eq!(vram[3][0], 0x33);
+    }
+
+    #[test]
+    fn display_vram_bytes_applies_start_line_bit_shift() {
+        let mut lcd = LcdController::new();
+        lcd.chips[1].vram[0][0] = 0xAA;
+        lcd.chips[1].vram[1][0] = 0x55;
+
+        lcd.chips[1].state.start_line = 1;
+        let vram = lcd.display_vram_bytes();
+        let expected = (0xAAu8 >> 1) | (0x55u8 << 7);
+        assert_eq!(vram[0][0], expected);
+    }
+
+    #[test]
+    fn display_vram_bytes_mirrored_region_includes_start_line() {
+        let mut lcd = LcdController::new();
+        lcd.chips[1].vram[4][0] = 0xF0;
+        lcd.chips[1].vram[5][0] = 0x0F;
+
+        lcd.chips[1].state.start_line = 1;
+        let vram = lcd.display_vram_bytes();
+        let expected = (0xF0u8 >> 1) | (0x0Fu8 << 7);
+        assert_eq!(vram[4][239], expected);
+    }
+
+    #[test]
+    fn display_vram_bytes_stay_in_sync_with_display_buffer() {
+        let mut lcd = LcdController::new();
+        for (chip_idx, chip) in lcd.chips.iter_mut().enumerate() {
+            for (page_idx, page) in chip.vram.iter_mut().enumerate() {
+                for (col_idx, byte) in page.iter_mut().enumerate() {
+                    *byte = (chip_idx as u8)
+                        .wrapping_mul(0x40)
+                        .wrapping_add((page_idx as u8).wrapping_mul(0x11))
+                        .wrapping_add(col_idx as u8);
+                }
+            }
+        }
+        lcd.chips[0].state.start_line = 13;
+        lcd.chips[1].state.start_line = 37;
+
+        let vram = lcd.display_vram_bytes();
+        let pixels = lcd.display_buffer();
+        for (row, row_pixels) in pixels.iter().enumerate().take(LCD_DISPLAY_ROWS) {
+            let page_left = row / 8;
+            let page_right = 4 + row / 8;
+            let bit = row % 8;
+            for (col, &pixel) in row_pixels.iter().enumerate().take(LCD_DISPLAY_COLS) {
+                let page = if col < 120 { page_left } else { page_right };
+                assert_eq!(
+                    pixel,
+                    super::pixel_on(vram[page][col], bit),
+                    "row {row} col {col}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn display_trace_buffer_applies_start_line_page_shift() {
+        let mut lcd = LcdController::new();
+        lcd.chips[1].vram_trace[1][0] = LcdWriteTrace {
+            pc: 0x1234,
+            ..Default::default()
+        };
+
+        lcd.chips[1].state.start_line = 8;
+        let trace = lcd.display_trace_buffer();
+        assert_eq!(trace[0][0].pc, 0x1234);
+    }
+
+    #[test]
+    fn display_trace_buffer_selects_majority_source_page_when_bit_shifted() {
+        let mut lcd = LcdController::new();
+        lcd.chips[1].vram_trace[0][0] = LcdWriteTrace {
+            pc: 0x1111,
+            ..Default::default()
+        };
+        lcd.chips[1].vram_trace[1][0] = LcdWriteTrace {
+            pc: 0x2222,
+            ..Default::default()
+        };
+
+        lcd.chips[1].state.start_line = 1;
+        let trace0 = lcd.display_trace_buffer();
+        assert_eq!(trace0[0][0].pc, 0x1111);
+
+        lcd.chips[1].state.start_line = 7;
+        let trace1 = lcd.display_trace_buffer();
+        assert_eq!(trace1[0][0].pc, 0x2222);
     }
 }

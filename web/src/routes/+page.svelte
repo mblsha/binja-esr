@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
+	import { LCD_CHIP_COLS, LCD_CHIP_ROWS } from '$lib/lcd';
 		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 		import { matrixCodeForKeyEvent } from '$lib/keymap';
 		import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
@@ -20,6 +21,16 @@
 			!Boolean((import.meta as any)?.env?.VITEST);
 
 		let lcdPixels: Uint8Array | null = null;
+		let lcdChipPixels: Uint8Array | null = null;
+		const CHIP_PIXELS_LEN = LCD_CHIP_COLS * LCD_CHIP_ROWS;
+		$: lcdLeftChipPixels =
+			lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN
+				? lcdChipPixels.subarray(0, CHIP_PIXELS_LEN)
+				: null;
+		$: lcdRightChipPixels =
+			lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN * 2
+				? lcdChipPixels.subarray(CHIP_PIXELS_LEN, CHIP_PIXELS_LEN * 2)
+				: null;
 		let lcdText: string[] | null = null;
 		let regs: any = null;
 	let callStack: number[] | null = null;
@@ -84,6 +95,9 @@
 			try {
 				if (frame?.lcdPixels instanceof ArrayBuffer) {
 					lcdPixels = new Uint8Array(frame.lcdPixels);
+				}
+				if (frame?.lcdChipPixels instanceof ArrayBuffer) {
+					lcdChipPixels = new Uint8Array(frame.lcdChipPixels);
 				}
 				lcdText = frame?.lcdText ?? null;
 				buildInfo = frame?.buildInfo ?? buildInfo;
@@ -462,6 +476,7 @@
 		if (worker) return;
 		if (!emulator) return;
 		lcdPixels = emulator.lcd_pixels();
+		lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
 			pcReg = emulator.get_reg?.('PC') ?? null;
 		} catch {
@@ -818,6 +833,20 @@
 
 	<LcdCanvas pixels={lcdPixels} />
 
+	<details>
+		<summary>LCD controller (64×64 chips)</summary>
+		<div class="lcd-chips">
+			<div class="lcd-chip">
+				<div class="hint">Left chip</div>
+				<LcdCanvas pixels={lcdLeftChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+			</div>
+			<div class="lcd-chip">
+				<div class="hint">Right chip</div>
+				<LcdCanvas pixels={lcdRightChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+			</div>
+		</div>
+	</details>
+
 	<VirtualKeyboard
 		disabled={!romLoaded}
 		onPress={(code) => virtualPress(code)}
@@ -1046,6 +1075,19 @@
 		display: inline-flex;
 		gap: 8px;
 		align-items: center;
+	}
+
+	.lcd-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 16px;
+		margin-top: 8px;
+	}
+
+	.lcd-chip {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
 	}
 
 	.stack {

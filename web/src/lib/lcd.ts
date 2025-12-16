@@ -1,5 +1,7 @@
 export const LCD_ROWS = 32;
 export const LCD_COLS = 240;
+export const LCD_CHIP_ROWS = 64;
+export const LCD_CHIP_COLS = 64;
 
 export type Rgba = readonly [number, number, number, number];
 
@@ -25,4 +27,3 @@ export function pixelsToRgba(
 	}
 	return out;
 }
-
