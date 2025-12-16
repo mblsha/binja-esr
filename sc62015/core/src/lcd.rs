@@ -559,12 +559,12 @@ impl LcdController {
             return out;
         };
         let start_line = (chip.state.start_line as usize) % LCD_CHIP_ROWS;
-        for y_display in 0..LCD_CHIP_ROWS {
+        for (y_display, row_out) in out.iter_mut().enumerate().take(LCD_CHIP_ROWS) {
             let y_vram = (y_display + start_line) % LCD_CHIP_ROWS;
             let page = y_vram / 8;
             let bit = y_vram % 8;
-            for x in 0..LCD_CHIP_COLS {
-                out[y_display][x] = pixel_on(chip.vram[page][x], bit);
+            for (x, pixel) in row_out.iter_mut().enumerate().take(LCD_CHIP_COLS) {
+                *pixel = pixel_on(chip.vram[page][x], bit);
             }
         }
         out
