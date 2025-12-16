@@ -140,10 +140,11 @@ describe('createEvalApi', () => {
 
 	it('iocs.putc writes IMEM byte registers when provided', async () => {
 		const writes: Array<{ addr: number; value: number }> = [];
-		const calls: Array<{ address: number; registers: any }> = [];
+		const regWrites: Array<{ name: string; value: number }> = [];
+		const calls: Array<{ address: number }> = [];
 		const adapter = {
 			callFunction: async (address: number, _max: number, _options?: any) => {
-				calls.push({ address, registers: null });
+				calls.push({ address });
 				return {
 					address,
 					before_pc: 0,
@@ -162,7 +163,7 @@ describe('createEvalApi', () => {
 			reset: () => {},
 			step: () => {},
 			getReg: () => 0,
-			setReg: () => {},
+			setReg: (name: string, value: number) => regWrites.push({ name, value }),
 			read8: () => 0,
 			write8: (addr: number, value: number) => writes.push({ addr, value })
 		};
@@ -174,7 +175,48 @@ describe('createEvalApi', () => {
 			{ addr: 0x00100000 + 0xd6, value: 3 },
 			{ addr: 0x00100000 + 0xd7, value: 4 }
 		]);
-		// We don't assert the call registers here because iocs.putc uses the IOCS helper path.
+		expect(regWrites).toContainEqual({ name: 'I', value: 0x0041 });
+		expect(regWrites).toContainEqual({ name: 'A', value: 0x41 });
+		expect(calls[0]?.address).toBe(0x00fffe8);
+	});
+
+	it('iocs.putc without bl/bh uses 0x000D (stdchr write byte) and only writes cl/ch', async () => {
+		const writes: Array<{ addr: number; value: number }> = [];
+		const regWrites: Array<{ name: string; value: number }> = [];
+		const calls: Array<{ address: number }> = [];
+		const adapter = {
+			callFunction: async (address: number, _max: number, _options?: any) => {
+				calls.push({ address });
+				return {
+					address,
+					before_pc: 0,
+					after_pc: 0,
+					before_sp: 0,
+					after_sp: 0,
+					before_regs: {},
+					after_regs: {},
+					memory_writes: [],
+					lcd_writes: [],
+					probe_samples: [],
+					perfetto_trace_b64: null,
+					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null }
+				};
+			},
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: (name: string, value: number) => regWrites.push({ name, value }),
+			read8: () => 0,
+			write8: (addr: number, value: number) => writes.push({ addr, value })
+		};
+		const api = createEvalApi(adapter as any);
+		await api.iocs.putc('B', { cl: 9, ch: 8 });
+		expect(writes).toEqual([
+			{ addr: 0x00100000 + 0xd6, value: 9 },
+			{ addr: 0x00100000 + 0xd7, value: 8 }
+		]);
+		expect(regWrites).toContainEqual({ name: 'I', value: 0x000d });
+		expect(regWrites).toContainEqual({ name: 'A', value: 0x42 });
 		expect(calls[0]?.address).toBe(0x00fffe8);
 	});
 });

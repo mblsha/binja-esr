@@ -97,8 +97,9 @@ export type EvalCallOptions = {
 // - I=0x0041
 // - CALLF 0xFFFE8 (in our runner: e.call(0x00FFFE8, ...))
 //
-// Note: Some ROM-specific IOCS entry points are selected via `IL` rather than `I`
-// (e.g. IOCS.LCD_PUTC). These still consume IMEM bytes for parameters in many cases.
+// Note: IOCS "write byte data" (0x000D) is a standard character-device call: it uses
+// (cl)/(ch) to select device/drive and ignores (bl)/(bh) for positioning. To draw at
+// a specific X/Y, use display IOCS 0x0041 (and set (bl)/(bh)).
 export type EvalIocsImemArgs = {
 	bl?: number;
 	bh?: number;
@@ -442,6 +443,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		},
 		iocs: {
 			putc: async (ch: string | number, options?: EvalIocsCallOptions) => {
+				const { bl, bh, cl, ch: chDev, ...callOptions } = options ?? {};
 				let byte: number;
 				if (typeof ch === 'number') {
 					byte = ch & 0xff;
@@ -452,14 +454,30 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				} else {
 					throw new Error('iocs.putc requires a string or number');
 				}
-				if (options?.bl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd4, 1, options.bl);
-				if (options?.bh !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd5, 1, options.bh);
-				if (options?.cl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd6, 1, options.cl);
-				if (options?.ch !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd7, 1, options.ch);
+
+				const hasXy = bl !== undefined || bh !== undefined;
+				if (hasXy && (bl === undefined || bh === undefined)) {
+					throw new Error('iocs.putc: provide both bl (x) and bh (y) to use DISPLAY_PUTCHAR_XY');
+				}
+
+				if (hasXy) {
+					await api.memory.write(IMEM_BASE_ADDR + 0xd4, 1, bl as number);
+					await api.memory.write(IMEM_BASE_ADDR + 0xd5, 1, bh as number);
+					await api.memory.write(IMEM_BASE_ADDR + 0xd6, 1, cl ?? 0);
+					await api.memory.write(IMEM_BASE_ADDR + 0xd7, 1, chDev ?? 0);
+					return await api.call(
+						IOCS_PUBLIC_ENTRY_ADDR,
+						{ I: 0x0041, A: byte },
+						{ ...callOptions, zeroMissing: false }
+					);
+				}
+
+				if (cl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd6, 1, cl);
+				if (chDev !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd7, 1, chDev);
 				return await api.call(
 					IOCS_PUBLIC_ENTRY_ADDR,
-					{ IL: IOCS.LCD_PUTC, A: byte },
-					options ? { ...options, zeroMissing: false } : { zeroMissing: false }
+					{ I: IOCS.STDCHR_WRITE_BYTE, A: byte },
+					{ ...callOptions, zeroMissing: false }
 				);
 			},
 			text: async (text: string, options?: EvalIocsCallOptions) => {
