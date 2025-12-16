@@ -63,6 +63,8 @@ pub struct PerfettoTracer {
     instructions_track: TrackId,
     ewrites_track: TrackId,
     iwrites_track: TrackId,
+    call_ui_root_open: bool,
+    call_ui_root_addr: u32,
     #[cfg(test)]
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
@@ -116,6 +118,12 @@ impl PerfettoTracer {
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
         let mem_read_counter = builder.add_counter_track("read_ops", Some("count"), None);
         let mem_write_counter = builder.add_counter_track("write_ops", Some("count"), None);
+        let units_per_instr = match layout {
+            // retrobus-perfetto stores timestamps in microseconds; it converts our input
+            // nanoseconds by dividing by 1000. Use >=1000ns so short traces don't collapse to 0.
+            PerfettoLayout::CallUi => 1_000, // 1 "tick" (instruction) = 1µs
+            PerfettoLayout::PythonCompat => 1,
+        };
         Self {
             builder,
             layout,
@@ -131,7 +139,7 @@ impl PerfettoTracer {
             irq_key_track,
             irq_misc_track,
             display_track,
-            units_per_instr: 1,
+            units_per_instr,
             path,
             imr_seq: 0,
             imr_read_zero: 0,
@@ -146,6 +154,8 @@ impl PerfettoTracer {
             instructions_track,
             ewrites_track,
             iwrites_track,
+            call_ui_root_open: false,
+            call_ui_root_addr: 0,
             #[cfg(test)]
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
@@ -165,6 +175,39 @@ impl PerfettoTracer {
         (instr_index
             .saturating_mul(self.units_per_instr)
             .saturating_add(substep)) as i64
+    }
+
+    /// Begin a fake top-level function slice for web `e.call` traces.
+    ///
+    /// This provides a stable "root" slice on the `Functions` track named by the
+    /// target address, even though the call harness enters the function by setting
+    /// `PC=addr` rather than executing a real CALL instruction.
+    pub fn call_ui_begin_root(&mut self, addr: u32) {
+        if self.layout != PerfettoLayout::CallUi || self.call_ui_root_open {
+            return;
+        }
+        let addr = addr & 0x000f_ffff;
+        let mut ev = self.builder.begin_slice(
+            self.functions_track,
+            format!("root@0x{addr:06X}"),
+            self.ts(0, 0),
+        );
+        ev.add_annotations([
+            ("to", AnnotationValue::Pointer(addr as u64)),
+            ("depth", AnnotationValue::UInt(0)),
+        ]);
+        ev.finish();
+        self.call_ui_root_open = true;
+        self.call_ui_root_addr = addr;
+    }
+
+    fn call_ui_end_root(&mut self) {
+        if self.layout != PerfettoLayout::CallUi || !self.call_ui_root_open {
+            return;
+        }
+        let end_ts = self.ts(perfetto_last_instr_index(), 0);
+        self.builder.end_slice(self.functions_track, end_ts);
+        self.call_ui_root_open = false;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -532,14 +575,18 @@ impl PerfettoTracer {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.builder
-                .save(&self.path)
+            let mut this = self;
+            this.call_ui_end_root();
+            this.builder
+                .save(&this.path)
                 .map_err(|e| CoreError::Other(format!("perfetto save: {e}")))
         }
     }
 
     pub fn serialize(self) -> Result<Vec<u8>> {
-        self.builder
+        let mut this = self;
+        this.call_ui_end_root();
+        this.builder
             .serialize()
             .map_err(|e| CoreError::Other(format!("perfetto serialize: {e}")))
     }
@@ -777,7 +824,10 @@ impl PerfettoTracer {
                 ]);
                 ev.finish();
             } else if name == "RET" || name == "RETF" {
-                self.builder.end_slice(self.functions_track, ts.saturating_add(1));
+                self.builder.end_slice(
+                    self.functions_track,
+                    ts.saturating_add(self.units_per_instr as i64),
+                );
             }
             return;
         }
