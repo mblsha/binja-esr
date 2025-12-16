@@ -82,6 +82,32 @@ export type EvalCallOptions = {
 	zeroMissing?: boolean;
 };
 
+// IOCS calls use a mix of registers (A/I) and "byte registers" stored in IMEM.
+//
+// TRM (PC‑E500): (bl)/(bh)/(cl)/(ch) are 1-byte "register halves" mapped to IMEM:
+// - (bl) = IMEM[0xD4]
+// - (bh) = IMEM[0xD5]
+// - (cl) = IMEM[0xD6]
+// - (ch) = IMEM[0xD7]
+//
+// Example: IOCS "one character output to arbitrary position" (0x0041):
+// - (cx)=0x0000  => (cl)=0, (ch)=0
+// - (bl)=x, (bh)=y
+// - A=byte
+// - I=0x0041
+// - CALLF 0xFFFE8 (in our runner: e.call(0x00FFFE8, ...))
+//
+// Note: Some ROM-specific IOCS entry points are selected via `IL` rather than `I`
+// (e.g. IOCS.LCD_PUTC). These still consume IMEM bytes for parameters in many cases.
+export type EvalIocsImemArgs = {
+	bl?: number;
+	bh?: number;
+	cl?: number;
+	ch?: number;
+};
+
+export type EvalIocsCallOptions = EvalCallOptions & EvalIocsImemArgs;
+
 export type EvalResetOptions = {
 	fresh?: boolean;
 	warmupTicks?: number;
@@ -136,8 +162,8 @@ export interface EvalApi {
 		injectEvent(code: number, release: boolean): Promise<void>;
 	};
 	iocs: {
-		putc(ch: string | number, options?: EvalCallOptions): Promise<CallHandle>;
-		text(text: string, options?: EvalCallOptions): Promise<CallHandle[]>;
+		putc(ch: string | number, options?: EvalIocsCallOptions): Promise<CallHandle>;
+		text(text: string, options?: EvalIocsCallOptions): Promise<CallHandle[]>;
 	};
 }
 
@@ -145,6 +171,7 @@ const DEFAULT_MAX_INSTRUCTIONS = 200_000;
 const DEFAULT_WARMUP_TICKS = 0;
 const DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 const DEFAULT_PROBE_MAX_SAMPLES = 256;
+const IMEM_BASE_ADDR = 0x0010_0000;
 
 const RESULT_REGISTER_ORDER: RegisterName[] = [
 	'A',
@@ -414,7 +441,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			}
 		},
 		iocs: {
-			putc: async (ch: string | number, options?: EvalCallOptions) => {
+			putc: async (ch: string | number, options?: EvalIocsCallOptions) => {
 				let byte: number;
 				if (typeof ch === 'number') {
 					byte = ch & 0xff;
@@ -425,13 +452,17 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				} else {
 					throw new Error('iocs.putc requires a string or number');
 				}
+				if (options?.bl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd4, 1, options.bl);
+				if (options?.bh !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd5, 1, options.bh);
+				if (options?.cl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd6, 1, options.cl);
+				if (options?.ch !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd7, 1, options.ch);
 				return await api.call(
 					IOCS_PUBLIC_ENTRY_ADDR,
 					{ IL: IOCS.LCD_PUTC, A: byte },
 					options ? { ...options, zeroMissing: false } : { zeroMissing: false }
 				);
 			},
-			text: async (text: string, options?: EvalCallOptions) => {
+			text: async (text: string, options?: EvalIocsCallOptions) => {
 				const out: CallHandle[] = [];
 				for (const ch of text) out.push(await api.iocs.putc(ch, options));
 				return out;
