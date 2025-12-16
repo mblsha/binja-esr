@@ -137,4 +137,44 @@ describe('createEvalApi', () => {
 		await api.keyboard.tap(0x56, 5);
 		expect(ops).toEqual(['inject:86:0', 'step:5', 'inject:86:1']);
 	});
+
+	it('iocs.putc writes IMEM byte registers when provided', async () => {
+		const writes: Array<{ addr: number; value: number }> = [];
+		const calls: Array<{ address: number; registers: any }> = [];
+		const adapter = {
+			callFunction: async (address: number, _max: number, _options?: any) => {
+				calls.push({ address, registers: null });
+				return {
+					address,
+					before_pc: 0,
+					after_pc: 0,
+					before_sp: 0,
+					after_sp: 0,
+					before_regs: {},
+					after_regs: {},
+					memory_writes: [],
+					lcd_writes: [],
+					probe_samples: [],
+					perfetto_trace_b64: null,
+					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null }
+				};
+			},
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: (addr: number, value: number) => writes.push({ addr, value })
+		};
+		const api = createEvalApi(adapter as any);
+		await api.iocs.putc('A', { bl: 1, bh: 2, cl: 3, ch: 4 });
+		expect(writes).toEqual([
+			{ addr: 0x00100000 + 0xd4, value: 1 },
+			{ addr: 0x00100000 + 0xd5, value: 2 },
+			{ addr: 0x00100000 + 0xd6, value: 3 },
+			{ addr: 0x00100000 + 0xd7, value: 4 }
+		]);
+		// We don't assert the call registers here because iocs.putc uses the IOCS helper path.
+		expect(calls[0]?.address).toBe(0x00fffe8);
+	});
 });
