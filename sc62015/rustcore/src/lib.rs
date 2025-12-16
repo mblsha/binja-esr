@@ -2098,14 +2098,14 @@ fn _sc62015_rustcore(m: &Bound<PyModule>) -> PyResult<()> {
 
 /// Helper to emit an IRQ event from Python into the Rust tracer when available.
 #[pyfunction]
-    fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
-        let mut guard = PERFETTO_TRACER.enter();
-        guard.with_some(|tracer| {
-            let mut converted = HashMap::new();
-            for (k, v) in payload {
-                converted.insert(k, AnnotationValue::UInt(v));
-            }
-            tracer.record_irq_event(name, converted);
-        });
-        Ok(())
-    }
+fn record_irq_event_py(name: &str, payload: HashMap<String, u64>) -> PyResult<()> {
+    let mut guard = PERFETTO_TRACER.enter();
+    guard.with_some(|tracer| {
+        let mut converted = HashMap::new();
+        for (k, v) in payload {
+            converted.insert(k, AnnotationValue::UInt(v));
+        }
+        tracer.record_irq_event(name, converted);
+    });
+    Ok(())
+}

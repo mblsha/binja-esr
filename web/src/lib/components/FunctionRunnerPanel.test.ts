@@ -16,14 +16,14 @@ describe('FunctionRunnerPanel', () => {
 			getItem: (key: string) => backing.get(key) ?? null,
 			setItem: (key: string, value: string) => backing.set(key, value),
 			removeItem: (key: string) => backing.delete(key),
-			clear: () => backing.clear()
+			clear: () => backing.clear(),
 		};
 		vi.stubGlobal('window', { localStorage: localStorageMock } as any);
 
 		const { getByTestId } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun: async () => ({ events: [], calls: [], prints: [], resultJson: null, error: null })
+			onRun: async () => ({ events: [], calls: [], prints: [], resultJson: null, error: null }),
 		});
 		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
 		await fireEvent.input(editor, { target: { value: 'hello' } });
@@ -38,12 +38,12 @@ describe('FunctionRunnerPanel', () => {
 			calls: [],
 			prints: [{ index: 0, value: 'ok' }],
 			resultJson: null,
-			error: null
+			error: null,
 		}));
 		const { getByTestId, findByTestId } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun
+			onRun,
 		});
 		await fireEvent.click(getByTestId('fnr-run'));
 		expect(onRun).toHaveBeenCalled();
@@ -72,15 +72,15 @@ describe('FunctionRunnerPanel', () => {
 						probeSamples: [],
 						perfettoTraceB64: 'ZHVtbXk=',
 						result: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
-						infoLog: []
-					}
-				}
-			]
+						infoLog: [],
+					},
+				},
+			],
 		}));
 		const { getByTestId, findByText } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun
+			onRun,
 		});
 		await fireEvent.click(getByTestId('fnr-run'));
 		expect(onRun).toHaveBeenCalled();
@@ -94,12 +94,12 @@ describe('FunctionRunnerPanel', () => {
 			calls: [],
 			prints: [],
 			resultJson: null,
-			error: null
+			error: null,
 		}));
 		const { getByTestId } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun
+			onRun,
 		});
 		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
 		await fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
@@ -113,7 +113,7 @@ describe('FunctionRunnerPanel', () => {
 		const { getByTestId } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun
+			onRun,
 		});
 		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
 		await fireEvent.input(editor, { target: { value: 'line1\n  line2\n\nline3' } });
@@ -135,7 +135,7 @@ describe('FunctionRunnerPanel', () => {
 		const { getByTestId } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun
+			onRun,
 		});
 		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
 		await fireEvent.input(editor, { target: { value: 'a\n  b\nc' } });
@@ -157,7 +157,7 @@ describe('FunctionRunnerPanel', () => {
 		const { getByTestId } = render(FunctionRunnerPanel, {
 			disabled: false,
 			busy: false,
-			onRun
+			onRun,
 		});
 		const editor = getByTestId('fnr-editor') as HTMLTextAreaElement;
 		await fireEvent.input(editor, { target: { value: 'ab' } });

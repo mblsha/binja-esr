@@ -43,9 +43,9 @@ describe('PC-E500 web emulator', () => {
 
 		vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
 			createImageData: (width: number, height: number) => ({
-				data: new Uint8ClampedArray(width * height * 4)
+				data: new Uint8ClampedArray(width * height * 4),
 			}),
-			putImageData: () => {}
+			putImageData: () => {},
 		} as any);
 
 		vi.stubGlobal('fetch', async (input: any) => {
@@ -57,8 +57,8 @@ describe('PC-E500 web emulator', () => {
 					headers: {
 						'content-type': 'application/octet-stream',
 						'cache-control': 'no-store',
-						'x-rom-source': 'test:pf1_demo_rom_window.rom'
-					}
+						'x-rom-source': 'test:pf1_demo_rom_window.rom',
+					},
 				});
 			}
 
@@ -68,8 +68,8 @@ describe('PC-E500 web emulator', () => {
 					status: 200,
 					headers: {
 						'content-type': 'application/wasm',
-						'cache-control': 'no-store'
-					}
+						'cache-control': 'no-store',
+					},
 				});
 			}
 
@@ -117,9 +117,9 @@ describe('PC-E500 web emulator', () => {
 
 		vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
 			createImageData: (width: number, height: number) => ({
-				data: new Uint8ClampedArray(width * height * 4)
+				data: new Uint8ClampedArray(width * height * 4),
 			}),
-			putImageData: () => {}
+			putImageData: () => {},
 		} as any);
 
 		vi.stubGlobal('fetch', async (input: any) => {
@@ -131,8 +131,8 @@ describe('PC-E500 web emulator', () => {
 					headers: {
 						'content-type': 'application/octet-stream',
 						'cache-control': 'no-store',
-						'x-rom-source': 'test:pf1_demo_rom_window.rom'
-					}
+						'x-rom-source': 'test:pf1_demo_rom_window.rom',
+					},
 				});
 			}
 
@@ -142,8 +142,8 @@ describe('PC-E500 web emulator', () => {
 					status: 200,
 					headers: {
 						'content-type': 'application/wasm',
-						'cache-control': 'no-store'
-					}
+						'cache-control': 'no-store',
+					},
 				});
 			}
 

@@ -22,12 +22,12 @@ describe('createEvalApi', () => {
 					memory_writes: [
 						{ addr: 0x0010, value: 0xaa },
 						{ addr: 0x0010, value: 0xbb },
-						{ addr: 0x0011, value: 0xcc }
+						{ addr: 0x0011, value: 0xcc },
 					],
 					lcd_writes: [],
 					probe_samples: [],
 					perfetto_trace_b64: 'ZHVtbXk=',
-					report: { reason: 'returned', steps: 3, pc: 0, sp: 0, halted: false, fault: null }
+					report: { reason: 'returned', steps: 3, pc: 0, sp: 0, halted: false, fault: null },
 				};
 			},
 			reset: () => {},
@@ -35,23 +35,19 @@ describe('createEvalApi', () => {
 			getReg: (_name: string) => 0,
 			setReg: (name: string, value: number) => regWrites.push({ name, value }),
 			read8: (_addr: number) => 0,
-			write8: (_addr: number, _value: number) => {}
+			write8: (_addr: number, _value: number) => {},
 		};
 
 		const api = createEvalApi(adapter as any);
-		const handle = await api.call(
-			'0x00012345',
-			{ A: 0x12 },
-			{ maxInstructions: 7, zeroMissing: false, trace: true }
-		);
+		const handle = await api.call('0x00012345', { A: 0x12 }, { maxInstructions: 7, zeroMissing: false, trace: true });
 
 		expect(regWrites).toEqual([{ name: 'A', value: 0x12 }]);
 		expect(calls).toEqual([
 			{
 				address: 0x00012345,
 				maxInstructions: 7,
-				options: { trace: true }
-			}
+				options: { trace: true },
+			},
 		]);
 		expect(handle.address).toBe(0x00012345);
 		expect(handle.artifacts.changed).toContain('A');
@@ -72,7 +68,7 @@ describe('createEvalApi', () => {
 			getReg: () => 0,
 			setReg: () => {},
 			read8: () => 0,
-			write8: () => {}
+			write8: () => {},
 		};
 		const api = createEvalApi(adapter as any);
 		await api.reset({ fresh: true, warmupTicks: 123 });
@@ -98,10 +94,10 @@ describe('createEvalApi', () => {
 					lcd_writes: [],
 					probe_samples: [
 						{ pc: 0x123, count: 1, regs: { A: 1 } },
-						{ pc: 0x123, count: 2, regs: { A: 2 } }
+						{ pc: 0x123, count: 2, regs: { A: 2 } },
 					],
 					perfetto_trace_b64: null,
-					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null }
+					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
 				};
 			},
 			reset: () => {},
@@ -109,12 +105,16 @@ describe('createEvalApi', () => {
 			getReg: () => 0,
 			setReg: () => {},
 			read8: () => 0,
-			write8: () => {}
+			write8: () => {},
 		};
 		const api = createEvalApi(adapter as any);
-		await api.withProbe(0x123, (s) => probeHits.push(s.count), async () => {
-			await api.call(0x10);
-		});
+		await api.withProbe(
+			0x123,
+			(s) => probeHits.push(s.count),
+			async () => {
+				await api.call(0x10);
+			},
+		);
 		expect(probeHits).toEqual([1, 2]);
 		expect(capturedOptions[0]?.probe?.pc).toBe(0x123);
 	});
@@ -131,7 +131,7 @@ describe('createEvalApi', () => {
 			setReg: () => {},
 			read8: () => 0,
 			write8: () => {},
-			injectMatrixEvent: (code: number, release: boolean) => ops.push(`inject:${code}:${release ? 1 : 0}`)
+			injectMatrixEvent: (code: number, release: boolean) => ops.push(`inject:${code}:${release ? 1 : 0}`),
 		};
 		const api = createEvalApi(adapter as any);
 		await api.keyboard.tap(0x56, 5);
@@ -157,7 +157,7 @@ describe('createEvalApi', () => {
 					lcd_writes: [],
 					probe_samples: [],
 					perfetto_trace_b64: null,
-					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null }
+					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
 				};
 			},
 			reset: () => {},
@@ -165,7 +165,7 @@ describe('createEvalApi', () => {
 			getReg: () => 0,
 			setReg: (name: string, value: number) => regWrites.push({ name, value }),
 			read8: () => 0,
-			write8: (addr: number, value: number) => writes.push({ addr, value })
+			write8: (addr: number, value: number) => writes.push({ addr, value }),
 		};
 		const api = createEvalApi(adapter as any);
 		await api.iocs.putc('A', { bl: 1, bh: 2, cl: 3, ch: 4 });
@@ -173,7 +173,7 @@ describe('createEvalApi', () => {
 			{ addr: 0x00100000 + 0xd4, value: 1 },
 			{ addr: 0x00100000 + 0xd5, value: 2 },
 			{ addr: 0x00100000 + 0xd6, value: 3 },
-			{ addr: 0x00100000 + 0xd7, value: 4 }
+			{ addr: 0x00100000 + 0xd7, value: 4 },
 		]);
 		expect(regWrites).toContainEqual({ name: 'IL', value: 0x0d });
 		expect(regWrites).toContainEqual({ name: 'A', value: 0x41 });
@@ -199,7 +199,7 @@ describe('createEvalApi', () => {
 					lcd_writes: [],
 					probe_samples: [],
 					perfetto_trace_b64: null,
-					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null }
+					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
 				};
 			},
 			reset: () => {},
@@ -207,7 +207,7 @@ describe('createEvalApi', () => {
 			getReg: () => 0,
 			setReg: (name: string, value: number) => regWrites.push({ name, value }),
 			read8: () => 0,
-			write8: (addr: number, value: number) => writes.push({ addr, value })
+			write8: (addr: number, value: number) => writes.push({ addr, value }),
 		};
 		const api = createEvalApi(adapter as any);
 		await api.iocs.putcXY('Z', { bl: 9, bh: 8, cl: 0, ch: 0 });
@@ -215,7 +215,7 @@ describe('createEvalApi', () => {
 			{ addr: 0x00100000 + 0xd4, value: 9 },
 			{ addr: 0x00100000 + 0xd5, value: 8 },
 			{ addr: 0x00100000 + 0xd6, value: 0 },
-			{ addr: 0x00100000 + 0xd7, value: 0 }
+			{ addr: 0x00100000 + 0xd7, value: 0 },
 		]);
 		expect(regWrites).toContainEqual({ name: 'I', value: 0x0041 });
 		expect(regWrites).toContainEqual({ name: 'A', value: 0x5a });

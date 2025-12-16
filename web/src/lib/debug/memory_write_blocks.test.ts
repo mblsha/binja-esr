@@ -7,7 +7,7 @@ describe('buildMemoryWriteBlocks', () => {
 		const blocks = buildMemoryWriteBlocks([
 			{ addr: 0x0010, value: 0x11 },
 			{ addr: 0x0010, value: 0x22 },
-			{ addr: 0x0011, value: 0x33 }
+			{ addr: 0x0011, value: 0x33 },
 		]);
 
 		expect(blocks).toHaveLength(1);
@@ -18,7 +18,7 @@ describe('buildMemoryWriteBlocks', () => {
 
 	it('expands multi-byte writes into per-byte entries', () => {
 		const blocks = buildMemoryWriteBlocks([{ addr: 0x0100, value: 0x1122, size: 2 }], {
-			groupSize: 16
+			groupSize: 16,
 		});
 		expect(blocks).toHaveLength(1);
 		expect(blocks[0].start).toBe(0x0100);
@@ -26,4 +26,3 @@ describe('buildMemoryWriteBlocks', () => {
 		expect(blocks[0].lines.join('\n')).toContain('11 22');
 	});
 });
-

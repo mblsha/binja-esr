@@ -24,7 +24,10 @@ fn write_capture_records_last_value_for_external_internal_and_overlay_writes() {
     let captured = mem.take_write_capture();
     assert_eq!(
         captured,
-        vec![(0x001234, 0x22), (0x005001, 0x55), (INTERNAL_MEMORY_START + 0x10, 0x33)]
+        vec![
+            (0x001234, 0x22),
+            (0x005001, 0x55),
+            (INTERNAL_MEMORY_START + 0x10, 0x33)
+        ]
     );
 }
-

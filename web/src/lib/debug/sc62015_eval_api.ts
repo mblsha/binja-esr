@@ -128,7 +128,7 @@ export interface EmulatorAdapter {
 		options?: {
 			trace?: boolean;
 			probe?: { pc: number; maxSamples?: number };
-		} | null
+		} | null,
 	): Promise<CallArtifacts>;
 	reset(fresh?: boolean): Promise<void> | void;
 	step(instructions: number): Promise<void> | void;
@@ -150,7 +150,7 @@ export interface EvalApi {
 	call(
 		reference: string | number,
 		registers?: Partial<Record<RegisterName, number>>,
-		options?: EvalCallOptions
+		options?: EvalCallOptions,
 	): Promise<CallHandle>;
 	reg(name: RegisterName): number;
 	flag(flag: StatusFlag): boolean;
@@ -180,21 +180,7 @@ const DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 const DEFAULT_PROBE_MAX_SAMPLES = 256;
 const IMEM_BASE_ADDR = 0x0010_0000;
 
-const RESULT_REGISTER_ORDER: RegisterName[] = [
-	'A',
-	'B',
-	'BA',
-	'IL',
-	'IH',
-	'I',
-	'X',
-	'Y',
-	'U',
-	'S',
-	'F',
-	'IMR',
-	'PC'
-];
+const RESULT_REGISTER_ORDER: RegisterName[] = ['A', 'B', 'BA', 'IL', 'IH', 'I', 'X', 'Y', 'U', 'S', 'F', 'IMR', 'PC'];
 
 function normalizeAddress(addr: number): number {
 	return (addr >>> 0) & 0x00ff_ffff;
@@ -224,7 +210,7 @@ function normalizeRegValue(name: RegisterName, value: number): number {
 
 function buildAssignments(
 	provided: Partial<Record<RegisterName, number>> | undefined,
-	zeroMissing: boolean
+	zeroMissing: boolean,
 ): Map<RegisterName, number> {
 	const out = new Map<RegisterName, number>();
 	if (provided) {
@@ -252,15 +238,18 @@ function diffRegisters(before: Record<string, number>, after: Record<string, num
 }
 
 export const Reg = Object.freeze(
-	RESULT_REGISTER_ORDER.reduce((acc, name) => {
-		(acc as any)[name] = name;
-		return acc;
-	}, {} as Record<RegisterName, RegisterName>)
+	RESULT_REGISTER_ORDER.reduce(
+		(acc, name) => {
+			(acc as any)[name] = name;
+			return acc;
+		},
+		{} as Record<RegisterName, RegisterName>,
+	),
 );
 
 export const Flag = Object.freeze({
 	C: 'C',
-	Z: 'Z'
+	Z: 'Z',
 } satisfies Record<StatusFlag, StatusFlag>);
 
 export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOptions): EvalApi {
@@ -328,9 +317,9 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				activeProbe
 					? {
 							trace,
-							probe: { pc: activeProbe.pc, maxSamples: activeProbe.maxSamples }
+							probe: { pc: activeProbe.pc, maxSamples: activeProbe.maxSamples },
 						}
-					: { trace }
+					: { trace },
 			);
 
 			if (activeProbe && artifacts.probe_samples?.length) {
@@ -346,7 +335,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			const memoryEvents: MemoryWriteEvent[] = artifacts.memory_writes.map((e) => ({
 				addr: e.addr >>> 0,
 				value: e.value & 0xff,
-				size: 1
+				size: 1,
 			}));
 			const memoryBlocks = buildMemoryWriteBlocks(memoryEvents);
 			const before = artifacts.before_regs;
@@ -363,7 +352,9 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				artifacts.lcd_writes.length
 					? `Captured ${artifacts.lcd_writes.length} LCD addressing-unit write(s).`
 					: 'No LCD writes captured.',
-				artifacts.perfetto_trace_b64 ? `Perfetto trace captured (${artifacts.perfetto_trace_b64.length} b64 chars).` : ''
+				artifacts.perfetto_trace_b64
+					? `Perfetto trace captured (${artifacts.perfetto_trace_b64.length} b64 chars).`
+					: '',
 			].filter(Boolean);
 
 			const handle: CallHandle = {
@@ -379,8 +370,8 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					probeSamples: artifacts.probe_samples ?? [],
 					perfettoTraceB64: artifacts.perfetto_trace_b64 ?? null,
 					result: artifacts.report,
-					infoLog
-				}
+					infoLog,
+				},
 			};
 			calls.push(handle);
 			events.push({ kind: 'call', sequence: sequence++, handle });
@@ -409,7 +400,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			probeStack.push({
 				pc: normalizedPc,
 				handler,
-				maxSamples: DEFAULT_PROBE_MAX_SAMPLES
+				maxSamples: DEFAULT_PROBE_MAX_SAMPLES,
 			});
 			try {
 				return await body();
@@ -423,11 +414,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				if (size === 1) return adapter.read8(addr);
 				if (size === 2) return (adapter.read8(addr) | (adapter.read8(addr + 1) << 8)) >>> 0;
 				if (size === 3)
-					return (
-						adapter.read8(addr) |
-						(adapter.read8(addr + 1) << 8) |
-						(adapter.read8(addr + 2) << 16)
-					) >>> 0;
+					return (adapter.read8(addr) | (adapter.read8(addr + 1) << 8) | (adapter.read8(addr + 2) << 16)) >>> 0;
 				throw new Error(`Unsupported read size ${size}`);
 			},
 			write: async (address, size, value) => {
@@ -448,7 +435,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					return;
 				}
 				throw new Error(`Unsupported write size ${size}`);
-			}
+			},
 		},
 		keyboard: {
 			press: async (code: number) => {
@@ -464,7 +451,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.injectMatrixEvent?.(code & 0xff, false);
 				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 				adapter.injectMatrixEvent?.(code & 0xff, true);
-			}
+			},
 		},
 		iocs: {
 			putc: async (ch: string | number, options?: EvalIocsCallOptions) => {
@@ -473,7 +460,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				return await api.call(
 					IOCS_PUBLIC_ENTRY_ADDR,
 					{ IL: IOCS.LCD_PUTC, A: byte },
-					options ? { ...options, zeroMissing: false } : { zeroMissing: false }
+					options ? { ...options, zeroMissing: false } : { zeroMissing: false },
 				);
 			},
 			text: async (text: string, options?: EvalIocsCallOptions) => {
@@ -487,10 +474,10 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				return await api.call(
 					IOCS_PUBLIC_ENTRY_ADDR,
 					{ I: IOCS.DISPLAY_PUTCHAR_XY, A: byte },
-					{ ...options, zeroMissing: false }
+					{ ...options, zeroMissing: false },
 				);
-			}
-		}
+			},
+		},
 	};
 
 	return api;

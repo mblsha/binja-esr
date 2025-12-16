@@ -11,5 +11,5 @@ export enum IOCS {
 	LCD_PUTC = 0x0d,
 
 	// TRM: "One character output to arbitrary position" (IOCS I=0x0041).
-	DISPLAY_PUTCHAR_XY = 0x0041
+	DISPLAY_PUTCHAR_XY = 0x0041,
 }

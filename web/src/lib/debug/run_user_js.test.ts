@@ -8,7 +8,7 @@ describe('runUserJs', () => {
 		const api = {
 			print: (...items: unknown[]) => {
 				for (const item of items) prints.push(item);
-			}
+			},
 		};
 		const Reg = { A: 'A' };
 		const Flag = { Z: 'Z' };
@@ -22,7 +22,7 @@ return { hasGlobalThis: typeof globalThis !== "undefined", hasWindow: typeof win
 			api as any,
 			Reg,
 			Flag,
-			IOCS
+			IOCS,
 		);
 
 		expect(prints).toEqual(['hello']);

@@ -2,46 +2,42 @@
 	import { onDestroy, onMount } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS } from '$lib/lcd';
-		import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
-		import { matrixCodeForKeyEvent } from '$lib/keymap';
-		import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
-		import { IOCS } from '$lib/debug/iocs';
-		import { runUserJs } from '$lib/debug/run_user_js';
-		import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
-		import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
+	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
+	import { matrixCodeForKeyEvent } from '$lib/keymap';
+	import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
+	import { IOCS } from '$lib/debug/iocs';
+	import { runUserJs } from '$lib/debug/run_user_js';
+	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
+	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
 
-		let wasm: any = null;
-		let emulator: any = null;
-		let worker: Worker | null = null;
-		let workerNextId = 1;
-		const workerPending = new Map<number, { resolve: (value: any) => void; reject: (err: unknown) => void }>();
-		const canUseWorker =
-			typeof window !== 'undefined' &&
-			typeof Worker !== 'undefined' &&
-			!Boolean((import.meta as any)?.env?.VITEST);
+	let wasm: any = null;
+	let emulator: any = null;
+	let worker: Worker | null = null;
+	let workerNextId = 1;
+	const workerPending = new Map<number, { resolve: (value: any) => void; reject: (err: unknown) => void }>();
+	const canUseWorker =
+		typeof window !== 'undefined' && typeof Worker !== 'undefined' && !Boolean((import.meta as any)?.env?.VITEST);
 
-		let lcdPixels: Uint8Array | null = null;
-		let lcdChipPixels: Uint8Array | null = null;
-		const CHIP_PIXELS_LEN = LCD_CHIP_COLS * LCD_CHIP_ROWS;
-		$: lcdLeftChipPixels =
-			lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN
-				? lcdChipPixels.subarray(0, CHIP_PIXELS_LEN)
-				: null;
-		$: lcdRightChipPixels =
-			lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN * 2
-				? lcdChipPixels.subarray(CHIP_PIXELS_LEN, CHIP_PIXELS_LEN * 2)
-				: null;
-		let lcdText: string[] | null = null;
-		let regs: any = null;
+	let lcdPixels: Uint8Array | null = null;
+	let lcdChipPixels: Uint8Array | null = null;
+	const CHIP_PIXELS_LEN = LCD_CHIP_COLS * LCD_CHIP_ROWS;
+	$: lcdLeftChipPixels =
+		lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN ? lcdChipPixels.subarray(0, CHIP_PIXELS_LEN) : null;
+	$: lcdRightChipPixels =
+		lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN * 2
+			? lcdChipPixels.subarray(CHIP_PIXELS_LEN, CHIP_PIXELS_LEN * 2)
+			: null;
+	let lcdText: string[] | null = null;
+	let regs: any = null;
 	let callStack: number[] | null = null;
 	let debugState: any = null;
 	let lastError: string | null = null;
-		let romSource: string | null = null;
-			let pcReg: number | null = null;
-			let halted = false;
-			let instructionCount: string | null = null;
-			let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
-			let romLoaded = false;
+	let romSource: string | null = null;
+	let pcReg: number | null = null;
+	let halted = false;
+	let instructionCount: string | null = null;
+	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
+	let romLoaded = false;
 
 	let running = false;
 	let targetFps = 30;
@@ -89,96 +85,96 @@
 		fifoTail: number | null;
 		fifo: number[];
 	} | null = null;
-		let debugKioJson: string | null = null;
+	let debugKioJson: string | null = null;
 
-		function applyWorkerFrame(frame: any) {
-			try {
-				if (frame?.lcdPixels instanceof ArrayBuffer) {
-					lcdPixels = new Uint8Array(frame.lcdPixels);
-				}
-				if (frame?.lcdChipPixels instanceof ArrayBuffer) {
-					lcdChipPixels = new Uint8Array(frame.lcdChipPixels);
-				}
-				lcdText = frame?.lcdText ?? null;
-				buildInfo = frame?.buildInfo ?? buildInfo;
-				regs = frame?.regs ?? regs;
-				callStack = frame?.callStack ?? callStack;
-				debugState = frame?.debugState ?? null;
-				pcReg = frame?.pc ?? pcReg;
-				halted = Boolean(frame?.halted);
-				instructionCount = frame?.instructionCount ?? instructionCount;
-
-				if (frame?.keyboardDebug) {
-					debugKio = frame.keyboardDebug;
-					debugKioJson = frame.keyboardDebugJson ?? null;
-					pressedCodes.clear();
-					for (const code of frame.keyboardDebug.pressedCodes ?? []) pressedCodes.add(code);
-					pendingVirtualRelease.clear();
-					for (const [code, remaining] of frame.keyboardDebug.pendingVirtualRelease ?? []) {
-						pendingVirtualRelease.set(code, remaining);
-					}
-				}
-			} catch (err) {
-				lastError = String(err);
+	function applyWorkerFrame(frame: any) {
+		try {
+			if (frame?.lcdPixels instanceof ArrayBuffer) {
+				lcdPixels = new Uint8Array(frame.lcdPixels);
 			}
-		}
+			if (frame?.lcdChipPixels instanceof ArrayBuffer) {
+				lcdChipPixels = new Uint8Array(frame.lcdChipPixels);
+			}
+			lcdText = frame?.lcdText ?? null;
+			buildInfo = frame?.buildInfo ?? buildInfo;
+			regs = frame?.regs ?? regs;
+			callStack = frame?.callStack ?? callStack;
+			debugState = frame?.debugState ?? null;
+			pcReg = frame?.pc ?? pcReg;
+			halted = Boolean(frame?.halted);
+			instructionCount = frame?.instructionCount ?? instructionCount;
 
-		function workerPost(message: any, transfer?: Transferable[]) {
-			if (!worker) return;
-			if (transfer) worker.postMessage(message, transfer);
-			else worker.postMessage(message);
-		}
-
-		function workerCall<T = any>(type: string, payload: any = {}, transfer?: Transferable[]): Promise<T> {
-			if (!worker) return Promise.reject(new Error('worker not ready'));
-			const id = workerNextId++;
-			const message = { id, type, ...payload };
-			return new Promise((resolve, reject) => {
-				workerPending.set(id, { resolve, reject });
-				workerPost(message, transfer);
-			});
-		}
-
-		function pushWorkerOptions() {
-			if (!worker) return;
-			const id = workerNextId++;
-			workerPost({
-				id,
-				type: 'set_options',
-				targetFps,
-				debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen }
-			});
-		}
-
-		async function ensureWorker(): Promise<void> {
-			if (!canUseWorker || worker) return;
-			worker = new Worker(new URL('../lib/emulator/pce500.worker.ts', import.meta.url), { type: 'module' });
-			worker.onmessage = (event: MessageEvent<any>) => {
-				const data = event.data;
-				if (!data) return;
-				if (data.type === 'reply') {
-					const pending = workerPending.get(data.id);
-					if (!pending) return;
-					workerPending.delete(data.id);
-					if (data.ok) pending.resolve(data.result);
-					else pending.reject(new Error(data.error ?? 'worker error'));
-					return;
+			if (frame?.keyboardDebug) {
+				debugKio = frame.keyboardDebug;
+				debugKioJson = frame.keyboardDebugJson ?? null;
+				pressedCodes.clear();
+				for (const code of frame.keyboardDebug.pressedCodes ?? []) pressedCodes.add(code);
+				pendingVirtualRelease.clear();
+				for (const [code, remaining] of frame.keyboardDebug.pendingVirtualRelease ?? []) {
+					pendingVirtualRelease.set(code, remaining);
 				}
-				if (data.type === 'frame') {
-					applyWorkerFrame(data.frame);
-					return;
-				}
-				if (data.type === 'fatal') {
-					lastError = `Worker error: ${data.error ?? 'unknown error'}`;
-					running = false;
-				}
-			};
-			worker.onerror = (event) => {
-				lastError = `Worker crashed: ${String(event)}`;
+			}
+		} catch (err) {
+			lastError = String(err);
+		}
+	}
+
+	function workerPost(message: any, transfer?: Transferable[]) {
+		if (!worker) return;
+		if (transfer) worker.postMessage(message, transfer);
+		else worker.postMessage(message);
+	}
+
+	function workerCall<T = any>(type: string, payload: any = {}, transfer?: Transferable[]): Promise<T> {
+		if (!worker) return Promise.reject(new Error('worker not ready'));
+		const id = workerNextId++;
+		const message = { id, type, ...payload };
+		return new Promise((resolve, reject) => {
+			workerPending.set(id, { resolve, reject });
+			workerPost(message, transfer);
+		});
+	}
+
+	function pushWorkerOptions() {
+		if (!worker) return;
+		const id = workerNextId++;
+		workerPost({
+			id,
+			type: 'set_options',
+			targetFps,
+			debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen },
+		});
+	}
+
+	async function ensureWorker(): Promise<void> {
+		if (!canUseWorker || worker) return;
+		worker = new Worker(new URL('../lib/emulator/pce500.worker.ts', import.meta.url), { type: 'module' });
+		worker.onmessage = (event: MessageEvent<any>) => {
+			const data = event.data;
+			if (!data) return;
+			if (data.type === 'reply') {
+				const pending = workerPending.get(data.id);
+				if (!pending) return;
+				workerPending.delete(data.id);
+				if (data.ok) pending.resolve(data.result);
+				else pending.reject(new Error(data.error ?? 'worker error'));
+				return;
+			}
+			if (data.type === 'frame') {
+				applyWorkerFrame(data.frame);
+				return;
+			}
+			if (data.type === 'fatal') {
+				lastError = `Worker error: ${data.error ?? 'unknown error'}`;
 				running = false;
-			};
-			pushWorkerOptions();
-		}
+			}
+		};
+		worker.onerror = (event) => {
+			lastError = `Worker crashed: ${String(event)}`;
+			running = false;
+		};
+		pushWorkerOptions();
+	}
 
 	function isDevBuild(): boolean {
 		try {
@@ -206,13 +202,13 @@
 				callFunction: async (
 					address: number,
 					maxInstructions: number,
-					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null
+					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
 				) => {
 					const raw =
 						emu.call_function_ex?.(address, maxInstructions, {
 							trace: Boolean(options?.trace),
 							probe_pc: options?.probe ? options.probe.pc : null,
-							probe_max_samples: options?.probe?.maxSamples ?? 256
+							probe_max_samples: options?.probe?.maxSamples ?? 256,
 						}) ?? emu.call_function(address, maxInstructions);
 					if (typeof raw === 'string') return JSON.parse(raw);
 					return raw;
@@ -229,7 +225,7 @@
 				write8: (addr: number, value: number) => emu.write_u8?.(addr, value),
 				pressMatrixCode: (code: number) => emu.press_matrix_code?.(code),
 				releaseMatrixCode: (code: number) => emu.release_matrix_code?.(code),
-				injectMatrixEvent: (code: number, release: boolean) => emu.inject_matrix_event?.(code, release)
+				injectMatrixEvent: (code: number, release: boolean) => emu.inject_matrix_event?.(code, release),
 			});
 
 			let resultJson: string | null = null;
@@ -245,7 +241,7 @@
 				calls: api.calls,
 				prints: api.prints,
 				resultJson,
-				error
+				error,
 			};
 		} catch (err) {
 			return {
@@ -253,43 +249,41 @@
 				calls: [],
 				prints: [],
 				resultJson: null,
-				error: err instanceof Error ? err.message : String(err)
+				error: err instanceof Error ? err.message : String(err),
 			};
 		} finally {
 			functionRunnerBusy = false;
 		}
 	}
 
-		function hex(value: number | null | undefined, width = 5): string {
-			if (value === null || value === undefined) return '—';
-			return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
-		}
+	function hex(value: number | null | undefined, width = 5): string {
+		if (value === null || value === undefined) return '—';
+		return `0x${value.toString(16).toUpperCase().padStart(width, '0')}`;
+	}
 
-		function formatBuildInfo(info: typeof buildInfo): string {
-			if (!info) return '—';
-			const ts = (() => {
-				if (!info.build_timestamp) return 'ts=?';
-				const raw = Number.parseInt(info.build_timestamp, 10);
-				if (!Number.isFinite(raw)) return `ts=${info.build_timestamp}`;
-				const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
-				const date = new Date(ms);
-				if (Number.isNaN(date.getTime())) return `ts=${info.build_timestamp}`;
-				const offsetMinutes = -date.getTimezoneOffset();
-				const sign = offsetMinutes >= 0 ? '+' : '-';
-				const abs = Math.abs(offsetMinutes);
-				const hh = String(Math.floor(abs / 60)).padStart(2, '0');
-				const mm = String(abs % 60).padStart(2, '0');
-				const localIso = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-					.toISOString()
-					.replace('Z', '');
-				return `ts=${localIso}${sign}${hh}:${mm}`;
-			})();
-			return `v${info.version} ${info.git_commit} ${ts}`;
-		}
+	function formatBuildInfo(info: typeof buildInfo): string {
+		if (!info) return '—';
+		const ts = (() => {
+			if (!info.build_timestamp) return 'ts=?';
+			const raw = Number.parseInt(info.build_timestamp, 10);
+			if (!Number.isFinite(raw)) return `ts=${info.build_timestamp}`;
+			const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
+			const date = new Date(ms);
+			if (Number.isNaN(date.getTime())) return `ts=${info.build_timestamp}`;
+			const offsetMinutes = -date.getTimezoneOffset();
+			const sign = offsetMinutes >= 0 ? '+' : '-';
+			const abs = Math.abs(offsetMinutes);
+			const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+			const mm = String(abs % 60).padStart(2, '0');
+			const localIso = new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().replace('Z', '');
+			return `ts=${localIso}${sign}${hh}:${mm}`;
+		})();
+		return `v${info.version} ${info.git_commit} ${ts}`;
+	}
 
-		function formatFunction(pc: number): string {
-			return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
-		}
+	function formatFunction(pc: number): string {
+		return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
+	}
 
 	function getReg(name: string): number | null {
 		for (const [key, value] of regsEntries(regs)) {
@@ -298,21 +292,19 @@
 		return null;
 	}
 
-		function regsEntries(input: any): [string, number][] {
-			if (!input) return [];
-			try {
-				if (typeof input.entries === 'function') {
-					return (Array.from(input.entries()) as [unknown, unknown][]).filter(
-						(entry): entry is [string, number] =>
-							Array.isArray(entry) &&
-							entry.length === 2 &&
-							typeof entry[0] === 'string' &&
-							typeof entry[1] === 'number'
-					);
-				}
-				return Object.entries(input).filter(
-					([k, v]) => typeof k === 'string' && typeof v === 'number'
-				) as [string, number][];
+	function regsEntries(input: any): [string, number][] {
+		if (!input) return [];
+		try {
+			if (typeof input.entries === 'function') {
+				return (Array.from(input.entries()) as [unknown, unknown][]).filter(
+					(entry): entry is [string, number] =>
+						Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && typeof entry[1] === 'number',
+				);
+			}
+			return Object.entries(input).filter(([k, v]) => typeof k === 'string' && typeof v === 'number') as [
+				string,
+				number,
+			][];
 		} catch {
 			return [];
 		}
@@ -423,31 +415,31 @@
 		}
 	}
 
-		async function ensureEmulator(): Promise<any> {
-			if (!wasm) {
-				wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
-				if (typeof wasm.default === 'function') {
-					const url = new URL('$lib/wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
-					try {
-						if (Boolean((import.meta as any)?.env?.DEV)) {
-							url.searchParams.set('v', String(Date.now()));
-						}
-					} catch {
-						// ignore
-					}
-					await wasm.default(url);
-				}
-			}
-			if (!emulator) {
-				emulator = new wasm.Pce500Emulator();
+	async function ensureEmulator(): Promise<any> {
+		if (!wasm) {
+			wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
+			if (typeof wasm.default === 'function') {
+				const url = new URL('$lib/wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
 				try {
-					buildInfo = emulator.build_info?.() ?? null;
+					if (Boolean((import.meta as any)?.env?.DEV)) {
+						url.searchParams.set('v', String(Date.now()));
+					}
 				} catch {
-					buildInfo = null;
+					// ignore
 				}
+				await wasm.default(url);
 			}
-			return emulator;
 		}
+		if (!emulator) {
+			emulator = new wasm.Pce500Emulator();
+			try {
+				buildInfo = emulator.build_info?.() ?? null;
+			} catch {
+				buildInfo = null;
+			}
+		}
+		return emulator;
+	}
 
 	async function tryAutoLoadRom() {
 		await ensureWorker();
@@ -456,21 +448,21 @@
 			const res = await fetch('/api/rom');
 			if (!res.ok) return;
 			romSource = res.headers.get('x-rom-source');
-				const bytes = new Uint8Array(await res.arrayBuffer());
-				if (worker) {
-					await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
-					romLoaded = true;
-					return;
-				}
-				const emu = await ensureEmulator();
-				emu.load_rom(bytes);
+			const bytes = new Uint8Array(await res.arrayBuffer());
+			if (worker) {
+				await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
 				romLoaded = true;
-				refreshAllNow();
-			} catch (err) {
-				lastError = `Auto-load failed: ${String(err)}`;
-				romLoaded = false;
+				return;
 			}
+			const emu = await ensureEmulator();
+			emu.load_rom(bytes);
+			romLoaded = true;
+			refreshAllNow();
+		} catch (err) {
+			lastError = `Auto-load failed: ${String(err)}`;
+			romLoaded = false;
 		}
+	}
 
 	function refreshFast() {
 		if (worker) return;
@@ -500,7 +492,7 @@
 		if (!emulator) return;
 		if (regsOpen) regs = emulator.regs?.() ?? regs;
 		if (callStackOpen) callStack = emulator.call_stack?.() ?? callStack;
-		debugState = debugStateOpen ? emulator.debug_state?.() ?? debugState : null;
+		debugState = debugStateOpen ? (emulator.debug_state?.() ?? debugState) : null;
 		if (lcdTextOpen && (!running || nowMs - lastLcdTextUpdateMs >= LCD_TEXT_UPDATE_INTERVAL_MS)) {
 			lastLcdTextUpdateMs = nowMs;
 			lcdText = emulator.lcd_text?.() ?? lcdText;
@@ -545,7 +537,7 @@
 			debugKioJson = safeJson({
 				...debugKio,
 				pressedCodes: Array.from(pressedCodes.values()),
-				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries())
+				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries()),
 			});
 		} catch {
 			debugKio = null;
@@ -589,32 +581,32 @@
 				fifoTail,
 				fifo,
 				pressedCodes: Array.from(pressedCodes.values()),
-				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries())
+				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries()),
 			});
 		} catch (err) {
 			console.log(`[pce500] ${tag}: dump failed`, err);
 		}
 	}
 
-		function installDevtoolsDebugHelpers() {
-			if (!isDevBuild()) return;
-			(globalThis as any).__pce500 = {
-				get emulator() {
-					return worker ? null : emulator;
-				},
-				dump: dumpKeyboardState,
-				step: (n: number) => stepOnce(n),
-				read: (addr: number) => emulator?.read_u8?.(addr),
-				readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
-				lcdTrace: async () => {
-					if (worker) return await workerCall('lcd_trace');
-					return emulator?.lcd_trace?.();
-				},
-				press: (code: number) => virtualPress(code),
-				release: (code: number) => virtualRelease(code),
-				tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
-					virtualPress(code);
-					stepOnce(stepCount);
+	function installDevtoolsDebugHelpers() {
+		if (!isDevBuild()) return;
+		(globalThis as any).__pce500 = {
+			get emulator() {
+				return worker ? null : emulator;
+			},
+			dump: dumpKeyboardState,
+			step: (n: number) => stepOnce(n),
+			read: (addr: number) => emulator?.read_u8?.(addr),
+			readInternal: (offset: number) => emulator?.read_u8?.(IMEM_BASE + offset),
+			lcdTrace: async () => {
+				if (worker) return await workerCall('lcd_trace');
+				return emulator?.lcd_trace?.();
+			},
+			press: (code: number) => virtualPress(code),
+			release: (code: number) => virtualRelease(code),
+			tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				virtualPress(code);
+				stepOnce(stepCount);
 				virtualRelease(code);
 			},
 			pressPF1: () => virtualPress(0x56),
@@ -623,45 +615,43 @@
 				virtualPress(0x56);
 				stepOnce(stepCount);
 				virtualRelease(0x56);
-			}
+			},
 		};
-		console.log(
-			'[pce500] devtools helpers installed: __pce500.dump(), __pce500.tapPF1(), __pce500.readInternal(0xF2)'
-		);
+		console.log('[pce500] devtools helpers installed: __pce500.dump(), __pce500.tapPF1(), __pce500.readInternal(0xF2)');
 	}
 
-		$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
-		$: pc = pcReg;
-		$: if (worker) {
-			targetFps;
-			regsOpen;
-			callStackOpen;
-			lcdTextOpen;
-			debugStateOpen;
-			keyboardDebugOpen;
-			pushWorkerOptions();
-		}
+	$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
+	$: pc = pcReg;
+	$: if (worker) {
+		targetFps;
+		regsOpen;
+		callStackOpen;
+		lcdTextOpen;
+		debugStateOpen;
+		keyboardDebugOpen;
+		pushWorkerOptions();
+	}
 
 	function sortedRegs(input: any): [string, number][] {
 		return regsEntries(input).sort(([a], [b]) => a.localeCompare(b));
 	}
 
-		async function stepOnce(count: number) {
-			if (worker) {
-				try {
-					await workerCall('step', { instructions: count });
-				} catch (err) {
-					lastError = String(err);
-					running = false;
-				}
-				return;
-			}
-			if (!emulator) return;
+	async function stepOnce(count: number) {
+		if (worker) {
 			try {
-				stepCore(count);
-				refreshFast();
-				const nowMs = performance.now();
-				refreshUi(nowMs);
+				await workerCall('step', { instructions: count });
+			} catch (err) {
+				lastError = String(err);
+				running = false;
+			}
+			return;
+		}
+		if (!emulator) return;
+		try {
+			stepCore(count);
+			refreshFast();
+			const nowMs = performance.now();
+			refreshUi(nowMs);
 			if (keyboardDebugOpen) snapshotKeyboardState();
 		} catch (err) {
 			lastError = String(err);
@@ -685,10 +675,7 @@
 				const sliceMs = performance.now() - sliceStart;
 				if (sliceMs > 0) {
 					const scaled = Math.floor(runSliceInstructions * (runSliceTargetMs / sliceMs));
-					runSliceInstructions = Math.max(
-						RUN_SLICE_MIN_INSTRUCTIONS,
-						Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled)
-					);
+					runSliceInstructions = Math.max(RUN_SLICE_MIN_INSTRUCTIONS, Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled));
 				}
 				if (!running || id !== runLoopId) return;
 			}
@@ -711,54 +698,54 @@
 		setTimeout(() => pumpRender(id), delayMs);
 	}
 
-		async function onSelectRom(event: Event) {
-			const input = event.currentTarget as HTMLInputElement;
-			const file = input.files?.[0];
-			if (!file) return;
+	async function onSelectRom(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
 
-			lastError = null;
-			try {
-				const bytes = new Uint8Array(await file.arrayBuffer());
-				romSource = file.name;
-				await ensureWorker();
-				if (worker) {
-					await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
-					romLoaded = true;
-					return;
-				}
-				const emu = await ensureEmulator();
-				emu.load_rom(bytes);
+		lastError = null;
+		try {
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			romSource = file.name;
+			await ensureWorker();
+			if (worker) {
+				await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
 				romLoaded = true;
-				refreshAllNow();
-			} catch (err) {
-				lastError = String(err);
-				romLoaded = false;
-			}
-		}
-
-		function start() {
-			if (!romLoaded) return;
-			if (running) return;
-			lastLcdTextUpdateMs = 0;
-			running = true;
-			if (worker) {
-				void workerCall('start');
 				return;
 			}
-			runSliceInstructions = 2000;
-			runLoopId += 1;
-			pumpEmulator(runLoopId);
-			pumpRender(runLoopId);
+			const emu = await ensureEmulator();
+			emu.load_rom(bytes);
+			romLoaded = true;
+			refreshAllNow();
+		} catch (err) {
+			lastError = String(err);
+			romLoaded = false;
 		}
+	}
 
-		function stop() {
-			running = false;
-			if (worker) {
-				void workerCall('stop');
-				return;
-			}
-			runLoopId += 1;
+	function start() {
+		if (!romLoaded) return;
+		if (running) return;
+		lastLcdTextUpdateMs = 0;
+		running = true;
+		if (worker) {
+			void workerCall('start');
+			return;
 		}
+		runSliceInstructions = 2000;
+		runLoopId += 1;
+		pumpEmulator(runLoopId);
+		pumpRender(runLoopId);
+	}
+
+	function stop() {
+		running = false;
+		if (worker) {
+			void workerCall('stop');
+			return;
+		}
+		runLoopId += 1;
+	}
 
 	function onKeyDown(event: KeyboardEvent) {
 		if (event.repeat) return;
@@ -817,16 +804,16 @@
 		<p class="hint">Auto-loaded ROM via {romSource}</p>
 	{/if}
 
-			<div class="controls">
-				<button on:click={() => stepOnce(1_000)} disabled={!romLoaded}>Step 1k</button>
-				<button on:click={() => stepOnce(20_000)} disabled={!romLoaded}>Step 20k</button>
-				<button on:click={start} disabled={!romLoaded || running}>Run</button>
-				<button on:click={stop} disabled={!running}>Stop</button>
-			<label>
-				Target FPS:
-				<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
-			</label>
-		</div>
+	<div class="controls">
+		<button on:click={() => stepOnce(1_000)} disabled={!romLoaded}>Step 1k</button>
+		<button on:click={() => stepOnce(20_000)} disabled={!romLoaded}>Step 20k</button>
+		<button on:click={start} disabled={!romLoaded || running}>Run</button>
+		<button on:click={stop} disabled={!running}>Stop</button>
+		<label>
+			Target FPS:
+			<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
+		</label>
+	</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
 	<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
@@ -854,16 +841,12 @@
 	/>
 
 	<label>
-		<input
-			type="checkbox"
-			data-testid="physical-keyboard-toggle"
-			bind:checked={physicalKeyboardEnabled}
-		/>
+		<input type="checkbox" data-testid="physical-keyboard-toggle" bind:checked={physicalKeyboardEnabled} />
 		Enable physical keyboard input (F1/F2, arrows)
 	</label>
 
-		{#if romLoaded}
-			<details bind:open={keyboardDebugOpen}>
+	{#if romLoaded}
+		<details bind:open={keyboardDebugOpen}>
 			<summary>Debug (keyboard)</summary>
 			<div class="debug-row">
 				<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
@@ -906,7 +889,11 @@
 						</tr>
 						<tr>
 							<td class="name">Pressed</td>
-							<td class="val">{Array.from(pressedCodes).map((c) => hex(c, 2)).join(' ') || '—'}</td>
+							<td class="val"
+								>{Array.from(pressedCodes)
+									.map((c) => hex(c, 2))
+									.join(' ') || '—'}</td
+							>
 						</tr>
 						<tr>
 							<td class="name">Pending release</td>
@@ -933,97 +920,95 @@
 		</details>
 	{/if}
 
-			{#if romLoaded}
-				<details
-					bind:open={callStackOpen}
-					on:toggle={() => {
-						if (callStackOpen) refreshAllNow();
-				}}
-			>
-				<summary>Call stack</summary>
-				{#if callStack && callStack.length > 0}
-					<ol class="stack" data-testid="call-stack">
-						{#each callStack as frame}
-							<li>{formatFunction(frame)} ({hex(frame)})</li>
-						{/each}
-					</ol>
-				{:else}
-					<p class="hint" data-testid="call-stack-empty">No frames</p>
-				{/if}
-			</details>
-
-			<details
-				bind:open={regsOpen}
-				on:toggle={() => {
-					if (regsOpen) refreshAllNow();
-				}}
-			>
-				<summary>Registers</summary>
-				{#if regs}
-					<table class="regs" data-testid="regs-table">
-						<tbody>
-							{#each sortedRegs(regs) as [name, value]}
-								<tr>
-									<td class="name">{name}</td>
-									<td class="val">{hex(value, 6)}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				{:else}
-					<p class="hint">Open to fetch registers.</p>
-				{/if}
-			</details>
-
-			<details
-				bind:open={lcdTextOpen}
-				on:toggle={() => {
-					if (lcdTextOpen) refreshAllNow();
-				}}
-			>
-				<summary>LCD (decoded text)</summary>
-				{#if lcdText && lcdText.length > 0}
-					<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
-				{:else}
-					<p class="hint">Open to decode LCD text.</p>
-				{/if}
-				</details>
+	{#if romLoaded}
+		<details
+			bind:open={callStackOpen}
+			on:toggle={() => {
+				if (callStackOpen) refreshAllNow();
+			}}
+		>
+			<summary>Call stack</summary>
+			{#if callStack && callStack.length > 0}
+				<ol class="stack" data-testid="call-stack">
+					{#each callStack as frame}
+						<li>{formatFunction(frame)} ({hex(frame)})</li>
+					{/each}
+				</ol>
+			{:else}
+				<p class="hint" data-testid="call-stack-empty">No frames</p>
 			{/if}
+		</details>
+
+		<details
+			bind:open={regsOpen}
+			on:toggle={() => {
+				if (regsOpen) refreshAllNow();
+			}}
+		>
+			<summary>Registers</summary>
+			{#if regs}
+				<table class="regs" data-testid="regs-table">
+					<tbody>
+						{#each sortedRegs(regs) as [name, value]}
+							<tr>
+								<td class="name">{name}</td>
+								<td class="val">{hex(value, 6)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{:else}
+				<p class="hint">Open to fetch registers.</p>
+			{/if}
+		</details>
+
+		<details
+			bind:open={lcdTextOpen}
+			on:toggle={() => {
+				if (lcdTextOpen) refreshAllNow();
+			}}
+		>
+			<summary>LCD (decoded text)</summary>
+			{#if lcdText && lcdText.length > 0}
+				<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
+			{:else}
+				<p class="hint">Open to decode LCD text.</p>
+			{/if}
+		</details>
+	{/if}
 
 	{#if lastError}
 		<p class="error">{lastError}</p>
 	{/if}
 
-			{#if romLoaded}
-				<details
-					bind:open={debugStateOpen}
-					on:toggle={() => {
-						if (debugStateOpen) refreshAllNow();
-				}}
-			>
-				<summary>Debug state</summary>
-				{#if debugState}
-					<pre>{safeJson(debugState)}</pre>
-				{:else}
-					<p class="hint">Open to fetch debug state.</p>
-				{/if}
-				</details>
+	{#if romLoaded}
+		<details
+			bind:open={debugStateOpen}
+			on:toggle={() => {
+				if (debugStateOpen) refreshAllNow();
+			}}
+		>
+			<summary>Debug state</summary>
+			{#if debugState}
+				<pre>{safeJson(debugState)}</pre>
+			{:else}
+				<p class="hint">Open to fetch debug state.</p>
 			{/if}
+		</details>
+	{/if}
 
-			{#if romLoaded}
-				<FunctionRunnerPanel
-					disabled={!romLoaded}
-					busy={functionRunnerBusy}
-					onRun={runFunctionRunner}
-					onBeforeRun={() => {
-						if (running) stop();
-					}}
-				/>
-			{/if}
+	{#if romLoaded}
+		<FunctionRunnerPanel
+			disabled={!romLoaded}
+			busy={functionRunnerBusy}
+			onRun={runFunctionRunner}
+			onBeforeRun={() => {
+				if (running) stop();
+			}}
+		/>
+	{/if}
 
-	<p class="hint">
-		Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.
-	</p>
+	<p class="hint">Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.</p>
 </main>
 
 <style>
@@ -1116,4 +1101,4 @@
 	}
 
 	/* Function runner styles live in FunctionRunnerPanel/Results components. */
-	</style>
+</style>

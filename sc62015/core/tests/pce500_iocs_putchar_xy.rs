@@ -59,8 +59,7 @@ fn iocs_putchar_xy(rt: &mut CoreRuntime, x: u8, y: u8, ch: u8) {
     rt.memory.write_internal_byte(0xD5, y);
 
     rt.state.set_reg(RegName::A, ch as u32);
-    rt.state
-        .set_reg(RegName::I, IOCS_PUTCHAR_XY as u32);
+    rt.state.set_reg(RegName::I, IOCS_PUTCHAR_XY as u32);
     call_with_sentinel(rt, IOCS_PUBLIC_ENTRY_ADDR, 50_000);
 
     // Allow the driver to complete any deferred LCD writes.
