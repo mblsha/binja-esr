@@ -28,3 +28,7 @@ snapshot = ["dep:zip"]
 name = "pce500"
 path = "src/bin/pce500.rs"
 required-features = ["cli"]
+
+[dev-dependencies]
+perfetto_protos = "0.51.1"
+protobuf = "3.7.2"

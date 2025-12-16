@@ -692,6 +692,8 @@ name = "sc62015-core"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "perfetto_protos",
+ "protobuf",
  "retrobus-perfetto",
  "serde",
  "serde_json",
