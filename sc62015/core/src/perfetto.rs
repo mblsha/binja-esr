@@ -729,10 +729,16 @@ impl PerfettoTracer {
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
     pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, AnnotationValue>) {
         // Prefer explicit cycle payload (manual clock) when present to align with Python traces.
-        let cycle_ts = payload.get("cycle").and_then(|v| match v {
-            AnnotationValue::UInt(c) => Some(*c as i64),
-            _ => None,
-        });
+        // For CallUi traces, timestamp against the instruction timeline so all instants have
+        // sensible ordering (some callers use `cycle=0` as a placeholder).
+        let cycle_ts = if self.layout == PerfettoLayout::CallUi {
+            None
+        } else {
+            payload.get("cycle").and_then(|v| match v {
+                AnnotationValue::UInt(c) => Some(*c as i64),
+                _ => None,
+            })
+        };
 
         // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
         let (ctx_idx, _pc) = perfetto_instr_context()
