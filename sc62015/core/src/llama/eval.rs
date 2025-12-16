@@ -427,11 +427,13 @@ impl LlamaExecutor {
                     bus.peek_imem_silent(IMEM_ISR_OFFSET),
                 )
             });
+            let mnemonic = dispatch::lookup(opcode).map(|entry| entry.name);
             tracer.record_regs(
                 instr_index,
                 pc_trace & mask_for(RegName::PC),
                 pc_trace & mask_for(RegName::PC),
                 opcode,
+                mnemonic,
                 regs,
                 mem_imr,
                 mem_isr,
