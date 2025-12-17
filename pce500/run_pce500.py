@@ -28,6 +28,7 @@ def run_emulator(
     timeout_secs: float | None = None,
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
+    memory_card_present: bool = True,
     # Optional auto key-press controls
     auto_press_key: str | None = None,
     auto_press_after_pc: int | None = None,
@@ -78,6 +79,7 @@ def run_emulator(
         trace_enabled=False,
         perfetto_trace=perfetto_trace,
         save_lcd_on_exit=save_lcd,
+        memory_card_present=bool(memory_card_present),
         enable_new_tracing=new_perfetto,
         trace_path=trace_file,
         disasm_trace=disasm_trace,
@@ -572,6 +574,7 @@ def main(
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
     profile_emulator=False,
+    memory_card_present: bool = True,
     steps: int = 20000,
     timeout_secs: float | None = None,
     auto_press_key: str | None = None,
@@ -629,6 +632,7 @@ def main(
         perfetto_trace=perfetto_enabled,
         new_perfetto=new_perfetto,
         trace_file=trace_file,
+        memory_card_present=bool(memory_card_present),
         timeout_secs=resolved_timeout,
         auto_press_key=auto_press_key,
         auto_press_after_pc=auto_press_after_pc,
@@ -734,6 +738,12 @@ if __name__ == "__main__":
         "--profile-emulator",
         action="store_true",
         help="Enable performance profiling of emulator execution (outputs emulator-profile.perfetto-trace)",
+    )
+    parser.add_argument(
+        "--card",
+        choices=("present", "absent"),
+        default="present",
+        help="Enable/disable memory card emulation (default: present)",
     )
     parser.add_argument(
         "--auto-press-key",
@@ -868,6 +878,7 @@ if __name__ == "__main__":
         new_perfetto=args.perfetto,
         trace_file=args.trace_file,
         profile_emulator=args.profile_emulator,
+        memory_card_present=(args.card == "present"),
         auto_press_key=args.auto_press_key,
         auto_press_after_pc=args.auto_press_after_pc,
         auto_press_after_steps=args.auto_press_after_steps,

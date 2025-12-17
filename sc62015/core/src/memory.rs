@@ -36,6 +36,8 @@ const MEMORY_CARD_RANGES: &[(usize, u32, u32, &str)] = &[
     (32768, 0x040000, 0x047FFF, "Memory_Card"),
     (65536, 0x040000, 0x04FFFF, "Memory_Card"),
 ];
+const MEMORY_CARD_SLOT_START: u32 = 0x040000;
+const MEMORY_CARD_SLOT_END: u32 = 0x04FFFF;
 
 fn canonical_address(address: u32) -> u32 {
     address & ADDRESS_MASK
@@ -346,12 +348,40 @@ impl MemoryImage {
             end: *end,
             name: "memory_card".to_string(),
             data: Some(data.to_vec()),
-            read_only: true,
+            read_only: false,
             read_handler: None,
             write_handler: None,
             perfetto_thread: Some(thread.to_string()),
         });
         Ok(())
+    }
+
+    pub fn set_memory_card_slot_present(&mut self, present: bool) {
+        self.remove_overlay("memory_card_slot");
+        if present {
+            self.add_overlay(MemoryOverlay {
+                start: MEMORY_CARD_SLOT_START,
+                end: MEMORY_CARD_SLOT_END,
+                name: "memory_card_slot".to_string(),
+                data: Some(vec![0u8; 65536]),
+                read_only: false,
+                read_handler: None,
+                write_handler: None,
+                perfetto_thread: Some("Memory_Card".to_string()),
+            });
+            return;
+        }
+        // Absent card: reads return 0 and writes are ignored but considered handled.
+        self.add_overlay(MemoryOverlay {
+            start: MEMORY_CARD_SLOT_START,
+            end: MEMORY_CARD_SLOT_END,
+            name: "memory_card_slot".to_string(),
+            data: None,
+            read_only: false,
+            read_handler: Some(Box::new(|_addr, _pc| Some(0x00))),
+            write_handler: Some(Box::new(|_addr, _value, _pc| true)),
+            perfetto_thread: Some("Memory_Card".to_string()),
+        });
     }
 
     pub fn clear_overlay_logs(&self) {
@@ -1255,5 +1285,14 @@ mod tests {
         let mut mem = MemoryImage::new();
         let err = mem.load_memory_card(&[0xFF; 1024]);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn memory_card_slot_absent_reads_zero_and_ignores_writes() {
+        let mut mem = MemoryImage::new();
+        mem.set_memory_card_slot_present(false);
+        assert_eq!(mem.load_with_pc(0x040005, 8, None), Some(0));
+        mem.store_with_pc(0x040005, 8, 0xFF, None);
+        assert_eq!(mem.load_with_pc(0x040005, 8, None), Some(0));
     }
 }
