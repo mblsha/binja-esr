@@ -49,6 +49,17 @@ class TestSimplifiedEmulator:
         assert emu.memory.read_byte(0x40001) == 1
         assert emu.memory.read_byte(0x400FF) == 255
 
+        # Verify card is writable by default (PF1 init flow depends on it).
+        emu.memory.write_byte(0x40005, 0xAA)
+        assert emu.memory.read_byte(0x40005) == 0xAA
+
+    def test_memory_card_absent_reads_zero_and_ignores_writes(self):
+        """Absent cards should not latch writes and should read back as 0."""
+        emu = PCE500Emulator(memory_card_present=False)
+        assert emu.memory.read_byte(0x40005) == 0x00
+        emu.memory.write_byte(0x40005, 0xFF)
+        assert emu.memory.read_byte(0x40005) == 0x00
+
     def test_ram_access(self):
         """Test internal RAM read/write."""
         emu = PCE500Emulator()
