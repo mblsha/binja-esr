@@ -7,7 +7,7 @@ type Candidate = {
 	source: string;
 };
 
-const REPORT_RELATIVE_PATH = 'rom-analysis/pc-e500/s3-en/bnida_address_report.json';
+const REPORT_RELATIVE_PATH = 'rom-analysis/pc-e500/s3-en/bnida.json';
 
 function stripLeadingLineComments(raw: string): string {
 	const lines = raw.split(/\r?\n/);
@@ -51,8 +51,7 @@ function symbolCandidates(): Candidate[] {
 function parseAddress(key: string): number | null {
 	const trimmed = key.trim();
 	if (!trimmed) return null;
-	const hex = trimmed.toLowerCase().startsWith('0x') ? trimmed.slice(2) : trimmed;
-	const value = Number.parseInt(hex, 16);
+	const value = Number.parseInt(trimmed, 10);
 	if (!Number.isFinite(value)) return null;
 	return value >>> 0;
 }
@@ -62,8 +61,8 @@ export const GET: RequestHandler = async () => {
 		try {
 			const raw = await readFile(candidate.path, 'utf8');
 			const jsonText = stripLeadingLineComments(raw);
-			const report = JSON.parse(jsonText) as Record<string, string>;
-			const symbols = Object.entries(report)
+			const bnida = JSON.parse(jsonText) as { names?: Record<string, string> };
+			const symbols = Object.entries(bnida.names ?? {})
 				.map(([addr, name]) => ({ addr: parseAddress(addr), name: String(name ?? '').trim() }))
 				.filter((entry) => typeof entry.addr === 'number' && entry.addr !== null && entry.name.length > 0)
 				.map((entry) => ({ addr: (entry.addr as number) & 0x000f_ffff, name: entry.name }));
