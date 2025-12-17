@@ -22,6 +22,9 @@ IMEM_OFFSET_TO_NAME: Dict[int, str] = {
 IMEM_TRACE_ALL = False
 IMEM_TRACE_REG = ""
 
+MEMORY_CARD_SLOT_START = 0x40000
+MEMORY_CARD_SLOT_END = 0x4FFFF
+
 
 def _is_lcd_region(address: int) -> bool:
     return 0x2000 <= address <= 0x200F or 0xA000 <= address <= 0xAFFF
@@ -75,6 +78,47 @@ class PCE500Memory:
         # Overlay manager
         self._bus = MemoryBus()
 
+        # Memory card slot (0x40000..). The ROM probes this window to decide
+        # whether the card path is available (e.g. toggling 0x40005).
+        #
+        # Default behavior matches existing harness expectations: a present,
+        # writable 64KB card initialized to zeroes.
+        self._card_present = True
+        self._card_writable = True
+        self._card_len = 65536
+        self._card_data = bytearray(self._card_len)
+
+        def _card_read(address: int, cpu_pc: Optional[int]) -> int:
+            _ = cpu_pc
+            if not self._card_present:
+                # Empirically, the ROM's probe sequence expects that absent
+                # cards do not latch writes and read back as 0.
+                return 0x00
+            offset = address - MEMORY_CARD_SLOT_START
+            if 0 <= offset < self._card_len:
+                return self._card_data[offset]
+            return 0x00
+
+        def _card_write(address: int, value: int, cpu_pc: Optional[int]) -> None:
+            _ = cpu_pc
+            if not self._card_present or not self._card_writable:
+                return
+            offset = address - MEMORY_CARD_SLOT_START
+            if 0 <= offset < self._card_len:
+                self._card_data[offset] = value & 0xFF
+
+        self.add_overlay(
+            MemoryOverlay(
+                start=MEMORY_CARD_SLOT_START,
+                end=MEMORY_CARD_SLOT_END,
+                name="memory_card_slot",
+                read_only=False,
+                read_handler=_card_read,
+                write_handler=_card_write,
+                perfetto_thread="Memory_Card",
+            )
+        )
+
         # Track keyboard overlay for optimization
         self._keyboard_overlay: Optional[MemoryOverlay] = None
         self._emulator: Optional[Any] = None
@@ -107,6 +151,40 @@ class PCE500Memory:
         self._imr_read_zero_count = 0
         self._imr_read_nonzero_count = 0
         self._imr_cache_value: Optional[int] = None
+
+    def set_memory_card_present(self, present: bool) -> None:
+        """Enable/disable memory card emulation.
+
+        When disabled, reads in the card window return 0 and writes are ignored.
+        """
+
+        self._card_present = bool(present)
+
+    def load_memory_card(
+        self,
+        card_data: bytes,
+        card_size: int,
+        *,
+        writable: bool = True,
+    ) -> None:
+        """Load a memory card (8KB, 16KB, 32KB, or 64KB) into the card slot."""
+
+        size_map = {
+            8192: 8192,
+            16384: 16384,
+            32768: 32768,
+            65536: 65536,
+        }
+        if card_size not in size_map:
+            raise ValueError(f"Invalid memory card size: {card_size}")
+
+        self._card_len = size_map[card_size]
+        self._card_data = bytearray(self._card_len)
+        self._card_data[: min(len(card_data), self._card_len)] = card_data[
+            : min(len(card_data), self._card_len)
+        ]
+        self._card_present = True
+        self._card_writable = bool(writable)
 
     def set_imem_access_callback(
         self, callback: Callable[[int, str, str, int], None]
@@ -786,35 +864,7 @@ class PCE500Memory:
             )
         )
 
-    def load_memory_card(self, card_data: bytes, card_size: int) -> None:
-        """Load a memory card (8KB, 16KB, 32KB, or 64KB) as overlay."""
-        # Map size to standard sizes
-        size_map = {
-            8192: (0x40000, 0x41FFF, "8KB"),
-            16384: (0x40000, 0x43FFF, "16KB"),
-            32768: (0x40000, 0x47FFF, "32KB"),
-            65536: (0x40000, 0x4FFFF, "64KB"),
-        }
-
-        if card_size not in size_map:
-            raise ValueError(f"Invalid memory card size: {card_size}")
-
-        start, end, size_str = size_map[card_size]
-
-        # Remove any existing memory card overlay
-        self.remove_overlay("memory_card")
-
-        # Add new memory card overlay
-        self.add_overlay(
-            MemoryOverlay(
-                start=start,
-                end=end,
-                name="memory_card",
-                data=bytearray(card_data[:card_size]),
-                read_only=True,
-                perfetto_thread="Memory_Card",
-            )
-        )
+    # NOTE: load_memory_card is implemented near __init__ to share the slot overlay.
 
     def add_ram(self, start_address: int, size: int, name: str) -> None:
         """Add RAM expansion as overlay."""

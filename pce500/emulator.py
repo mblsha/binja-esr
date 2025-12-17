@@ -158,6 +158,7 @@ class PCE500Emulator:
         trace_enabled: bool = False,
         perfetto_trace: bool = False,
         save_lcd_on_exit: bool = True,
+        memory_card_present: bool = True,
         keyboard_columns_active_high: bool = True,
         enable_new_tracing: bool = False,
         trace_path: str = "pc-e500.perfetto-trace",
@@ -199,6 +200,7 @@ class PCE500Emulator:
 
         self.memory = PCE500Memory()
         self.memory._emulator = self  # Set reference for tracking counters
+        self.memory.set_memory_card_present(bool(memory_card_present))
 
         self.lcd = HD61202Controller()
         self._lcd_trace_events: List[Dict[str, Any]] = []

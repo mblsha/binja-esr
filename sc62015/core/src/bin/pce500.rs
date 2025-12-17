@@ -18,6 +18,7 @@ use sc62015_core::{
         IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
     },
     pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
+    perfetto::set_call_ui_function_names,
     timer::TimerContext,
     PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
@@ -47,6 +48,12 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const PF2_MENU_PC: u32 = 0x0F1FBF; // observed Python PC after PF2 menu renders
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum CardMode {
+    Present,
+    Absent,
+}
 
 struct IrqPerfetto {
     builder: PerfettoTraceBuilder,
@@ -120,6 +127,10 @@ struct Args {
     /// ROM image to load (defaults to the repo-symlinked PC-E500 ROM).
     #[arg(long, value_name = "PATH", default_value_os_t = default_rom_path())]
     rom: PathBuf,
+
+    /// Enable/disable memory card emulation (0x040000..0x04FFFF).
+    #[arg(long, value_enum, default_value_t = CardMode::Present)]
+    card: CardMode,
 
     /// Run until PF1 menu (ignores steps limit).
     #[arg(long, default_value_t = false)]
@@ -225,6 +236,16 @@ struct Args {
     /// Dump LCD write trace (PC + call stack per addressing unit) as JSON.
     #[arg(long, value_name = "PATH")]
     dump_lcd_trace: Option<PathBuf>,
+
+    /// Load function names from a BNIDA export (rom-analysis/.../bnida.json) and use them to label
+    /// the "Functions" track in Perfetto traces (replacing sub_XXXXXX fallbacks).
+    #[arg(long, value_name = "PATH")]
+    bnida: Option<PathBuf>,
+
+    /// Scenario: wait for boot text, press PF1, wait for S1(MAIN), press PF1 again, then stop once
+    /// the next distinct row0 text appears. Requires a sufficiently large --steps budget.
+    #[arg(long, default_value_t = false)]
+    pf1_twice: bool,
 }
 
 #[derive(Serialize)]
@@ -239,6 +260,44 @@ struct LcdTraceDump {
 
 fn default_rom_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500.bin")
+}
+
+#[derive(serde::Deserialize)]
+struct BnidaExport {
+    #[serde(default)]
+    names: HashMap<String, String>,
+}
+
+fn default_bnida_path() -> PathBuf {
+    // When running via binja-esr-tests/scripts/run_rom_tests.sh, CWD is public-src.
+    PathBuf::from("../rom-analysis/pc-e500/s3-en/bnida.json")
+}
+
+fn load_bnida_names(path: Option<PathBuf>) -> Result<HashMap<u32, String>, Box<dyn Error>> {
+    let candidate = path.unwrap_or_else(default_bnida_path);
+    if !candidate.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let raw = fs::read_to_string(&candidate)?;
+    let bnida: BnidaExport = serde_json::from_str(&raw)?;
+    if bnida.names.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut out: HashMap<u32, String> = HashMap::with_capacity(bnida.names.len());
+    for (addr_str, name) in bnida.names {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let addr: u32 = match addr_str.trim().parse::<u32>() {
+            Ok(v) => v & 0x000f_ffff,
+            Err(_) => continue,
+        };
+        out.insert(addr, trimmed.to_string());
+    }
+    Ok(out)
 }
 
 struct StandaloneBus {
@@ -1157,6 +1216,32 @@ fn parse_expected_row(raw: &str) -> Result<(usize, String), String> {
     Ok((row_idx, text.to_string()))
 }
 
+fn perfetto_part_path(base: &Path, part: u32) -> PathBuf {
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("pc-e500");
+    let parent = base.parent().unwrap_or_else(|| Path::new(""));
+    let ext = base.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let filename = if ext.is_empty() {
+        format!("{stem}.part{part:03}")
+    } else {
+        format!("{stem}.part{part:03}.{ext}")
+    };
+    parent.join(filename)
+}
+
+fn rotate_perfetto_trace(base: &Path, part: u32) {
+    let mut guard = PERFETTO_TRACER.enter();
+    if let Some(tracer) = guard.take() {
+        if let Err(err) = tracer.finish() {
+            eprintln!("[perfetto] failed to save trace chunk: {err}");
+        }
+    }
+    let next_path = perfetto_part_path(base, part);
+    guard.replace(Some(PerfettoTracer::new(next_path)));
+}
+
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let rom_bytes = load_rom(&args.rom)?;
     let font = Pce500FontMap::from_rom(&rom_bytes);
@@ -1166,12 +1251,25 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let perfetto_dbg = false;
     let log_dbg = |_msg: &str| {};
 
+    let perfetto_base_path = args.perfetto_path.clone();
+    let perfetto_chunk_size: u64 = if args.pf1_twice { 200_000 } else { 0 };
+
     if args.perfetto {
-        let mut guard = PERFETTO_TRACER.enter();
-        guard.replace(Some(PerfettoTracer::new(args.perfetto_path.clone())));
+        // Install BNIDA-derived function names (if available) so the "Functions" track labels
+        // resolve to stable names instead of sub_XXXXXX fallbacks.
+        if let Ok(symbols) = load_bnida_names(args.bnida.clone()) {
+            if !symbols.is_empty() {
+                set_call_ui_function_names(symbols);
+            }
+        }
+        // Chunk long traces to avoid OOM (retrobus-perfetto buffers in memory).
+        // The output will be `${perfetto_path}.partNNN.perfetto-trace` for each chunk.
+        rotate_perfetto_trace(&perfetto_base_path, 0);
     }
 
-    let auto_key = if args.pf1 {
+    let auto_key = if args.pf1_twice {
+        None
+    } else if args.pf1 {
         Some(AutoKeyKind::Matrix(PF1_CODE))
     } else if args.pf2 {
         Some(AutoKeyKind::Matrix(PF2_CODE))
@@ -1209,6 +1307,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
     )]);
     memory.set_keyboard_bridge(false);
+
+    memory.set_memory_card_slot_present(matches!(args.card, CardMode::Present));
 
     // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)
     // unless disabled for debugging.
@@ -1259,6 +1359,29 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut release_at: u64 = 0;
     let max_steps = args.steps;
     let mut _halted_after_pf1 = false;
+    let mut perfetto_part: u32 = 1;
+
+    // Optional scenario state machine (PF1 twice, then wait for the next screen).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Pf1TwiceStage {
+        WaitBootText,
+        Press1,
+        WaitMainText,
+        Press2,
+        WaitNextText,
+        Done,
+    }
+    let mut pf1_stage = if args.pf1_twice {
+        Pf1TwiceStage::WaitBootText
+    } else {
+        Pf1TwiceStage::Done
+    };
+    let mut pf1_release_at: u64 = 0;
+    let mut main_row0_seen: Option<String> = None;
+    let mut _last_lcd_lines: Vec<String> = Vec::new();
+    let mut _next_text_row0: Option<String> = None;
+    let lcd_check_interval: u64 = 5_000;
+
     log_dbg(&format!("entering execute loop for {max_steps} steps"));
     while executed < max_steps {
         // Ensure vector table is patched once before executing instructions.
@@ -1287,6 +1410,52 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     AutoKeyKind::OnKey => bus.clear_on_key(),
                 }
                 pressed_key = false;
+            }
+        }
+
+        if pf1_stage != Pf1TwiceStage::Done && executed.is_multiple_of(lcd_check_interval) {
+            let lcd_lines = decode_display_text(bus.lcd(), &font);
+            if !lcd_lines.is_empty() {
+                _last_lcd_lines = lcd_lines.clone();
+            }
+            let row0 = lcd_lines.get(0).cloned().unwrap_or_default();
+            match pf1_stage {
+                Pf1TwiceStage::WaitBootText => {
+                    if row0.contains("S2(CARD):") {
+                        pf1_stage = Pf1TwiceStage::Press1;
+                    }
+                }
+                Pf1TwiceStage::Press1 => {
+                    bus.press_key(PF1_CODE);
+                    pf1_release_at = executed.saturating_add(40_000);
+                    pf1_stage = Pf1TwiceStage::WaitMainText;
+                }
+                Pf1TwiceStage::WaitMainText => {
+                    if executed >= pf1_release_at {
+                        bus.release_key(PF1_CODE);
+                    }
+                    if row0.contains("S1(MAIN):") {
+                        main_row0_seen = Some(row0.clone());
+                        pf1_stage = Pf1TwiceStage::Press2;
+                    }
+                }
+                Pf1TwiceStage::Press2 => {
+                    bus.press_key(PF1_CODE);
+                    pf1_release_at = executed.saturating_add(40_000);
+                    pf1_stage = Pf1TwiceStage::WaitNextText;
+                }
+                Pf1TwiceStage::WaitNextText => {
+                    if executed >= pf1_release_at {
+                        bus.release_key(PF1_CODE);
+                    }
+                    if let Some(main) = main_row0_seen.as_ref() {
+                        if !row0.trim().is_empty() && row0 != *main {
+                            _next_text_row0 = Some(row0.clone());
+                            pf1_stage = Pf1TwiceStage::Done;
+                        }
+                    }
+                }
+                Pf1TwiceStage::Done => {}
             }
         }
         if bus.irq_pending() {
@@ -1454,6 +1623,17 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 }
                 bus.cycle_count = bus.cycle_count.wrapping_add(1);
                 executed += 1;
+                if pf1_stage == Pf1TwiceStage::Done && args.pf1_twice {
+                    break;
+                }
+                if perfetto_chunk_size > 0
+                    && args.perfetto
+                    && executed.is_multiple_of(perfetto_chunk_size)
+                    && executed > 0
+                {
+                    rotate_perfetto_trace(&perfetto_base_path, perfetto_part);
+                    perfetto_part = perfetto_part.saturating_add(1);
+                }
                 if let Some(stop) = stop_pc {
                     if state.pc() == stop {
                         break;
