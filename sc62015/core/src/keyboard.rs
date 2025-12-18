@@ -365,7 +365,7 @@ impl KeyboardMatrix {
         // FIFO shape (so we don't clobber unrelated ROM state).
         let head_raw = memory.load(FIFO_HEAD_ADDR, 8).unwrap_or(0) as u8;
         let looks_like_main_menu_fifo = head_raw >= FIFO_SIZE as u8
-            && memory.load(FIFO_BASE_ADDR + 0, 8).unwrap_or(0) as u8 == 0x56
+            && memory.load(FIFO_BASE_ADDR, 8).unwrap_or(0) as u8 == 0x56
             && memory.load(FIFO_BASE_ADDR + 1, 8).unwrap_or(0) as u8 == 0xD6
             && memory.load(FIFO_BASE_ADDR + 2, 8).unwrap_or(0) as u8 == 0xD6
             && memory.load(FIFO_BASE_ADDR + 3, 8).unwrap_or(0) as u8 == 0x00

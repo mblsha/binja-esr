@@ -685,7 +685,12 @@ def main(
     perfetto_enabled = perfetto
     # When loading from a snapshot and the caller did not explicitly enable tracing,
     # default to no perfetto to avoid overhead on short replay windows.
-    if load_snapshot and not new_perfetto and perfetto_enabled and not perfetto_on_snapshot:
+    if (
+        load_snapshot
+        and not new_perfetto
+        and perfetto_enabled
+        and not perfetto_on_snapshot
+    ):
         perfetto_enabled = False
 
     # Use context manager for automatic cleanup

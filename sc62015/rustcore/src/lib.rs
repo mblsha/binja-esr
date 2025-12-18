@@ -11,8 +11,8 @@ use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
         eval::{
-            perfetto_last_pc, power_on_reset, reset_perf_counters, set_perf_instr_counter, LlamaBus,
-            LlamaExecutor,
+            perfetto_last_pc, power_on_reset, reset_perf_counters, set_perf_instr_counter,
+            LlamaBus, LlamaExecutor,
         },
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
@@ -238,6 +238,23 @@ fn is_lcd_addr(addr: u32) -> bool {
         || (0xA000..=0xAFFF).contains(&(addr & ADDRESS_MASK))
 }
 
+// Python's `PCE500Memory` stores the 256-byte IMEM window inside the last 256 bytes of its
+// `external_memory` bytearray. The contract harness snapshots that array, so we mirror the same
+// "IMEM-at-the-end-of-external" layout here.
+const EXTERNAL_IMEM_ALIAS_START: u32 = 0x0FFF00;
+
+fn contract_resolve_imem_alias(address: u32) -> (u32, u32) {
+    let addr = address & ADDRESS_MASK;
+    if addr < INTERNAL_MEMORY_START && addr >= EXTERNAL_IMEM_ALIAS_START {
+        (
+            INTERNAL_MEMORY_START + (addr - EXTERNAL_IMEM_ALIAS_START),
+            addr,
+        )
+    } else {
+        (addr, addr)
+    }
+}
+
 #[pyclass(unsendable, name = "LlamaContractBus")]
 struct LlamaContractBus {
     memory: MemoryImage,
@@ -445,7 +462,7 @@ impl LlamaContractBus {
 
     #[pyo3(signature = (address, pc=None))]
     fn read_byte(&mut self, address: u32, pc: Option<u32>) -> PyResult<u8> {
-        let addr = address & ADDRESS_MASK;
+        let (addr, event_addr) = contract_resolve_imem_alias(address);
         // Defer to host memory when Python overlays are required.
         if self.memory.requires_python(addr) {
             if let Some(host) = &self.host_memory {
@@ -465,7 +482,7 @@ impl LlamaContractBus {
                     self.memory.bump_read_count();
                     self.events.push(ContractEvent {
                         kind: "read",
-                        address: addr,
+                        address: event_addr,
                         value,
                         pc: pc.map(|v| v & ADDRESS_MASK),
                         detail: None,
@@ -479,7 +496,7 @@ impl LlamaContractBus {
                 if let Some(value) = self.keyboard.handle_read(offset, &mut self.memory) {
                     self.events.push(ContractEvent {
                         kind: "read",
-                        address: addr,
+                        address: event_addr,
                         value,
                         pc: pc.map(|v| v & ADDRESS_MASK),
                         detail: None,
@@ -497,7 +514,7 @@ impl LlamaContractBus {
         }
         self.events.push(ContractEvent {
             kind: "read",
-            address: addr,
+            address: event_addr,
             value,
             pc: pc.map(|v| v & ADDRESS_MASK),
             detail: None,
@@ -507,7 +524,7 @@ impl LlamaContractBus {
 
     #[pyo3(signature = (address, value, pc=None))]
     fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
-        let addr = address & ADDRESS_MASK;
+        let (addr, event_addr) = contract_resolve_imem_alias(address);
         if self.memory.requires_python(addr) {
             if let Some(host) = &self.host_memory {
                 Python::with_gil(|py| {
@@ -541,7 +558,7 @@ impl LlamaContractBus {
                 }
                 self.events.push(ContractEvent {
                     kind: "write",
-                    address: addr,
+                    address: event_addr,
                     value,
                     pc: pc.map(|v| v & ADDRESS_MASK),
                     detail: None,
@@ -554,7 +571,7 @@ impl LlamaContractBus {
                 if self.keyboard.handle_write(offset, value, &mut self.memory) {
                     self.events.push(ContractEvent {
                         kind: "write",
-                        address: addr,
+                        address: event_addr,
                         value,
                         pc: pc.map(|v| v & ADDRESS_MASK),
                         detail: None,
@@ -598,7 +615,7 @@ impl LlamaContractBus {
         }
         self.events.push(ContractEvent {
             kind: "write",
-            address: address & ADDRESS_MASK,
+            address: event_addr,
             value,
             pc: pc.map(|v| v & ADDRESS_MASK),
             detail: None,
@@ -612,10 +629,13 @@ impl LlamaContractBus {
             "internal",
             PyBytes::new_bound(py, self.memory.internal_slice()),
         )?;
-        dict.set_item(
-            "external",
-            PyBytes::new_bound(py, self.memory.external_slice()),
-        )?;
+        let mut external = self.memory.external_slice().to_vec();
+        let internal = self.memory.internal_slice();
+        if external.len() >= internal.len() {
+            let start = external.len() - internal.len();
+            external[start..].copy_from_slice(internal);
+        }
+        dict.set_item("external", PyBytes::new_bound(py, &external))?;
         dict.set_item("external_len", self.memory.external_len())?;
         // Surface IMR/ISR for contract assertions.
         let internal = self.memory.internal_slice();
