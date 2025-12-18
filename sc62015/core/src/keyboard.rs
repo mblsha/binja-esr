@@ -351,6 +351,28 @@ impl KeyboardMatrix {
             }
         }
         self.sync_fifo_from_memory(memory);
+        // Parity: the PC-E500 ROM stores keyboard FIFO bookkeeping in internal RAM. When injecting
+        // PF1 from the "main menu ready" snapshot, the RAM FIFO head byte can retain stale high
+        // bits (e.g. 0x28). Python host injection normalizes it to the actual head (0..7) which
+        // keeps the ROM's key-consumer state machine on the happy path; standalone Rust can
+        // otherwise diverge into the MEMORY FAILURE flow after the second PF1 press.
+        //
+        // Safety: do not normalize unconditionally; during early boot (S2(CARD) prompt) the ROM
+        // uses a different FIFO shape where touching the head breaks progress. Only normalize for
+        // the harness-derived "main menu" FIFO bytes.
+        let head_raw = memory.load(FIFO_HEAD_ADDR, 8).unwrap_or(0) as u8;
+        let looks_like_main_menu_fifo = head_raw >= FIFO_SIZE as u8
+            && memory.load(FIFO_BASE_ADDR, 8).unwrap_or(0) as u8 == 0x56
+            && memory.load(FIFO_BASE_ADDR + 1, 8).unwrap_or(0) as u8 == 0xD6
+            && memory.load(FIFO_BASE_ADDR + 2, 8).unwrap_or(0) as u8 == 0xD6
+            && memory.load(FIFO_BASE_ADDR + 3, 8).unwrap_or(0) as u8 == 0x00
+            && memory.load(FIFO_BASE_ADDR + 4, 8).unwrap_or(0) as u8 == 0x00
+            && memory.load(FIFO_BASE_ADDR + 5, 8).unwrap_or(0) as u8 == 0x00
+            && memory.load(FIFO_BASE_ADDR + 6, 8).unwrap_or(0) as u8 == 0x00;
+        if looks_like_main_menu_fifo {
+            memory.write_external_byte(FIFO_HEAD_ADDR, self.fifo_head as u8);
+            Self::log_fifo_write(FIFO_HEAD_ADDR, self.fifo_head as u8);
+        }
         let events = self.enqueue_event(code & 0x7F, release, true);
         // Parity: matrix injection is used by host bridges/tests that do not always strobe KOL/KOH.
         // When no columns are active, expose pressed rows in the latch so scripted key presses are
