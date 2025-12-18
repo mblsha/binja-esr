@@ -706,15 +706,15 @@ impl MemoryImage {
 
     pub fn is_internal(address: u32) -> bool {
         let address = canonical_address(address);
-        address >= INTERNAL_MEMORY_START && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
+        // Mirror internal memory for any address with bit20 set, matching the Python bus model:
+        // `address >= 0x100000` selects the 256-byte IMEM window via `(addr - 0x100000) & 0xFF`.
+        address >= INTERNAL_MEMORY_START
     }
 
     pub fn internal_index(address: u32) -> Option<usize> {
         let address = canonical_address(address);
-        if address >= INTERNAL_MEMORY_START
-            && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
-        {
-            return Some((address - INTERNAL_MEMORY_START) as usize);
+        if address >= INTERNAL_MEMORY_START {
+            return Some(((address - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK) as usize);
         }
         None
     }
@@ -1009,8 +1009,13 @@ mod tests {
     fn requires_python_masks_address() {
         let mut mem = MemoryImage::new();
         mem.set_python_ranges(vec![(0x1000, 0x1FFF)]);
-        assert!(mem.requires_python(0x0010_0100));
-        assert!(mem.requires_python(0x1010_0100));
+        // Internal space is selected by bit20 and mirrored by the low 8 bits.
+        // These addresses should not require Python overlays.
+        assert!(!mem.requires_python(0x0010_0100));
+        assert!(!mem.requires_python(0x1010_0100));
+        // External addresses should still honor the configured Python overlay ranges.
+        assert!(mem.requires_python(0x0000_1000));
+        assert!(mem.requires_python(0x0100_1000));
     }
 
     #[test]

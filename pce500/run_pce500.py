@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pce500 import PCE500Emulator
 from pce500.display.text_decoder import decode_display_text
+from pce500.tracing.perfetto_tracing import trace_dispatcher
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from pce500.emulator import IRQSource
 from sc62015.pysc62015.constants import ISRFlag
@@ -52,6 +53,8 @@ def run_emulator(
     lcd_trace_limit: int = 50000,
     load_snapshot: str | Path | None = None,
     save_snapshot: str | Path | None = None,
+    save_snapshots_at_steps: list[int] | None = None,
+    save_snapshots_prefix: str | Path = "snapshot",
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -75,12 +78,14 @@ def run_emulator(
     timeout_secs = default_timeout if timeout_secs is None else float(timeout_secs)
 
     # Create emulator
+    defer_perfetto_start = bool(load_snapshot) and bool(perfetto_trace)
+    defer_trace_start = bool(load_snapshot) and bool(new_perfetto)
     emu = PCE500Emulator(
         trace_enabled=False,
-        perfetto_trace=perfetto_trace,
+        perfetto_trace=bool(perfetto_trace) and not defer_perfetto_start,
         save_lcd_on_exit=save_lcd,
         memory_card_present=bool(memory_card_present),
-        enable_new_tracing=new_perfetto,
+        enable_new_tracing=bool(new_perfetto) and not defer_trace_start,
         trace_path=trace_file,
         disasm_trace=disasm_trace,
         enable_display_trace=display_trace,
@@ -165,6 +170,46 @@ def run_emulator(
         emu.load_snapshot(load_snapshot, backend=backend_env or None)
         if print_stats:
             print(f"PC after snapshot: {emu.cpu.regs.get(RegisterName.PC):06X}")
+        if defer_perfetto_start:
+            try:
+                # Snapshot loading can write megabytes of RAM/IMEM; keep retrobus-perfetto
+                # tracing disabled during that phase, then enable it once the runtime state
+                # is ready (so traces only contain the replay window).
+                emu.perfetto_enabled = True
+                trace_dispatcher.start_trace(trace_file)
+                emu.lcd.set_perfetto_enabled(True)
+                emu.memory.set_perfetto_enabled(True)
+                rust_trace_path = trace_file
+                if new_perfetto:
+                    rust_trace_path = f"{trace_file}.rust"
+                if getattr(emu.cpu, "backend", None) == "llama":
+                    emu.cpu.set_perfetto_trace(rust_trace_path)
+            except Exception:
+                pass
+        if defer_trace_start:
+            # Snapshot loading can write megabytes of RAM/IMEM; keep tracing disabled during
+            # that phase, then enable it once the runtime state is ready.
+            new_tracer.start(trace_file)
+            # Keep Perfetto timestamps aligned to instruction indices:
+            # 1 instruction tick == 1us in the final Perfetto UI.
+            new_tracer.set_manual_clock_mode(True, tick_ns=1_000)
+            emu.memory.set_perf_tracer(new_tracer)
+            try:
+                # Enable instruction-level snapshots/slices in the emulator step loop.
+                setattr(emu, "_new_trace_enabled", True)
+            except Exception:
+                pass
+            try:
+                if getattr(emu.cpu, "backend", None) == "llama":
+                    emu.cpu.set_perfetto_trace(f"{trace_file}.rust")
+                    # Align Perfetto op_index to the snapshot instruction_count. The Rust tracer
+                    # resets its internal counter when tracing starts; seed it so comparisons
+                    # against standalone Rust traces remain stable.
+                    setter = getattr(emu.cpu, "set_perf_instr_counter", None)
+                    if callable(setter):
+                        setter(int(emu.instruction_count))
+            except Exception:
+                pass
         boot_skip_steps = 0
     elif print_stats:
         print(f"PC after reset: {emu.cpu.regs.get(RegisterName.PC):06X}")
@@ -224,6 +269,11 @@ def run_emulator(
     last_active_cols = []
     start_instruction_count = emu.instruction_count
     target_instructions = start_instruction_count + int(num_steps)
+    pending_snapshots: list[int] = []
+    if save_snapshots_at_steps:
+        pending_snapshots = sorted(
+            {int(v) for v in save_snapshots_at_steps if int(v) >= 0}
+        )
     while emu.instruction_count < target_instructions:
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
@@ -320,6 +370,18 @@ def run_emulator(
                 auto2_release = int(auto2_hold)
 
         emu.step()
+
+        if pending_snapshots and emu.instruction_count >= pending_snapshots[0]:
+            snap_step = pending_snapshots.pop(0)
+            try:
+                prefix = Path(save_snapshots_prefix)
+                out_path = prefix.with_name(f"{prefix.name}_{snap_step}.pcsnap")
+                emu.save_snapshot(out_path)
+                if print_stats:
+                    print(f"[snapshot] saved {out_path} @instr={emu.instruction_count}")
+            except Exception as exc:
+                if print_stats:
+                    print(f"[snapshot] failed @instr={emu.instruction_count}: {exc}")
 
         # If sweeping, find active columns from last KOL/KOH and press one row at a time
         if sweep_rows:
@@ -602,6 +664,9 @@ def main(
     lcd_trace_limit: int = 50000,
     load_snapshot: str | Path | None = None,
     save_snapshot: str | Path | None = None,
+    perfetto_on_snapshot: bool = False,
+    save_snapshots_at_steps: list[int] | None = None,
+    save_snapshots_prefix: str | Path = "snapshot",
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -620,7 +685,7 @@ def main(
     perfetto_enabled = perfetto
     # When loading from a snapshot and the caller did not explicitly enable tracing,
     # default to no perfetto to avoid overhead on short replay windows.
-    if load_snapshot and not new_perfetto and perfetto_enabled:
+    if load_snapshot and not new_perfetto and perfetto_enabled and not perfetto_on_snapshot:
         perfetto_enabled = False
 
     # Use context manager for automatic cleanup
@@ -655,6 +720,8 @@ def main(
         lcd_trace_limit=lcd_trace_limit,
         load_snapshot=load_snapshot,
         save_snapshot=save_snapshot,
+        save_snapshots_at_steps=save_snapshots_at_steps,
+        save_snapshots_prefix=save_snapshots_prefix,
     ) as emu:
         if False:
             pass
@@ -848,9 +915,27 @@ if __name__ == "__main__":
         help="Load a .pcsnap bundle before stepping (disables perfetto by default for speed)",
     )
     parser.add_argument(
+        "--perfetto-on-snapshot",
+        action="store_true",
+        help="When --load-snapshot is used, keep retrobus-perfetto tracing enabled (default: off)",
+    )
+    parser.add_argument(
         "--save-snapshot",
         type=str,
         help="Save a .pcsnap bundle after execution",
+    )
+    parser.add_argument(
+        "--save-snapshots-at-steps",
+        type=str,
+        help="Comma-separated list of instruction counts at which to save snapshots "
+        "(e.g., 900000,1100000).",
+    )
+    parser.add_argument(
+        "--save-snapshots-prefix",
+        type=str,
+        default="snapshot",
+        help="Prefix (path) for --save-snapshots-at-steps outputs (default: snapshot). "
+        "Files will be written as <prefix>_<steps>.pcsnap",
     )
     # Secondary auto-key scheduling for experiments (step-based)
     parser.add_argument(
@@ -903,4 +988,11 @@ if __name__ == "__main__":
         lcd_trace_limit=args.lcd_trace_limit,
         load_snapshot=args.load_snapshot,
         save_snapshot=args.save_snapshot,
+        perfetto_on_snapshot=args.perfetto_on_snapshot,
+        save_snapshots_at_steps=(
+            [int(v) for v in args.save_snapshots_at_steps.split(",") if v.strip()]
+            if args.save_snapshots_at_steps
+            else None
+        ),
+        save_snapshots_prefix=args.save_snapshots_prefix,
     )

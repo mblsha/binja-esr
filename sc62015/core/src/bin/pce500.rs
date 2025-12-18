@@ -5,11 +5,14 @@ use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     keyboard::KeyboardMatrix,
+    keyboard::KeyboardSnapshot,
     lcd::LcdController,
     lcd::LcdWriteTrace,
     lcd_text::{decode_display_text, Pce500FontMap},
     llama::{
-        eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
+        eval::{
+            perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, LlamaExecutor,
+        },
         opcodes::RegName,
         state::LlamaState,
     },
@@ -19,8 +22,9 @@ use sc62015_core::{
     },
     pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
     perfetto::set_call_ui_function_names,
+    snapshot,
     timer::TimerContext,
-    PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
+    PerfettoTracer, SnapshotMetadata, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
 use std::env;
@@ -132,6 +136,14 @@ struct Args {
     #[arg(long, value_enum, default_value_t = CardMode::Present)]
     card: CardMode,
 
+    /// Load a .pcsnap snapshot bundle before stepping.
+    #[arg(long, value_name = "PATH")]
+    load_snapshot: Option<PathBuf>,
+
+    /// Save a .pcsnap snapshot bundle after stepping.
+    #[arg(long, value_name = "PATH")]
+    save_snapshot: Option<PathBuf>,
+
     /// Run until PF1 menu (ignores steps limit).
     #[arg(long, default_value_t = false)]
     pf1: bool,
@@ -152,6 +164,18 @@ struct Args {
     /// Auto-release after this many additional instructions (if pressed).
     #[arg(long, default_value_t = 1_000)]
     auto_release_after: u64,
+
+    /// Optional secondary matrix code to auto-press. Accepts 'pf1', 'pf2', 'on', decimal, or hex.
+    #[arg(long, value_name = "CODE")]
+    auto2_key: Option<String>,
+
+    /// Secondary auto-press after this many executed instructions (ignored if --auto2-key unset).
+    #[arg(long, default_value_t = 0)]
+    auto2_after: u64,
+
+    /// Secondary auto-release after this many additional instructions (ignored if --auto2-key unset).
+    #[arg(long, default_value_t = 1_000)]
+    auto2_release_after: u64,
 
     /// Decode LCD text and require this substring to appear (can repeat).
     #[arg(long, value_name = "TEXT")]
@@ -855,7 +879,9 @@ impl StandaloneBus {
             |mem| {
                 // Parity: always count/key-latch events even when IRQs are masked.
                 let events = self.keyboard.scan_tick(mem, true);
-                if events > 0 || (kb_irq_enabled && self.keyboard.fifo_len() > 0) {
+                // Parity: keep the firmware-visible FIFO mirror in RAM up to date even when
+                // KEY IRQ delivery is masked; the ROM still polls the FIFO pointers/bytes.
+                if events > 0 || self.keyboard.fifo_len() > 0 {
                     self.keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
                 }
                 (
@@ -1278,6 +1304,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+    let auto2_key = if args.pf1_twice {
+        None
+    } else if let Some(raw) = args.auto2_key.as_ref() {
+        parse_matrix_code(raw)?
+    } else {
+        None
+    };
     // Parity: do not auto-strobe; rely on ROM strobes.
     let trace_kbd = args.trace_kbd;
 
@@ -1338,17 +1371,120 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         None,
         None,
     );
-    bus.strobe_all_columns();
-    if auto_key.is_some() {
-        bus.keyboard.set_repeat_enabled(false);
-    }
     let mut state = LlamaState::new();
     let mut executor = LlamaExecutor::new();
+    if args.load_snapshot.is_none() {
+        bus.strobe_all_columns();
+        if auto_key.is_some() || auto2_key.is_some() {
+            bus.keyboard.set_repeat_enabled(false);
+        }
+    }
     power_on_reset(&mut bus, &mut state);
     // power_on_reset seeds PC from the ROM reset vector at 0xFFFFD.
 
     let start = Instant::now();
-    let mut executed: u64 = 0;
+    let mut snapshot_loaded: Option<snapshot::SnapshotLoad> = None;
+    if let Some(path) = args.load_snapshot.as_ref() {
+        let load = snapshot::load_snapshot(path.as_path(), &mut bus.memory)?;
+        if let Some(lcd_meta) = load.metadata.lcd.as_ref() {
+            if let Some(payload) = load.lcd_payload.as_deref() {
+                bus.lcd.load_snapshot(lcd_meta, payload)?;
+            }
+        }
+        if let Some(kb_json) = load.metadata.keyboard.as_ref() {
+            let parsed: Option<KeyboardSnapshot> =
+                serde_json::from_value::<KeyboardSnapshot>(kb_json.clone())
+                    .ok()
+                    .or_else(|| {
+                        // Python snapshots embed the keyboard matrix under `keyboard.matrix`.
+                        // Convert this to the flat Rust KeyboardSnapshot by injecting fifo_len.
+                        let matrix = kb_json.as_object()?.get("matrix")?.clone();
+                        let mut obj = matrix.as_object()?.clone();
+
+                        let fifo_size = obj
+                            .get("fifo")
+                            .and_then(|v| v.as_array())
+                            .map(|v| v.len())
+                            .unwrap_or(0);
+                        let head = obj.get("head").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        let tail = obj.get("tail").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        let fifo_len = if fifo_size == 0 {
+                            0
+                        } else if tail >= head {
+                            tail - head
+                        } else {
+                            fifo_size.saturating_sub(head.saturating_sub(tail))
+                        };
+                        obj.insert("fifo_len".to_string(), serde_json::Value::from(fifo_len));
+                        if !obj.contains_key("active_columns") {
+                            let kol = obj.get("kol").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                            let koh = obj.get("koh").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                            let mut cols: Vec<u8> = Vec::new();
+                            for bit in 0..8u8 {
+                                if (kol & (1 << bit)) != 0 {
+                                    cols.push(bit);
+                                }
+                            }
+                            for bit in 0..3u8 {
+                                if (koh & (1 << bit)) != 0 {
+                                    cols.push(bit + 8);
+                                }
+                            }
+                            obj.insert("active_columns".to_string(), serde_json::Value::from(cols));
+                        }
+                        let rebuilt = serde_json::Value::Object(obj);
+                        serde_json::from_value::<KeyboardSnapshot>(rebuilt).ok()
+                    });
+
+            if let Some(kb_snap) = parsed {
+                bus.keyboard.load_snapshot_state(&kb_snap);
+                // Snapshot parity: ensure the firmware-visible FIFO mirror in RAM is rebuilt
+                // immediately on load (do not wait for the timer scan cadence).
+                if bus.keyboard.fifo_len() > 0 {
+                    let kb_irq_enabled = bus.timer.kb_irq_enabled;
+                    bus.keyboard
+                        .write_fifo_to_memory(&mut bus.memory, kb_irq_enabled);
+                }
+            }
+        }
+        bus.cycle_count = load.metadata.cycle_count;
+        bus.timer.apply_snapshot_info(
+            &load.metadata.timer,
+            &load.metadata.interrupts,
+            bus.cycle_count,
+            true,
+        );
+        // Snapshot parity: the Python emulator serializes interrupt lifecycle state separately
+        // from IMEM (e.g. in_interrupt/pending/source). Keep our bus-level IRQ gates aligned
+        // so snapshot-driven replay windows behave identically.
+        bus.in_interrupt = bus.timer.in_interrupt;
+        bus.irq_pending = bus.timer.irq_pending;
+        bus.last_irq_src = bus.timer.irq_source.clone();
+        for (name, value) in load.registers.iter() {
+            let reg = match name.as_str() {
+                "PC" => Some(RegName::PC),
+                "BA" => Some(RegName::BA),
+                "I" => Some(RegName::I),
+                "X" => Some(RegName::X),
+                "Y" => Some(RegName::Y),
+                "U" => Some(RegName::U),
+                "S" => Some(RegName::S),
+                "F" => Some(RegName::F),
+                _ => None,
+            };
+            if let Some(reg) = reg {
+                state.set_reg(reg, *value);
+            }
+        }
+        snapshot_loaded = Some(load);
+    }
+    let mut executed: u64 = snapshot_loaded
+        .as_ref()
+        .map(|s| s.metadata.instruction_count)
+        .unwrap_or(0);
+    // Keep Perfetto instruction indexing stable across snapshot-driven runs.
+    set_perf_instr_counter(executed);
+    let stop_at: u64 = executed.saturating_add(args.steps);
     let auto_press_step: u64 = args.auto_after;
     let mut auto_release_after: u64 = args.auto_release_after;
     if args.pf2 && args.auto_release_after == 1_000 {
@@ -1357,6 +1493,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut pressed_key = false;
     let mut auto_press_consumed = false;
     let mut release_at: u64 = 0;
+    let auto2_press_step: u64 = args.auto2_after;
+    let auto2_release_after: u64 = args.auto2_release_after;
+    let mut pressed_key2 = false;
+    let mut auto2_press_consumed = false;
+    let mut release2_at: u64 = 0;
     let max_steps = args.steps;
     let mut _halted_after_pf1 = false;
     let mut perfetto_part: u32 = 1;
@@ -1377,13 +1518,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         Pf1TwiceStage::Done
     };
     let mut pf1_release_at: u64 = 0;
+    let mut pf1_is_down: bool = false;
     let mut main_row0_seen: Option<String> = None;
     let mut _last_lcd_lines: Vec<String> = Vec::new();
     let mut _next_text_row0: Option<String> = None;
     let lcd_check_interval: u64 = 5_000;
 
     log_dbg(&format!("entering execute loop for {max_steps} steps"));
-    while executed < max_steps {
+    while executed < stop_at {
         // Ensure vector table is patched once before executing instructions.
         if !bus.vec_patched {
             bus.maybe_patch_vectors();
@@ -1403,13 +1545,38 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 }
                 pressed_key = true;
                 auto_press_consumed = true;
-                release_at = executed.saturating_add(auto_release_after);
+                release_at = if auto_release_after == 0 {
+                    u64::MAX
+                } else {
+                    executed.saturating_add(auto_release_after)
+                };
             } else if pressed_key && executed >= release_at {
                 match code {
                     AutoKeyKind::Matrix(code) => bus.release_key(code),
                     AutoKeyKind::OnKey => bus.clear_on_key(),
                 }
                 pressed_key = false;
+            }
+        }
+        if let Some(code) = auto2_key {
+            if !pressed_key2 && !auto2_press_consumed && executed >= auto2_press_step {
+                match code {
+                    AutoKeyKind::Matrix(code) => bus.press_key(code),
+                    AutoKeyKind::OnKey => bus.press_on_key(),
+                }
+                pressed_key2 = true;
+                auto2_press_consumed = true;
+                release2_at = if auto2_release_after == 0 {
+                    u64::MAX
+                } else {
+                    executed.saturating_add(auto2_release_after)
+                };
+            } else if pressed_key2 && executed >= release2_at {
+                match code {
+                    AutoKeyKind::Matrix(code) => bus.release_key(code),
+                    AutoKeyKind::OnKey => bus.clear_on_key(),
+                }
+                pressed_key2 = false;
             }
         }
 
@@ -1421,35 +1588,50 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             let row0 = lcd_lines.get(0).cloned().unwrap_or_default();
             match pf1_stage {
                 Pf1TwiceStage::WaitBootText => {
-                    if row0.contains("S2(CARD):") {
+                    // Wait for a stable boot header before pressing.
+                    if row0.contains("S2(CARD):NEW CARD") {
                         pf1_stage = Pf1TwiceStage::Press1;
                     }
                 }
                 Pf1TwiceStage::Press1 => {
                     bus.press_key(PF1_CODE);
+                    pf1_is_down = true;
                     pf1_release_at = executed.saturating_add(40_000);
                     pf1_stage = Pf1TwiceStage::WaitMainText;
                 }
                 Pf1TwiceStage::WaitMainText => {
-                    if executed >= pf1_release_at {
+                    if pf1_is_down && executed >= pf1_release_at {
                         bus.release_key(PF1_CODE);
+                        pf1_is_down = false;
                     }
-                    if row0.contains("S1(MAIN):") {
+                    // Wait for a stable main header before pressing again.
+                    if row0.contains("S1(MAIN):NEW CARD") {
                         main_row0_seen = Some(row0.clone());
                         pf1_stage = Pf1TwiceStage::Press2;
                     }
                 }
                 Pf1TwiceStage::Press2 => {
                     bus.press_key(PF1_CODE);
+                    pf1_is_down = true;
                     pf1_release_at = executed.saturating_add(40_000);
                     pf1_stage = Pf1TwiceStage::WaitNextText;
                 }
                 Pf1TwiceStage::WaitNextText => {
-                    if executed >= pf1_release_at {
+                    if pf1_is_down && executed >= pf1_release_at {
                         bus.release_key(PF1_CODE);
+                        pf1_is_down = false;
                     }
                     if let Some(main) = main_row0_seen.as_ref() {
-                        if !row0.trim().is_empty() && row0 != *main {
+                        let row0_trimmed = row0.trim();
+                        let stable_next = row0_trimmed.contains("ALL CLEAR")
+                            || row0_trimmed.contains("PAIR MISMATCH")
+                            || row0_trimmed.contains("MEMORY FAILURE")
+                            || row0_trimmed.contains("WRONG CARD")
+                            || row0_trimmed.contains("PROTECTED CARD")
+                            || row0_trimmed.contains("TRANSFER")
+                            || row0_trimmed.contains("S2(CARD):")
+                            || row0_trimmed.contains("S1(MAIN):");
+                        if !row0_trimmed.is_empty() && row0 != *main && stable_next {
                             _next_text_row0 = Some(row0.clone());
                             pf1_stage = Pf1TwiceStage::Done;
                         }
@@ -1488,6 +1670,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.last_irq_src = Some(src.to_string());
                     break;
                 }
+            }
+            // If the newly-latched ISR bit is deliverable, enter the IRQ handler immediately.
+            // Without this, we can execute the instruction after HALT (e.g. a NOP) before
+            // vectoring, which diverges from Python.
+            let sp = state.get_reg(RegName::S) & 0x00FF_FFFF;
+            if sp >= 5 && bus.irq_pending() {
+                bus.deliver_irq(&mut state);
             }
         }
         let pc = state.pc();
@@ -1766,6 +1955,54 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("Wrote LCD trace dump: {}", path.display());
     }
 
+    if let Some(path) = args.save_snapshot.as_ref() {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+
+        let (timer_info, interrupt_info) = bus.timer.snapshot_info();
+        let mut meta = SnapshotMetadata::default();
+        meta.backend = "standalone-rust".to_string();
+        meta.instruction_count = executed;
+        meta.cycle_count = bus.cycle_count;
+        meta.pc = state.pc();
+        meta.call_depth = state.call_depth();
+        meta.call_sub_level = state.call_sub_level();
+        meta.timer = timer_info;
+        meta.interrupts = interrupt_info;
+        meta.keyboard = Some(serde_json::to_value(bus.keyboard.snapshot_state())?);
+        let telemetry = bus.keyboard.telemetry();
+        meta.kb_metrics = Some(serde_json::json!({
+            "pressed": telemetry.pressed,
+            "strobe_count": telemetry.strobe_count,
+            "kol": telemetry.kol,
+            "koh": telemetry.koh,
+            "active_columns": telemetry.active_columns,
+        }));
+
+        let (lcd_meta, lcd_vram) = bus.lcd.export_snapshot();
+        meta.lcd = Some(lcd_meta);
+
+        let mut regs: HashMap<String, u32> = HashMap::new();
+        for (name, reg) in [
+            ("PC", RegName::PC),
+            ("BA", RegName::BA),
+            ("I", RegName::I),
+            ("X", RegName::X),
+            ("Y", RegName::Y),
+            ("U", RegName::U),
+            ("S", RegName::S),
+            ("F", RegName::F),
+        ] {
+            regs.insert(name.to_string(), state.get_reg(reg));
+        }
+
+        snapshot::save_snapshot(path.as_path(), &meta, &regs, &bus.memory, Some(&lcd_vram))?;
+        println!("Wrote snapshot: {}", path.display());
+    }
+
     bus.finish_perfetto();
 
     if args.perf {
@@ -1880,6 +2117,9 @@ mod tests {
             None,
         );
         let mut state = LlamaState::new();
+        // Ensure the IRQ prologue pushes to external RAM (not the IMEM-mirrored address space),
+        // matching real power-on state.
+        state.set_reg(RegName::S, 0x0BFF00);
         // Enable master + ONK mask.
         bus.memory
             .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_ONK);

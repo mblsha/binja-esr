@@ -10,7 +10,10 @@ use retrobus_perfetto::AnnotationValue;
 use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
-        eval::{perfetto_last_pc, power_on_reset, reset_perf_counters, LlamaBus, LlamaExecutor},
+        eval::{
+            perfetto_last_pc, power_on_reset, reset_perf_counters, set_perf_instr_counter, LlamaBus,
+            LlamaExecutor,
+        },
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
     },
@@ -1982,6 +1985,11 @@ impl LlamaCpu {
         if let Some(tracer) = guard.take() {
             let _ = tracer.finish();
         }
+        Ok(())
+    }
+
+    fn set_perf_instr_counter(&self, value: u64) -> PyResult<()> {
+        set_perf_instr_counter(value);
         Ok(())
     }
 }

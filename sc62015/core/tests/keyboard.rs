@@ -117,6 +117,40 @@ fn fifo_syncs_head_from_memory_and_clears_keyi_when_drained() {
 }
 
 #[test]
+fn inject_event_normalizes_fifo_head_only_for_main_menu_snapshot_shape() {
+    const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
+    const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
+    const FIFO_BASE_ADDR: u32 = 0x00BFC96;
+
+    let mut mem = MemoryImage::new();
+    let mut kb = KeyboardMatrix::new();
+
+    // Boot prompt shape: head can be 0x28 and tail=0x04; do not touch it (boot PF1 relies on it).
+    mem.write_external_byte(FIFO_HEAD_ADDR, 0x28);
+    mem.write_external_byte(FIFO_TAIL_ADDR, 0x04);
+    kb.inject_matrix_event(0x56, false, &mut mem, true);
+    assert_eq!(
+        mem.read_byte(FIFO_HEAD_ADDR).unwrap_or(0),
+        0x28,
+        "boot prompt should not force-normalize FIFO_HEAD_ADDR"
+    );
+
+    // Main-menu snapshot shape (from `py_main_ready_555000`): FIFO bytes contain the PF1 press/release
+    // history and head retains stale high bits.
+    mem.write_external_byte(FIFO_HEAD_ADDR, 0x28);
+    mem.write_external_byte(FIFO_TAIL_ADDR, 0x03);
+    for (i, byte) in [0x56u8, 0xD6, 0xD6, 0, 0, 0, 0].into_iter().enumerate() {
+        mem.write_external_byte(FIFO_BASE_ADDR + i as u32, byte);
+    }
+    kb.inject_matrix_event(0x56, false, &mut mem, true);
+    assert_eq!(
+        mem.read_byte(FIFO_HEAD_ADDR).unwrap_or(0),
+        0x00,
+        "main-menu snapshot should normalize FIFO_HEAD_ADDR to 0..7"
+    );
+}
+
+#[test]
 fn defaults_match_python_keyboard_matrix() {
     // Parity guard: ensure Rust defaults mirror pce500/keyboard_matrix.py.
     let kb = KeyboardMatrix::new();
