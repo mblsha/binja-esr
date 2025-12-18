@@ -442,17 +442,25 @@ impl LlamaContractBus {
 
     #[pyo3(signature = (address, pc=None))]
     fn read_byte(&mut self, address: u32, pc: Option<u32>) -> PyResult<u8> {
-        let addr = address & ADDRESS_MASK;
+        let raw_addr = address & ADDRESS_MASK;
+        // Parity: Python treats any address with bit20 set as selecting the 256-byte IMEM window
+        // via `(addr - 0x100000) & 0xFF`. The core `MemoryImage` is range-limited to 0x100000..0x1000FF,
+        // so normalize here for contract harness runs.
+        let addr = if raw_addr >= INTERNAL_MEMORY_START {
+            INTERNAL_MEMORY_START + ((raw_addr - INTERNAL_MEMORY_START) & 0xFF)
+        } else {
+            raw_addr
+        };
         // Defer to host memory when Python overlays are required.
         if self.memory.requires_python(addr) {
             if let Some(host) = &self.host_memory {
                 return Python::with_gil(|py| {
                     let bound = host.bind(py);
                     let value = bound
-                        .call_method1("read_byte", (addr, pc))
+                        .call_method1("read_byte", (raw_addr, pc))
                         .or_else(|err| {
                             if err.is_instance_of::<PyTypeError>(py) {
-                                bound.call_method1("read_byte", (addr,))
+                                bound.call_method1("read_byte", (raw_addr,))
                             } else {
                                 Err(err)
                             }
@@ -462,7 +470,7 @@ impl LlamaContractBus {
                     self.memory.bump_read_count();
                     self.events.push(ContractEvent {
                         kind: "read",
-                        address: addr,
+                        address: raw_addr,
                         value,
                         pc: pc.map(|v| v & ADDRESS_MASK),
                         detail: None,
@@ -472,29 +480,28 @@ impl LlamaContractBus {
             }
         }
         if addr >= INTERNAL_MEMORY_START {
-            if let Some(offset) = addr.checked_sub(INTERNAL_MEMORY_START) {
-                if let Some(value) = self.keyboard.handle_read(offset, &mut self.memory) {
-                    self.events.push(ContractEvent {
-                        kind: "read",
-                        address: addr,
-                        value,
-                        pc: pc.map(|v| v & ADDRESS_MASK),
-                        detail: None,
-                    });
-                    return Ok(value);
-                }
+            let offset = (raw_addr - INTERNAL_MEMORY_START) & 0xFF;
+            if let Some(value) = self.keyboard.handle_read(offset, &mut self.memory) {
+                self.events.push(ContractEvent {
+                    kind: "read",
+                    address: raw_addr,
+                    value,
+                    pc: pc.map(|v| v & ADDRESS_MASK),
+                    detail: None,
+                });
+                return Ok(value);
             }
         }
         let value = self
             .memory
             .load_with_pc(addr, 8, pc.map(|v| v & ADDRESS_MASK))
             .unwrap_or(0) as u8;
-        if is_lcd_addr(address) && (address & 0x3) == 0x1 {
+        if is_lcd_addr(raw_addr) && (raw_addr & 0x3) == 0x1 {
             self.last_lcd_status = Some(value);
         }
         self.events.push(ContractEvent {
             kind: "read",
-            address: addr,
+            address: raw_addr,
             value,
             pc: pc.map(|v| v & ADDRESS_MASK),
             detail: None,
@@ -504,16 +511,21 @@ impl LlamaContractBus {
 
     #[pyo3(signature = (address, value, pc=None))]
     fn write_byte(&mut self, address: u32, value: u8, pc: Option<u32>) -> PyResult<()> {
-        let addr = address & ADDRESS_MASK;
+        let raw_addr = address & ADDRESS_MASK;
+        let addr = if raw_addr >= INTERNAL_MEMORY_START {
+            INTERNAL_MEMORY_START + ((raw_addr - INTERNAL_MEMORY_START) & 0xFF)
+        } else {
+            raw_addr
+        };
         if self.memory.requires_python(addr) {
             if let Some(host) = &self.host_memory {
                 Python::with_gil(|py| {
                     let bound = host.bind(py);
                     bound
-                        .call_method1("write_byte", (addr, value, pc))
+                        .call_method1("write_byte", (raw_addr, value, pc))
                         .or_else(|err| {
                             if err.is_instance_of::<PyTypeError>(py) {
-                                bound.call_method1("write_byte", (addr, value))
+                                bound.call_method1("write_byte", (raw_addr, value))
                             } else {
                                 Err(err)
                             }
@@ -538,7 +550,7 @@ impl LlamaContractBus {
                 }
                 self.events.push(ContractEvent {
                     kind: "write",
-                    address: addr,
+                    address: raw_addr,
                     value,
                     pc: pc.map(|v| v & ADDRESS_MASK),
                     detail: None,
@@ -547,17 +559,16 @@ impl LlamaContractBus {
             }
         }
         if addr >= INTERNAL_MEMORY_START {
-            if let Some(offset) = addr.checked_sub(INTERNAL_MEMORY_START) {
-                if self.keyboard.handle_write(offset, value, &mut self.memory) {
-                    self.events.push(ContractEvent {
-                        kind: "write",
-                        address: addr,
-                        value,
-                        pc: pc.map(|v| v & ADDRESS_MASK),
-                        detail: None,
-                    });
-                    return Ok(());
-                }
+            let offset = (raw_addr - INTERNAL_MEMORY_START) & 0xFF;
+            if self.keyboard.handle_write(offset, value, &mut self.memory) {
+                self.events.push(ContractEvent {
+                    kind: "write",
+                    address: raw_addr,
+                    value,
+                    pc: pc.map(|v| v & ADDRESS_MASK),
+                    detail: None,
+                });
+                return Ok(());
             }
         }
         let _ = self
@@ -595,7 +606,7 @@ impl LlamaContractBus {
         }
         self.events.push(ContractEvent {
             kind: "write",
-            address: address & ADDRESS_MASK,
+            address: raw_addr,
             value,
             pc: pc.map(|v| v & ADDRESS_MASK),
             detail: None,
@@ -609,10 +620,13 @@ impl LlamaContractBus {
             "internal",
             PyBytes::new_bound(py, self.memory.internal_slice()),
         )?;
-        dict.set_item(
-            "external",
-            PyBytes::new_bound(py, self.memory.external_slice()),
-        )?;
+        let mut external = self.memory.external_slice().to_vec();
+        let internal = self.memory.internal_slice();
+        if external.len() >= internal.len() {
+            let start = external.len() - internal.len();
+            external[start..].copy_from_slice(internal);
+        }
+        dict.set_item("external", PyBytes::new_bound(py, &external))?;
         dict.set_item("external_len", self.memory.external_len())?;
         // Surface IMR/ISR for contract assertions.
         let internal = self.memory.internal_slice();
