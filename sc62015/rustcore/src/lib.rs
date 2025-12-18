@@ -245,7 +245,7 @@ const EXTERNAL_IMEM_ALIAS_START: u32 = 0x0FFF00;
 
 fn contract_resolve_imem_alias(address: u32) -> (u32, u32) {
     let addr = address & ADDRESS_MASK;
-    if addr < INTERNAL_MEMORY_START && addr >= EXTERNAL_IMEM_ALIAS_START {
+    if (EXTERNAL_IMEM_ALIAS_START..INTERNAL_MEMORY_START).contains(&addr) {
         (
             INTERNAL_MEMORY_START + (addr - EXTERNAL_IMEM_ALIAS_START),
             addr,
