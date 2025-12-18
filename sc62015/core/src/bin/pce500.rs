@@ -1217,6 +1217,9 @@ fn parse_expected_row(raw: &str) -> Result<(usize, String), String> {
 }
 
 fn perfetto_part_path(base: &Path, part: u32) -> PathBuf {
+    if part == 0 {
+        return base.to_path_buf();
+    }
     let stem = base
         .file_stem()
         .and_then(|s| s.to_str())
