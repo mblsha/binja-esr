@@ -89,6 +89,14 @@ pub fn reset_perf_counters() {
     PERF_SUBSTEP.store(0, Ordering::Relaxed);
 }
 
+/// Set the global instruction index used for Perfetto `op_index` annotations.
+///
+/// This is used by snapshot-driven runners so traces remain aligned to the absolute
+/// instruction_count stored in the snapshot metadata.
+pub fn set_perf_instr_counter(value: u64) {
+    PERF_INSTR_COUNTER.store(value, Ordering::Relaxed);
+}
+
 /// Next per-instruction substep for Perfetto manual clock parity.
 pub fn perfetto_next_substep() -> u64 {
     PERF_SUBSTEP.fetch_add(1, Ordering::Relaxed) as u64 + 1
