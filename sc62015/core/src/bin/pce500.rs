@@ -1418,7 +1418,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             if !lcd_lines.is_empty() {
                 _last_lcd_lines = lcd_lines.clone();
             }
-            let row0 = lcd_lines.get(0).cloned().unwrap_or_default();
+            let row0 = lcd_lines.first().cloned().unwrap_or_default();
             match pf1_stage {
                 Pf1TwiceStage::WaitBootText => {
                     if row0.contains("S2(CARD):") {
