@@ -1446,6 +1446,9 @@ class PCE500Emulator:
         metadata.update(
             {
                 "backend": getattr(self.cpu, "backend", "llama"),
+                "instruction_count": int(getattr(self, "instruction_count", 0)),
+                "cycle_count": int(getattr(self, "cycle_count", 0)),
+                "pc": int(getattr(cpu_snapshot, "pc", 0)) & 0xFFFFFF,
                 "call_depth": int(getattr(self, "call_depth", 0)),
                 "call_sub_level": int(getattr(cpu_snapshot, "call_sub_level", 0)),
                 "temps": temps,
