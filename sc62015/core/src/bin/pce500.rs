@@ -1585,7 +1585,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             if !lcd_lines.is_empty() {
                 _last_lcd_lines = lcd_lines.clone();
             }
-            let row0 = lcd_lines.get(0).cloned().unwrap_or_default();
+            let row0 = lcd_lines.first().cloned().unwrap_or_default();
             match pf1_stage {
                 Pf1TwiceStage::WaitBootText => {
                     // Wait for a stable boot header before pressing.
@@ -1963,27 +1963,28 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         let (timer_info, interrupt_info) = bus.timer.snapshot_info();
-        let mut meta = SnapshotMetadata::default();
-        meta.backend = "standalone-rust".to_string();
-        meta.instruction_count = executed;
-        meta.cycle_count = bus.cycle_count;
-        meta.pc = state.pc();
-        meta.call_depth = state.call_depth();
-        meta.call_sub_level = state.call_sub_level();
-        meta.timer = timer_info;
-        meta.interrupts = interrupt_info;
-        meta.keyboard = Some(serde_json::to_value(bus.keyboard.snapshot_state())?);
         let telemetry = bus.keyboard.telemetry();
-        meta.kb_metrics = Some(serde_json::json!({
-            "pressed": telemetry.pressed,
-            "strobe_count": telemetry.strobe_count,
-            "kol": telemetry.kol,
-            "koh": telemetry.koh,
-            "active_columns": telemetry.active_columns,
-        }));
-
         let (lcd_meta, lcd_vram) = bus.lcd.export_snapshot();
-        meta.lcd = Some(lcd_meta);
+        let meta = SnapshotMetadata {
+            backend: "standalone-rust".to_string(),
+            instruction_count: executed,
+            cycle_count: bus.cycle_count,
+            pc: state.pc(),
+            call_depth: state.call_depth(),
+            call_sub_level: state.call_sub_level(),
+            timer: timer_info,
+            interrupts: interrupt_info,
+            keyboard: Some(serde_json::to_value(bus.keyboard.snapshot_state())?),
+            kb_metrics: Some(serde_json::json!({
+                "pressed": telemetry.pressed,
+                "strobe_count": telemetry.strobe_count,
+                "kol": telemetry.kol,
+                "koh": telemetry.koh,
+                "active_columns": telemetry.active_columns,
+            })),
+            lcd: Some(lcd_meta),
+            ..Default::default()
+        };
 
         let mut regs: HashMap<String, u32> = HashMap::new();
         for (name, reg) in [
