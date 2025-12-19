@@ -94,6 +94,24 @@ describe('createEvalApi', () => {
 		expect(ops).toEqual(['step:42']);
 	});
 
+	it('lcd.textString returns joined decoded lines', async () => {
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: async () => {},
+			step: async () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			lcdText: () => ['A', 'B'],
+		};
+		const api = createEvalApi(adapter as any);
+		expect(await api.lcd.text()).toEqual(['A', 'B']);
+		expect(await api.lcd.textString()).toEqual('A\nB');
+	});
+
 	it('withProbe forwards probe to callFunction and invokes handler for returned samples', async () => {
 		const probeHits: number[] = [];
 		const capturedOptions: any[] = [];

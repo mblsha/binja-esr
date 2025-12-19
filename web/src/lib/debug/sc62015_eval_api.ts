@@ -136,6 +136,7 @@ export interface EmulatorAdapter {
 	setReg(name: string, value: number): void;
 	read8(addr: number): number;
 	write8(addr: number, value: number): void;
+	lcdText?(): string[] | null;
 	pressMatrixCode?(code: number): void;
 	releaseMatrixCode?(code: number): void;
 	injectMatrixEvent?(code: number, release: boolean): void;
@@ -161,6 +162,10 @@ export interface EvalApi {
 	memory: {
 		read(address: number, size?: 1 | 2 | 3): Promise<number>;
 		write(address: number, size: 1 | 2 | 3, value: number): Promise<void>;
+	};
+	lcd: {
+		text(): Promise<string[]>;
+		textString(): Promise<string>;
 	};
 	keyboard: {
 		press(code: number): Promise<void>;
@@ -441,6 +446,10 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				}
 				throw new Error(`Unsupported write size ${size}`);
 			},
+		},
+		lcd: {
+			text: async () => adapter.lcdText?.() ?? [],
+			textString: async () => (adapter.lcdText?.() ?? []).join('\n'),
 		},
 		keyboard: {
 			press: async (code: number) => {
