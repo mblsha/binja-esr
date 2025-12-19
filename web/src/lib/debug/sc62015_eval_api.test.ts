@@ -76,6 +76,24 @@ describe('createEvalApi', () => {
 		expect(api.events[0]?.kind).toBe('reset');
 	});
 
+	it('step forwards to adapter.step', async () => {
+		const ops: string[] = [];
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: async () => ops.push('reset'),
+			step: async (n: number) => ops.push(`step:${n}`),
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+		};
+		const api = createEvalApi(adapter as any);
+		await api.step(42);
+		expect(ops).toEqual(['step:42']);
+	});
+
 	it('withProbe forwards probe to callFunction and invokes handler for returned samples', async () => {
 		const probeHits: number[] = [];
 		const capturedOptions: any[] = [];
