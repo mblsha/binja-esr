@@ -147,6 +147,7 @@ export interface EvalApi {
 	readonly events: EvalEvent[];
 	last(): CallHandle | null;
 	reset(options?: EvalResetOptions): Promise<void>;
+	step(instructions: number): Promise<void>;
 	call(
 		reference: string | number,
 		registers?: Partial<Record<RegisterName, number>>,
@@ -299,6 +300,10 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				await Promise.resolve(adapter.step(warmupTicks));
 			}
 			events.push({ kind: 'reset', sequence: sequence++, fresh, warmupTicks });
+		},
+		step: async (instructions: number) => {
+			if (typeof adapter.step !== 'function') throw new Error('EmulatorAdapter.step is not available.');
+			await Promise.resolve(adapter.step(instructions));
 		},
 		call: async (reference, registers, options) => {
 			const { address, name } = resolveReference(reference);
