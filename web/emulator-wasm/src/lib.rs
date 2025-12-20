@@ -8,12 +8,11 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 use base64::Engine;
-use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
-use sc62015_core::pce500::{pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
-use sc62015_core::DeviceModel;
+use sc62015_core::pce500::{DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
 use sc62015_core::{CoreRuntime, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+use sc62015_core::{DeviceModel, DeviceTextDecoder};
 
 #[derive(Debug, Clone, Serialize)]
 struct BuildInfo {
@@ -132,7 +131,7 @@ pub struct Pce500Emulator {
     runtime: CoreRuntime,
     rom_image: Vec<u8>,
     model: DeviceModel,
-    font_map: Option<Pce500FontMap>,
+    text_decoder: Option<DeviceTextDecoder>,
 }
 
 #[wasm_bindgen]
@@ -143,7 +142,7 @@ impl Pce500Emulator {
             runtime: CoreRuntime::new(),
             rom_image: Vec::new(),
             model: DeviceModel::DEFAULT,
-            font_map: None,
+            text_decoder: None,
         };
         emulator.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
         emulator
@@ -178,10 +177,7 @@ impl Pce500Emulator {
             return Err(JsValue::from_str("ROM is empty"));
         }
         self.rom_image = rom.to_vec();
-        self.font_map = match self.model {
-            DeviceModel::PcE500 => pce500_font_map_from_rom(&self.rom_image),
-            DeviceModel::Iq7000 => None,
-        };
+        self.text_decoder = self.model.text_decoder(&self.rom_image);
         self.reset()
     }
 
@@ -495,7 +491,7 @@ impl Pce500Emulator {
     }
 
     pub fn lcd_text(&self) -> Result<JsValue, JsValue> {
-        let Some(font) = self.font_map.as_ref() else {
+        let Some(text_decoder) = self.text_decoder.as_ref() else {
             return serde_wasm_bindgen::to_value(&Vec::<String>::new())
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         };
@@ -503,7 +499,7 @@ impl Pce500Emulator {
             return serde_wasm_bindgen::to_value(&Vec::<String>::new())
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         };
-        let lines = decode_display_text(lcd, font);
+        let lines = text_decoder.decode_display_text(lcd);
         serde_wasm_bindgen::to_value(&lines).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 

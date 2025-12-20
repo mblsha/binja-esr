@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use thiserror::Error;
 
-pub use device::DeviceModel;
+pub use device::{DeviceModel, DeviceTextDecoder};
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{
-    create_lcd, LcdController, LcdHal, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
+    create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
 };
 pub use llama::state::LlamaState as CpuState;
@@ -180,6 +180,8 @@ pub struct SnapshotMetadata {
     pub magic: String,
     pub version: u32,
     pub backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_model: Option<DeviceModel>,
     pub created: String,
     pub instruction_count: u64,
     pub cycle_count: u64,
@@ -221,6 +223,7 @@ impl Default for SnapshotMetadata {
             magic: SNAPSHOT_MAGIC.to_string(),
             version: SNAPSHOT_VERSION,
             backend: "core".to_string(),
+            device_model: None,
             created: now_timestamp(),
             instruction_count: 0,
             cycle_count: 0,
@@ -349,6 +352,7 @@ pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) {
 /// Extremely small placeholder runtime for LLAMA-only execution.
 pub struct CoreRuntime {
     metadata: SnapshotMetadata,
+    device_model: DeviceModel,
     pub memory: MemoryImage,
     pub state: LlamaState,
     pub fast_mode: bool,
@@ -371,6 +375,7 @@ impl CoreRuntime {
     pub fn new() -> Self {
         let mut rt = Self {
             metadata: SnapshotMetadata::default(),
+            device_model: DeviceModel::PcE500,
             memory: MemoryImage::new(),
             state: LlamaState::new(),
             fast_mode: false,
@@ -384,6 +389,15 @@ impl CoreRuntime {
         };
         rt.install_imr_isr_hook();
         rt
+    }
+
+    pub fn device_model(&self) -> DeviceModel {
+        self.device_model
+    }
+
+    pub fn set_device_model(&mut self, model: DeviceModel) {
+        self.device_model = model;
+        self.metadata.device_model = Some(model);
     }
 
     pub fn instruction_count(&self) -> u64 {
@@ -1246,6 +1260,7 @@ impl CoreRuntime {
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     pub fn save_snapshot(&self, path: &std::path::Path) -> Result<()> {
         let mut metadata = self.metadata.clone();
+        metadata.device_model = Some(self.device_model);
         metadata.instruction_count = self.metadata.instruction_count;
         metadata.cycle_count = self.metadata.cycle_count;
         metadata.pc = self.get_reg("PC");
@@ -1300,6 +1315,7 @@ impl CoreRuntime {
     pub fn load_snapshot(&mut self, path: &std::path::Path) -> Result<()> {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
+        self.device_model = self.metadata.device_model.unwrap_or(DeviceModel::PcE500);
         apply_registers(&mut self.state, &loaded.registers);
         self.fast_mode = self.metadata.fast_mode;
         self.memory
@@ -1334,7 +1350,8 @@ impl CoreRuntime {
             let kind = lcd_meta
                 .get("kind")
                 .and_then(|v| v.as_str())
-                .unwrap_or("hd61202");
+                .map(LcdKind::parse)
+                .unwrap_or(LcdKind::Hd61202);
             if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
                 self.lcd = Some(create_lcd(kind));
             }
@@ -1342,7 +1359,7 @@ impl CoreRuntime {
                 let _ = lcd.load_snapshot(lcd_meta, payload);
             }
         } else if self.lcd.is_none() {
-            self.lcd = Some(create_lcd("hd61202"));
+            self.lcd = Some(create_lcd(LcdKind::Hd61202));
         }
         // Restore call depth/sub-level and temps from metadata if present.
         if self.metadata.call_depth > 0 {
