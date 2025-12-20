@@ -3,7 +3,10 @@
 
 use crate::create_lcd;
 use crate::lcd::{LcdHal, LcdKind};
-use crate::lcd_text::{decode_display_text, Pce500FontMap};
+use crate::lcd_text::{
+    decode_display_text, decode_iq7000_display_text_auto, Iq7000FontMap, Iq7000LargeFontMap,
+    Pce500FontMap,
+};
 use crate::pce500;
 use crate::{CoreRuntime, Result};
 use serde::{Deserialize, Serialize};
@@ -22,12 +25,24 @@ pub struct DeviceSpec {
 #[derive(Debug, Clone, Copy)]
 pub enum DeviceTextDecoderKind {
     Pce500,
+    Iq7000,
 }
 
 impl DeviceTextDecoderKind {
     fn build(self, rom: &[u8]) -> Option<DeviceTextDecoder> {
         match self {
             Self::Pce500 => pce500::pce500_font_map_from_rom(rom).map(DeviceTextDecoder::Pce500),
+            Self::Iq7000 => {
+                let small_font = Iq7000FontMap::from_rom(rom, 0x00F_1B45);
+                let large_font = Iq7000LargeFontMap::from_rom(rom, 0x00F_2145);
+                if small_font.is_empty() && large_font.is_empty() {
+                    return None;
+                }
+                Some(DeviceTextDecoder::Iq7000 {
+                    small_font,
+                    large_font,
+                })
+            }
         }
     }
 }
@@ -53,12 +68,12 @@ impl DeviceModel {
             Self::Iq7000 => DeviceSpec {
                 label: "iq-7000",
                 rom_basename: "iq-7000.bin",
-                lcd_kind: LcdKind::Unknown,
+                lcd_kind: LcdKind::Iq7000Vram,
                 // Placeholder: IQ-7000 mapping is not yet confirmed. Keep the PC-E500 window for now.
                 rom_window_start: pce500::ROM_WINDOW_START as u32,
                 rom_window_len: pce500::ROM_WINDOW_LEN,
-                font_base_addr: None,
-                text_decoder: None,
+                font_base_addr: Some(0x00F_1B45),
+                text_decoder: Some(DeviceTextDecoderKind::Iq7000),
             },
             Self::PcE500 => DeviceSpec {
                 label: "pc-e500",
@@ -123,12 +138,20 @@ impl DeviceModel {
 #[derive(Debug, Clone)]
 pub enum DeviceTextDecoder {
     Pce500(Pce500FontMap),
+    Iq7000 {
+        small_font: Iq7000FontMap,
+        large_font: Iq7000LargeFontMap,
+    },
 }
 
 impl DeviceTextDecoder {
     pub fn decode_display_text(&self, lcd: &dyn LcdHal) -> Vec<String> {
         match self {
             Self::Pce500(font) => decode_display_text(lcd, font),
+            Self::Iq7000 {
+                small_font,
+                large_font,
+            } => decode_iq7000_display_text_auto(lcd, small_font, large_font),
         }
     }
 }
