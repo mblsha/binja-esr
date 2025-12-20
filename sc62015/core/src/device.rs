@@ -2,6 +2,7 @@
 // PY_SOURCE: pce500/run_pce500.py
 
 use crate::create_lcd;
+use crate::iq7000;
 use crate::lcd::{LcdHal, LcdKind};
 use crate::lcd_text::{
     decode_display_text, decode_iq7000_display_text_auto, Iq7000FontMap, Iq7000LargeFontMap,
@@ -69,9 +70,8 @@ impl DeviceModel {
                 label: "iq-7000",
                 rom_basename: "iq-7000.bin",
                 lcd_kind: LcdKind::Iq7000Vram,
-                // Placeholder: IQ-7000 mapping is not yet confirmed. Keep the PC-E500 window for now.
-                rom_window_start: pce500::ROM_WINDOW_START as u32,
-                rom_window_len: pce500::ROM_WINDOW_LEN,
+                rom_window_start: iq7000::ROM_WINDOW_START as u32,
+                rom_window_len: iq7000::ROM_WINDOW_LEN,
                 font_base_addr: Some(0x00F_1B45),
                 text_decoder: Some(DeviceTextDecoderKind::Iq7000),
             },
@@ -130,8 +130,18 @@ impl DeviceModel {
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         rt.set_device_model(*self);
         rt.lcd = Some(create_lcd(self.lcd_kind()));
-        // Placeholder: share the existing PC-E500 window loader for now.
-        pce500::load_pce500_rom_window(rt, rom)
+        if let Some(kb) = rt.keyboard.as_mut() {
+            kb.set_columns_active_high(true);
+            if matches!(self, Self::Iq7000) {
+                kb.disable_fifo_mirroring();
+                kb.set_keyi_on_any_press(true);
+                kb.set_raw_kil(true);
+            }
+        }
+        match self {
+            Self::Iq7000 => iq7000::load_iq7000_rom_image(rt, rom),
+            Self::PcE500 => pce500::load_pce500_rom_window(rt, rom),
+        }
     }
 }
 
