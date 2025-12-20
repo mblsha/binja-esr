@@ -119,7 +119,9 @@ def test_cmpp_imem_reg_matches_between_backends() -> None:
         # D7 04 10: CMPP (BP+10), X (no PRE byte; IMem defaults to BP+N).
         raw[0:3] = bytes([0xD7, 0x04, 0x10])
         # (m..m+2) = 0xFFFFFF (little-endian), so lhs >= rhs for X=0x000080.
-        raw[INTERNAL_MEMORY_START + 0x10 : INTERNAL_MEMORY_START + 0x13] = b"\xFF\xFF\xFF"
+        raw[INTERNAL_MEMORY_START + 0x10 : INTERNAL_MEMORY_START + 0x13] = (
+            b"\xff\xff\xff"
+        )
 
         memory = _make_memory(raw)
         cpu = CPU(memory, reset_on_init=False, backend=backend)
