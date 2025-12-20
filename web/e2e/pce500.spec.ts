@@ -3,6 +3,8 @@ import { test, expect } from '@playwright/test';
 test('PF1 click changes decoded LCD text', async ({ page }) => {
 	await page.goto('/');
 
+	await page.getByTestId('rom-model').selectOption('pc-e500');
+
 	const step20k = page.getByRole('button', { name: 'Step 20k' });
 	await expect(step20k).toBeEnabled();
 
@@ -19,4 +21,3 @@ test('PF1 click changes decoded LCD text', async ({ page }) => {
 
 	await expect(page.getByTestId('lcd-text')).toContainText('MENU');
 });
-

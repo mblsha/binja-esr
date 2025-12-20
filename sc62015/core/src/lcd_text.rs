@@ -1,7 +1,7 @@
 // PY_SOURCE: pce500/display/text_decoder.py:decode_display_text
 // PY_SOURCE: pce500/display/font.py
 
-use crate::lcd::{LcdController, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+use crate::lcd::{LcdHal, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 use std::collections::HashMap;
 
 const FONT_BASE: usize = 0x00F2215;
@@ -70,7 +70,7 @@ fn font_base_offset(rom: &[u8]) -> Option<usize> {
     None
 }
 
-pub fn decode_display_text(lcd: &LcdController, font: &Pce500FontMap) -> Vec<String> {
+pub fn decode_display_text(lcd: &dyn LcdHal, font: &Pce500FontMap) -> Vec<String> {
     let buffer = lcd.display_buffer();
     let char_rows = LCD_DISPLAY_ROWS / ROWS_PER_CELL;
     let char_cols = LCD_DISPLAY_COLS / COLS_PER_CELL;

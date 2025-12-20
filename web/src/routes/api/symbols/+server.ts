@@ -7,7 +7,26 @@ type Candidate = {
 	source: string;
 };
 
-const REPORT_RELATIVE_PATH = 'rom-analysis/pc-e500/s3-en/bnida.json';
+type RomModel = 'iq-7000' | 'pc-e500';
+
+const DEFAULT_MODEL: RomModel = 'iq-7000';
+
+function normalizeModel(raw: string | null): RomModel | null {
+	const trimmed = raw?.trim().toLowerCase();
+	if (!trimmed) return null;
+	if (trimmed === 'iq-7000' || trimmed === 'iq7000' || trimmed === 'iq_7000') return 'iq-7000';
+	if (trimmed === 'pc-e500' || trimmed === 'pce500' || trimmed === 'pc_e500') return 'pc-e500';
+	return null;
+}
+
+function reportRelativePath(model: RomModel): string {
+	switch (model) {
+		case 'iq-7000':
+			return 'rom-analysis/iq-7000/bnida.json';
+		case 'pc-e500':
+			return 'rom-analysis/pc-e500/s3-en/bnida.json';
+	}
+}
 
 function stripLeadingLineComments(raw: string): string {
 	const lines = raw.split(/\r?\n/);
@@ -28,21 +47,28 @@ function walkParents(start: string, maxDepth = 6): string[] {
 	return out;
 }
 
-function symbolCandidates(): Candidate[] {
-	const env = process.env.PCE500_BNIDA_ADDRESS_REPORT_PATH;
+function symbolCandidates(model: RomModel): Candidate[] {
+	const env =
+		model === 'pc-e500'
+			? process.env.PCE500_BNIDA_ADDRESS_REPORT_PATH
+			: process.env.IQ7000_BNIDA_ADDRESS_REPORT_PATH;
 	const candidates: Candidate[] = [];
 	if (env) {
-		candidates.push({ path: env, source: 'env:PCE500_BNIDA_ADDRESS_REPORT_PATH' });
+		candidates.push({
+			path: env,
+			source: model === 'pc-e500' ? 'env:PCE500_BNIDA_ADDRESS_REPORT_PATH' : 'env:IQ7000_BNIDA_ADDRESS_REPORT_PATH',
+		});
 	}
 
+	const reportPath = reportRelativePath(model);
 	for (const root of walkParents(process.cwd())) {
 		candidates.push({
-			path: resolve(root, REPORT_RELATIVE_PATH),
-			source: `${root}/${REPORT_RELATIVE_PATH}`,
+			path: resolve(root, reportPath),
+			source: `${root}/${reportPath}`,
 		});
 		candidates.push({
-			path: resolve(root, 'binja-esr-tests', REPORT_RELATIVE_PATH),
-			source: `${root}/binja-esr-tests/${REPORT_RELATIVE_PATH}`,
+			path: resolve(root, 'binja-esr-tests', reportPath),
+			source: `${root}/binja-esr-tests/${reportPath}`,
 		});
 	}
 	return candidates;
@@ -56,8 +82,10 @@ function parseAddress(key: string): number | null {
 	return value >>> 0;
 }
 
-export const GET: RequestHandler = async () => {
-	for (const candidate of symbolCandidates()) {
+export const GET: RequestHandler = async ({ url }) => {
+	const model = normalizeModel(url.searchParams.get('model')) ?? DEFAULT_MODEL;
+
+	for (const candidate of symbolCandidates(model)) {
 		try {
 			const raw = await readFile(candidate.path, 'utf8');
 			const jsonText = stripLeadingLineComments(raw);
@@ -71,6 +99,7 @@ export const GET: RequestHandler = async () => {
 				headers: {
 					'content-type': 'application/json; charset=utf-8',
 					'cache-control': 'no-store',
+					'x-rom-model': model,
 				},
 			});
 		} catch {
@@ -78,7 +107,7 @@ export const GET: RequestHandler = async () => {
 		}
 	}
 
-	return new Response('Symbol report not found', {
+	return new Response(`Symbol report not found for model '${model}'`, {
 		status: 404,
 		headers: {
 			'content-type': 'text/plain; charset=utf-8',

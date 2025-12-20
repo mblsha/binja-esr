@@ -7,22 +7,52 @@ type Candidate = {
 	source: string;
 };
 
-function romCandidates(): Candidate[] {
-	const env = process.env.PCE500_ROM_PATH;
+type RomModel = 'iq-7000' | 'pc-e500';
+
+const DEFAULT_MODEL: RomModel = 'iq-7000';
+
+function normalizeModel(raw: string | null): RomModel | null {
+	const trimmed = raw?.trim().toLowerCase();
+	if (!trimmed) return null;
+	if (trimmed === 'iq-7000' || trimmed === 'iq7000' || trimmed === 'iq_7000') return 'iq-7000';
+	if (trimmed === 'pc-e500' || trimmed === 'pce500' || trimmed === 'pc_e500') return 'pc-e500';
+	return null;
+}
+
+function romBasename(model: RomModel): string {
+	switch (model) {
+		case 'iq-7000':
+			return 'iq-7000.bin';
+		case 'pc-e500':
+			return 'pc-e500.bin';
+	}
+}
+
+function romCandidates(model: RomModel): Candidate[] {
+	const env =
+		model === 'pc-e500'
+			? process.env.PCE500_ROM_PATH
+			: process.env.IQ7000_ROM_PATH ?? process.env.IQ_7000_ROM_PATH;
 	const candidates: Candidate[] = [];
 	if (env) {
-		candidates.push({ path: env, source: 'env:PCE500_ROM_PATH' });
+		candidates.push({
+			path: env,
+			source: model === 'pc-e500' ? 'env:PCE500_ROM_PATH' : 'env:IQ7000_ROM_PATH',
+		});
 	}
 
-	// When running `web/` inside the repo, the ROM symlink is usually at `../data/pc-e500.bin`.
-	candidates.push({ path: resolve(process.cwd(), '../data/pc-e500.bin'), source: '../data/pc-e500.bin' });
-	candidates.push({ path: resolve(process.cwd(), '../../data/pc-e500.bin'), source: '../../data/pc-e500.bin' });
-	candidates.push({ path: resolve(process.cwd(), 'data/pc-e500.bin'), source: 'data/pc-e500.bin' });
+	const basename = romBasename(model);
+	// When running `web/` inside the repo, the ROM symlink is usually at `../data/<rom>.bin`.
+	candidates.push({ path: resolve(process.cwd(), `../data/${basename}`), source: `../data/${basename}` });
+	candidates.push({ path: resolve(process.cwd(), `../../data/${basename}`), source: `../../data/${basename}` });
+	candidates.push({ path: resolve(process.cwd(), `data/${basename}`), source: `data/${basename}` });
 	return candidates;
 }
 
-export const GET: RequestHandler = async () => {
-	for (const candidate of romCandidates()) {
+export const GET: RequestHandler = async ({ url }) => {
+	const model = normalizeModel(url.searchParams.get('model')) ?? DEFAULT_MODEL;
+
+	for (const candidate of romCandidates(model)) {
 		try {
 			const bytes = await readFile(candidate.path);
 			if (bytes.length === 0) continue;
@@ -32,6 +62,7 @@ export const GET: RequestHandler = async () => {
 					'content-type': 'application/octet-stream',
 					'cache-control': 'no-store',
 					'x-rom-source': candidate.source,
+					'x-rom-model': model,
 				},
 			});
 		} catch {
@@ -39,7 +70,7 @@ export const GET: RequestHandler = async () => {
 		}
 	}
 
-	return new Response('ROM not found', {
+	return new Response(`ROM not found for model '${model}'`, {
 		status: 404,
 		headers: {
 			'content-type': 'text/plain; charset=utf-8',

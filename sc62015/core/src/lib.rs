@@ -21,7 +21,10 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 pub use keyboard::KeyboardMatrix;
-pub use lcd::{LcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+pub use lcd::{
+    create_lcd, LcdController, LcdHal, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
+    LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
+};
 pub use llama::state::LlamaState as CpuState;
 pub use memory::{
     AccessKind, MemoryAccessLog, MemoryImage, MemoryOverlay, ADDRESS_MASK, EXTERNAL_SPACE,
@@ -349,7 +352,7 @@ pub struct CoreRuntime {
     pub fast_mode: bool,
     executor: crate::llama::eval::LlamaExecutor,
     pub keyboard: Option<KeyboardMatrix>,
-    pub lcd: Option<LcdController>,
+    pub lcd: Option<Box<dyn LcdHal>>,
     pub timer: Box<TimerContext>,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
@@ -371,7 +374,7 @@ impl CoreRuntime {
             fast_mode: false,
             executor: crate::llama::eval::LlamaExecutor::new(),
             keyboard: Some(KeyboardMatrix::new()),
-            lcd: Some(LcdController::new()),
+            lcd: Some(Box::new(LcdController::new())),
             timer: Box::new(TimerContext::new(false, 0, 0)),
             host_read: None,
             host_write: None,
@@ -695,7 +698,7 @@ impl CoreRuntime {
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
             keyboard_ptr: *mut KeyboardMatrix,
-            lcd_ptr: *mut LcdController,
+            lcd_ptr: Option<*mut dyn LcdHal>,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             onk_level: bool,
@@ -728,10 +731,13 @@ impl CoreRuntime {
                         }
                     }
                     // LCD controller mirrored at 0x2000/0xA000.
-                    if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
-                        if let Some(val) = (*self.lcd_ptr).read(addr) {
-                            (*self.mem).bump_read_count();
-                            return val as u32;
+                    if let Some(lcd_ptr) = self.lcd_ptr {
+                        let lcd = &mut *lcd_ptr;
+                        if lcd.handles(addr) {
+                            if let Some(val) = lcd.read(addr) {
+                                (*self.mem).bump_read_count();
+                                return val as u32;
+                            }
                         }
                     }
                     // Host overlay: delegate addresses flagged as Python-only.
@@ -804,10 +810,13 @@ impl CoreRuntime {
                         }
                     }
                     // LCD writes.
-                    if !self.lcd_ptr.is_null() && (*self.lcd_ptr).handles(addr) {
-                        (*self.lcd_ptr).write(addr, value as u8);
-                        let _ = (*self.mem).store(addr, bits, value);
-                        return;
+                    if let Some(lcd_ptr) = self.lcd_ptr {
+                        let lcd = &mut *lcd_ptr;
+                        if lcd.handles(addr) {
+                            lcd.write(addr, value as u8);
+                            let _ = (*self.mem).store(addr, bits, value);
+                            return;
+                        }
                     }
                     if python_required {
                         if let Some(cb) = self.host_write {
@@ -1012,11 +1021,7 @@ impl CoreRuntime {
                     .as_mut()
                     .map(|kb| kb as *mut KeyboardMatrix)
                     .unwrap_or(std::ptr::null_mut());
-                let lcd_ptr = self
-                    .lcd
-                    .as_mut()
-                    .map(|lcd| lcd as *mut LcdController)
-                    .unwrap_or(std::ptr::null_mut());
+                let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
                 let host_read = self
                     .host_read
                     .as_mut()
@@ -1321,15 +1326,21 @@ impl CoreRuntime {
                 kb.load_snapshot_state(&snapshot);
             }
         }
-        if self.lcd.is_none() {
-            self.lcd = Some(LcdController::new());
-        }
-        if let (Some(lcd_meta), Some(payload), Some(lcd)) = (
-            self.metadata.lcd.clone(),
-            loaded.lcd_payload.as_deref(),
-            self.lcd.as_mut(),
-        ) {
-            let _ = lcd.load_snapshot(&lcd_meta, payload);
+        if let (Some(lcd_meta), Some(payload)) =
+            (self.metadata.lcd.as_ref(), loaded.lcd_payload.as_deref())
+        {
+            let kind = lcd_meta
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("hd61202");
+            if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
+                self.lcd = Some(create_lcd(kind));
+            }
+            if let Some(lcd) = self.lcd.as_mut() {
+                let _ = lcd.load_snapshot(lcd_meta, payload);
+            }
+        } else if self.lcd.is_none() {
+            self.lcd = Some(create_lcd("hd61202"));
         }
         // Restore call depth/sub-level and temps from metadata if present.
         if self.metadata.call_depth > 0 {

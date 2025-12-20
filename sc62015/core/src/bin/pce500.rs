@@ -4,9 +4,9 @@
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
+    create_lcd,
     keyboard::KeyboardMatrix,
-    lcd::LcdController,
-    lcd::LcdWriteTrace,
+    lcd::{LcdHal, LcdWriteTrace},
     lcd_text::{decode_display_text, Pce500FontMap},
     llama::{
         eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
@@ -53,6 +53,42 @@ const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 enum CardMode {
     Present,
     Absent,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum RomModel {
+    #[value(name = "iq-7000")]
+    Iq7000,
+    #[value(name = "pc-e500")]
+    PcE500,
+}
+
+impl RomModel {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Iq7000 => "iq-7000",
+            Self::PcE500 => "pc-e500",
+        }
+    }
+
+    fn default_rom_path(self) -> PathBuf {
+        let basename = match self {
+            Self::Iq7000 => "iq-7000.bin",
+            Self::PcE500 => "pc-e500.bin",
+        };
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../data/{basename}"))
+    }
+
+    fn default_bnida_path(self) -> PathBuf {
+        match self {
+            // When running via binja-esr-tests/scripts/run_rom_tests.sh, CWD is public-src.
+            // Use CARGO_MANIFEST_DIR so `cargo run --manifest-path ...` works from any directory.
+            Self::Iq7000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../rom-analysis/iq-7000/bnida.json"),
+            Self::PcE500 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../rom-analysis/pc-e500/s3-en/bnida.json"),
+        }
+    }
 }
 
 struct IrqPerfetto {
@@ -117,16 +153,20 @@ impl IrqPerfetto {
 #[derive(Parser, Debug)]
 #[command(
     name = "pce500-llama",
-    about = "Standalone Rust LLAMA runner for the PC-E500 ROM (no Python harness)."
+    about = "Standalone Rust LLAMA runner (ROM selectable; defaults to IQ-7000)."
 )]
 struct Args {
     /// Number of instructions to execute before exiting.
     #[arg(long, default_value_t = 20_000)]
     steps: u64,
 
-    /// ROM image to load (defaults to the repo-symlinked PC-E500 ROM).
-    #[arg(long, value_name = "PATH", default_value_os_t = default_rom_path())]
-    rom: PathBuf,
+    /// ROM model/profile to run (sets defaults for --rom and --bnida).
+    #[arg(long, value_enum, default_value_t = RomModel::Iq7000)]
+    model: RomModel,
+
+    /// ROM image to load (defaults to the repo-symlinked ROM for --model).
+    #[arg(long, value_name = "PATH")]
+    rom: Option<PathBuf>,
 
     /// Enable/disable memory card emulation (0x040000..0x04FFFF).
     #[arg(long, value_enum, default_value_t = CardMode::Present)]
@@ -230,7 +270,7 @@ struct Args {
     perfetto: bool,
 
     /// Path to write the Perfetto trace.
-    #[arg(long, value_name = "PATH", default_value = "pc-e500.perfetto-trace")]
+    #[arg(long, value_name = "PATH", default_value = "iq-7000.perfetto-trace")]
     perfetto_path: PathBuf,
 
     /// Dump LCD write trace (PC + call stack per addressing unit) as JSON.
@@ -258,23 +298,17 @@ struct LcdTraceDump {
     trace: Vec<Vec<LcdWriteTrace>>,
 }
 
-fn default_rom_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500.bin")
-}
-
 #[derive(serde::Deserialize)]
 struct BnidaExport {
     #[serde(default)]
     names: HashMap<String, String>,
 }
 
-fn default_bnida_path() -> PathBuf {
-    // When running via binja-esr-tests/scripts/run_rom_tests.sh, CWD is public-src.
-    PathBuf::from("../rom-analysis/pc-e500/s3-en/bnida.json")
-}
-
-fn load_bnida_names(path: Option<PathBuf>) -> Result<HashMap<u32, String>, Box<dyn Error>> {
-    let candidate = path.unwrap_or_else(default_bnida_path);
+fn load_bnida_names(
+    model: RomModel,
+    path: Option<PathBuf>,
+) -> Result<HashMap<u32, String>, Box<dyn Error>> {
+    let candidate = path.unwrap_or_else(|| model.default_bnida_path());
     if !candidate.exists() {
         return Ok(HashMap::new());
     }
@@ -302,7 +336,7 @@ fn load_bnida_names(path: Option<PathBuf>) -> Result<HashMap<u32, String>, Box<d
 
 struct StandaloneBus {
     memory: MemoryImage,
-    lcd: LcdController,
+    lcd: Box<dyn LcdHal>,
     timer: TimerContext,
     cycle_count: u64,
     keyboard: KeyboardMatrix,
@@ -347,7 +381,7 @@ impl StandaloneBus {
     #[allow(clippy::too_many_arguments)]
     fn new(
         memory: MemoryImage,
-        lcd: LcdController,
+        lcd: Box<dyn LcdHal>,
         timer: TimerContext,
         log_lcd: bool,
         log_lcd_limit: u32,
@@ -389,8 +423,8 @@ impl StandaloneBus {
         }
     }
 
-    fn lcd(&self) -> &LcdController {
-        &self.lcd
+    fn lcd(&self) -> &dyn LcdHal {
+        self.lcd.as_ref()
     }
 
     fn keyboard_stats(&self) -> (u32, u32, Vec<u8>) {
@@ -1246,7 +1280,11 @@ fn rotate_perfetto_trace(base: &Path, part: u32) {
 }
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
-    let rom_bytes = load_rom(&args.rom)?;
+    let rom_path = args
+        .rom
+        .clone()
+        .unwrap_or_else(|| args.model.default_rom_path());
+    let rom_bytes = load_rom(&rom_path)?;
     let font = Pce500FontMap::from_rom(&rom_bytes);
 
     let log_lcd = args.lcd_log;
@@ -1260,7 +1298,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     if args.perfetto {
         // Install BNIDA-derived function names (if available) so the "Functions" track labels
         // resolve to stable names instead of sub_XXXXXX fallbacks.
-        if let Ok(symbols) = load_bnida_names(args.bnida.clone()) {
+        if let Ok(symbols) = load_bnida_names(args.model, args.bnida.clone()) {
             if !symbols.is_empty() {
                 set_call_ui_function_names(symbols);
             }
@@ -1269,6 +1307,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         // The output will be `${perfetto_path}.partNNN.perfetto-trace` for each chunk.
         rotate_perfetto_trace(&perfetto_base_path, 0);
     }
+
+    eprintln!(
+        "[rom] model={} path={}",
+        args.model.label(),
+        rom_path.display()
+    );
 
     let auto_key = if args.pf1_twice {
         None
@@ -1325,9 +1369,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         log_dbg(&format!("irq perfetto path: {}", irq_path.display()));
         IrqPerfetto::new(irq_path)
     });
+    let lcd_kind = match args.model {
+        RomModel::PcE500 => "hd61202",
+        RomModel::Iq7000 => "unknown",
+    };
     let mut bus = StandaloneBus::new(
         memory,
-        LcdController::new(),
+        create_lcd(lcd_kind),
         if args.disable_timers {
             TimerContext::new(false, 0, 0)
         } else {
@@ -1831,7 +1879,7 @@ mod tests {
     fn on_key_sets_isr_and_triggers_pending_irq() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
-            LcdController::new(),
+            create_lcd("hd61202"),
             TimerContext::new(true, 0, 0),
             false,
             0,
@@ -1873,7 +1921,7 @@ mod tests {
     fn deliver_irq_prefers_onk_when_masked_in() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
-            LcdController::new(),
+            create_lcd("hd61202"),
             TimerContext::new(true, 0, 0),
             false,
             0,
@@ -1919,7 +1967,7 @@ mod tests {
         memory.load_external(&rom);
         let mut bus = StandaloneBus::new(
             memory,
-            LcdController::new(),
+            create_lcd("hd61202"),
             TimerContext::new(false, 0, 0),
             false,
             0,

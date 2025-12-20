@@ -65,4 +65,4 @@
 - **Rust-only runner:** To boot the ROM and view decoded LCD text without Python:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
-  - Default ROM path: `public-src/data/pc-e500.bin` (symlink to your ROM). Ensure it exists or pass `--rom PATH`.
+  - Default ROM model: `iq-7000` (uses `public-src/data/iq-7000.bin`). Select PC-E500 with `--model pc-e500` or pass `--rom PATH`.

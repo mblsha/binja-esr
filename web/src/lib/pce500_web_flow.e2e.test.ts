@@ -51,7 +51,7 @@ describe('PC-E500 web emulator', () => {
 		vi.stubGlobal('fetch', async (input: any) => {
 			const url = asFetchUrl(input);
 
-			if (url === '/api/rom' || url.endsWith('/api/rom')) {
+			if (url.includes('/api/rom')) {
 				return new Response(romBytes as any, {
 					status: 200,
 					headers: {
@@ -125,7 +125,7 @@ describe('PC-E500 web emulator', () => {
 		vi.stubGlobal('fetch', async (input: any) => {
 			const url = asFetchUrl(input);
 
-			if (url === '/api/rom' || url.endsWith('/api/rom')) {
+			if (url.includes('/api/rom')) {
 				return new Response(romBytes as any, {
 					status: 200,
 					headers: {
