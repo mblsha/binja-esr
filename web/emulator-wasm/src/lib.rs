@@ -126,8 +126,8 @@ struct CallArtifacts {
     report: CallReport,
 }
 
-#[wasm_bindgen]
-pub struct Pce500Emulator {
+#[wasm_bindgen(js_name = Pce500Emulator)]
+pub struct Sc62015Emulator {
     runtime: CoreRuntime,
     rom_image: Vec<u8>,
     model: DeviceModel,
@@ -135,7 +135,7 @@ pub struct Pce500Emulator {
 }
 
 #[wasm_bindgen]
-impl Pce500Emulator {
+impl Sc62015Emulator {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         let mut emulator = Self {
@@ -560,6 +560,8 @@ impl Pce500Emulator {
 
     // ROM window loading lives in sc62015-core so the CLI runner and WASM wrapper share it.
 }
+
+pub type Pce500Emulator = Sc62015Emulator;
 
 #[cfg(test)]
 mod tests {

@@ -8,6 +8,30 @@ use crate::pce500;
 use crate::{CoreRuntime, Result};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceSpec {
+    pub label: &'static str,
+    pub rom_basename: &'static str,
+    pub lcd_kind: LcdKind,
+    pub rom_window_start: u32,
+    pub rom_window_len: usize,
+    pub font_base_addr: Option<u32>,
+    pub text_decoder: Option<DeviceTextDecoderKind>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DeviceTextDecoderKind {
+    Pce500,
+}
+
+impl DeviceTextDecoderKind {
+    fn build(self, rom: &[u8]) -> Option<DeviceTextDecoder> {
+        match self {
+            Self::Pce500 => pce500::pce500_font_map_from_rom(rom).map(DeviceTextDecoder::Pce500),
+        }
+    }
+}
+
 /// Supported device/ROM models. These primarily affect defaults (ROM selection, LCD controller,
 /// font decoding) rather than the SC62015 CPU core.
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
@@ -24,6 +48,30 @@ pub enum DeviceModel {
 impl DeviceModel {
     pub const DEFAULT: Self = Self::Iq7000;
 
+    pub fn spec(self) -> DeviceSpec {
+        match self {
+            Self::Iq7000 => DeviceSpec {
+                label: "iq-7000",
+                rom_basename: "iq-7000.bin",
+                lcd_kind: LcdKind::Unknown,
+                // Placeholder: IQ-7000 mapping is not yet confirmed. Keep the PC-E500 window for now.
+                rom_window_start: pce500::ROM_WINDOW_START as u32,
+                rom_window_len: pce500::ROM_WINDOW_LEN,
+                font_base_addr: None,
+                text_decoder: None,
+            },
+            Self::PcE500 => DeviceSpec {
+                label: "pc-e500",
+                rom_basename: "pc-e500.bin",
+                lcd_kind: LcdKind::Hd61202,
+                rom_window_start: pce500::ROM_WINDOW_START as u32,
+                rom_window_len: pce500::ROM_WINDOW_LEN,
+                font_base_addr: Some(pce500::ROM_FONT_BASE_ADDR),
+                text_decoder: Some(DeviceTextDecoderKind::Pce500),
+            },
+        }
+    }
+
     pub fn parse(raw: &str) -> Option<Self> {
         let trimmed = raw.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
@@ -37,48 +85,31 @@ impl DeviceModel {
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Iq7000 => "iq-7000",
-            Self::PcE500 => "pc-e500",
-        }
+        self.spec().label
     }
 
     pub fn rom_basename(self) -> &'static str {
-        match self {
-            Self::Iq7000 => "iq-7000.bin",
-            Self::PcE500 => "pc-e500.bin",
-        }
+        self.spec().rom_basename
     }
 
     pub fn lcd_kind(self) -> LcdKind {
-        match self {
-            Self::Iq7000 => LcdKind::Unknown,
-            Self::PcE500 => LcdKind::Hd61202,
-        }
+        self.spec().lcd_kind
     }
 
     pub fn rom_window_start(self) -> u32 {
-        // Placeholder: IQ-7000 mapping is not yet confirmed. Keep the PC-E500 window for now.
-        pce500::ROM_WINDOW_START as u32
+        self.spec().rom_window_start
     }
 
     pub fn rom_window_len(self) -> usize {
-        // Placeholder: IQ-7000 mapping is not yet confirmed. Keep the PC-E500 window for now.
-        pce500::ROM_WINDOW_LEN
+        self.spec().rom_window_len
     }
 
     pub fn font_base_addr(self) -> Option<u32> {
-        match self {
-            Self::Iq7000 => None,
-            Self::PcE500 => Some(pce500::ROM_FONT_BASE_ADDR),
-        }
+        self.spec().font_base_addr
     }
 
     pub fn text_decoder(self, rom: &[u8]) -> Option<DeviceTextDecoder> {
-        match self {
-            Self::Iq7000 => None,
-            Self::PcE500 => pce500::pce500_font_map_from_rom(rom).map(DeviceTextDecoder::Pce500),
-        }
+        self.spec().text_decoder.and_then(|kind| kind.build(rom))
     }
 
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
