@@ -131,7 +131,7 @@ struct CallArtifacts {
     report: CallReport,
 }
 
-#[wasm_bindgen(js_name = Pce500Emulator)]
+#[wasm_bindgen]
 pub struct Sc62015Emulator {
     runtime: CoreRuntime,
     rom_image: Vec<u8>,

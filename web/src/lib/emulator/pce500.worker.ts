@@ -192,7 +192,7 @@ async function evalScript(source: string): Promise<any> {
 
 async function ensureEmulator(): Promise<any> {
 	if (!wasm) {
-		wasm = await import('../wasm/pce500_wasm/pce500_wasm.js');
+		wasm = await import('../wasm/sc62015_wasm');
 		if (typeof wasm.default === 'function') {
 			const url = new URL('../wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
 			try {
@@ -206,7 +206,7 @@ async function ensureEmulator(): Promise<any> {
 		}
 	}
 	if (!emulator) {
-		emulator = new wasm.Pce500Emulator();
+		emulator = new wasm.Sc62015Emulator();
 		try {
 			buildInfo = emulator.build_info?.() ?? null;
 		} catch {
