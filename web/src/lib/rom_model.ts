@@ -1,7 +1,5 @@
 export type RomModel = 'iq-7000' | 'pc-e500';
 
-export const DEFAULT_ROM_MODEL: RomModel = 'iq-7000';
-
 export function normalizeRomModel(raw: string | null | undefined): RomModel | null {
 	const trimmed = raw?.trim().toLowerCase();
 	if (!trimmed) return null;
@@ -18,4 +16,3 @@ export function romBasename(model: RomModel): string {
 			return 'pc-e500.bin';
 	}
 }
-

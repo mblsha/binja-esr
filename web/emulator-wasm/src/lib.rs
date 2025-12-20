@@ -14,6 +14,11 @@ use sc62015_core::pce500::{DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
 use sc62015_core::{CoreRuntime, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 use sc62015_core::{DeviceModel, DeviceTextDecoder};
 
+#[wasm_bindgen]
+pub fn default_device_model() -> String {
+    DeviceModel::DEFAULT.label().to_string()
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct BuildInfo {
     version: String,
@@ -146,6 +151,10 @@ impl Sc62015Emulator {
         };
         emulator.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
         emulator
+    }
+
+    pub fn device_model(&self) -> String {
+        self.model.label().to_string()
     }
 
     pub fn has_rom(&self) -> bool {

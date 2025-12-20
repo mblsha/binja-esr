@@ -46,7 +46,7 @@ pub enum DeviceModel {
 }
 
 impl DeviceModel {
-    pub const DEFAULT: Self = Self::Iq7000;
+    pub const DEFAULT: Self = Self::PcE500;
 
     pub fn spec(self) -> DeviceSpec {
         match self {

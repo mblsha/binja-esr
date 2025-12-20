@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { DEFAULT_ROM_MODEL, normalizeRomModel, type RomModel } from '$lib/rom_model';
+import { normalizeRomModel, type RomModel } from '$lib/rom_model';
 import type { RequestHandler } from './$types';
 
 type Candidate = {
@@ -38,9 +38,7 @@ function walkParents(start: string, maxDepth = 6): string[] {
 
 function symbolCandidates(model: RomModel): Candidate[] {
 	const env =
-		model === 'pc-e500'
-			? process.env.PCE500_BNIDA_ADDRESS_REPORT_PATH
-			: process.env.IQ7000_BNIDA_ADDRESS_REPORT_PATH;
+		model === 'pc-e500' ? process.env.PCE500_BNIDA_ADDRESS_REPORT_PATH : process.env.IQ7000_BNIDA_ADDRESS_REPORT_PATH;
 	const candidates: Candidate[] = [];
 	if (env) {
 		candidates.push({
@@ -72,7 +70,16 @@ function parseAddress(key: string): number | null {
 }
 
 export const GET: RequestHandler = async ({ url }) => {
-	const model = normalizeRomModel(url.searchParams.get('model')) ?? DEFAULT_ROM_MODEL;
+	const model = normalizeRomModel(url.searchParams.get('model'));
+	if (!model) {
+		return new Response("Missing or invalid 'model' query parameter", {
+			status: 400,
+			headers: {
+				'content-type': 'text/plain; charset=utf-8',
+				'cache-control': 'no-store',
+			},
+		});
+	}
 
 	for (const candidate of symbolCandidates(model)) {
 		try {
