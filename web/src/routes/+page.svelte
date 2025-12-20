@@ -438,7 +438,7 @@
 
 	async function ensureEmulator(): Promise<any> {
 		if (!wasm) {
-			wasm = await import('$lib/wasm/pce500_wasm/pce500_wasm.js');
+			wasm = await import('$lib/wasm/sc62015_wasm');
 			if (typeof wasm.default === 'function') {
 				const url = new URL('$lib/wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url);
 				try {
@@ -452,7 +452,7 @@
 			}
 		}
 		if (!emulator) {
-			emulator = new wasm.Pce500Emulator();
+			emulator = new wasm.Sc62015Emulator();
 			try {
 				buildInfo = emulator.build_info?.() ?? null;
 			} catch {
