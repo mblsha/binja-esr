@@ -140,6 +140,8 @@ export interface EmulatorAdapter {
 	pressMatrixCode?(code: number): void;
 	releaseMatrixCode?(code: number): void;
 	injectMatrixEvent?(code: number, release: boolean): void;
+	pressOnKey?(): void;
+	releaseOnKey?(): void;
 }
 
 export interface EvalApi {
@@ -172,6 +174,11 @@ export interface EvalApi {
 		release(code: number): Promise<void>;
 		tap(code: number, holdInstructions?: number): Promise<void>;
 		injectEvent(code: number, release: boolean): Promise<void>;
+	};
+	onKey: {
+		press(): Promise<void>;
+		release(): Promise<void>;
+		tap(holdInstructions?: number): Promise<void>;
 	};
 	iocs: {
 		putc(ch: string | number, options?: EvalIocsCallOptions): Promise<CallHandle>;
@@ -465,6 +472,19 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.injectMatrixEvent?.(code & 0xff, false);
 				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 				adapter.injectMatrixEvent?.(code & 0xff, true);
+			},
+		},
+		onKey: {
+			press: async () => {
+				adapter.pressOnKey?.();
+			},
+			release: async () => {
+				adapter.releaseOnKey?.();
+			},
+			tap: async (holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				adapter.pressOnKey?.();
+				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+				adapter.releaseOnKey?.();
 			},
 		},
 		iocs: {
