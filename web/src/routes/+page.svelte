@@ -391,11 +391,7 @@
 			return;
 		}
 		if (!emulator) return;
-		if (down) {
-			emulator.press_matrix_code?.(code);
-		} else {
-			emulator.release_matrix_code?.(code);
-		}
+		emulator.inject_matrix_event?.(code, !down);
 	}
 
 	function releaseAllPhysicalHeldCodes() {

@@ -514,11 +514,7 @@ async function handleRequest(msg: WorkerRequest) {
 			}
 			case 'physical_key': {
 				await ensureEmulator();
-				if (msg.down) {
-					emulator.press_matrix_code?.(msg.code);
-				} else {
-					emulator.release_matrix_code?.(msg.code);
-				}
+				emulator.inject_matrix_event?.(msg.code, !msg.down);
 				replyOk(msg.id);
 				return;
 			}
