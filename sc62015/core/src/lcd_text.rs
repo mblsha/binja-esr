@@ -4,8 +4,6 @@
 use crate::lcd::{LcdHal, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 use std::collections::HashMap;
 
-const FONT_BASE: usize = 0x00F2215;
-const ROM_WINDOW_START: usize = 0x0C0000;
 const GLYPH_WIDTH: usize = 5;
 const GLYPH_STRIDE: usize = 6; // five data columns + spacer
 const GLYPH_COUNT: usize = 96; // ASCII 0x20-0x7F
@@ -18,8 +16,8 @@ pub struct Pce500FontMap {
 }
 
 impl Pce500FontMap {
-    pub fn from_rom(rom: &[u8]) -> Self {
-        let Some(base) = font_base_offset(rom) else {
+    pub fn from_rom(rom: &[u8], font_base_addr: u32, rom_window_start: u32) -> Self {
+        let Some(base) = font_base_offset(rom, font_base_addr, rom_window_start) else {
             return Self::default();
         };
 
@@ -59,11 +57,13 @@ impl Pce500FontMap {
     }
 }
 
-fn font_base_offset(rom: &[u8]) -> Option<usize> {
-    if FONT_BASE < rom.len() {
-        return Some(FONT_BASE);
+fn font_base_offset(rom: &[u8], font_base_addr: u32, rom_window_start: u32) -> Option<usize> {
+    let base = usize::try_from(font_base_addr).ok()?;
+    if base < rom.len() {
+        return Some(base);
     }
-    let window_base = FONT_BASE.checked_sub(ROM_WINDOW_START)?;
+    let window_base = font_base_addr.checked_sub(rom_window_start)?;
+    let window_base = usize::try_from(window_base).ok()?;
     if window_base < rom.len() {
         return Some(window_base);
     }

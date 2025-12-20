@@ -8,6 +8,7 @@ use crate::{CoreRuntime, Result};
 pub const ROM_WINDOW_START: usize = 0x0C0000;
 pub const ROM_WINDOW_LEN: usize = 0x40000;
 pub const ROM_RESET_VECTOR_ADDR: u32 = 0x0FFFFD;
+pub const ROM_FONT_BASE_ADDR: u32 = 0x00F_2215;
 
 pub const DEFAULT_MTI_PERIOD: u64 = 500;
 pub const DEFAULT_STI_PERIOD: u64 = 5000;
@@ -37,7 +38,7 @@ pub fn load_pce500_rom_window_into_memory(memory: &mut MemoryImage, rom: &[u8]) 
 }
 
 pub fn pce500_font_map_from_rom(rom: &[u8]) -> Option<Pce500FontMap> {
-    let font = Pce500FontMap::from_rom(rom);
+    let font = Pce500FontMap::from_rom(rom, ROM_FONT_BASE_ADDR, ROM_WINDOW_START as u32);
     if font.is_empty() {
         None
     } else {

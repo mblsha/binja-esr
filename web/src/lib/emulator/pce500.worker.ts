@@ -400,7 +400,8 @@ async function handleRequest(msg: WorkerRequest) {
 				const emu = await ensureEmulator();
 				romModel = msg.model ?? null;
 				perfettoSymbolsPromise = null;
-				emu.load_rom(msg.bytes);
+				const model = romModel ?? 'iq-7000';
+				emu.load_rom_with_model?.(msg.bytes, model) ?? emu.load_rom(msg.bytes);
 				lastLcdTextUpdateMs = 0;
 				lastLcdText = null;
 				pressedCodes.clear();
