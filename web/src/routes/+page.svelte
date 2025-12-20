@@ -74,6 +74,7 @@
 	let debugStateOpen = false;
 	let physicalKeyboardHookInstalled = false;
 	let mounted = false;
+	const PHYSICAL_KEYBOARD_CAPTURE: AddEventListenerOptions = { passive: false, capture: true };
 
 	const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 	let lastLcdTextUpdateMs = 0;
@@ -404,15 +405,15 @@
 
 	function installPhysicalKeyboardHook() {
 		if (physicalKeyboardHookInstalled) return;
-		window.addEventListener('keydown', onKeyDown, { passive: false });
-		window.addEventListener('keyup', onKeyUp, { passive: false });
+		window.addEventListener('keydown', onKeyDown, PHYSICAL_KEYBOARD_CAPTURE);
+		window.addEventListener('keyup', onKeyUp, PHYSICAL_KEYBOARD_CAPTURE);
 		physicalKeyboardHookInstalled = true;
 	}
 
 	function uninstallPhysicalKeyboardHook() {
 		if (!physicalKeyboardHookInstalled) return;
-		window.removeEventListener('keydown', onKeyDown);
-		window.removeEventListener('keyup', onKeyUp);
+		window.removeEventListener('keydown', onKeyDown, { capture: true });
+		window.removeEventListener('keyup', onKeyUp, { capture: true });
 		physicalKeyboardHookInstalled = false;
 	}
 
