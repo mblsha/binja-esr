@@ -2885,9 +2885,12 @@ impl LlamaExecutor {
                     lhs = state.get_reg(r1) & mask;
                     rhs = state.get_reg(r2) & mask;
                 } else if let Some(r) = decoded.reg3 {
-                    lhs = state.get_reg(r) & mask;
                     if let Some(mem) = decoded.mem {
-                        rhs = bus.load(mem.addr, bits) & mask;
+                        // IMem20, Reg3 form: the first operand (memory) is the left-hand side.
+                        lhs = bus.load(mem.addr, bits) & mask;
+                        rhs = state.get_reg(r) & mask;
+                    } else {
+                        lhs = state.get_reg(r) & mask;
                     }
                 }
                 Self::set_flags_cmp(state, lhs, rhs, bits);
@@ -3438,6 +3441,36 @@ mod tests {
         assert_eq!(len, 2);
         assert_eq!(bus.mem[0x20], 0x33);
         assert_eq!(state.pc(), 2);
+    }
+
+    #[test]
+    fn cmpp_imem_reg_uses_mem_as_lhs_and_resets_carry_when_mem_ge_reg() {
+        // Program bytes (little-endian 20-bit IMEM):
+        //   D7           CMPP (IMem20), Reg3 (ops_reversed encoding order)
+        //   04           Reg3 selector: X
+        //   10 00 00     IMem addr = 0x000010
+        let mut bus = MemBus {
+            mem: vec![0xFF; 0x40],
+        };
+        bus.mem[..5].copy_from_slice(&[0xD7, 0x04, 0x10, 0x00, 0x00]);
+        // IMem bytes remain 0xFF → lhs is maximal; X = 0x000080 (rhs) → borrow should be clear.
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x000080);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xD7, &mut state, &mut bus).unwrap();
+
+        assert_eq!(
+            len, 3,
+            "encoding without PRE consumes opcode + reg + 1-byte IMEM slot"
+        );
+        assert_eq!(state.pc(), len as u32);
+        assert_eq!(
+            state.get_reg(RegName::FC) & 1,
+            0,
+            "carry/borrow should clear when lhs >= rhs"
+        );
+        assert_eq!(state.get_reg(RegName::FZ) & 1, 0, "result is non-zero");
     }
 
     #[test]
