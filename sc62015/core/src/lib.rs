@@ -2,6 +2,7 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
 pub mod device;
+pub mod iq7000;
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_text;
@@ -729,6 +730,26 @@ impl CoreRuntime {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
+                    // The SC62015 exposes keyboard registers as byte-wide ports (KOL/KOH/KIL),
+                    // but firmware frequently uses word-sized access via KOL.w (touching 0xF0/0xF1).
+                    // Split multi-byte accesses so the keyboard handler sees both bytes.
+                    if bits > 8
+                        && !self.keyboard_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let bytes = bits.div_ceil(8).max(1) as u32;
+                        let start = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        let end = start.saturating_add(bytes.saturating_sub(1));
+                        if start <= 0xF2 && end >= 0xF0 {
+                            let mut out = 0u32;
+                            for byte_offset in 0..bytes {
+                                let byte = self.load(addr.wrapping_add(byte_offset), 8) & 0xFF;
+                                out |= byte << (byte_offset * 8);
+                            }
+                            return out;
+                        }
+                    }
                     let python_required = (*self.mem).requires_python(addr);
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
@@ -801,6 +822,23 @@ impl CoreRuntime {
             }
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
                 unsafe {
+                    // See `load`: split word-sized KOL.w writes so KOH is updated too.
+                    if bits > 8
+                        && !self.keyboard_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let bytes = bits.div_ceil(8).max(1) as u32;
+                        let start = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        let end = start.saturating_add(bytes.saturating_sub(1));
+                        if start <= 0xF2 && end >= 0xF0 {
+                            for byte_offset in 0..bytes {
+                                let byte = (value >> (byte_offset * 8)) & 0xFF;
+                                self.store(addr.wrapping_add(byte_offset), 8, byte);
+                            }
+                            return;
+                        }
+                    }
                     let python_required = (*self.mem).requires_python(addr);
                     // Keyboard KOL/KOH/KIL writes.
                     if !self.keyboard_ptr.is_null()

@@ -5,14 +5,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const FIFO_SIZE: usize = 8;
-const COLUMN_COUNT: usize = 11; // 8 from KOL, 3 from KOH
-const FIFO_BASE_ADDR: u32 = 0x00BFC96;
-const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
-const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
+const COLUMN_COUNT: usize = 16; // 8 from KOL, 8 from KOH (KOL.w)
+const PCE500_FIFO_BASE_ADDR: u32 = 0x00BFC96;
+const PCE500_FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
+const PCE500_FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const DEFAULT_PRESS_TICKS: u8 = 6;
 const DEFAULT_RELEASE_TICKS: u8 = 6;
 const DEFAULT_REPEAT_DELAY: u8 = 24;
 const DEFAULT_REPEAT_INTERVAL: u8 = 6;
+
+#[derive(Copy, Clone, Debug)]
+struct KeyboardFifoAddrs {
+    base: u32,
+    head: u32,
+    tail: u32,
+}
+
+const PCE500_FIFO_ADDRS: KeyboardFifoAddrs = KeyboardFifoAddrs {
+    base: PCE500_FIFO_BASE_ADDR,
+    head: PCE500_FIFO_HEAD_ADDR,
+    tail: PCE500_FIFO_TAIL_ADDR,
+};
 
 #[derive(Copy, Clone, Debug, Default)]
 struct KeyLocation {
@@ -141,6 +154,9 @@ pub struct KeyboardMatrix {
     kol: u8,
     koh: u8,
     kil_latch: u8,
+    fifo_addrs: Option<KeyboardFifoAddrs>,
+    keyi_on_any_press: bool,
+    raw_kil: bool,
     columns_active_high: bool,
     press_threshold: u8,
     release_threshold: u8,
@@ -209,6 +225,9 @@ impl KeyboardMatrix {
             kol: 0x00,
             koh: 0x00,
             kil_latch: 0x00,
+            fifo_addrs: Some(PCE500_FIFO_ADDRS),
+            keyi_on_any_press: false,
+            raw_kil: false,
             columns_active_high: true,
             press_threshold: DEFAULT_PRESS_TICKS,
             release_threshold: DEFAULT_RELEASE_TICKS,
@@ -227,7 +246,7 @@ impl KeyboardMatrix {
             keyi_latch: false,
             kil_read_count: 0,
         };
-        for matrix_code in 0..(11 * 8) {
+        for matrix_code in 0..(COLUMN_COUNT * 8) {
             let column = (matrix_code >> 3) as u8;
             let row = (matrix_code & 0x07) as u8;
             matrix.states.push(KeyState {
@@ -236,6 +255,18 @@ impl KeyboardMatrix {
             });
         }
         matrix
+    }
+
+    pub fn disable_fifo_mirroring(&mut self) {
+        self.fifo_addrs = None;
+    }
+
+    pub fn set_keyi_on_any_press(&mut self, enabled: bool) {
+        self.keyi_on_any_press = enabled;
+    }
+
+    pub fn set_raw_kil(&mut self, enabled: bool) {
+        self.raw_kil = enabled;
     }
 
     pub fn active_columns(&self) -> Vec<u8> {
@@ -251,7 +282,7 @@ impl KeyboardMatrix {
                 cols.push(col);
             }
         }
-        for col in 0..3 {
+        for col in 0..8 {
             let bit = (self.koh >> col) & 1;
             let active = if self.columns_active_high {
                 bit == 1
@@ -270,6 +301,12 @@ impl KeyboardMatrix {
         let active = self.active_columns();
         for state in &self.states {
             if !active.contains(&state.location.column) {
+                continue;
+            }
+            if self.raw_kil {
+                if state.pressed {
+                    value |= 1 << (state.location.row & 0x07);
+                }
                 continue;
             }
             if state.debounced
@@ -305,7 +342,10 @@ impl KeyboardMatrix {
     /// Reconcile FIFO head/tail with firmware-written pointers in RAM so drained entries
     /// do not linger in the Rust model (avoids reasserting KEYI after the host consumes data).
     pub fn sync_fifo_from_memory(&mut self, memory: &MemoryImage) {
-        if let Some(head) = memory.load(FIFO_HEAD_ADDR, 8) {
+        let Some(addrs) = self.fifo_addrs else {
+            return;
+        };
+        if let Some(head) = memory.load(addrs.head, 8) {
             let new_head = (head as usize) % FIFO_SIZE;
             if new_head != self.fifo_head {
                 self.fifo_head = new_head;
@@ -360,18 +400,20 @@ impl KeyboardMatrix {
         // Safety: do not normalize unconditionally; during early boot (S2(CARD) prompt) the ROM
         // uses a different FIFO shape where touching the head breaks progress. Only normalize for
         // the harness-derived "main menu" FIFO bytes.
-        let head_raw = memory.load(FIFO_HEAD_ADDR, 8).unwrap_or(0) as u8;
-        let looks_like_main_menu_fifo = head_raw >= FIFO_SIZE as u8
-            && memory.load(FIFO_BASE_ADDR, 8).unwrap_or(0) as u8 == 0x56
-            && memory.load(FIFO_BASE_ADDR + 1, 8).unwrap_or(0) as u8 == 0xD6
-            && memory.load(FIFO_BASE_ADDR + 2, 8).unwrap_or(0) as u8 == 0xD6
-            && memory.load(FIFO_BASE_ADDR + 3, 8).unwrap_or(0) as u8 == 0x00
-            && memory.load(FIFO_BASE_ADDR + 4, 8).unwrap_or(0) as u8 == 0x00
-            && memory.load(FIFO_BASE_ADDR + 5, 8).unwrap_or(0) as u8 == 0x00
-            && memory.load(FIFO_BASE_ADDR + 6, 8).unwrap_or(0) as u8 == 0x00;
-        if looks_like_main_menu_fifo {
-            memory.write_external_byte(FIFO_HEAD_ADDR, self.fifo_head as u8);
-            Self::log_fifo_write(FIFO_HEAD_ADDR, self.fifo_head as u8);
+        if let Some(addrs) = self.fifo_addrs {
+            let head_raw = memory.load(addrs.head, 8).unwrap_or(0) as u8;
+            let looks_like_main_menu_fifo = head_raw >= FIFO_SIZE as u8
+                && memory.load(addrs.base, 8).unwrap_or(0) as u8 == 0x56
+                && memory.load(addrs.base + 1, 8).unwrap_or(0) as u8 == 0xD6
+                && memory.load(addrs.base + 2, 8).unwrap_or(0) as u8 == 0xD6
+                && memory.load(addrs.base + 3, 8).unwrap_or(0) as u8 == 0x00
+                && memory.load(addrs.base + 4, 8).unwrap_or(0) as u8 == 0x00
+                && memory.load(addrs.base + 5, 8).unwrap_or(0) as u8 == 0x00
+                && memory.load(addrs.base + 6, 8).unwrap_or(0) as u8 == 0x00;
+            if looks_like_main_menu_fifo {
+                memory.write_external_byte(addrs.head, self.fifo_head as u8);
+                Self::log_fifo_write(addrs.head, self.fifo_head as u8);
+            }
         }
         let events = self.enqueue_event(code & 0x7F, release, true);
         // Parity: matrix injection is used by host bridges/tests that do not always strobe KOL/KOH.
@@ -421,22 +463,24 @@ impl KeyboardMatrix {
     }
 
     pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
-        self.sync_fifo_from_memory(memory);
-        // Parity: mirror only occupied FIFO entries. The ROM seeds bytes in this region (including
-        // FIFO pointers), so writing zeros over the whole window can clobber firmware state.
-        let mut idx = self.fifo_head;
-        for _ in 0..self.fifo_count {
-            let addr = FIFO_BASE_ADDR + idx as u32;
-            // Firmware owns FIFO_HEAD_ADDR; avoid clobbering it when mirroring.
-            if addr != FIFO_HEAD_ADDR {
-                let value = self.fifo_storage[idx];
-                memory.write_external_byte(addr, value);
-                Self::log_fifo_write(addr, value);
+        if let Some(addrs) = self.fifo_addrs {
+            self.sync_fifo_from_memory(memory);
+            // Parity: mirror only occupied FIFO entries. The ROM seeds bytes in this region (including
+            // FIFO pointers), so writing zeros over the whole window can clobber firmware state.
+            let mut idx = self.fifo_head;
+            for _ in 0..self.fifo_count {
+                let addr = addrs.base + idx as u32;
+                // Firmware owns FIFO_HEAD_ADDR; avoid clobbering it when mirroring.
+                if addr != addrs.head {
+                    let value = self.fifo_storage[idx];
+                    memory.write_external_byte(addr, value);
+                    Self::log_fifo_write(addr, value);
+                }
+                idx = (idx + 1) % FIFO_SIZE;
             }
-            idx = (idx + 1) % FIFO_SIZE;
+            memory.write_external_byte(addrs.tail, self.fifo_tail as u8);
+            Self::log_fifo_write(addrs.tail, self.fifo_tail as u8);
         }
-        memory.write_external_byte(FIFO_TAIL_ADDR, self.fifo_tail as u8);
-        Self::log_fifo_write(FIFO_TAIL_ADDR, self.fifo_tail as u8);
         // Assert KEYI only if keyboard IRQs are enabled, matching Python gating.
         if self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
             if let Some(isr) = memory.read_internal_byte(0xFC) {
@@ -464,6 +508,15 @@ impl KeyboardMatrix {
                     });
                 }
             }
+        }
+        if self.fifo_addrs.is_none() && self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
+            // Devices without a known ROM FIFO layout still need KEYI wake-ups, but writing the
+            // PC-E500 FIFO bytes would corrupt unrelated RAM. Treat queued events as edge-triggered:
+            // once KEYI is pending, drop them.
+            self.fifo_head = 0;
+            self.fifo_tail = 0;
+            self.fifo_count = 0;
+            self.keyi_latch = false;
         }
     }
 
@@ -584,7 +637,7 @@ impl KeyboardMatrix {
 
     pub fn load_snapshot_state(&mut self, snapshot: &KeyboardSnapshot) {
         self.kol = snapshot.kol;
-        self.koh = snapshot.koh & 0x0F;
+        self.koh = snapshot.koh;
         self.kil_latch = snapshot.kil_latch;
         self.fifo_storage = [0; FIFO_SIZE];
         for (idx, byte) in snapshot.fifo.iter().enumerate().take(FIFO_SIZE) {
@@ -644,9 +697,14 @@ impl KeyboardMatrix {
         self.repeat_enabled = enabled;
     }
 
+    pub fn set_columns_active_high(&mut self, enabled: bool) {
+        self.columns_active_high = enabled;
+    }
+
     pub fn press_matrix_code(&mut self, code: u8, memory: &mut MemoryImage) {
         let _ = memory;
         if let Some(state) = self.states.get_mut(code as usize) {
+            let was_pressed = state.pressed;
             state.pressed = true;
             state.debounced = false;
             state.press_ticks = 0;
@@ -654,6 +712,12 @@ impl KeyboardMatrix {
             state.repeat_ticks = self.repeat_delay;
             self.kil_latch = self.compute_kil(false);
             // Parity: defer event enqueue/KEYI to timer-driven scan_tick; do not push KIL to IMEM here.
+            if self.keyi_on_any_press && !was_pressed {
+                // Some ROMs (e.g., IQ‑7000) park KOL/KOH inactive while waiting and rely on KEYI
+                // to kick off scanning. Wake on any new physical press to avoid a deadlock where
+                // a key cannot be seen until columns are strobed.
+                self.enqueue_event(code & 0x7F, false, true);
+            }
         }
     }
 
@@ -702,7 +766,7 @@ impl KeyboardMatrix {
                 true
             }
             0xF1 => {
-                self.koh = value & 0x0F;
+                self.koh = value;
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
                 self.bump_column_histogram();
@@ -722,6 +786,7 @@ impl KeyboardMatrix {
         if !self.scan_enabled {
             return 0;
         }
+        let emit_events = self.fifo_addrs.is_some();
         let active = self.active_columns();
         let mut events = 0usize;
         for idx in 0..self.states.len() {
@@ -767,8 +832,12 @@ impl KeyboardMatrix {
                     state.repeat_ticks = 0;
                 }
             }
-            if let Some((code, release)) = enqueue {
-                events += self.enqueue_event(code, release, count_irq);
+            if emit_events {
+                if let Some((code, release)) = enqueue {
+                    events += self.enqueue_event(code, release, count_irq);
+                }
+            } else {
+                let _ = enqueue;
             }
         }
         self.kil_latch = self.compute_kil(false);
@@ -830,7 +899,7 @@ mod tests {
         kb.write_fifo_to_memory(&mut mem, true);
         assert_eq!(kb.fifo_len(), 1);
         // Simulate firmware consuming one entry by advancing head in RAM.
-        mem.write_external_byte(FIFO_HEAD_ADDR, 1);
+        mem.write_external_byte(PCE500_FIFO_HEAD_ADDR, 1);
         kb.release_matrix_code(0, &mut mem);
         let _ = kb.scan_tick(&mut mem, true);
         assert_eq!(kb.fifo_len(), 0, "head sync should drop consumed entries");
