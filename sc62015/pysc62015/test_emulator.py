@@ -1325,6 +1325,31 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
         )
 
 
+def test_cmpp_imem_reg_uses_mem_as_lhs_and_resets_carry_when_mem_ge_reg() -> None:
+    cpu, _raw, _reads, _writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {
+            imem(0x10): 0xFF,
+            imem(0x11): 0xFF,
+            imem(0x12): 0xFF,
+        },
+        bytes([0xD7, 0x04, 0x10]),
+    )
+
+    cpu.regs.set(RegisterName.X, 0x000080)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 1)
+
+    decoded = cpu.decode_instruction(0x00)
+    assert decoded.name() == "CMPP"
+
+    _ = cpu.execute_instruction(0x00)
+
+    assert cpu.regs.get(RegisterName.PC) == 3
+    assert cpu.regs.get(RegisterName.FC) & 1 == 0
+    assert cpu.regs.get(RegisterName.FZ) & 1 == 0
+
+
 def test_pushs_pops() -> None:
     # Test PUSHS F and POPS F instructions
     # Note: PUSHS IMR and POPS IMR do not exist in the SC62015 instruction set
