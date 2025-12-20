@@ -43,6 +43,9 @@ type KeyboardDebug = {
 type Frame = {
 	lcdPixels: ArrayBuffer;
 	lcdChipPixels: ArrayBuffer;
+	lcdCols: number;
+	lcdRows: number;
+	lcdKind: string | null;
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
@@ -295,6 +298,17 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 }
 
 function captureFrame(forceText: boolean): Frame {
+	const geometry = (() => {
+		try {
+			return emulator.lcd_geometry?.() ?? null;
+		} catch {
+			return null;
+		}
+	})();
+	const lcdCols = typeof geometry?.cols === 'number' ? geometry.cols : 240;
+	const lcdRows = typeof geometry?.rows === 'number' ? geometry.rows : 32;
+	const lcdKind = typeof geometry?.kind === 'string' ? geometry.kind : null;
+
 	const pixels = emulator.lcd_pixels();
 	const pixelsCopy = new Uint8Array(pixels);
 	const chipPixels = emulator.lcd_chip_pixels();
@@ -344,6 +358,9 @@ function captureFrame(forceText: boolean): Frame {
 	return {
 		lcdPixels: pixelsCopy.buffer,
 		lcdChipPixels: chipPixelsCopy.buffer,
+		lcdCols,
+		lcdRows,
+		lcdKind,
 		pc,
 		instructionCount,
 		halted,

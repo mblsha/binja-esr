@@ -11,7 +11,9 @@ use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::pce500::{DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
-use sc62015_core::{CoreRuntime, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
+use sc62015_core::{
+    CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
+};
 use sc62015_core::{DeviceModel, DeviceTextDecoder};
 
 #[wasm_bindgen]
@@ -24,6 +26,13 @@ struct BuildInfo {
     version: String,
     git_commit: String,
     build_timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LcdGeometry {
+    kind: String,
+    cols: u32,
+    rows: u32,
 }
 
 fn build_info() -> BuildInfo {
@@ -469,17 +478,75 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_pixels(&self) -> Uint8Array {
-        let rows = LCD_DISPLAY_ROWS as usize;
-        let cols = LCD_DISPLAY_COLS as usize;
-        let mut flat = vec![0u8; rows * cols];
-        if let Some(lcd) = self.runtime.lcd.as_deref() {
-            let buf = lcd.display_buffer();
-            for (row, row_buf) in buf.iter().enumerate().take(rows) {
-                let start = row * cols;
-                flat[start..start + cols].copy_from_slice(row_buf);
+        let Some(lcd) = self.runtime.lcd.as_deref() else {
+            return Uint8Array::from(vec![0u8; LCD_DISPLAY_ROWS * LCD_DISPLAY_COLS].as_slice());
+        };
+
+        match lcd.kind() {
+            // PC-E500: keep the existing 32x240 buffer layout (matches Python get_display_buffer).
+            LcdKind::Hd61202 | LcdKind::Unknown => {
+                let rows = LCD_DISPLAY_ROWS as usize;
+                let cols = LCD_DISPLAY_COLS as usize;
+                let mut flat = vec![0u8; rows * cols];
+                let buf = lcd.display_buffer();
+                for (row, row_buf) in buf.iter().enumerate().take(rows) {
+                    let start = row * cols;
+                    flat[start..start + cols].copy_from_slice(row_buf);
+                }
+                Uint8Array::from(flat.as_slice())
+            }
+            // IQ-7000: export the real 96x64 pixel grid (8 pages x 96 columns).
+            LcdKind::Iq7000Vram => {
+                const COLS: usize = 96;
+                const ROWS: usize = 64;
+                const PAGES: usize = 8;
+
+                let bytes = lcd.display_vram_bytes();
+                let mut flat = vec![0u8; ROWS * COLS];
+                for page in 0..PAGES {
+                    for col in 0..COLS {
+                        let byte = bytes[page][col];
+                        for dy in 0..8usize {
+                            let bit = 7usize.saturating_sub(dy);
+                            let on = (byte >> bit) & 1;
+                            flat[(page * 8 + dy) * COLS + col] = on;
+                        }
+                    }
+                }
+                Uint8Array::from(flat.as_slice())
             }
         }
-        Uint8Array::from(flat.as_slice())
+    }
+
+    pub fn lcd_geometry(&self) -> Result<JsValue, JsValue> {
+        let (kind, cols, rows) = if let Some(lcd) = self.runtime.lcd.as_deref() {
+            match lcd.kind() {
+                LcdKind::Iq7000Vram => (LcdKind::Iq7000Vram, 96u32, 64u32),
+                LcdKind::Hd61202 => (
+                    LcdKind::Hd61202,
+                    LCD_DISPLAY_COLS as u32,
+                    LCD_DISPLAY_ROWS as u32,
+                ),
+                LcdKind::Unknown => (
+                    LcdKind::Unknown,
+                    LCD_DISPLAY_COLS as u32,
+                    LCD_DISPLAY_ROWS as u32,
+                ),
+            }
+        } else {
+            (
+                LcdKind::Unknown,
+                LCD_DISPLAY_COLS as u32,
+                LCD_DISPLAY_ROWS as u32,
+            )
+        };
+
+        serde_wasm_bindgen::to_value(&LcdGeometry {
+            kind: kind.as_str().to_string(),
+            cols,
+            rows,
+        })
+        .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn lcd_chip_pixels(&self) -> Uint8Array {
