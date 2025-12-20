@@ -192,6 +192,8 @@ async function main() {
 			runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
 				emulator.inject_matrix_event?.(code, release),
 			),
+		pressOnKey: () => runWithError('onkey.press()', () => emulator.press_on_key?.()),
+		releaseOnKey: () => runWithError('onkey.release()', () => emulator.release_on_key?.()),
 	};
 
 	const api = createEvalApi(adapter);
