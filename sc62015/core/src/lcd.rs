@@ -23,8 +23,33 @@ const LCD_RANGE_HIGH: u32 = 0xA000;
 pub const LCD_DISPLAY_ROWS: usize = 32;
 pub const LCD_DISPLAY_COLS: usize = 240;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LcdKind {
+    #[serde(rename = "hd61202")]
+    Hd61202,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
+impl LcdKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hd61202 => "hd61202",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim() {
+            "hd61202" => Self::Hd61202,
+            "unknown" => Self::Unknown,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 pub trait LcdHal: Send {
-    fn kind(&self) -> &'static str;
+    fn kind(&self) -> LcdKind;
     fn reset(&mut self);
     fn handles(&self, address: u32) -> bool;
     fn read(&mut self, address: u32) -> Option<u8>;
@@ -45,11 +70,10 @@ pub trait LcdHal: Send {
     fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String>;
 }
 
-pub fn create_lcd(kind: &str) -> Box<dyn LcdHal> {
-    match kind.trim() {
-        "hd61202" => Box::new(LcdController::new()),
-        "unknown" => Box::new(UnknownLcdController::new()),
-        _ => Box::new(UnknownLcdController::new()),
+pub fn create_lcd(kind: LcdKind) -> Box<dyn LcdHal> {
+    match kind {
+        LcdKind::Hd61202 => Box::new(LcdController::new()),
+        LcdKind::Unknown => Box::new(UnknownLcdController::new()),
     }
 }
 
@@ -279,8 +303,8 @@ pub struct LcdStats {
 }
 
 impl LcdController {
-    pub fn kind(&self) -> &'static str {
-        "hd61202"
+    pub fn kind(&self) -> LcdKind {
+        LcdKind::Hd61202
     }
 
     pub fn new() -> Self {
@@ -635,7 +659,7 @@ impl LcdController {
 }
 
 impl LcdHal for LcdController {
-    fn kind(&self) -> &'static str {
+    fn kind(&self) -> LcdKind {
         self.kind()
     }
 
@@ -703,8 +727,8 @@ impl Default for UnknownLcdController {
 }
 
 impl LcdHal for UnknownLcdController {
-    fn kind(&self) -> &'static str {
-        "unknown"
+    fn kind(&self) -> LcdKind {
+        LcdKind::Unknown
     }
 
     fn reset(&mut self) {
@@ -780,7 +804,8 @@ impl LcdHal for UnknownLcdController {
         let kind = metadata
             .get("kind")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .map(LcdKind::parse)
+            .unwrap_or(LcdKind::Unknown);
         if kind != self.kind() {
             return Err("lcd kind mismatch".to_string());
         }

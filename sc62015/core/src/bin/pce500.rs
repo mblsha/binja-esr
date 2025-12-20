@@ -7,7 +7,6 @@ use sc62015_core::{
     create_lcd,
     keyboard::KeyboardMatrix,
     lcd::{LcdHal, LcdWriteTrace},
-    lcd_text::decode_display_text,
     llama::{
         eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
@@ -17,10 +16,7 @@ use sc62015_core::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
         IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
     },
-    pce500::{
-        load_pce500_rom_window_into_memory, pce500_font_map_from_rom, ROM_WINDOW_LEN,
-        ROM_WINDOW_START,
-    },
+    pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
     perfetto::set_call_ui_function_names,
     timer::TimerContext,
     DeviceModel, PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
@@ -1267,10 +1263,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .clone()
         .unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = load_rom(&rom_path)?;
-    let font = match args.model {
-        DeviceModel::PcE500 => pce500_font_map_from_rom(&rom_bytes),
-        DeviceModel::Iq7000 => None,
-    };
+    let text_decoder = args.model.text_decoder(&rom_bytes);
 
     let log_lcd = args.lcd_log;
     let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
@@ -1447,9 +1440,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         if pf1_stage != Pf1TwiceStage::Done && executed.is_multiple_of(lcd_check_interval) {
-            let lcd_lines = font
+            let lcd_lines = text_decoder
                 .as_ref()
-                .map(|font| decode_display_text(bus.lcd(), font))
+                .map(|decoder| decoder.decode_display_text(bus.lcd()))
                 .unwrap_or_default();
             if !lcd_lines.is_empty() {
                 _last_lcd_lines = lcd_lines.clone();
@@ -1764,12 +1757,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let mut lcd_lines = font
+    let mut lcd_lines = text_decoder
         .as_ref()
-        .map(|font| decode_display_text(bus.lcd(), font))
+        .map(|decoder| decoder.decode_display_text(bus.lcd()))
         .unwrap_or_default();
     if matches!(args.model, DeviceModel::PcE500)
-        && font.is_some()
+        && text_decoder.is_some()
         && bus.lcd_writes > 0
         && lcd_lines.iter().all(|line| line.trim().is_empty())
     {
@@ -1871,7 +1864,7 @@ mod tests {
     fn on_key_sets_isr_and_triggers_pending_irq() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
-            create_lcd("hd61202"),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
             TimerContext::new(true, 0, 0),
             false,
             0,
@@ -1913,7 +1906,7 @@ mod tests {
     fn deliver_irq_prefers_onk_when_masked_in() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
-            create_lcd("hd61202"),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
             TimerContext::new(true, 0, 0),
             false,
             0,
@@ -1959,7 +1952,7 @@ mod tests {
         memory.load_external(&rom);
         let mut bus = StandaloneBus::new(
             memory,
-            create_lcd("hd61202"),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
             TimerContext::new(false, 0, 0),
             false,
             0,

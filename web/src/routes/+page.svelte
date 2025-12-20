@@ -9,6 +9,7 @@
 	import { runUserJs } from '$lib/debug/run_user_js';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
+	import { DEFAULT_ROM_MODEL, type RomModel } from '$lib/rom_model';
 
 	let wasm: any = null;
 	let emulator: any = null;
@@ -38,8 +39,7 @@
 	let instructionCount: string | null = null;
 	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 	let romLoaded = false;
-	type RomModel = 'iq-7000' | 'pc-e500';
-	let romModel: RomModel = 'iq-7000';
+	let romModel: RomModel = DEFAULT_ROM_MODEL;
 
 	let running = false;
 	let targetFps = 30;

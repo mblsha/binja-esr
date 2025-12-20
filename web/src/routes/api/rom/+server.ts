@@ -1,32 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { DEFAULT_ROM_MODEL, normalizeRomModel, romBasename, type RomModel } from '$lib/rom_model';
 import type { RequestHandler } from './$types';
 
 type Candidate = {
 	path: string;
 	source: string;
 };
-
-type RomModel = 'iq-7000' | 'pc-e500';
-
-const DEFAULT_MODEL: RomModel = 'iq-7000';
-
-function normalizeModel(raw: string | null): RomModel | null {
-	const trimmed = raw?.trim().toLowerCase();
-	if (!trimmed) return null;
-	if (trimmed === 'iq-7000' || trimmed === 'iq7000' || trimmed === 'iq_7000') return 'iq-7000';
-	if (trimmed === 'pc-e500' || trimmed === 'pce500' || trimmed === 'pc_e500') return 'pc-e500';
-	return null;
-}
-
-function romBasename(model: RomModel): string {
-	switch (model) {
-		case 'iq-7000':
-			return 'iq-7000.bin';
-		case 'pc-e500':
-			return 'pc-e500.bin';
-	}
-}
 
 function romCandidates(model: RomModel): Candidate[] {
 	const env =
@@ -50,7 +30,7 @@ function romCandidates(model: RomModel): Candidate[] {
 }
 
 export const GET: RequestHandler = async ({ url }) => {
-	const model = normalizeModel(url.searchParams.get('model')) ?? DEFAULT_MODEL;
+	const model = normalizeRomModel(url.searchParams.get('model')) ?? DEFAULT_ROM_MODEL;
 
 	for (const candidate of romCandidates(model)) {
 		try {

@@ -1,23 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { DEFAULT_ROM_MODEL, normalizeRomModel, type RomModel } from '$lib/rom_model';
 import type { RequestHandler } from './$types';
 
 type Candidate = {
 	path: string;
 	source: string;
 };
-
-type RomModel = 'iq-7000' | 'pc-e500';
-
-const DEFAULT_MODEL: RomModel = 'iq-7000';
-
-function normalizeModel(raw: string | null): RomModel | null {
-	const trimmed = raw?.trim().toLowerCase();
-	if (!trimmed) return null;
-	if (trimmed === 'iq-7000' || trimmed === 'iq7000' || trimmed === 'iq_7000') return 'iq-7000';
-	if (trimmed === 'pc-e500' || trimmed === 'pce500' || trimmed === 'pc_e500') return 'pc-e500';
-	return null;
-}
 
 function reportRelativePath(model: RomModel): string {
 	switch (model) {
@@ -83,7 +72,7 @@ function parseAddress(key: string): number | null {
 }
 
 export const GET: RequestHandler = async ({ url }) => {
-	const model = normalizeModel(url.searchParams.get('model')) ?? DEFAULT_MODEL;
+	const model = normalizeRomModel(url.searchParams.get('model')) ?? DEFAULT_ROM_MODEL;
 
 	for (const candidate of symbolCandidates(model)) {
 		try {

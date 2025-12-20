@@ -2,17 +2,22 @@
 // PY_SOURCE: pce500/run_pce500.py
 
 use crate::create_lcd;
+use crate::lcd::{LcdHal, LcdKind};
+use crate::lcd_text::{decode_display_text, Pce500FontMap};
 use crate::pce500;
 use crate::{CoreRuntime, Result};
+use serde::{Deserialize, Serialize};
 
 /// Supported device/ROM models. These primarily affect defaults (ROM selection, LCD controller,
 /// font decoding) rather than the SC62015 CPU core.
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceModel {
     #[cfg_attr(feature = "cli", value(name = "iq-7000"))]
+    #[serde(rename = "iq-7000")]
     Iq7000,
     #[cfg_attr(feature = "cli", value(name = "pc-e500"))]
+    #[serde(rename = "pc-e500")]
     PcE500,
 }
 
@@ -45,10 +50,10 @@ impl DeviceModel {
         }
     }
 
-    pub fn lcd_kind(self) -> &'static str {
+    pub fn lcd_kind(self) -> LcdKind {
         match self {
-            Self::Iq7000 => "unknown",
-            Self::PcE500 => "hd61202",
+            Self::Iq7000 => LcdKind::Unknown,
+            Self::PcE500 => LcdKind::Hd61202,
         }
     }
 
@@ -69,9 +74,30 @@ impl DeviceModel {
         }
     }
 
+    pub fn text_decoder(self, rom: &[u8]) -> Option<DeviceTextDecoder> {
+        match self {
+            Self::Iq7000 => None,
+            Self::PcE500 => pce500::pce500_font_map_from_rom(rom).map(DeviceTextDecoder::Pce500),
+        }
+    }
+
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
+        rt.set_device_model(*self);
         rt.lcd = Some(create_lcd(self.lcd_kind()));
         // Placeholder: share the existing PC-E500 window loader for now.
         pce500::load_pce500_rom_window(rt, rom)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DeviceTextDecoder {
+    Pce500(Pce500FontMap),
+}
+
+impl DeviceTextDecoder {
+    pub fn decode_display_text(&self, lcd: &dyn LcdHal) -> Vec<String> {
+        match self {
+            Self::Pce500(font) => decode_display_text(lcd, font),
+        }
     }
 }
