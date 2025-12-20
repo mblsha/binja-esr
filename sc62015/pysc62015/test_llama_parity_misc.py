@@ -109,6 +109,37 @@ def test_dsll_shifts_left_digits(backend: str) -> None:
     assert cpu.regs.get(RegisterName.FZ) == 0
 
 
+def test_cmpp_imem_reg_matches_between_backends() -> None:
+    """Ensure LLAMA matches Python for CMPP (m),r3 borrow/operand ordering."""
+
+    assert "llama" in available_backends(), "LLAMA backend not available"
+
+    def run_case(backend: str) -> tuple[int, int, int]:
+        raw = bytearray(ADDRESS_SPACE_SIZE)
+        # D7 04 10: CMPP (BP+10), X (no PRE byte; IMem defaults to BP+N).
+        raw[0:3] = bytes([0xD7, 0x04, 0x10])
+        # (m..m+2) = 0xFFFFFF (little-endian), so lhs >= rhs for X=0x000080.
+        raw[INTERNAL_MEMORY_START + 0x10 : INTERNAL_MEMORY_START + 0x13] = b"\xFF\xFF\xFF"
+
+        memory = _make_memory(raw)
+        cpu = CPU(memory, reset_on_init=False, backend=backend)
+        cpu.regs.set(RegisterName.X, 0x000080)
+        cpu.regs.set(RegisterName.FC, 1)
+        cpu.regs.set(RegisterName.FZ, 1)
+        _run(cpu)
+        return (
+            cpu.regs.get(RegisterName.PC),
+            cpu.regs.get(RegisterName.FC) & 1,
+            cpu.regs.get(RegisterName.FZ) & 1,
+        )
+
+    python_state = run_case("python")
+    llama_state = run_case("llama")
+
+    assert llama_state == python_state
+    assert python_state == (3, 0, 0)
+
+
 def test_wait_invokes_wait_cycles_llama() -> None:
     assert "llama" in available_backends(), "LLAMA backend not available"
 
