@@ -48,6 +48,14 @@ impl LcdKind {
     }
 }
 
+pub fn lcd_kind_from_snapshot_meta(metadata: &Value, default: LcdKind) -> LcdKind {
+    metadata
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(LcdKind::parse)
+        .unwrap_or(default)
+}
+
 pub trait LcdHal: Send {
     fn kind(&self) -> LcdKind;
     fn reset(&mut self);
@@ -801,11 +809,7 @@ impl LcdHal for UnknownLcdController {
     }
 
     fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
-        let kind = metadata
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .map(LcdKind::parse)
-            .unwrap_or(LcdKind::Unknown);
+        let kind = lcd_kind_from_snapshot_meta(metadata, LcdKind::Unknown);
         if kind != self.kind() {
             return Err("lcd kind mismatch".to_string());
         }

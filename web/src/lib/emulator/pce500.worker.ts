@@ -1,3 +1,5 @@
+import { DEFAULT_ROM_MODEL, type RomModel } from '../rom_model';
+
 type DebugOptions = {
 	regsOpen: boolean;
 	callStackOpen: boolean;
@@ -7,7 +9,7 @@ type DebugOptions = {
 };
 
 type WorkerRequest =
-	| { id: number; type: 'load_rom'; bytes: Uint8Array; romSource?: string | null; model?: string | null }
+	| { id: number; type: 'load_rom'; bytes: Uint8Array; romSource?: string | null; model?: RomModel }
 	| { id: number; type: 'step'; instructions: number }
 	| { id: number; type: 'start' }
 	| { id: number; type: 'stop' }
@@ -67,7 +69,7 @@ const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 let wasm: any = null;
 let emulator: any = null;
 let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
-let romModel: string | null = null;
+let romModel: RomModel = DEFAULT_ROM_MODEL;
 
 let running = false;
 let targetFps = 30;
@@ -97,8 +99,7 @@ async function ensurePerfettoSymbols(): Promise<void> {
 	perfettoSymbolsPromise = (async () => {
 		try {
 			await ensureEmulator();
-			const model = romModel ?? 'iq-7000';
-			const res = await fetch(`/api/symbols?model=${encodeURIComponent(model)}`);
+			const res = await fetch(`/api/symbols?model=${encodeURIComponent(romModel)}`);
 			if (!res.ok) return;
 			const payload = (await res.json()) as any;
 			emulator.set_perfetto_function_symbols(payload.symbols);
@@ -398,10 +399,9 @@ async function handleRequest(msg: WorkerRequest) {
 			}
 			case 'load_rom': {
 				const emu = await ensureEmulator();
-				romModel = msg.model ?? null;
+				romModel = msg.model ?? DEFAULT_ROM_MODEL;
 				perfettoSymbolsPromise = null;
-				const model = romModel ?? 'iq-7000';
-				emu.load_rom_with_model?.(msg.bytes, model) ?? emu.load_rom(msg.bytes);
+				emu.load_rom_with_model?.(msg.bytes, romModel) ?? emu.load_rom(msg.bytes);
 				lastLcdTextUpdateMs = 0;
 				lastLcdText = null;
 				pressedCodes.clear();

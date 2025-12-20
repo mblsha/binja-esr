@@ -352,7 +352,6 @@ pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) {
 /// Extremely small placeholder runtime for LLAMA-only execution.
 pub struct CoreRuntime {
     metadata: SnapshotMetadata,
-    device_model: DeviceModel,
     pub memory: MemoryImage,
     pub state: LlamaState,
     pub fast_mode: bool,
@@ -375,7 +374,6 @@ impl CoreRuntime {
     pub fn new() -> Self {
         let mut rt = Self {
             metadata: SnapshotMetadata::default(),
-            device_model: DeviceModel::PcE500,
             memory: MemoryImage::new(),
             state: LlamaState::new(),
             fast_mode: false,
@@ -392,11 +390,10 @@ impl CoreRuntime {
     }
 
     pub fn device_model(&self) -> DeviceModel {
-        self.device_model
+        self.metadata.device_model.unwrap_or(DeviceModel::PcE500)
     }
 
     pub fn set_device_model(&mut self, model: DeviceModel) {
-        self.device_model = model;
         self.metadata.device_model = Some(model);
     }
 
@@ -1260,7 +1257,6 @@ impl CoreRuntime {
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     pub fn save_snapshot(&self, path: &std::path::Path) -> Result<()> {
         let mut metadata = self.metadata.clone();
-        metadata.device_model = Some(self.device_model);
         metadata.instruction_count = self.metadata.instruction_count;
         metadata.cycle_count = self.metadata.cycle_count;
         metadata.pc = self.get_reg("PC");
@@ -1315,7 +1311,6 @@ impl CoreRuntime {
     pub fn load_snapshot(&mut self, path: &std::path::Path) -> Result<()> {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
-        self.device_model = self.metadata.device_model.unwrap_or(DeviceModel::PcE500);
         apply_registers(&mut self.state, &loaded.registers);
         self.fast_mode = self.metadata.fast_mode;
         self.memory
@@ -1347,11 +1342,7 @@ impl CoreRuntime {
         if let (Some(lcd_meta), Some(payload)) =
             (self.metadata.lcd.as_ref(), loaded.lcd_payload.as_deref())
         {
-            let kind = lcd_meta
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .map(LcdKind::parse)
-                .unwrap_or(LcdKind::Hd61202);
+            let kind = crate::lcd::lcd_kind_from_snapshot_meta(lcd_meta, LcdKind::Hd61202);
             if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
                 self.lcd = Some(create_lcd(kind));
             }
