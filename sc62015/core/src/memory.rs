@@ -11,7 +11,7 @@ type ImrIsrHook = Rc<dyn Fn(u32, u8, u8)>;
 pub const INTERNAL_MEMORY_START: u32 = 0x100000;
 pub const ADDRESS_MASK: u32 = 0x00FF_FFFF;
 pub const INTERNAL_ADDR_MASK: u32 = 0xFF;
-pub const EXTERNAL_SPACE: usize = 0x200000;
+pub const EXTERNAL_SPACE: usize = 0x100000;
 pub const INTERNAL_SPACE: usize = 0x100;
 pub const INTERNAL_RAM_START: usize = 0xB8000;
 pub const INTERNAL_RAM_SIZE: usize = 0x8000;
@@ -1009,9 +1009,8 @@ mod tests {
     fn requires_python_masks_address() {
         let mut mem = MemoryImage::new();
         mem.set_python_ranges(vec![(0x1000, 0x1FFF)]);
-        let addr = (EXTERNAL_SPACE as u32) + 0x100;
-        assert!(mem.requires_python(addr));
-        assert!(mem.requires_python(addr | 0x1000_0000));
+        assert!(mem.requires_python(0x0010_0100));
+        assert!(mem.requires_python(0x1010_0100));
     }
 
     #[test]
