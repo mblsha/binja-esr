@@ -453,7 +453,7 @@ impl Pce500Emulator {
         let rows = LCD_DISPLAY_ROWS as usize;
         let cols = LCD_DISPLAY_COLS as usize;
         let mut flat = vec![0u8; rows * cols];
-        if let Some(lcd) = self.runtime.lcd.as_ref() {
+        if let Some(lcd) = self.runtime.lcd.as_deref() {
             let buf = lcd.display_buffer();
             for (row, row_buf) in buf.iter().enumerate().take(rows) {
                 let start = row * cols;
@@ -467,7 +467,7 @@ impl Pce500Emulator {
         let rows = LCD_CHIP_ROWS as usize;
         let cols = LCD_CHIP_COLS as usize;
         let mut flat = vec![0u8; rows * cols * 2];
-        if let Some(lcd) = self.runtime.lcd.as_ref() {
+        if let Some(lcd) = self.runtime.lcd.as_deref() {
             for chip_index in 0..2 {
                 let buf = lcd.chip_display_buffer(chip_index);
                 let base = chip_index * rows * cols;
@@ -485,7 +485,7 @@ impl Pce500Emulator {
             return serde_wasm_bindgen::to_value(&Vec::<String>::new())
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         };
-        let Some(lcd) = self.runtime.lcd.as_ref() else {
+        let Some(lcd) = self.runtime.lcd.as_deref() else {
             return serde_wasm_bindgen::to_value(&Vec::<String>::new())
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         };
@@ -494,7 +494,7 @@ impl Pce500Emulator {
     }
 
     pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
-        let Some(lcd) = self.runtime.lcd.as_ref() else {
+        let Some(lcd) = self.runtime.lcd.as_deref() else {
             return serde_wasm_bindgen::to_value(
                 &Vec::<Vec<sc62015_core::lcd::LcdWriteTrace>>::new(),
             )

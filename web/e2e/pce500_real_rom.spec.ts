@@ -16,6 +16,8 @@ test('real ROM: PF1 changes boot menu', async ({ page }) => {
 
 	await page.goto('/');
 
+	await page.getByTestId('rom-model').selectOption('pc-e500');
+
 	// Boot: the ROM should render the S2(CARD) header after initial init.
 	await clickStep20k(page, 1);
 	await expect(page.getByTestId('lcd-text')).toContainText('S2(CARD):NEW CARD', { timeout: 30_000 });
@@ -30,4 +32,3 @@ test('real ROM: PF1 changes boot menu', async ({ page }) => {
 	await clickStep20k(page, 40);
 	await expect(page.getByTestId('lcd-text')).toContainText('S1(MAIN):NEW CARD', { timeout: 30_000 });
 });
-

@@ -5,6 +5,8 @@ test('function runner: reset + PF1 tap + traced call does not trigger wasm-bindg
 }) => {
 	await page.goto('/');
 
+	await page.getByTestId('rom-model').selectOption('pc-e500');
+
 	// Wait for auto-ROM-load to complete (enables controls), but don't "start" the emulator.
 	const step20k = page.getByRole('button', { name: 'Step 20k' });
 	await expect(step20k).toBeEnabled();

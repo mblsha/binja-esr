@@ -34,7 +34,7 @@ fn pce500_boots_and_decodes_lcd_text_via_core_runtime() {
 
     rt.step(20_000).expect("execute boot instructions");
 
-    let lcd = rt.lcd.as_ref().expect("lcd present");
+    let lcd = rt.lcd.as_deref().expect("lcd present");
     let lines = decode_display_text(lcd, &font);
     assert!(
         lines
@@ -87,7 +87,7 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
     rt.step(800_000 - 15_000 - 40_000)
         .expect("execute after PF1 release");
 
-    let lcd = rt.lcd.as_ref().expect("lcd present");
+    let lcd = rt.lcd.as_deref().expect("lcd present");
     let lines = decode_display_text(lcd, &font);
     assert!(
         lines

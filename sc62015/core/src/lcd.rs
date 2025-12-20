@@ -23,6 +23,36 @@ const LCD_RANGE_HIGH: u32 = 0xA000;
 pub const LCD_DISPLAY_ROWS: usize = 32;
 pub const LCD_DISPLAY_COLS: usize = 240;
 
+pub trait LcdHal: Send {
+    fn kind(&self) -> &'static str;
+    fn reset(&mut self);
+    fn handles(&self, address: u32) -> bool;
+    fn read(&mut self, address: u32) -> Option<u8>;
+    fn write(&mut self, address: u32, value: u8);
+    fn read_placeholder(&self, address: u32) -> u32;
+
+    fn begin_display_write_capture(&mut self);
+    fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite>;
+
+    fn display_buffer(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
+    fn chip_display_buffer(&self, chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS];
+    fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_PAGES];
+    fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; LCD_PAGES];
+
+    fn stats(&self) -> LcdStats;
+
+    fn export_snapshot(&self) -> (Value, Vec<u8>);
+    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String>;
+}
+
+pub fn create_lcd(kind: &str) -> Box<dyn LcdHal> {
+    match kind.trim() {
+        "hd61202" => Box::new(LcdController::new()),
+        "unknown" => Box::new(UnknownLcdController::new()),
+        _ => Box::new(UnknownLcdController::new()),
+    }
+}
+
 // The LCD controller is mirrored at 0x2000 and 0xA000. Bits 0-3 encode
 // R/W, DI, and CS the same way the Python hd61202 decoder does:
 //  bit0: 0=write, 1=read
@@ -80,6 +110,16 @@ pub struct LcdDisplayWrite {
     pub col: u16,
     pub value: u8,
     pub trace: LcdWriteTrace,
+}
+
+pub struct UnknownLcdController {
+    write_count: u64,
+}
+
+impl UnknownLcdController {
+    pub fn new() -> Self {
+        Self { write_count: 0 }
+    }
 }
 
 impl Hd61202Chip {
@@ -239,6 +279,10 @@ pub struct LcdStats {
 }
 
 impl LcdController {
+    pub fn kind(&self) -> &'static str {
+        "hd61202"
+    }
+
     pub fn new() -> Self {
         Self {
             chips: [Hd61202Chip::default(), Hd61202Chip::default()],
@@ -434,6 +478,7 @@ impl LcdController {
 
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
         let mut meta = json!({
+            "kind": self.kind(),
             "chip_count": self.chips.len(),
             "pages": LCD_PAGES,
             "width": LCD_WIDTH,
@@ -586,6 +631,163 @@ impl LcdController {
         stats.cs_left_count = self.cs_left_count;
         stats.cs_right_count = self.cs_right_count;
         stats
+    }
+}
+
+impl LcdHal for LcdController {
+    fn kind(&self) -> &'static str {
+        self.kind()
+    }
+
+    fn reset(&mut self) {
+        self.reset();
+    }
+
+    fn handles(&self, address: u32) -> bool {
+        self.handles(address)
+    }
+
+    fn read(&mut self, address: u32) -> Option<u8> {
+        self.read(address)
+    }
+
+    fn write(&mut self, address: u32, value: u8) {
+        self.write(address, value)
+    }
+
+    fn read_placeholder(&self, address: u32) -> u32 {
+        self.read_placeholder(address)
+    }
+
+    fn begin_display_write_capture(&mut self) {
+        self.begin_display_write_capture();
+    }
+
+    fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite> {
+        self.take_display_write_capture()
+    }
+
+    fn display_buffer(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS] {
+        self.display_buffer()
+    }
+
+    fn chip_display_buffer(&self, chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS] {
+        self.chip_display_buffer(chip_index)
+    }
+
+    fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_PAGES] {
+        self.display_vram_bytes()
+    }
+
+    fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; LCD_PAGES] {
+        self.display_trace_buffer()
+    }
+
+    fn stats(&self) -> LcdStats {
+        self.stats()
+    }
+
+    fn export_snapshot(&self) -> (Value, Vec<u8>) {
+        self.export_snapshot()
+    }
+
+    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
+        self.load_snapshot(metadata, payload)
+    }
+}
+
+impl Default for UnknownLcdController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LcdHal for UnknownLcdController {
+    fn kind(&self) -> &'static str {
+        "unknown"
+    }
+
+    fn reset(&mut self) {
+        self.write_count = 0;
+    }
+
+    fn handles(&self, address: u32) -> bool {
+        let addr = address & 0x00FF_FFFF;
+        (0x0000_2000..=0x0000_2FFF).contains(&addr) || (0x0000_A000..=0x0000_AFFF).contains(&addr)
+    }
+
+    fn read(&mut self, address: u32) -> Option<u8> {
+        if !self.handles(address) {
+            return None;
+        }
+        if (address & 1) == 1 {
+            // Mirror the existing PC-E500 LCD wrapper behaviour: reads return 0xFF.
+            return Some(0xFF);
+        }
+        None
+    }
+
+    fn write(&mut self, address: u32, _value: u8) {
+        if !self.handles(address) {
+            return;
+        }
+        if (address & 1) == 0 {
+            self.write_count = self.write_count.wrapping_add(1);
+        }
+    }
+
+    fn read_placeholder(&self, address: u32) -> u32 {
+        if !self.handles(address) {
+            return 0;
+        }
+        if (address & 1) == 1 {
+            return 0xFF;
+        }
+        0
+    }
+
+    fn begin_display_write_capture(&mut self) {}
+
+    fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite> {
+        Vec::new()
+    }
+
+    fn display_buffer(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS] {
+        [[0u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS]
+    }
+
+    fn chip_display_buffer(&self, _chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS] {
+        [[0u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS]
+    }
+
+    fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_PAGES] {
+        [[0u8; LCD_DISPLAY_COLS]; LCD_PAGES]
+    }
+
+    fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; LCD_PAGES] {
+        [[LcdWriteTrace::default(); LCD_DISPLAY_COLS]; LCD_PAGES]
+    }
+
+    fn stats(&self) -> LcdStats {
+        LcdStats::default()
+    }
+
+    fn export_snapshot(&self) -> (Value, Vec<u8>) {
+        (json!({"kind": self.kind()}), Vec::new())
+    }
+
+    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
+        let kind = metadata
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        if kind != self.kind() {
+            return Err("lcd kind mismatch".to_string());
+        }
+        if !payload.is_empty() {
+            return Err("unknown lcd does not accept payload".to_string());
+        }
+        Ok(())
     }
 }
 

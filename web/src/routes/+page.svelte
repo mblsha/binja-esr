@@ -38,6 +38,8 @@
 	let instructionCount: string | null = null;
 	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 	let romLoaded = false;
+	type RomModel = 'iq-7000' | 'pc-e500';
+	let romModel: RomModel = 'iq-7000';
 
 	let running = false;
 	let targetFps = 30;
@@ -195,7 +197,7 @@
 		perfettoSymbolsPromise = (async () => {
 			try {
 				await ensureEmulator();
-				const res = await fetch('/api/symbols');
+				const res = await fetch(`/api/symbols?model=${encodeURIComponent(romModel)}`);
 				if (!res.ok) return;
 				const payload = (await res.json()) as any;
 				emulator.set_perfetto_function_symbols(payload.symbols);
@@ -460,16 +462,17 @@
 		return emulator;
 	}
 
-	async function tryAutoLoadRom() {
+	async function tryAutoLoadRom(force = false) {
 		await ensureWorker();
-		if (!worker && emulator?.has_rom?.()) return;
+		if (!force && !worker && emulator?.has_rom?.()) return;
 		try {
-			const res = await fetch('/api/rom');
+			const res = await fetch(`/api/rom?model=${encodeURIComponent(romModel)}`);
 			if (!res.ok) return;
+			perfettoSymbolsPromise = null;
 			romSource = res.headers.get('x-rom-source');
 			const bytes = new Uint8Array(await res.arrayBuffer());
 			if (worker) {
-				await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
+				await workerCall('load_rom', { bytes, romSource, model: romModel }, [bytes.buffer]);
 				romLoaded = true;
 				return;
 			}
@@ -725,10 +728,11 @@
 		lastError = null;
 		try {
 			const bytes = new Uint8Array(await file.arrayBuffer());
+			perfettoSymbolsPromise = null;
 			romSource = file.name;
 			await ensureWorker();
 			if (worker) {
-				await workerCall('load_rom', { bytes, romSource }, [bytes.buffer]);
+				await workerCall('load_rom', { bytes, romSource, model: romModel }, [bytes.buffer]);
 				romLoaded = true;
 				return;
 			}
@@ -812,15 +816,23 @@
 </script>
 
 <main>
-	<h1>PC-E500 Web Emulator (LLAMA/WASM)</h1>
+	<h1>SC62015 Web Emulator (LLAMA/WASM)</h1>
 
 	<label>
-		Load ROM:
+		ROM preset:
+		<select bind:value={romModel} on:change={() => void tryAutoLoadRom(true)} data-testid="rom-model">
+			<option value="iq-7000">IQ-7000</option>
+			<option value="pc-e500">PC-E500</option>
+		</select>
+	</label>
+
+	<label>
+		Load ROM file:
 		<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
 	</label>
 
 	{#if romSource}
-		<p class="hint">Auto-loaded ROM via {romSource}</p>
+		<p class="hint">Loaded ROM ({romModel}) via {romSource}</p>
 	{/if}
 
 	<div class="controls">

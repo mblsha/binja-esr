@@ -72,12 +72,12 @@ fn pce500_iocs_putc_emits_lcd_writes() {
 
     let before_lines = rt
         .lcd
-        .as_ref()
+        .as_deref()
         .map(|lcd| decode_display_text(lcd, &font))
         .expect("lcd present");
 
     rt.lcd
-        .as_mut()
+        .as_deref_mut()
         .expect("lcd present")
         .begin_display_write_capture();
     rt.state.set_reg(RegName::A, b'~' as u32);
@@ -89,7 +89,7 @@ fn pce500_iocs_putc_emits_lcd_writes() {
 
     let (lcd_writes, after_lines) = rt
         .lcd
-        .as_mut()
+        .as_deref_mut()
         .map(|lcd| {
             (
                 lcd.take_display_write_capture(),

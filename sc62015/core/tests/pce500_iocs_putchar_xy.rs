@@ -95,7 +95,7 @@ fn pce500_iocs_putchar_xy_writes_expected_screen_cells() {
 
     let before_lines = rt
         .lcd
-        .as_ref()
+        .as_deref()
         .map(|lcd| decode_display_text(lcd, &font))
         .expect("lcd present");
     assert!(
@@ -114,7 +114,7 @@ fn pce500_iocs_putchar_xy_writes_expected_screen_cells() {
     let right_x = (width - 1) as u8;
 
     rt.lcd
-        .as_mut()
+        .as_deref_mut()
         .expect("lcd present")
         .begin_display_write_capture();
 
@@ -125,7 +125,7 @@ fn pce500_iocs_putchar_xy_writes_expected_screen_cells() {
 
     let lcd_writes = rt
         .lcd
-        .as_mut()
+        .as_deref_mut()
         .map(|lcd| lcd.take_display_write_capture())
         .expect("lcd present");
     assert!(
@@ -135,7 +135,7 @@ fn pce500_iocs_putchar_xy_writes_expected_screen_cells() {
 
     let after_lines = rt
         .lcd
-        .as_ref()
+        .as_deref()
         .map(|lcd| decode_display_text(lcd, &font))
         .expect("lcd present");
     assert_eq!(
