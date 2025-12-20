@@ -1339,15 +1339,17 @@ impl CoreRuntime {
                 kb.load_snapshot_state(&snapshot);
             }
         }
-        if let (Some(lcd_meta), Some(payload)) =
-            (self.metadata.lcd.as_ref(), loaded.lcd_payload.as_deref())
-        {
+        if let Some(lcd_meta) = self.metadata.lcd.as_ref() {
             let kind = crate::lcd::lcd_kind_from_snapshot_meta(lcd_meta, LcdKind::Hd61202);
             if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
                 self.lcd = Some(create_lcd(kind));
             }
             if let Some(lcd) = self.lcd.as_mut() {
-                let _ = lcd.load_snapshot(lcd_meta, payload);
+                let payload = loaded.lcd_payload.as_deref();
+                let should_load = payload.is_some() || kind == LcdKind::Unknown;
+                if should_load {
+                    let _ = lcd.load_snapshot(lcd_meta, payload.unwrap_or(&[]));
+                }
             }
         } else if self.lcd.is_none() {
             self.lcd = Some(create_lcd(LcdKind::Hd61202));
@@ -3132,6 +3134,23 @@ mod tests {
         assert!(
             rt2.metadata.kb_metrics.is_some(),
             "keyboard metrics should be stored in snapshot metadata"
+        );
+    }
+
+    #[test]
+    fn snapshot_roundtrip_restores_unknown_lcd_kind() {
+        let tmp = std::env::temp_dir().join("core_snapshot_unknown_lcd.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let mut rt = CoreRuntime::new();
+        rt.lcd = Some(create_lcd(LcdKind::Unknown));
+        rt.save_snapshot(&tmp).expect("save snapshot");
+
+        let mut rt2 = CoreRuntime::new();
+        rt2.load_snapshot(&tmp).expect("load snapshot");
+        assert_eq!(
+            rt2.lcd.as_ref().expect("lcd restored").kind(),
+            LcdKind::Unknown
         );
     }
 
