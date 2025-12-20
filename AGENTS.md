@@ -65,4 +65,8 @@
 - **Rust-only runner:** To boot the ROM and view decoded LCD text without Python:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
-  - Default ROM model: `iq-7000` (uses `public-src/data/iq-7000.bin`). Select PC-E500 with `--model pc-e500` or pass `--rom PATH`.
+  - Default ROM model: `pc-e500` (uses `data/pc-e500.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
+- **JS function runner (WASM):** Run an async JS snippet against the same Rust core compiled to WASM:
+  - Build WASM first: `cd web && npm install && npm run wasm:build`
+  - Run a script: `node scripts/js_function_runner_cli.mjs --model pc-e500 path/to/script.js` (or `--eval "<js>"`, or `--stdin`)
+  - Note: this is separate from the native Rust CLI (no TS wrapper for the Rust CLI); the web UI uses `web/src/lib/wasm/sc62015_wasm.ts` to keep `Pce500Emulator` as an alias for `Sc62015Emulator`.
