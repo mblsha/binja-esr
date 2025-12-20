@@ -477,7 +477,7 @@
 				return;
 			}
 			const emu = await ensureEmulator();
-			emu.load_rom(bytes);
+			emu.load_rom_with_model?.(bytes, romModel) ?? emu.load_rom(bytes);
 			romLoaded = true;
 			refreshAllNow();
 		} catch (err) {
@@ -737,7 +737,7 @@
 				return;
 			}
 			const emu = await ensureEmulator();
-			emu.load_rom(bytes);
+			emu.load_rom_with_model?.(bytes, romModel) ?? emu.load_rom(bytes);
 			romLoaded = true;
 			refreshAllNow();
 		} catch (err) {

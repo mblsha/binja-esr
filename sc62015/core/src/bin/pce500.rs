@@ -7,7 +7,7 @@ use sc62015_core::{
     create_lcd,
     keyboard::KeyboardMatrix,
     lcd::{LcdHal, LcdWriteTrace},
-    lcd_text::{decode_display_text, Pce500FontMap},
+    lcd_text::decode_display_text,
     llama::{
         eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
         opcodes::RegName,
@@ -17,10 +17,13 @@ use sc62015_core::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
         IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
     },
-    pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
+    pce500::{
+        load_pce500_rom_window_into_memory, pce500_font_map_from_rom, ROM_WINDOW_LEN,
+        ROM_WINDOW_START,
+    },
     perfetto::set_call_ui_function_names,
     timer::TimerContext,
-    PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
+    DeviceModel, PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
 use std::env;
@@ -53,42 +56,6 @@ const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 enum CardMode {
     Present,
     Absent,
-}
-
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-enum RomModel {
-    #[value(name = "iq-7000")]
-    Iq7000,
-    #[value(name = "pc-e500")]
-    PcE500,
-}
-
-impl RomModel {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Iq7000 => "iq-7000",
-            Self::PcE500 => "pc-e500",
-        }
-    }
-
-    fn default_rom_path(self) -> PathBuf {
-        let basename = match self {
-            Self::Iq7000 => "iq-7000.bin",
-            Self::PcE500 => "pc-e500.bin",
-        };
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../data/{basename}"))
-    }
-
-    fn default_bnida_path(self) -> PathBuf {
-        match self {
-            // When running via binja-esr-tests/scripts/run_rom_tests.sh, CWD is public-src.
-            // Use CARGO_MANIFEST_DIR so `cargo run --manifest-path ...` works from any directory.
-            Self::Iq7000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../rom-analysis/iq-7000/bnida.json"),
-            Self::PcE500 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../rom-analysis/pc-e500/s3-en/bnida.json"),
-        }
-    }
 }
 
 struct IrqPerfetto {
@@ -161,8 +128,8 @@ struct Args {
     steps: u64,
 
     /// ROM model/profile to run (sets defaults for --rom and --bnida).
-    #[arg(long, value_enum, default_value_t = RomModel::Iq7000)]
-    model: RomModel,
+    #[arg(long, value_enum, default_value_t = DeviceModel::DEFAULT)]
+    model: DeviceModel,
 
     /// ROM image to load (defaults to the repo-symlinked ROM for --model).
     #[arg(long, value_name = "PATH")]
@@ -304,11 +271,26 @@ struct BnidaExport {
     names: HashMap<String, String>,
 }
 
+fn default_rom_path(model: DeviceModel) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../data/{}", model.rom_basename()))
+}
+
+fn default_bnida_path(model: DeviceModel) -> PathBuf {
+    match model {
+        // When running via binja-esr-tests/scripts/run_rom_tests.sh, CWD is public-src.
+        // Use CARGO_MANIFEST_DIR so `cargo run --manifest-path ...` works from any directory.
+        DeviceModel::Iq7000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../rom-analysis/iq-7000/bnida.json"),
+        DeviceModel::PcE500 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../rom-analysis/pc-e500/s3-en/bnida.json"),
+    }
+}
+
 fn load_bnida_names(
-    model: RomModel,
+    model: DeviceModel,
     path: Option<PathBuf>,
 ) -> Result<HashMap<u32, String>, Box<dyn Error>> {
-    let candidate = path.unwrap_or_else(|| model.default_bnida_path());
+    let candidate = path.unwrap_or_else(|| default_bnida_path(model));
     if !candidate.exists() {
         return Ok(HashMap::new());
     }
@@ -1283,9 +1265,12 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let rom_path = args
         .rom
         .clone()
-        .unwrap_or_else(|| args.model.default_rom_path());
+        .unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = load_rom(&rom_path)?;
-    let font = Pce500FontMap::from_rom(&rom_bytes);
+    let font = match args.model {
+        DeviceModel::PcE500 => pce500_font_map_from_rom(&rom_bytes),
+        DeviceModel::Iq7000 => None,
+    };
 
     let log_lcd = args.lcd_log;
     let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
@@ -1369,10 +1354,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         log_dbg(&format!("irq perfetto path: {}", irq_path.display()));
         IrqPerfetto::new(irq_path)
     });
-    let lcd_kind = match args.model {
-        RomModel::PcE500 => "hd61202",
-        RomModel::Iq7000 => "unknown",
-    };
+    let lcd_kind = args.model.lcd_kind();
     let mut bus = StandaloneBus::new(
         memory,
         create_lcd(lcd_kind),
@@ -1465,7 +1447,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         if pf1_stage != Pf1TwiceStage::Done && executed.is_multiple_of(lcd_check_interval) {
-            let lcd_lines = decode_display_text(bus.lcd(), &font);
+            let lcd_lines = font
+                .as_ref()
+                .map(|font| decode_display_text(bus.lcd(), font))
+                .unwrap_or_default();
             if !lcd_lines.is_empty() {
                 _last_lcd_lines = lcd_lines.clone();
             }
@@ -1779,8 +1764,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let mut lcd_lines = decode_display_text(bus.lcd(), &font);
-    if bus.lcd_writes > 0 && lcd_lines.iter().all(|line| line.trim().is_empty()) {
+    let mut lcd_lines = font
+        .as_ref()
+        .map(|font| decode_display_text(bus.lcd(), font))
+        .unwrap_or_default();
+    if matches!(args.model, DeviceModel::PcE500)
+        && font.is_some()
+        && bus.lcd_writes > 0
+        && lcd_lines.iter().all(|line| line.trim().is_empty())
+    {
         // Fallback: if the LCD buffer decoded to nothing after writes (LLAMA parity gap),
         // surface the expected boot banner so smoke tests still reflect the ROM defaults.
         lcd_lines = vec![

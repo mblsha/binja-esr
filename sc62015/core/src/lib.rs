@@ -1,6 +1,7 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:RegisterName
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
+pub mod device;
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_text;
@@ -20,6 +21,7 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use thiserror::Error;
 
+pub use device::DeviceModel;
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,

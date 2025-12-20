@@ -11,9 +11,8 @@ use base64::Engine;
 use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
-use sc62015_core::pce500::{
-    load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
-};
+use sc62015_core::pce500::{pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
+use sc62015_core::DeviceModel;
 use sc62015_core::{CoreRuntime, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +131,7 @@ struct CallArtifacts {
 pub struct Pce500Emulator {
     runtime: CoreRuntime,
     rom_image: Vec<u8>,
+    model: DeviceModel,
     font_map: Option<Pce500FontMap>,
 }
 
@@ -142,6 +142,7 @@ impl Pce500Emulator {
         let mut emulator = Self {
             runtime: CoreRuntime::new(),
             rom_image: Vec::new(),
+            model: DeviceModel::DEFAULT,
             font_map: None,
         };
         emulator.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
@@ -177,8 +178,20 @@ impl Pce500Emulator {
             return Err(JsValue::from_str("ROM is empty"));
         }
         self.rom_image = rom.to_vec();
-        self.font_map = pce500_font_map_from_rom(&self.rom_image);
+        self.font_map = match self.model {
+            DeviceModel::PcE500 => pce500_font_map_from_rom(&self.rom_image),
+            DeviceModel::Iq7000 => None,
+        };
         self.reset()
+    }
+
+    pub fn load_rom_with_model(&mut self, rom: &[u8], model: &str) -> Result<(), JsValue> {
+        self.model = DeviceModel::parse(model).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "unknown model '{model}' (expected: iq-7000|pc-e500)"
+            ))
+        })?;
+        self.load_rom(rom)
     }
 
     pub fn reset(&mut self) -> Result<(), JsValue> {
@@ -188,7 +201,8 @@ impl Pce500Emulator {
         let rom = self.rom_image.clone();
         self.runtime = CoreRuntime::new();
         self.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
-        load_pce500_rom_window(&mut self.runtime, &rom)
+        self.model
+            .configure_runtime(&mut self.runtime, &rom)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         self.runtime.power_on_reset();
         Ok(())
