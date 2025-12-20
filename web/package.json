@@ -11,6 +11,8 @@
 		"preview": "vite preview",
 		"wasm:build": "cd emulator-wasm && wasm-pack build --target web --out-dir ../src/lib/wasm/pce500_wasm",
 		"wasm:test": "cd emulator-wasm && wasm-pack test --node",
+		"prefnr:cli": "npm run wasm:build",
+		"fnr:cli": "vite-node --script scripts/js_function_runner_cli.ts",
 		"pretest": "npm run wasm:build",
 		"test": "vitest run",
 		"test:watch": "vitest",

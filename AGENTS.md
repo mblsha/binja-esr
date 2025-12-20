@@ -67,7 +67,7 @@
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
   - Default ROM model: `pc-e500` (uses `data/pc-e500.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
 - **JS function runner (WASM):** Run an async JS snippet against the same Rust core compiled to WASM:
-  - Build WASM first: `cd web && npm install && npm run wasm:build`
-  - Run a script: `node scripts/js_function_runner_cli.mjs --model pc-e500 path/to/script.js` (or `--eval "<js>"`, or `--stdin`)
-  - Script API: `e` is the same `EvalApi` used by the web Function Runner; output is a JSON blob compatible with `FunctionRunnerOutput`.
+  - Install deps once: `cd web && npm install`
+  - Run a script (auto-builds wasm): `cd web && npm run fnr:cli -- --model pc-e500 path/to/script.js` (or `--eval "<js>"`, or `--stdin`)
+  - Script API: `e` is the same `EvalApi` used by the web Function Runner; output JSON is compatible with `FunctionRunnerOutput`.
   - Note: this is separate from the native Rust CLI (no TS wrapper for the Rust CLI); the web UI uses `web/src/lib/wasm/sc62015_wasm.ts` to keep `Pce500Emulator` as an alias for `Sc62015Emulator`.

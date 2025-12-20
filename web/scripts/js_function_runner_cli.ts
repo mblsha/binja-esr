@@ -21,9 +21,9 @@ type RunnerArgs = {
 function usage() {
 	return `
 Usage:
-  node scripts/js_function_runner_cli.mjs [options] <script.js>
-  node scripts/js_function_runner_cli.mjs [options] --eval "<js>"
-  cat script.js | node scripts/js_function_runner_cli.mjs [options] --stdin
+  npm run fnr:cli -- [options] <script.js>
+  npm run fnr:cli -- [options] --eval "<js>"
+  cat script.js | npm run fnr:cli -- [options] --stdin
 
 Options:
   --model <iq-7000|pc-e500>   ROM preset (default: Rust runtime default)
@@ -225,4 +225,3 @@ try {
 	else console.error(String(err));
 	process.exit(1);
 }
-
