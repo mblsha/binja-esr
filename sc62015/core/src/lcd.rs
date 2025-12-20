@@ -27,6 +27,8 @@ pub const LCD_DISPLAY_COLS: usize = 240;
 pub enum LcdKind {
     #[serde(rename = "hd61202")]
     Hd61202,
+    #[serde(rename = "iq7000-vram")]
+    Iq7000Vram,
     #[serde(rename = "unknown")]
     Unknown,
 }
@@ -35,6 +37,7 @@ impl LcdKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Hd61202 => "hd61202",
+            Self::Iq7000Vram => "iq7000-vram",
             Self::Unknown => "unknown",
         }
     }
@@ -42,6 +45,7 @@ impl LcdKind {
     pub fn parse(raw: &str) -> Self {
         match raw.trim() {
             "hd61202" => Self::Hd61202,
+            "iq7000-vram" => Self::Iq7000Vram,
             "unknown" => Self::Unknown,
             _ => Self::Unknown,
         }
@@ -81,6 +85,7 @@ pub trait LcdHal: Send {
 pub fn create_lcd(kind: LcdKind) -> Box<dyn LcdHal> {
     match kind {
         LcdKind::Hd61202 => Box::new(LcdController::new()),
+        LcdKind::Iq7000Vram => Box::new(Iq7000LcdController::new()),
         LcdKind::Unknown => Box::new(UnknownLcdController::new()),
     }
 }
@@ -151,6 +156,91 @@ pub struct UnknownLcdController {
 impl UnknownLcdController {
     pub fn new() -> Self {
         Self { write_count: 0 }
+    }
+}
+
+// IQ-7000 display notes (derived from ROM traces, not a hardware-accurate controller):
+//
+// - Firmware writes character glyph columns into a RAM-backed VRAM region rather than directly
+//   hitting the HD61202 ports.
+// - The VRAM backing store is 8 pages × 96 columns (= 96×64 pixels), split across two windows:
+//   - Pages 0..3 (rows 0..31): 0x4000..0x41FF
+//   - Pages 4..7 (rows 32..63): 0x6000..0x61FF
+// - Each page has a 0x80 stride, but only the first 0x60 bytes are used (96 pixels wide, i.e.
+//   16×6-byte cells for the small font or 12×8-byte cells for the large font).
+// - IOCS pixel coordinates treat `x=0` as the left edge, but VRAM columns are mirrored:
+//   IOCS `x` maps to VRAM column `95-x`.
+const IQ7000_VRAM_COLS: usize = 96;
+const IQ7000_VRAM_STRIDE: usize = 0x80;
+const IQ7000_PAGES_PER_BUFFER: usize = 4;
+const IQ7000_TOTAL_PAGES: usize = IQ7000_PAGES_PER_BUFFER * 2;
+
+pub struct Iq7000LcdController {
+    vram: [[u8; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
+    vram_trace: [[LcdWriteTrace; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
+    display_write_capture: Option<HashMap<u16, LcdDisplayWrite>>,
+}
+
+impl Iq7000LcdController {
+    pub fn new() -> Self {
+        Self {
+            vram: [[0u8; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
+            vram_trace: [[LcdWriteTrace::default(); IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
+            display_write_capture: None,
+        }
+    }
+
+    fn decode_vram_addr(addr: u32) -> Option<(usize, usize)> {
+        let addr = addr & 0x00FF_FFFF;
+        if (0x0000_4000..=0x0000_41FF).contains(&addr) {
+            let offset = (addr - 0x0000_4000) as usize;
+            let page = offset / IQ7000_VRAM_STRIDE;
+            let col = offset % IQ7000_VRAM_STRIDE;
+            if page >= IQ7000_PAGES_PER_BUFFER || col >= IQ7000_VRAM_COLS {
+                return None;
+            }
+            return Some((page, col));
+        }
+        if (0x0000_6000..=0x0000_61FF).contains(&addr) {
+            let offset = (addr - 0x0000_6000) as usize;
+            let page = offset / IQ7000_VRAM_STRIDE;
+            let col = offset % IQ7000_VRAM_STRIDE;
+            if page >= IQ7000_PAGES_PER_BUFFER || col >= IQ7000_VRAM_COLS {
+                return None;
+            }
+            return Some((page + IQ7000_PAGES_PER_BUFFER, col));
+        }
+        None
+    }
+
+    fn record_display_write_capture(
+        &mut self,
+        page: usize,
+        col: usize,
+        value: u8,
+        trace: LcdWriteTrace,
+    ) {
+        let Some(map) = self.display_write_capture.as_mut() else {
+            return;
+        };
+        let page_u8 = (page as u8) & 0x07;
+        let col_u16 = (col as u16) & 0x00FF;
+        let key = ((page_u8 as u16) << 8) | (col_u16 & 0xFF);
+        map.insert(
+            key,
+            LcdDisplayWrite {
+                page: page_u8,
+                col: col_u16,
+                value,
+                trace,
+            },
+        );
+    }
+}
+
+impl Default for Iq7000LcdController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -728,6 +818,176 @@ impl LcdHal for LcdController {
     }
 }
 
+impl LcdHal for Iq7000LcdController {
+    fn kind(&self) -> LcdKind {
+        LcdKind::Iq7000Vram
+    }
+
+    fn reset(&mut self) {
+        self.vram = [[0u8; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES];
+        self.vram_trace = [[LcdWriteTrace::default(); IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES];
+        self.display_write_capture = None;
+    }
+
+    fn handles(&self, address: u32) -> bool {
+        let addr = address & 0x00FF_FFFF;
+        (0x0000_4000..=0x0000_41FF).contains(&addr) || (0x0000_6000..=0x0000_61FF).contains(&addr)
+    }
+
+    fn read(&mut self, _address: u32) -> Option<u8> {
+        // IQ-7000 display memory is RAM-backed; reads should come from MemoryImage.
+        None
+    }
+
+    fn write(&mut self, address: u32, value: u8) {
+        let Some((page, col)) = Self::decode_vram_addr(address) else {
+            return;
+        };
+
+        let ctx = perfetto_instr_context();
+        let op_index = ctx.map(|(idx, _)| idx);
+        let pc = ctx.map(|(_, pc)| pc).or(Some(perfetto_last_pc()));
+        let call_stack = perfetto_last_call_stack();
+        let trace = LcdWriteTrace {
+            pc: pc.unwrap_or(0) & mask_for(RegName::PC),
+            call_stack,
+        };
+
+        if let Some(page_buf) = self.vram.get_mut(page) {
+            if let Some(slot) = page_buf.get_mut(col) {
+                *slot = value;
+            }
+        }
+        if let Some(page_trace) = self.vram_trace.get_mut(page) {
+            if let Some(slot) = page_trace.get_mut(col) {
+                *slot = trace;
+            }
+        }
+        self.record_display_write_capture(page, col, value, trace);
+
+        let mut guard = PERFETTO_TRACER.enter();
+        guard.with_some(|tracer| {
+            tracer.record_lcd_event(
+                "IQ7000_VRAM_WRITE",
+                address & 0x00FF_FFFF,
+                value,
+                0,
+                (page as u8) & 0x07,
+                col as u8,
+                pc,
+                op_index,
+            );
+        });
+    }
+
+    fn read_placeholder(&self, _address: u32) -> u32 {
+        0
+    }
+
+    fn begin_display_write_capture(&mut self) {
+        self.display_write_capture = Some(HashMap::new());
+    }
+
+    fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite> {
+        let Some(map) = self.display_write_capture.take() else {
+            return Vec::new();
+        };
+        let mut out: Vec<LcdDisplayWrite> = map.into_values().collect();
+        out.sort_by_key(|ev| ((ev.page as u32) << 16) | (ev.col as u32));
+        out
+    }
+
+    fn display_buffer(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS] {
+        let mut out = [[0u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
+        // Render both 32-row halves side-by-side so callers can inspect the full 96×64 VRAM while
+        // keeping the shared 32×240 UI buffer shape.
+        for (window_idx, page_base) in [0usize, IQ7000_PAGES_PER_BUFFER].into_iter().enumerate() {
+            let dest_col_base = if window_idx == 0 { 0 } else { 120 };
+            for page in 0..IQ7000_PAGES_PER_BUFFER {
+                let Some(src_page) = self.vram.get(page_base + page) else {
+                    continue;
+                };
+                for (col, byte) in src_page.iter().enumerate().take(IQ7000_VRAM_COLS) {
+                    let dest_col_within = IQ7000_VRAM_COLS - 1 - col;
+                    let dest_col = dest_col_base + dest_col_within;
+                    for dy in 0..8usize {
+                        let bit = 7usize.saturating_sub(dy);
+                        let on = (*byte >> bit) & 1;
+                        out[page * 8 + dy][dest_col] = on;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn chip_display_buffer(&self, _chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS] {
+        [[0u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS]
+    }
+
+    fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_PAGES] {
+        let mut out = [[0u8; LCD_DISPLAY_COLS]; LCD_PAGES];
+        for (page, src_page) in self.vram.iter().enumerate().take(LCD_PAGES) {
+            for (col, byte) in src_page.iter().enumerate().take(IQ7000_VRAM_COLS) {
+                let dest_col = IQ7000_VRAM_COLS - 1 - col;
+                out[page][dest_col] = *byte;
+            }
+        }
+        out
+    }
+
+    fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; LCD_PAGES] {
+        let mut out = [[LcdWriteTrace::default(); LCD_DISPLAY_COLS]; LCD_PAGES];
+        for (page, src_page) in self.vram_trace.iter().enumerate().take(LCD_PAGES) {
+            for (col, trace) in src_page.iter().enumerate().take(IQ7000_VRAM_COLS) {
+                let dest_col = IQ7000_VRAM_COLS - 1 - col;
+                out[page][dest_col] = *trace;
+            }
+        }
+        out
+    }
+
+    fn stats(&self) -> LcdStats {
+        LcdStats::default()
+    }
+
+    fn export_snapshot(&self) -> (Value, Vec<u8>) {
+        let meta = json!({
+            "kind": self.kind(),
+            "cols": IQ7000_VRAM_COLS,
+            "pages_per_buffer": IQ7000_PAGES_PER_BUFFER,
+            "buffers": 2,
+        });
+        let mut payload = Vec::with_capacity(IQ7000_TOTAL_PAGES * IQ7000_VRAM_COLS);
+        for page in 0..IQ7000_TOTAL_PAGES {
+            payload.extend_from_slice(&self.vram[page]);
+        }
+        (meta, payload)
+    }
+
+    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
+        let kind = lcd_kind_from_snapshot_meta(metadata, LcdKind::Iq7000Vram);
+        if kind != self.kind() {
+            return Err("lcd kind mismatch".to_string());
+        }
+        let expected = IQ7000_TOTAL_PAGES * IQ7000_VRAM_COLS;
+        if payload.len() != expected {
+            return Err(format!(
+                "iq7000 lcd payload length mismatch (expected {expected}, got {})",
+                payload.len()
+            ));
+        }
+        for page in 0..IQ7000_TOTAL_PAGES {
+            let start = page * IQ7000_VRAM_COLS;
+            let end = start + IQ7000_VRAM_COLS;
+            self.vram[page].copy_from_slice(&payload[start..end]);
+        }
+        self.vram_trace = [[LcdWriteTrace::default(); IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES];
+        self.display_write_capture = None;
+        Ok(())
+    }
+}
+
 impl Default for UnknownLcdController {
     fn default() -> Self {
         Self::new()
@@ -1006,6 +1266,32 @@ mod tests {
         assert_eq!(super::pixel_on(0b0000_0000, 0), 1);
         assert_eq!(super::pixel_on(0b1000_0000, 7), 0);
         assert_eq!(super::pixel_on(0b0111_1111, 7), 1);
+    }
+
+    #[test]
+    fn iq7000_vram_addresses_map_to_display_bytes() {
+        let mut lcd = Iq7000LcdController::new();
+        lcd.write(0x405A, 0xAA);
+        let bytes = lcd.display_vram_bytes();
+        assert_eq!(bytes[0][5], 0xAA);
+
+        lcd.write(0x605A, 0xBB);
+        let bytes = lcd.display_vram_bytes();
+        assert_eq!(bytes[4][5], 0xBB);
+    }
+
+    #[test]
+    fn iq7000_snapshot_roundtrip_restores_vram() {
+        let mut lcd = Iq7000LcdController::new();
+        lcd.write(0x605A, 0xCC);
+        let (meta, payload) = lcd.export_snapshot();
+
+        let mut restored = Iq7000LcdController::new();
+        restored
+            .load_snapshot(&meta, &payload)
+            .expect("iq7000 snapshot should load");
+        let bytes = restored.display_vram_bytes();
+        assert_eq!(bytes[4][5], 0xCC);
     }
 
     #[test]
