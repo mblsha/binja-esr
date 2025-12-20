@@ -1,4 +1,4 @@
-import { DEFAULT_ROM_MODEL, type RomModel } from '../rom_model';
+import { normalizeRomModel, type RomModel } from '../rom_model';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -10,6 +10,7 @@ type DebugOptions = {
 
 type WorkerRequest =
 	| { id: number; type: 'load_rom'; bytes: Uint8Array; romSource?: string | null; model?: RomModel }
+	| { id: number; type: 'get_model' }
 	| { id: number; type: 'step'; instructions: number }
 	| { id: number; type: 'start' }
 	| { id: number; type: 'stop' }
@@ -69,7 +70,7 @@ const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 let wasm: any = null;
 let emulator: any = null;
 let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
-let romModel: RomModel = DEFAULT_ROM_MODEL;
+let romModel: RomModel = 'pc-e500';
 
 let running = false;
 let targetFps = 30;
@@ -211,6 +212,13 @@ async function ensureEmulator(): Promise<any> {
 		} catch {
 			buildInfo = null;
 		}
+	}
+	try {
+		const raw = emulator?.device_model?.() ?? wasm?.default_device_model?.();
+		const model = normalizeRomModel(typeof raw === 'string' ? raw : null);
+		if (model) romModel = model;
+	} catch {
+		// ignore
 	}
 	return emulator;
 }
@@ -399,7 +407,7 @@ async function handleRequest(msg: WorkerRequest) {
 			}
 			case 'load_rom': {
 				const emu = await ensureEmulator();
-				romModel = msg.model ?? DEFAULT_ROM_MODEL;
+				romModel = msg.model ?? romModel;
 				perfettoSymbolsPromise = null;
 				emu.load_rom_with_model?.(msg.bytes, romModel) ?? emu.load_rom(msg.bytes);
 				lastLcdTextUpdateMs = 0;
@@ -408,6 +416,11 @@ async function handleRequest(msg: WorkerRequest) {
 				pendingVirtualRelease.clear();
 				postFrame(captureFrame(true));
 				replyOk(msg.id);
+				return;
+			}
+			case 'get_model': {
+				await ensureEmulator();
+				replyOk(msg.id, romModel);
 				return;
 			}
 			case 'step': {

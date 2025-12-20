@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { DEFAULT_ROM_MODEL, normalizeRomModel, romBasename, type RomModel } from '$lib/rom_model';
+import { normalizeRomModel, romBasename, type RomModel } from '$lib/rom_model';
 import type { RequestHandler } from './$types';
 
 type Candidate = {
@@ -10,9 +10,7 @@ type Candidate = {
 
 function romCandidates(model: RomModel): Candidate[] {
 	const env =
-		model === 'pc-e500'
-			? process.env.PCE500_ROM_PATH
-			: process.env.IQ7000_ROM_PATH ?? process.env.IQ_7000_ROM_PATH;
+		model === 'pc-e500' ? process.env.PCE500_ROM_PATH : (process.env.IQ7000_ROM_PATH ?? process.env.IQ_7000_ROM_PATH);
 	const candidates: Candidate[] = [];
 	if (env) {
 		candidates.push({
@@ -30,7 +28,16 @@ function romCandidates(model: RomModel): Candidate[] {
 }
 
 export const GET: RequestHandler = async ({ url }) => {
-	const model = normalizeRomModel(url.searchParams.get('model')) ?? DEFAULT_ROM_MODEL;
+	const model = normalizeRomModel(url.searchParams.get('model'));
+	if (!model) {
+		return new Response("Missing or invalid 'model' query parameter", {
+			status: 400,
+			headers: {
+				'content-type': 'text/plain; charset=utf-8',
+				'cache-control': 'no-store',
+			},
+		});
+	}
 
 	for (const candidate of romCandidates(model)) {
 		try {

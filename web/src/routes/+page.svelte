@@ -9,7 +9,7 @@
 	import { runUserJs } from '$lib/debug/run_user_js';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
-	import { DEFAULT_ROM_MODEL, type RomModel } from '$lib/rom_model';
+	import { normalizeRomModel, type RomModel } from '$lib/rom_model';
 
 	let wasm: any = null;
 	let emulator: any = null;
@@ -39,7 +39,7 @@
 	let instructionCount: string | null = null;
 	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 	let romLoaded = false;
-	let romModel: RomModel = DEFAULT_ROM_MODEL;
+	let romModel: RomModel = 'pc-e500';
 
 	let running = false;
 	let targetFps = 30;
@@ -459,11 +459,32 @@
 				buildInfo = null;
 			}
 		}
+		try {
+			const raw = emulator?.device_model?.() ?? wasm?.default_device_model?.();
+			const model = normalizeRomModel(typeof raw === 'string' ? raw : null);
+			if (model) romModel = model;
+		} catch {
+			// ignore
+		}
 		return emulator;
+	}
+
+	async function syncRomModelFromRuntime(): Promise<void> {
+		if (worker) {
+			try {
+				const model = (await workerCall('get_model')) as any;
+				if (typeof model === 'string') romModel = model as RomModel;
+			} catch {
+				// ignore
+			}
+			return;
+		}
+		await ensureEmulator();
 	}
 
 	async function tryAutoLoadRom(force = false) {
 		await ensureWorker();
+		if (!force) await syncRomModelFromRuntime();
 		if (!force && !worker && emulator?.has_rom?.()) return;
 		try {
 			const res = await fetch(`/api/rom?model=${encodeURIComponent(romModel)}`);
