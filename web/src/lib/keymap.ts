@@ -11,8 +11,6 @@ export const KEY_TO_MATRIX_CODE: Record<string, number> = {
 };
 
 export function matrixCodeForKeyEvent(event: KeyboardEvent): number | null {
-	const byCode = KEY_TO_MATRIX_CODE[event.code];
-	if (typeof byCode === 'number') return byCode;
-	const byKey = KEY_TO_MATRIX_CODE[event.key];
-	return typeof byKey === 'number' ? byKey : null;
+	const code = KEY_TO_MATRIX_CODE[event.code];
+	return typeof code === 'number' ? code : null;
 }
