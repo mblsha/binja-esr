@@ -324,6 +324,8 @@ pub(crate) struct LcdCharMatcher {
 }
 
 impl LcdCharMatcher {
+    const STREAM_BREAK_INSTRS: u64 = 10;
+
     pub(crate) fn from_pce500_font_map(font: &Pce500FontMap) -> Option<Self> {
         if font.is_empty() {
             return None;
@@ -366,6 +368,12 @@ impl LcdCharMatcher {
         let max_len = self.trie.max_len;
         if max_len == 0 {
             return None;
+        }
+
+        if let Some(prev) = self.window.back() {
+            if sample.op_index.saturating_sub(prev.op_index) >= Self::STREAM_BREAK_INSTRS {
+                self.window.clear();
+            }
         }
 
         self.window.push_back(sample);
@@ -717,5 +725,53 @@ mod tests {
 
         // Smoke: matcher can coexist with actual LCD types (no trait coupling).
         let _lcd = LcdController::new();
+    }
+
+    #[test]
+    fn lcd_char_matcher_breaks_stream_on_instruction_gap() {
+        let mut large_rom = vec![0u8; 0x80 * IQ7000_LARGE_CELL_BYTES];
+        let pattern: [u8; IQ7000_LARGE_CELL_BYTES] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+            0x17, 0x18,
+        ];
+        large_rom[(0x41 * IQ7000_LARGE_CELL_BYTES)
+            ..(0x41 * IQ7000_LARGE_CELL_BYTES + IQ7000_LARGE_CELL_BYTES)]
+            .copy_from_slice(&pattern);
+        let large_font = Iq7000LargeFontMap::from_rom(&large_rom, 0);
+        let small_font = Iq7000FontMap::default();
+
+        let mut matcher =
+            LcdCharMatcher::from_iq7000_font_maps(&small_font, &large_font).expect("matcher");
+
+        for (idx, byte) in pattern[..8].iter().copied().enumerate() {
+            assert!(
+                matcher
+                    .push(LcdCharWriteSample {
+                        value: byte,
+                        op_index: idx as u64,
+                        x: 0,
+                        y: 0,
+                    })
+                    .is_none(),
+                "partial glyph should not match"
+            );
+        }
+
+        // A sufficiently large instruction gap implies a new character write stream, so the
+        // matcher must not match across this boundary.
+        let gap_start = 7u64 + LcdCharMatcher::STREAM_BREAK_INSTRS;
+        let mut last = None;
+        for (idx, byte) in pattern[8..].iter().copied().enumerate() {
+            last = matcher.push(LcdCharWriteSample {
+                value: byte,
+                op_index: gap_start + idx as u64,
+                x: 0,
+                y: 0,
+            });
+        }
+        assert!(
+            last.is_none(),
+            "expected no match when glyph bytes are split by an instruction gap"
+        );
     }
 }
