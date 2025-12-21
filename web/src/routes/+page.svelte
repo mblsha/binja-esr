@@ -9,6 +9,7 @@
 	import { IOCS } from '$lib/debug/iocs';
 	import { runUserJs } from '$lib/debug/run_user_js';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
+	import FunctionRunnerExamplesPanel from '$lib/components/FunctionRunnerExamplesPanel.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import { normalizeRomModel, type RomModel } from '$lib/rom_model';
@@ -1113,6 +1114,10 @@
 				<p class="hint">Open to fetch debug state.</p>
 			{/if}
 		</details>
+	{/if}
+
+	{#if romLoaded}
+		<FunctionRunnerExamplesPanel />
 	{/if}
 
 	{#if romLoaded}
