@@ -542,7 +542,7 @@ impl Sc62015Emulator {
         };
 
         serde_wasm_bindgen::to_value(&LcdGeometry { kind, cols, rows })
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn lcd_chip_pixels(&self) -> Uint8Array {
