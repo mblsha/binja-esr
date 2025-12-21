@@ -2,7 +2,7 @@
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import FunctionRunnerResults from '$lib/components/FunctionRunnerResults.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
-	import type { CallHandle } from '$lib/debug/sc62015_eval_api';
+	import type { CallHandle, PerfettoTraceHandle } from '$lib/debug/sc62015_eval_api';
 	import { tick } from 'svelte';
 
 	export let disabled = false;
@@ -17,6 +17,10 @@
 // await e.reset({ fresh: true, warmupTicks: 20_000 });
 // await e.keyboard.tap(0x56); // PF1 (virtual injection), holds ~40k instr by default
 // await e.call(0x00F2A87, undefined, { maxInstructions: 200_000, trace: true });
+// await e.perfetto.trace('boot-menu', async () => {
+//   await e.step(500_000);
+//   await e.keyboard.tap(0x56);
+// });
 //
 // // IOCS experimentation (public entry is CALLF 0xFFFE8):
 // await e.iocs.putc('~', { trace: true });
@@ -45,6 +49,29 @@
 		const a = document.createElement('a');
 		a.href = url;
 		a.download = `pce500_call_${call.index}.perfetto-trace`;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		URL.revokeObjectURL(url);
+	}
+
+	function downloadPerfettoTrace(trace: PerfettoTraceHandle) {
+		const b64 = trace?.perfettoTraceB64 ?? null;
+		if (!b64) return;
+		const binary = atob(b64);
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+		const blob = new Blob([bytes], { type: 'application/octet-stream' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		const safeName = (trace.name ?? 'trace')
+			.trim()
+			.toLowerCase()
+			.replaceAll(/[^a-z0-9._-]+/g, '_')
+			.replaceAll(/_+/g, '_')
+			.replaceAll(/^_+|_+$/g, '');
+		a.href = url;
+		a.download = `sc62015_${safeName || 'trace'}.perfetto-trace`;
 		document.body.appendChild(a);
 		a.click();
 		a.remove();
@@ -193,7 +220,7 @@
 		data-testid="fnr-editor"
 	></textarea>
 
-	<FunctionRunnerResults {output} onDownloadTrace={downloadTrace} />
+	<FunctionRunnerResults {output} onDownloadTrace={downloadTrace} onDownloadPerfettoTrace={downloadPerfettoTrace} />
 </details>
 
 <style>

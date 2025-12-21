@@ -251,6 +251,23 @@
 					if (typeof raw === 'string') return JSON.parse(raw);
 					return raw;
 				},
+				startPerfettoTrace: async (name: string) => {
+					await ensurePerfettoSymbols();
+					if (typeof emu.perfetto_start !== 'function') {
+						throw new Error('perfetto_start is not available in this runtime');
+					}
+					emu.perfetto_start(name);
+				},
+				stopPerfettoTrace: () => {
+					if (typeof emu.perfetto_stop_b64 !== 'function') {
+						throw new Error('perfetto_stop_b64 is not available in this runtime');
+					}
+					const raw = emu.perfetto_stop_b64();
+					if (typeof raw !== 'string') {
+						throw new Error('perfetto_stop_b64 returned a non-string value');
+					}
+					return raw;
+				},
 				reset: async () => {
 					await Promise.resolve(emu.reset?.());
 				},
