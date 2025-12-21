@@ -155,6 +155,25 @@ async function evalScript(source: string): Promise<any> {
 				if (typeof raw === 'string') return JSON.parse(raw);
 				return raw;
 			}),
+		startPerfettoTrace: async (name: string) =>
+			runWithErrorAsync(`perfetto.start(${name})`, async () => {
+				await ensurePerfettoSymbols();
+				if (typeof emulator.perfetto_start !== 'function') {
+					throw new Error('perfetto_start is not available in this runtime');
+				}
+				emulator.perfetto_start(name);
+			}),
+		stopPerfettoTrace: () =>
+			runWithError('perfetto.stop()', () => {
+				if (typeof emulator.perfetto_stop_b64 !== 'function') {
+					throw new Error('perfetto_stop_b64 is not available in this runtime');
+				}
+				const raw = emulator.perfetto_stop_b64();
+				if (typeof raw !== 'string') {
+					throw new Error('perfetto_stop_b64 returned a non-string value');
+				}
+				return raw;
+			}),
 		reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
 		step: async (instructions: number) =>
 			runWithErrorAsync(`step(${instructions})`, () => Promise.resolve(emulator.step?.(instructions))),

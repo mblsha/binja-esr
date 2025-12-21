@@ -68,10 +68,18 @@ export type CallHandle = {
 	};
 };
 
+export type PerfettoTraceHandle = {
+	index: number;
+	name: string;
+	byteLength: number;
+	perfettoTraceB64: string;
+};
+
 export type PrintEntry = { index: number; value: unknown };
 
 export type EvalEvent =
 	| { kind: 'call'; sequence: number; handle: CallHandle }
+	| { kind: 'perfetto_trace'; sequence: number; trace: PerfettoTraceHandle }
 	| { kind: 'print'; sequence: number; entry: PrintEntry }
 	| { kind: 'error'; sequence: number; message: string }
 	| { kind: 'reset'; sequence: number; fresh: boolean; warmupTicks: number };
@@ -130,6 +138,8 @@ export interface EmulatorAdapter {
 			probe?: { pc: number; maxSamples?: number };
 		} | null,
 	): Promise<CallArtifacts>;
+	startPerfettoTrace?(name: string): Promise<void> | void;
+	stopPerfettoTrace?(): Promise<string> | string;
 	reset(fresh?: boolean): Promise<void> | void;
 	step(instructions: number): Promise<void> | void;
 	getReg(name: string): number;
@@ -146,6 +156,7 @@ export interface EmulatorAdapter {
 
 export interface EvalApi {
 	readonly calls: CallHandle[];
+	readonly perfettoTraces: PerfettoTraceHandle[];
 	readonly prints: PrintEntry[];
 	readonly events: EvalEvent[];
 	last(): CallHandle | null;
@@ -180,6 +191,9 @@ export interface EvalApi {
 		release(): Promise<void>;
 		tap(holdInstructions?: number): Promise<void>;
 	};
+	perfetto: {
+		trace<T>(name: string, body: () => Promise<T> | T): Promise<T>;
+	};
 	iocs: {
 		putc(ch: string | number, options?: EvalIocsCallOptions): Promise<CallHandle>;
 		text(text: string, options?: EvalIocsCallOptions): Promise<CallHandle[]>;
@@ -197,6 +211,13 @@ const RESULT_REGISTER_ORDER: RegisterName[] = ['A', 'B', 'BA', 'IL', 'IH', 'I', 
 
 function normalizeAddress(addr: number): number {
 	return (addr >>> 0) & 0x00ff_ffff;
+}
+
+function base64ByteLength(b64: string): number {
+	const len = b64.length;
+	if (len === 0) return 0;
+	const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+	return Math.max(0, Math.floor((len * 3) / 4) - padding);
 }
 
 function resolveReference(reference: string | number): { address: number; name: string | null } {
@@ -267,10 +288,13 @@ export const Flag = Object.freeze({
 
 export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOptions): EvalApi {
 	const calls: CallHandle[] = [];
+	const perfettoTraces: PerfettoTraceHandle[] = [];
 	const prints: PrintEntry[] = [];
 	const events: EvalEvent[] = [];
 	let sequence = 0;
 	let callIndex = 0;
+	let traceIndex = 0;
+	let perfettoActive = false;
 	const probeStack: Array<{ pc: number; handler: ProbeHandler; maxSamples: number }> = [];
 
 	async function writeIocsImemArgs(args: EvalIocsImemArgs | undefined) {
@@ -294,6 +318,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 
 	const api: EvalApi = {
 		calls,
+		perfettoTraces,
 		prints,
 		events,
 		last: () => (calls.length ? calls[calls.length - 1] : null),
@@ -322,6 +347,11 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			const maxInstructions = options?.maxInstructions ?? DEFAULT_MAX_INSTRUCTIONS;
 			const zeroMissing = options?.zeroMissing ?? false;
 			const trace = options?.trace ?? false;
+			if (trace && perfettoActive) {
+				throw new Error(
+					'Nested tracing is unsupported: disable per-call trace when using e.perfetto.trace(name, ...).',
+				);
+			}
 			const assignments = buildAssignments(registers, zeroMissing);
 			for (const [regName, value] of assignments.entries()) {
 				adapter.setReg(regName, value);
@@ -485,6 +515,59 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.pressOnKey?.();
 				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 				adapter.releaseOnKey?.();
+			},
+		},
+		perfetto: {
+			trace: async <T>(name: string, body: () => Promise<T> | T): Promise<T> => {
+				const trimmed = typeof name === 'string' ? name.trim() : '';
+				if (!trimmed) throw new Error('perfetto.trace(name, ...) requires a non-empty name');
+				if (perfettoActive) {
+					throw new Error('Nested perfetto.trace(...) calls are unsupported');
+				}
+				if (typeof adapter.startPerfettoTrace !== 'function' || typeof adapter.stopPerfettoTrace !== 'function') {
+					throw new Error('Perfetto tracing is not available in this runtime.');
+				}
+
+				perfettoActive = true;
+				let started = false;
+				let stopAttempted = false;
+
+				try {
+					await Promise.resolve(adapter.startPerfettoTrace(trimmed));
+					started = true;
+					const result = await body();
+					stopAttempted = true;
+					const perfettoTraceB64 = await Promise.resolve(adapter.stopPerfettoTrace());
+					const trace: PerfettoTraceHandle = {
+						index: traceIndex++,
+						name: trimmed,
+						byteLength: base64ByteLength(perfettoTraceB64),
+						perfettoTraceB64,
+					};
+					perfettoTraces.push(trace);
+					events.push({ kind: 'perfetto_trace', sequence: sequence++, trace });
+					return result;
+				} catch (err) {
+					if (started && !stopAttempted) {
+						try {
+							stopAttempted = true;
+							const perfettoTraceB64 = await Promise.resolve(adapter.stopPerfettoTrace());
+							const trace: PerfettoTraceHandle = {
+								index: traceIndex++,
+								name: trimmed,
+								byteLength: base64ByteLength(perfettoTraceB64),
+								perfettoTraceB64,
+							};
+							perfettoTraces.push(trace);
+							events.push({ kind: 'perfetto_trace', sequence: sequence++, trace });
+						} catch {
+							// ignore secondary stop errors
+						}
+					}
+					throw err;
+				} finally {
+					perfettoActive = false;
+				}
 			},
 		},
 		iocs: {

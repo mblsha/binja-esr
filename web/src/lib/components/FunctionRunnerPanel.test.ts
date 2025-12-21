@@ -87,6 +87,32 @@ describe('FunctionRunnerPanel', () => {
 		expect(await findByText('Download')).toBeTruthy();
 	});
 
+	it('shows named perfetto trace items from events', async () => {
+		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
+		const onRun = vi.fn(async (_source: string) => ({
+			events: [
+				{
+					kind: 'perfetto_trace' as const,
+					sequence: 0,
+					trace: { index: 0, name: 'boot-menu', byteLength: 5, perfettoTraceB64: 'ZHVtbXk=' },
+				},
+			],
+			calls: [],
+			prints: [],
+			resultJson: null,
+			error: null,
+		}));
+		const { getByTestId, findByText, findAllByText } = render(FunctionRunnerPanel, {
+			disabled: false,
+			busy: false,
+			onRun,
+		});
+		await fireEvent.click(getByTestId('fnr-run'));
+		expect(onRun).toHaveBeenCalled();
+		expect(await findByText('boot-menu')).toBeTruthy();
+		expect((await findAllByText('Download')).length).toBeGreaterThan(0);
+	});
+
 	it('Cmd+Enter runs the script from the editor', async () => {
 		vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: () => {} } } as any);
 		const onRun = vi.fn(async (_source: string) => ({

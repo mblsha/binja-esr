@@ -257,4 +257,80 @@ describe('createEvalApi', () => {
 		expect(regWrites).toContainEqual({ name: 'A', value: 0x5a });
 		expect(calls[0]?.address).toBe(0x00fffe8);
 	});
+
+	it('perfetto.trace starts/stops capture and records an event', async () => {
+		const ops: string[] = [];
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			startPerfettoTrace: (name: string) => ops.push(`start:${name}`),
+			stopPerfettoTrace: () => {
+				ops.push('stop');
+				return 'ZHVtbXk=';
+			},
+			reset: () => {},
+			step: (n: number) => ops.push(`step:${n}`),
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+		};
+
+		const api = createEvalApi(adapter as any);
+		const result = await api.perfetto.trace('boot', async () => {
+			await api.step(10);
+			return 123;
+		});
+
+		expect(result).toBe(123);
+		expect(ops).toEqual(['start:boot', 'step:10', 'stop']);
+		expect(api.events.some((e) => e.kind === 'perfetto_trace')).toBe(true);
+	});
+
+	it('perfetto.trace rejects nested capture', async () => {
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			startPerfettoTrace: (_name: string) => {},
+			stopPerfettoTrace: () => 'ZHVtbXk=',
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+		};
+
+		const api = createEvalApi(adapter as any);
+		await expect(
+			api.perfetto.trace('outer', async () => {
+				await api.perfetto.trace('inner', async () => {});
+			}),
+		).rejects.toThrow(/nested/i);
+	});
+
+	it('perfetto.trace rejects per-call trace inside an active capture', async () => {
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('call should be blocked before reaching adapter');
+			},
+			startPerfettoTrace: (_name: string) => {},
+			stopPerfettoTrace: () => 'ZHVtbXk=',
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+		};
+
+		const api = createEvalApi(adapter as any);
+		await expect(
+			api.perfetto.trace('outer', async () => {
+				await api.call(0x10, undefined, { trace: true });
+			}),
+		).rejects.toThrow(/nested tracing/i);
+	});
 });

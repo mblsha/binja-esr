@@ -1,10 +1,20 @@
 <script lang="ts">
-	import type { CallHandle } from '$lib/debug/sc62015_eval_api';
+	import type { CallHandle, EvalEvent, PerfettoTraceHandle } from '$lib/debug/sc62015_eval_api';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
 	import { formatAddress } from '$lib/debug/memory_write_blocks';
 
 	export let output: FunctionRunnerOutput | null = null;
 	export let onDownloadTrace: (call: CallHandle) => void;
+	export let onDownloadPerfettoTrace: (trace: PerfettoTraceHandle) => void;
+
+	function perfettoTraces(events: EvalEvent[] | null | undefined): PerfettoTraceHandle[] {
+		if (!events?.length) return [];
+		const out: PerfettoTraceHandle[] = [];
+		for (const event of events) {
+			if (event.kind === 'perfetto_trace') out.push(event.trace);
+		}
+		return out;
+	}
 
 	function hex(value: number | null | undefined, width = 2): string {
 		if (value === null || value === undefined) return '—';
@@ -18,6 +28,23 @@
 
 {#if output?.error}
 	<p class="error" data-testid="fnr-error">Script error: {output.error}</p>
+{/if}
+
+{#if perfettoTraces(output?.events).length}
+	<details open>
+		<summary>Perfetto traces ({perfettoTraces(output?.events).length})</summary>
+		{#each perfettoTraces(output?.events) as trace (trace.index)}
+			<div class="call" data-testid="fnr-trace">
+				<div class="call-title">
+					<strong>{trace.name}</strong>
+				</div>
+				<div class="debug-row">
+					<span class="hint">{trace.byteLength.toLocaleString()} bytes</span>
+					<button type="button" on:click={() => onDownloadPerfettoTrace(trace)}>Download</button>
+				</div>
+			</div>
+		{/each}
+	</details>
 {/if}
 
 {#if output?.prints?.length}

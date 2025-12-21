@@ -21,6 +21,22 @@ pub fn default_device_model() -> String {
     DeviceModel::DEFAULT.label().to_string()
 }
 
+fn sanitize_perfetto_trace_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "trace".to_string();
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        let ok = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.');
+        out.push(if ok { ch } else { '_' });
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct BuildInfo {
     version: String,
@@ -190,6 +206,36 @@ impl Sc62015Emulator {
         Ok(())
     }
 
+    /// Begins a long-running Perfetto trace that persists across `step()` and `call_function_ex()`.
+    ///
+    /// Nested tracing is not supported: returns an error if a trace is already active.
+    pub fn perfetto_start(&mut self, name: &str) -> Result<(), JsValue> {
+        let mut guard = sc62015_core::PERFETTO_TRACER.enter();
+        if let Some(existing) = guard.take() {
+            guard.replace(Some(existing));
+            return Err(JsValue::from_str(
+                "Perfetto trace already recording (nested tracing is unsupported)",
+            ));
+        }
+        let filename = format!("{}.perfetto-trace", sanitize_perfetto_trace_name(name));
+        guard.replace(Some(sc62015_core::PerfettoTracer::new(
+            std::path::PathBuf::from(filename),
+        )));
+        Ok(())
+    }
+
+    /// Stops the active long-running Perfetto trace and returns it as base64.
+    pub fn perfetto_stop_b64(&mut self) -> Result<String, JsValue> {
+        let mut guard = sc62015_core::PERFETTO_TRACER.enter();
+        let tracer = guard
+            .take()
+            .ok_or_else(|| JsValue::from_str("Perfetto trace is not recording"))?;
+        let bytes = tracer
+            .serialize()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
     pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), JsValue> {
         if rom.is_empty() {
             return Err(JsValue::from_str("ROM is empty"));
@@ -338,6 +384,17 @@ impl Sc62015Emulator {
         if opts.probe_max_samples == 0 {
             opts.probe_max_samples = 256;
         }
+
+        if opts.trace {
+            let mut guard = sc62015_core::PERFETTO_TRACER.enter();
+            if let Some(existing) = guard.take() {
+                guard.replace(Some(existing));
+                return Err(JsValue::from_str(
+                    "Perfetto trace already recording (nested tracing is unsupported)",
+                ));
+            }
+        }
+
         let before_pc = self.runtime.state.pc();
         let before_sp = self.runtime.state.get_reg(RegName::S);
         let before_call_metrics = self.runtime.state.snapshot_call_metrics();
