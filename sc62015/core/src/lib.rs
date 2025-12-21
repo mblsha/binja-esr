@@ -1382,7 +1382,7 @@ impl CoreRuntime {
             if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
                 self.lcd = Some(create_lcd(kind));
             }
-            let model = self.metadata.device_model.unwrap_or_else(|| match kind {
+            let model = self.metadata.device_model.unwrap_or(match kind {
                 LcdKind::Iq7000Vram => DeviceModel::Iq7000,
                 _ => DeviceModel::PcE500,
             });
