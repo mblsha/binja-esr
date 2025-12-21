@@ -1,12 +1,12 @@
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator
 // PY_SOURCE: pce500/run_pce500.py
 
-use crate::create_lcd;
 use crate::iq7000;
-use crate::lcd::{LcdHal, LcdKind};
+use crate::lcd::create_lcd;
+use crate::lcd::{Iq7000LcdController, LcdController, LcdHal, LcdKind};
 use crate::lcd_text::{
     decode_display_text, decode_iq7000_display_text_auto, Iq7000FontMap, Iq7000LargeFontMap,
-    Pce500FontMap,
+    LcdCharMatcher, Pce500FontMap,
 };
 use crate::pce500;
 use crate::{CoreRuntime, Result};
@@ -59,6 +59,31 @@ pub enum DeviceModel {
     #[cfg_attr(feature = "cli", value(name = "pc-e500"))]
     #[serde(rename = "pc-e500")]
     PcE500,
+}
+
+/// Configure device-specific LCD character matching for Perfetto tracing.
+///
+/// This installs the trie-backed matcher used by the "LCD Characters" Perfetto track so that
+/// write streams can be decoded into glyph slices. Callers must pass a ROM blob that includes the
+/// device's font tables (either the raw ROM image or a snapshot's external memory dump).
+pub fn configure_lcd_char_tracing(lcd: &mut dyn LcdHal, model: DeviceModel, rom: &[u8]) {
+    match model {
+        DeviceModel::PcE500 => {
+            let matcher = pce500::pce500_font_map_from_rom(rom)
+                .and_then(|font| LcdCharMatcher::from_pce500_font_map(&font));
+            if let Some(controller) = lcd.as_any_mut().downcast_mut::<LcdController>() {
+                controller.set_char_matcher(matcher);
+            }
+        }
+        DeviceModel::Iq7000 => {
+            let small_font = Iq7000FontMap::from_rom(rom, 0x00F_1B45);
+            let large_font = Iq7000LargeFontMap::from_rom(rom, 0x00F_2145);
+            let matcher = LcdCharMatcher::from_iq7000_font_maps(&small_font, &large_font);
+            if let Some(controller) = lcd.as_any_mut().downcast_mut::<Iq7000LcdController>() {
+                controller.set_char_matcher(matcher);
+            }
+        }
+    }
 }
 
 impl DeviceModel {
@@ -130,6 +155,9 @@ impl DeviceModel {
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         rt.set_device_model(*self);
         rt.lcd = Some(create_lcd(self.lcd_kind()));
+        if let Some(lcd) = rt.lcd.as_deref_mut() {
+            configure_lcd_char_tracing(lcd, *self, rom);
+        }
         if let Some(kb) = rt.keyboard.as_mut() {
             kb.set_columns_active_high(true);
             if matches!(self, Self::Iq7000) {

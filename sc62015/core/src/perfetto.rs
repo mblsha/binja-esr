@@ -65,6 +65,7 @@ pub struct PerfettoTracer {
     irq_key_track: TrackId,
     irq_misc_track: TrackId,
     display_track: TrackId,
+    lcd_chars_track: TrackId,
     units_per_instr: u64,
     path: PathBuf,
     imr_seq: u64,
@@ -119,6 +120,7 @@ impl PerfettoTracer {
         let irq_key_track = builder.add_thread("irq.key");
         let irq_misc_track = builder.add_thread("irq.misc");
         let display_track = builder.add_thread("Display");
+        let lcd_chars_track = builder.add_thread("LCD Characters");
         let functions_track = builder.add_thread("Functions");
         let instructions_track = builder.add_thread("Instructions");
         let ewrites_track = builder.add_thread("EWrites");
@@ -139,6 +141,7 @@ impl PerfettoTracer {
             irq_key_track,
             irq_misc_track,
             display_track,
+            lcd_chars_track,
             units_per_instr: 1_000,
             path,
             imr_seq: 0,
@@ -395,6 +398,46 @@ impl PerfettoTracer {
             ev.add_annotation("op_index", AnnotationValue::UInt(idx));
         }
         ev.finish();
+    }
+
+    pub fn record_lcd_character_slice(
+        &mut self,
+        ch: char,
+        start_op_index: u64,
+        end_op_index: u64,
+        x: u16,
+        y: u8,
+    ) {
+        let label = if ch.is_ascii_graphic() {
+            ch.to_string()
+        } else {
+            let code = ch as u32;
+            if code <= 0xFF {
+                format!("0x{code:02X}")
+            } else {
+                format!("U+{code:04X}")
+            }
+        };
+
+        let ts_start = self.ts(start_op_index, 0);
+        let ts_end = self
+            .ts(end_op_index, 0)
+            .saturating_add(self.units_per_instr as i64);
+
+        {
+            let mut ev = self
+                .builder
+                .begin_slice(self.lcd_chars_track, label, ts_start);
+            ev.add_annotations([
+                ("x", AnnotationValue::UInt(x as u64)),
+                ("y", AnnotationValue::UInt(y as u64)),
+                ("ch", AnnotationValue::UInt(ch as u32 as u64)),
+                ("start_op_index", AnnotationValue::UInt(start_op_index)),
+                ("end_op_index", AnnotationValue::UInt(end_op_index)),
+            ]);
+            ev.finish();
+        }
+        self.builder.end_slice(self.lcd_chars_track, ts_end);
     }
 
     pub fn update_counters(
@@ -764,6 +807,16 @@ impl PerfettoTracer {
     ) {
     }
 
+    pub fn record_lcd_character_slice(
+        &mut self,
+        _ch: char,
+        _start_op_index: u64,
+        _end_op_index: u64,
+        _x: u16,
+        _y: u8,
+    ) {
+    }
+
     pub fn update_counters(
         &mut self,
         _instr_index: u64,
@@ -1000,5 +1053,19 @@ mod tests {
         let names = tracer.test_function_slices.borrow().clone();
         assert_eq!(names.len(), 1);
         assert_eq!(names[0], "pne");
+    }
+
+    #[test]
+    fn lcd_character_slices_create_lcd_characters_track() {
+        let path = std::env::temp_dir().join("perfetto_lcd_chars_test.perfetto-trace");
+        let _ = std::fs::remove_file(&path);
+        let mut tracer = PerfettoTracer::new(path);
+        tracer.record_lcd_character_slice('A', 10, 12, 5, 1);
+        let bytes = tracer.serialize().expect("serialize");
+        let haystack = String::from_utf8_lossy(&bytes);
+        assert!(
+            haystack.contains("LCD Characters"),
+            "expected LCD Characters track name in serialized trace"
+        );
     }
 }

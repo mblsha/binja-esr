@@ -1348,9 +1348,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         IrqPerfetto::new(irq_path)
     });
     let lcd_kind = args.model.lcd_kind();
+    let mut lcd = create_lcd(lcd_kind);
+    sc62015_core::device::configure_lcd_char_tracing(lcd.as_mut(), args.model, &rom_bytes);
     let mut bus = StandaloneBus::new(
         memory,
-        create_lcd(lcd_kind),
+        lcd,
         if args.disable_timers {
             TimerContext::new(false, 0, 0)
         } else {
