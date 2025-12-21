@@ -13,7 +13,9 @@ test('physical keyboard: holding F1 changes decoded LCD text', async ({ page }) 
 	await keyboardToggle.check();
 
 	// Ensure the page has focus so keyboard events hit the window handler.
-	await page.click('body');
+	// (Avoid clicking "body": layout changes can place the checkbox at the center of the page,
+	// toggling it back off.)
+	await page.getByTestId('emu-status').click();
 
 	await step20k.click();
 	await expect(page.getByTestId('lcd-text')).toContainText('BOOT');

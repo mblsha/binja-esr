@@ -1,15 +1,23 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
-	import { LCD_CHIP_COLS, LCD_CHIP_ROWS } from '$lib/lcd';
+	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 	import { matrixCodeForKeyEvent } from '$lib/keymap';
+	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
 	import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
 	import { IOCS } from '$lib/debug/iocs';
 	import { runUserJs } from '$lib/debug/run_user_js';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
+	import { createPersistedStore } from '$lib/stores/persisted';
 	import { normalizeRomModel, type RomModel } from '$lib/rom_model';
+
+	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
+	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
+		serialize: (value) => value,
+		deserialize: (raw) => normalizeRomModel(raw) ?? 'pc-e500',
+	});
 
 	let wasm: any = null;
 	let emulator: any = null;
@@ -21,6 +29,9 @@
 
 	let lcdPixels: Uint8Array | null = null;
 	let lcdChipPixels: Uint8Array | null = null;
+	let lcdCols = LCD_COLS;
+	let lcdRows = LCD_ROWS;
+	let lcdKind: LcdKind | null = null;
 	const CHIP_PIXELS_LEN = LCD_CHIP_COLS * LCD_CHIP_ROWS;
 	$: lcdLeftChipPixels =
 		lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN ? lcdChipPixels.subarray(0, CHIP_PIXELS_LEN) : null;
@@ -40,6 +51,8 @@
 	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 	let romLoaded = false;
 	let romModel: RomModel = 'pc-e500';
+	let romModelWasPersisted = false;
+	$: romModel = $romModelStore;
 
 	let running = false;
 	let targetFps = 30;
@@ -97,6 +110,10 @@
 			if (frame?.lcdChipPixels instanceof ArrayBuffer) {
 				lcdChipPixels = new Uint8Array(frame.lcdChipPixels);
 			}
+			if (typeof frame?.lcdCols === 'number') lcdCols = frame.lcdCols;
+			if (typeof frame?.lcdRows === 'number') lcdRows = frame.lcdRows;
+			const nextKind = normalizeLcdKind(frame?.lcdKind);
+			if (nextKind) lcdKind = nextKind;
 			lcdText = frame?.lcdText ?? null;
 			buildInfo = frame?.buildInfo ?? buildInfo;
 			regs = frame?.regs ?? regs;
@@ -462,7 +479,7 @@
 		try {
 			const raw = emulator?.device_model?.() ?? wasm?.default_device_model?.();
 			const model = normalizeRomModel(typeof raw === 'string' ? raw : null);
-			if (model) romModel = model;
+			if (model && !romModelWasPersisted) $romModelStore = model;
 		} catch {
 			// ignore
 		}
@@ -470,10 +487,11 @@
 	}
 
 	async function syncRomModelFromRuntime(): Promise<void> {
+		if (romModelWasPersisted) return;
 		if (worker) {
 			try {
 				const model = (await workerCall('get_model')) as any;
-				if (typeof model === 'string') romModel = model as RomModel;
+				if (typeof model === 'string') $romModelStore = model as RomModel;
 			} catch {
 				// ignore
 			}
@@ -510,6 +528,19 @@
 	function refreshFast() {
 		if (worker) return;
 		if (!emulator) return;
+		try {
+			const geometry = emulator.lcd_geometry?.() ?? null;
+			if (geometry && typeof geometry === 'object') {
+				const kind = normalizeLcdKind((geometry as any).kind);
+				const cols = (geometry as any).cols;
+				const rows = (geometry as any).rows;
+				if (kind) lcdKind = kind;
+				if (typeof cols === 'number') lcdCols = cols;
+				if (typeof rows === 'number') lcdRows = rows;
+			}
+		} catch {
+			// ignore
+		}
 		lcdPixels = emulator.lcd_pixels();
 		lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
@@ -812,6 +843,11 @@
 
 	onMount(() => {
 		mounted = true;
+		try {
+			romModelWasPersisted = normalizeRomModel(window.localStorage.getItem(ROM_MODEL_STORAGE_KEY)) !== null;
+		} catch {
+			romModelWasPersisted = false;
+		}
 		void tryAutoLoadRom();
 		void ensureWorker();
 		installDevtoolsDebugHelpers();
@@ -841,7 +877,14 @@
 
 	<label>
 		ROM preset:
-		<select bind:value={romModel} on:change={() => void tryAutoLoadRom(true)} data-testid="rom-model">
+		<select
+			bind:value={$romModelStore}
+			on:change={() => {
+				romModelWasPersisted = true;
+				void tryAutoLoadRom(true);
+			}}
+			data-testid="rom-model"
+		>
 			<option value="iq-7000">IQ-7000</option>
 			<option value="pc-e500">PC-E500</option>
 		</select>
@@ -870,21 +913,27 @@
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
 	<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
 
-	<LcdCanvas pixels={lcdPixels} />
+	{#if romLoaded}
+		<p class="hint">LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows})</p>
+	{/if}
 
-	<details>
-		<summary>LCD controller (64×64 chips)</summary>
-		<div class="lcd-chips">
-			<div class="lcd-chip">
-				<div class="hint">Left chip</div>
-				<LcdCanvas pixels={lcdLeftChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+	<LcdCanvas pixels={lcdPixels} cols={lcdCols} rows={lcdRows} />
+
+	{#if lcdKind === 'hd61202'}
+		<details>
+			<summary>LCD controller (64×64 chips)</summary>
+			<div class="lcd-chips">
+				<div class="lcd-chip">
+					<div class="hint">Left chip</div>
+					<LcdCanvas pixels={lcdLeftChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+				</div>
+				<div class="lcd-chip">
+					<div class="hint">Right chip</div>
+					<LcdCanvas pixels={lcdRightChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+				</div>
 			</div>
-			<div class="lcd-chip">
-				<div class="hint">Right chip</div>
-				<LcdCanvas pixels={lcdRightChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
-			</div>
-		</div>
-	</details>
+		</details>
+	{/if}
 
 	<VirtualKeyboard
 		disabled={!romLoaded}
