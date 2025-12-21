@@ -1114,15 +1114,40 @@ class PCE500Emulator:
 
         opcode = None
         try:
-            # Pre-read opcode and I for WAIT simulation (so we can model time passing)
-            # Always simulate WAIT loops to advance timers, regardless of tracing.
+            # Pre-read opcode and I for WAIT/MVL simulation (so we can model time passing).
+            # WAIT and MVL both loop on I; each loop iteration should advance cycle_count so
+            # timers/keyboard can progress during long operations.
             wait_sim_count = 0
+            mvl_sim_count = 0
             try:
                 opcode_peek = self.memory.read_byte(pc) & 0xFF
-                if opcode_peek == 0xEF:  # WAIT
+                exec_pc = pc
+                exec_opcode = opcode_peek
+                prefix_guard = 0
+                while (
+                    (0x21 <= exec_opcode <= 0x27) or (0x30 <= exec_opcode <= 0x37)
+                ) and prefix_guard < 4:
+                    exec_pc += 1
+                    exec_opcode = self.memory.read_byte(exec_pc) & 0xFF
+                    prefix_guard += 1
+
+                if exec_opcode in (
+                    0xEF,
+                    0xCB,
+                    0xCF,
+                    0xD3,
+                    0xDB,
+                    0xE3,
+                    0xEB,
+                    0xF3,
+                    0xFB,
+                ):
                     i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
                     if i_before > 0:
-                        wait_sim_count = i_before
+                        if exec_opcode == 0xEF:  # WAIT
+                            wait_sim_count = i_before
+                        else:
+                            mvl_sim_count = i_before
                 opcode = opcode_peek
             except Exception:
                 pass
@@ -1145,15 +1170,25 @@ class PCE500Emulator:
 
                 self.cycle_count += 1
                 self.instruction_count += 1
-                # If this was WAIT, simulate the skipped loop to keep timers aligned
+                # Account for WAIT/MVL loops so cycle_count (and traces) reflect time passing.
+                # - WAIT should tick timers per iteration.
+                # - MVL-family should bump cycle_count without per-byte timer ticks (preserve cadence).
                 if wait_sim_count:
                     if getattr(self.cpu, "backend", None) == "llama" and hasattr(
                         self.memory, "wait_cycles"
                     ):
-                        # LLAMA core delegated WAIT-cycle timing via memory.wait_cycles().
+                        # LLAMA core delegates WAIT timing via memory.wait_cycles().
                         pass
                     else:
                         self._simulate_wait(wait_sim_count)
+                if mvl_sim_count:
+                    cycles = int(mvl_sim_count)
+                    self.cycle_count += cycles
+                    try:
+                        self._scheduler.next_mti += cycles
+                        self._scheduler.next_sti += cycles
+                    except Exception:
+                        pass
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
@@ -1213,15 +1248,25 @@ class PCE500Emulator:
 
                 self.cycle_count += 1
                 self.instruction_count += 1
-                # If this was WAIT, simulate the skipped loop to keep timers aligned
+                # Account for WAIT/MVL loops so cycle_count (and traces) reflect time passing.
+                # - WAIT should tick timers per iteration.
+                # - MVL-family should bump cycle_count without per-byte timer ticks (preserve cadence).
                 if wait_sim_count:
                     if getattr(self.cpu, "backend", None) == "llama" and hasattr(
                         self.memory, "wait_cycles"
                     ):
-                        # LLAMA core delegated WAIT-cycle timing via memory.wait_cycles().
+                        # LLAMA core delegates WAIT timing via memory.wait_cycles().
                         pass
                     else:
                         self._simulate_wait(wait_sim_count)
+                if mvl_sim_count:
+                    cycles = int(mvl_sim_count)
+                    self.cycle_count += cycles
+                    try:
+                        self._scheduler.next_mti += cycles
+                        self._scheduler.next_sti += cycles
+                    except Exception:
+                        pass
 
                 # Only compute disassembly when tracing is enabled to avoid overhead
                 if self.trace is not None:
