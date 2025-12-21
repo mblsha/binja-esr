@@ -12,6 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::any::Any;
 use std::collections::HashMap;
 
 const LCD_WIDTH: usize = 64;
@@ -63,6 +64,7 @@ pub fn lcd_kind_from_snapshot_meta(metadata: &Value, default: LcdKind) -> LcdKin
 }
 
 pub trait LcdHal: Send {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn kind(&self) -> LcdKind;
     fn reset(&mut self);
     fn handles(&self, address: u32) -> bool;
@@ -801,6 +803,10 @@ impl LcdController {
 }
 
 impl LcdHal for LcdController {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn kind(&self) -> LcdKind {
         self.kind()
     }
@@ -863,6 +869,10 @@ impl LcdHal for LcdController {
 }
 
 impl LcdHal for Iq7000LcdController {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn kind(&self) -> LcdKind {
         LcdKind::Iq7000Vram
     }
@@ -1061,6 +1071,10 @@ impl Default for UnknownLcdController {
 }
 
 impl LcdHal for UnknownLcdController {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn kind(&self) -> LcdKind {
         LcdKind::Unknown
     }

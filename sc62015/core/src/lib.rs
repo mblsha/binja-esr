@@ -1382,6 +1382,14 @@ impl CoreRuntime {
             if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
                 self.lcd = Some(create_lcd(kind));
             }
+            let model = self.metadata.device_model.unwrap_or_else(|| match kind {
+                LcdKind::Iq7000Vram => DeviceModel::Iq7000,
+                _ => DeviceModel::PcE500,
+            });
+            let rom = self.memory.external_slice();
+            if let Some(lcd) = self.lcd.as_deref_mut() {
+                crate::device::configure_lcd_char_tracing(lcd, model, rom);
+            }
             if let Some(lcd) = self.lcd.as_mut() {
                 let payload = loaded.lcd_payload.as_deref();
                 let should_load = payload.is_some() || kind == LcdKind::Unknown;
