@@ -2,8 +2,10 @@
 // PY_SOURCE: pce500/display/controller_wrapper.py:HD61202Controller
 
 use crate::{
+    lcd_text::{LcdCharMatcher, LcdCharWriteSample},
     llama::eval::{
-        perfetto_instr_context, perfetto_last_call_stack, perfetto_last_pc, PerfettoCallStack,
+        perfetto_instr_context, perfetto_last_call_stack, perfetto_last_instr_index,
+        perfetto_last_pc, PerfettoCallStack,
     },
     llama::{opcodes::RegName, state::mask_for},
     PERFETTO_TRACER,
@@ -179,6 +181,7 @@ pub struct Iq7000LcdController {
     vram: [[u8; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
     vram_trace: [[LcdWriteTrace; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
     display_write_capture: Option<HashMap<u16, LcdDisplayWrite>>,
+    char_matcher: Option<LcdCharMatcher>,
 }
 
 impl Iq7000LcdController {
@@ -187,6 +190,14 @@ impl Iq7000LcdController {
             vram: [[0u8; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
             vram_trace: [[LcdWriteTrace::default(); IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES],
             display_write_capture: None,
+            char_matcher: None,
+        }
+    }
+
+    pub(crate) fn set_char_matcher(&mut self, matcher: Option<LcdCharMatcher>) {
+        self.char_matcher = matcher;
+        if let Some(matcher) = self.char_matcher.as_mut() {
+            matcher.reset_stream();
         }
     }
 
@@ -388,6 +399,7 @@ pub struct LcdController {
     cs_right_count: u32,
     last_status: Option<u8>,
     display_write_capture: Option<HashMap<u16, LcdDisplayWrite>>,
+    char_matcher: Option<LcdCharMatcher>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -413,6 +425,7 @@ impl LcdController {
             cs_right_count: 0,
             last_status: None,
             display_write_capture: None,
+            char_matcher: None,
         }
     }
 
@@ -423,6 +436,16 @@ impl LcdController {
         self.cs_right_count = 0;
         self.last_status = None;
         self.display_write_capture = None;
+        if let Some(matcher) = self.char_matcher.as_mut() {
+            matcher.reset_stream();
+        }
+    }
+
+    pub(crate) fn set_char_matcher(&mut self, matcher: Option<LcdCharMatcher>) {
+        self.char_matcher = matcher;
+        if let Some(matcher) = self.char_matcher.as_mut() {
+            matcher.reset_stream();
+        }
     }
 
     pub fn begin_display_write_capture(&mut self) {
@@ -526,6 +549,27 @@ impl LcdController {
                         self.record_display_write_capture(*idx, page_before, column, data, trace);
                         let mut guard = PERFETTO_TRACER.enter();
                         guard.with_some(|tracer| {
+                            if let Some(matcher) = self.char_matcher.as_mut() {
+                                if let Some(x) =
+                                    map_chip_col_to_display_col(*idx, page_before, column)
+                                {
+                                    let op = op_index.unwrap_or_else(perfetto_last_instr_index);
+                                    if let Some(matched) = matcher.push(LcdCharWriteSample {
+                                        value: data,
+                                        op_index: op,
+                                        x,
+                                        y: page_before,
+                                    }) {
+                                        tracer.record_lcd_character_slice(
+                                            matched.ch,
+                                            matched.start_op_index,
+                                            matched.end_op_index,
+                                            matched.x,
+                                            matched.y,
+                                        );
+                                    }
+                                }
+                            }
                             tracer.record_lcd_event(
                                 "VRAM_Write",
                                 address & 0x00FF_FFFF,
@@ -827,6 +871,9 @@ impl LcdHal for Iq7000LcdController {
         self.vram = [[0u8; IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES];
         self.vram_trace = [[LcdWriteTrace::default(); IQ7000_VRAM_COLS]; IQ7000_TOTAL_PAGES];
         self.display_write_capture = None;
+        if let Some(matcher) = self.char_matcher.as_mut() {
+            matcher.reset_stream();
+        }
     }
 
     fn handles(&self, address: u32) -> bool {
@@ -867,6 +914,25 @@ impl LcdHal for Iq7000LcdController {
 
         let mut guard = PERFETTO_TRACER.enter();
         guard.with_some(|tracer| {
+            if let Some(matcher) = self.char_matcher.as_mut() {
+                let op = op_index.unwrap_or_else(perfetto_last_instr_index);
+                let x = u16::try_from(IQ7000_VRAM_COLS - 1 - col).unwrap_or(0);
+                let y = (page as u8) & 0x07;
+                if let Some(matched) = matcher.push(LcdCharWriteSample {
+                    value,
+                    op_index: op,
+                    x,
+                    y,
+                }) {
+                    tracer.record_lcd_character_slice(
+                        matched.ch,
+                        matched.start_op_index,
+                        matched.end_op_index,
+                        matched.x,
+                        matched.y,
+                    );
+                }
+            }
             tracer.record_lcd_event(
                 "IQ7000_VRAM_WRITE",
                 address & 0x00FF_FFFF,

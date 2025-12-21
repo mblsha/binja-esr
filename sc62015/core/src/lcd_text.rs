@@ -2,7 +2,7 @@
 // PY_SOURCE: pce500/display/font.py
 
 use crate::lcd::{LcdHal, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 const GLYPH_WIDTH: usize = 5;
 const GLYPH_STRIDE: usize = 6; // five data columns + spacer
@@ -241,6 +241,171 @@ pub fn decode_iq7000_display_text_auto(
     out
 }
 
+#[derive(Clone)]
+struct LcdCharTrieNode {
+    // Child index + 1, keyed by byte value. Using 0 as "no edge" keeps the node compact and fast.
+    children: [u16; 256],
+    terminal: Option<char>,
+}
+
+impl Default for LcdCharTrieNode {
+    fn default() -> Self {
+        Self {
+            children: [0u16; 256],
+            terminal: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct LcdCharTrie {
+    nodes: Vec<LcdCharTrieNode>,
+    max_len: usize,
+}
+
+impl LcdCharTrie {
+    fn new() -> Self {
+        Self {
+            nodes: vec![LcdCharTrieNode::default()],
+            max_len: 0,
+        }
+    }
+
+    fn insert(&mut self, pattern: &[u8], ch: char) {
+        self.max_len = self.max_len.max(pattern.len());
+        let mut node = 0usize;
+
+        // Insert reversed so a match can be found by walking backward from the newest write.
+        for &byte in pattern.iter().rev() {
+            let edge = self.nodes[node].children[byte as usize];
+            if edge == 0 {
+                self.nodes.push(LcdCharTrieNode::default());
+                let new_idx = self.nodes.len() - 1;
+                self.nodes[node].children[byte as usize] =
+                    u16::try_from(new_idx + 1).expect("lcd char trie too large");
+                node = new_idx;
+            } else {
+                node = (edge as usize).saturating_sub(1);
+            }
+        }
+
+        // If multiple fonts contain an identical byte pattern, keep the first-seen char label.
+        self.nodes[node].terminal.get_or_insert(ch);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LcdCharWriteSample {
+    pub value: u8,
+    pub op_index: u64,
+    pub x: u16,
+    pub y: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LcdCharMatch {
+    pub ch: char,
+    pub start_op_index: u64,
+    pub end_op_index: u64,
+    pub x: u16,
+    pub y: u8,
+    pub len: usize,
+}
+
+/// Streaming glyph detector used by LCD write tracing.
+///
+/// This matcher keeps the last `max_glyph_len` byte writes and checks if the newest suffix matches
+/// any known glyph pattern from the device's font map(s). It emits the **longest** match ending at
+/// the current write (by design, to disambiguate overlapping font widths).
+#[derive(Clone)]
+pub(crate) struct LcdCharMatcher {
+    trie: LcdCharTrie,
+    window: VecDeque<LcdCharWriteSample>,
+}
+
+impl LcdCharMatcher {
+    pub(crate) fn from_pce500_font_map(font: &Pce500FontMap) -> Option<Self> {
+        if font.is_empty() {
+            return None;
+        }
+        let mut trie = LcdCharTrie::new();
+        for (pattern, ch) in font.glyphs.iter() {
+            trie.insert(pattern, *ch);
+        }
+        Some(Self {
+            trie,
+            window: VecDeque::new(),
+        })
+    }
+
+    pub(crate) fn from_iq7000_font_maps(
+        small_font: &Iq7000FontMap,
+        large_font: &Iq7000LargeFontMap,
+    ) -> Option<Self> {
+        if small_font.is_empty() && large_font.is_empty() {
+            return None;
+        }
+        let mut trie = LcdCharTrie::new();
+        for (pattern, ch) in small_font.glyphs.iter() {
+            trie.insert(pattern, *ch);
+        }
+        for (pattern, ch) in large_font.glyphs.iter() {
+            trie.insert(pattern, *ch);
+        }
+        Some(Self {
+            trie,
+            window: VecDeque::new(),
+        })
+    }
+
+    pub(crate) fn reset_stream(&mut self) {
+        self.window.clear();
+    }
+
+    pub(crate) fn push(&mut self, sample: LcdCharWriteSample) -> Option<LcdCharMatch> {
+        let max_len = self.trie.max_len;
+        if max_len == 0 {
+            return None;
+        }
+
+        self.window.push_back(sample);
+        while self.window.len() > max_len {
+            self.window.pop_front();
+        }
+
+        let mut node = 0usize;
+        let mut depth = 0usize;
+        let mut best: Option<(char, usize)> = None;
+
+        for ev in self.window.iter().rev() {
+            let edge = self.trie.nodes[node].children[ev.value as usize];
+            if edge == 0 {
+                break;
+            }
+            node = (edge as usize).saturating_sub(1);
+            depth = depth.saturating_add(1);
+
+            if let Some(ch) = self.trie.nodes[node].terminal {
+                // Longest-match policy: keep updating as we walk deeper.
+                best = Some((ch, depth));
+            }
+        }
+
+        let (ch, len) = best?;
+        let start_idx = self.window.len().saturating_sub(len);
+        let start = *self.window.get(start_idx)?;
+        let end = *self.window.back()?;
+        Some(LcdCharMatch {
+            ch,
+            start_op_index: start.op_index,
+            end_op_index: end.op_index,
+            x: start.x,
+            y: start.y,
+            len,
+        })
+    }
+}
+
 fn decode_iq7000_small_row(
     bytes: &[[u8; LCD_DISPLAY_COLS]; 8],
     row: usize,
@@ -347,6 +512,7 @@ fn trim_trailing_empty_lines(lines: &mut Vec<String>) {
 mod tests {
     use super::*;
     use crate::lcd::Iq7000LcdController;
+    use crate::lcd::LcdController;
 
     #[test]
     fn iq7000_text_decoder_ocr_matches_font_map() {
@@ -463,5 +629,93 @@ mod tests {
 
         let lines = decode_iq7000_display_text_auto(&lcd, &small_font, &large_font);
         assert_eq!(lines, vec!["A", "", "CD"]);
+    }
+
+    #[test]
+    fn lcd_char_matcher_emits_longest_match() {
+        // Small font has 'A' = 6 bytes.
+        let mut small_rom = vec![0u8; 0x80 * IQ7000_CELL_BYTES];
+        let small_a = [1u8, 2, 3, 4, 5, 6];
+        small_rom[(0x41 * IQ7000_CELL_BYTES)..(0x41 * IQ7000_CELL_BYTES + IQ7000_CELL_BYTES)]
+            .copy_from_slice(&small_a);
+        let small_font = Iq7000FontMap::from_rom(&small_rom, 0);
+
+        // Large font has 'B' = 16 bytes and ends with the same 6-byte suffix as the small 'A'.
+        let mut large_rom = vec![0u8; 0x80 * IQ7000_LARGE_CELL_BYTES];
+        let mut large_b = [0u8; IQ7000_LARGE_CELL_BYTES];
+        large_b[(IQ7000_LARGE_CELL_BYTES - small_a.len())..].copy_from_slice(&small_a);
+        large_rom[(0x42 * IQ7000_LARGE_CELL_BYTES)
+            ..(0x42 * IQ7000_LARGE_CELL_BYTES + IQ7000_LARGE_CELL_BYTES)]
+            .copy_from_slice(&large_b);
+        let large_font = Iq7000LargeFontMap::from_rom(&large_rom, 0);
+
+        let mut matcher =
+            LcdCharMatcher::from_iq7000_font_maps(&small_font, &large_font).expect("matcher");
+
+        let mut last = None;
+        for (idx, byte) in large_b.into_iter().enumerate() {
+            last = matcher.push(LcdCharWriteSample {
+                value: byte,
+                op_index: idx as u64,
+                x: 7,
+                y: 2,
+            });
+        }
+
+        assert_eq!(
+            last,
+            Some(LcdCharMatch {
+                ch: 'B',
+                start_op_index: 0,
+                end_op_index: (IQ7000_LARGE_CELL_BYTES - 1) as u64,
+                x: 7,
+                y: 2,
+                len: IQ7000_LARGE_CELL_BYTES,
+            })
+        );
+    }
+
+    #[test]
+    fn lcd_char_matcher_detects_pce500_glyphs() {
+        let mut rom = vec![0u8; GLYPH_COUNT * GLYPH_STRIDE];
+        let a_index = (0x41u32 - 0x20u32) as usize;
+        let start = a_index * GLYPH_STRIDE;
+        let a_pattern = [0x01u8, 0x02, 0x04, 0x08, 0x10];
+        rom[start..start + GLYPH_WIDTH].copy_from_slice(&a_pattern);
+        let font = Pce500FontMap::from_rom(&rom, 0, 0);
+
+        let mut matcher = LcdCharMatcher::from_pce500_font_map(&font).expect("matcher");
+        let mut out = None;
+        for (idx, byte) in a_pattern.into_iter().enumerate() {
+            out = matcher.push(LcdCharWriteSample {
+                value: byte,
+                op_index: idx as u64,
+                x: 11,
+                y: 3,
+            });
+        }
+        assert_eq!(
+            out,
+            Some(LcdCharMatch {
+                ch: 'A',
+                start_op_index: 0,
+                end_op_index: (GLYPH_WIDTH - 1) as u64,
+                x: 11,
+                y: 3,
+                len: GLYPH_WIDTH,
+            })
+        );
+
+        // Sanity: pushing an unrelated byte should not keep re-emitting the same glyph.
+        let next = matcher.push(LcdCharWriteSample {
+            value: 0xFF,
+            op_index: 99,
+            x: 12,
+            y: 3,
+        });
+        assert!(next.is_none());
+
+        // Smoke: matcher can coexist with actual LCD types (no trait coupling).
+        let _lcd = LcdController::new();
     }
 }

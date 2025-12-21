@@ -1,12 +1,11 @@
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator
 // PY_SOURCE: pce500/run_pce500.py
 
-use crate::create_lcd;
 use crate::iq7000;
-use crate::lcd::{LcdHal, LcdKind};
+use crate::lcd::{Iq7000LcdController, LcdController, LcdHal, LcdKind};
 use crate::lcd_text::{
     decode_display_text, decode_iq7000_display_text_auto, Iq7000FontMap, Iq7000LargeFontMap,
-    Pce500FontMap,
+    LcdCharMatcher, Pce500FontMap,
 };
 use crate::pce500;
 use crate::{CoreRuntime, Result};
@@ -129,7 +128,23 @@ impl DeviceModel {
 
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         rt.set_device_model(*self);
-        rt.lcd = Some(create_lcd(self.lcd_kind()));
+        rt.lcd = Some(match self {
+            Self::PcE500 => {
+                let mut lcd = LcdController::new();
+                let matcher = pce500::pce500_font_map_from_rom(rom)
+                    .and_then(|font| LcdCharMatcher::from_pce500_font_map(&font));
+                lcd.set_char_matcher(matcher);
+                Box::new(lcd) as Box<dyn LcdHal>
+            }
+            Self::Iq7000 => {
+                let mut lcd = Iq7000LcdController::new();
+                let small_font = Iq7000FontMap::from_rom(rom, 0x00F_1B45);
+                let large_font = Iq7000LargeFontMap::from_rom(rom, 0x00F_2145);
+                let matcher = LcdCharMatcher::from_iq7000_font_maps(&small_font, &large_font);
+                lcd.set_char_matcher(matcher);
+                Box::new(lcd) as Box<dyn LcdHal>
+            }
+        });
         if let Some(kb) = rt.keyboard.as_mut() {
             kb.set_columns_active_high(true);
             if matches!(self, Self::Iq7000) {
