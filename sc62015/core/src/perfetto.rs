@@ -193,7 +193,7 @@ impl PerfettoTracer {
     pub fn record_regs(
         &mut self,
         instr_index: u64,
-        pc: u32,
+        _pc: u32,
         reg_pc: u32,
         opcode: u8,
         mnemonic: Option<&str>,
@@ -204,9 +204,9 @@ impl PerfettoTracer {
         let ts_start = self.ts(instr_index, 0);
         let ts_end = self.ts(instr_index.saturating_add(1), 0);
         let name = if let Some(m) = mnemonic {
-            format!("{m} @0x{pc:06X}")
+            m.to_string()
         } else {
-            format!("op=0x{opcode:02X} @0x{pc:06X}")
+            format!("op=0x{opcode:02X}")
         };
         {
             let mut ev = self
@@ -242,7 +242,7 @@ impl PerfettoTracer {
         {
             self.test_exec_events
                 .borrow_mut()
-                .push((pc, opcode, instr_index));
+                .push((reg_pc, opcode, instr_index));
             self.test_timestamps.borrow_mut().push(ts_start);
         }
     }
