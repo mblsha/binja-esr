@@ -1,7 +1,8 @@
 /// <reference types="node" />
 
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import path from 'node:path';
+import { defineConfig, type Plugin } from 'vite';
 
 const isVitest = process.env.VITEST === 'true' || process.env.VITEST === '1';
 
@@ -16,8 +17,27 @@ function parseAllowedHosts(): string[] | true | undefined {
 	return hosts.length ? hosts : true;
 }
 
+function wasmPackageReload(): Plugin {
+	const wasmPkgDir = path.resolve('src/lib/wasm/pce500_wasm');
+	const wasmPkgPrefix = `${wasmPkgDir}${path.sep}`;
+
+	return {
+		name: 'wasm-package-reload',
+		configureServer(server) {
+			server.watcher.add(wasmPkgDir);
+		},
+		handleHotUpdate(ctx) {
+			const file = ctx.file;
+			if (file === wasmPkgDir || file.startsWith(wasmPkgPrefix)) {
+				ctx.server.ws.send({ type: 'full-reload' });
+				return [];
+			}
+		}
+	};
+}
+
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [sveltekit(), wasmPackageReload()],
 	worker: {
 		format: 'es'
 	},
