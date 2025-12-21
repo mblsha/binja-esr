@@ -4,6 +4,7 @@
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 	import { matrixCodeForKeyEvent } from '$lib/keymap';
+	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
 	import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
 	import { IOCS } from '$lib/debug/iocs';
 	import { runUserJs } from '$lib/debug/run_user_js';
@@ -30,7 +31,7 @@
 	let lcdChipPixels: Uint8Array | null = null;
 	let lcdCols = LCD_COLS;
 	let lcdRows = LCD_ROWS;
-	let lcdKind: string | null = null;
+	let lcdKind: LcdKind | null = null;
 	const CHIP_PIXELS_LEN = LCD_CHIP_COLS * LCD_CHIP_ROWS;
 	$: lcdLeftChipPixels =
 		lcdChipPixels && lcdChipPixels.length >= CHIP_PIXELS_LEN ? lcdChipPixels.subarray(0, CHIP_PIXELS_LEN) : null;
@@ -111,7 +112,8 @@
 			}
 			if (typeof frame?.lcdCols === 'number') lcdCols = frame.lcdCols;
 			if (typeof frame?.lcdRows === 'number') lcdRows = frame.lcdRows;
-			if (typeof frame?.lcdKind === 'string') lcdKind = frame.lcdKind;
+			const nextKind = normalizeLcdKind(frame?.lcdKind);
+			if (nextKind) lcdKind = nextKind;
 			lcdText = frame?.lcdText ?? null;
 			buildInfo = frame?.buildInfo ?? buildInfo;
 			regs = frame?.regs ?? regs;
@@ -529,10 +531,10 @@
 		try {
 			const geometry = emulator.lcd_geometry?.() ?? null;
 			if (geometry && typeof geometry === 'object') {
-				const kind = (geometry as any).kind;
+				const kind = normalizeLcdKind((geometry as any).kind);
 				const cols = (geometry as any).cols;
 				const rows = (geometry as any).rows;
-				if (typeof kind === 'string') lcdKind = kind;
+				if (kind) lcdKind = kind;
 				if (typeof cols === 'number') lcdCols = cols;
 				if (typeof rows === 'number') lcdRows = rows;
 			}

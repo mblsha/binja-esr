@@ -30,7 +30,7 @@ struct BuildInfo {
 
 #[derive(Debug, Clone, Serialize)]
 struct LcdGeometry {
-    kind: String,
+    kind: LcdKind,
     cols: u32,
     rows: u32,
 }
@@ -541,11 +541,7 @@ impl Sc62015Emulator {
             )
         };
 
-        serde_wasm_bindgen::to_value(&LcdGeometry {
-            kind: kind.as_str().to_string(),
-            cols,
-            rows,
-        })
+        serde_wasm_bindgen::to_value(&LcdGeometry { kind, cols, rows })
         .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 

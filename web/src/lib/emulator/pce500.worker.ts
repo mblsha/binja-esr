@@ -1,4 +1,5 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
+import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -45,7 +46,7 @@ type Frame = {
 	lcdChipPixels: ArrayBuffer;
 	lcdCols: number;
 	lcdRows: number;
-	lcdKind: string | null;
+	lcdKind: LcdKind;
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
@@ -307,7 +308,7 @@ function captureFrame(forceText: boolean): Frame {
 	})();
 	const lcdCols = typeof geometry?.cols === 'number' ? geometry.cols : 240;
 	const lcdRows = typeof geometry?.rows === 'number' ? geometry.rows : 32;
-	const lcdKind = typeof geometry?.kind === 'string' ? geometry.kind : null;
+	const lcdKind = normalizeLcdKind(geometry?.kind) ?? 'unknown';
 
 	const pixels = emulator.lcd_pixels();
 	const pixelsCopy = new Uint8Array(pixels);
