@@ -8,7 +8,10 @@ use sc62015_core::{
     keyboard::KeyboardMatrix,
     lcd::{LcdHal, LcdWriteTrace},
     llama::{
-        eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
+        eval::{
+            perfetto_next_substep, power_on_reset, set_perf_cycle_counter, set_perf_cycle_window,
+            LlamaBus, LlamaExecutor,
+        },
         opcodes::RegName,
         state::LlamaState,
     },
@@ -857,6 +860,7 @@ impl StandaloneBus {
     }
 
     fn tick_timers_only(&mut self) {
+        set_perf_cycle_counter(self.cycle_count);
         if self.in_interrupt {
             return;
         }
@@ -1170,10 +1174,7 @@ impl LlamaBus for StandaloneBus {
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
-        // Python WAIT decrements I to zero; each loop advances cycle_count and timers.
-        for _ in 0..cycles.max(1) {
-            self.advance_cycle();
-        }
+        let _ = cycles;
     }
 }
 
@@ -1619,6 +1620,37 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             );
         }
         let opcode = bus.load(pc, 8) as u8;
+        // Capture WAIT/MVL loop count before execution (executor clears I).
+        // Mirror Python: skip any PRE prefixes (up to 4) to identify the executed opcode.
+        let mut exec_pc = pc;
+        let mut exec_opcode = opcode;
+        let mut prefix_guard = 0u8;
+        while prefix_guard < 4
+            && ((0x21..=0x27).contains(&exec_opcode) || (0x30..=0x37).contains(&exec_opcode))
+        {
+            exec_pc = exec_pc.wrapping_add(1) & ADDRESS_MASK;
+            exec_opcode = bus.load(exec_pc, 8) as u8;
+            prefix_guard = prefix_guard.saturating_add(1);
+        }
+        let i_before = state.get_reg(RegName::I) & 0xFFFF;
+        let mut wait_loops = 0u32;
+        let mut mvl_loops = 0u32;
+        if i_before > 0 {
+            if exec_opcode == 0xEF {
+                wait_loops = i_before;
+            } else if matches!(
+                exec_opcode,
+                0xCB | 0xCF | 0xD3 | 0xDB | 0xE3 | 0xEB | 0xF3 | 0xFB
+            ) {
+                mvl_loops = i_before;
+            }
+        }
+        let cycle_start = bus.cycle_count;
+        let cycle_end = cycle_start
+            .wrapping_add(1)
+            .wrapping_add(wait_loops as u64)
+            .wrapping_add(mvl_loops as u64);
+        set_perf_cycle_window(cycle_start, cycle_end);
         if perfetto_dbg {
             eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
         }
@@ -1653,6 +1685,22 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.last_irq_src = None;
                 }
                 bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                set_perf_cycle_counter(bus.cycle_count);
+                bus.set_pc(state.pc());
+                for _ in 0..wait_loops {
+                    bus.advance_cycle();
+                }
+                if mvl_loops > 0 {
+                    let delta = mvl_loops as u64;
+                    bus.cycle_count = bus.cycle_count.wrapping_add(delta);
+                    if bus.timer.next_mti != 0 {
+                        bus.timer.next_mti = bus.timer.next_mti.wrapping_add(delta);
+                    }
+                    if bus.timer.next_sti != 0 {
+                        bus.timer.next_sti = bus.timer.next_sti.wrapping_add(delta);
+                    }
+                }
+                set_perf_cycle_counter(bus.cycle_count);
                 executed += 1;
                 if pf1_stage == Pf1TwiceStage::Done && args.pf1_twice {
                     break;

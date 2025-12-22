@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[cfg(feature = "perfetto")]
-use crate::llama::eval::{perfetto_instr_context, perfetto_last_instr_index, perfetto_last_pc};
+use crate::llama::eval::{
+    perfetto_cycle_window, perfetto_instr_context, perfetto_last_cycle, perfetto_last_instr_index,
+    perfetto_last_pc,
+};
 #[cfg(feature = "perfetto")]
 use crate::CoreError;
 #[cfg(feature = "perfetto")]
@@ -102,9 +105,9 @@ impl PerfettoTracer {
         // - `Instructions`: per-instruction slices with pre-state regs/IMR/ISR, dur=1 tick
         // - `EWrites`/`IWrites`: instants for external/internal memory writes
         //
-        // Timestamps are deterministic instruction-index ticks. retrobus-perfetto stores
+        // Timestamps are deterministic cycle ticks. retrobus-perfetto stores
         // timestamps in microseconds; it converts input nanoseconds by dividing by 1000.
-        // Use 1000ns per tick so each instruction advances Perfetto time by 1us.
+        // Use 1000ns per tick so each cycle advances Perfetto time by 1us.
 
         let exec_track = builder.add_thread("InstructionTrace");
         let _timeline_track = builder.add_thread("Execution");
@@ -174,15 +177,15 @@ impl PerfettoTracer {
         &self.path
     }
 
-    fn ts(&self, instr_index: u64, substep: u64) -> i64 {
-        (instr_index
+    fn ts(&self, cycle: u64, substep: u64) -> i64 {
+        (cycle
             .saturating_mul(self.units_per_instr)
             .saturating_add(substep)) as i64
     }
 
     fn call_ui_close_open_function_slices(&mut self) {
         // Close any unbalanced nested slices (e.call can stop mid-call).
-        let end_ts = self.ts(perfetto_last_instr_index(), 0);
+        let end_ts = self.ts(perfetto_last_cycle(), 0);
         while self.call_ui_functions_depth > 0 {
             self.builder.end_slice(self.functions_track, end_ts);
             self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_sub(1);
@@ -201,8 +204,12 @@ impl PerfettoTracer {
         mem_imr: u8,
         mem_isr: u8,
     ) {
-        let ts_start = self.ts(instr_index, 0);
-        let ts_end = self.ts(instr_index.saturating_add(1), 0);
+        let (cycle_start, cycle_end) = perfetto_cycle_window().unwrap_or_else(|| {
+            let start = perfetto_last_cycle();
+            (start, start.saturating_add(1))
+        });
+        let ts_start = self.ts(cycle_start, 0);
+        let ts_end = self.ts(cycle_end, 0);
         let name = if let Some(m) = mnemonic {
             format!("{m} @0x{pc:06X}")
         } else {
@@ -217,6 +224,8 @@ impl PerfettoTracer {
                 ("pc", AnnotationValue::Pointer(reg_pc as u64)),
                 ("opcode", AnnotationValue::UInt(opcode as u64)),
                 ("op_index", AnnotationValue::UInt(instr_index)),
+                ("cycle_start", AnnotationValue::UInt(cycle_start)),
+                ("cycle_end", AnnotationValue::UInt(cycle_end)),
                 ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
                 ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
             ]);
@@ -276,7 +285,10 @@ impl PerfettoTracer {
         } else {
             value & ((1u32 << size) - 1)
         };
-        let ts = self.ts(instr_index, substep.max(1));
+        let cycle = perfetto_cycle_window()
+            .map(|(start, _)| start)
+            .unwrap_or_else(perfetto_last_cycle);
+        let ts = self.ts(cycle, substep.max(1));
         let track = if space == "internal" {
             self.iwrites_track
         } else {
@@ -293,6 +305,7 @@ impl PerfettoTracer {
             ("space", AnnotationValue::Str(space.to_string())),
             ("size", AnnotationValue::UInt(size as u64)),
             ("op_index", AnnotationValue::UInt(instr_index)),
+            ("cycle", AnnotationValue::UInt(cycle)),
         ]);
         ev.finish();
         #[cfg(test)]
@@ -318,10 +331,13 @@ impl PerfettoTracer {
         let pc_effective = pc
             .or(ctx.map(|(_, pc)| pc))
             .or_else(|| Some(perfetto_last_pc()));
-        let ts = ctx
-            .map(|(op, _)| self.ts(op, 1))
-            // Align to provided manual cycle when no live instruction context.
-            .unwrap_or(cycle as i64);
+        let last_cycle = perfetto_last_cycle();
+        let cycle_ts = if cycle == 0 && last_cycle != 0 {
+            last_cycle
+        } else {
+            cycle
+        };
+        let ts = self.ts(cycle_ts, 0);
         {
             let mut ev =
                 self.builder
@@ -339,7 +355,7 @@ impl PerfettoTracer {
             if let Some((op_idx, _)) = ctx {
                 ev.add_annotation("op_index", AnnotationValue::UInt(op_idx));
             }
-            ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
+            ev.add_annotation("cycle", AnnotationValue::UInt(cycle_ts));
             ev.finish();
         }
 
@@ -353,7 +369,7 @@ impl PerfettoTracer {
             ("value", AnnotationValue::UInt(masked_value as u64)),
             ("space", AnnotationValue::Str(space.to_string())),
             ("size", AnnotationValue::UInt(size as u64)),
-            ("cycle", AnnotationValue::UInt(cycle)),
+            ("cycle", AnnotationValue::UInt(cycle_ts)),
         ]);
         if let Some(pc_val) = pc_effective {
             mem_alias.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
@@ -379,9 +395,12 @@ impl PerfettoTracer {
         pc: Option<u32>,
         op_index: Option<u64>,
     ) {
-        let ts = op_index
-            .map(|idx| self.ts(idx, 0))
-            .unwrap_or_else(|| self.display_seq as i64);
+        let cycle = perfetto_cycle_window()
+            .map(|(start, _)| start)
+            .unwrap_or_else(perfetto_last_cycle);
+        let step = self.units_per_instr.saturating_sub(1).max(1);
+        let substep = (self.display_seq % step).saturating_add(1);
+        let ts = self.ts(cycle, substep);
         self.display_seq = self.display_seq.saturating_add(1);
         let mut ev = self
             .builder
@@ -391,6 +410,7 @@ impl PerfettoTracer {
         ev.add_annotation("chip", AnnotationValue::UInt(chip as u64));
         ev.add_annotation("page", AnnotationValue::UInt(page as u64));
         ev.add_annotation("column", AnnotationValue::UInt(column as u64));
+        ev.add_annotation("cycle", AnnotationValue::UInt(cycle));
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
         }
@@ -447,7 +467,12 @@ impl PerfettoTracer {
         mem_reads: u64,
         mem_writes: u64,
     ) {
-        let ts = self.ts(instr_index, 0);
+        let cycle = perfetto_last_cycle();
+        let ts = if cycle != 0 {
+            self.ts(cycle, 0)
+        } else {
+            self.ts(instr_index, 0)
+        };
         self.builder
             .update_counter(self.call_depth_counter, call_depth as f64, ts);
         self.builder
@@ -487,7 +512,6 @@ impl PerfettoTracer {
     }
 
     /// IMR read diagnostics: log each read and keep running zero/non-zero counters.
-    /// If an instruction index is available, align the timestamp to that index to match Python.
     pub fn record_imr_read(&mut self, pc: Option<u32>, value: u8, instr_index: Option<u64>) {
         let zero = value == 0;
         if zero {
@@ -495,11 +519,12 @@ impl PerfettoTracer {
         } else {
             self.imr_read_nonzero = self.imr_read_nonzero.saturating_add(1);
         }
-        let ts = if let Some(op) = instr_index {
-            self.ts(op, 0)
-        } else {
-            self.imr_seq as i64
-        };
+        let cycle = perfetto_cycle_window()
+            .map(|(start, _)| start)
+            .unwrap_or_else(perfetto_last_cycle);
+        let step = self.units_per_instr.saturating_sub(1).max(1);
+        let substep = (self.imr_seq % step).saturating_add(1);
+        let ts = self.ts(cycle, substep);
         self.imr_seq = self.imr_seq.saturating_add(1);
 
         // Mirror Python tracer: update IMR counters.
@@ -521,6 +546,10 @@ impl PerfettoTracer {
         ev.add_annotation("zero", zero as u64);
         ev.add_annotation("count_zero", self.imr_read_zero);
         ev.add_annotation("count_nonzero", self.imr_read_nonzero);
+        ev.add_annotation("cycle", cycle);
+        if let Some(op) = instr_index {
+            ev.add_annotation("op_index", op);
+        }
         ev.finish();
     }
 
@@ -536,14 +565,13 @@ impl PerfettoTracer {
         op_index: Option<u64>,
         pc: Option<u32>,
     ) {
-        let fallback = {
-            let last = perfetto_last_instr_index();
-            (last != u64::MAX).then_some(last)
-        };
-        let ts = op_index
-            .or(fallback)
-            .map(|idx| self.ts(idx, 0))
-            .unwrap_or(self.imr_seq as i64);
+        let cycle = perfetto_cycle_window()
+            .map(|(start, _)| start)
+            .unwrap_or_else(perfetto_last_cycle);
+        let step = self.units_per_instr.saturating_sub(1).max(1);
+        let substep = (self.imr_seq % step).saturating_add(1);
+        let ts = self.ts(cycle, substep);
+        self.imr_seq = self.imr_seq.saturating_add(1);
         let mut ev =
             self.builder
                 .add_instant_event(self.exec_track, "IMEM_EffectiveAddr".to_string(), ts);
@@ -552,6 +580,7 @@ impl PerfettoTracer {
         ev.add_annotation("bp", bp as u64);
         ev.add_annotation("px", px as u64);
         ev.add_annotation("py", py as u64);
+        ev.add_annotation("cycle", cycle);
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", pc_val as u64);
         }
@@ -569,19 +598,19 @@ impl PerfettoTracer {
         op_index: Option<u64>,
         pc: Option<u32>,
     ) {
-        let fallback = {
-            let last = perfetto_last_instr_index();
-            (last != u64::MAX).then_some(last)
-        };
-        let ts = op_index
-            .or(fallback)
-            .map(|idx| self.ts(idx, 0))
-            .unwrap_or(self.imr_seq as i64);
+        let cycle = perfetto_cycle_window()
+            .map(|(start, _)| start)
+            .unwrap_or_else(perfetto_last_cycle);
+        let step = self.units_per_instr.saturating_sub(1).max(1);
+        let substep = (self.imr_seq % step).saturating_add(1);
+        let ts = self.ts(cycle, substep);
+        self.imr_seq = self.imr_seq.saturating_add(1);
         let mut ev = self
             .builder
             .add_instant_event(self.exec_track, "KEYI_Set".to_string(), ts);
         ev.add_annotation("offset", addr as u64);
         ev.add_annotation("value", value as u64);
+        ev.add_annotation("cycle", cycle);
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", pc_val as u64);
         }
@@ -599,14 +628,13 @@ impl PerfettoTracer {
         value: u8,
         op_index: Option<u64>,
     ) {
-        let fallback = {
-            let last = perfetto_last_instr_index();
-            (last != u64::MAX).then_some(last)
-        };
-        let ts = op_index
-            .or(fallback)
-            .map(|idx| self.ts(idx, 0))
-            .unwrap_or(self.imr_seq as i64);
+        let cycle = perfetto_cycle_window()
+            .map(|(start, _)| start)
+            .unwrap_or_else(perfetto_last_cycle);
+        let step = self.units_per_instr.saturating_sub(1).max(1);
+        let substep = (self.imr_seq % step).saturating_add(1);
+        let ts = self.ts(cycle, substep);
+        self.imr_seq = self.imr_seq.saturating_add(1);
         let mut ev = self
             .builder
             .add_instant_event(self.exec_track, "read@KIO".to_string(), ts);
@@ -615,6 +643,7 @@ impl PerfettoTracer {
         }
         ev.add_annotation("offset", offset as u64);
         ev.add_annotation("value", value as u64);
+        ev.add_annotation("cycle", cycle);
         if let Some(idx) = op_index {
             ev.add_annotation("op_index", idx);
         }
@@ -622,27 +651,25 @@ impl PerfettoTracer {
     }
 
     /// Timer/IRQ events for parity tracing (MTI/STI/KEYI etc.).
-    pub fn record_irq_event(&mut self, name: &str, payload: HashMap<String, AnnotationValue>) {
-        // Always timestamp against the instruction timeline. Some callers use `cycle=0` as a
-        // placeholder; relying on it collapses start times to 0.
-        let cycle_ts = None;
-
-        // Align IRQ/key events to the instruction index when available and when no manual cycle is provided.
-        let (ctx_idx, _pc) = perfetto_instr_context()
-            .unwrap_or_else(|| (perfetto_last_instr_index(), perfetto_last_pc()));
-        let ctx_idx = (ctx_idx != u64::MAX).then_some(ctx_idx);
-        let last_idx = {
-            let last = perfetto_last_instr_index();
-            (last != u64::MAX).then_some(last)
+    pub fn record_irq_event(&mut self, name: &str, mut payload: HashMap<String, AnnotationValue>) {
+        let cycle_from_payload = payload.get("cycle").and_then(|v| match v {
+            AnnotationValue::UInt(value) => Some(*value),
+            AnnotationValue::Pointer(value) => Some(*value),
+            _ => None,
+        });
+        let last_cycle = perfetto_last_cycle();
+        let cycle = match cycle_from_payload {
+            Some(0) if last_cycle != 0 => last_cycle,
+            Some(value) => value,
+            None => last_cycle,
         };
-
-        let ts = irq_timestamp(
-            cycle_ts,
-            ctx_idx,
-            last_idx,
-            self.units_per_instr,
-            self.irq_seq,
-        );
+        if !payload.contains_key("cycle") {
+            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle));
+        }
+        // Keep instants ordered within the same cycle (best-effort).
+        let step = self.units_per_instr.saturating_sub(1).max(1);
+        let substep = (self.irq_seq % step).saturating_add(1);
+        let ts = self.ts(cycle, substep);
         self.irq_seq = self.irq_seq.saturating_add(1);
         let track = match classify_irq_track(name, &payload) {
             IrqTrack::Timer => self.irq_timer_track,
@@ -703,27 +730,32 @@ impl PerfettoTracer {
         let op = ctx
             .map(|(idx, _)| idx)
             .unwrap_or_else(perfetto_last_instr_index);
-        let ts = self.ts(op, 0);
+        let (cycle_start, cycle_end) = perfetto_cycle_window().unwrap_or_else(|| {
+            let start = perfetto_last_cycle();
+            (start, start.saturating_add(1))
+        });
+        let ts_start = self.ts(cycle_start, 0);
+        let ts_end = self.ts(cycle_end, 0);
         if name == "CALL" || name == "CALLF" {
             let label = lookup_call_ui_function_name(pc_to & 0x000f_ffff)
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| format!("sub_{pc_to:06X}"));
             #[cfg(test)]
             self.test_function_slices.borrow_mut().push(label.clone());
-            let mut ev = self.builder.begin_slice(self.functions_track, label, ts);
+            let mut ev = self
+                .builder
+                .begin_slice(self.functions_track, label, ts_start);
             ev.add_annotations([
                 ("from", AnnotationValue::Pointer(pc_from as u64)),
                 ("to", AnnotationValue::Pointer(pc_to as u64)),
                 ("depth", AnnotationValue::UInt(depth as u64)),
                 ("op_index", AnnotationValue::UInt(op)),
+                ("cycle_start", AnnotationValue::UInt(cycle_start)),
             ]);
             ev.finish();
             self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_add(1);
         } else if name == "RET" || name == "RETF" {
-            self.builder.end_slice(
-                self.functions_track,
-                ts.saturating_add(self.units_per_instr as i64),
-            );
+            self.builder.end_slice(self.functions_track, ts_end);
             self.call_ui_functions_depth = self.call_ui_functions_depth.saturating_sub(1);
         }
     }
@@ -883,29 +915,6 @@ impl PerfettoTracer {
     pub fn record_call_flow(&mut self, _name: &str, _pc_from: u32, _pc_to: u32, _depth: u32) {}
 }
 
-/// Compute a Perfetto timestamp for IRQ/key events, honoring a manual clock when present,
-/// otherwise falling back to the current/last instruction index with a small substep to
-/// avoid collapsing multiple host events into the same instant.
-#[cfg(feature = "perfetto")]
-fn irq_timestamp(
-    cycle_ts: Option<i64>,
-    instr_idx: Option<u64>,
-    last_idx: Option<u64>,
-    units_per_instr: u64,
-    seq: u64,
-) -> i64 {
-    if let Some(cycle) = cycle_ts {
-        return cycle;
-    }
-    if let Some(idx) = instr_idx {
-        return (idx.saturating_mul(units_per_instr)) as i64;
-    }
-    if let Some(last) = last_idx {
-        return (last.saturating_mul(units_per_instr).saturating_add(1)) as i64;
-    }
-    seq as i64
-}
-
 #[cfg(feature = "perfetto")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IrqTrack {
@@ -1002,30 +1011,6 @@ mod tests {
     fn unknown_defaults_to_misc() {
         let track = classify_irq_track("PythonOverlayMissing", &HashMap::new());
         assert_eq!(track, IrqTrack::Misc);
-    }
-
-    #[test]
-    fn irq_timestamp_prefers_cycle() {
-        let ts = irq_timestamp(Some(1234), Some(5), Some(4), 1, 7);
-        assert_eq!(ts, 1234);
-    }
-
-    #[test]
-    fn irq_timestamp_uses_instr_index_when_present() {
-        let ts = irq_timestamp(None, Some(10), None, 1, 3);
-        assert_eq!(ts, 10);
-    }
-
-    #[test]
-    fn irq_timestamp_falls_back_to_last_index_with_substep() {
-        let ts = irq_timestamp(None, None, Some(8), 1, 5);
-        assert_eq!(ts, 9);
-    }
-
-    #[test]
-    fn irq_timestamp_uses_seq_when_no_context() {
-        let ts = irq_timestamp(None, None, None, 1, 42);
-        assert_eq!(ts, 42);
     }
 
     #[test]

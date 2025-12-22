@@ -377,11 +377,12 @@ class PCE500Emulator:
         self._trace_units_per_instruction = self._TRACE_UNITS_PER_INSTRUCTION
         self._trace_substep = 0
         self._active_trace_instruction: Optional[int] = None
+        self._active_trace_cycle_start: Optional[int] = None
         if self._new_trace_enabled:
             if not new_tracer.enabled:
                 new_tracer.start(self._trace_path)
-            # Keep Perfetto timestamps aligned to instruction indices:
-            # 1 instruction tick == 1us in the final Perfetto UI.
+            # Keep Perfetto timestamps aligned to emulator cycles:
+            # 1 cycle tick == 1us in the final Perfetto UI.
             new_tracer.set_manual_clock_mode(True, tick_ns=1_000)
             self.memory.set_perf_tracer(new_tracer)
             # Ensure the Rust LLAMA core writes into the same Perfetto trace file.
@@ -464,9 +465,17 @@ class PCE500Emulator:
         if not (new_tracer.enabled or self.perfetto_enabled):
             return
         data = dict(payload or {})
+        data.setdefault("cycle", int(self.cycle_count))
         if source is not None:
             data.setdefault("src", source.name)
         if new_tracer.enabled:
+            if getattr(self, "_new_trace_enabled", False):
+                try:
+                    new_tracer.set_manual_clock_units(
+                        int(data.get("cycle", self.cycle_count))
+                    )
+                except Exception:
+                    new_tracer.set_manual_clock_units(int(self.cycle_count))
             new_tracer.instant(self._irq_perfetto_track(source), name, data)
         elif self.perfetto_enabled or trace_dispatcher.has_observers():
             trace_dispatcher.record_instant(
@@ -552,10 +561,7 @@ class PCE500Emulator:
         }
         if new_tracer.enabled:
             if getattr(self, "_new_trace_enabled", False):
-                op_index = getattr(self, "_active_trace_instruction", None)
-                if not isinstance(op_index, int):
-                    op_index = int(getattr(self, "instruction_count", 0))
-                new_tracer.set_manual_clock_units(op_index)
+                new_tracer.set_manual_clock_units(int(self.cycle_count))
             new_tracer.instant("irq.key", "KeyScanEvent", payload)
         elif self.perfetto_enabled or trace_dispatcher.has_observers():
             trace_dispatcher.record_instant("irq.key", "KeyScanEvent", payload)
@@ -635,6 +641,8 @@ class PCE500Emulator:
     def step(self) -> bool:
         trace_snapshot: Optional[Dict[str, Any]] = None
         pc = self.cpu.regs.get(RegisterName.PC)
+        if self._new_trace_enabled and new_tracer.enabled:
+            new_tracer.set_manual_clock_units(int(self.cycle_count))
         # If we appear to be stuck in an interrupt even though IRM is enabled
         # again, drop the stale in-progress marker so pending IRQs (e.g., KEYI
         # latched while IMR was masked) can be delivered.
@@ -1101,6 +1109,7 @@ class PCE500Emulator:
             )
             if trace_snapshot is not None:
                 self._active_trace_instruction = self.instruction_count
+                self._active_trace_cycle_start = int(self.cycle_count)
                 self._trace_substep = 0
 
         if pc in self.breakpoints:
@@ -1189,6 +1198,8 @@ class PCE500Emulator:
                         self._scheduler.next_sti += cycles
                     except Exception:
                         pass
+                if self._new_trace_enabled and new_tracer.enabled:
+                    new_tracer.set_manual_clock_units(int(self.cycle_count))
                 if self.perfetto_enabled:
                     # In fast mode, keep lightweight counters only
                     self._update_perfetto_counters()
@@ -1267,6 +1278,8 @@ class PCE500Emulator:
                         self._scheduler.next_sti += cycles
                     except Exception:
                         pass
+                if self._new_trace_enabled and new_tracer.enabled:
+                    new_tracer.set_manual_clock_units(int(self.cycle_count))
 
                 # Only compute disassembly when tracing is enabled to avoid overhead
                 if self.trace is not None:
@@ -1743,8 +1756,24 @@ class PCE500Emulator:
         self._last_pc = self._current_pc
         self._trace_instr_count = self.instruction_count
         self._active_trace_instruction = None
+        self._active_trace_cycle_start = None
         self._trace_substep = 0
         self.start_time = time.time()
+
+        # Keep LLAMA perfetto counters aligned with restored snapshot indices so native traces
+        # (and subsequent snapshots) continue from the correct absolute cycle/instruction base.
+        if getattr(self.cpu, "backend", None) == "llama":
+            try:
+                llama_impl = getattr(self.cpu, "_impl", None)
+                if llama_impl is not None:
+                    setter = getattr(llama_impl, "set_perf_instr_counter", None)
+                    if callable(setter):
+                        setter(int(self.instruction_count))
+                    setter = getattr(llama_impl, "set_perf_cycle_counter", None)
+                    if callable(setter):
+                        setter(int(self.cycle_count))
+            except Exception:
+                pass
 
         timer_info = metadata.get("timer", {})
         self._timer_enabled = bool(timer_info.get("enabled", True))
@@ -1915,6 +1944,8 @@ class PCE500Emulator:
         """Advance cycle count and timers for simulated WAIT loops."""
         for _ in range(int(cycles)):
             self.cycle_count += 1
+            if self._new_trace_enabled and new_tracer.enabled:
+                new_tracer.set_manual_clock_units(int(self.cycle_count))
             if self._timer_enabled and not getattr(self, "_in_interrupt", False):
                 try:
                     self._tick_timers()
@@ -1953,13 +1984,12 @@ class PCE500Emulator:
 
         registers = self._collect_trace_registers()
 
-        units = instr_index * self._trace_units_per_instruction
         return {
             "pc": pc & 0xFFFFFF,
             "opcode": opcode,
             "op_index": instr_index,
+            "cycle_start": int(self.cycle_count),
             "registers": registers,
-            "units": units,
         }
 
     def _emit_instruction_trace_event(self, snapshot: Optional[Dict[str, Any]]) -> None:
@@ -1967,10 +1997,11 @@ class PCE500Emulator:
 
         if not snapshot or not new_tracer.enabled:
             return
-        op_index = snapshot.get("op_index")
-        if not isinstance(op_index, int):
+        cycle_start = snapshot.get("cycle_start")
+        if not isinstance(cycle_start, int):
             return
-        new_tracer.set_manual_clock_units(op_index)
+        cycle_end = int(self.cycle_count)
+        new_tracer.set_manual_clock_units(cycle_start)
         pc = snapshot.get("pc")
         opcode = snapshot.get("opcode")
         mnemonic: Optional[str] = None
@@ -1994,7 +2025,11 @@ class PCE500Emulator:
             payload["pc"] = pc & 0xFFFFFF
         if isinstance(opcode, int):
             payload["opcode"] = opcode & 0xFF
-        payload["op_index"] = op_index
+        op_index = snapshot.get("op_index")
+        if isinstance(op_index, int):
+            payload["op_index"] = op_index
+        payload["cycle_start"] = cycle_start
+        payload["cycle_end"] = cycle_end
         # Include IMR/ISR from internal memory so perfetto comparisons can catch
         # interrupt masking regressions across backends.
         try:
@@ -2022,15 +2057,17 @@ class PCE500Emulator:
         for reg_name, value in registers.items():
             payload[f"reg_{reg_name.lower()}"] = int(value)
         new_tracer.begin_slice("Instructions", name, payload)
-        new_tracer.set_manual_clock_units(op_index + 1)
+        new_tracer.set_manual_clock_units(cycle_end)
         new_tracer.end_slice("Instructions")
 
-        self._trace_instr_count = op_index + 1
-        new_tracer.set_manual_clock_units(op_index)
+        if isinstance(op_index, int):
+            self._trace_instr_count = op_index + 1
+        new_tracer.set_manual_clock_units(cycle_end)
         new_tracer.counter(
             "InstructionClock", "instructions", float(self._trace_instr_count)
         )
         self._active_trace_instruction = None
+        self._active_trace_cycle_start = None
 
     def _collect_trace_registers(self) -> Dict[str, int]:
         """Collect the register snapshot for Perfetto tracing with minimal overhead."""
@@ -2101,10 +2138,9 @@ class PCE500Emulator:
 
         if not (self._new_trace_enabled and new_tracer.enabled):
             return None
-        instr_index = self._active_trace_instruction
-        if instr_index is None:
+        if self._active_trace_instruction is None:
             return None
-        return int(instr_index)
+        return int(self.cycle_count)
 
     def _trace_execution(self, pc: int, opcode: Optional[int]):
         payload: Dict[str, Any] = {"pc": f"0x{pc:06X}"}
@@ -2163,7 +2199,12 @@ class PCE500Emulator:
                 and isinstance(dest_addr, int)
             ):
                 op_index = max(0, int(self.instruction_count) - 1)
-                new_tracer.set_manual_clock_units(op_index)
+                cycle_start = (
+                    int(self._active_trace_cycle_start)
+                    if isinstance(self._active_trace_cycle_start, int)
+                    else int(self.cycle_count)
+                )
+                new_tracer.set_manual_clock_units(cycle_start)
                 new_tracer.begin_slice(
                     "Functions",
                     f"fn@0x{dest_addr:06X}",
@@ -2172,6 +2213,7 @@ class PCE500Emulator:
                         "to": dest_addr & 0xFFFFFF,
                         "depth": int(self.call_depth),
                         "op_index": op_index,
+                        "cycle_start": cycle_start,
                     },
                 )
 
@@ -2185,8 +2227,7 @@ class PCE500Emulator:
                 and new_tracer.enabled
                 and instr_name in {"RET", "RETF"}
             ):
-                op_index = max(0, int(self.instruction_count) - 1)
-                new_tracer.set_manual_clock_units(op_index + 1)
+                new_tracer.set_manual_clock_units(int(self.cycle_count))
                 new_tracer.end_slice("Functions")
             if instr_name == "RETI" and self._interrupt_stack:
                 flow_id = self._interrupt_stack.pop()

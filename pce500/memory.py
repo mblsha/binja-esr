@@ -270,6 +270,10 @@ class PCE500Memory:
             op_index = getattr(emulator, "_active_trace_instruction", None)
             if op_index is not None:
                 payload["op_index"] = op_index
+            try:
+                payload["cycle"] = int(getattr(emulator, "cycle_count", 0))
+            except Exception:
+                pass
             if getattr(emulator, "_new_trace_enabled", False) and hasattr(
                 emulator, "_next_memory_trace_units"
             ):
@@ -1126,6 +1130,10 @@ class PCE500Memory:
             op_index = getattr(emulator, "_active_trace_instruction", None)
             if op_index is not None:
                 payload["op_index"] = op_index
+            try:
+                payload["cycle"] = int(getattr(emulator, "cycle_count", 0))
+            except Exception:
+                pass
             if getattr(emulator, "_new_trace_enabled", False) and hasattr(
                 emulator, "_next_memory_trace_units"
             ):
@@ -1168,6 +1176,10 @@ class PCE500Memory:
             op_index = getattr(emulator, "_active_trace_instruction", None)
             if op_index is not None:
                 data["op_index"] = op_index
+            try:
+                data.setdefault("cycle", int(getattr(emulator, "cycle_count", 0)))
+            except Exception:
+                pass
             if getattr(emulator, "_new_trace_enabled", False) and hasattr(
                 emulator, "_next_memory_trace_units"
             ):
@@ -1175,6 +1187,15 @@ class PCE500Memory:
                 setter = getattr(tracer, "set_manual_clock_units", None)
                 if units is not None and callable(setter):
                     setter(units)
+            elif getattr(emulator, "_new_trace_enabled", False) and hasattr(
+                tracer, "set_manual_clock_units"
+            ):
+                try:
+                    tracer.set_manual_clock_units(
+                        int(getattr(emulator, "cycle_count", 0))
+                    )
+                except Exception:
+                    pass
         try:
             if hasattr(tracer, "instant"):
                 tracer.instant(track, name, data)

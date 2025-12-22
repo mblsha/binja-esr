@@ -186,14 +186,14 @@ def run_emulator(
                     emu.cpu.set_perfetto_trace(rust_trace_path)
             except Exception:
                 pass
-        if defer_trace_start:
-            # Snapshot loading can write megabytes of RAM/IMEM; keep tracing disabled during
-            # that phase, then enable it once the runtime state is ready.
-            new_tracer.start(trace_file)
-            # Keep Perfetto timestamps aligned to instruction indices:
-            # 1 instruction tick == 1us in the final Perfetto UI.
-            new_tracer.set_manual_clock_mode(True, tick_ns=1_000)
-            emu.memory.set_perf_tracer(new_tracer)
+            if defer_trace_start:
+                # Snapshot loading can write megabytes of RAM/IMEM; keep tracing disabled during
+                # that phase, then enable it once the runtime state is ready.
+                new_tracer.start(trace_file)
+                # Keep Perfetto timestamps aligned to emulator cycles:
+                # 1 cycle tick == 1us in the final Perfetto UI.
+                new_tracer.set_manual_clock_mode(True, tick_ns=1_000)
+                emu.memory.set_perf_tracer(new_tracer)
             try:
                 # Enable instruction-level snapshots/slices in the emulator step loop.
                 setattr(emu, "_new_trace_enabled", True)

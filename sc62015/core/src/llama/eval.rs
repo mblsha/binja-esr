@@ -30,6 +30,9 @@ static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
 static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
 static PERF_SUBSTEP: AtomicU32 = AtomicU32::new(0);
+static PERF_CYCLE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PERF_CURRENT_CYCLE_START: AtomicU64 = AtomicU64::new(u64::MAX);
+static PERF_CURRENT_CYCLE_END: AtomicU64 = AtomicU64::new(u64::MAX);
 
 pub const PERFETTO_CALL_STACK_MAX_FRAMES: usize = 8;
 
@@ -50,6 +53,8 @@ impl Drop for PerfettoContextGuard {
         PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
         PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
         PERF_SUBSTEP.store(0, Ordering::Relaxed);
+        PERF_CURRENT_CYCLE_START.store(u64::MAX, Ordering::Relaxed);
+        PERF_CURRENT_CYCLE_END.store(u64::MAX, Ordering::Relaxed);
     }
 }
 
@@ -67,6 +72,22 @@ pub fn perfetto_instr_context() -> Option<(u64, u32)> {
 /// Last-seen instruction index for host-side events that occur outside executor context.
 pub fn perfetto_last_instr_index() -> u64 {
     PERF_INSTR_COUNTER.load(Ordering::Relaxed)
+}
+
+/// Last-seen cycle counter for host-side events outside executor context.
+pub fn perfetto_last_cycle() -> u64 {
+    PERF_CYCLE_COUNTER.load(Ordering::Relaxed)
+}
+
+/// Expose current cycle window (start/end) for Perfetto instruction slices.
+pub fn perfetto_cycle_window() -> Option<(u64, u64)> {
+    let start = PERF_CURRENT_CYCLE_START.load(Ordering::Relaxed);
+    let end = PERF_CURRENT_CYCLE_END.load(Ordering::Relaxed);
+    if start == u64::MAX || end == u64::MAX {
+        None
+    } else {
+        Some((start, end))
+    }
 }
 
 /// Last-seen PC (masked) even outside executor context; useful for host-side tracing.
@@ -87,6 +108,9 @@ pub fn reset_perf_counters() {
     PERF_LAST_PC.with(|value| value.set(0));
     PERF_LAST_CALL_STACK.with(|value| value.set(PerfettoCallStack::default()));
     PERF_SUBSTEP.store(0, Ordering::Relaxed);
+    PERF_CYCLE_COUNTER.store(0, Ordering::Relaxed);
+    PERF_CURRENT_CYCLE_START.store(u64::MAX, Ordering::Relaxed);
+    PERF_CURRENT_CYCLE_END.store(u64::MAX, Ordering::Relaxed);
 }
 
 /// Set the global instruction index used for Perfetto `op_index` annotations.
@@ -95,6 +119,17 @@ pub fn reset_perf_counters() {
 /// instruction_count stored in the snapshot metadata.
 pub fn set_perf_instr_counter(value: u64) {
     PERF_INSTR_COUNTER.store(value, Ordering::Relaxed);
+}
+
+/// Set the global cycle counter used for Perfetto timestamps.
+pub fn set_perf_cycle_counter(value: u64) {
+    PERF_CYCLE_COUNTER.store(value, Ordering::Relaxed);
+}
+
+/// Set the cycle window (start/end) associated with the current instruction.
+pub fn set_perf_cycle_window(start: u64, end: u64) {
+    PERF_CURRENT_CYCLE_START.store(start, Ordering::Relaxed);
+    PERF_CURRENT_CYCLE_END.store(end, Ordering::Relaxed);
 }
 
 /// Next per-instruction substep for Perfetto manual clock parity.
@@ -2076,7 +2111,9 @@ impl LlamaExecutor {
                 let wait_cycles = state.get_reg(RegName::I);
                 // If the host does not expose wait_cycles, tick timers/keyboard locally to avoid
                 // stalling MTI/STI/KEYI.
-                bus.wait_cycles(wait_cycles.max(1));
+                if wait_cycles > 0 {
+                    bus.wait_cycles(wait_cycles);
+                }
                 state.set_reg(RegName::I, 0);
                 state.set_reg(RegName::FC, 0);
                 state.set_reg(RegName::FZ, 0);
