@@ -1174,7 +1174,15 @@ impl LlamaBus for StandaloneBus {
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
-        let _ = cycles;
+        if cycles == 0 {
+            return;
+        }
+        // Match Python: the WAIT instruction consumes 1 "base" cycle without ticking timers,
+        // then advances/ticks once per I loop iteration.
+        self.cycle_count = self.cycle_count.wrapping_add(1);
+        for _ in 0..cycles {
+            self.advance_cycle();
+        }
     }
 }
 
@@ -1684,12 +1692,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.active_irq_mask = 0;
                     bus.last_irq_src = None;
                 }
-                bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                if wait_loops == 0 {
+                    bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                }
                 set_perf_cycle_counter(bus.cycle_count);
                 bus.set_pc(state.pc());
-                for _ in 0..wait_loops {
-                    bus.advance_cycle();
-                }
                 if mvl_loops > 0 {
                     let delta = mvl_loops as u64;
                     bus.cycle_count = bus.cycle_count.wrapping_add(delta);
