@@ -1196,7 +1196,9 @@ class IMemHelper(Operand):
         result: List[Token] = [TBegMem(MemType.INTERNAL)]
         match pre:
             case AddressingMode.N:
-                if isinstance(self.value, IMemOperand) and isinstance(self.value.n_val, int):
+                if isinstance(self.value, IMemOperand) and isinstance(
+                    self.value.n_val, int
+                ):
                     result.extend(_render_named_imem_addr(self.value.n_val))
                 elif isinstance(self.value, Imm8) and isinstance(self.value.value, int):
                     result.extend(_render_named_imem_addr(self.value.value))
