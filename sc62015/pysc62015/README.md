@@ -88,6 +88,10 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 
 ### Internal Memory Map (IMEMRegisters, defined in opcodes.py)
 
+Bit numbering follows the TRM convention: bit 7 is the MSB and bit 0 is the LSB. For
+registers with documented bitfields, this table includes a `Bit layout (7→0)` line
+listing bit names from MSB to LSB; `-` indicates an unused/reserved bit.
+
 | Name | Address (Hex) | Description |
 | :--- | :--- | :--- |
 | **BP** | 0xEC | RAM Base Pointer |
@@ -101,15 +105,15 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 | **EOH** | 0xF4 | E Port Output Buffer L (Controls E8-E15). |
 | **EIL** | 0xF5 | E Port Input Buffer H (Reads E0-E7). |
 | **EIH** | 0xF6 | E Port Input Buffer L (Reads E8-E15). |
-| **UCR** | 0xF7 | **UART Control Register**<br><pre>  7     6     5     4     3     2     1     0<br>+-----+-----+-----+-----+-----+-----+-----+-----+<br>| BOE | BR2 | BR1 | BR0 | PA1 | PA0 |  DL |  ST |<br>+-----+-----+-----+-----+-----+-----+-----+-----+</pre>• `BOE` (bit 7): Break Output Enable.<br>• `BR2–BR0` (bits 6–4): Baud Rate (300 to 19200 bps).<br>• `PA1–PA0` (bits 3–2): Parity Select (EVEN, ODD, NONE).<br>• `DL` (bit 1): Character Length (7 or 8 bits).<br>• `ST` (bit 0): Stop Bits (1 or 2). |
-| **USR** | 0xF8 | **UART Status Register**<br><pre>  7     6     5     4     3     2     1     0<br>+-----+-----+-----+-----+-----+-----+-----+-----+<br>|     |     | RXR | TXE | TXR |  FE |  OE |  PE |<br>+-----+-----+-----+-----+-----+-----+-----+-----+</pre>• `RXR` (bit 5): Receiver Ready.<br>• `TXE` (bit 4): Transmitter Empty.<br>• `TXR` (bit 3): Transmitter Ready.<br>• `FE` (bit 2): Framing Error.<br>• `OE` (bit 1): Overrun Error.<br>• `PE` (bit 0): Parity Error. |
+| **UCR** | 0xF7 | **UART Control Register**<br>Bit layout (7→0): `BOE BR2 BR1 BR0 PA1 PA0 DL ST`<br>• `BOE` (bit 7): Break Output Enable.<br>• `BR2–BR0` (bits 6–4): Baud Rate (300 to 19200 bps).<br>• `PA1–PA0` (bits 3–2): Parity Select (EVEN, ODD, NONE).<br>• `DL` (bit 1): Character Length (7 or 8 bits).<br>• `ST` (bit 0): Stop Bits (1 or 2). |
+| **USR** | 0xF8 | **UART Status Register**<br>Bit layout (7→0): `- - RXR TXE TXR FE OE PE`<br>• `RXR` (bit 5): Receiver Ready.<br>• `TXE` (bit 4): Transmitter Empty.<br>• `TXR` (bit 3): Transmitter Ready.<br>• `FE` (bit 2): Framing Error.<br>• `OE` (bit 1): Overrun Error.<br>• `PE` (bit 0): Parity Error. |
 | **RXD** | 0xF9 | UART Receive Buffer. |
 | **TXD** | 0xFA | UART Transmit Buffer. |
-| **IMR** | 0xFB | **Interrupt Mask Register**<br><pre>  7     6      5       4       3      2     1     0<br>+-----+-----+------+-------+------+-----+-----+-----+<br>| IRM | EXM | RXRM | TXRM  | ONKM | KEYM| STM | MTM |<br>+-----+-----+------+-------+------+-----+-----+-----+</pre>• `IRM` (bit 7): Global interrupt mask.<br>• Individual bits (6-0) mask specific interrupts (External, UART, Key, Timer). |
-| **ISR** | 0xFC | **Interrupt Status Register**<br><pre>  7    6     5      4      3       2     1     0<br>+----+-----+-----+------+-------+-----+-----+-----+<br>|    | EXI | RXRI| TXRI | ONKI  | KEYI| STI | MTI |<br>+----+-----+-----+------+-------+-----+-----+-----+</pre>• Individual bits (6-0) are set to '1' to indicate a specific interrupt has occurred. |
-| **SCR** | 0xFD | **System Control Register**<br><pre>  7    6    5    4     3    2    1     0<br>+----+----+----+----+-----+----+----+-----+<br>| ISE| BZ2| BZ1| BZ0| VDDC| STS| MTS| DISC|<br>+----+----+----+----+-----+----+----+-----+</pre>• `ISE` (bit 7): IRQ Start Enable.<br>• `BZ2–BZ0` (bits 6–4): CO/CI pin control.<br>• `VDDC` (bit 3): VDD Control.<br>• `STS` (bit 2): SEC Timer Select.<br>• `MTS` (bit 1): MSEC Timer Select.<br>• `DISC` (bit 0): LCD Driver Control. |
-| **LCC** | 0xFE | **LCD Contrast Control**<br><pre>  7    6    5    4    3     2     1      0<br>+----+----+----+----+----+----+-----+------+<br>|LCC4|LCC3|LCC2|LCC1|LCC0| KSD| STCL| MTCL |<br>+----+----+----+----+----+----+-----+------+</pre>• `LCC4–LCC0` (bits 7–3): Contrast level (0–31).<br>• `KSD` (bit 2): Key Strobe Disable.<br>• `STCL` (bit 1): SEC Timer Clear enable.<br>• `MTCL` (bit 0): MSEC Timer Clear enable. |
-| **SSR** | 0xFF | **System Status Control** (renamed from source for clarity)<br><pre>  7    6    5    4     3    2    1      0<br>+----+----+----+----+----+----+----+------<br>|    |    |    |    | ONK| RSF| CI | TEST |<br>+----+----+----+----+----+----+----+------</pre>• `ONK` (bit 3): ON-Key input status.<br>• `RSF` (bit 2): Reset-Start Flag.<br>• `CI` (bit 1): CMT Input status.<br>• `TEST` (bit 0): Test Input status. |
+| **IMR** | 0xFB | **Interrupt Mask Register**<br>Bit layout (7→0): `IRM EXM RXRM TXRM ONKM KEYM STM MTM`<br>• `IRM` (bit 7): Global interrupt mask.<br>• `EXM` (bit 6): External interrupt mask.<br>• `RXRM` (bit 5): UART RX ready mask.<br>• `TXRM` (bit 4): UART TX ready mask.<br>• `ONKM` (bit 3): ON-key interrupt mask.<br>• `KEYM` (bit 2): Keyboard matrix interrupt mask.<br>• `STM` (bit 1): Sub-timer interrupt mask.<br>• `MTM` (bit 0): Main-timer interrupt mask. |
+| **ISR** | 0xFC | **Interrupt Status Register**<br>Bit layout (7→0): `- EXI RXRI TXRI ONKI KEYI STI MTI`<br>• `EXI` (bit 6): External interrupt pending.<br>• `RXRI` (bit 5): UART RX ready pending.<br>• `TXRI` (bit 4): UART TX ready pending.<br>• `ONKI` (bit 3): ON-key interrupt pending.<br>• `KEYI` (bit 2): Keyboard matrix interrupt pending.<br>• `STI` (bit 1): Sub-timer interrupt pending.<br>• `MTI` (bit 0): Main-timer interrupt pending. |
+| **SCR** | 0xFD | **System Control Register**<br>Bit layout (7→0): `ISE BZ2 BZ1 BZ0 VDDC STS MTS DISC`<br>• `ISE` (bit 7): IRQ Start Enable.<br>• `BZ2–BZ0` (bits 6–4): CO/CI pin control.<br>• `VDDC` (bit 3): VDD Control.<br>• `STS` (bit 2): SEC Timer Select.<br>• `MTS` (bit 1): MSEC Timer Select.<br>• `DISC` (bit 0): LCD Driver Control. |
+| **LCC** | 0xFE | **LCD Contrast Control**<br>Bit layout (7→0): `LCC4 LCC3 LCC2 LCC1 LCC0 KSD STCL MTCL`<br>• `LCC4–LCC0` (bits 7–3): Contrast level (0–31).<br>• `KSD` (bit 2): Key Strobe Disable.<br>• `STCL` (bit 1): SEC Timer Clear enable.<br>• `MTCL` (bit 0): MSEC Timer Clear enable. |
+| **SSR** | 0xFF | **System Status Control** (renamed from source for clarity)<br>Bit layout (7→0): `- - - - ONK RSF CI TEST`<br>• `ONK` (bit 3): ON-Key input status.<br>• `RSF` (bit 2): Reset-Start Flag.<br>• `CI` (bit 1): CMT Input status.<br>• `TEST` (bit 0): Test Input status. |
 
 ### Logic Registers (FCS/IOCS scratch area)
 
