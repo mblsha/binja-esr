@@ -1134,7 +1134,7 @@ def test_pre_roundtrip() -> None:
     data = bytearray([0x33, 0x7D, 0xEC])
     instr = decode(data, 0x1234)
     assert instr._pre == 0x33
-    assert asm_str(instr.render()) == "DEC   (EC)"
+    assert asm_str(instr.render()) == "DEC   (BP)"
 
     encoder = Encoder()
     instr.encode(encoder, 0x1234)

@@ -378,6 +378,53 @@ class IMEMRegisters(IntEnum):
     allowing the values to be used directly as integers.
     """
 
+    # ---------------------------------------------------------------------
+    # IOCS/FCS "logic registers" (TRM internal RAM scratchpad at 0xD4–0xDF).
+    #
+    # These are not hardware MMIO registers; they are conventional parameter
+    # slots used by higher-level ROM services (FCS/IOCS) when passing values
+    # that don't fit in the CPU registers.
+    #
+    # Layout (little-endian):
+    #   (bx) = [BH:BL] at 0xD5:0xD4
+    #   (cx) = [CH:CL] at 0xD7:0xD6
+    #   (dx) = [DH:DL] at 0xD9:0xD8
+    #   (si) = 24-bit at 0xDA..0xDC
+    #   (di) = 24-bit at 0xDD..0xDF
+    # ---------------------------------------------------------------------
+    BL = 0xD4
+    BH = 0xD5
+    CL = 0xD6
+    CH = 0xD7
+    DL = 0xD8
+    DH = 0xD9
+    SI = 0xDA
+    SI1 = 0xDB
+    SI2 = 0xDC
+    DI = 0xDD
+    DI1 = 0xDE
+    DI2 = 0xDF
+
+    # ---------------------------------------------------------------------
+    # IOCS workspace base pointer (TRM "(E6)" style parameter).
+    #
+    # PC-E500 ROM code keeps a 24-bit pointer here and indexes IOCS state as
+    # `[(E6)+offset]`. The bytes are little-endian: LO/MID/HI.
+    # ---------------------------------------------------------------------
+    IOCS_WS = 0xE6
+    IOCS_WS1 = 0xE7
+    IOCS_WS2 = 0xE8
+
+    # Alternative spellings (older name; keep working in asm/code).
+    IOCS_WORKSPACE = IOCS_WS
+    IOCS_WORKSPACE1 = IOCS_WS1
+    IOCS_WORKSPACE2 = IOCS_WS2
+
+    # Shorthand aliases (keeps older disassembly-style `E6`/`E7`/`E8` usable in asm).
+    E6 = IOCS_WS
+    E7 = IOCS_WS1
+    E8 = IOCS_WS2
+
     # RAM Pointers
     BP = 0xEC  # RAM Base Pointer
     PX = 0xED  # RAM PX Pointer
@@ -1144,10 +1191,24 @@ class IMemHelper(Operand):
         if pre is None:
             pre = AddressingMode.BP_N
 
+        def _render_named_imem_addr(n_val: int) -> List[Token]:
+            try:
+                name = IMEMRegisters(n_val).name
+            except ValueError:
+                return [TInt(f"{n_val:02X}")]
+            return [TText(name)]
+
         result: List[Token] = [TBegMem(MemType.INTERNAL)]
         match pre:
             case AddressingMode.N:
-                result.extend(self.value.render())
+                if isinstance(self.value, IMemOperand) and isinstance(
+                    self.value.n_val, int
+                ):
+                    result.extend(_render_named_imem_addr(self.value.n_val))
+                elif isinstance(self.value, Imm8) and isinstance(self.value.value, int):
+                    result.extend(_render_named_imem_addr(self.value.value))
+                else:
+                    result.extend(self.value.render())
             case AddressingMode.BP_N:
                 result.append(TText("BP"))
                 result.append(TSep("+"))

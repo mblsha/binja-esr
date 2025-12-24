@@ -111,6 +111,35 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 | **LCC** | 0xFE | **LCD Contrast Control**<br><pre>  7    6    5    4    3     2     1      0<br>+----+----+----+----+----+----+-----+------+<br>|LCC4|LCC3|LCC2|LCC1|LCC0| KSD| STCL| MTCL |<br>+----+----+----+----+----+----+-----+------+</pre>• `LCC4–LCC0` (bits 7–3): Contrast level (0–31).<br>• `KSD` (bit 2): Key Strobe Disable.<br>• `STCL` (bit 1): SEC Timer Clear enable.<br>• `MTCL` (bit 0): MSEC Timer Clear enable. |
 | **SSR** | 0xFF | **System Status Control** (renamed from source for clarity)<br><pre>  7    6    5    4     3    2    1      0<br>+----+----+----+----+----+----+----+------<br>|    |    |    |    | ONK| RSF| CI | TEST |<br>+----+----+----+----+----+----+----+------</pre>• `ONK` (bit 3): ON-Key input status.<br>• `RSF` (bit 2): Reset-Start Flag.<br>• `CI` (bit 1): CMT Input status.<br>• `TEST` (bit 0): Test Input status. |
 
+### Logic Registers (FCS/IOCS scratch area)
+
+The PC-E500 TRM describes a set of "logic registers" that exist at fixed internal RAM
+addresses. ROM code (and higher-level services like FCS/IOCS) use this block as a
+parameter/return scratch area when there aren't enough CPU registers.
+
+In this emulator, these addresses are also named in `IMEMRegisters` so disassembly and
+assembly can use `BL`/`BH`/`CL`/`CH`/`DL`/`DH`/`SI`/`DI` (and `IOCS_WS` for `(E6)`)
+instead of raw hex.
+
+| Name | Address (Hex) | Size | Meaning |
+| :--- | :--- | :--- | :--- |
+| **BL** | 0xD4 | 1 | `(bl)` – low byte of `(bx)` |
+| **BH** | 0xD5 | 1 | `(bh)` – high byte of `(bx)` |
+| **CL** | 0xD6 | 1 | `(cl)` – low byte of `(cx)` |
+| **CH** | 0xD7 | 1 | `(ch)` – high byte of `(cx)` |
+| **DL** | 0xD8 | 1 | `(dl)` – low byte of `(dx)` |
+| **DH** | 0xD9 | 1 | `(dh)` – high byte of `(dx)` |
+| **SI** | 0xDA | 3 | `(si)` – 24-bit pointer: `[SI]`, `[SI+1]`, `[SI+2]` |
+| **DI** | 0xDD | 3 | `(di)` – 24-bit pointer: `[DI]`, `[DI+1]`, `[DI+2]` |
+| **IOCS_WS** | 0xE6..0xE8 | 3 | IOCS workspace base pointer (24-bit). PC-E500 ROM convention treats this as `(E6)` and commonly indexes it as `[(E6)+offset]`. |
+
+Common composites (little-endian layout):
+
+- `(bx)` is the 16-bit value at `BH:BL` (`0xD5:0xD4`)
+- `(cx)` is the 16-bit value at `CH:CL` (`0xD7:0xD6`)
+- `(dx)` is the 16-bit value at `DH:DL` (`0xD9:0xD8`)
+- IOCS workspace base pointer (PC-E500 ROM convention): `(E6)` → `IOCS_WS` (aliases `E6`/`E7`/`E8`) at `0xE6..0xE8`, typically used as `[(E6)+offset]`
+
 ---
 
 ## Opcode Information Details
