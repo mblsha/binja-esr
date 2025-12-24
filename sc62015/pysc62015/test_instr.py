@@ -244,6 +244,16 @@ def test_jp_rel() -> None:
     _assert_unconditional_jump_llil(instr, 0x2000, dest)
 
 
+def test_reset_analysis_is_unresolved_branch() -> None:
+    instr = decode(bytearray([0xFF]), 0x1234)
+    assert instr.name() == "RESET"
+
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0x1234)
+    assert info.length == 1
+    assert info.mybranches == [(BranchType.UnresolvedBranch, None)]
+
+
 def test_mvi() -> None:
     instr = decode(bytearray([0x08, 0xAA]), 0x1234)
     assert instr.name() == "MV"
