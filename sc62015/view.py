@@ -203,12 +203,13 @@ class SC62015FullView(SC62015BaseView):
             SectionSemantics.ReadOnlyCodeSectionSemantics,
         ),
         # SC62015 CPU Internal RAM at 0x100000-0x1000FF (256 bytes)
-        # Note: This is the CPU's built-in RAM, separate from external memory space
+        # Note: This is the CPU's built-in RAM, separate from external memory space. Full
+        # memory dumps are typically 1MB (0x00000-0xFFFFF) and do not include this region.
         SegmentDef(
             "Internal RAM",
             INTERNAL_MEMORY_START,
             INTERNAL_MEMORY_LENGTH,
-            INTERNAL_MEMORY_START,
+            None,
             SegmentFlag.SegmentReadable | SegmentFlag.SegmentWritable,
             SectionSemantics.ReadWriteDataSectionSemantics,
         ),
