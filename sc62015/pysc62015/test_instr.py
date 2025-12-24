@@ -46,6 +46,8 @@ from binja_test_mocks.coding import Decoder, Encoder
 from binja_test_mocks.mock_analysis import MockAnalysisInfo
 from binja_test_mocks.mock_llil import (
     MockLowLevelILFunction,
+    MockIfExpr,
+    MockLabel,
     MockLLIL,
     MockFlag,
     mllil,
@@ -54,6 +56,7 @@ from binja_test_mocks.mock_llil import (
 from binaryninja.lowlevelil import (  # type: ignore
     LLIL_TEMP,
 )
+from binaryninja.enums import BranchType  # type: ignore
 from binaryninja import RegisterName  # type: ignore
 
 import os
@@ -68,6 +71,59 @@ def decode(data: bytearray, addr: int) -> Instruction:
     if instr is None:
         raise ValueError(f"Failed to decode {data.hex()} at {addr:#x}")
     return instr
+
+
+def _assert_conditional_jump_llil(
+    instr: JP_Rel,
+    addr: int,
+    expected_dest: MockLLIL,
+    *,
+    expected_cond_flag: str,
+    expected_cond_value: int,
+) -> None:
+    il = MockLowLevelILFunction()
+    instr.lift(il, addr)
+
+    assert len(il.ils) == 4
+    if_expr, label_true, jump, label_false = il.ils
+
+    assert isinstance(if_expr, MockIfExpr)
+    assert isinstance(label_true, MockLabel)
+    assert isinstance(jump, MockLLIL)
+    assert isinstance(label_false, MockLabel)
+
+    assert if_expr.t is label_true.label
+    assert if_expr.f is label_false.label
+
+    assert if_expr.cond == mllil(
+        "CMP_E.b",
+        [
+            mllil("FLAG", [MockFlag(expected_cond_flag)]),
+            mllil("CONST.b", [expected_cond_value]),
+        ],
+    )
+
+    assert jump.op == "JUMP"
+    assert jump.ops == [expected_dest]
+
+
+def _assert_unconditional_jump_llil(
+    instr: JP_Rel, addr: int, expected_dest: MockLLIL
+) -> None:
+    il = MockLowLevelILFunction()
+    instr.lift(il, addr)
+
+    assert len(il.ils) == 3
+    label_true, jump, label_false = il.ils
+
+    assert isinstance(label_true, MockLabel)
+    assert isinstance(jump, MockLLIL)
+    assert isinstance(label_false, MockLabel)
+
+    assert label_true.label is not label_false.label
+
+    assert jump.op == "JUMP"
+    assert jump.ops == [expected_dest]
 
 
 def test_operand() -> None:
@@ -94,11 +150,17 @@ def test_jp_abs() -> None:
             mllil("CONST.l", [0xCD0000]),
         ],
     )
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0xCD1234)
+    assert info.mybranches == [(BranchType.UnconditionalBranch, 0xCDBBAA)]
 
     instr = decode(bytearray([0x03, 0xAA, 0xBB, 0x0C]), 0x1234)
     assert isinstance(instr, JP_Abs)
     assert instr.render() == [TInstr("JPF"), TSep("   "), TInt("CBBAA")]
     assert instr.lift_jump_addr(il, 0x1234) == mllil("CONST.l", [0xCBBAA])
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0x1234)
+    assert info.mybranches == [(BranchType.UnconditionalBranch, 0xCBBAA)]
 
     instr = decode(bytearray([0x15, 0xCD, 0x00]), 0xF0185)
     assert isinstance(instr, JP_Abs)
@@ -110,19 +172,76 @@ def test_jp_abs() -> None:
             mllil("CONST.l", [0xF0000]),
         ],
     )
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0xF0185)
+    assert info.mybranches == [
+        (BranchType.FalseBranch, 0xF0188),
+        (BranchType.TrueBranch, 0xF00CD),
+    ]
 
 
 def test_jp_rel() -> None:
     instr = decode(bytearray([0x1A, 0x06]), 0xF0163)
     assert instr.name() == "JRNZ"
-    il = MockLowLevelILFunction()
     assert isinstance(instr, JP_Rel)
-    assert instr.lift_jump_addr(il, 0xF0163) == mllil("CONST.l", [0xF0163 + 2 + 6])
+    il = MockLowLevelILFunction()
+    dest = instr.lift_jump_addr(il, 0xF0163)
+    assert dest == mllil("CONST.l", [0xF0163 + 2 + 6])
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0xF0163)
+    assert info.mybranches == [
+        (BranchType.FalseBranch, 0xF0165),
+        (BranchType.TrueBranch, 0xF016B),
+    ]
+    _assert_conditional_jump_llil(
+        instr,
+        0xF0163,
+        dest,
+        expected_cond_flag="Z",
+        expected_cond_value=0,
+    )
 
     instr = decode(bytearray([0x1B, 0x06]), 0xF0163)
     assert instr.name() == "JRNZ"
     assert isinstance(instr, JP_Rel)
-    assert instr.lift_jump_addr(il, 0xF0163) == mllil("CONST.l", [0xF0163 + 2 - 6])
+    il = MockLowLevelILFunction()
+    dest = instr.lift_jump_addr(il, 0xF0163)
+    assert dest == mllil("CONST.l", [0xF0163 + 2 - 6])
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0xF0163)
+    assert info.mybranches == [
+        (BranchType.FalseBranch, 0xF0165),
+        (BranchType.TrueBranch, 0xF015F),
+    ]
+    _assert_conditional_jump_llil(
+        instr,
+        0xF0163,
+        dest,
+        expected_cond_flag="Z",
+        expected_cond_value=0,
+    )
+
+    instr = decode(bytearray([0x12, 0x05]), 0x2000)
+    assert instr.name() == "JR"
+    assert isinstance(instr, JP_Rel)
+    il = MockLowLevelILFunction()
+    dest = instr.lift_jump_addr(il, 0x2000)
+    assert dest == mllil("CONST.l", [0x2000 + 2 + 5])
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0x2000)
+    assert info.mybranches == [(BranchType.UnconditionalBranch, 0x2007)]
+    _assert_unconditional_jump_llil(instr, 0x2000, dest)
+
+    instr = decode(bytearray([0x13, 0x05]), 0x2000)
+    assert instr.name() == "JR"
+    assert isinstance(instr, JP_Rel)
+    il = MockLowLevelILFunction()
+    dest = instr.lift_jump_addr(il, 0x2000)
+    assert dest == mllil("CONST.l", [0x2000 + 2 - 5])
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0x2000)
+    assert info.mybranches == [(BranchType.UnconditionalBranch, 0x1FFD)]
+    _assert_unconditional_jump_llil(instr, 0x2000, dest)
 
 
 def test_mvi() -> None:

@@ -16,9 +16,10 @@ class JumpInstruction(Instruction):
 
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
-        # expect TrueBranch to be handled by subclasses as it might require
-        # llil logic to calculate the address
-        info.add_branch(BranchType.FalseBranch, addr + self.length())
+        if self._cond:
+            # expect TrueBranch to be handled by subclasses as it might require
+            # llil logic to calculate the address
+            info.add_branch(BranchType.FalseBranch, addr + self.length())
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         if_true = LowLevelILLabel()
@@ -60,7 +61,12 @@ class JP_Abs(JumpInstruction):
             # absolute address
             assert first.value is not None, "Value not set"
             dest = first.value
-            info.add_branch(BranchType.TrueBranch, dest)
+            if first.width() < 3:
+                dest |= addr & 0xFF0000
+            branch_type = (
+                BranchType.TrueBranch if self._cond else BranchType.UnconditionalBranch
+            )
+            info.add_branch(branch_type, dest)
 
 
 class JP_Rel(JumpInstruction):
@@ -79,7 +85,10 @@ class JP_Rel(JumpInstruction):
         assert len(rest) == 0, "Expected no extra operands"
         assert isinstance(first, ImmOffset), f"Expected ImmOffset, got {type(first)}"
         dest = addr + self.length() + first.offset_value()
-        info.add_branch(BranchType.TrueBranch, dest)
+        branch_type = (
+            BranchType.TrueBranch if self._cond else BranchType.UnconditionalBranch
+        )
+        info.add_branch(branch_type, dest)
 
 
 class CALL(Instruction):
