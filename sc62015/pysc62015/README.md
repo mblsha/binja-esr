@@ -90,7 +90,6 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 
 | Name | Address (Hex) | Description |
 | :--- | :--- | :--- |
-| **IOCS_WS** | 0xE6..0xE8 | IOCS workspace base pointer (24-bit). PC-E500 ROM convention treats this as `(E6)` and commonly indexes it as `[(E6)+offset]`. |
 | **BP** | 0xEC | RAM Base Pointer |
 | **PX** | 0xED | RAM PX Pointer |
 | **PY** | 0xEE | RAM PY Pointer |
@@ -119,7 +118,8 @@ addresses. ROM code (and higher-level services like FCS/IOCS) use this block as 
 parameter/return scratch area when there aren't enough CPU registers.
 
 In this emulator, these addresses are also named in `IMEMRegisters` so disassembly and
-assembly can use `BL`/`BH`/`CL`/`CH`/`DL`/`DH`/`SI`/`DI` instead of raw hex.
+assembly can use `BL`/`BH`/`CL`/`CH`/`DL`/`DH`/`SI`/`DI` (and `IOCS_WS` for `(E6)`)
+instead of raw hex.
 
 | Name | Address (Hex) | Size | Meaning |
 | :--- | :--- | :--- | :--- |
@@ -131,6 +131,7 @@ assembly can use `BL`/`BH`/`CL`/`CH`/`DL`/`DH`/`SI`/`DI` instead of raw hex.
 | **DH** | 0xD9 | 1 | `(dh)` – high byte of `(dx)` |
 | **SI** | 0xDA | 3 | `(si)` – 24-bit pointer: `[SI]`, `[SI+1]`, `[SI+2]` |
 | **DI** | 0xDD | 3 | `(di)` – 24-bit pointer: `[DI]`, `[DI+1]`, `[DI+2]` |
+| **IOCS_WS** | 0xE6..0xE8 | 3 | IOCS workspace base pointer (24-bit). PC-E500 ROM convention treats this as `(E6)` and commonly indexes it as `[(E6)+offset]`. |
 
 Common composites (little-endian layout):
 
