@@ -296,6 +296,31 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	let traceIndex = 0;
 	let perfettoActive = false;
 	const probeStack: Array<{ pc: number; handler: ProbeHandler; maxSamples: number }> = [];
+	let perfettoActiveName: string | null = null;
+
+	function isLikelyWasmTrap(message: string): boolean {
+		const lower = message.toLowerCase();
+		return (
+			/\bunreachable\b/.test(lower) ||
+			lower.includes('out of memory') ||
+			lower.includes('memory allocation') ||
+			lower.includes('wasm trap')
+		);
+	}
+
+	function attachPerfettoHint(err: unknown): unknown {
+		const message = err instanceof Error ? err.message : String(err);
+		if (!message || !isLikelyWasmTrap(message)) return err;
+		if (message.includes('Perfetto tracing may have')) return err;
+
+		const name = perfettoActiveName ? `'${perfettoActiveName}' ` : '';
+		const hint =
+			`Perfetto tracing ${name}may have exhausted WASM memory (traces are buffered in memory). ` +
+			`Try tracing fewer instructions or splitting into multiple traces; you may need to reload the emulator after a trap.`;
+		const wrapped = new Error(`${message}\n${hint}`);
+		(wrapped as any).cause = err;
+		return wrapped;
+	}
 
 	async function writeIocsImemArgs(args: EvalIocsImemArgs | undefined) {
 		if (!args) return;
@@ -529,6 +554,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				}
 
 				perfettoActive = true;
+				perfettoActiveName = trimmed;
 				let started = false;
 				let stopAttempted = false;
 
@@ -564,9 +590,10 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 							// ignore secondary stop errors
 						}
 					}
-					throw err;
+					throw attachPerfettoHint(err);
 				} finally {
 					perfettoActive = false;
+					perfettoActiveName = null;
 				}
 			},
 		},
