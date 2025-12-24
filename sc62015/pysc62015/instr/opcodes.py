@@ -405,6 +405,21 @@ class IMEMRegisters(IntEnum):
     DI1 = 0xDE
     DI2 = 0xDF
 
+    # ---------------------------------------------------------------------
+    # IOCS workspace base pointer (TRM "(E6)" style parameter).
+    #
+    # PC-E500 ROM code keeps a 24-bit pointer here and indexes IOCS state as
+    # `[(E6)+offset]`. The bytes are little-endian: LO/MID/HI.
+    # ---------------------------------------------------------------------
+    IOCS_WORKSPACE = 0xE6
+    IOCS_WORKSPACE1 = 0xE7
+    IOCS_WORKSPACE2 = 0xE8
+
+    # Shorthand aliases (keeps older disassembly-style `E6`/`E7`/`E8` usable in asm).
+    E6 = IOCS_WORKSPACE
+    E7 = IOCS_WORKSPACE1
+    E8 = IOCS_WORKSPACE2
+
     # RAM Pointers
     BP = 0xEC  # RAM Base Pointer
     PX = 0xED  # RAM PX Pointer
@@ -1171,10 +1186,22 @@ class IMemHelper(Operand):
         if pre is None:
             pre = AddressingMode.BP_N
 
+        def _render_named_imem_addr(n_val: int) -> List[Token]:
+            try:
+                name = IMEMRegisters(n_val).name
+            except ValueError:
+                return [TInt(f"{n_val:02X}")]
+            return [TText(name)]
+
         result: List[Token] = [TBegMem(MemType.INTERNAL)]
         match pre:
             case AddressingMode.N:
-                result.extend(self.value.render())
+                if isinstance(self.value, IMemOperand) and isinstance(self.value.n_val, int):
+                    result.extend(_render_named_imem_addr(self.value.n_val))
+                elif isinstance(self.value, Imm8) and isinstance(self.value.value, int):
+                    result.extend(_render_named_imem_addr(self.value.value))
+                else:
+                    result.extend(self.value.render())
             case AddressingMode.BP_N:
                 result.append(TText("BP"))
                 result.append(TSep("+"))
