@@ -90,6 +90,7 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 
 | Name | Address (Hex) | Description |
 | :--- | :--- | :--- |
+| **IOCS_WS** | 0xE6..0xE8 | IOCS workspace base pointer (24-bit). PC-E500 ROM convention treats this as `(E6)` and commonly indexes it as `[(E6)+offset]`. |
 | **BP** | 0xEC | RAM Base Pointer |
 | **PX** | 0xED | RAM PX Pointer |
 | **PY** | 0xEE | RAM PY Pointer |
