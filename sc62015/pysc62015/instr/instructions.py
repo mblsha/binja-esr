@@ -1134,7 +1134,7 @@ class IR(MiscInstruction):
         imr, *_rest = RegIMR().operands()
         imr_value = imr.lift(il)
         il.append(il.push(3, RegPC().lift(il)))
-        il.append(il.push(1, il.reg(1, RegisterName("F"))))
+        il.append(il.push(1, RegF().lift(il)))
         il.append(il.push(1, imr_value))
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
 
