@@ -378,6 +378,33 @@ class IMEMRegisters(IntEnum):
     allowing the values to be used directly as integers.
     """
 
+    # ---------------------------------------------------------------------
+    # IOCS/FCS "logic registers" (TRM internal RAM scratchpad at 0xD4–0xDF).
+    #
+    # These are not hardware MMIO registers; they are conventional parameter
+    # slots used by higher-level ROM services (FCS/IOCS) when passing values
+    # that don't fit in the CPU registers.
+    #
+    # Layout (little-endian):
+    #   (bx) = [BH:BL] at 0xD5:0xD4
+    #   (cx) = [CH:CL] at 0xD7:0xD6
+    #   (dx) = [DH:DL] at 0xD9:0xD8
+    #   (si) = 24-bit at 0xDA..0xDC
+    #   (di) = 24-bit at 0xDD..0xDF
+    # ---------------------------------------------------------------------
+    BL = 0xD4
+    BH = 0xD5
+    CL = 0xD6
+    CH = 0xD7
+    DL = 0xD8
+    DH = 0xD9
+    SI = 0xDA
+    SI1 = 0xDB
+    SI2 = 0xDC
+    DI = 0xDD
+    DI1 = 0xDE
+    DI2 = 0xDF
+
     # RAM Pointers
     BP = 0xEC  # RAM Base Pointer
     PX = 0xED  # RAM PX Pointer
