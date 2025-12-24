@@ -22,11 +22,14 @@ class SC62015(Architecture):
     # registers from page 32 of the book
     regs = {
         "BA": RegisterInfo("BA", 2),
-        "A": RegisterInfo("BA", 1, 1),  # accumulator
-        "B": RegisterInfo("BA", 1, 0),  # axiliary
+        # Binary Ninja subregister offsets are little-endian: offset 0 is the LSB.
+        # SC62015 docs define BA as (B:A) where A is the low byte and B is the high byte.
+        "A": RegisterInfo("BA", 1, 0),  # accumulator (LSB of BA)
+        "B": RegisterInfo("BA", 1, 1),  # auxiliary (MSB of BA)
         "I": RegisterInfo("I", 2),  # counter
-        "IL": RegisterInfo("I", 1, 1),
-        "IH": RegisterInfo("I", 1, 0),
+        # I is (IH:IL) where IL is the low byte and IH is the high byte.
+        "IL": RegisterInfo("I", 1, 0),  # LSB of I
+        "IH": RegisterInfo("I", 1, 1),  # MSB of I
         "X": RegisterInfo("X", 3),  # pointer
         "Y": RegisterInfo("Y", 3),  # pointer
         "U": RegisterInfo("U", 3),  # user stack
