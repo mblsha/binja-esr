@@ -136,7 +136,7 @@ Common composites (little-endian layout):
 - `(bx)` is the 16-bit value at `BH:BL` (`0xD5:0xD4`)
 - `(cx)` is the 16-bit value at `CH:CL` (`0xD7:0xD6`)
 - `(dx)` is the 16-bit value at `DH:DL` (`0xD9:0xD8`)
-- IOCS workspace base pointer (PC-E500 ROM convention): `IOCS_WORKSPACE` at `0xE6..0xE8`
+- IOCS workspace base pointer (PC-E500 ROM convention): `IOCS_WS` at `0xE6..0xE8`
 
 ---
 

@@ -1064,7 +1064,7 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_regs={
             RegisterName.Y: 0x332211,  # Little-endian: low byte first
         },
-        expected_asm_str="MV    Y, (IOCS_WORKSPACE)",
+        expected_asm_str="MV    Y, (IOCS_WS)",
     ),
     InstructionTestCase(
         test_id="MVP_to_E6_internal_mem",
@@ -1082,7 +1082,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START
             + 0xE8: 0x0B,  # High byte (only low 4 bits used for 20-bit)
         },
-        expected_asm_str="MVP   (IOCS_WORKSPACE), BFCDE",
+        expected_asm_str="MVP   (IOCS_WS), BFCDE",
     ),
     InstructionTestCase(
         test_id="MV_A_from_indirect_ext_mem_with_offset",
@@ -1104,7 +1104,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.A: 0x42,  # A should contain value from external memory
             RegisterName.B: 0xAB,  # B should remain unchanged
         },
-        expected_asm_str="MV    A, [(IOCS_WORKSPACE)+08]",
+        expected_asm_str="MV    A, [(IOCS_WS)+08]",
     ),
     InstructionTestCase(
         test_id="MV_Y_from_X_plus_offset",
@@ -1227,7 +1227,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             0x042004: 0x34,  # Low byte should be written
             0x042005: 0x12,  # High byte should be written (but currently isn't)
         },
-        expected_asm_str="MV    [(IOCS_WORKSPACE)+04], BA",
+        expected_asm_str="MV    [(IOCS_WS)+04], BA",
     ),
     # Test INC X instruction
     InstructionTestCase(

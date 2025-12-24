@@ -411,14 +411,19 @@ class IMEMRegisters(IntEnum):
     # PC-E500 ROM code keeps a 24-bit pointer here and indexes IOCS state as
     # `[(E6)+offset]`. The bytes are little-endian: LO/MID/HI.
     # ---------------------------------------------------------------------
-    IOCS_WORKSPACE = 0xE6
-    IOCS_WORKSPACE1 = 0xE7
-    IOCS_WORKSPACE2 = 0xE8
+    IOCS_WS = 0xE6
+    IOCS_WS1 = 0xE7
+    IOCS_WS2 = 0xE8
+
+    # Alternative spellings (older name; keep working in asm/code).
+    IOCS_WORKSPACE = IOCS_WS
+    IOCS_WORKSPACE1 = IOCS_WS1
+    IOCS_WORKSPACE2 = IOCS_WS2
 
     # Shorthand aliases (keeps older disassembly-style `E6`/`E7`/`E8` usable in asm).
-    E6 = IOCS_WORKSPACE
-    E7 = IOCS_WORKSPACE1
-    E8 = IOCS_WORKSPACE2
+    E6 = IOCS_WS
+    E7 = IOCS_WS1
+    E8 = IOCS_WS2
 
     # RAM Pointers
     BP = 0xEC  # RAM Base Pointer
