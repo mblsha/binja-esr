@@ -1148,7 +1148,9 @@ class IR(MiscInstruction):
 class RESET(MiscInstruction):
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)
-        info.add_branch(BranchType.FunctionReturn)
+        # RESET transfers control to the reset vector (destination comes from memory), so there is no
+        # fallthrough.
+        info.add_branch(BranchType.UnresolvedBranch)
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.intrinsic([], RESETIntrinsic, []))
