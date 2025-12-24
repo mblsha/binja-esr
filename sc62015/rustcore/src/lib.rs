@@ -11,8 +11,9 @@ use sc62015_core::{
     keyboard::KeyboardMatrix,
     llama::{
         eval::{
-            perfetto_last_pc, power_on_reset, reset_perf_counters, set_perf_instr_counter,
-            LlamaBus, LlamaExecutor,
+            perfetto_last_instr_index, perfetto_last_pc, power_on_reset, reset_perf_counters,
+            set_perf_cycle_counter, set_perf_cycle_window, set_perf_instr_counter, LlamaBus,
+            LlamaExecutor,
         },
         opcodes::RegName as LlamaRegName,
         state::LlamaState,
@@ -1172,16 +1173,27 @@ impl LlamaBus for LlamaPyBus {
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
+        if cycles == 0 {
+            return;
+        }
         // Prefer the Python host hook; otherwise, tick the Rust timer/keyboard locally for parity.
         if self.has_wait_cycles {
             Python::with_gil(|py| {
                 let bound = self.memory.bind(py);
-                let _ = bound.call_method1("wait_cycles", (cycles.max(1),));
+                let _ = bound.call_method1("wait_cycles", (cycles,));
             });
+            unsafe {
+                if self.cycles_ptr.is_null() {
+                    return;
+                }
+                let cycles_counter = &mut *self.cycles_ptr;
+                *cycles_counter = cycles_counter.wrapping_add(cycles as u64);
+                set_perf_cycle_counter(*cycles_counter);
+            }
             return;
         }
 
-        let ticks = cycles.max(1);
+        let ticks = cycles;
         unsafe {
             if self.timer.is_null()
                 || self.keyboard.is_null()
@@ -1210,6 +1222,7 @@ impl LlamaBus for LlamaPyBus {
 
             for _ in 0..ticks {
                 *cycles_counter = cycles_counter.wrapping_add(1);
+                set_perf_cycle_counter(*cycles_counter);
                 if let Some(imr) = mirror.read_internal_byte(IMEM_IMR_OFFSET) {
                     timer.irq_imr = imr;
                 }
@@ -1438,7 +1451,39 @@ impl LlamaCpu {
             &mut self.mirror,
             &mut self.cycles,
         );
+        let cycle_start = self.cycles;
+        set_perf_cycle_counter(cycle_start);
         let opcode = bus.read_byte(entry_pc & ADDRESS_MASK);
+        // Capture WAIT/MVL loop count before execution (executor clears I).
+        // Mirror Python: skip any PRE prefixes (up to 4) to identify the executed opcode.
+        let mut exec_pc = entry_pc & ADDRESS_MASK;
+        let mut exec_opcode = opcode;
+        let mut prefix_guard = 0u8;
+        while prefix_guard < 4
+            && ((0x21..=0x27).contains(&exec_opcode) || (0x30..=0x37).contains(&exec_opcode))
+        {
+            exec_pc = exec_pc.wrapping_add(1) & ADDRESS_MASK;
+            exec_opcode = bus.read_byte(exec_pc);
+            prefix_guard = prefix_guard.saturating_add(1);
+        }
+        let i_before = self.state.get_reg(LlamaRegName::I) & 0xFFFF;
+        let mut wait_loops = 0u32;
+        let mut mvl_loops = 0u32;
+        if i_before > 0 {
+            if exec_opcode == 0xEF {
+                wait_loops = i_before;
+            } else if matches!(
+                exec_opcode,
+                0xCB | 0xCF | 0xD3 | 0xDB | 0xE3 | 0xEB | 0xF3 | 0xFB
+            ) {
+                mvl_loops = i_before;
+            }
+        }
+        let cycle_end = cycle_start
+            .wrapping_add(1)
+            .wrapping_add(wait_loops as u64)
+            .wrapping_add(mvl_loops as u64);
+        set_perf_cycle_window(cycle_start, cycle_end);
         let len = self
             .executor
             .execute(opcode, &mut self.state, &mut bus)
@@ -1447,6 +1492,21 @@ impl LlamaCpu {
         self.memory_writes = self.memory_writes.saturating_add(bus.memory_writes);
         self.call_sub_level = self.state.call_sub_level();
         self.sync_temps_from_state();
+        // Advance cycles: one for the opcode, plus WAIT/MVL loops on I.
+        // - WAIT loops are advanced via bus.wait_cycles() (Python hook or fallback); add the opcode cycle here.
+        // - MVL-family should bump cycle count without ticking timers (preserve cadence).
+        self.cycles = self.cycles.wrapping_add(1);
+        if mvl_loops > 0 {
+            let delta = mvl_loops as u64;
+            self.cycles = self.cycles.wrapping_add(delta);
+            if self.timer.next_mti != 0 {
+                self.timer.next_mti = self.timer.next_mti.wrapping_add(delta);
+            }
+            if self.timer.next_sti != 0 {
+                self.timer.next_sti = self.timer.next_sti.wrapping_add(delta);
+            }
+        }
+        set_perf_cycle_counter(self.cycles);
         if opcode == 0xFE {
             // IR: interrupt entry
             let (imr, isr) = self.read_irq_registers(py, &mut bus);
@@ -1886,6 +1946,8 @@ impl LlamaCpu {
         let mut metadata = SnapshotMetadata {
             backend: "llama".to_string(),
             pc: self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
+            instruction_count: perfetto_last_instr_index(),
+            cycle_count: self.cycles,
             memory_image_size: image.external_len(),
             fallback_ranges,
             readonly_ranges,
@@ -1999,6 +2061,12 @@ impl LlamaCpu {
         Ok(())
     }
 
+    fn set_perf_cycle_counter(&mut self, value: u64) -> PyResult<()> {
+        self.cycles = value;
+        set_perf_cycle_counter(value);
+        Ok(())
+    }
+
     fn flush_perfetto(&mut self) -> PyResult<()> {
         let mut guard = PERFETTO_TRACER.enter();
         if let Some(tracer) = guard.take() {
@@ -2049,6 +2117,91 @@ mod tests {
         let isr = bus.memory.read_internal_byte(0xFC).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI bit should be set in ISR");
         assert!(bus.timer.irq_pending, "MTI should mark irq_pending");
+    }
+
+    #[test]
+    fn mvl_advances_cycles_by_i() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self):
+        self.data = bytearray(0x100000 + 0x100)
+    def read_byte(self, addr, pc=None):
+        return self.data[addr & 0xFFFFFF]
+    def write_byte(self, addr, val, pc=None):
+        self.data[addr & 0xFFFFFF] = val & 0xFF
+        return None
+"#;
+            let module =
+                PyModule::from_code_bound(py, code, "mem_mod.py", "mem_mod").expect("mem module");
+            let mem = module.getattr("Mem").unwrap().call0().unwrap();
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+
+            let mem_obj = cpu.memory.clone_ref(py);
+            let bound = mem_obj.bind(py);
+            // MVL (0xCB) IMem8,IMem8: 0x50 <- 0xA0
+            let _ = bound.call_method1("write_byte", (0u32, 0xCBu8));
+            let _ = bound.call_method1("write_byte", (1u32, 0x50u8));
+            let _ = bound.call_method1("write_byte", (2u32, 0xA0u8));
+            let _ = bound.call_method1("write_byte", (INTERNAL_MEMORY_START + 0xECu32, 0u8));
+            let src = [0x11u8, 0x22u8, 0x33u8, 0x44u8, 0x55u8];
+            for (idx, byte) in src.iter().enumerate() {
+                let _ = bound.call_method1(
+                    "write_byte",
+                    (INTERNAL_MEMORY_START + 0xA0u32 + idx as u32, *byte),
+                );
+                let _ = bound.call_method1(
+                    "write_byte",
+                    (INTERNAL_MEMORY_START + 0x50u32 + idx as u32, 0u8),
+                );
+            }
+
+            cpu.state.set_reg(LlamaRegName::PC, 0);
+            cpu.state.set_reg(LlamaRegName::I, 5);
+            cpu.timer.next_mti = 3;
+
+            let (_opcode, _len) = cpu.execute_instruction(py, 0).expect("execute MVL");
+            assert_eq!(cpu.cycles, 6, "MVL should advance cycles by 1 + I");
+            assert_eq!(cpu.timer.next_mti, 8, "MVL should shift MTI deadline by I");
+        });
+    }
+
+    #[test]
+    fn wait_with_host_hook_advances_cycles_by_i() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self):
+        self.data = bytearray(0x100000 + 0x100)
+        self.wait_calls = []
+    def read_byte(self, addr, pc=None):
+        return self.data[addr & 0xFFFFFF]
+    def write_byte(self, addr, val, pc=None):
+        self.data[addr & 0xFFFFFF] = val & 0xFF
+        return None
+    def wait_cycles(self, cycles):
+        self.wait_calls.append(int(cycles))
+"#;
+            let module =
+                PyModule::from_code_bound(py, code, "mem_mod.py", "mem_mod").expect("mem module");
+            let mem = module.getattr("Mem").unwrap().call0().unwrap();
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+
+            let mem_obj = cpu.memory.clone_ref(py);
+            let bound = mem_obj.bind(py);
+            let _ = bound.call_method1("write_byte", (0u32, 0xEFu8)); // WAIT
+            cpu.state.set_reg(LlamaRegName::PC, 0);
+            cpu.state.set_reg(LlamaRegName::I, 5);
+
+            let (_opcode, _len) = cpu.execute_instruction(py, 0).expect("execute WAIT");
+            assert_eq!(cpu.cycles, 6, "WAIT should advance cycles by 1 + I");
+
+            let calls = bound.getattr("wait_calls").unwrap();
+            let calls: Vec<i64> = calls.extract().unwrap_or_default();
+            assert_eq!(calls, vec![5], "WAIT should pass I to wait_cycles hook");
+        });
     }
 
     #[test]

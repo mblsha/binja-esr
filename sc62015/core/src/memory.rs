@@ -534,7 +534,7 @@ impl MemoryImage {
                 } else {
                     let pc_val = pc.or_else(|| Some(perfetto_last_pc()));
                     tracer.record_mem_write_at_cycle(
-                        crate::llama::eval::perfetto_last_instr_index(),
+                        crate::llama::eval::perfetto_last_cycle(),
                         pc_val,
                         address,
                         value as u32,
@@ -629,7 +629,14 @@ impl MemoryImage {
                                 substep,
                             );
                         } else {
-                            tracer.record_mem_write_at_cycle(0, pc, addr, byte as u32, &name, 8);
+                            tracer.record_mem_write_at_cycle(
+                                crate::llama::eval::perfetto_last_cycle(),
+                                pc,
+                                addr,
+                                byte as u32,
+                                &name,
+                                8,
+                            );
                         }
                     });
                     handled = true;

@@ -938,6 +938,7 @@ impl CoreRuntime {
 
         for _ in 0..instructions {
             let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::llama::eval::set_perf_cycle_counter(self.metadata.cycle_count);
                 // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
                 let imr = self
                     .memory
@@ -1028,6 +1029,7 @@ impl CoreRuntime {
                     let prev_cycle = self.metadata.cycle_count;
                     let new_cycle = prev_cycle.wrapping_add(1);
                     self.metadata.cycle_count = new_cycle;
+                    crate::llama::eval::set_perf_cycle_counter(new_cycle);
                     if !self.timer.in_interrupt {
                         let kb_irq_enabled = self.timer.kb_irq_enabled;
                         let _ = self.timer.tick_timers_with_keyboard(
@@ -1101,12 +1103,38 @@ impl CoreRuntime {
                         "python overlay required for 0x{addr:06X} but no host handler is installed"
                     )));
                 }
-                // Capture WAIT loop count before execution (executor clears I).
-                let wait_loops = if opcode == 0xEF {
-                    self.state.get_reg(RegName::I) & mask_for(RegName::I)
-                } else {
-                    0
-                };
+                // Capture WAIT/MVL loop count before execution (executor clears I).
+                // Mirror Python: skip any PRE prefixes (up to 4) to identify the executed opcode.
+                let mut exec_pc = pc;
+                let mut exec_opcode = opcode;
+                let mut prefix_guard = 0u8;
+                while prefix_guard < 4
+                    && ((0x21..=0x27).contains(&exec_opcode)
+                        || (0x30..=0x37).contains(&exec_opcode))
+                {
+                    exec_pc = exec_pc.wrapping_add(1) & ADDRESS_MASK;
+                    exec_opcode = bus.load(exec_pc, 8) as u8;
+                    prefix_guard = prefix_guard.saturating_add(1);
+                }
+                let i_before = self.state.get_reg(RegName::I) & mask_for(RegName::I);
+                let mut wait_loops = 0u32;
+                let mut mvl_loops = 0u32;
+                if i_before > 0 {
+                    if exec_opcode == 0xEF {
+                        wait_loops = i_before;
+                    } else if matches!(
+                        exec_opcode,
+                        0xCB | 0xCF | 0xD3 | 0xDB | 0xE3 | 0xEB | 0xF3 | 0xFB
+                    ) {
+                        mvl_loops = i_before;
+                    }
+                }
+                let cycle_start = self.metadata.cycle_count;
+                let cycle_end = cycle_start
+                    .wrapping_add(1)
+                    .wrapping_add(wait_loops as u64)
+                    .wrapping_add(mvl_loops as u64);
+                crate::llama::eval::set_perf_cycle_window(cycle_start, cycle_end);
                 if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
                     return Err(CoreError::Other(format!(
                         "execute opcode 0x{opcode:02X}: {e}"
@@ -1158,12 +1186,17 @@ impl CoreRuntime {
 
                 // Advance cycles: one for the opcode plus simulated WAIT idle cycles, mirroring Python
                 // _simulate_wait which burns I cycles and ticks timers/keyboard each iteration.
+                // MVL-family also loops on I; advance cycle_count to reflect time passing but pause
+                // timer cadence so parity stays stable.
                 let run_timer_cycles = true;
-                let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
                 let prev_cycle = self.metadata.cycle_count;
+                let timer_cycle_increment = 1u64.wrapping_add(wait_loops as u64);
+                let cycle_increment = timer_cycle_increment.wrapping_add(mvl_loops as u64);
+                let timer_cycle_end = prev_cycle.wrapping_add(timer_cycle_increment);
                 let new_cycle = prev_cycle.wrapping_add(cycle_increment);
                 if run_timer_cycles {
-                    for cyc in prev_cycle + 1..=new_cycle {
+                    for cyc in prev_cycle + 1..=timer_cycle_end {
+                        crate::llama::eval::set_perf_cycle_counter(cyc);
                         if !self.timer.in_interrupt {
                             let kb_irq_enabled = self.timer.kb_irq_enabled;
                             let _ = self.timer.tick_timers_with_keyboard(
@@ -1191,7 +1224,17 @@ impl CoreRuntime {
                         }
                     }
                 }
+                if mvl_loops > 0 {
+                    let delta = mvl_loops as u64;
+                    if self.timer.next_mti != 0 {
+                        self.timer.next_mti = self.timer.next_mti.wrapping_add(delta);
+                    }
+                    if self.timer.next_sti != 0 {
+                        self.timer.next_sti = self.timer.next_sti.wrapping_add(delta);
+                    }
+                }
                 self.metadata.cycle_count = new_cycle;
+                crate::llama::eval::set_perf_cycle_counter(new_cycle);
                 if opcode == 0x01 {
                     let irq_src = self.timer.irq_source.clone();
                     // If irq_source was lost, fall back to the delivered mask stack or live ISR bits.
@@ -1766,6 +1809,7 @@ fn src_mask_for_name(name: &str) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::llama::opcodes::RegName;
+    use crate::memory::IMEM_BP_OFFSET;
     use std::fs;
     use std::sync::{MutexGuard, OnceLock};
 
@@ -3237,6 +3281,41 @@ mod tests {
         );
         // Cycle counter should advance for opcode + I loops.
         assert_eq!(rt.metadata.cycle_count, 6);
+    }
+
+    #[test]
+    fn mvl_advances_cycle_count_and_pauses_timers() {
+        let mut rt = CoreRuntime::new();
+        // Program: MVL IMem8,IMem8 (offsets 0x50 <- 0xA0)
+        rt.memory.write_external_slice(0, &[0xCB, 0x50, 0xA0]);
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::I, 5);
+        rt.memory.write_internal_byte(IMEM_BP_OFFSET, 0x00);
+
+        let src = [0x11, 0x22, 0x33, 0x44, 0x55];
+        for (idx, byte) in src.iter().enumerate() {
+            rt.memory.write_internal_byte(0xA0 + idx as u32, *byte);
+            rt.memory.write_internal_byte(0x50 + idx as u32, 0x00);
+        }
+
+        // Arm a timer in the future; MVL should not tick timers for each I loop and should
+        // shift the next-fire deadline forward to preserve cadence.
+        *rt.timer = TimerContext::new(true, 1, 0);
+        rt.timer.next_mti = 3;
+        rt.timer.next_sti = 0;
+
+        rt.step(1).expect("MVL step");
+
+        assert_eq!(rt.metadata.cycle_count, 6);
+        assert_eq!(rt.timer.next_mti, 8);
+        assert!(!rt.timer.irq_pending, "MVL loops should not tick timers");
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_eq!(isr & ISR_MTI, 0, "ISR should not reflect timer fire");
+
+        for (idx, byte) in src.iter().enumerate() {
+            let got = rt.memory.read_internal_byte(0x50 + idx as u32).unwrap_or(0);
+            assert_eq!(got, *byte);
+        }
     }
 
     #[test]
