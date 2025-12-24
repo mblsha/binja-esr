@@ -99,6 +99,16 @@ function safeJson(value: any): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 }
 
+function isLikelyWasmTrap(message: string): boolean {
+	const lower = message.toLowerCase();
+	return /\bunreachable\b/.test(lower) || lower.includes('out of memory') || lower.includes('memory allocation');
+}
+
+function isWasmBindgenBorrowError(message: string): boolean {
+	const lower = message.toLowerCase();
+	return lower.includes('recursive use of an object detected') || lower.includes('unsafe aliasing');
+}
+
 async function ensurePerfettoSymbols(): Promise<void> {
 	if (perfettoSymbolsPromise) return perfettoSymbolsPromise;
 	perfettoSymbolsPromise = (async () => {
@@ -487,12 +497,22 @@ async function handleRequest(msg: WorkerRequest) {
 				}
 				await ensureEmulator();
 				const res = await evalScript(msg.source);
-				try {
-					postFrame(captureFrame(true));
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					if (res && typeof res === 'object') {
-						res.error = res.error ? `${res.error}\n(postFrame) ${msg}` : `(postFrame) ${msg}`;
+				const scriptError = typeof res?.error === 'string' ? res.error : null;
+				const fatalWasmError =
+					typeof scriptError === 'string' && (isLikelyWasmTrap(scriptError) || isWasmBindgenBorrowError(scriptError));
+
+				if (fatalWasmError) {
+					if (typeof res?.error === 'string' && !res.error.toLowerCase().includes('reload')) {
+						res.error = `${res.error}\n(postFrame skipped: emulator may need reload after a WASM trap)`;
+					}
+				} else {
+					try {
+						postFrame(captureFrame(true));
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						if (res && typeof res === 'object') {
+							res.error = res.error ? `${res.error}\n(postFrame) ${msg}` : `(postFrame) ${msg}`;
+						}
 					}
 				}
 				replyOk(msg.id, res);

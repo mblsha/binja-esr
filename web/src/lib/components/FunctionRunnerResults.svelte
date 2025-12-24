@@ -124,6 +124,7 @@
 <style>
 	.error {
 		color: #ff5c5c;
+		white-space: pre-wrap;
 	}
 
 	.hint {
