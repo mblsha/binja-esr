@@ -1,11 +1,8 @@
 from .opcodes import *  # noqa: F401,F403
 from binaryninja.enums import BranchType  # noqa: F401
 from .traits import HasWidth
-from typing import Callable, TYPE_CHECKING
+from typing import Callable
 from binaryninja import InstructionInfo  # type: ignore
-
-if TYPE_CHECKING:
-    from binja_test_mocks.mock_llil import MockLowLevelILFunction
 
 
 def _is_mock_llil(il: LowLevelILFunction) -> bool:
