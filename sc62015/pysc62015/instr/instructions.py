@@ -1,15 +1,21 @@
 from .opcodes import *  # noqa: F401,F403
 from binaryninja.enums import BranchType  # noqa: F401
 from .traits import HasWidth
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 from binaryninja import InstructionInfo  # type: ignore
-from binja_test_mocks.mock_llil import MockLowLevelILFunction
+
+if TYPE_CHECKING:
+    from binja_test_mocks.mock_llil import MockLowLevelILFunction
+
+
+def _is_mock_llil(il: LowLevelILFunction) -> bool:
+    return il.__class__.__name__ == "MockLowLevelILFunction"
 
 
 def _ret_pass_flags_enabled(il: LowLevelILFunction) -> bool:
     if hasattr(il, "ret_pass_flags_enabled"):
         return bool(getattr(il, "ret_pass_flags_enabled"))
-    if isinstance(il, MockLowLevelILFunction):
+    if _is_mock_llil(il):
         return True
     arch = getattr(il, "arch", None)
     return bool(getattr(arch, "ret_pass_flags", False))
@@ -126,6 +132,12 @@ class CALL(Instruction):
         dest_addr = self.dest_addr(addr)
         if _ret_pass_flags_enabled(il):
             il.append(il.call(il.const_pointer(3, dest_addr)))
+            if dest.width() != 3:
+                # LLIL call pushes a full return address; fix stack to match 2-byte CALL.
+                sp = RegisterName("S")
+                il.append(
+                    il.set_reg(3, sp, il.add(3, il.reg(3, sp), il.const(3, 1)))
+                )
             il.append(il.set_flag(CFlag, il.reg(1, RegisterName("rc"))))
             il.append(il.set_flag(ZFlag, il.reg(1, RegisterName("rz"))))
             return
