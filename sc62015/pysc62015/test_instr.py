@@ -1054,14 +1054,14 @@ def test_ret_pass_flags_enabled_for_mock_llil() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0xAB0000)
     assert len(il.ils) == 4
-    assert il.ils[0] == mllil("CALL", [mllil("CONST_PTR.l", [0xAB1234])])
-    assert isinstance(il.ils[1], MockLLIL)
-    assert il.ils[1].bare_op() == "SET_REG"
-    assert il.ils[1].width() == 3
-    assert il.ils[1].ops == [
+    assert isinstance(il.ils[0], MockLLIL)
+    assert il.ils[0].bare_op() == "SET_REG"
+    assert il.ils[0].width() == 3
+    assert il.ils[0].ops == [
         mreg("S"),
         mllil("ADD.l", [mllil("REG.l", [mreg("S")]), mllil("CONST.l", [1])]),
     ]
+    assert il.ils[1] == mllil("CALL", [mllil("CONST_PTR.l", [0xAB1234])])
     assert il.ils[2] == mllil(
         "SET_FLAG", [MockFlag("C"), mllil("REG.b", [mreg("rc")])]
     )

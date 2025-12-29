@@ -128,13 +128,14 @@ class CALL(Instruction):
         dest = self._dest()
         dest_addr = self.dest_addr(addr)
         if _ret_pass_flags_enabled(il):
-            il.append(il.call(il.const_pointer(3, dest_addr)))
             if dest.width() != 3:
-                # LLIL call pushes a full return address; fix stack to match 2-byte CALL.
+                # SC62015 near CALL pushes 2 bytes, but LLIL_CALL pushes a full return address.
+                # Pre-adjust S so the callee sees the correct entry stack depth.
                 sp = RegisterName("S")
                 il.append(
                     il.set_reg(3, sp, il.add(3, il.reg(3, sp), il.const(3, 1)))
                 )
+            il.append(il.call(il.const_pointer(3, dest_addr)))
             il.append(il.set_flag(CFlag, il.reg(1, RegisterName("rc"))))
             il.append(il.set_flag(ZFlag, il.reg(1, RegisterName("rz"))))
             return
