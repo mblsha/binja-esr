@@ -36,6 +36,9 @@ class SC62015(Architecture):
         "S": RegisterInfo("S", 3),  # system stack
         "PC": RegisterInfo("PC", 3),  # program counter
         "PS": RegisterInfo("PC", 1, 2),  # actually 4 bits, page segment
+        # Fake registers used to pass flags across calls for analysis.
+        "rc": RegisterInfo("rc", 1),
+        "rz": RegisterInfo("rz", 1),
     }
     stack_pointer = "S"
 
@@ -47,6 +50,7 @@ class SC62015(Architecture):
         "Z": FlagRole.ZeroFlagRole,
         "C": FlagRole.CarryFlagRole,
     }
+    ret_pass_flags = True
     flag_write_types = [
         "Z",
         "C",
