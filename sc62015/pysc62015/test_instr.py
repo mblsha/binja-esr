@@ -1048,6 +1048,48 @@ def test_lift_mv() -> None:
         )
     ]
 
+
+def test_ret_pass_flags_enabled_for_mock_llil() -> None:
+    instr = decode(bytearray([0x04, 0x34, 0x12]), 0xAB0000)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0xAB0000)
+    assert il.ils == [
+        mllil("CALL", [mllil("CONST_PTR.l", [0xAB1234])]),
+        mllil("SET_FLAG", [MockFlag("C"), mllil("REG.b", [mreg("rc")])]),
+        mllil("SET_FLAG", [MockFlag("Z"), mllil("REG.b", [mreg("rz")])]),
+    ]
+
+    instr = decode(bytearray([0x06]), 0xAB1234)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0xAB1234)
+    assert il.ils[:2] == [
+        mllil("SET_REG.b{0}", [mreg("rc"), mllil("FLAG", [MockFlag("C")])]),
+        mllil("SET_REG.b{0}", [mreg("rz"), mllil("FLAG", [MockFlag("Z")])]),
+    ]
+    assert len(il.ils) == 3
+    assert isinstance(il.ils[2], MockLLIL)
+    assert il.ils[2].bare_op() == "RET"
+
+
+def test_ret_pass_flags_disabled_for_mock_llil() -> None:
+    instr = decode(bytearray([0x04, 0x34, 0x12]), 0xAB0000)
+    il = MockLowLevelILFunction()
+    il.ret_pass_flags_enabled = False
+    instr.lift(il, 0xAB0000)
+    assert len(il.ils) == 2
+    assert isinstance(il.ils[0], MockLLIL)
+    assert il.ils[0].bare_op() == "PUSH"
+    assert isinstance(il.ils[1], MockLLIL)
+    assert il.ils[1].bare_op() == "JUMP"
+
+    instr = decode(bytearray([0x06]), 0xAB1234)
+    il = MockLowLevelILFunction()
+    il.ret_pass_flags_enabled = False
+    instr.lift(il, 0xAB1234)
+    assert len(il.ils) == 1
+    assert isinstance(il.ils[0], MockLLIL)
+    assert il.ils[0].bare_op() == "RET"
+
     instr = decode(bytearray([0xC8, 0xAB, 0xCD]), 0x1234)
     # With no PRE, defaults to BP_N addressing for both operands
     assert asm_str(instr.render()) == "MV    (BP+AB), (BP+CD)"

@@ -502,6 +502,7 @@ class Emulator:
         if opcode == 0xEF:  # WAIT
             # Build minimal instruction info/length via analyze, and set I to 0
             il = MockLowLevelILFunction()
+            il.ret_pass_flags_enabled = False
             info = InstructionInfo()
             instr.analyze(info, address)
             current_instr_length = cast(int, info.length)
@@ -518,6 +519,7 @@ class Emulator:
             return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
         il = MockLowLevelILFunction()
+        il.ret_pass_flags_enabled = False
         instr.lift(il, address)
 
         info = InstructionInfo()
