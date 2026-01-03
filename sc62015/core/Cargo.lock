@@ -399,7 +399,7 @@ dependencies = [
 [[package]]
 name = "perfetto-writer"
 version = "0.3.2"
-source = "git+https://github.com/mblsha/retrobus-perfetto.git?rev=f506895e5247b63d24ba551b2205022fdf00221f#f506895e5247b63d24ba551b2205022fdf00221f"
+source = "git+https://github.com/mblsha/retrobus-perfetto.git?rev=v0.3.1#017bfbfb2cec373965acf7016439ac9c9df75e33"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -642,7 +642,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 [[package]]
 name = "retrobus-perfetto"
 version = "0.1.0"
-source = "git+https://github.com/mblsha/retrobus-perfetto.git?rev=f506895e5247b63d24ba551b2205022fdf00221f#f506895e5247b63d24ba551b2205022fdf00221f"
+source = "git+https://github.com/mblsha/retrobus-perfetto.git?rev=v0.3.1#017bfbfb2cec373965acf7016439ac9c9df75e33"
 dependencies = [
  "anyhow",
  "getrandom",
