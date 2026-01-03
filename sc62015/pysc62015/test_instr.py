@@ -377,7 +377,7 @@ def test_inc_lifting() -> None:
     instr.lift(il, 0x1234)
     assert il.ils == [
         mllil(
-            "SET_REG.b{0}",
+            "SET_REG.b",
             [
                 mreg("A"),
                 mllil(
@@ -1040,7 +1040,7 @@ def test_lift_mv() -> None:
     instr.lift(il, 0x1234)
     assert il.ils == [
         mllil(
-            "SET_REG.b{0}",
+            "SET_REG.b",
             [
                 mreg("A"),
                 mllil("CONST.b", [0xCD]),
