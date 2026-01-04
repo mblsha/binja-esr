@@ -15,6 +15,7 @@ type RunnerArgs = {
 	romPath: string | null;
 	bnidaPath: string | null;
 	disableBnida: boolean;
+	requireBnida: boolean;
 	scriptPath: string | null;
 	evalSource: string | null;
 	stdin: boolean;
@@ -32,6 +33,7 @@ Options:
   --rom <path>               Explicit ROM path (overrides --model)
   --bnida <path>             BNIDA export for function trace labels
   --no-bnida                 Disable auto-loading BNIDA symbols
+  --require-bnida            Fail if BNIDA symbols cannot be loaded
   --eval <js>                Inline script (async JS)
   --stdin                    Read script from stdin
   --help                     Show this help
@@ -57,6 +59,7 @@ function safeJson(value: unknown): string {
 }
 
 type PerfettoSymbol = { addr: number; name: string };
+type BnidaLoadResult = { symbols: PerfettoSymbol[]; source: string };
 
 function stripLeadingLineComments(raw: string): string {
 	const lines = raw.split(/\r?\n/);
@@ -94,7 +97,7 @@ function parseAddress(key: string): number | null {
 	return value >>> 0;
 }
 
-async function loadBnidaSymbols(args: RunnerArgs, model: RomModel): Promise<PerfettoSymbol[] | null> {
+async function loadBnidaSymbols(args: RunnerArgs, model: RomModel): Promise<BnidaLoadResult | null> {
 	if (args.disableBnida) return null;
 
 	const candidates: string[] = [];
@@ -115,7 +118,7 @@ async function loadBnidaSymbols(args: RunnerArgs, model: RomModel): Promise<Perf
 				.map(([addr, name]) => ({ addr: parseAddress(addr), name: String(name ?? '').trim() }))
 				.filter((entry) => typeof entry.addr === 'number' && entry.addr !== null && entry.name.length > 0)
 				.map((entry) => ({ addr: (entry.addr as number) & 0x000f_ffff, name: entry.name }));
-			return symbols;
+			return { symbols, source: candidate };
 		} catch {
 			// Try next candidate.
 		}
@@ -129,6 +132,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 	let romPath: string | null = null;
 	let bnidaPath: string | null = null;
 	let disableBnida = false;
+	let requireBnida = false;
 	let evalSource: string | null = null;
 	let stdin = false;
 	let scriptPath: string | null = null;
@@ -163,6 +167,10 @@ function parseArgs(argv: string[]): RunnerArgs {
 			disableBnida = true;
 			continue;
 		}
+		if (arg === '--require-bnida') {
+			requireBnida = true;
+			continue;
+		}
 		if (arg === '--eval') {
 			const next = argv[++i];
 			if (next === undefined) die('error: --eval requires JS source');
@@ -178,7 +186,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 		scriptPath = arg;
 	}
 
-	return { model, romPath, bnidaPath, disableBnida, scriptPath, evalSource, stdin };
+	return { model, romPath, bnidaPath, disableBnida, requireBnida, scriptPath, evalSource, stdin };
 }
 
 async function ensureWasmInitialized(): Promise<void> {
@@ -223,9 +231,16 @@ async function main() {
 	(emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes));
 
 	try {
-		const symbols = await loadBnidaSymbols(args, model);
-		if (symbols && typeof emulator.set_perfetto_function_symbols === 'function') {
-			emulator.set_perfetto_function_symbols(symbols);
+		const result = await loadBnidaSymbols(args, model);
+		if (!result) {
+			if (args.requireBnida) {
+				die('error: BNIDA symbols not found; use --bnida or --no-bnida to override');
+			}
+			if (!args.disableBnida) {
+				console.error('warning: BNIDA symbols not found; function traces will use sub_XXXXXX labels');
+			}
+		} else if (typeof emulator.set_perfetto_function_symbols === 'function') {
+			emulator.set_perfetto_function_symbols(result.symbols);
 		}
 	} catch {
 		// Ignore missing symbol sources (public CI does not ship private rom-analysis).
