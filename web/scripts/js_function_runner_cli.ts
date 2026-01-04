@@ -13,6 +13,8 @@ import initWasm, * as wasm from '../src/lib/wasm/pce500_wasm/pce500_wasm.js';
 type RunnerArgs = {
 	model: RomModel | null;
 	romPath: string | null;
+	bnidaPath: string | null;
+	disableBnida: boolean;
 	scriptPath: string | null;
 	evalSource: string | null;
 	stdin: boolean;
@@ -28,6 +30,8 @@ Usage:
 Options:
   --model <iq-7000|pc-e500>   ROM preset (default: Rust runtime default)
   --rom <path>               Explicit ROM path (overrides --model)
+  --bnida <path>             BNIDA export for function trace labels
+  --no-bnida                 Disable auto-loading BNIDA symbols
   --eval <js>                Inline script (async JS)
   --stdin                    Read script from stdin
   --help                     Show this help
@@ -52,9 +56,79 @@ function safeJson(value: unknown): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 }
 
+type PerfettoSymbol = { addr: number; name: string };
+
+function stripLeadingLineComments(raw: string): string {
+	const lines = raw.split(/\r?\n/);
+	let start = 0;
+	while (start < lines.length && lines[start]?.trimStart().startsWith('//')) start += 1;
+	return lines.slice(start).join('\n');
+}
+
+function walkParents(start: string, maxDepth = 6): string[] {
+	const out: string[] = [];
+	let current = start;
+	for (let i = 0; i < maxDepth; i++) {
+		out.push(current);
+		const next = resolve(current, '..');
+		if (next === current) break;
+		current = next;
+	}
+	return out;
+}
+
+function reportRelativePath(model: RomModel): string {
+	switch (model) {
+		case 'iq-7000':
+			return 'rom-analysis/iq-7000/bnida.json';
+		case 'pc-e500':
+			return 'rom-analysis/pc-e500/s3-en/bnida.json';
+	}
+}
+
+function parseAddress(key: string): number | null {
+	const trimmed = key.trim();
+	if (!trimmed) return null;
+	const value = Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(value)) return null;
+	return value >>> 0;
+}
+
+async function loadBnidaSymbols(args: RunnerArgs, model: RomModel): Promise<PerfettoSymbol[] | null> {
+	if (args.disableBnida) return null;
+
+	const candidates: string[] = [];
+	if (args.bnidaPath) candidates.push(resolve(process.cwd(), args.bnidaPath));
+
+	const reportPath = reportRelativePath(model);
+	for (const root of walkParents(process.cwd())) {
+		candidates.push(resolve(root, reportPath));
+		candidates.push(resolve(root, 'binja-esr-tests', reportPath));
+	}
+
+	for (const candidate of candidates) {
+		try {
+			const raw = await readFile(candidate, 'utf8');
+			const jsonText = stripLeadingLineComments(raw);
+			const bnida = JSON.parse(jsonText) as { names?: Record<string, string> };
+			const symbols = Object.entries(bnida.names ?? {})
+				.map(([addr, name]) => ({ addr: parseAddress(addr), name: String(name ?? '').trim() }))
+				.filter((entry) => typeof entry.addr === 'number' && entry.addr !== null && entry.name.length > 0)
+				.map((entry) => ({ addr: (entry.addr as number) & 0x000f_ffff, name: entry.name }));
+			return symbols;
+		} catch {
+			// Try next candidate.
+		}
+	}
+
+	return null;
+}
+
 function parseArgs(argv: string[]): RunnerArgs {
 	let model: RomModel | null = null;
 	let romPath: string | null = null;
+	let bnidaPath: string | null = null;
+	let disableBnida = false;
 	let evalSource: string | null = null;
 	let stdin = false;
 	let scriptPath: string | null = null;
@@ -79,6 +153,16 @@ function parseArgs(argv: string[]): RunnerArgs {
 			romPath = next;
 			continue;
 		}
+		if (arg === '--bnida') {
+			const next = argv[++i];
+			if (!next) die('error: --bnida requires a path');
+			bnidaPath = next;
+			continue;
+		}
+		if (arg === '--no-bnida') {
+			disableBnida = true;
+			continue;
+		}
 		if (arg === '--eval') {
 			const next = argv[++i];
 			if (next === undefined) die('error: --eval requires JS source');
@@ -94,7 +178,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 		scriptPath = arg;
 	}
 
-	return { model, romPath, scriptPath, evalSource, stdin };
+	return { model, romPath, bnidaPath, disableBnida, scriptPath, evalSource, stdin };
 }
 
 async function ensureWasmInitialized(): Promise<void> {
@@ -137,6 +221,15 @@ async function main() {
 	if (!Emulator) die('error: wasm module missing Sc62015Emulator/Pce500Emulator export');
 	const emulator: any = new Emulator();
 	(emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes));
+
+	try {
+		const symbols = await loadBnidaSymbols(args, model);
+		if (symbols && typeof emulator.set_perfetto_function_symbols === 'function') {
+			emulator.set_perfetto_function_symbols(symbols);
+		}
+	} catch {
+		// Ignore missing symbol sources (public CI does not ship private rom-analysis).
+	}
 
 	function wrapError(context: string, err: unknown): Error {
 		const msg = err instanceof Error ? err.message : String(err);
