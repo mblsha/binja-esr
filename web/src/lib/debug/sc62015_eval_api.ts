@@ -1,5 +1,6 @@
 import { IOCS, IOCS_PUBLIC_ENTRY_ADDR } from './iocs';
 import { buildMemoryWriteBlocks, type MemoryWriteBlock, type MemoryWriteEvent } from './memory_write_blocks';
+import type { StubHandler, StubRegistration } from './sc62015_stub_types';
 
 export type RegisterName =
 	| 'A'
@@ -136,6 +137,7 @@ export interface EmulatorAdapter {
 		options?: {
 			trace?: boolean;
 			probe?: { pc: number; maxSamples?: number };
+			stubs?: Array<{ id: number; pc: number }>;
 		} | null,
 	): Promise<CallArtifacts>;
 	startPerfettoTrace?(name: string): Promise<void> | void;
@@ -152,6 +154,8 @@ export interface EmulatorAdapter {
 	injectMatrixEvent?(code: number, release: boolean): void;
 	pressOnKey?(): void;
 	releaseOnKey?(): void;
+	registerStub?(stub: StubRegistration): void;
+	clearStubs?(): void;
 }
 
 export interface EvalApi {
@@ -199,6 +203,8 @@ export interface EvalApi {
 		text(text: string, options?: EvalIocsCallOptions): Promise<CallHandle[]>;
 		putcXY(ch: string | number, options: EvalIocsDisplayPutcOptions): Promise<CallHandle>;
 	};
+	stub(pc: number, name: string | null, handler: StubHandler): StubRegistration;
+	clearStubs(): void;
 }
 
 const DEFAULT_MAX_INSTRUCTIONS = 200_000;
@@ -296,6 +302,8 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	let traceIndex = 0;
 	let perfettoActive = false;
 	const probeStack: Array<{ pc: number; handler: ProbeHandler; maxSamples: number }> = [];
+	const stubs: StubRegistration[] = [];
+	let stubId = 1;
 	let perfettoActiveName: string | null = null;
 
 	function isLikelyWasmTrap(message: string): boolean {
@@ -383,6 +391,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			}
 
 			const activeProbe = probeStack.length ? probeStack[probeStack.length - 1] : null;
+			const stubSpecs = stubs.map((stub) => ({ id: stub.id, pc: stub.pc }));
 			const artifacts = await adapter.callFunction(
 				address,
 				maxInstructions,
@@ -390,8 +399,9 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					? {
 							trace,
 							probe: { pc: activeProbe.pc, maxSamples: activeProbe.maxSamples },
+							stubs: stubSpecs,
 						}
-					: { trace },
+					: { trace, stubs: stubSpecs },
 			);
 
 			if (activeProbe && artifacts.probe_samples?.length) {
@@ -479,6 +489,26 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			} finally {
 				probeStack.pop();
 			}
+		},
+		stub: (pc, name, handler) => {
+			if (typeof handler !== 'function') throw new Error('stub requires a handler function');
+			if (typeof adapter.registerStub !== 'function') {
+				throw new Error('stub support is not available in this runtime');
+			}
+			const normalizedPc = normalizeAddress(pc);
+			const stub: StubRegistration = {
+				id: stubId++,
+				pc: normalizedPc,
+				name: name ?? null,
+				handler,
+			};
+			stubs.push(stub);
+			adapter.registerStub(stub);
+			return stub;
+		},
+		clearStubs: () => {
+			stubs.length = 0;
+			adapter.clearStubs?.();
 		},
 		memory: {
 			read: async (address, size = 1) => {

@@ -7,6 +7,8 @@ import { createEvalApi, Flag, Reg, type EmulatorAdapter } from '../src/lib/debug
 import { IOCS } from '../src/lib/debug/iocs';
 import { runUserJs } from '../src/lib/debug/run_user_js';
 import { normalizeRomModel, romBasename, type RomModel } from '../src/lib/rom_model';
+import { createStubDispatcher, type StubDispatcher } from '../src/lib/debug/sc62015_stub_dispatch';
+import type { StubRegistration } from '../src/lib/debug/sc62015_stub_types';
 
 import initWasm, * as wasm from '../src/lib/wasm/pce500_wasm/pce500_wasm.js';
 
@@ -60,6 +62,27 @@ function safeJson(value: unknown): string {
 
 type PerfettoSymbol = { addr: number; name: string };
 type BnidaLoadResult = { symbols: PerfettoSymbol[]; source: string };
+
+let stubDispatcher: StubDispatcher | null = null;
+
+function initStubDispatcher(emulator: any) {
+	if (stubDispatcher || !emulator || !wasm?.memory) return;
+	if (typeof emulator.memory_external_ptr !== 'function') return;
+	stubDispatcher = createStubDispatcher({
+		wasmMemory: wasm.memory,
+		externalPtr: emulator.memory_external_ptr(),
+		externalLen: emulator.memory_external_len(),
+		internalPtr: emulator.memory_internal_ptr(),
+		internalLen: emulator.memory_internal_len(),
+	});
+}
+
+function requireStubDispatcher(): StubDispatcher {
+	if (!stubDispatcher) {
+		throw new Error('stub support requires updated WASM exports (rebuild web wasm)');
+	}
+	return stubDispatcher;
+}
 
 function stripLeadingLineComments(raw: string): string {
 	const lines = raw.split(/\r?\n/);
@@ -228,6 +251,7 @@ async function main() {
 	const Emulator = (wasm as any).Sc62015Emulator ?? (wasm as any).Pce500Emulator;
 	if (!Emulator) die('error: wasm module missing Sc62015Emulator/Pce500Emulator export');
 	const emulator: any = new Emulator();
+	initStubDispatcher(emulator);
 	(emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes));
 
 	try {
@@ -269,7 +293,7 @@ async function main() {
 		callFunction: async (
 			address: number,
 			maxInstructions: number,
-			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
+			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number }; stubs?: Array<{ id: number; pc: number }> } | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
 				const raw =
@@ -277,6 +301,7 @@ async function main() {
 						trace: Boolean(options?.trace),
 						probe_pc: options?.probe ? options.probe.pc : null,
 						probe_max_samples: options?.probe?.maxSamples ?? 256,
+						stubs: options?.stubs ?? [],
 					}) ?? emulator.call_function(address, maxInstructions);
 				if (typeof raw === 'string') return JSON.parse(raw);
 				return raw;
@@ -320,6 +345,12 @@ async function main() {
 			),
 		pressOnKey: () => runWithError('onkey.press()', () => emulator.press_on_key?.()),
 		releaseOnKey: () => runWithError('onkey.release()', () => emulator.release_on_key?.()),
+		registerStub: (stub: StubRegistration) => {
+			requireStubDispatcher().registerStub(stub);
+		},
+		clearStubs: () => {
+			stubDispatcher?.clearStubs();
+		},
 	};
 
 	const api = createEvalApi(adapter);

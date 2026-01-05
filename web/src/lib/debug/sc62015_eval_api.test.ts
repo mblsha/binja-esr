@@ -46,7 +46,7 @@ describe('createEvalApi', () => {
 			{
 				address: 0x00012345,
 				maxInstructions: 7,
-				options: { trace: true },
+				options: { trace: true, stubs: [] },
 			},
 		]);
 		expect(handle.address).toBe(0x00012345);
@@ -153,6 +153,65 @@ describe('createEvalApi', () => {
 		);
 		expect(probeHits).toEqual([1, 2]);
 		expect(capturedOptions[0]?.probe?.pc).toBe(0x123);
+	});
+
+	it('stub registers with adapter and passes stubs into calls', async () => {
+		const registered: any[] = [];
+		const cleared: string[] = [];
+		const callOptions: any[] = [];
+		const adapter = {
+			callFunction: async (_address: number, _max: number, options?: any) => {
+				callOptions.push(options);
+				return {
+					address: 0x10,
+					before_pc: 0,
+					after_pc: 0,
+					before_sp: 0,
+					after_sp: 0,
+					before_regs: {},
+					after_regs: {},
+					memory_writes: [],
+					lcd_writes: [],
+					probe_samples: [],
+					perfetto_trace_b64: null,
+					report: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
+				};
+			},
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			registerStub: (stub: any) => registered.push(stub),
+			clearStubs: () => cleared.push('ok'),
+		};
+		const api = createEvalApi(adapter as any);
+		const handler = () => ({ regs: { A: 1 } });
+		const stub = api.stub(0x1234, 'stub', handler as any);
+		await api.call(0x10);
+		api.clearStubs();
+
+		expect(registered).toHaveLength(1);
+		expect(registered[0].pc).toBe(0x1234);
+		expect(callOptions[0].stubs).toEqual([{ id: stub.id, pc: 0x1234 }]);
+		expect(cleared).toEqual(['ok']);
+	});
+
+	it('stub throws when adapter lacks stub support', () => {
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+		};
+		const api = createEvalApi(adapter as any);
+		expect(() => api.stub(0x1234, 'stub', () => ({}))).toThrow(/stub support/);
 	});
 
 	it('keyboard helpers forward to adapter', async () => {
