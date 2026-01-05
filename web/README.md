@@ -38,6 +38,19 @@ npm run test
 npm run wasm:test
 ```
 
+## Function runner stubs
+The Function Runner (UI + `fnr:cli`) can intercept execution at a specific PC and apply patches.
+
+```js
+e.stub(0x00F1234, 'demo_stub', (mem, regs, flags) => ({
+  mem_writes: { 0x2000: mem.read8(0x2000) ^ 0xff },
+  regs: { A: 0x42 },
+  flags: { Z: 0, C: 1 },
+  ret: { kind: 'ret' }, // or retf/jump/stay
+}));
+await e.call(0x00F1234, undefined, { maxInstructions: 5_000 });
+```
+
 ## Notes
 - WASM package output is generated into `src/lib/wasm/pce500_wasm` (ignored by git).
   - One-off rebuild: `npm run wasm:build`

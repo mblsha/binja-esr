@@ -28,6 +28,14 @@
 // // Display-level output at X/Y (TRM IOCS 0x0041):
 // await e.iocs.putcXY('A', { bl: 1, bh: 1, cl: 0, ch: 0, trace: true });
 //
+// // Stub a routine by PC, patch state, then return (ret/retf/jump/stay):
+// e.stub(0x00F1234, 'demo_stub', (mem, regs, flags) => ({
+//   mem_writes: { 0x2000: mem.read8(0x2000) ^ 0xff },
+//   regs: { A: 0x42 },
+//   flags: { Z: 0, C: 1 },
+//   ret: { kind: 'ret' },
+// }));
+//
 // await e.withProbe(0x00F299C, (s) => e.print({ hit: s.count, pc: s.pc, A: s.regs.A }), async () => {
 //   await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });
 // });

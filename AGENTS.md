@@ -70,4 +70,6 @@
   - Install deps once: `cd web && npm install`
   - Run a script (auto-builds wasm): `cd web && npm run fnr:cli -- --model pc-e500 path/to/script.js` (or `--eval "<js>"`, or `--stdin`)
   - Script API: `e` is the same `EvalApi` used by the web Function Runner; output JSON is compatible with `FunctionRunnerOutput`.
+  - Stubs: `e.stub(0x00F1234, 'demo', (mem, regs, flags) => ({ mem_writes: { 0x2000: 0x41 }, regs: { A: 1 }, flags: { Z: 0, C: 1 }, ret: { kind: 'ret' } }))` intercepts a PC and returns a patch; `mem.read8/read16/read24` are read-only and writes flow through `mem_writes` (array or `{addr: value}` map).
+    Return kinds: `ret`, `retf`, `jump`, `stay`.
   - Note: this is separate from the native Rust CLI (no TS wrapper for the Rust CLI); the web UI uses `web/src/lib/wasm/sc62015_wasm.ts` to keep `Pce500Emulator` as an alias for `Sc62015Emulator`.

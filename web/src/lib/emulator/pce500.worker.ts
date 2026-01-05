@@ -175,7 +175,11 @@ async function evalScript(source: string): Promise<any> {
 		callFunction: async (
 			address: number,
 			maxInstructions: number,
-			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number }; stubs?: Array<{ id: number; pc: number }> } | null,
+			options?: {
+				trace?: boolean;
+				probe?: { pc: number; maxSamples?: number };
+				stubs?: Array<{ id: number; pc: number }>;
+			} | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
 				if (options?.trace) await ensurePerfettoSymbols();
