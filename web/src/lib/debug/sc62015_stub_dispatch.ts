@@ -90,7 +90,10 @@ function makeMemReader(getViews: () => { external: Uint8Array; internal: Uint8Ar
 		const masked = (addr >>> 0) & ADDRESS_MASK;
 		if (masked >= INTERNAL_BASE) {
 			const idx = masked - INTERNAL_BASE;
-			return idx < internal.length ? internal[idx] ?? 0 : 0;
+			if (idx >= internal.length) {
+				throw new Error(`stub memory read out of range: 0x${masked.toString(16)}`);
+			}
+			return internal[idx] ?? 0;
 		}
 		if (!external.length) return 0;
 		const idx = masked % external.length;

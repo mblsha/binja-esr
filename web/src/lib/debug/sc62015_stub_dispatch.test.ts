@@ -81,4 +81,21 @@ describe('createStubDispatcher', () => {
 		const dispatch = (globalThis as any).__sc62015_stub_dispatch as (id: number, regs: unknown, flags: unknown) => any;
 		expect(() => dispatch(7, [], [])).toThrow(/boom/);
 	});
+
+	it('throws when stub reads past internal memory window', () => {
+		const memory = makeMemory();
+		const dispatcher = createStubDispatcher(memory);
+		dispatcher.registerStub({
+			id: 8,
+			pc: 0x1000,
+			name: 'oor',
+			handler: (mem) => {
+				mem.read8(0x100000 + memory.internalLen);
+				return {};
+			},
+		});
+		const dispatch = (globalThis as any).__sc62015_stub_dispatch as (id: number, regs: unknown, flags: unknown) => any;
+		expect(() => dispatch(8, [], [])).toThrow(/oor/);
+		expect(() => dispatch(8, [], [])).toThrow(/out of range/);
+	});
 });
