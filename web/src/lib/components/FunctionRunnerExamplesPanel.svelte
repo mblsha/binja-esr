@@ -27,6 +27,20 @@ e.print({ PC: e.reg('PC'), A: e.reg('A') });
 			code: `await e.call(0x00F2A87, undefined, { maxInstructions: 200_000 });`,
 		},
 		{
+			id: 'stub',
+			title: 'Stub a ROM routine',
+			hint: 'Intercepts execution, patches state, then returns (or jumps).',
+			code: `
+e.stub(0x00F1234, 'demo_stub', (mem, regs, flags) => ({
+  mem_writes: { 0x2000: mem.read8(0x2000) ^ 0xff },
+  regs: { A: 0x42 },
+  flags: { Z: 0, C: 1 },
+  ret: { kind: 'ret' },
+}));
+await e.call(0x00F1234, undefined, { maxInstructions: 5_000 });
+`.trim(),
+		},
+		{
 			id: 'virtual-key',
 			title: 'Tap a virtual key',
 			hint: 'Example uses PF1 (PC‑E500 default keymap).',
