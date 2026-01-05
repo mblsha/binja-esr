@@ -623,10 +623,12 @@ impl Sc62015Emulator {
                     };
                     let bits = size * 8;
                     let addr = write.addr & 0x000f_ffff;
-                    let _ = self
-                        .runtime
-                        .memory
-                        .store_with_pc(addr, bits, write.value, Some(current_pc));
+                    let _ = self.runtime.memory.store_with_pc(
+                        addr,
+                        bits,
+                        write.value,
+                        Some(current_pc),
+                    );
                 }
                 for entry in patch.regs {
                     if let Some(reg) = reg_from_name(&entry.name) {
@@ -643,7 +645,8 @@ impl Sc62015Emulator {
                 let ret = patch.ret.unwrap_or(StubReturn::Ret { pc: None });
                 match ret {
                     StubReturn::Ret { pc } => {
-                        let ret_addr = pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 16);
+                        let ret_addr =
+                            pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 16);
                         let _ = self.runtime.state.pop_call_page();
                         let page = current_pc & 0xFF0000;
                         let mut dest = (page | (ret_addr & 0xFFFF)) & 0xFFFFF;
@@ -656,7 +659,8 @@ impl Sc62015Emulator {
                     }
                     StubReturn::Retf { pc } => {
                         let mut dest =
-                            pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 24) & 0xFFFFF;
+                            pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 24)
+                                & 0xFFFFF;
                         if let Some(override_pc) = pc {
                             dest = override_pc & 0x000f_ffff;
                         }
@@ -917,8 +921,8 @@ pub type Pce500Emulator = Sc62015Emulator;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::{Deserialize, Serialize};
     use sc62015_core::pce500::ROM_WINDOW_LEN;
+    use serde::{Deserialize, Serialize};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const PF1_CODE: u8 = 0x56;
