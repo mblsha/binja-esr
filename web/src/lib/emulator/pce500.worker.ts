@@ -1,5 +1,7 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
+import { createStubDispatcher, type StubDispatcher } from '../debug/sc62015_stub_dispatch';
+import type { StubRegistration } from '../debug/sc62015_stub_types';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -94,6 +96,7 @@ let lastLcdText: string[] | null = null;
 const pressedCodes = new Set<number>();
 const pendingVirtualRelease = new Map<number, number>();
 let perfettoSymbolsPromise: Promise<void> | null = null;
+let stubDispatcher: StubDispatcher | null = null;
 
 function safeJson(value: any): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
@@ -107,6 +110,26 @@ function isLikelyWasmTrap(message: string): boolean {
 function isWasmBindgenBorrowError(message: string): boolean {
 	const lower = message.toLowerCase();
 	return lower.includes('recursive use of an object detected') || lower.includes('unsafe aliasing');
+}
+
+function initStubDispatcher() {
+	if (stubDispatcher || !emulator || !wasm) return;
+	if (typeof emulator.memory_external_ptr !== 'function') return;
+	stubDispatcher = createStubDispatcher({
+		wasmMemory: wasm.memory,
+		externalPtr: emulator.memory_external_ptr(),
+		externalLen: emulator.memory_external_len(),
+		internalPtr: emulator.memory_internal_ptr(),
+		internalLen: emulator.memory_internal_len(),
+	});
+}
+
+function requireStubDispatcher(): StubDispatcher {
+	initStubDispatcher();
+	if (!stubDispatcher) {
+		throw new Error('stub support requires updated WASM exports (rebuild web wasm)');
+	}
+	return stubDispatcher;
 }
 
 async function ensurePerfettoSymbols(): Promise<void> {
@@ -152,7 +175,7 @@ async function evalScript(source: string): Promise<any> {
 		callFunction: async (
 			address: number,
 			maxInstructions: number,
-			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
+			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number }; stubs?: Array<{ id: number; pc: number }> } | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
 				if (options?.trace) await ensurePerfettoSymbols();
@@ -161,6 +184,7 @@ async function evalScript(source: string): Promise<any> {
 						trace: Boolean(options?.trace),
 						probe_pc: options?.probe ? options.probe.pc : null,
 						probe_max_samples: options?.probe?.maxSamples ?? 256,
+						stubs: options?.stubs ?? [],
 					}) ?? emulator.call_function(address, maxInstructions);
 				if (typeof raw === 'string') return JSON.parse(raw);
 				return raw;
@@ -205,6 +229,12 @@ async function evalScript(source: string): Promise<any> {
 			runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
 				emulator.inject_matrix_event?.(code, release),
 			),
+		registerStub: (stub: StubRegistration) => {
+			requireStubDispatcher().registerStub(stub);
+		},
+		clearStubs: () => {
+			stubDispatcher?.clearStubs();
+		},
 	});
 	let resultJson: string | null = null;
 	let error: string | null = null;
@@ -245,6 +275,7 @@ async function ensureEmulator(): Promise<any> {
 		} catch {
 			buildInfo = null;
 		}
+		initStubDispatcher();
 	}
 	try {
 		const raw = emulator?.device_model?.() ?? wasm?.default_device_model?.();

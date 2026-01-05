@@ -4,17 +4,24 @@
 // PY_SOURCE: pce500/display/font.py
 
 use js_sys::Uint8Array;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
-use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
+use sc62015_core::memory::{ADDRESS_MASK, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::pce500::{DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
 use sc62015_core::{
     CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
 };
 use sc62015_core::{DeviceModel, DeviceTextDecoder};
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(catch, js_namespace = globalThis, js_name = __sc62015_stub_dispatch)]
+    fn js_stub_dispatch(stub_id: u32, regs: JsValue, flags: JsValue) -> Result<JsValue, JsValue>;
+}
 
 #[wasm_bindgen]
 pub fn default_device_model() -> String {
@@ -35,6 +42,58 @@ fn sanitize_perfetto_trace_name(name: &str) -> String {
         out = out.replace("__", "_");
     }
     out.trim_matches('_').to_string()
+}
+
+fn reg_from_name(name: &str) -> Option<RegName> {
+    match name.to_ascii_uppercase().as_str() {
+        "A" => Some(RegName::A),
+        "B" => Some(RegName::B),
+        "BA" => Some(RegName::BA),
+        "IL" => Some(RegName::IL),
+        "IH" => Some(RegName::IH),
+        "I" => Some(RegName::I),
+        "X" => Some(RegName::X),
+        "Y" => Some(RegName::Y),
+        "U" => Some(RegName::U),
+        "S" => Some(RegName::S),
+        "PC" => Some(RegName::PC),
+        "F" => Some(RegName::F),
+        "FC" => Some(RegName::FC),
+        "FZ" => Some(RegName::FZ),
+        "IMR" => Some(RegName::IMR),
+        _ => None,
+    }
+}
+
+fn mask_for_width(bits: u8) -> u32 {
+    if bits >= 32 {
+        u32::MAX
+    } else if bits == 0 {
+        0
+    } else {
+        (1u32 << bits) - 1
+    }
+}
+
+fn pop_stack(
+    state: &mut sc62015_core::llama::state::LlamaState,
+    memory: &mut sc62015_core::memory::MemoryImage,
+    bits: u8,
+) -> u32 {
+    let bytes = bits.div_ceil(8);
+    let mut value = 0u32;
+    let mut sp = state.get_reg(RegName::S) & ADDRESS_MASK;
+    for i in 0..bytes {
+        let byte = memory.load(sp, 8).unwrap_or(0) & 0xFF;
+        value |= byte << (8 * i);
+        sp = sp.wrapping_add(1) & ADDRESS_MASK;
+    }
+    state.set_reg(RegName::S, sp);
+    value & mask_for_width(bits)
+}
+
+fn js_error_to_string(err: JsValue) -> String {
+    err.as_string().unwrap_or_else(|| format!("{err:?}"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +191,47 @@ struct CallOptions {
     probe_pc: Option<u32>,
     #[serde(default)]
     probe_max_samples: u32,
+    #[serde(default)]
+    stubs: Vec<StubSpec>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct StubSpec {
+    pc: u32,
+    id: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StubRegEntry {
+    name: String,
+    value: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StubWrite {
+    addr: u32,
+    value: u32,
+    size: u8,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum StubReturn {
+    Ret { pc: Option<u32> },
+    Retf { pc: Option<u32> },
+    Jump { pc: u32 },
+    Stay,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+struct StubPatch {
+    #[serde(default)]
+    mem_writes: Vec<StubWrite>,
+    #[serde(default)]
+    regs: Vec<StubRegEntry>,
+    #[serde(default)]
+    flags: Vec<StubRegEntry>,
+    ret: Option<StubReturn>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -302,6 +402,22 @@ impl Sc62015Emulator {
         let _ = self.runtime.memory.store(addr, 8, value as u32);
     }
 
+    pub fn memory_external_ptr(&self) -> u32 {
+        self.runtime.memory.external_slice().as_ptr() as u32
+    }
+
+    pub fn memory_external_len(&self) -> u32 {
+        self.runtime.memory.external_len() as u32
+    }
+
+    pub fn memory_internal_ptr(&self) -> u32 {
+        self.runtime.memory.internal_slice().as_ptr() as u32
+    }
+
+    pub fn memory_internal_len(&self) -> u32 {
+        self.runtime.memory.internal_slice().len() as u32
+    }
+
     pub fn imr(&self) -> u8 {
         self.runtime
             .memory
@@ -384,6 +500,11 @@ impl Sc62015Emulator {
         if opts.probe_max_samples == 0 {
             opts.probe_max_samples = 256;
         }
+        let stub_map: HashMap<u32, u32> = opts
+            .stubs
+            .iter()
+            .map(|stub| (stub.pc & 0x000f_ffff, stub.id))
+            .collect();
 
         if opts.trace {
             let mut guard = sc62015_core::PERFETTO_TRACER.enter();
@@ -438,21 +559,122 @@ impl Sc62015Emulator {
         let mut probe_samples: Vec<ProbeSample> = Vec::new();
         let mut probe_hits: u32 = 0;
         while steps < max_instructions {
+            let current_pc = self.runtime.state.pc() & 0x000f_ffff;
             if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
                 reason = "halted".to_string();
                 break;
             }
             if let Some(probe_pc) = opts.probe_pc {
-                if self.runtime.state.pc() == (probe_pc & 0x000f_ffff)
+                if current_pc == (probe_pc & 0x000f_ffff)
                     && (probe_samples.len() as u32) < opts.probe_max_samples
                 {
                     probe_hits = probe_hits.saturating_add(1);
                     probe_samples.push(ProbeSample {
-                        pc: self.runtime.state.pc(),
+                        pc: current_pc,
                         count: probe_hits,
                         regs: sc62015_core::collect_registers(&self.runtime.state),
                     });
                 }
+            }
+            if let Some(stub_id) = stub_map.get(&current_pc).copied() {
+                let stub_result: Result<StubPatch, String> = (|| {
+                    let regs_snapshot = sc62015_core::collect_registers(&self.runtime.state);
+                    let regs_entries: Vec<StubRegEntry> = regs_snapshot
+                        .into_iter()
+                        .map(|(name, value)| StubRegEntry { name, value })
+                        .collect();
+                    let flags_entries = vec![
+                        StubRegEntry {
+                            name: "C".to_string(),
+                            value: self.runtime.state.get_reg(RegName::FC) & 1,
+                        },
+                        StubRegEntry {
+                            name: "Z".to_string(),
+                            value: self.runtime.state.get_reg(RegName::FZ) & 1,
+                        },
+                    ];
+                    let regs_js = serde_wasm_bindgen::to_value(&regs_entries)
+                        .map_err(|e| format!("stub regs encode failed: {e}"))?;
+                    let flags_js = serde_wasm_bindgen::to_value(&flags_entries)
+                        .map_err(|e| format!("stub flags encode failed: {e}"))?;
+                    let patch_js = js_stub_dispatch(stub_id, regs_js, flags_js)
+                        .map_err(|e| format!("stub dispatch failed: {}", js_error_to_string(e)))?;
+                    if patch_js.is_null() || patch_js.is_undefined() {
+                        return Ok(StubPatch::default());
+                    }
+                    serde_wasm_bindgen::from_value(patch_js)
+                        .map_err(|e| format!("stub patch decode failed: {e}"))
+                })();
+                let patch = match stub_result {
+                    Ok(patch) => patch,
+                    Err(message) => {
+                        reason = "fault".to_string();
+                        fault = Some(CallFault {
+                            kind: "StubError".to_string(),
+                            message,
+                        });
+                        break;
+                    }
+                };
+                for write in patch.mem_writes {
+                    let size = match write.size {
+                        2 | 3 => write.size,
+                        _ => 1,
+                    };
+                    let bits = size * 8;
+                    let addr = write.addr & 0x000f_ffff;
+                    let _ = self
+                        .runtime
+                        .memory
+                        .store_with_pc(addr, bits, write.value, Some(current_pc));
+                }
+                for entry in patch.regs {
+                    if let Some(reg) = reg_from_name(&entry.name) {
+                        self.runtime.state.set_reg(reg, entry.value);
+                    }
+                }
+                for entry in patch.flags {
+                    match entry.name.to_ascii_uppercase().as_str() {
+                        "C" | "FC" => self.runtime.state.set_reg(RegName::FC, entry.value & 1),
+                        "Z" | "FZ" => self.runtime.state.set_reg(RegName::FZ, entry.value & 1),
+                        _ => {}
+                    }
+                }
+                let ret = patch.ret.unwrap_or(StubReturn::Ret { pc: None });
+                match ret {
+                    StubReturn::Ret { pc } => {
+                        let ret_addr = pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 16);
+                        let _ = self.runtime.state.pop_call_page();
+                        let page = current_pc & 0xFF0000;
+                        let mut dest = (page | (ret_addr & 0xFFFF)) & 0xFFFFF;
+                        if let Some(override_pc) = pc {
+                            dest = override_pc & 0x000f_ffff;
+                        }
+                        self.runtime.state.set_pc(dest);
+                        self.runtime.state.call_depth_dec();
+                        let _ = self.runtime.state.pop_call_stack();
+                    }
+                    StubReturn::Retf { pc } => {
+                        let mut dest =
+                            pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 24) & 0xFFFFF;
+                        if let Some(override_pc) = pc {
+                            dest = override_pc & 0x000f_ffff;
+                        }
+                        self.runtime.state.set_pc(dest);
+                        self.runtime.state.call_depth_dec();
+                        let _ = self.runtime.state.pop_call_stack();
+                    }
+                    StubReturn::Jump { pc } => {
+                        self.runtime.state.set_pc(pc & 0x000f_ffff);
+                    }
+                    StubReturn::Stay => {}
+                }
+                steps += 1;
+                if self.runtime.state.pc() == sentinel_pc {
+                    reason = "returned".to_string();
+                    break;
+                }
+                continue;
             }
             if let Err(err) = self.runtime.step(1) {
                 reason = "fault".to_string();
@@ -695,10 +917,21 @@ pub type Pce500Emulator = Sc62015Emulator;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
     use sc62015_core::pce500::ROM_WINDOW_LEN;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const PF1_CODE: u8 = 0x56;
+
+    #[wasm_bindgen(module = "/tests/stub_dispatch.js")]
+    extern "C" {
+        fn install_stub_dispatch();
+        fn set_stub_patch(patch: JsValue);
+        fn set_stub_error(message: &str);
+        fn clear_stub_state();
+        fn last_regs() -> JsValue;
+        fn last_flags() -> JsValue;
+    }
 
     #[wasm_bindgen_test]
     fn reset_reads_rom_vector() {
@@ -755,6 +988,255 @@ mod tests {
                 .is_some_and(|val| !val.is_empty()),
             "expected a non-empty perfetto trace when trace=true"
         );
+    }
+
+    #[derive(Serialize)]
+    struct StubSpec {
+        pc: u32,
+        id: u32,
+    }
+
+    #[derive(Serialize)]
+    struct StubOptions {
+        stubs: Vec<StubSpec>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct StubRegEntry {
+        name: String,
+        value: u32,
+    }
+
+    #[derive(Serialize)]
+    struct StubWrite {
+        addr: u32,
+        value: u32,
+        size: u8,
+    }
+
+    #[derive(Serialize)]
+    #[serde(tag = "kind", rename_all = "lowercase")]
+    #[allow(dead_code)]
+    enum StubReturn {
+        Ret { pc: Option<u32> },
+        Retf { pc: Option<u32> },
+        Jump { pc: u32 },
+        Stay,
+    }
+
+    #[derive(Serialize)]
+    struct StubPatch {
+        mem_writes: Vec<StubWrite>,
+        regs: Vec<StubRegEntry>,
+        flags: Vec<StubRegEntry>,
+        ret: StubReturn,
+    }
+
+    #[derive(Deserialize)]
+    struct MemoryWriteByteDecoded {
+        addr: u32,
+        value: u8,
+    }
+
+    #[derive(Deserialize)]
+    struct CallFaultDecoded {
+        kind: String,
+        message: String,
+    }
+
+    #[derive(Deserialize)]
+    struct CallReportDecoded {
+        reason: String,
+        pc: u32,
+        fault: Option<CallFaultDecoded>,
+    }
+
+    #[derive(Deserialize)]
+    struct CallArtifactsDecoded {
+        memory_writes: Vec<MemoryWriteByteDecoded>,
+        after_regs: std::collections::HashMap<String, u32>,
+        report: CallReportDecoded,
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_stub_ret_applies_patch() {
+        install_stub_dispatch();
+        clear_stub_state();
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let patch = StubPatch {
+            mem_writes: vec![StubWrite {
+                addr: 0x0002_0000,
+                value: 0xAA,
+                size: 1,
+            }],
+            regs: vec![StubRegEntry {
+                name: "BA".to_string(),
+                value: 0x1234,
+            }],
+            flags: vec![
+                StubRegEntry {
+                    name: "C".to_string(),
+                    value: 1,
+                },
+                StubRegEntry {
+                    name: "Z".to_string(),
+                    value: 1,
+                },
+            ],
+            ret: StubReturn::Ret { pc: None },
+        };
+        set_stub_patch(serde_wasm_bindgen::to_value(&patch).expect("patch"));
+
+        let opts = StubOptions {
+            stubs: vec![StubSpec { pc, id: 1 }],
+        };
+        let js = emulator
+            .call_function_ex(pc, 16, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded =
+            serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+
+        assert_eq!(decoded.report.reason, "returned");
+        assert_eq!(decoded.after_regs.get("BA").copied(), Some(0x1234));
+        let f = decoded.after_regs.get("F").copied().unwrap_or(0);
+        assert_eq!(f & 0x1, 1);
+        assert_eq!(f & 0x2, 0x2);
+        assert!(
+            decoded
+                .memory_writes
+                .iter()
+                .any(|entry| entry.addr == 0x0002_0000 && entry.value == 0xAA),
+            "expected stub write to be captured",
+        );
+
+        let regs_val = last_regs();
+        let regs: Vec<StubRegEntry> = serde_wasm_bindgen::from_value(regs_val).expect("regs");
+        assert!(regs.iter().any(|entry| entry.name == "PC"));
+        let flags_val = last_flags();
+        let flags: Vec<StubRegEntry> = serde_wasm_bindgen::from_value(flags_val).expect("flags");
+        assert!(flags.iter().any(|entry| entry.name == "C"));
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_stub_retf_returns() {
+        install_stub_dispatch();
+        clear_stub_state();
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let patch = StubPatch {
+            mem_writes: Vec::new(),
+            regs: Vec::new(),
+            flags: Vec::new(),
+            ret: StubReturn::Retf { pc: None },
+        };
+        set_stub_patch(serde_wasm_bindgen::to_value(&patch).expect("patch"));
+
+        let opts = StubOptions {
+            stubs: vec![StubSpec { pc, id: 2 }],
+        };
+        let js = emulator
+            .call_function_ex(pc, 16, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded =
+            serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+        assert_eq!(decoded.report.reason, "returned");
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_stub_error_is_reported() {
+        install_stub_dispatch();
+        clear_stub_state();
+        set_stub_error("boom");
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let opts = StubOptions {
+            stubs: vec![StubSpec { pc, id: 3 }],
+        };
+        let js = emulator
+            .call_function_ex(pc, 16, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded =
+            serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+
+        assert_eq!(decoded.report.reason, "fault");
+        let fault = decoded.report.fault.expect("fault");
+        assert_eq!(fault.kind, "StubError");
+        assert!(fault.message.contains("boom"));
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_stub_jump_to_sentinel_returns() {
+        install_stub_dispatch();
+        clear_stub_state();
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let sentinel_pc = (pc & 0x0f_0000) | 0xD00D;
+        let patch = StubPatch {
+            mem_writes: Vec::new(),
+            regs: Vec::new(),
+            flags: Vec::new(),
+            ret: StubReturn::Jump { pc: sentinel_pc },
+        };
+        set_stub_patch(serde_wasm_bindgen::to_value(&patch).expect("patch"));
+
+        let opts = StubOptions {
+            stubs: vec![StubSpec { pc, id: 4 }],
+        };
+        let js = emulator
+            .call_function_ex(pc, 4, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded =
+            serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+
+        assert_eq!(decoded.report.reason, "returned");
+        assert_eq!(decoded.report.pc, sentinel_pc & 0x000f_ffff);
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_ex_stub_stay_times_out() {
+        install_stub_dispatch();
+        clear_stub_state();
+
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+
+        let pc = emulator.get_reg("PC");
+        let patch = StubPatch {
+            mem_writes: Vec::new(),
+            regs: Vec::new(),
+            flags: Vec::new(),
+            ret: StubReturn::Stay,
+        };
+        set_stub_patch(serde_wasm_bindgen::to_value(&patch).expect("patch"));
+
+        let opts = StubOptions {
+            stubs: vec![StubSpec { pc, id: 5 }],
+        };
+        let js = emulator
+            .call_function_ex(pc, 3, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect("call");
+        let decoded: CallArtifactsDecoded =
+            serde_json::from_str(&js.as_string().unwrap()).expect("decode");
+
+        assert_eq!(decoded.report.reason, "timeout");
     }
 
     #[wasm_bindgen_test]
