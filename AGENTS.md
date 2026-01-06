@@ -66,6 +66,10 @@
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
   - Default ROM model: `pc-e500` (uses `data/pc-e500.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
+- **LCD terminal UI:** A live terminal renderer that redraws decoded LCD lines on change:
+  - `cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500`
+  - Keyboard: Ctrl+1..5 or F1..F5 map to PF1..PF5, Enter maps to `=`, Backspace maps to `BS`, Ctrl+C exits.
+  - Use `--no-alt-screen` for tmux capture panes, `--force-tty` when running detached, `--input-steps` to reduce input latency, `--pf-numbers` to map digits 1–5 to PF1–PF5, `--bnida PATH` to show function names in the status line, `--force-key-irq` to force KEY interrupts if the ROM stays halted, `--card present|absent` to control the memory card slot state, and `--pf1-twice` to auto-drive the PF1 menu.
 - **JS function runner (WASM):** Run an async JS snippet against the same Rust core compiled to WASM:
   - Install deps once: `cd web && npm install`
   - Run a script (auto-builds wasm): `cd web && npm run fnr:cli -- --model pc-e500 path/to/script.js` (or `--eval "<js>"`, or `--stdin`)
