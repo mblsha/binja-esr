@@ -2628,7 +2628,7 @@ impl LlamaExecutor {
                     // Track call page so RET can restore the original page even if PC page changes.
                     state.push_call_page(pc_before);
                 }
-                state.push_call_frame(dest & 0xFFFFF, push_bits as u8);
+                state.push_call_frame(dest & 0xFFFFF, push_bits);
                 state.set_pc(dest & 0xFFFFF);
                 state.call_depth_inc();
                 let mut guard = crate::PERFETTO_TRACER.enter();
