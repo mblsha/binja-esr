@@ -196,6 +196,10 @@ impl LlamaState {
         &self.call_stack
     }
 
+    pub fn call_page_depth(&self) -> usize {
+        self.call_page_stack.len()
+    }
+
     pub fn push_call_stack(&mut self, dest: u32) {
         self.call_stack.push(dest & mask_for(RegName::PC));
     }

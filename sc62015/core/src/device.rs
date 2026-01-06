@@ -168,7 +168,13 @@ impl DeviceModel {
         }
         match self {
             Self::Iq7000 => iq7000::load_iq7000_rom_image(rt, rom),
-            Self::PcE500 => pce500::load_pce500_rom_window(rt, rom),
+            Self::PcE500 => {
+                let res = pce500::load_pce500_rom_window(rt, rom);
+                if res.is_ok() {
+                    rt.enable_sio_stub();
+                }
+                res
+            }
         }
     }
 }
