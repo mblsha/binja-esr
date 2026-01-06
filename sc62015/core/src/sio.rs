@@ -1,3 +1,5 @@
+// PY_SOURCE: sc62015/pysc62015/instr/opcodes.py
+
 use std::collections::VecDeque;
 
 use crate::llama::opcodes::RegName;
@@ -125,9 +127,20 @@ impl SioStub {
         state: &mut crate::llama::state::LlamaState,
         memory: &mut MemoryImage,
     ) {
-        let call_depth = state.call_stack().len();
-        let page_depth = state.call_page_depth();
-        if page_depth < call_depth {
+        let ret_bits = match state.peek_call_return_width() {
+            Some(16) => 16,
+            Some(24) => 24,
+            _ => {
+                let call_depth = state.call_stack().len();
+                let page_depth = state.call_page_depth();
+                if page_depth < call_depth {
+                    24
+                } else {
+                    16
+                }
+            }
+        };
+        if ret_bits == 24 {
             let ret = Self::pop_stack_value(state, memory, 24);
             let dest = ret & 0xFFFFF;
             state.set_pc(dest);
@@ -140,7 +153,7 @@ impl SioStub {
             state.set_pc(dest);
         }
         state.call_depth_dec();
-        let _ = state.pop_call_stack();
+        let _ = state.pop_call_frame();
     }
 
     fn pop_stack_value(

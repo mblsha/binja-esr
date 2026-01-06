@@ -28,6 +28,7 @@ pub struct LlamaState {
     call_depth: u32,
     call_sub_level: u32,
     call_page_stack: Vec<u32>,
+    call_return_widths: Vec<u8>,
     call_stack: Vec<u32>,
 }
 
@@ -37,6 +38,7 @@ pub struct CallMetricsSnapshot {
     pub call_depth: u32,
     pub call_sub_level: u32,
     pub call_page_stack: Vec<u32>,
+    pub call_return_widths: Vec<u8>,
 }
 
 impl LlamaState {
@@ -47,6 +49,7 @@ impl LlamaState {
             call_depth: 0,
             call_sub_level: 0,
             call_page_stack: Vec::new(),
+            call_return_widths: Vec::new(),
             call_stack: Vec::new(),
         }
     }
@@ -167,6 +170,7 @@ impl LlamaState {
         self.call_depth = 0;
         self.call_sub_level = 0;
         self.call_page_stack.clear();
+        self.call_return_widths.clear();
         self.call_stack.clear();
     }
 
@@ -201,11 +205,25 @@ impl LlamaState {
     }
 
     pub fn push_call_stack(&mut self, dest: u32) {
-        self.call_stack.push(dest & mask_for(RegName::PC));
+        self.push_call_frame(dest, 0);
     }
 
     pub fn pop_call_stack(&mut self) -> Option<u32> {
+        self.pop_call_frame()
+    }
+
+    pub fn push_call_frame(&mut self, dest: u32, ret_bits: u8) {
+        self.call_stack.push(dest & mask_for(RegName::PC));
+        self.call_return_widths.push(ret_bits);
+    }
+
+    pub fn pop_call_frame(&mut self) -> Option<u32> {
+        let _ = self.call_return_widths.pop();
         self.call_stack.pop()
+    }
+
+    pub fn peek_call_return_width(&self) -> Option<u8> {
+        self.call_return_widths.last().copied()
     }
 
     pub fn set_call_sub_level(&mut self, value: u32) {
@@ -236,6 +254,7 @@ impl LlamaState {
         self.call_depth = 0;
         self.call_sub_level = 0;
         self.call_page_stack.clear();
+        self.call_return_widths.clear();
         self.call_stack.clear();
     }
 
@@ -245,6 +264,7 @@ impl LlamaState {
             call_depth: self.call_depth,
             call_sub_level: self.call_sub_level,
             call_page_stack: self.call_page_stack.clone(),
+            call_return_widths: self.call_return_widths.clone(),
         }
     }
 
@@ -253,6 +273,7 @@ impl LlamaState {
         self.call_depth = snapshot.call_depth;
         self.call_sub_level = snapshot.call_sub_level;
         self.call_page_stack = snapshot.call_page_stack;
+        self.call_return_widths = snapshot.call_return_widths;
     }
 }
 
