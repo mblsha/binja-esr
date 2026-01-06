@@ -799,8 +799,7 @@ impl CoreRuntime {
                             offset,
                             IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
                         ) {
-                            if let Some(val) = (*self.sio_ptr).handle_read(offset, &mut *self.mem)
-                            {
+                            if let Some(val) = (*self.sio_ptr).handle_read(offset, &mut *self.mem) {
                                 return val as u32;
                             }
                         }
