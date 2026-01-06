@@ -10,6 +10,7 @@ pub mod llama;
 pub mod memory;
 pub mod pce500;
 pub mod perfetto;
+pub mod sio;
 pub mod snapshot;
 pub mod timer;
 
@@ -35,6 +36,7 @@ pub use memory::{
     INTERNAL_SPACE,
 };
 pub use perfetto::PerfettoTracer;
+pub use sio::SioStub;
 #[cfg(feature = "perfetto")]
 pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>;
 #[cfg(feature = "perfetto")]
@@ -102,7 +104,10 @@ pub use timer::TimerContext;
 use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::mask_for;
-use crate::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET};
+use crate::memory::{
+    IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_RXD_OFFSET, IMEM_TXD_OFFSET,
+    IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
+};
 
 pub type Result<T> = std::result::Result<T, CoreError>;
 
@@ -359,6 +364,7 @@ pub struct CoreRuntime {
     executor: crate::llama::eval::LlamaExecutor,
     pub keyboard: Option<KeyboardMatrix>,
     pub lcd: Option<Box<dyn LcdHal>>,
+    pub sio: Option<SioStub>,
     pub timer: Box<TimerContext>,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
@@ -381,6 +387,7 @@ impl CoreRuntime {
             executor: crate::llama::eval::LlamaExecutor::new(),
             keyboard: Some(KeyboardMatrix::new()),
             lcd: Some(Box::new(LcdController::new())),
+            sio: None,
             timer: Box::new(TimerContext::new(false, 0, 0)),
             host_read: None,
             host_write: None,
@@ -448,6 +455,14 @@ impl CoreRuntime {
     pub fn clear_host_overlays(&mut self) {
         self.host_read = None;
         self.host_write = None;
+    }
+
+    pub fn enable_sio_stub(&mut self) {
+        if self.sio.is_none() {
+            let mut stub = SioStub::new();
+            stub.init(&mut self.memory);
+            self.sio = Some(stub);
+        }
     }
 
     fn install_imr_isr_hook(&mut self) {
@@ -713,6 +728,7 @@ impl CoreRuntime {
             mem: &'a mut MemoryImage,
             keyboard_ptr: *mut KeyboardMatrix,
             lcd_ptr: Option<*mut dyn LcdHal>,
+            sio_ptr: *mut SioStub,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             onk_level: bool,
@@ -770,6 +786,21 @@ impl CoreRuntime {
                         if lcd.handles(addr) {
                             if let Some(val) = lcd.read(addr) {
                                 (*self.mem).bump_read_count();
+                                return val as u32;
+                            }
+                        }
+                    }
+                    if !self.sio_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        if matches!(
+                            offset,
+                            IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
+                        ) {
+                            if let Some(val) = (*self.sio_ptr).handle_read(offset, &mut *self.mem)
+                            {
                                 return val as u32;
                             }
                         }
@@ -869,6 +900,19 @@ impl CoreRuntime {
                             return;
                         }
                     }
+                    if !self.sio_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        if matches!(
+                            offset,
+                            IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
+                        ) && (*self.sio_ptr).handle_write(offset, value as u8, &mut *self.mem)
+                        {
+                            return;
+                        }
+                    }
                     if python_required {
                         if let Some(cb) = self.host_write {
                             (*cb)(addr, value as u8);
@@ -937,6 +981,14 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            if let Some(sio) = self.sio.as_mut() {
+                if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
+                    self.metadata.instruction_count =
+                        self.metadata.instruction_count.saturating_add(1);
+                    self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                    continue;
+                }
+            }
             let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
                 let imr = self
@@ -1081,11 +1133,16 @@ impl CoreRuntime {
                     .host_write
                     .as_mut()
                     .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
+                let sio_ptr = self
+                    .sio
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
                 let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
                 let mut bus = RuntimeBus {
                     mem: &mut self.memory,
                     keyboard_ptr,
                     lcd_ptr,
+                    sio_ptr,
                     host_read,
                     host_write,
                     onk_level: self.onk_level,
