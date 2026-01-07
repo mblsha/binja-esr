@@ -236,10 +236,7 @@
 						addr: typeof entry?.addr === 'number' ? entry.addr >>> 0 : null,
 						name: String(entry?.name ?? '').trim(),
 					}))
-					.filter(
-						(entry: RawSymbolEntry): entry is SymbolEntry =>
-							Number.isFinite(entry.addr) && entry.name.length > 0,
-					)
+					.filter((entry: RawSymbolEntry): entry is SymbolEntry => Number.isFinite(entry.addr) && entry.name.length > 0)
 					.map((entry: SymbolEntry) => ({ addr: entry.addr & 0x000f_ffff, name: entry.name }));
 				if (romModel !== model) return null;
 				symbolMap = new Map(entries.map((entry) => [entry.addr, entry.name]));
