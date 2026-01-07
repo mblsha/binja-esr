@@ -677,25 +677,29 @@ fn jump_to_basic_loop(runtime: &mut CoreRuntime) {
     runtime.state.reset_call_metrics();
 }
 
-fn apply_stub_returns(
-    runtime: &mut CoreRuntime,
-    symbols: Option<&SymbolMap>,
+struct StubReturnConfig<'a> {
+    symbols: Option<&'a SymbolMap>,
     stub_iocs: bool,
     fast_delay: bool,
     stub_sio: bool,
     fast_init: bool,
+    ram_zero_buf: Option<&'a [u8]>,
+}
+
+fn apply_stub_returns(
+    runtime: &mut CoreRuntime,
     ram_cleared: &mut bool,
-    ram_zero_buf: Option<&[u8]>,
+    config: StubReturnConfig<'_>,
 ) -> bool {
-    if stub_iocs && in_iocs_dispatch(runtime, symbols) {
+    if config.stub_iocs && in_iocs_dispatch(runtime, config.symbols) {
         force_return_auto(runtime);
         return true;
     }
-    if fast_delay && in_delay_routine(runtime, symbols) {
+    if config.fast_delay && in_delay_routine(runtime, config.symbols) {
         force_return_auto(runtime);
         return true;
     }
-    if stub_sio && in_sio_routine(runtime, symbols) {
+    if config.stub_sio && in_sio_routine(runtime, config.symbols) {
         runtime.state.set_reg(RegName::FC, 0);
         runtime.state.set_reg(RegName::FZ, 0);
         runtime.memory.write_internal_byte(IMEM_RXD_OFFSET, 0x41);
@@ -703,9 +707,9 @@ fn apply_stub_returns(
         force_return_auto(runtime);
         return true;
     }
-    if fast_init {
-        if let Some(buf) = ram_zero_buf {
-            if in_clear_external_ram(runtime, symbols) {
+    if config.fast_init {
+        if let Some(buf) = config.ram_zero_buf {
+            if in_clear_external_ram(runtime, config.symbols) {
                 fast_clear_pce500_ram(runtime, ram_cleared, buf);
                 force_return_auto(runtime);
                 return true;
@@ -1163,13 +1167,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut did_stub = false;
             if apply_stub_returns(
                 &mut runtime,
-                symbols.as_ref(),
-                args.stub_iocs,
-                args.fast_delay,
-                args.stub_sio,
-                args.fast_init,
                 &mut fast_init_cleared,
-                fast_init_buf.as_deref(),
+                StubReturnConfig {
+                    symbols: symbols.as_ref(),
+                    stub_iocs: args.stub_iocs,
+                    fast_delay: args.fast_delay,
+                    stub_sio: args.stub_sio,
+                    fast_init: args.fast_init,
+                    ram_zero_buf: fast_init_buf.as_deref(),
+                },
             ) {
                 executed = executed.saturating_add(1);
                 remaining = remaining.saturating_sub(1);
