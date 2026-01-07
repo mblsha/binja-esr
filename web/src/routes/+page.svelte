@@ -81,6 +81,7 @@
 	let lastLcdTextUpdateMs = 0;
 	$: targetFrameIntervalMs = 1000 / Math.max(1, targetFps);
 	type SymbolEntry = { addr: number; name: string };
+	type RawSymbolEntry = { addr: number | null; name: string };
 	let symbolMap = new Map<number, string>();
 	let symbolsPromise: Promise<SymbolEntry[] | null> | null = null;
 	let symbolsPromiseModel: RomModel | null = null;
@@ -235,8 +236,11 @@
 						addr: typeof entry?.addr === 'number' ? entry.addr >>> 0 : null,
 						name: String(entry?.name ?? '').trim(),
 					}))
-					.filter((entry: any): entry is SymbolEntry => Number.isFinite(entry.addr) && entry.name.length > 0)
-					.map((entry) => ({ addr: entry.addr & 0x000f_ffff, name: entry.name }));
+					.filter(
+						(entry: RawSymbolEntry): entry is SymbolEntry =>
+							Number.isFinite(entry.addr) && entry.name.length > 0,
+					)
+					.map((entry: SymbolEntry) => ({ addr: entry.addr & 0x000f_ffff, name: entry.name }));
 				if (romModel !== model) return null;
 				symbolMap = new Map(entries.map((entry) => [entry.addr, entry.name]));
 				return entries;
