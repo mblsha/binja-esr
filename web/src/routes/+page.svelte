@@ -83,6 +83,7 @@
 	type SymbolEntry = { addr: number; name: string };
 	let symbolMap = new Map<number, string>();
 	let symbolsPromise: Promise<SymbolEntry[] | null> | null = null;
+	let symbolsPromiseModel: RomModel | null = null;
 
 	const RUN_SLICE_MIN_INSTRUCTIONS = 1;
 	const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
@@ -215,14 +216,17 @@
 
 	function resetSymbols() {
 		symbolsPromise = null;
+		symbolsPromiseModel = null;
 		symbolMap = new Map();
 	}
 
 	async function ensureSymbols(): Promise<SymbolEntry[] | null> {
-		if (symbolsPromise) return symbolsPromise;
+		const model = romModel;
+		if (symbolsPromise && symbolsPromiseModel === model) return symbolsPromise;
+		symbolsPromiseModel = model;
 		symbolsPromise = (async () => {
 			try {
-				const res = await fetch(`/api/symbols?model=${encodeURIComponent(romModel)}`);
+				const res = await fetch(`/api/symbols?model=${encodeURIComponent(model)}`);
 				if (!res.ok) return null;
 				const payload = (await res.json()) as any;
 				const raw = Array.isArray(payload?.symbols) ? payload.symbols : [];
@@ -233,6 +237,7 @@
 					}))
 					.filter((entry: any): entry is SymbolEntry => Number.isFinite(entry.addr) && entry.name.length > 0)
 					.map((entry) => ({ addr: entry.addr & 0x000f_ffff, name: entry.name }));
+				if (romModel !== model) return null;
 				symbolMap = new Map(entries.map((entry) => [entry.addr, entry.name]));
 				return entries;
 			} catch {
