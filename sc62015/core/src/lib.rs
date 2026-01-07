@@ -87,11 +87,6 @@ pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new(None);
 #[cfg(not(feature = "perfetto"))]
 pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new();
 
-#[derive(Debug)]
-struct PythonOverlayFault {
-    addr: u32,
-    pc: u32,
-}
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub use snapshot::{load_snapshot, save_snapshot};
 pub use snapshot::{
@@ -740,7 +735,6 @@ impl CoreRuntime {
             meta_ptr: *const SnapshotMetadata,
             #[allow(dead_code)]
             state_ptr: *const LlamaState,
-            overlay_fault_addr: Option<u32>,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
@@ -804,7 +798,7 @@ impl CoreRuntime {
                             }
                         }
                     }
-                    // Host overlay: delegate addresses flagged as Python-only.
+                    // Host overlay: delegate addresses flagged for external handling.
                     if python_required {
                         if let Some(cb) = self.host_read {
                             if let Some(val) = (*cb)(addr) {
@@ -812,25 +806,6 @@ impl CoreRuntime {
                                 return val as u32;
                             }
                         }
-                        // If we reach here, the address requires Python handling but no callback is present.
-                        // Emit a perfetto warning so traces surface the divergence and stop execution.
-                        let mut guard = PERFETTO_TRACER.enter();
-                        guard.with_some(|tracer| {
-                            let mut payload = std::collections::HashMap::new();
-                            payload.insert(
-                                "addr".to_string(),
-                                perfetto::AnnotationValue::Pointer(addr as u64),
-                            );
-                            payload.insert(
-                                "pc".to_string(),
-                                perfetto::AnnotationValue::Pointer(self.pc as u64),
-                            );
-                            tracer.record_irq_event("PythonOverlayMissing", payload);
-                        });
-                        if self.overlay_fault_addr.is_none() {
-                            self.overlay_fault_addr = Some(addr);
-                        }
-                        std::panic::panic_any(PythonOverlayFault { addr, pc: self.pc });
                     }
                     // SSR (0xFF) must reflect ONK level even without host overlays to match Python/Perfetto.
                     if MemoryImage::is_internal(addr)
@@ -945,27 +920,6 @@ impl CoreRuntime {
                             });
                             return;
                         }
-                        let mut guard = PERFETTO_TRACER.enter();
-                        guard.with_some(|tracer| {
-                            let mut payload = std::collections::HashMap::new();
-                            payload.insert(
-                                "addr".to_string(),
-                                perfetto::AnnotationValue::Pointer(addr as u64),
-                            );
-                            payload.insert(
-                                "pc".to_string(),
-                                perfetto::AnnotationValue::Pointer(self.pc as u64),
-                            );
-                            payload.insert(
-                                "value".to_string(),
-                                perfetto::AnnotationValue::UInt(value as u64),
-                            );
-                            tracer.record_irq_event("PythonOverlayMissing", payload);
-                        });
-                        if self.overlay_fault_addr.is_none() {
-                            self.overlay_fault_addr = Some(addr);
-                        }
-                        std::panic::panic_any(PythonOverlayFault { addr, pc: self.pc });
                     }
                     let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
                 }
@@ -1149,14 +1103,8 @@ impl CoreRuntime {
                     pc,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
                     state_ptr: &self.state as *const LlamaState,
-                    overlay_fault_addr: None,
                 };
                 let opcode = bus.load(pc, 8) as u8;
-                if let Some(addr) = bus.overlay_fault_addr {
-                    return Err(CoreError::Other(format!(
-                        "python overlay required for 0x{addr:06X} but no host handler is installed"
-                    )));
-                }
                 // Capture WAIT loop count before execution (executor clears I).
                 let wait_loops = if opcode == 0xEF {
                     self.state.get_reg(RegName::I) & mask_for(RegName::I)
@@ -1166,11 +1114,6 @@ impl CoreRuntime {
                 if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
                     return Err(CoreError::Other(format!(
                         "execute opcode 0x{opcode:02X}: {e}"
-                    )));
-                }
-                if let Some(addr) = bus.overlay_fault_addr {
-                    return Err(CoreError::Other(format!(
-                        "python overlay required for 0x{addr:06X} but no host handler is installed"
                     )));
                 }
                 if opcode == 0xFF {
@@ -1334,15 +1277,7 @@ impl CoreRuntime {
 
             match step_result {
                 Ok(inner) => inner?,
-                Err(payload) => {
-                    if let Some(fault) = payload.downcast_ref::<PythonOverlayFault>() {
-                        return Err(CoreError::Other(format!(
-                            "python overlay required for 0x{:06X} at PC 0x{:06X}",
-                            fault.addr, fault.pc
-                        )));
-                    }
-                    std::panic::resume_unwind(payload);
-                }
+                Err(payload) => std::panic::resume_unwind(payload),
             }
         }
         Ok(())
@@ -2559,6 +2494,80 @@ mod tests {
     }
 
     #[test]
+    fn halt_does_not_execute_instructions() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_slice(0, &[0x00, 0x00]); // NOPs.
+        rt.state.set_pc(0);
+        rt.step(1).expect("execute NOP");
+        let pc_before = rt.state.pc();
+        let instr_before = rt.instruction_count();
+        let cycle_before = rt.cycle_count();
+
+        rt.state.set_halted(true);
+        rt.step(3).expect("halt idle ticks");
+
+        assert_eq!(rt.state.pc(), pc_before, "HALT should not advance PC");
+        assert_eq!(
+            rt.instruction_count(),
+            instr_before,
+            "HALT should not execute instructions"
+        );
+        assert!(
+            rt.cycle_count() > cycle_before,
+            "HALT should still advance cycles"
+        );
+    }
+
+    #[test]
+    fn halt_wakes_on_key_inject() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_slice(0, &[0x00]); // NOP after HALT.
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.state.set_halted(true);
+
+        let kb_irq_enabled = rt.timer.kb_irq_enabled;
+        let kb = rt.keyboard.as_mut().expect("keyboard present");
+        let events = kb.inject_matrix_event(0x56, false, &mut rt.memory, kb_irq_enabled);
+        assert!(events > 0, "key injection should enqueue an event");
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert_ne!(isr & ISR_KEYI, 0, "KEYI should be asserted after injection");
+
+        rt.step(1).expect("halt wake step");
+
+        assert!(
+            !rt.state.is_halted(),
+            "HALT should clear on injected key event"
+        );
+    }
+
+    #[test]
+    fn halt_reenters_when_next_opcode_is_halt() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_slice(0, &[0xDE, 0x00]); // HALT, NOP.
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.state.set_halted(true);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+
+        let kb_irq_enabled = rt.timer.kb_irq_enabled;
+        let kb = rt.keyboard.as_mut().expect("keyboard present");
+        let events = kb.inject_matrix_event(0x56, false, &mut rt.memory, kb_irq_enabled);
+        assert!(events > 0, "key injection should enqueue an event");
+
+        rt.step(1).expect("halt wake step");
+
+        assert!(rt.state.is_halted(), "HALT should re-enter halt state");
+        assert_eq!(rt.state.pc(), 1, "HALT should advance PC");
+        assert_eq!(
+            rt.instruction_count(),
+            1,
+            "HALT instruction should still be executed"
+        );
+    }
+
+    #[test]
     fn halt_updates_perfetto_counters_on_idle_tick() {
         use std::fs;
 
@@ -3296,7 +3305,7 @@ mod tests {
     }
 
     #[test]
-    fn requires_python_without_host_errors() {
+    fn requires_python_without_host_falls_back() {
         let mut rt = CoreRuntime::new();
         // Mark an external range as Python-only and point PC at it.
         rt.memory
@@ -3306,13 +3315,22 @@ mod tests {
         rt.memory.write_external_byte(0x0000_2000, 0x00);
         let res = rt.step(1);
         assert!(
-            matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
-            "step should fail when Python-required overlays are missing: {res:?}"
+            res.is_ok(),
+            "step should execute without host overlays: {res:?}"
+        );
+        assert_eq!(
+            rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
+            0x0000_2001,
+            "PC should advance on NOP even without overlays"
+        );
+        assert_eq!(
+            rt.metadata.instruction_count, 1,
+            "instruction counter should increment on NOP"
         );
     }
 
     #[test]
-    fn python_overlay_required_imem_access_fails_without_host() {
+    fn imem_access_handles_e_port_without_host() {
         let mut rt = CoreRuntime::new();
         // Program: MV IMem8, imm8 targeting offset 0xF5 (E-port input, locally emulated).
         rt.memory.write_external_slice(0, &[0xCC, 0xF5, 0xAA]);
@@ -3322,31 +3340,6 @@ mod tests {
         assert!(
             res.is_ok(),
             "E-port IMEM accesses should be handled locally without a Python overlay: {res:?}"
-        );
-    }
-
-    #[test]
-    fn python_overlay_fault_does_not_advance_pc_or_counters() {
-        let mut rt = CoreRuntime::new();
-        // Mark an external range as Python-only and point PC at it.
-        rt.memory
-            .set_python_ranges(vec![(0x0000_3000, 0x0000_3000)]);
-        rt.state.set_reg(RegName::PC, 0x0000_3000);
-        rt.memory.write_external_byte(0x0000_3000, 0x00); // NOP
-
-        let res = rt.step(1);
-        assert!(
-            matches!(res, Err(CoreError::Other(ref msg)) if msg.contains("python overlay")),
-            "missing overlay should surface as error"
-        );
-        assert_eq!(
-            rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
-            0x0000_3000,
-            "PC should not advance on overlay fault"
-        );
-        assert_eq!(
-            rt.metadata.instruction_count, 0,
-            "instruction counter should not increment on overlay fault"
         );
     }
 
