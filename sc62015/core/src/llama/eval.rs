@@ -419,6 +419,46 @@ impl LlamaExecutor {
         }
     }
 
+    fn reg_name_for_trace(reg: RegName) -> &'static str {
+        match reg {
+            RegName::A => "A",
+            RegName::B => "B",
+            RegName::BA => "BA",
+            RegName::IL => "IL",
+            RegName::IH => "IH",
+            RegName::I => "I",
+            RegName::X => "X",
+            RegName::Y => "Y",
+            RegName::U => "U",
+            RegName::S => "S",
+            RegName::PC => "PC",
+            RegName::F => "F",
+            RegName::FC => "FC",
+            RegName::FZ => "FZ",
+            RegName::IMR => "IMR",
+            RegName::Temp(_) => "TEMP",
+            RegName::Unknown(_) => "UNKNOWN",
+        }
+    }
+
+    fn emit_control_flow_event(
+        label: &str,
+        kind: &str,
+        instr_index: u64,
+        pc: u32,
+        payload: HashMap<String, AnnotationValue>,
+    ) {
+        let mut guard = PERFETTO_TRACER.enter();
+        guard.with_some(|tracer| {
+            let mut payload = payload;
+            payload.insert(
+                "cf_kind".to_string(),
+                AnnotationValue::Str(kind.to_string()),
+            );
+            tracer.record_control_flow(label, instr_index, pc & mask_for(RegName::PC), payload);
+        });
+    }
+
     fn trace_instr<B: LlamaBus>(
         &self,
         opcode: u8,
@@ -2026,6 +2066,11 @@ impl LlamaExecutor {
             regs
         });
 
+        let entry_kind = entry.map(|entry| entry.kind);
+        let entry_name = entry.map(|entry| entry.name);
+        let stack_s_before = state.get_reg(RegName::S) & mask_for(RegName::S);
+        let stack_u_before = state.get_reg(RegName::U) & mask_for(RegName::U);
+
         let result = match entry {
             Some(entry) => self.execute_with(
                 exec_opcode,
@@ -2035,6 +2080,7 @@ impl LlamaExecutor {
                 pre_modes_opt.as_ref(),
                 pc_override,
                 prefix_len,
+                instr_index,
             ),
             None => fallback_unknown(state, prefix_len, None),
         };
@@ -2049,6 +2095,72 @@ impl LlamaExecutor {
                 trace_pc_snapshot,
             );
         }
+
+        if let Some(kind) = entry_kind {
+            if !matches!(
+                kind,
+                InstrKind::Call | InstrKind::Ret | InstrKind::RetF | InstrKind::RetI
+            ) {
+                let stack_s_after = state.get_reg(RegName::S) & mask_for(RegName::S);
+                let stack_u_after = state.get_reg(RegName::U) & mask_for(RegName::U);
+                if stack_s_before != stack_s_after {
+                    let mut payload = HashMap::new();
+                    payload.insert(
+                        "stack_reg".to_string(),
+                        AnnotationValue::Str("S".to_string()),
+                    );
+                    payload.insert(
+                        "stack_before".to_string(),
+                        AnnotationValue::Pointer(stack_s_before as u64),
+                    );
+                    payload.insert(
+                        "stack_after".to_string(),
+                        AnnotationValue::Pointer(stack_s_after as u64),
+                    );
+                    if let Some(name) = entry_name {
+                        payload.insert(
+                            "mnemonic".to_string(),
+                            AnnotationValue::Str(name.to_string()),
+                        );
+                    }
+                    Self::emit_control_flow_event(
+                        "STACK_REG_WRITE",
+                        "stack_write",
+                        instr_index,
+                        start_pc,
+                        payload,
+                    );
+                }
+                if stack_u_before != stack_u_after {
+                    let mut payload = HashMap::new();
+                    payload.insert(
+                        "stack_reg".to_string(),
+                        AnnotationValue::Str("U".to_string()),
+                    );
+                    payload.insert(
+                        "stack_before".to_string(),
+                        AnnotationValue::Pointer(stack_u_before as u64),
+                    );
+                    payload.insert(
+                        "stack_after".to_string(),
+                        AnnotationValue::Pointer(stack_u_after as u64),
+                    );
+                    if let Some(name) = entry_name {
+                        payload.insert(
+                            "mnemonic".to_string(),
+                            AnnotationValue::Str(name.to_string()),
+                        );
+                    }
+                    Self::emit_control_flow_event(
+                        "STACK_REG_WRITE",
+                        "stack_write",
+                        instr_index,
+                        start_pc,
+                        payload,
+                    );
+                }
+            }
+        }
         result
     }
 
@@ -2062,6 +2174,7 @@ impl LlamaExecutor {
         pre: Option<&PreModes>,
         pc_override: Option<u32>,
         prefix_len: u8,
+        instr_index: u64,
     ) -> Result<u8, &'static str> {
         match entry.kind {
             InstrKind::Nop => {
@@ -2502,6 +2615,7 @@ impl LlamaExecutor {
             }
             InstrKind::Ir => {
                 let instr_len = prefix_len + Self::estimated_length(entry);
+                let pc_before = state.pc() & mask_for(RegName::PC);
                 // Push IMR, F, PC (little-endian) to match Python RETI stack layout, clear IRM, and jump to vector.
                 let pc = state.pc().wrapping_add(instr_len as u32) & mask_for(RegName::PC);
                 Self::push_stack(state, bus, RegName::S, pc, 24, false);
@@ -2536,6 +2650,32 @@ impl LlamaExecutor {
                     payload.insert("src".to_string(), AnnotationValue::Str("IR".to_string()));
                     tracer.record_irq_event("IRQ_Enter", payload);
                 });
+                let vector = vec & mask_for(RegName::PC);
+                let mut cf_payload = HashMap::new();
+                cf_payload.insert(
+                    "pc_next".to_string(),
+                    AnnotationValue::Pointer(vector as u64),
+                );
+                cf_payload.insert(
+                    "pc_target".to_string(),
+                    AnnotationValue::Pointer(vector as u64),
+                );
+                cf_payload.insert(
+                    "pc_fallthrough".to_string(),
+                    AnnotationValue::Pointer(pc as u64),
+                );
+                cf_payload.insert("ret_addr".to_string(), AnnotationValue::Pointer(pc as u64));
+                cf_payload.insert(
+                    "instr_len".to_string(),
+                    AnnotationValue::UInt(instr_len as u64),
+                );
+                Self::emit_control_flow_event(
+                    entry.name,
+                    "irq",
+                    instr_index,
+                    pc_before,
+                    cf_payload,
+                );
                 Ok(instr_len)
             }
             InstrKind::Tcl => {
@@ -2549,49 +2689,105 @@ impl LlamaExecutor {
             }
             InstrKind::JpAbs => {
                 // Absolute jump; operand may be 16-bit (low bits) or 20-bit.
-                if !Self::cond_pass(entry, state) {
-                    // Condition false: just advance PC
-                    let len = self
-                        .decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?
-                        .len;
-                    let start_pc = state.pc();
-                    if state.pc() == start_pc {
-                        state.set_pc(start_pc.wrapping_add(len as u32));
-                    }
-                    return Ok(len);
-                }
+                let pc_mask = mask_for(RegName::PC);
+                let pc_before = state.pc() & pc_mask;
+                let cond_ok = Self::cond_pass(entry, state);
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
-                let target = if let Some((val, bits)) = decoded.imm {
-                    if bits == 16 {
+                let fallthrough = pc_before.wrapping_add(decoded.len as u32) & pc_mask;
+                let mut target = None;
+                let mut target_addr = None;
+                let mut target_reg = None;
+                let target_src = if let Some((val, bits)) = decoded.imm {
+                    let instr_pc = pc_override.unwrap_or(pc_before) & pc_mask;
+                    let dest = if bits == 16 {
                         // JP 16-bit keeps current page (mask to PC width)
                         // Use the address of the JP instruction (Python uses addr & 0xFF0000).
-                        let instr_pc = pc_override.unwrap_or(state.pc());
-                        (instr_pc & mask_for(RegName::PC) & 0xFF0000) | (val & 0xFFFF)
+                        (instr_pc & 0xFF0000) | (val & 0xFFFF)
                     } else {
-                        val & mask_for(RegName::PC)
-                    }
+                        val & pc_mask
+                    };
+                    target = Some(dest);
+                    "imm"
                 } else if let Some(mem) = decoded.mem {
-                    bus.load(mem.addr, mem.bits) & 0xFFFFF
+                    target_addr = Some(mem.addr);
+                    if cond_ok {
+                        target = Some(bus.load(mem.addr, mem.bits) & pc_mask);
+                    }
+                    "mem"
                 } else if let Some(r) = decoded.reg3 {
-                    state.get_reg(r) & 0xFFFFF
+                    target = Some(state.get_reg(r) & pc_mask);
+                    target_reg = Some(Self::reg_name_for_trace(r));
+                    "reg"
                 } else {
                     return Err("missing jump target");
                 };
-                state.set_pc(target);
+
+                if cond_ok && target.is_none() {
+                    return Err("missing jump target");
+                }
+
+                let dest = if cond_ok {
+                    target.unwrap_or(fallthrough)
+                } else {
+                    fallthrough
+                };
+                state.set_pc(dest);
+
+                let mut payload = HashMap::new();
+                payload.insert("pc_next".to_string(), AnnotationValue::Pointer(dest as u64));
+                payload.insert(
+                    "pc_fallthrough".to_string(),
+                    AnnotationValue::Pointer(fallthrough as u64),
+                );
+                payload.insert(
+                    "instr_len".to_string(),
+                    AnnotationValue::UInt(decoded.len as u64),
+                );
+                if let Some(cond) = entry.cond {
+                    payload.insert(
+                        "cf_cond".to_string(),
+                        AnnotationValue::Str(cond.to_string()),
+                    );
+                    payload.insert(
+                        "cf_taken".to_string(),
+                        AnnotationValue::UInt(cond_ok as u64),
+                    );
+                }
+                if let Some(value) = target {
+                    payload.insert(
+                        "pc_target".to_string(),
+                        AnnotationValue::Pointer(value as u64),
+                    );
+                }
+                payload.insert(
+                    "pc_target_src".to_string(),
+                    AnnotationValue::Str(target_src.to_string()),
+                );
+                if let Some(addr) = target_addr {
+                    payload.insert(
+                        "pc_target_addr".to_string(),
+                        AnnotationValue::Pointer(addr as u64),
+                    );
+                }
+                if let Some(reg) = target_reg {
+                    payload.insert(
+                        "pc_target_reg".to_string(),
+                        AnnotationValue::Str(reg.to_string()),
+                    );
+                }
+                let kind = if entry.cond.is_some() {
+                    "cond_branch"
+                } else {
+                    "jump"
+                };
+                Self::emit_control_flow_event(entry.name, kind, instr_index, pc_before, payload);
                 Ok(decoded.len)
             }
             InstrKind::JpRel => {
-                if !Self::cond_pass(entry, state) {
-                    let len = self
-                        .decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?
-                        .len;
-                    let start_pc = state.pc();
-                    if state.pc() == start_pc {
-                        state.set_pc(start_pc.wrapping_add(len as u32));
-                    }
-                    return Ok(len);
-                }
+                let pc_mask = mask_for(RegName::PC);
+                let pc_before = state.pc() & pc_mask;
+                let cond_ok = Self::cond_pass(entry, state);
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let imm_raw = decoded.imm.ok_or("missing relative")?.0 as u8;
@@ -2602,9 +2798,41 @@ impl LlamaExecutor {
                 } else {
                     (imm_raw as i8) as i32
                 };
-                // JR is relative to current PC + length
-                let next_pc = state.pc().wrapping_add(decoded.len as u32);
-                state.set_pc(next_pc.wrapping_add_signed(imm) & 0xFFFFF);
+                let fallthrough = pc_before.wrapping_add(decoded.len as u32) & pc_mask;
+                let target = fallthrough.wrapping_add_signed(imm) & pc_mask;
+                let dest = if cond_ok { target } else { fallthrough };
+                state.set_pc(dest);
+
+                let mut payload = HashMap::new();
+                payload.insert("pc_next".to_string(), AnnotationValue::Pointer(dest as u64));
+                payload.insert(
+                    "pc_fallthrough".to_string(),
+                    AnnotationValue::Pointer(fallthrough as u64),
+                );
+                payload.insert(
+                    "pc_target".to_string(),
+                    AnnotationValue::Pointer(target as u64),
+                );
+                payload.insert(
+                    "instr_len".to_string(),
+                    AnnotationValue::UInt(decoded.len as u64),
+                );
+                if let Some(cond) = entry.cond {
+                    payload.insert(
+                        "cf_cond".to_string(),
+                        AnnotationValue::Str(cond.to_string()),
+                    );
+                    payload.insert(
+                        "cf_taken".to_string(),
+                        AnnotationValue::UInt(cond_ok as u64),
+                    );
+                }
+                let kind = if entry.cond.is_some() {
+                    "cond_branch"
+                } else {
+                    "jump"
+                };
+                Self::emit_control_flow_event(entry.name, kind, instr_index, pc_before, payload);
                 Ok(decoded.len)
             }
             InstrKind::Call => {
@@ -2612,6 +2840,7 @@ impl LlamaExecutor {
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let (target, bits) = decoded.imm.ok_or("missing jump target")?;
                 let pc_before = state.pc();
+                let pc_mask = mask_for(RegName::PC);
                 let ret_addr = pc_before.wrapping_add(decoded.len as u32);
                 let mut dest = target;
                 let push_bits = if bits == 16 {
@@ -2640,10 +2869,47 @@ impl LlamaExecutor {
                         state.call_depth(),
                     );
                 });
+                let mut payload = HashMap::new();
+                payload.insert(
+                    "pc_next".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert(
+                    "pc_target".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert(
+                    "pc_fallthrough".to_string(),
+                    AnnotationValue::Pointer((ret_addr & pc_mask) as u64),
+                );
+                payload.insert(
+                    "ret_addr".to_string(),
+                    AnnotationValue::Pointer((ret_addr & pc_mask) as u64),
+                );
+                payload.insert(
+                    "call_target".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert(
+                    "instr_len".to_string(),
+                    AnnotationValue::UInt(decoded.len as u64),
+                );
+                payload.insert(
+                    "call_depth".to_string(),
+                    AnnotationValue::UInt(state.call_depth() as u64),
+                );
+                Self::emit_control_flow_event(
+                    entry.name,
+                    "call",
+                    instr_index,
+                    pc_before & pc_mask,
+                    payload,
+                );
                 Ok(decoded.len)
             }
             InstrKind::Ret => {
                 let pc_before = state.pc();
+                let pc_mask = mask_for(RegName::PC);
                 let ret = Self::pop_stack(state, bus, RegName::S, 16, false);
                 let current_page = state.pc() & 0xFF0000;
                 // Parity: Python RET combines the low 16-bit return with the *current* page, even
@@ -2664,10 +2930,32 @@ impl LlamaExecutor {
                         state.call_depth(),
                     );
                 });
+                let mut payload = HashMap::new();
+                payload.insert(
+                    "pc_next".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert(
+                    "ret_target".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
+                payload.insert(
+                    "call_depth".to_string(),
+                    AnnotationValue::UInt(state.call_depth() as u64),
+                );
+                Self::emit_control_flow_event(
+                    entry.name,
+                    "ret",
+                    instr_index,
+                    pc_before & pc_mask,
+                    payload,
+                );
                 Ok(1)
             }
             InstrKind::RetF => {
                 let pc_before = state.pc();
+                let pc_mask = mask_for(RegName::PC);
                 let ret = Self::pop_stack(state, bus, RegName::S, 24, false);
                 let dest = ret & 0xFFFFF;
                 state.set_pc(dest);
@@ -2682,10 +2970,33 @@ impl LlamaExecutor {
                         state.call_depth(),
                     );
                 });
+                let mut payload = HashMap::new();
+                payload.insert(
+                    "pc_next".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert(
+                    "ret_target".to_string(),
+                    AnnotationValue::Pointer((dest & pc_mask) as u64),
+                );
+                payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
+                payload.insert(
+                    "call_depth".to_string(),
+                    AnnotationValue::UInt(state.call_depth() as u64),
+                );
+                Self::emit_control_flow_event(
+                    entry.name,
+                    "ret",
+                    instr_index,
+                    pc_before & pc_mask,
+                    payload,
+                );
                 Ok(1)
             }
             InstrKind::RetI => {
                 // Stack layout: IMR (1), F(1), 24-bit PC (little-endian).
+                let pc_mask = mask_for(RegName::PC);
+                let pc_before = state.pc() & pc_mask;
                 let mask_s = mask_for(RegName::S);
                 let mut sp = state.get_reg(RegName::S) & mask_s;
                 let _sp_before = sp;
@@ -2710,7 +3021,32 @@ impl LlamaExecutor {
                 state.set_reg(RegName::F, f);
                 state.set_pc(ret & 0xFFFFF);
                 state.call_depth_dec();
-                Ok(1 + prefix_len)
+                let instr_len = 1 + prefix_len;
+                let mut payload = HashMap::new();
+                payload.insert(
+                    "pc_next".to_string(),
+                    AnnotationValue::Pointer((ret & pc_mask) as u64),
+                );
+                payload.insert(
+                    "ret_target".to_string(),
+                    AnnotationValue::Pointer((ret & pc_mask) as u64),
+                );
+                payload.insert(
+                    "instr_len".to_string(),
+                    AnnotationValue::UInt(instr_len as u64),
+                );
+                payload.insert(
+                    "call_depth".to_string(),
+                    AnnotationValue::UInt(state.call_depth() as u64),
+                );
+                Self::emit_control_flow_event(
+                    entry.name,
+                    "reti",
+                    instr_index,
+                    pc_before & pc_mask,
+                    payload,
+                );
+                Ok(instr_len)
             }
             InstrKind::PushU | InstrKind::PushS => {
                 let decoded =
@@ -3770,7 +4106,7 @@ mod tests {
             operands: &[OperandKind::EMemRegWidth(1), OperandKind::EMemRegWidth(1)],
         };
         let len = exec
-            .execute_with(0x54, &entry, &mut state, &mut bus, None, None, 0)
+            .execute_with(0x54, &entry, &mut state, &mut bus, None, None, 0, 0)
             .unwrap();
         assert_eq!(len, 3);
         // Post-inc X advances by length, pre-dec Y decrements by length.
