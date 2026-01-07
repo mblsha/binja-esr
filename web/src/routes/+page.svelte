@@ -80,6 +80,9 @@
 	const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 	let lastLcdTextUpdateMs = 0;
 	$: targetFrameIntervalMs = 1000 / Math.max(1, targetFps);
+	type SymbolEntry = { addr: number; name: string };
+	let symbolMap = new Map<number, string>();
+	let symbolsPromise: Promise<SymbolEntry[] | null> | null = null;
 
 	const RUN_SLICE_MIN_INSTRUCTIONS = 1;
 	const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
@@ -210,15 +213,43 @@
 
 	let perfettoSymbolsPromise: Promise<void> | null = null;
 
+	function resetSymbols() {
+		symbolsPromise = null;
+		symbolMap = new Map();
+	}
+
+	async function ensureSymbols(): Promise<SymbolEntry[] | null> {
+		if (symbolsPromise) return symbolsPromise;
+		symbolsPromise = (async () => {
+			try {
+				const res = await fetch(`/api/symbols?model=${encodeURIComponent(romModel)}`);
+				if (!res.ok) return null;
+				const payload = (await res.json()) as any;
+				const raw = Array.isArray(payload?.symbols) ? payload.symbols : [];
+				const entries: SymbolEntry[] = raw
+					.map((entry: any) => ({
+						addr: typeof entry?.addr === 'number' ? entry.addr >>> 0 : null,
+						name: String(entry?.name ?? '').trim(),
+					}))
+					.filter((entry: any): entry is SymbolEntry => Number.isFinite(entry.addr) && entry.name.length > 0)
+					.map((entry) => ({ addr: entry.addr & 0x000f_ffff, name: entry.name }));
+				symbolMap = new Map(entries.map((entry) => [entry.addr, entry.name]));
+				return entries;
+			} catch {
+				return null;
+			}
+		})();
+		return symbolsPromise;
+	}
+
 	async function ensurePerfettoSymbols(): Promise<void> {
 		if (perfettoSymbolsPromise) return perfettoSymbolsPromise;
 		perfettoSymbolsPromise = (async () => {
 			try {
+				const symbols = await ensureSymbols();
+				if (!symbols || symbols.length === 0) return;
 				await ensureEmulator();
-				const res = await fetch(`/api/symbols?model=${encodeURIComponent(romModel)}`);
-				if (!res.ok) return;
-				const payload = (await res.json()) as any;
-				emulator.set_perfetto_function_symbols(payload.symbols);
+				emulator.set_perfetto_function_symbols(symbols);
 			} catch {
 				// Ignore missing symbol sources (public CI does not ship private rom-analysis).
 			}
@@ -338,7 +369,9 @@
 	}
 
 	function formatFunction(pc: number): string {
-		return `sub_${pc.toString(16).toUpperCase().padStart(5, '0')}`;
+		const addr = pc & 0x000f_ffff;
+		const name = symbolMap.get(addr);
+		return name ?? `sub_${addr.toString(16).toUpperCase().padStart(5, '0')}`;
 	}
 
 	function getReg(name: string): number | null {
@@ -525,17 +558,20 @@
 		try {
 			const res = await fetch(`/api/rom?model=${encodeURIComponent(romModel)}`);
 			if (!res.ok) return;
+			resetSymbols();
 			perfettoSymbolsPromise = null;
 			romSource = res.headers.get('x-rom-source');
 			const bytes = new Uint8Array(await res.arrayBuffer());
 			if (worker) {
 				await workerCall('load_rom', { bytes, romSource, model: romModel }, [bytes.buffer]);
 				romLoaded = true;
+				if (callStackOpen) void ensureSymbols();
 				return;
 			}
 			const emu = await ensureEmulator();
 			emu.load_rom_with_model?.(bytes, romModel) ?? emu.load_rom(bytes);
 			romLoaded = true;
+			if (callStackOpen) void ensureSymbols();
 			refreshAllNow();
 		} catch (err) {
 			lastError = `Auto-load failed: ${String(err)}`;
@@ -592,6 +628,7 @@
 	}
 
 	function refreshAllNow() {
+		if (callStackOpen) void ensureSymbols();
 		if (worker) {
 			void workerCall('snapshot');
 			return;
@@ -798,17 +835,20 @@
 		lastError = null;
 		try {
 			const bytes = new Uint8Array(await file.arrayBuffer());
+			resetSymbols();
 			perfettoSymbolsPromise = null;
 			romSource = file.name;
 			await ensureWorker();
 			if (worker) {
 				await workerCall('load_rom', { bytes, romSource, model: romModel }, [bytes.buffer]);
 				romLoaded = true;
+				if (callStackOpen) void ensureSymbols();
 				return;
 			}
 			const emu = await ensureEmulator();
 			emu.load_rom_with_model?.(bytes, romModel) ?? emu.load_rom(bytes);
 			romLoaded = true;
+			if (callStackOpen) void ensureSymbols();
 			refreshAllNow();
 		} catch (err) {
 			lastError = String(err);
