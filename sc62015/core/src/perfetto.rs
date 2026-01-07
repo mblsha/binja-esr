@@ -78,6 +78,7 @@ pub struct PerfettoTracer {
     mem_write_counter: TrackId,
     functions_track: TrackId,
     instructions_track: TrackId,
+    control_flow_track: TrackId,
     ewrites_track: TrackId,
     iwrites_track: TrackId,
     call_ui_functions_depth: u32,
@@ -123,6 +124,7 @@ impl PerfettoTracer {
         let lcd_chars_track = builder.add_thread("LCD Characters");
         let functions_track = builder.add_thread("Functions");
         let instructions_track = builder.add_thread("Instructions");
+        let control_flow_track = builder.add_thread("ControlFlow");
         let ewrites_track = builder.add_thread("EWrites");
         let iwrites_track = builder.add_thread("IWrites");
         let call_depth_counter = builder.add_counter_track("call_depth", Some("depth"), None);
@@ -154,6 +156,7 @@ impl PerfettoTracer {
             mem_write_counter,
             functions_track,
             instructions_track,
+            control_flow_track,
             ewrites_track,
             iwrites_track,
             call_ui_functions_depth: 0,
@@ -697,6 +700,27 @@ impl PerfettoTracer {
         self.record_irq_event(name, payload);
     }
 
+    /// Control-flow instants aligned to instruction timestamps.
+    pub fn record_control_flow(
+        &mut self,
+        name: &str,
+        instr_index: u64,
+        pc: u32,
+        payload: HashMap<String, AnnotationValue>,
+    ) {
+        let ts = self.ts(instr_index, 0);
+        let mut ev = self
+            .builder
+            .add_instant_event(self.control_flow_track, name.to_string(), ts);
+        ev.add_annotation("backend", AnnotationValue::Str("rust".to_string()));
+        ev.add_annotation("pc", AnnotationValue::Pointer(pc as u64));
+        ev.add_annotation("op_index", AnnotationValue::UInt(instr_index));
+        for (k, v) in payload {
+            ev.add_annotation(k, v);
+        }
+        ev.finish();
+    }
+
     /// Function enter/exit markers to mirror Python call/return tracing.
     pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
         let ctx = perfetto_instr_context();
@@ -877,6 +901,15 @@ impl PerfettoTracer {
         _pending_src: Option<&str>,
         _kil: Option<u8>,
         _imr_reg: Option<u8>,
+    ) {
+    }
+
+    pub fn record_control_flow(
+        &mut self,
+        _name: &str,
+        _instr_index: u64,
+        _pc: u32,
+        _payload: HashMap<String, AnnotationValue>,
     ) {
     }
 
