@@ -1,3 +1,5 @@
+// PY_SOURCE: sc62015/pysc62015/emulator.py
+
 use clap::Parser;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
@@ -813,8 +815,11 @@ fn inject_key(
     hold_steps: u64,
     force_key_irq: bool,
 ) {
+    if force_key_irq && !runtime.timer.kb_irq_enabled {
+        runtime.timer.kb_irq_enabled = true;
+    }
     if let Some(kb) = runtime.keyboard.as_mut() {
-        let kb_irq_enabled = runtime.timer.kb_irq_enabled;
+        let kb_irq_enabled = runtime.timer.kb_irq_enabled || force_key_irq;
         let _ = kb.inject_matrix_event(code, false, &mut runtime.memory, kb_irq_enabled);
         if kb_irq_enabled {
             runtime.timer.key_irq_latched = true;
