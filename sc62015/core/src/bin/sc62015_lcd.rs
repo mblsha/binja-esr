@@ -11,7 +11,7 @@ use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
 use sc62015_core::{
     pce500::DEFAULT_MTI_PERIOD, pce500::DEFAULT_STI_PERIOD, pce500::ROM_WINDOW_START,
-    timer::TimerContext, CoreRuntime, DeviceModel,
+    timer::TimerContext, CoreRuntime, DeviceModel, LoopDetectorConfig,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -19,7 +19,7 @@ use std::fs;
 use std::io::{stdout, IsTerminal, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const IQ7000_TEXT_ROWS: usize = 8;
 const IQ7000_TEXT_COLS: usize = 16;
@@ -141,6 +141,10 @@ struct Args {
     /// Delay before auto-typing (in steps).
     #[arg(long, default_value_t = AUTO_TYPE_START_DELAY_STEPS)]
     auto_type_delay: u64,
+
+    /// Write loop report JSON on exit (defaults to loop_report_<epoch>.json).
+    #[arg(long, value_name = "PATH")]
+    loop_report: Option<PathBuf>,
 }
 
 struct TerminalGuard {
@@ -394,6 +398,23 @@ fn format_debug_lines(
                 .unwrap_or_else(|| "off".to_string())
         ),
     ]);
+    let loop_line = match runtime.loop_detector().and_then(|det| det.current_summary()) {
+        Some(summary) => {
+            let mut line = format!(
+                "Loop: start=0x{start:05X} len={len} reps={reps}",
+                start = summary.start_pc,
+                len = summary.len,
+                reps = summary.repeats
+            );
+            let alt_count = summary.candidate_lengths.len().saturating_sub(1);
+            if alt_count > 0 {
+                line.push_str(&format!(" alts={alt_count}"));
+            }
+            line
+        }
+        None => "Loop: (none)".to_string(),
+    };
+    lines.push(loop_line);
     lines
 }
 
@@ -492,6 +513,17 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
         DeviceModel::PcE500 => root.join("rom-analysis/pc-e500/s3-en/bnida.json"),
         DeviceModel::Iq7000 => root.join("rom-analysis/iq-7000/bnida.json"),
     }
+}
+
+fn default_loop_report_path() -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    PathBuf::from(format!(
+        "loop_report_{}_{}.json",
+        stamp.as_secs(),
+        stamp.subsec_nanos()
+    ))
 }
 
 fn ensure_term() {
@@ -1078,6 +1110,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         *runtime.timer =
             TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
     }
+    let mut loop_config = LoopDetectorConfig::default();
+    loop_config.detect_stride = args.refresh_steps;
+    runtime.enable_loop_detector(loop_config);
     runtime.power_on_reset();
 
     let text_decoder = args.model.text_decoder(&rom_bytes);
@@ -1447,6 +1482,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if args.sleep_ms > 0 {
             sleep(Duration::from_millis(args.sleep_ms));
+        }
+    }
+
+    if let Some(detector) = runtime.loop_detector() {
+        if let Some(report) = detector.last_report() {
+            let path = args
+                .loop_report
+                .clone()
+                .unwrap_or_else(default_loop_report_path);
+            let json = serde_json::to_string_pretty(report)?;
+            fs::write(&path, json)?;
+            eprintln!("[loop] report saved to {}", path.display());
         }
     }
 

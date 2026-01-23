@@ -7,6 +7,7 @@ pub mod keyboard;
 pub mod lcd;
 pub mod lcd_text;
 pub mod llama;
+pub mod loop_detector;
 pub mod memory;
 pub mod pce500;
 pub mod perfetto;
@@ -28,6 +29,10 @@ pub use keyboard::KeyboardMatrix;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
+};
+pub use loop_detector::{
+    LoopBranchInfo, LoopBranchKind, LoopCandidate, LoopDetector, LoopDetectorConfig, LoopIrqSource,
+    LoopReport, LoopStep, LoopSummary, LoopTraceEntry,
 };
 pub use llama::state::LlamaState as CpuState;
 pub use memory::{
@@ -356,6 +361,7 @@ pub struct CoreRuntime {
     pub memory: MemoryImage,
     pub state: LlamaState,
     pub fast_mode: bool,
+    loop_detector: Option<LoopDetector>,
     executor: crate::llama::eval::LlamaExecutor,
     pub keyboard: Option<KeyboardMatrix>,
     pub lcd: Option<Box<dyn LcdHal>>,
@@ -379,6 +385,7 @@ impl CoreRuntime {
             memory: MemoryImage::new(),
             state: LlamaState::new(),
             fast_mode: false,
+            loop_detector: None,
             executor: crate::llama::eval::LlamaExecutor::new(),
             keyboard: Some(KeyboardMatrix::new()),
             lcd: Some(Box::new(LcdController::new())),
@@ -458,6 +465,22 @@ impl CoreRuntime {
             stub.init(&mut self.memory);
             self.sio = Some(stub);
         }
+    }
+
+    pub fn enable_loop_detector(&mut self, config: LoopDetectorConfig) {
+        self.loop_detector = Some(LoopDetector::new(config));
+    }
+
+    pub fn disable_loop_detector(&mut self) {
+        self.loop_detector = None;
+    }
+
+    pub fn loop_detector(&self) -> Option<&LoopDetector> {
+        self.loop_detector.as_ref()
+    }
+
+    pub fn loop_detector_mut(&mut self) -> Option<&mut LoopDetector> {
+        self.loop_detector.as_mut()
     }
 
     fn install_imr_isr_hook(&mut self) {
@@ -1072,6 +1095,13 @@ impl CoreRuntime {
                     return Ok::<(), CoreError>(());
                 }
 
+                let in_interrupt_before = self.timer.in_interrupt;
+                let irq_source_before = self
+                    .timer
+                    .irq_source
+                    .as_deref()
+                    .map(LoopIrqSource::from_name);
+
                 let keyboard_ptr = self
                     .keyboard
                     .as_mut()
@@ -1090,7 +1120,7 @@ impl CoreRuntime {
                     .sio
                     .as_mut()
                     .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
-                let pc = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
                 let mut bus = RuntimeBus {
                     mem: &mut self.memory,
                     keyboard_ptr,
@@ -1100,22 +1130,27 @@ impl CoreRuntime {
                     host_write,
                     onk_level: self.onk_level,
                     cycle: self.metadata.cycle_count,
-                    pc,
+                    pc: pc_before,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
                     state_ptr: &self.state as *const LlamaState,
                 };
-                let opcode = bus.load(pc, 8) as u8;
+                let opcode = bus.load(pc_before, 8) as u8;
                 // Capture WAIT loop count before execution (executor clears I).
                 let wait_loops = if opcode == 0xEF {
                     self.state.get_reg(RegName::I) & mask_for(RegName::I)
                 } else {
                     0
                 };
-                if let Err(e) = self.executor.execute(opcode, &mut self.state, &mut bus) {
-                    return Err(CoreError::Other(format!(
-                        "execute opcode 0x{opcode:02X}: {e}"
-                    )));
-                }
+                let instr_len = match self.executor.execute(opcode, &mut self.state, &mut bus) {
+                    Ok(len) => len,
+                    Err(e) => {
+                        return Err(CoreError::Other(format!(
+                            "execute opcode 0x{opcode:02X}: {e}"
+                        )))
+                    }
+                };
+                let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                drop(bus);
                 if opcode == 0xFF {
                     // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
                     // refresh mirrors from IMEM without clearing counters/bit-watch.
@@ -1147,7 +1182,7 @@ impl CoreRuntime {
                         .read_internal_byte(IMEM_IMR_OFFSET)
                         .unwrap_or(self.timer.irq_imr);
                     self.timer.last_irq_src = Some("IR".to_string());
-                    self.timer.last_irq_pc = Some(pc & ADDRESS_MASK);
+                    self.timer.last_irq_pc = Some(pc_before & ADDRESS_MASK);
                     let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
                         | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
                         | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
@@ -1229,7 +1264,7 @@ impl CoreRuntime {
                             let cleared = prev & (!src_mask);
                             let _ = self.memory.store(isr_addr, 8, cleared as u32);
                             self.timer
-                                .record_bit_watch_transition("ISR", prev, cleared, pc);
+                                .record_bit_watch_transition("ISR", prev, cleared, pc_before);
                         }
                     }
                     // Drop any stale interrupt-stack frames (used only for bookkeeping).
@@ -1239,7 +1274,7 @@ impl CoreRuntime {
                         let mut payload = std::collections::HashMap::new();
                         payload.insert(
                             "pc".to_string(),
-                            perfetto::AnnotationValue::Pointer(pc as u64),
+                            perfetto::AnnotationValue::Pointer(pc_before as u64),
                         );
                         payload.insert(
                             "ret".to_string(),
@@ -1260,6 +1295,16 @@ impl CoreRuntime {
                             perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
                         );
                         tracer.record_irq_event("IRQ_Return", payload);
+                    });
+                }
+                if let Some(detector) = self.loop_detector.as_mut() {
+                    detector.record_step(LoopStep {
+                        pc_before,
+                        pc_after,
+                        opcode,
+                        instr_len,
+                        in_interrupt: in_interrupt_before,
+                        irq_source: irq_source_before,
                     });
                 }
                 self.deliver_pending_irq()?;
