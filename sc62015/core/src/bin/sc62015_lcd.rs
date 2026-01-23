@@ -13,7 +13,7 @@ use sc62015_core::{
     pce500::DEFAULT_MTI_PERIOD, pce500::DEFAULT_STI_PERIOD, pce500::ROM_WINDOW_START,
     timer::TimerContext, CoreRuntime, DeviceModel, LoopDetectorConfig,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fs;
 use std::io::{stdout, IsTerminal, Write};
@@ -302,6 +302,20 @@ fn resolve_symbol(addr: u32, symbols: Option<&SymbolMap>) -> Option<(u32, String
     Some((*base, name.clone(), offset))
 }
 
+fn resolve_function(
+    addr: u32,
+    symbols: Option<&SymbolMap>,
+    functions: Option<&FunctionSet>,
+) -> Option<(u32, String, u32)> {
+    let funcs = functions?;
+    let base = *funcs.range(..=addr).next_back()?;
+    let name = symbols
+        .and_then(|map| map.get(&base).cloned())
+        .unwrap_or_else(|| format!("sub_{base:05X}"));
+    let offset = addr.saturating_sub(base);
+    Some((base, name, offset))
+}
+
 fn format_symbol(addr: u32, symbols: Option<&SymbolMap>) -> String {
     if let Some((_base, name, offset)) = resolve_symbol(addr, symbols) {
         if offset == 0 {
@@ -329,6 +343,7 @@ fn format_call_stack_lines(frames: &[u32], symbols: Option<&SymbolMap>) -> Vec<S
 fn format_debug_lines(
     runtime: &CoreRuntime,
     symbols: Option<&SymbolMap>,
+    functions: Option<&FunctionSet>,
     last_key: &Option<String>,
     last_key_step: u64,
     pending_releases: &[PendingRelease],
@@ -415,12 +430,40 @@ fn format_debug_lines(
         None => "Loop: (none)".to_string(),
     };
     lines.push(loop_line);
+    if let Some(detector) = runtime.loop_detector() {
+        if detector.current_summary().is_some() {
+            if let Some(report) = detector.last_report() {
+                let mut functions_seen = BTreeMap::<u32, String>::new();
+                for entry in &report.trace {
+                    if entry.mainline_index.is_none() {
+                        continue;
+                    }
+                    let pc = entry.pc_before & 0x000f_ffff;
+                    if let Some((base, name, _)) = resolve_function(pc, symbols, functions) {
+                        functions_seen.entry(base).or_insert(name);
+                    } else if let Some((base, name, _)) = resolve_symbol(pc, symbols) {
+                        functions_seen.entry(base).or_insert(name);
+                    }
+                }
+                if !functions_seen.is_empty() {
+                    let names_list = functions_seen
+                        .into_iter()
+                        .map(|(_addr, name)| name)
+                        .collect::<Vec<_>>();
+                    let count = names_list.len();
+                    let names = names_list.join(", ");
+                    lines.push(format!("Loop fns({count}): {names}"));
+                }
+            }
+        }
+    }
     lines
 }
 
 fn format_extra_lines(
     runtime: &CoreRuntime,
     symbols: Option<&SymbolMap>,
+    functions: Option<&FunctionSet>,
     last_key: &Option<String>,
     last_key_step: u64,
     pending_releases: &[PendingRelease],
@@ -431,6 +474,7 @@ fn format_extra_lines(
     lines.extend(format_debug_lines(
         runtime,
         symbols,
+        functions,
         last_key,
         last_key_step,
         pending_releases,
@@ -544,6 +588,17 @@ fn load_bnida_symbols(path: &PathBuf) -> Result<SymbolMap, Box<dyn Error>> {
         if !name.is_empty() {
             out.insert(addr, name);
         }
+    }
+    Ok(out)
+}
+
+fn load_bnida_functions(path: &PathBuf) -> Result<FunctionSet, Box<dyn Error>> {
+    let raw = fs::read_to_string(path)?;
+    let cleaned = strip_leading_line_comments(&raw);
+    let parsed: BnidaJson = serde_json::from_str(&cleaned)?;
+    let mut out = BTreeSet::new();
+    for addr in parsed.functions.unwrap_or_default() {
+        out.insert(addr & 0x000f_ffff);
     }
     Ok(out)
 }
@@ -762,10 +817,13 @@ struct PendingRelease {
 }
 
 type SymbolMap = BTreeMap<u32, String>;
+type FunctionSet = BTreeSet<u32>;
 
 #[derive(serde::Deserialize)]
 struct BnidaJson {
     names: Option<HashMap<String, String>>,
+    #[serde(default)]
+    functions: Option<Vec<u32>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1128,6 +1186,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let symbols = bnida_path
         .as_ref()
         .and_then(|path| load_bnida_symbols(path).ok());
+    let function_addrs = bnida_path
+        .as_ref()
+        .and_then(|path| load_bnida_functions(path).ok());
     let mut last_lines: Vec<String> = Vec::new();
     let mut first_draw = true;
     let mut last_key: Option<String> = None;
@@ -1170,6 +1231,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let extra_lines = format_extra_lines(
             &runtime,
             symbols.as_ref(),
+            function_addrs.as_ref(),
             &last_key,
             last_key_step,
             &pending_releases,
@@ -1430,6 +1492,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let extra_lines = format_extra_lines(
                     &runtime,
                     symbols.as_ref(),
+                    function_addrs.as_ref(),
                     &last_key,
                     last_key_step,
                     &pending_releases,
@@ -1467,6 +1530,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let extra_lines = format_extra_lines(
                 &runtime,
                 symbols.as_ref(),
+                function_addrs.as_ref(),
                 &last_key,
                 last_key_step,
                 &pending_releases,
