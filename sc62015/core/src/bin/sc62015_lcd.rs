@@ -7,7 +7,7 @@ use crossterm::{
     terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use sc62015_core::llama::opcodes::RegName;
-use sc62015_core::llama::state::mask_for;
+use sc62015_core::llama::state::{mask_for, LlamaState};
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
 use sc62015_core::{
     pce500::DEFAULT_MTI_PERIOD, pce500::DEFAULT_STI_PERIOD, pce500::ROM_WINDOW_START,
@@ -332,18 +332,48 @@ fn format_symbol(addr: u32, symbols: Option<&SymbolMap>) -> String {
     format!("sub_{addr:05X}")
 }
 
-fn format_call_stack_lines(frames: &[u32], symbols: Option<&SymbolMap>) -> Vec<String> {
+fn format_call_stack_lines_with_header(
+    header: &str,
+    frames: &[u32],
+    symbols: Option<&SymbolMap>,
+) -> Vec<String> {
     if frames.is_empty() {
-        return vec!["Call stack: (empty)".to_string()];
+        return vec![format!("{header} (empty)")];
     }
     let mut out = Vec::with_capacity(frames.len() + 1);
-    out.push("Call stack:".to_string());
+    out.push(header.to_string());
     for (idx, frame) in frames.iter().enumerate() {
         let addr = frame & 0x000f_ffff;
         let label = format_symbol(addr, symbols);
         out.push(format!("{idx:02}: {label} (0x{addr:05X})"));
     }
     out
+}
+
+fn format_call_stack_lines(frames: &[u32], symbols: Option<&SymbolMap>) -> Vec<String> {
+    format_call_stack_lines_with_header("Call stack:", frames, symbols)
+}
+
+fn format_off_context_lines(state: &LlamaState, symbols: Option<&SymbolMap>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(pc) = state.last_off_pc() {
+        let label = format_symbol(pc, symbols);
+        lines.push(format!("OFF at: {label} (0x{pc:05X})"));
+    } else {
+        lines.push("OFF at: (unknown)".to_string());
+    }
+    let frames = state.last_off_call_stack();
+    let frames = if frames.is_empty() {
+        state.call_stack()
+    } else {
+        frames
+    };
+    lines.extend(format_call_stack_lines_with_header(
+        "OFF stack:",
+        frames,
+        symbols,
+    ));
+    lines
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -487,7 +517,11 @@ fn format_extra_lines(
     halted_steps: u64,
     pf1_stage: Option<Pf1TwiceStage>,
 ) -> Vec<String> {
-    let mut lines = format_call_stack_lines(runtime.state.call_stack(), symbols);
+    let mut lines = if runtime.state.is_off() {
+        format_off_context_lines(&runtime.state, symbols)
+    } else {
+        format_call_stack_lines(runtime.state.call_stack(), symbols)
+    };
     lines.extend(format_debug_lines(
         runtime,
         symbols,
@@ -1293,7 +1327,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     ram_zero_buf: fast_init_buf.as_deref(),
                 },
             ) {
-                executed = executed.saturating_add(1);
+                if !runtime.state.is_off() {
+                    executed = executed.saturating_add(1);
+                }
                 remaining = remaining.saturating_sub(1);
                 dirty = true;
                 did_stub = true;
@@ -1304,8 +1340,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 remaining.min(args.input_steps)
             };
             if !did_stub {
+                let off_before = runtime.state.is_off();
+                let instr_before = runtime.instruction_count();
                 runtime.step(chunk as usize)?;
-                executed = executed.saturating_add(chunk);
+                let advanced = runtime.instruction_count().saturating_sub(instr_before);
+                if off_before || runtime.state.is_off() {
+                    executed = executed.saturating_add(advanced);
+                } else {
+                    executed = executed.saturating_add(chunk);
+                }
                 remaining = remaining.saturating_sub(chunk);
             }
             apply_pending_releases(&mut runtime, &mut pending_releases, executed);
@@ -1366,7 +1409,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            if runtime.state.is_halted() {
+            if runtime.state.is_halted() && !runtime.state.is_off() {
                 halted_steps = halted_steps.saturating_add(chunk);
             } else {
                 halted_steps = 0;
