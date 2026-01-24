@@ -242,17 +242,17 @@ impl LoopDetector {
         if let Some(last_full) = self.full_trace.back_mut() {
             last_full.mainline_index = Some(main_idx);
         }
-        self.edges.entry(step.pc_before).or_default().insert(step.pc_after);
+        self.edges
+            .entry(step.pc_before)
+            .or_default()
+            .insert(step.pc_after);
         self.update_recent_positions(step.pc_before, main_idx);
         self.maybe_detect(main_idx);
     }
 
     fn update_recent_positions(&mut self, pc: u32, idx: u64) {
         let front_idx = self.main_front_idx();
-        let entries = self
-            .recent_positions
-            .entry(pc)
-            .or_default();
+        let entries = self.recent_positions.entry(pc).or_default();
         entries.push_back(idx);
         while entries.len() > self.config.recent_positions_len {
             entries.pop_front();
@@ -473,7 +473,12 @@ impl LoopDetector {
             in_interrupt: entry.in_interrupt,
             irq_source: entry.irq_source,
             is_hardware_interrupt: entry.is_hardware_interrupt,
-            branch: self.branch_info(entry.opcode, entry.pc_before, entry.pc_after, entry.instr_len),
+            branch: self.branch_info(
+                entry.opcode,
+                entry.pc_before,
+                entry.pc_after,
+                entry.instr_len,
+            ),
         }
     }
 
@@ -488,7 +493,12 @@ impl LoopDetector {
             in_interrupt: false,
             irq_source: None,
             is_hardware_interrupt: false,
-            branch: self.branch_info(entry.opcode, entry.pc_before, entry.pc_after, entry.instr_len),
+            branch: self.branch_info(
+                entry.opcode,
+                entry.pc_before,
+                entry.pc_after,
+                entry.instr_len,
+            ),
         }
     }
 
@@ -652,15 +662,7 @@ mod tests {
         let mut detector = LoopDetector::new(config);
         record_irq(&mut detector, 0x9000, LoopIrqSource::Key);
         record_main(&mut detector, 0x10);
-        record_step(
-            &mut detector,
-            0x20,
-            0x21,
-            RETI_OPCODE,
-            1,
-            false,
-            None,
-        );
+        record_step(&mut detector, 0x20, 0x21, RETI_OPCODE, 1, false, None);
         record_main(&mut detector, 0x30);
         assert_eq!(detector.main_index, 2);
         assert_eq!(detector.main_trace.len(), 2);
@@ -734,25 +736,9 @@ mod tests {
             ..Default::default()
         };
         let mut detector = LoopDetector::new(config);
-        record_step(
-            &mut detector,
-            0x40,
-            0x60,
-            0x00,
-            1,
-            false,
-            None,
-        );
+        record_step(&mut detector, 0x40, 0x60, 0x00, 1, false, None);
         for _ in 0..3 {
-            record_step(
-                &mut detector,
-                0x40,
-                0x41,
-                0x00,
-                1,
-                false,
-                None,
-            );
+            record_step(&mut detector, 0x40, 0x41, 0x00, 1, false, None);
         }
         let report = detector.last_report().expect("loop report");
         let entry = report
@@ -774,15 +760,7 @@ mod tests {
         };
         let mut detector = LoopDetector::new(config);
         for _ in 0..3 {
-            record_step(
-                &mut detector,
-                0x80,
-                0x83,
-                0x14,
-                3,
-                false,
-                None,
-            );
+            record_step(&mut detector, 0x80, 0x83, 0x14, 3, false, None);
         }
         let report = detector.last_report().expect("loop report");
         let entry = report
