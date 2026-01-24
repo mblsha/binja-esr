@@ -15,8 +15,8 @@ pub mod sio;
 pub mod snapshot;
 pub mod timer;
 
-use crate::llama::{opcodes::RegName, state::LlamaState};
 use crate::llama::state::PowerState;
+use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use serde_json::json;
@@ -31,11 +31,11 @@ pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
 };
+pub use llama::state::LlamaState as CpuState;
 pub use loop_detector::{
     LoopBranchInfo, LoopBranchKind, LoopCandidate, LoopDetector, LoopDetectorConfig, LoopIrqSource,
     LoopReport, LoopStep, LoopSummary, LoopTraceEntry,
 };
-pub use llama::state::LlamaState as CpuState;
 pub use memory::{
     AccessKind, MemoryAccessLog, MemoryImage, MemoryOverlay, ADDRESS_MASK, EXTERNAL_SPACE,
     INTERNAL_ADDR_MASK, INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START,
@@ -2780,10 +2780,7 @@ mod tests {
         let cycles_after = rt.cycle_count();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
 
-        assert_eq!(
-            cycles_after, cycles_before,
-            "OFF should not advance cycles"
-        );
+        assert_eq!(cycles_after, cycles_before, "OFF should not advance cycles");
         assert_eq!(isr & ISR_MTI, 0, "OFF should not tick MTI");
     }
 

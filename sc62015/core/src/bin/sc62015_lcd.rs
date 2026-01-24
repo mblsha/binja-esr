@@ -429,7 +429,10 @@ fn format_debug_lines(
                 .unwrap_or_else(|| "off".to_string())
         ),
     ]);
-    let loop_line = match runtime.loop_detector().and_then(|det| det.current_summary()) {
+    let loop_line = match runtime
+        .loop_detector()
+        .and_then(|det| det.current_summary())
+    {
         Some(summary) => {
             let mut line = format!(
                 "Loop: start=0x{start:05X} len={len} reps={reps}",
