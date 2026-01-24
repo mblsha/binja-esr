@@ -1417,7 +1417,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             bus.maybe_patch_vectors();
         }
         // Drive timers using the current cycle count (before this instruction executes).
-        bus.tick_timers_only();
+        if !state.is_off() {
+            bus.tick_timers_only();
+        }
         if let Some(code) = auto_key {
             if !pressed_key && !auto_press_consumed && executed >= auto_press_step {
                 match code {
@@ -1514,7 +1516,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.timer.key_irq_latched = false;
                 }
                 if onk_only == 0 {
-                    bus.cycle_count = bus.cycle_count.wrapping_add(1);
                     continue;
                 }
                 state.set_halted(false);
