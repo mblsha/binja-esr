@@ -204,7 +204,8 @@ impl LoopDetector {
     pub fn record_step(&mut self, step: LoopStep) {
         let full_idx = self.full_index;
         self.full_index = self.full_index.saturating_add(1);
-        let is_hardware_interrupt = step.in_interrupt && step.irq_source.map_or(true, |src| !src.is_ir());
+        let is_hardware_interrupt =
+            step.in_interrupt && step.irq_source.is_none_or(|src| !src.is_ir());
         if self.full_trace.len() == self.config.full_history_len {
             self.full_trace.pop_front();
         }
@@ -241,10 +242,7 @@ impl LoopDetector {
         if let Some(last_full) = self.full_trace.back_mut() {
             last_full.mainline_index = Some(main_idx);
         }
-        self.edges
-            .entry(step.pc_before)
-            .or_insert_with(HashSet::new)
-            .insert(step.pc_after);
+        self.edges.entry(step.pc_before).or_default().insert(step.pc_after);
         self.update_recent_positions(step.pc_before, main_idx);
         self.maybe_detect(main_idx);
     }
@@ -254,19 +252,19 @@ impl LoopDetector {
         let entries = self
             .recent_positions
             .entry(pc)
-            .or_insert_with(VecDeque::new);
+            .or_default();
         entries.push_back(idx);
         while entries.len() > self.config.recent_positions_len {
             entries.pop_front();
         }
-        while entries.front().map_or(false, |v| *v < front_idx) {
+        while entries.front().is_some_and(|v| *v < front_idx) {
             entries.pop_front();
         }
     }
 
     fn maybe_detect(&mut self, current_idx: u64) {
         let stride = self.config.detect_stride;
-        if stride > 0 && (current_idx + 1) % stride != 0 {
+        if stride > 0 && !(current_idx + 1).is_multiple_of(stride) {
             return;
         }
         self.detect(current_idx);
@@ -308,10 +306,7 @@ impl LoopDetector {
             detected_at: current_idx,
             candidate_lengths,
         };
-        let changed = self
-            .current_summary
-            .as_ref()
-            .map_or(true, |prev| prev != &summary);
+        let changed = self.current_summary.as_ref() != Some(&summary);
         self.current_summary = Some(summary.clone());
         if changed {
             self.last_report = Some(self.build_report(summary, candidates));
@@ -607,11 +602,13 @@ mod tests {
 
     #[test]
     fn detects_repeated_loop() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 8;
-        config.main_history_len = 32;
-        config.full_history_len = 64;
-        config.detect_stride = 0;
+        let config = LoopDetectorConfig {
+            max_loop_len: 8,
+            main_history_len: 32,
+            full_history_len: 64,
+            detect_stride: 0,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         let pcs = [0x10, 0x20, 0x30];
         for idx in 0..9 {
@@ -633,8 +630,10 @@ mod tests {
 
     #[test]
     fn detects_multiple_candidates_picks_longest() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 4;
+        let config = LoopDetectorConfig {
+            max_loop_len: 4,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         for _ in 0..6 {
             record_main(&mut detector, 0x10);
@@ -646,8 +645,10 @@ mod tests {
 
     #[test]
     fn skips_hardware_interrupts_and_reti() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 4;
+        let config = LoopDetectorConfig {
+            max_loop_len: 4,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         record_irq(&mut detector, 0x9000, LoopIrqSource::Key);
         record_main(&mut detector, 0x10);
@@ -668,8 +669,10 @@ mod tests {
 
     #[test]
     fn includes_ir_source_even_when_in_interrupt() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 4;
+        let config = LoopDetectorConfig {
+            max_loop_len: 4,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         record_irq(&mut detector, 0x7000, LoopIrqSource::Ir);
         assert_eq!(detector.main_index, 1);
@@ -680,9 +683,11 @@ mod tests {
 
     #[test]
     fn detect_stride_gates_detection() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 2;
-        config.detect_stride = 2;
+        let config = LoopDetectorConfig {
+            max_loop_len: 2,
+            detect_stride: 2,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         for _ in 0..3 {
             record_main(&mut detector, 0x10);
@@ -694,8 +699,10 @@ mod tests {
 
     #[test]
     fn ignores_short_repeats() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 2;
+        let config = LoopDetectorConfig {
+            max_loop_len: 2,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         record_main(&mut detector, 0x10);
         record_main(&mut detector, 0x20);
@@ -706,8 +713,10 @@ mod tests {
 
     #[test]
     fn respects_max_loop_len() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 3;
+        let config = LoopDetectorConfig {
+            max_loop_len: 3,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         let pcs = [0x10, 0x20, 0x30, 0x40];
         for _ in 0..3 {
@@ -720,8 +729,10 @@ mod tests {
 
     #[test]
     fn branch_not_taken_when_multiple_edges() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 2;
+        let config = LoopDetectorConfig {
+            max_loop_len: 2,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         record_step(
             &mut detector,
@@ -757,8 +768,10 @@ mod tests {
 
     #[test]
     fn branch_not_taken_when_conditional_only_fallthrough() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 1;
+        let config = LoopDetectorConfig {
+            max_loop_len: 1,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         for _ in 0..3 {
             record_step(
@@ -783,13 +796,15 @@ mod tests {
 
     #[test]
     fn report_truncates_when_full_trace_overflows() {
-        let mut config = LoopDetectorConfig::default();
-        config.max_loop_len = 5;
-        config.main_history_len = config
-            .max_loop_len
+        let main_history_len = 5usize
             .saturating_mul(3)
             .saturating_add(DEFAULT_MAIN_HISTORY_SLACK);
-        config.full_history_len = config.main_history_len;
+        let config = LoopDetectorConfig {
+            max_loop_len: 5,
+            main_history_len,
+            full_history_len: main_history_len,
+            ..Default::default()
+        };
         let mut detector = LoopDetector::new(config);
         let pattern = [0x10, 0x20, 0x30, 0x40, 0x50];
         let irq_fill = 20;
