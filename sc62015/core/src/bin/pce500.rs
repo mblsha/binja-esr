@@ -4,20 +4,21 @@
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
-    apply_registers, collect_registers, create_lcd, emit_event,
+    apply_registers,
+    collect_registers,
+    create_lcd,
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
-        eval::{
-            perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace,
-        },
+        dispatch,
+        eval::{perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace},
         opcodes::RegName,
         state::{mask_for, LlamaState, PowerState},
     },
     memory::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
-        IMEM_KOL_OFFSET, IMEM_SSR_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET, IMEM_SSR_OFFSET,
     },
     pce500::{
         load_pce500_rom_window_into_memory, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
@@ -26,8 +27,8 @@ use sc62015_core::{
     perfetto::set_call_ui_function_names,
     sleep_cycles, snapshot,
     timer::TimerContext,
-    AsyncDriver, DeviceModel, DeviceTextDecoder, DriverEvent, PerfettoTracer, SnapshotMetadata,
-    ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
+    emit_event, AsyncDriver, DeviceModel, DeviceTextDecoder, DriverEvent,
+    PerfettoTracer, SnapshotMetadata, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -58,6 +59,11 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
+const HALT_IDLE_CYCLES: u64 = 3;
+const TIMER_MTI_PHASE_OFFSET: i64 = 0;
+const TIMER_STI_PHASE_OFFSET: i64 = 0;
+const TIMER_MTI_PERIOD_OFFSET: i64 = 0;
+const TIMER_STI_PERIOD_OFFSET: i64 = 0;
 const CPU_DONE_EVENT: u32 = 1;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +225,7 @@ struct Args {
     /// Save a snapshot (.pcsnap) after executing.
     #[arg(long, value_name = "PATH")]
     snapshot_out: Option<PathBuf>,
+
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -629,7 +636,7 @@ impl StandaloneBus {
             lcd,
             timer,
             cycle_count: 0,
-            timer_finalize_clamp: false,
+            timer_finalize_clamp: true,
             keyboard: KeyboardMatrix::new(),
             lcd_writes: 0,
             log_lcd,
@@ -749,8 +756,7 @@ impl StandaloneBus {
         let events = self.keyboard.scan_tick(&mut self.memory, true);
         let fifo_pending = self.keyboard.fifo_len() > 0;
         let pending = events > 0 || fifo_pending;
-        let kb_irq_enabled = self.timer.kb_irq_enabled;
-        if events > 0 || (kb_irq_enabled && fifo_pending) {
+        if events > 0 {
             self.deferred_key_irq = true;
             self.deferred_pending_kil = pending;
             self.last_kbd_access = Some("scan".to_string());
@@ -1170,13 +1176,17 @@ impl StandaloneBus {
                         (
                             "isr",
                             AnnotationValue::UInt(
-                                self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) as u64,
+                                self.memory
+                                    .read_internal_byte(IMEM_ISR_OFFSET)
+                                    .unwrap_or(0) as u64,
                             ),
                         ),
                         (
                             "imr",
                             AnnotationValue::UInt(
-                                self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u64,
+                                self.memory
+                                    .read_internal_byte(IMEM_IMR_OFFSET)
+                                    .unwrap_or(0) as u64,
                             ),
                         ),
                         ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
@@ -1204,14 +1214,6 @@ impl StandaloneBus {
             self.tick_timers_only(self.cycle_count);
         }
     }
-
-    fn finalize_instruction(&mut self) {
-        self.timer
-            .finalize_instruction_with_clamp(self.cycle_count, self.timer_finalize_clamp);
-        if !self.scan_on_timer {
-            self.tick_keyboard();
-        }
-    }
 }
 
 fn mask_bits(bits: u8) -> u32 {
@@ -1219,6 +1221,14 @@ fn mask_bits(bits: u8) -> u32 {
         u32::MAX
     } else {
         (1u32 << bits) - 1
+    }
+}
+
+fn adjust_u64(value: u64, offset: i64) -> u64 {
+    if offset >= 0 {
+        value.wrapping_add(offset as u64)
+    } else {
+        value.wrapping_sub((-offset) as u64)
     }
 }
 
@@ -1250,8 +1260,11 @@ fn load_snapshot_state(
     }
 
     bus.cycle_count = metadata.cycle_count;
-    bus.timer
-        .apply_snapshot_info(&metadata.timer, &metadata.interrupts, metadata.cycle_count);
+    bus.timer.apply_snapshot_info(
+        &metadata.timer,
+        &metadata.interrupts,
+        metadata.cycle_count,
+    );
     bus.irq_pending = metadata.interrupts.pending;
     bus.in_interrupt = metadata.interrupts.in_interrupt;
     bus.last_irq_src = metadata.interrupts.source.clone();
@@ -1265,23 +1278,23 @@ fn load_snapshot_state(
 
     bus.memory
         .set_memory_counts(metadata.memory_reads, metadata.memory_writes);
-    let mut readonly = if !metadata.readonly_ranges.is_empty() {
-        metadata.readonly_ranges.clone()
-    } else {
-        Vec::new()
-    };
-    let no_ram_range = (NO_RAM_WINDOW_START as u32, NO_RAM_WINDOW_END as u32);
-    if !readonly.contains(&no_ram_range) {
-        readonly.push(no_ram_range);
-    }
-    let rom_range = (
-        ROM_WINDOW_START as u32,
-        (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
-    );
-    if !readonly.contains(&rom_range) {
-        readonly.push(rom_range);
-    }
-    bus.memory.set_readonly_ranges(readonly);
+        let mut readonly = if !metadata.readonly_ranges.is_empty() {
+            metadata.readonly_ranges.clone()
+        } else {
+            Vec::new()
+        };
+        let no_ram_range = (NO_RAM_WINDOW_START as u32, NO_RAM_WINDOW_END as u32);
+        if !readonly.contains(&no_ram_range) {
+            readonly.push(no_ram_range);
+        }
+        let rom_range = (
+            ROM_WINDOW_START as u32,
+            (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
+        );
+        if !readonly.contains(&rom_range) {
+            readonly.push(rom_range);
+        }
+        bus.memory.set_readonly_ranges(readonly);
 
     if let Some(kb_meta) = metadata.keyboard.clone() {
         if let Ok(snapshot) = serde_json::from_value::<KeyboardSnapshot>(kb_meta) {
@@ -1357,10 +1370,10 @@ fn save_snapshot_state(
     if timer_info.enabled {
         let mti_period = timer_info.mti_period.max(0) as u64;
         let sti_period = timer_info.sti_period.max(0) as u64;
-        timer_info.next_mti =
-            next_timer_tick(bus.cycle_count, mti_period).min(i32::MAX as u64) as i32;
-        timer_info.next_sti =
-            next_timer_tick(bus.cycle_count, sti_period).min(i32::MAX as u64) as i32;
+        timer_info.next_mti = next_timer_tick(bus.cycle_count, mti_period)
+            .min(i32::MAX as u64) as i32;
+        timer_info.next_sti = next_timer_tick(bus.cycle_count, sti_period)
+            .min(i32::MAX as u64) as i32;
     } else {
         timer_info.next_mti = 0;
         timer_info.next_sti = 0;
@@ -1401,6 +1414,14 @@ impl LlamaBus for StandaloneBus {
         }
         let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
+            if offset == IMEM_KIL_OFFSET {
+                // Honor KSD (keyboard strobe disable) bit in LCC (bit 2).
+                let lcc = self.memory.read_internal_byte(IMEM_LCC_OFFSET).unwrap_or(0);
+                if (lcc & 0x04) != 0 {
+                    self.trace_kbd_access("read-ksd-masked", addr, offset, bits, 0);
+                    return 0;
+                }
+            }
             let had_pending = offset == IMEM_KIL_OFFSET && self.keyboard.fifo_len() > 0;
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
@@ -1660,6 +1681,31 @@ impl LlamaBus for StandaloneBus {
         })
     }
 
+    fn timer_periods(&mut self) -> Option<(u64, u64)> {
+        Some((self.timer.mti_period, self.timer.sti_period))
+    }
+
+    fn finalize_instruction(&mut self) {
+        self.timer
+            .finalize_instruction_with_clamp(self.cycle_count, self.timer_finalize_clamp);
+        if !self.scan_on_timer {
+            self.tick_keyboard();
+        }
+    }
+
+    fn finalize_timer_chunk(&mut self) {
+        self.timer
+            .finalize_instruction_with_clamp(self.cycle_count, self.timer_finalize_clamp);
+    }
+
+    fn set_timer_finalize_clamp(&mut self, clamp: bool) {
+        self.timer_finalize_clamp = clamp;
+    }
+
+    fn mark_instruction_start(&mut self) {
+        self.timer.set_instruction_start_cycle(self.cycle_count);
+    }
+
     fn cycle_count(&mut self) -> Option<u64> {
         Some(self.cycle_count)
     }
@@ -1724,7 +1770,8 @@ fn parse_u64_value(raw: &str) -> Result<u64, String> {
     }
     let lowered = trimmed.to_ascii_lowercase();
     if let Some(hex) = lowered.strip_prefix("0x") {
-        return u64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex value '{raw}'"));
+        return u64::from_str_radix(hex, 16)
+            .map_err(|_| format!("invalid hex value '{raw}'"));
     }
     trimmed
         .parse::<u64>()
@@ -1764,7 +1811,7 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
 
 fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
-    for token_raw in raw.split([',', ';']) {
+    for token_raw in raw.split(|ch| ch == ',' || ch == ';') {
         let token = token_raw.trim();
         if token.is_empty() {
             continue;
@@ -1816,7 +1863,9 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
         }
         if lower.starts_with("wait-screen-draw") {
             if token.contains(':') || token.contains('=') {
-                return Err(format!("wait-screen-draw does not take a value: '{token}'"));
+                return Err(format!(
+                    "wait-screen-draw does not take a value: '{token}'"
+                ));
             }
             actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
             continue;
@@ -1985,14 +2034,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut use_key_seq = false;
     let mut needs_screen_state = false;
     let mut needs_screen_text = false;
-    if let Some(raw) = args
-        .key_seq
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        let actions =
-            parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD).map_err(|err| format!("--key-seq: {err}"))?;
+    if let Some(raw) = args.key_seq.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let actions = parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD)
+            .map_err(|err| format!("--key-seq: {err}"))?;
         if !actions.is_empty() {
             for action in &actions {
                 match action.kind {
@@ -2072,6 +2116,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     configure_bus_for_model(&mut bus, args.model);
     // Keep default timer-driven scans unless tests override the flag.
     bus.timer.set_preserve_phase(false);
+    if bus.timer.enabled && args.snapshot_in.is_none() {
+        bus.timer.mti_period = adjust_u64(bus.timer.mti_period, TIMER_MTI_PERIOD_OFFSET);
+        bus.timer.sti_period = adjust_u64(bus.timer.sti_period, TIMER_STI_PERIOD_OFFSET);
+        bus.timer.next_mti = adjust_u64(bus.timer.next_mti, TIMER_MTI_PERIOD_OFFSET);
+        bus.timer.next_sti = adjust_u64(bus.timer.next_sti, TIMER_STI_PERIOD_OFFSET);
+        bus.timer.next_mti = adjust_u64(bus.timer.next_mti, TIMER_MTI_PHASE_OFFSET);
+        bus.timer.next_sti = adjust_u64(bus.timer.next_sti, TIMER_STI_PHASE_OFFSET);
+    }
     let mut state = LlamaState::new();
     let executor = AsyncLlamaExecutor::new();
     let mut base_instruction_count: u64 = 0;
@@ -2126,7 +2178,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
         log_dbg(&format!("entering execute loop for {max_steps} steps"));
         while executed < max_steps {
-            let mut pre_tick_done = false;
             // Ensure vector table is patched once before executing instructions.
             if !bus.vec_patched {
                 bus.maybe_patch_vectors();
@@ -2199,17 +2250,85 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.timer.last_fired = bus.timer.irq_source.clone();
                 }
                 // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
-                // Mirror Python: tick timers before deciding whether to remain halted.
-                if !state.is_off() {
-                    bus.tick_timers_only(bus.cycle_count);
-                    pre_tick_done = true;
-                }
+                // The Python emulator uses this to prevent the ROM from stalling in low-power
+                // loops when timers/keyboard events are pending.
                 let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                if isr == 0 {
-                    if !state.is_off() {
-                        bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                let stay_halted = isr == 0;
+                if stay_halted {
+                    // Remain halted; emit an idle step and advance cycles without executing.
+                    let pc = state.pc() & ADDRESS_MASK;
+                    bus.set_pc(pc);
+                    bus.set_instr_index(executed);
+                    let opcode = bus.load(pc, 8) as u8;
+                    bus.advance_cycles(HALT_IDLE_CYCLES);
+                    bus.finalize_instruction();
+                    let trace_regs = {
+                        let mut guard = PERFETTO_TRACER.enter();
+                        guard.with_some(|_| ()).is_some()
                     }
-                    sleep_for_cycles(1).await;
+                    .then(|| {
+                        let mut regs = HashMap::new();
+                        for (name, reg) in [
+                            ("A", RegName::A),
+                            ("B", RegName::B),
+                            ("BA", RegName::BA),
+                            ("IL", RegName::IL),
+                            ("IH", RegName::IH),
+                            ("I", RegName::I),
+                            ("X", RegName::X),
+                            ("Y", RegName::Y),
+                            ("U", RegName::U),
+                            ("S", RegName::S),
+                            ("PC", RegName::PC),
+                            ("F", RegName::F),
+                            ("FC", RegName::FC),
+                            ("FZ", RegName::FZ),
+                        ] {
+                            regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
+                        }
+                        regs
+                    });
+                    if let Some(regs) = trace_regs {
+                        let mem_imr = bus.peek_imem_silent(IMEM_IMR_OFFSET);
+                        let mem_isr = bus.peek_imem_silent(IMEM_ISR_OFFSET);
+                        let (mti, sti) = bus.timer.tick_counts(bus.cycle_count);
+                        let mnemonic = dispatch::lookup(opcode).map(|entry| entry.name);
+                        let mut guard = PERFETTO_TRACER.enter();
+                        set_perf_instr_counter(executed.saturating_add(1));
+                        guard.with_some(|tracer| {
+                            tracer.record_regs(
+                                executed,
+                                pc,
+                                pc,
+                                opcode,
+                                mnemonic,
+                                &regs,
+                                mem_imr,
+                                mem_isr,
+                                Some(mti),
+                                Some(sti),
+                                Some(bus.cycle_count),
+                            );
+                        });
+                    } else {
+                        set_perf_instr_counter(executed.saturating_add(1));
+                    }
+                    bus.apply_deferred_key_irq();
+                    executed = executed.saturating_add(1);
+                    sleep_for_cycles(HALT_IDLE_CYCLES).await;
+                    if perfetto_chunk_size > 0
+                        && perfetto_enabled
+                        && executed.is_multiple_of(perfetto_chunk_size)
+                        && executed > 0
+                    {
+                        rotate_perfetto_trace(&perfetto_base_path_run, perfetto_part);
+                        perfetto_part = perfetto_part.saturating_add(1);
+                    }
+                    if let Some(stop) = stop_pc {
+                        if state.pc() == stop {
+                            break;
+                        }
+                    }
                     continue;
                 }
                 state.set_halted(false);
@@ -2317,36 +2436,25 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     isr = isr
                 );
             }
-            let run_timer_cycles = !state.is_off();
-            if run_timer_cycles && !pre_tick_done {
-                // Mirror Python: tick timers once per instruction before execution.
-                bus.tick_timers_only(bus.cycle_count);
-            }
             let opcode = bus.load(pc, 8) as u8;
             if perfetto_dbg {
                 eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
             }
+            let run_timer_cycles = !state.is_off();
             let bus_ptr: *mut StandaloneBus = &mut bus;
             let cycle_ptr: *mut u64 = &mut bus.cycle_count;
             // SAFETY: tick_cb is only invoked while the CPU loop owns &mut bus/state.
             let mut tick_cb = move |cycle| unsafe { (*bus_ptr).tick_timers_only(cycle) };
             // SAFETY: cycle_count is only mutated through this tick helper in the loop.
-            let mut ticker = TickHelper::new(
-                unsafe { &mut *cycle_ptr },
-                run_timer_cycles,
-                Some(&mut tick_cb),
-            );
+            let mut ticker =
+                TickHelper::new(unsafe { &mut *cycle_ptr }, run_timer_cycles, Some(&mut tick_cb));
             match executor
                 .execute(opcode, &mut state, &mut bus, &mut ticker)
                 .await
             {
                 Ok(_instr_len) => {
                     bus.handle_irq_return(opcode, &state);
-                    bus.finalize_instruction();
                     bus.apply_deferred_key_irq();
-                    if run_timer_cycles && opcode != 0xEF {
-                        bus.cycle_count = bus.cycle_count.wrapping_add(1);
-                    }
                     executed += 1;
                     if perfetto_chunk_size > 0
                         && perfetto_enabled
@@ -2420,6 +2528,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 "   PF2 --- DO NOT INITIALIZE".to_string(),
             ];
         }
+
         let lcd_trace = if wants_lcd_trace {
             let trace = bus.lcd().display_trace_buffer();
             let trace = trace.map(|row| row.to_vec()).to_vec();
@@ -2468,7 +2577,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     println!(
         "Executed {} instruction(s) in {:.3?} (PC=0x{:05X}, halted={}, lcd_writes={})",
-        summary.executed, elapsed, summary.pc, summary.halted, summary.lcd_writes
+        summary.executed,
+        elapsed,
+        summary.pc,
+        summary.halted,
+        summary.lcd_writes
     );
     println!(
         "Final IMR=0x{:02X} (mem=0x{:02X}) ISR=0x{:02X}",
@@ -2496,7 +2609,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 fs::create_dir_all(parent)?;
             }
         }
-        let dump = summary.lcd_trace.as_ref().ok_or("missing LCD trace data")?;
+        let dump = summary
+            .lcd_trace
+            .as_ref()
+            .ok_or("missing LCD trace data")?;
         fs::write(path, serde_json::to_string_pretty(dump)?)?;
         println!("Wrote LCD trace dump: {}", path.display());
     }
@@ -2668,7 +2784,10 @@ mod tests {
             0,
             "scan tick should assert KEYI after debounce"
         );
-        assert!(bus.timer.key_irq_latched, "scan tick should latch KEYI");
+        assert!(
+            bus.timer.key_irq_latched,
+            "scan tick should latch KEYI"
+        );
         assert!(bus.pending_kil, "scan tick should mark KIL pending");
         assert!(
             bus.keyboard.fifo_len() > 0,
@@ -2689,8 +2808,10 @@ mod tests {
             None,
             None,
         );
-        bus.memory
-            .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_MTI);
+        bus.memory.write_internal_byte(
+            super::IMEM_IMR_OFFSET,
+            super::IMR_MASTER | super::IMR_MTI,
+        );
         bus.memory
             .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_MTI);
         bus.irq_pending = false;
@@ -2896,8 +3017,8 @@ mod tests {
         let actions = parse_key_seq("space", 10).expect("parse key seq");
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].kind, KeySeqKind::Press);
-        let code =
-            KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE").expect("expected KEY_SPACE");
+        let code = KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE")
+            .expect("expected KEY_SPACE");
         assert_eq!(actions[0].key, Some(AutoKeyKind::Matrix(code)));
     }
 
@@ -3008,7 +3129,10 @@ mod tests {
         assert_eq!(state2.call_sub_level(), 2);
         assert_eq!(bus2.cycle_count, 1234);
         assert_eq!(bus2.memory.load(0x2000, 8).unwrap_or(0), 0x12);
-        assert_eq!(bus2.memory.read_internal_byte(0x10).unwrap_or(0), 0x34);
+        assert_eq!(
+            bus2.memory.read_internal_byte(0x10).unwrap_or(0),
+            0x34
+        );
 
         let _ = std::fs::remove_file(snapshot_path);
     }
@@ -3079,8 +3203,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let snapshot_path =
-            std::env::temp_dir().join(format!("pce500_snapshot_off_{stamp}.pcsnap"));
+        let snapshot_path = std::env::temp_dir().join(format!("pce500_snapshot_off_{stamp}.pcsnap"));
         save_snapshot_state(&snapshot_path, &bus, &state, 7).expect("save snapshot");
 
         let mut bus2 = StandaloneBus::new(
@@ -3126,12 +3249,12 @@ mod tests {
             None,
         );
         assert!(bus.scan_on_timer, "scan_on_timer defaults to true");
-        assert!(!bus.timer_finalize_clamp, "timer clamp defaults to false");
+        assert!(bus.timer_finalize_clamp, "timer clamp defaults to true");
         configure_bus_for_model(&mut bus, DeviceModel::PcE500);
         assert!(!bus.scan_on_timer, "PC-E500 should scan per instruction");
         assert!(
-            !bus.timer_finalize_clamp,
-            "timer clamp should remain disabled by default"
+            bus.timer_finalize_clamp,
+            "timer clamp should remain enabled by default"
         );
         let snap = bus.keyboard.snapshot_state();
         assert_eq!(snap.press_threshold, 1);
