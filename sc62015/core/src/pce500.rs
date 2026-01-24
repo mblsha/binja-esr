@@ -10,8 +10,9 @@ pub const ROM_WINDOW_LEN: usize = 0x40000;
 pub const ROM_RESET_VECTOR_ADDR: u32 = 0x0FFFFD;
 pub const ROM_FONT_BASE_ADDR: u32 = 0x00F_2215;
 
-pub const DEFAULT_MTI_PERIOD: u64 = 500;
-pub const DEFAULT_STI_PERIOD: u64 = 5000;
+// Hardware nominal clock is 2 MHz; MTI=16 ms and STI=0.5 s in the default ROM config.
+pub const DEFAULT_MTI_PERIOD: u64 = 32_000;
+pub const DEFAULT_STI_PERIOD: u64 = 1_000_000;
 
 pub const PF1_CODE: u8 = 0x56; // col=10, row=6
 pub const PF2_CODE: u8 = 0x55; // col=10, row=5

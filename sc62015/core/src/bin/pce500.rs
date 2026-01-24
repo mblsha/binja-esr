@@ -16,7 +16,10 @@ use sc62015_core::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
         IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
     },
-    pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
+    pce500::{
+        load_pce500_rom_window_into_memory, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD, ROM_WINDOW_LEN,
+        ROM_WINDOW_START,
+    },
     perfetto::set_call_ui_function_names,
     timer::TimerContext,
     DeviceModel, PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
@@ -1335,7 +1338,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     memory.set_memory_card_slot_present(matches!(args.card, CardMode::Present));
 
-    // Timer periods align with Python harness defaults (fast ≈500 cycles, slow ≈5000)
+    // Timer periods align with the nominal 2 MHz hardware clock (fast ≈16 ms, slow ≈0.5 s)
     // unless disabled for debugging.
     let perfetto = args.perfetto.then(|| {
         let mut irq_path = args.perfetto_path.clone();
@@ -1356,8 +1359,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if args.disable_timers {
             TimerContext::new(false, 0, 0)
         } else {
-            // Match Python cadence: MTI≈500 cycles, STI≈5000 cycles.
-            TimerContext::new(true, 500, 5_000)
+            TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32)
         },
         log_lcd,
         log_lcd_limit,
