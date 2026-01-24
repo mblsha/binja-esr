@@ -120,7 +120,7 @@ pub struct LoopCandidate {
     pub repeats: u32,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopBranchKind {
     Taken,
@@ -785,6 +785,11 @@ mod tests {
     fn report_truncates_when_full_trace_overflows() {
         let mut config = LoopDetectorConfig::default();
         config.max_loop_len = 5;
+        config.main_history_len = config
+            .max_loop_len
+            .saturating_mul(3)
+            .saturating_add(DEFAULT_MAIN_HISTORY_SLACK);
+        config.full_history_len = config.main_history_len;
         let mut detector = LoopDetector::new(config);
         let pattern = [0x10, 0x20, 0x30, 0x40, 0x50];
         let irq_fill = 20;

@@ -285,14 +285,20 @@ fn format_status(
     symbols: Option<&SymbolMap>,
 ) -> String {
     let pc = runtime.state.pc() & 0x000f_ffff;
-    let halted = runtime.state.is_halted();
+    let power_state = if runtime.state.is_off() {
+        "OFF"
+    } else if runtime.state.is_halted() {
+        "HALT"
+    } else {
+        "RUN"
+    };
     let label = format_symbol(pc, symbols);
     let pc_display = format!("pc=0x{pc:05X} {label}");
     let key_status = last_key
         .as_ref()
         .map(|label| format!(" last_key={label}@{last_key_step}"))
         .unwrap_or_default();
-    format!("{pc_display} steps={executed} halted={halted}{key_status} (Ctrl+C to exit)")
+    format!("{pc_display} steps={executed} state={power_state}{key_status} (Ctrl+C to exit)")
 }
 
 fn resolve_symbol(addr: u32, symbols: Option<&SymbolMap>) -> Option<(u32, String, u32)> {
@@ -376,6 +382,13 @@ fn format_debug_lines(
     let imr_reg = runtime.state.get_reg(RegName::IMR) & 0xFF;
     let instr = runtime.instruction_count();
     let cycles = runtime.cycle_count();
+    let power_state = if runtime.state.is_off() {
+        "OFF"
+    } else if runtime.state.is_halted() {
+        "HALT"
+    } else {
+        "RUN"
+    };
     let fifo_len = runtime
         .keyboard
         .as_ref()
@@ -404,7 +417,9 @@ fn format_debug_lines(
         format!(
             "KB: irq={kb_irq} latch={key_latch} pending={irq_pending} in_irq={in_irq} imr=0x{imr:02X} imr_reg=0x{imr_reg:02X} isr=0x{isr:02X} kil=0x{kil:02X} fifo={fifo_len}"
         ),
-        format!("CPU: instr={instr} cycles={cycles} halted_steps={halted_steps}"),
+        format!(
+            "CPU: instr={instr} cycles={cycles} state={power_state} halted_steps={halted_steps}"
+        ),
         format!("Key: last={last}@{last_step} pending=[{pending}]"),
         format!(
             "Auto: pf1_twice={}",

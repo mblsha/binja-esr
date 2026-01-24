@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::opcodes::RegName;
 
 pub fn mask_for(name: RegName) -> u32 {
@@ -21,10 +23,19 @@ pub fn mask_for(name: RegName) -> u32 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerState {
+    #[default]
+    Running,
+    Halted,
+    Off,
+}
+
 #[derive(Default)]
 pub struct LlamaState {
     regs: HashMap<RegName, u32>,
-    halted: bool,
+    power_state: PowerState,
     call_depth: u32,
     call_sub_level: u32,
     call_page_stack: Vec<u32>,
@@ -45,7 +56,7 @@ impl LlamaState {
     pub fn new() -> Self {
         Self {
             regs: HashMap::new(),
-            halted: false,
+            power_state: PowerState::Running,
             call_depth: 0,
             call_sub_level: 0,
             call_page_stack: Vec::new(),
@@ -153,20 +164,40 @@ impl LlamaState {
     }
 
     pub fn halt(&mut self) {
-        self.halted = true;
+        self.power_state = PowerState::Halted;
+    }
+
+    pub fn power_off(&mut self) {
+        self.power_state = PowerState::Off;
+    }
+
+    pub fn set_power_state(&mut self, state: PowerState) {
+        self.power_state = state;
     }
 
     pub fn set_halted(&mut self, value: bool) {
-        self.halted = value;
+        if value {
+            self.power_state = PowerState::Halted;
+        } else {
+            self.power_state = PowerState::Running;
+        }
     }
 
     pub fn is_halted(&self) -> bool {
-        self.halted
+        !matches!(self.power_state, PowerState::Running)
+    }
+
+    pub fn is_off(&self) -> bool {
+        matches!(self.power_state, PowerState::Off)
+    }
+
+    pub fn power_state(&self) -> PowerState {
+        self.power_state
     }
 
     pub fn reset(&mut self) {
         self.regs.clear();
-        self.halted = false;
+        self.power_state = PowerState::Running;
         self.call_depth = 0;
         self.call_sub_level = 0;
         self.call_page_stack.clear();

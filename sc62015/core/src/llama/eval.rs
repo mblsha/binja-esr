@@ -10,7 +10,7 @@
 use super::{
     dispatch,
     opcodes::{InstrKind, OpcodeEntry, OperandKind, RegName},
-    state::{mask_for, LlamaState},
+    state::{mask_for, LlamaState, PowerState},
 };
 use crate::{
     memory::{
@@ -301,7 +301,11 @@ fn imem_addr_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -
     INTERNAL_MEMORY_START + imem_offset_for_mode(bus, mode, raw)
 }
 
-fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
+fn enter_low_power_state<B: LlamaBus>(
+    bus: &mut B,
+    state: &mut LlamaState,
+    power_state: PowerState,
+) {
     // Mirror pysc62015.intrinsics._enter_low_power_state: adjust USR/SSR and halt.
     let mut usr = read_imem_byte(bus, IMEM_USR_OFFSET);
     usr &= !0x3F;
@@ -312,7 +316,7 @@ fn enter_low_power_state<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr |= 0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-    state.halt();
+    state.set_power_state(power_state);
 }
 
 /// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
@@ -2201,7 +2205,7 @@ impl LlamaExecutor {
                 Ok(len)
             }
             InstrKind::Off => {
-                enter_low_power_state(bus, state);
+                enter_low_power_state(bus, state, PowerState::Off);
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -2210,7 +2214,7 @@ impl LlamaExecutor {
                 Ok(len)
             }
             InstrKind::Halt => {
-                enter_low_power_state(bus, state);
+                enter_low_power_state(bus, state, PowerState::Halted);
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -4404,6 +4408,18 @@ mod tests {
         let mut exec = LlamaExecutor::new();
         let _ = exec.execute(0xDE, &mut state, &mut bus).unwrap();
         assert!(state.is_halted());
+        assert!(!state.is_off(), "HALT should not enter OFF state");
+    }
+
+    #[test]
+    fn off_sets_state() {
+        let mut bus = MemBus::with_size(1);
+        bus.mem[0] = 0xDF; // OFF
+        let mut state = LlamaState::new();
+        let mut exec = LlamaExecutor::new();
+        let _ = exec.execute(0xDF, &mut state, &mut bus).unwrap();
+        assert!(state.is_halted(), "OFF should enter low-power state");
+        assert!(state.is_off(), "OFF should mark power state as off");
     }
 
     #[test]
