@@ -346,6 +346,7 @@ fn format_call_stack_lines(frames: &[u32], symbols: Option<&SymbolMap>) -> Vec<S
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_debug_lines(
     runtime: &CoreRuntime,
     symbols: Option<&SymbolMap>,
@@ -461,10 +462,7 @@ fn format_debug_lines(
                     }
                 }
                 if !functions_seen.is_empty() {
-                    let names_list = functions_seen
-                        .into_iter()
-                        .map(|(_addr, name)| name)
-                        .collect::<Vec<_>>();
+                    let names_list = functions_seen.into_values().collect::<Vec<_>>();
                     let count = names_list.len();
                     let names = names_list.join(", ");
                     lines.push(format!("Loop fns({count}): {names}"));
@@ -475,6 +473,7 @@ fn format_debug_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_extra_lines(
     runtime: &CoreRuntime,
     symbols: Option<&SymbolMap>,
@@ -1183,8 +1182,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         *runtime.timer =
             TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
     }
-    let mut loop_config = LoopDetectorConfig::default();
-    loop_config.detect_stride = args.refresh_steps;
+    let loop_config = LoopDetectorConfig {
+        detect_stride: args.refresh_steps,
+        ..Default::default()
+    };
     runtime.enable_loop_detector(loop_config);
     runtime.power_on_reset();
 

@@ -1137,55 +1137,57 @@ impl CoreRuntime {
                     .as_deref()
                     .map(LoopIrqSource::from_name);
 
-                let keyboard_ptr = self
-                    .keyboard
-                    .as_mut()
-                    .map(|kb| kb as *mut KeyboardMatrix)
-                    .unwrap_or(std::ptr::null_mut());
-                let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
-                let host_read = self
-                    .host_read
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                let host_write = self
-                    .host_write
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
-                let sio_ptr = self
-                    .sio
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
                 let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                let mut bus = RuntimeBus {
-                    mem: &mut self.memory,
-                    keyboard_ptr,
-                    lcd_ptr,
-                    sio_ptr,
-                    host_read,
-                    host_write,
-                    onk_level: self.onk_level,
-                    cycle: self.metadata.cycle_count,
-                    pc: pc_before,
-                    meta_ptr: &self.metadata as *const SnapshotMetadata,
-                    state_ptr: &self.state as *const LlamaState,
+                let (opcode, instr_len, pc_after, wait_loops) = {
+                    let keyboard_ptr = self
+                        .keyboard
+                        .as_mut()
+                        .map(|kb| kb as *mut KeyboardMatrix)
+                        .unwrap_or(std::ptr::null_mut());
+                    let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
+                    let host_read = self
+                        .host_read
+                        .as_mut()
+                        .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                    let host_write = self
+                        .host_write
+                        .as_mut()
+                        .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
+                    let sio_ptr = self
+                        .sio
+                        .as_mut()
+                        .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
+                    let mut bus = RuntimeBus {
+                        mem: &mut self.memory,
+                        keyboard_ptr,
+                        lcd_ptr,
+                        sio_ptr,
+                        host_read,
+                        host_write,
+                        onk_level: self.onk_level,
+                        cycle: self.metadata.cycle_count,
+                        pc: pc_before,
+                        meta_ptr: &self.metadata as *const SnapshotMetadata,
+                        state_ptr: &self.state as *const LlamaState,
+                    };
+                    let opcode = bus.load(pc_before, 8) as u8;
+                    // Capture WAIT loop count before execution (executor clears I).
+                    let wait_loops = if opcode == 0xEF {
+                        self.state.get_reg(RegName::I) & mask_for(RegName::I)
+                    } else {
+                        0
+                    };
+                    let instr_len = match self.executor.execute(opcode, &mut self.state, &mut bus) {
+                        Ok(len) => len,
+                        Err(e) => {
+                            return Err(CoreError::Other(format!(
+                                "execute opcode 0x{opcode:02X}: {e}"
+                            )))
+                        }
+                    };
+                    let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                    (opcode, instr_len, pc_after, wait_loops)
                 };
-                let opcode = bus.load(pc_before, 8) as u8;
-                // Capture WAIT loop count before execution (executor clears I).
-                let wait_loops = if opcode == 0xEF {
-                    self.state.get_reg(RegName::I) & mask_for(RegName::I)
-                } else {
-                    0
-                };
-                let instr_len = match self.executor.execute(opcode, &mut self.state, &mut bus) {
-                    Ok(len) => len,
-                    Err(e) => {
-                        return Err(CoreError::Other(format!(
-                            "execute opcode 0x{opcode:02X}: {e}"
-                        )))
-                    }
-                };
-                let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                drop(bus);
                 if opcode == 0xFF {
                     // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
                     // refresh mirrors from IMEM without clearing counters/bit-watch.
