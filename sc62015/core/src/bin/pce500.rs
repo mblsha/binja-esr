@@ -1497,6 +1497,33 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 bus.deliver_irq(&mut state);
             }
         } else if state.is_halted() {
+            if state.is_off() {
+                let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                // Assumption: OFF clears non-ONK IRQ state; verify on real hardware.
+                let onk_only = isr & ISR_ONKI;
+                if onk_only != isr {
+                    bus.memory.write_internal_byte(IMEM_ISR_OFFSET, onk_only);
+                }
+                bus.irq_pending = false;
+                bus.timer.irq_pending = false;
+                bus.last_irq_src = None;
+                bus.timer.irq_source = None;
+                bus.timer.last_fired = None;
+                bus.timer.irq_isr = onk_only;
+                if (isr & ISR_KEYI) != 0 {
+                    bus.timer.key_irq_latched = false;
+                }
+                if onk_only == 0 {
+                    bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                    continue;
+                }
+                state.set_halted(false);
+                bus.irq_pending = true;
+                bus.timer.irq_pending = true;
+                bus.last_irq_src = Some("ONK".to_string());
+                bus.timer.irq_source = Some("ONK".to_string());
+                bus.timer.last_fired = bus.timer.irq_source.clone();
+            }
             // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
             // The Python emulator uses this to prevent the ROM from stalling in low-power
             // loops when timers/keyboard events are pending.

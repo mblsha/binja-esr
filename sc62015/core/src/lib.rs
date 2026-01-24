@@ -16,6 +16,7 @@ pub mod snapshot;
 pub mod timer;
 
 use crate::llama::{opcodes::RegName, state::LlamaState};
+use crate::llama::state::PowerState;
 use serde::{Deserialize, Serialize};
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use serde_json::json;
@@ -197,6 +198,8 @@ pub struct SnapshotMetadata {
     pub memory_writes: u64,
     pub pc: u32,
     #[serde(default)]
+    pub power_state: PowerState,
+    #[serde(default)]
     pub call_depth: u32,
     #[serde(default)]
     pub call_sub_level: u32,
@@ -236,6 +239,7 @@ impl Default for SnapshotMetadata {
             memory_reads: 0,
             memory_writes: 0,
             pc: 0,
+            power_state: PowerState::Running,
             call_depth: 0,
             call_sub_level: 0,
             temps: HashMap::new(),
@@ -957,6 +961,37 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            if self.state.is_off() {
+                if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                    // Assumption: OFF clears non-ONK IRQ state; verify on real hardware.
+                    let onk_only = isr & ISR_ONKI;
+                    if onk_only != isr {
+                        self.memory.write_internal_byte(IMEM_ISR_OFFSET, onk_only);
+                    }
+                    self.timer.irq_pending = false;
+                    self.timer.irq_source = None;
+                    self.timer.last_fired = None;
+                    self.timer.irq_isr = onk_only;
+                    if (isr & ISR_KEYI) != 0 {
+                        self.timer.key_irq_latched = false;
+                    }
+                    if onk_only != 0 {
+                        self.state.set_power_state(PowerState::Running);
+                        self.timer.irq_pending = true;
+                        self.timer.irq_isr = onk_only;
+                        self.timer.irq_imr = self
+                            .memory
+                            .read_internal_byte(IMEM_IMR_OFFSET)
+                            .unwrap_or(self.timer.irq_imr);
+                        self.timer.irq_source = Some("ONK".to_string());
+                        self.timer.last_fired = self.timer.irq_source.clone();
+                    } else {
+                        return Ok(());
+                    }
+                } else {
+                    return Ok(());
+                }
+            }
             if let Some(sio) = self.sio.as_mut() {
                 if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
                     self.metadata.instruction_count =
@@ -1338,6 +1373,7 @@ impl CoreRuntime {
         metadata.memory_writes = self.memory.memory_write_count();
         metadata.call_depth = self.state.call_depth();
         metadata.call_sub_level = self.state.call_sub_level();
+        metadata.power_state = self.state.power_state();
         metadata.temps = collect_registers(&self.state)
             .into_iter()
             .filter(|(k, _)| k.starts_with("TEMP"))
@@ -1386,6 +1422,7 @@ impl CoreRuntime {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
         apply_registers(&mut self.state, &loaded.registers);
+        self.state.set_power_state(self.metadata.power_state);
         self.fast_mode = self.metadata.fast_mode;
         self.memory
             .set_memory_counts(self.metadata.memory_reads, self.metadata.memory_writes);
@@ -1883,6 +1920,31 @@ mod tests {
         assert_eq!(rt2.timer.delivered_masks, vec![ISR_MTI]);
         assert_eq!(rt2.timer.next_interrupt_id, 5);
         assert_eq!(rt2.timer.last_fired, None);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_power_state() {
+        let tmp_off = std::env::temp_dir().join("core_snapshot_power_off.pcsnap");
+        let tmp_halt = std::env::temp_dir().join("core_snapshot_power_halt.pcsnap");
+        let _ = fs::remove_file(&tmp_off);
+        let _ = fs::remove_file(&tmp_halt);
+
+        let mut rt = CoreRuntime::new();
+        rt.state.power_off();
+        rt.save_snapshot(&tmp_off).expect("save off snapshot");
+
+        let mut rt2 = CoreRuntime::new();
+        rt2.load_snapshot(&tmp_off).expect("load off snapshot");
+        assert!(rt2.state.is_off(), "OFF state should round-trip");
+
+        let mut rt3 = CoreRuntime::new();
+        rt3.state.set_halted(true);
+        rt3.save_snapshot(&tmp_halt).expect("save halt snapshot");
+
+        let mut rt4 = CoreRuntime::new();
+        rt4.load_snapshot(&tmp_halt).expect("load halt snapshot");
+        assert!(rt4.state.is_halted(), "HALT state should round-trip");
+        assert!(!rt4.state.is_off(), "HALT should not restore as OFF");
     }
 
     #[test]
@@ -2677,6 +2739,76 @@ mod tests {
         );
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "ISR bit should remain set but ignored");
+    }
+
+    #[test]
+    fn off_only_wakes_on_onk() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.state.power_off();
+
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_MTI);
+        let _ = rt.step(1);
+        assert!(rt.state.is_off(), "OFF should ignore MTI");
+
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        let _ = rt.step(1);
+        assert!(rt.state.is_off(), "OFF should ignore KEYI");
+
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
+        let _ = rt.step(1);
+        assert!(!rt.state.is_off(), "OFF should wake on ONKI");
+        assert!(rt.timer.irq_pending, "ONKI wake should arm pending IRQ");
+    }
+
+    #[test]
+    fn off_stops_timers() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.state.power_off();
+        rt.timer.enabled = true;
+        rt.timer.mti_period = 1;
+        rt.timer.next_mti = 1;
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
+
+        let cycles_before = rt.cycle_count();
+        let _ = rt.step(5);
+        let cycles_after = rt.cycle_count();
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+
+        assert_eq!(
+            cycles_after, cycles_before,
+            "OFF should not advance cycles"
+        );
+        assert_eq!(isr & ISR_MTI, 0, "OFF should not tick MTI");
+    }
+
+    #[test]
+    fn off_clears_non_onk_isr_and_pending() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.state.power_off();
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("MTI".to_string());
+        rt.timer.last_fired = Some("MTI".to_string());
+        rt.timer.key_irq_latched = true;
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI | ISR_MTI);
+
+        let _ = rt.step(1);
+
+        let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        assert!(rt.state.is_off(), "OFF should remain until ONK");
+        assert_eq!(isr & (ISR_KEYI | ISR_MTI | ISR_STI), 0);
+        assert!(!rt.timer.irq_pending, "OFF should clear pending IRQs");
+        assert!(rt.timer.irq_source.is_none());
+        assert!(rt.timer.last_fired.is_none());
+        assert!(
+            !rt.timer.key_irq_latched,
+            "OFF should clear key latch state"
+        );
     }
 
     #[test]

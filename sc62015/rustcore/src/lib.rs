@@ -1908,6 +1908,7 @@ impl LlamaCpu {
             })),
             ..SnapshotMetadata::default()
         };
+        metadata.power_state = self.state.power_state();
         // Capture timer/interrupt mirrors for parity with Python snapshots.
         let (timer_info, interrupt_info) = self.timer.snapshot_info();
         metadata.timer = timer_info;
