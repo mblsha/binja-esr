@@ -78,6 +78,7 @@ struct LcdShadow {
     page: u8,
     y: u8,
     on: bool,
+    busy: bool,
     start_line: u8,
     vram: [[u8; 64]; 8],
 }
@@ -87,7 +88,8 @@ impl LcdShadow {
         Self {
             page: 0,
             y: 0,
-            on: true,
+            on: false,
+            busy: false,
             start_line: 0,
             vram: [[0; 64]; 8],
         }
@@ -97,12 +99,14 @@ impl LcdShadow {
     fn reset(&mut self) {
         self.page = 0;
         self.y = 0;
-        self.on = true;
+        self.on = false;
+        self.busy = false;
         self.start_line = 0;
         self.vram = [[0; 64]; 8];
     }
 
     fn apply_instruction(&mut self, instr: u8, data: u8) {
+        self.busy = true;
         match instr {
             0b00 => {
                 // On/Off
@@ -125,10 +129,29 @@ impl LcdShadow {
     }
 
     fn apply_data(&mut self, value: u8) {
+        self.busy = true;
         let page = (self.page as usize) % 8;
         let y = (self.y as usize) % 64;
         self.vram[page][y] = value;
         self.y = ((self.y as usize + 1) % 64) as u8;
+    }
+
+    fn read_status(&mut self) -> u8 {
+        let mut status = if self.busy { 0x80 } else { 0x00 };
+        if !self.on {
+            status |= 0x20;
+        }
+        self.busy = false;
+        status
+    }
+
+    fn read_data(&mut self) -> u8 {
+        let page = (self.page as usize) % 8;
+        let y = (self.y as usize) % 64;
+        let read_col = if y == 0 { 63 } else { y - 1 };
+        let value = self.vram[page][read_col];
+        self.y = ((y + 1) % 64) as u8;
+        value
     }
 
     fn flatten(&self) -> Vec<u8> {
@@ -493,6 +516,37 @@ impl LlamaContractBus {
                     detail: None,
                 });
                 return Ok(value);
+            }
+        }
+        if is_lcd_addr(raw_addr) {
+            let addr_lo = raw_addr & 0x0FFF;
+            let rw = addr_lo & 1;
+            if rw == 1 {
+                let di = (addr_lo >> 1) & 1;
+                let cs_bits = (addr_lo >> 2) & 0b11;
+                let idx = match cs_bits {
+                    0b10 => Some(0),
+                    0b01 => Some(1),
+                    _ => None,
+                };
+                if let Some(idx) = idx {
+                    let value = if di == 0 {
+                        self.lcd_shadow[idx].read_status()
+                    } else {
+                        self.lcd_shadow[idx].read_data()
+                    };
+                    if (raw_addr & 0x3) == 0x1 {
+                        self.last_lcd_status = Some(value);
+                    }
+                    self.events.push(ContractEvent {
+                        kind: "read",
+                        address: raw_addr,
+                        value,
+                        pc: pc.map(|v| v & ADDRESS_MASK),
+                        detail: None,
+                    });
+                    return Ok(value);
+                }
             }
         }
         let value = self
