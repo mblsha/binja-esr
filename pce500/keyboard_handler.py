@@ -264,6 +264,9 @@ class PCE500KeyboardHandler:
     def fifo_snapshot(self) -> list[int]:
         return self._matrix.fifo_snapshot()
 
+    def consume_pending_events(self) -> None:
+        self._matrix.consume_pending_events()
+
     def snapshot_state(self) -> dict[str, object]:
         """Capture current keyboard handler + matrix state."""
 

@@ -6,26 +6,10 @@ use std::collections::HashMap;
 
 const FIFO_SIZE: usize = 8;
 const COLUMN_COUNT: usize = 16; // 8 from KOL, 8 from KOH (KOL.w)
-const PCE500_FIFO_BASE_ADDR: u32 = 0x00BFC96;
-const PCE500_FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
-const PCE500_FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const DEFAULT_PRESS_TICKS: u8 = 6;
 const DEFAULT_RELEASE_TICKS: u8 = 6;
 const DEFAULT_REPEAT_DELAY: u8 = 24;
 const DEFAULT_REPEAT_INTERVAL: u8 = 6;
-
-#[derive(Copy, Clone, Debug)]
-struct KeyboardFifoAddrs {
-    base: u32,
-    head: u32,
-    tail: u32,
-}
-
-const PCE500_FIFO_ADDRS: KeyboardFifoAddrs = KeyboardFifoAddrs {
-    base: PCE500_FIFO_BASE_ADDR,
-    head: PCE500_FIFO_HEAD_ADDR,
-    tail: PCE500_FIFO_TAIL_ADDR,
-};
 
 #[derive(Copy, Clone, Debug, Default)]
 struct KeyLocation {
@@ -139,8 +123,8 @@ const KEY_NAMES: [Option<&str>; 88] = [
     Some("KEY_CTRL"),
     Some("KEY_ANS"),
     Some("KEY_DOWN"),
-    Some("KEY_DOWN_TRIANGLE"),
     Some("KEY_LEFT"),
+    Some("KEY_ENTER"),
     Some("KEY_0"),
     Some("KEY_PLUSMINUS"),
     Some("KEY_PERIOD"),
@@ -148,16 +132,18 @@ const KEY_NAMES: [Option<&str>; 88] = [
     Some("KEY_EQUALS"),
     None,
 ];
+const KEY_ROWS: usize = 8;
+const KEY_COLUMNS: usize = KEY_NAMES.len() / KEY_ROWS;
 
 #[derive(Default)]
 pub struct KeyboardMatrix {
     kol: u8,
     koh: u8,
     kil_latch: u8,
-    fifo_addrs: Option<KeyboardFifoAddrs>,
     keyi_on_any_press: bool,
     raw_kil: bool,
     columns_active_high: bool,
+    emit_events: bool,
     press_threshold: u8,
     release_threshold: u8,
     repeat_delay: u8,
@@ -225,10 +211,10 @@ impl KeyboardMatrix {
             kol: 0x00,
             koh: 0x00,
             kil_latch: 0x00,
-            fifo_addrs: Some(PCE500_FIFO_ADDRS),
             keyi_on_any_press: false,
             raw_kil: false,
             columns_active_high: true,
+            emit_events: true,
             press_threshold: DEFAULT_PRESS_TICKS,
             release_threshold: DEFAULT_RELEASE_TICKS,
             repeat_delay: DEFAULT_REPEAT_DELAY,
@@ -258,7 +244,7 @@ impl KeyboardMatrix {
     }
 
     pub fn disable_fifo_mirroring(&mut self) {
-        self.fifo_addrs = None;
+        self.emit_events = false;
     }
 
     pub fn set_keyi_on_any_press(&mut self, enabled: bool) {
@@ -339,35 +325,21 @@ impl KeyboardMatrix {
         1
     }
 
-    /// Reconcile FIFO head/tail with firmware-written pointers in RAM so drained entries
-    /// do not linger in the Rust model (avoids reasserting KEYI after the host consumes data).
-    pub fn sync_fifo_from_memory(&mut self, memory: &MemoryImage) {
-        let Some(addrs) = self.fifo_addrs else {
-            return;
-        };
-        if let Some(head) = memory.load(addrs.head, 8) {
-            let new_head = (head as usize) % FIFO_SIZE;
-            if new_head != self.fifo_head {
-                self.fifo_head = new_head;
-            }
-        }
-        // Tail is owned by the producer (this model); keep the in-memory value as advisory only.
-        // Recompute count based on reconciled head/tail.
-        let mut count = if self.fifo_tail >= self.fifo_head {
-            self.fifo_tail.saturating_sub(self.fifo_head)
-        } else {
-            FIFO_SIZE.saturating_sub(self.fifo_head.saturating_sub(self.fifo_tail))
-        };
-        if self.fifo_head == self.fifo_tail {
-            count = 0;
-        }
-        self.fifo_count = count.min(FIFO_SIZE);
+    pub fn consume_pending_events(&mut self) {
         if self.fifo_count == 0 {
             self.keyi_latch = false;
+            return;
         }
+        for slot in &mut self.fifo_storage {
+            *slot = 0;
+        }
+        self.fifo_head = 0;
+        self.fifo_tail = 0;
+        self.fifo_count = 0;
+        self.keyi_latch = false;
     }
 
-    /// Inject a matrix event immediately, bypassing debounce, and mirror state into memory.
+    /// Inject a matrix event immediately, bypassing debounce, and assert KEYI if enabled.
     pub fn inject_matrix_event(
         &mut self,
         code: u8,
@@ -388,31 +360,6 @@ impl KeyboardMatrix {
                 state.press_ticks = self.press_threshold;
                 state.release_ticks = 0;
                 state.repeat_ticks = self.repeat_delay;
-            }
-        }
-        self.sync_fifo_from_memory(memory);
-        // Parity: the PC-E500 ROM stores keyboard FIFO bookkeeping in internal RAM. When injecting
-        // PF1 from the "main menu ready" snapshot, the RAM FIFO head byte can retain stale high
-        // bits (e.g. 0x28). Python host injection normalizes it to the actual head (0..7) which
-        // keeps the ROM's key-consumer state machine on the happy path; standalone Rust can
-        // otherwise diverge into the MEMORY FAILURE flow after the second PF1 press.
-        //
-        // Safety: do not normalize unconditionally; during early boot (S2(CARD) prompt) the ROM
-        // uses a different FIFO shape where touching the head breaks progress. Only normalize for
-        // the harness-derived "main menu" FIFO bytes.
-        if let Some(addrs) = self.fifo_addrs {
-            let head_raw = memory.load(addrs.head, 8).unwrap_or(0) as u8;
-            let looks_like_main_menu_fifo = head_raw >= FIFO_SIZE as u8
-                && memory.load(addrs.base, 8).unwrap_or(0) as u8 == 0x56
-                && memory.load(addrs.base + 1, 8).unwrap_or(0) as u8 == 0xD6
-                && memory.load(addrs.base + 2, 8).unwrap_or(0) as u8 == 0xD6
-                && memory.load(addrs.base + 3, 8).unwrap_or(0) as u8 == 0x00
-                && memory.load(addrs.base + 4, 8).unwrap_or(0) as u8 == 0x00
-                && memory.load(addrs.base + 5, 8).unwrap_or(0) as u8 == 0x00
-                && memory.load(addrs.base + 6, 8).unwrap_or(0) as u8 == 0x00;
-            if looks_like_main_menu_fifo {
-                memory.write_external_byte(addrs.head, self.fifo_head as u8);
-                Self::log_fifo_write(addrs.head, self.fifo_head as u8);
             }
         }
         let events = self.enqueue_event(code & 0x7F, release, true);
@@ -440,47 +387,7 @@ impl KeyboardMatrix {
         events
     }
 
-    fn log_fifo_write(addr: u32, value: u8) {
-        let mut guard = crate::PERFETTO_TRACER.enter();
-        guard.with_some(|tracer| {
-            let (seq, pc) = crate::llama::eval::perfetto_instr_context().unwrap_or_else(|| {
-                (
-                    crate::llama::eval::perfetto_last_instr_index(),
-                    crate::llama::eval::perfetto_last_pc(),
-                )
-            });
-            let substep = crate::llama::eval::perfetto_next_substep();
-            tracer.record_mem_write_with_substep(
-                seq,
-                pc,
-                addr,
-                value as u32,
-                "external",
-                8,
-                substep,
-            );
-        });
-    }
-
     pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
-        if let Some(addrs) = self.fifo_addrs {
-            self.sync_fifo_from_memory(memory);
-            // Parity: mirror only occupied FIFO entries. The ROM seeds bytes in this region (including
-            // FIFO pointers), so writing zeros over the whole window can clobber firmware state.
-            let mut idx = self.fifo_head;
-            for _ in 0..self.fifo_count {
-                let addr = addrs.base + idx as u32;
-                // Firmware owns FIFO_HEAD_ADDR; avoid clobbering it when mirroring.
-                if addr != addrs.head {
-                    let value = self.fifo_storage[idx];
-                    memory.write_external_byte(addr, value);
-                    Self::log_fifo_write(addr, value);
-                }
-                idx = (idx + 1) % FIFO_SIZE;
-            }
-            memory.write_external_byte(addrs.tail, self.fifo_tail as u8);
-            Self::log_fifo_write(addrs.tail, self.fifo_tail as u8);
-        }
         // Assert KEYI only if keyboard IRQs are enabled, matching Python gating.
         if self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
             if let Some(isr) = memory.read_internal_byte(0xFC) {
@@ -509,18 +416,9 @@ impl KeyboardMatrix {
                 }
             }
         }
-        if self.fifo_addrs.is_none() && self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
-            // Devices without a known ROM FIFO layout still need KEYI wake-ups, but writing the
-            // PC-E500 FIFO bytes would corrupt unrelated RAM. Treat queued events as edge-triggered:
-            // once KEYI is pending, drop them.
-            self.fifo_head = 0;
-            self.fifo_tail = 0;
-            self.fifo_count = 0;
-            self.keyi_latch = false;
-        }
     }
 
-    pub fn reset(&mut self, memory: &mut MemoryImage) {
+    pub fn reset(&mut self, _memory: &mut MemoryImage) {
         self.kol = 0;
         self.koh = 0;
         self.kil_latch = 0;
@@ -541,7 +439,6 @@ impl KeyboardMatrix {
             state.release_ticks = 0;
             state.repeat_ticks = 0;
         }
-        self.write_fifo_to_memory(memory, true);
     }
 
     pub fn fifo_snapshot(&self) -> Vec<u8> {
@@ -555,7 +452,58 @@ impl KeyboardMatrix {
     }
 
     fn key_name_for(matrix_code: u8) -> Option<&'static str> {
-        KEY_NAMES.get(matrix_code as usize).and_then(|entry| *entry)
+        let col = (matrix_code >> 3) as usize;
+        let row = (matrix_code & 0x07) as usize;
+        if row >= KEY_ROWS || col >= KEY_COLUMNS {
+            return None;
+        }
+        let idx = row * KEY_COLUMNS + col;
+        KEY_NAMES.get(idx).and_then(|entry| *entry)
+    }
+
+    pub fn matrix_code_for_char(ch: char) -> Option<u8> {
+        if ch.is_whitespace() {
+            return None;
+        }
+        let upper = ch.to_ascii_uppercase();
+        let name = match upper {
+            'A'..='Z' => format!("KEY_{upper}"),
+            '0'..='9' => format!("KEY_{upper}"),
+            '+' => "KEY_PLUS".to_string(),
+            '-' => "KEY_MINUS".to_string(),
+            '*' => "KEY_MULTIPLY".to_string(),
+            '/' => "KEY_DIVIDE".to_string(),
+            '=' => "KEY_EQUALS".to_string(),
+            '.' => "KEY_PERIOD".to_string(),
+            ',' => "KEY_COMMA".to_string(),
+            ';' => "KEY_SEMICOLON".to_string(),
+            '(' => "KEY_LPAREN".to_string(),
+            ')' => "KEY_RPAREN".to_string(),
+            _ => return None,
+        };
+        KEY_NAMES.iter().position(|entry| entry.map_or(false, |label| label == name)).and_then(
+            |idx| {
+                let row = idx / KEY_COLUMNS;
+                let col = idx % KEY_COLUMNS;
+                if row >= KEY_ROWS || col >= KEY_COLUMNS {
+                    return None;
+                }
+                Some(((col as u8) << 3) | (row as u8))
+            },
+        )
+    }
+
+    pub fn matrix_code_for_key_name(name: &str) -> Option<u8> {
+        KEY_NAMES.iter().position(|entry| entry.map_or(false, |label| label == name)).and_then(
+            |idx| {
+                let row = idx / KEY_COLUMNS;
+                let col = idx % KEY_COLUMNS;
+                if row >= KEY_ROWS || col >= KEY_COLUMNS {
+                    return None;
+                }
+                Some(((col as u8) << 3) | (row as u8))
+            },
+        )
     }
 
     pub fn irq_count(&self) -> u32 {
@@ -680,7 +628,10 @@ impl KeyboardMatrix {
                 .iter()
                 .position(|entry| entry.map(|s| s == name).unwrap_or(false))
             {
-                if let Some(state) = self.states.get_mut(idx) {
+                let row = idx / KEY_COLUMNS;
+                let col = idx % KEY_COLUMNS;
+                let code = ((col as u8) << 3) | (row as u8);
+                if let Some(state) = self.states.get_mut(code as usize) {
                     state.pressed = saved.pressed;
                     state.debounced = saved.debounced;
                     state.press_ticks = saved.press_ticks;
@@ -695,6 +646,10 @@ impl KeyboardMatrix {
 
     pub fn set_repeat_enabled(&mut self, enabled: bool) {
         self.repeat_enabled = enabled;
+    }
+
+    pub fn set_press_threshold(&mut self, ticks: u8) {
+        self.press_threshold = ticks.max(1);
     }
 
     pub fn set_columns_active_high(&mut self, enabled: bool) {
@@ -750,6 +705,9 @@ impl KeyboardMatrix {
                 }
                 self.kil_latch = self.compute_kil(true);
                 self.kil_read_count = self.kil_read_count.wrapping_add(1);
+                if self.fifo_count > 0 {
+                    self.consume_pending_events();
+                }
                 Some(self.kil_latch)
             }
             _ => None,
@@ -760,6 +718,7 @@ impl KeyboardMatrix {
         match offset {
             0xF0 => {
                 self.kol = value;
+                memory.write_internal_byte(offset, value);
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
                 self.bump_column_histogram();
@@ -767,6 +726,7 @@ impl KeyboardMatrix {
             }
             0xF1 => {
                 self.koh = value;
+                memory.write_internal_byte(offset, value);
                 self.kil_latch = self.compute_kil(false);
                 self.strobe_count = self.strobe_count.wrapping_add(1);
                 self.bump_column_histogram();
@@ -780,13 +740,11 @@ impl KeyboardMatrix {
         }
     }
 
-    pub fn scan_tick(&mut self, memory: &mut MemoryImage, count_irq: bool) -> usize {
-        // Parity: respect firmware-updated head/tail before enqueuing new events.
-        self.sync_fifo_from_memory(memory);
+    pub fn scan_tick(&mut self, _memory: &mut MemoryImage, count_irq: bool) -> usize {
         if !self.scan_enabled {
             return 0;
         }
-        let emit_events = self.fifo_addrs.is_some();
+        let emit_events = self.emit_events;
         let active = self.active_columns();
         let mut events = 0usize;
         for idx in 0..self.states.len() {
@@ -873,7 +831,7 @@ mod tests {
     #[test]
     fn scan_tick_respects_irq_disable() {
         let mut kb = KeyboardMatrix::new();
-        kb.press_threshold = 1;
+        kb.set_press_threshold(1);
         let mut mem = MemoryImage::new();
         kb.handle_write(0xF0, 0x01, &mut mem);
         kb.press_matrix_code(0, &mut mem);
@@ -888,20 +846,34 @@ mod tests {
     }
 
     #[test]
-    fn scan_tick_syncs_head_from_memory() {
+    fn scan_tick_defers_fifo_clear_until_kil_read() {
         let mut kb = KeyboardMatrix::new();
-        kb.press_threshold = 1;
+        kb.set_press_threshold(1);
         let mut mem = MemoryImage::new();
         kb.handle_write(0xF0, 0x01, &mut mem);
         kb.press_matrix_code(0, &mut mem);
         let events = kb.scan_tick(&mut mem, true);
         assert!(events > 0, "expected a debounced event");
+        assert!(kb.fifo_len() > 0, "expected FIFO to hold the event");
         kb.write_fifo_to_memory(&mut mem, true);
-        assert_eq!(kb.fifo_len(), 1);
-        // Simulate firmware consuming one entry by advancing head in RAM.
-        mem.write_external_byte(PCE500_FIFO_HEAD_ADDR, 1);
-        kb.release_matrix_code(0, &mut mem);
-        let _ = kb.scan_tick(&mut mem, true);
-        assert_eq!(kb.fifo_len(), 0, "head sync should drop consumed entries");
+        assert!(
+            kb.fifo_len() > 0,
+            "FIFO should remain pending until KIL read"
+        );
+        let _ = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
+        assert_eq!(kb.fifo_len(), 0, "FIFO should drain after KIL read");
+    }
+
+    #[test]
+    fn matrix_code_for_char_maps_alnum_keys() {
+        let code = KeyboardMatrix::matrix_code_for_char('A').expect("expected KEY_A");
+        assert_eq!(KeyboardMatrix::key_name_for(code), Some("KEY_A"));
+        let code = KeyboardMatrix::matrix_code_for_char('1').expect("expected KEY_1");
+        assert_eq!(KeyboardMatrix::key_name_for(code), Some("KEY_1"));
+    }
+
+    #[test]
+    fn matrix_code_for_char_rejects_space() {
+        assert_eq!(KeyboardMatrix::matrix_code_for_char(' '), None);
     }
 }

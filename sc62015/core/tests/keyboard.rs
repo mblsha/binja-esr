@@ -12,7 +12,7 @@ fn scan_tick_populates_fifo_and_sets_keyi() {
     kb.press_matrix_code(0x10, &mut mem);
     assert_eq!(kb.fifo_len(), 0);
 
-    // Strobe columns, then run a scan tick and mirror FIFO/KEYI to memory.
+    // Strobe columns, then run a scan tick and assert KEYI.
     kb.handle_write(0xF0, 0xFF, &mut mem);
     kb.handle_write(0xF1, 0x07, &mut mem);
     let mut events = 0;
@@ -26,10 +26,19 @@ fn scan_tick_populates_fifo_and_sets_keyi() {
         events > 0,
         "scan_tick should detect the pressed key after debounce"
     );
+    assert!(
+        kb.fifo_len() > 0,
+        "FIFO should hold the event before KEYI assert"
+    );
     kb.write_fifo_to_memory(&mut mem, true);
-    assert!(kb.fifo_len() > 0);
+    assert!(
+        kb.fifo_len() > 0,
+        "FIFO should remain pending until the ROM consumes it"
+    );
     let isr = mem.read_internal_byte(0xFC).unwrap_or(0);
     assert_ne!(isr & 0x04, 0, "KEYI should be set after scan");
+    let _ = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
+    assert_eq!(kb.fifo_len(), 0, "FIFO should drain after KIL read");
 }
 
 #[test]
@@ -47,11 +56,14 @@ fn keyi_is_not_reasserted_by_kil_read_without_host() {
         }
     }
     kb.write_fifo_to_memory(&mut mem, true);
-    assert!(kb.fifo_len() > 0);
+    assert!(
+        kb.fifo_len() > 0,
+        "FIFO should remain queued until KIL read"
+    );
     let isr_after_scan = mem.read_internal_byte(0xFC).unwrap_or(0);
     assert_ne!(isr_after_scan & 0x04, 0, "KEYI should be set after scan");
 
-    // Clear ISR (e.g., by firmware) while FIFO is still non-empty.
+    // Clear ISR (e.g., by firmware) after the KEYI latch was asserted.
     mem.write_internal_byte(0xFC, 0x00);
     assert_eq!(mem.read_internal_byte(0xFC).unwrap_or(0) & 0x04, 0);
 
@@ -82,9 +94,7 @@ fn kil_read_does_not_generate_events_without_scan() {
 }
 
 #[test]
-fn fifo_syncs_head_from_memory_and_clears_keyi_when_drained() {
-    const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
-
+fn write_fifo_to_memory_keeps_events_when_irq_masked() {
     let mut mem = MemoryImage::new();
     let mut kb = KeyboardMatrix::new();
 
@@ -97,57 +107,16 @@ fn fifo_syncs_head_from_memory_and_clears_keyi_when_drained() {
             break;
         }
     }
-    kb.write_fifo_to_memory(&mut mem, true);
-    let snap = kb.snapshot_state();
-    assert!(snap.fifo_len > 0);
-
-    // Firmware consumes the entry: advance head pointer in RAM and clear ISR.
-    mem.write_external_byte(FIFO_HEAD_ADDR, snap.tail as u8);
-    mem.write_internal_byte(0xFC, 0x00);
-
-    // Next mirror should notice the drained head and avoid reasserting KEYI.
-    kb.write_fifo_to_memory(&mut mem, true);
-    assert_eq!(
-        kb.fifo_len(),
-        0,
-        "FIFO should drop consumed events when head advances in RAM"
+    assert!(kb.fifo_len() > 0);
+    kb.write_fifo_to_memory(&mut mem, false);
+    assert!(
+        kb.fifo_len() > 0,
+        "FIFO should remain queued while IRQs are masked"
     );
     let isr = mem.read_internal_byte(0xFC).unwrap_or(0);
-    assert_eq!(isr & 0x04, 0, "KEYI should stay clear after drain");
-}
-
-#[test]
-fn inject_event_normalizes_fifo_head_only_for_main_menu_snapshot_shape() {
-    const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
-    const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
-    const FIFO_BASE_ADDR: u32 = 0x00BFC96;
-
-    let mut mem = MemoryImage::new();
-    let mut kb = KeyboardMatrix::new();
-
-    // Boot prompt shape: head can be 0x28 and tail=0x04; do not touch it (boot PF1 relies on it).
-    mem.write_external_byte(FIFO_HEAD_ADDR, 0x28);
-    mem.write_external_byte(FIFO_TAIL_ADDR, 0x04);
-    kb.inject_matrix_event(0x56, false, &mut mem, true);
-    assert_eq!(
-        mem.read_byte(FIFO_HEAD_ADDR).unwrap_or(0),
-        0x28,
-        "boot prompt should not force-normalize FIFO_HEAD_ADDR"
-    );
-
-    // Main-menu snapshot shape (from `py_main_ready_555000`): FIFO bytes contain the PF1 press/release
-    // history and head retains stale high bits.
-    mem.write_external_byte(FIFO_HEAD_ADDR, 0x28);
-    mem.write_external_byte(FIFO_TAIL_ADDR, 0x03);
-    for (i, byte) in [0x56u8, 0xD6, 0xD6, 0, 0, 0, 0].into_iter().enumerate() {
-        mem.write_external_byte(FIFO_BASE_ADDR + i as u32, byte);
-    }
-    kb.inject_matrix_event(0x56, false, &mut mem, true);
-    assert_eq!(
-        mem.read_byte(FIFO_HEAD_ADDR).unwrap_or(0),
-        0x00,
-        "main-menu snapshot should normalize FIFO_HEAD_ADDR to 0..7"
-    );
+    assert_eq!(isr & 0x04, 0, "KEYI should not assert when masked");
+    let _ = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
+    assert_eq!(kb.fifo_len(), 0, "KIL read should consume pending events");
 }
 
 #[test]

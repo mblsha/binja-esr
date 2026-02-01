@@ -1,16 +1,11 @@
-"""Tests for the high-level keyboard handler and FIFO mirroring."""
+"""Tests for the high-level keyboard handler and FIFO buffering."""
 
 from __future__ import annotations
 
 
 from typing import List
 from pce500.keyboard_handler import PCE500KeyboardHandler
-from pce500.keyboard_matrix import (
-    FIFO_BASE,
-    FIFO_HEAD_ADDR,
-    FIFO_TAIL_ADDR,
-    KEY_LOCATIONS,
-)
+from pce500.keyboard_matrix import KEY_LOCATIONS
 from pce500.memory import PCE500Memory, INTERNAL_MEMORY_START
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
@@ -27,15 +22,8 @@ def _select_column(handler: PCE500KeyboardHandler, key_code: str) -> None:
     handler.handle_register_write(0xF1, koh)
 
 
-def _read_fifo(memory: PCE500Memory, count: int) -> List[int]:
-    data: List[int] = []
-    head = memory.read_byte(FIFO_HEAD_ADDR)
-    tail = memory.read_byte(FIFO_TAIL_ADDR)
-    idx = head
-    while idx != tail and len(data) < count:
-        data.append(memory.read_byte(FIFO_BASE + idx))
-        idx = (idx + 1) % 8
-    return data
+def _read_fifo(handler: PCE500KeyboardHandler, count: int) -> List[int]:
+    return handler.fifo_snapshot()[:count]
 
 
 class TestKeyboardHandler:
@@ -64,7 +52,7 @@ class TestKeyboardHandler:
         events = self.handler.scan_tick()
         assert events and not events[0].release
 
-        fifo = _read_fifo(self.memory, 2)
+        fifo = _read_fifo(self.handler, 2)
         assert fifo == [events[0].to_byte()]
 
         # Release the key and tick again to generate release event
@@ -72,7 +60,7 @@ class TestKeyboardHandler:
         self.handler.scan_tick()
         events = self.handler.scan_tick()
         assert events and events[0].release
-        fifo = _read_fifo(self.memory, 2)
+        fifo = _read_fifo(self.handler, 2)
         assert fifo == [
             KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row,
             0x80 | (KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row),
@@ -90,9 +78,9 @@ class TestKeyboardHandler:
         self.memory.write_byte(lcc_addr, 0x04)
         assert self.handler.handle_register_read(0xF2) == 0x00
 
-        fifo_before = _read_fifo(self.memory, 4)
+        fifo_before = _read_fifo(self.handler, 4)
         self.handler.scan_tick()
-        fifo_after = _read_fifo(self.memory, 4)
+        fifo_after = _read_fifo(self.handler, 4)
         assert fifo_before == fifo_after
 
     def test_repeat_events_marked(self) -> None:
