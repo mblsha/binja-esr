@@ -1883,8 +1883,8 @@ fn src_mask_for_name(name: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::perfetto::perfetto_test_guard;
     use crate::llama::opcodes::RegName;
+    use crate::perfetto::perfetto_test_guard;
     use std::fs;
 
     #[test]

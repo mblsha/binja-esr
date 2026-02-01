@@ -12,12 +12,12 @@ use crate::CoreError;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 #[cfg(all(test, feature = "perfetto"))]
 use std::cell::RefCell;
-#[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
 #[cfg(any(feature = "perfetto", test))]
 use std::sync::OnceLock;
 #[cfg(feature = "perfetto")]
 use std::sync::RwLock;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
 #[cfg(not(feature = "perfetto"))]
 #[derive(Clone, Debug)]
@@ -386,9 +386,11 @@ impl PerfettoTracer {
 
         // Mirror to Memory track for Python parity.
         {
-            let mut mem_alias =
-                self.builder
-                    .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
+            let mut mem_alias = self.builder.add_instant_event(
+                self.memory_track,
+                format!("Write@0x{addr:06X}"),
+                ts,
+            );
             mem_alias.add_annotations([
                 ("backend", AnnotationValue::Str("rust".to_string())),
                 ("address", AnnotationValue::Pointer(addr as u64)),

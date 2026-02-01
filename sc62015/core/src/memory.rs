@@ -1027,7 +1027,7 @@ mod tests {
         assert_eq!(mem.load(addr, 16), Some(value));
         assert_eq!(mem.load(INTERNAL_RAM_START as u32, 16), Some(value));
         let slice = mem.internal_ram_slice();
-        assert_eq!(slice.get(0), Some(&0xEF));
+        assert_eq!(slice.first(), Some(&0xEF));
         assert_eq!(slice.get(1), Some(&0xBE));
     }
 
