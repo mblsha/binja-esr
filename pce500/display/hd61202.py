@@ -37,6 +37,7 @@ class Instruction(enum.Enum):
 @dataclasses.dataclass
 class HD61202State:
     on: bool = False
+    busy: bool = False
     start_line: int = 0  # 0-63
     page: int = 0  # 0-7
     y_address: int = 0  # 0-63
@@ -79,6 +80,7 @@ class HD61202:
 
     def write_instruction(self, instr: Instruction, data: int):
         self.instruction_count += 1
+        self.state.busy = True
 
         if instr == Instruction.ON_OFF:
             self.state.on = bool(data)
@@ -94,6 +96,7 @@ class HD61202:
 
     def write_data(self, data: int, pc_source: Optional[int] = None):
         self.data_write_count += 1
+        self.state.busy = True
         if (
             0 <= self.state.page < self.LCD_PAGES
             and 0 <= self.state.y_address < self.LCD_WIDTH_PIXELS
@@ -119,27 +122,26 @@ class HD61202:
 
     def read_instruction_status(self) -> int:
         """Reads the status byte (instruction register)."""
-        # Bit 7: BUSY flag (0 = ready, 1 = busy)
-        # Bit 6: ON/OFF state
-        # Bit 5: RESET state (always 0 in normal operation)
-        # Bits 4-0: Don't care
+        # HD61202 datasheet:
+        # Bit 7: BUSY (1 = busy)
+        # Bit 5: ON/OFF (0 = on, 1 = off)
         status = 0
-        if self.state.on:
-            status |= 0x40  # Set bit 6
-        # We always report ready (BUSY = 0)
+        if self.state.busy:
+            status |= 0x80
+        if not self.state.on:
+            status |= 0x20
+        self.state.busy = False
         return status
 
     def read_data(self) -> int:
         """Reads data from the current address and increments Y address."""
         self.data_read_count += 1
-        if (
-            0 <= self.state.page < self.LCD_PAGES
-            and 0 <= self.state.y_address < self.LCD_WIDTH_PIXELS
-        ):
-            data = self.vram[self.state.page][self.state.y_address]
-            self.state.y_address = (self.state.y_address + 1) % self.LCD_WIDTH_PIXELS
-            return data
-        return 0
+        page = self.state.page % self.LCD_PAGES
+        y = self.state.y_address % self.LCD_WIDTH_PIXELS
+        read_col = (y - 1) % self.LCD_WIDTH_PIXELS
+        data = self.vram[page][read_col]
+        self.state.y_address = (y + 1) % self.LCD_WIDTH_PIXELS
+        return data
 
     def get_pc_source(self, page: int, y_address: int) -> Optional[int]:
         """Get the PC source for a specific VRAM location."""
@@ -151,6 +153,7 @@ class HD61202:
         """Reset the HD61202 chip state and statistics."""
         # Reset state
         self.state.on = False
+        self.state.busy = False
         self.state.start_line = 0
         self.state.page = 0
         self.state.y_address = 0
@@ -171,20 +174,28 @@ class HD61202:
 # --- Helper Functions ---
 
 
-def parse_command(addr: int, value: int) -> Command:
-    """Parses a memory write address and value into an LCD command."""
+def decode_access(addr: int) -> Optional[tuple[ChipSelect, DataInstruction, ReadWrite]]:
     addr_hi = addr & 0xF000
-    if addr_hi not in [0xA000, 0x2000]:
-        raise ValueError(f"Unexpected address high bits: {hex(addr_hi)}")
+    if addr_hi not in (0xA000, 0x2000):
+        return None
 
-    addr_lo = addr & 0xFFF
-    if not (addr_lo & 1) == ReadWrite.WRITE.value:
-        raise ValueError("Command parsing only supports write operations.")
-
+    addr_lo = addr & 0x000F
+    rw = ReadWrite.READ if (addr_lo & 1) else ReadWrite.WRITE
     di = DataInstruction((addr_lo >> 1) & 1)
     cs = ChipSelect((addr_lo >> 2) & 0b11)
     if cs == ChipSelect.NONE:
-        raise ValueError("Unexpected Chip Select value: NONE")
+        return None
+    return cs, di, rw
+
+
+def parse_command(addr: int, value: int) -> Command:
+    """Parses a memory write address and value into an LCD command."""
+    access = decode_access(addr)
+    if access is None:
+        raise ValueError(f"Unexpected address high bits: {hex(addr & 0xF000)}")
+    cs, di, rw = access
+    if rw != ReadWrite.WRITE:
+        raise ValueError("Command parsing only supports write operations.")
 
     data = value
     instr = None
