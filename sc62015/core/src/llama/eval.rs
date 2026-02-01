@@ -3479,6 +3479,7 @@ mod tests {
 
     #[test]
     fn perfetto_trace_anchors_to_prefix_pc_and_opcode() {
+        let _perfetto_lock = crate::perfetto_test_guard();
         use crate::PerfettoTracer;
         // Program: PRE (0x32) followed by NOP (0x00)
         let mut bus = MemBus::with_size(4);
@@ -4317,6 +4318,7 @@ mod tests {
 
     #[test]
     fn pushu_imr_clears_irm_with_perfetto_enabled() {
+        let _perfetto_lock = crate::perfetto_test_guard();
         use crate::PerfettoTracer;
 
         let mut bus = MemBus::with_size(0x200);
@@ -4860,7 +4862,8 @@ mod tests {
 
     #[test]
     fn perfetto_last_pc_tracks_executed_instruction_pc() {
-        let _lock = PERFETTO_TRACER.enter();
+        let _perfetto_lock = crate::perfetto_test_guard();
+        let _perfetto_handle = PERFETTO_TRACER.enter();
         reset_perf_counters();
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
