@@ -1,3 +1,4 @@
+use crate::async_driver::sleep_cycles;
 use crate::{CoreError, CoreRuntime, ADDRESS_MASK};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -43,9 +44,10 @@ impl AsyncCpuHandle {
                 )
             };
 
+            sleep_cycles(1).await;
             {
                 let mut runtime = self.runtime.borrow_mut();
-                runtime.step_async(1).await?;
+                runtime.step(1)?;
             }
 
             let (pc_after, instr_after, cycle_after) = {
