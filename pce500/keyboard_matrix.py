@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 FIFO_SIZE = 8  # event queue depth
 FIFO_HEAD_ADDR = 0x00BFC9D
 FIFO_TAIL_ADDR = 0x00BFC9E
+COLUMN_COUNT = 16  # 8 KOL + 8 KOH bits (matches Rust keyboard scan width)
 
 # Debounce / repeat defaults derived from ROM behaviour (16 ms fast-timer cadence).
 DEFAULT_PRESS_TICKS = 6
@@ -216,7 +217,7 @@ class KeyboardMatrix:
         self._pressed_keys: set[str] = set()
 
         self.strobe_count = 0
-        self.column_histogram: List[int] = [0] * 11
+        self.column_histogram: List[int] = [0] * COLUMN_COUNT
         self.irq_count = 0
         # Optional trace hook for scan events (col, row, pressed)
         self._trace_hook = None
@@ -530,7 +531,7 @@ class KeyboardMatrix:
             active_flag = bit == 1 if self.columns_active_high else bit == 0
             if active_flag:
                 active.append(col)
-        for col in range(3):
+        for col in range(8):
             bit = (self.koh >> col) & 1
             active_flag = bit == 1 if self.columns_active_high else bit == 0
             if active_flag:

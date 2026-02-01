@@ -481,29 +481,31 @@ impl KeyboardMatrix {
             ')' => "KEY_RPAREN".to_string(),
             _ => return None,
         };
-        KEY_NAMES.iter().position(|entry| entry.map_or(false, |label| label == name)).and_then(
-            |idx| {
+        KEY_NAMES
+            .iter()
+            .position(|entry| entry.is_some_and(|label| label == name))
+            .and_then(|idx| {
                 let row = idx / KEY_COLUMNS;
                 let col = idx % KEY_COLUMNS;
                 if row >= KEY_ROWS || col >= KEY_COLUMNS {
                     return None;
                 }
                 Some(((col as u8) << 3) | (row as u8))
-            },
-        )
+            })
     }
 
     pub fn matrix_code_for_key_name(name: &str) -> Option<u8> {
-        KEY_NAMES.iter().position(|entry| entry.map_or(false, |label| label == name)).and_then(
-            |idx| {
+        KEY_NAMES
+            .iter()
+            .position(|entry| entry.is_some_and(|label| label == name))
+            .and_then(|idx| {
                 let row = idx / KEY_COLUMNS;
                 let col = idx % KEY_COLUMNS;
                 if row >= KEY_ROWS || col >= KEY_COLUMNS {
                     return None;
                 }
                 Some(((col as u8) << 3) | (row as u8))
-            },
-        )
+            })
     }
 
     pub fn irq_count(&self) -> u32 {
