@@ -153,7 +153,7 @@ impl DeviceModel {
     }
 
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
-        rt.set_device_model(*self);
+        rt.set_device_model(*self)?;
         rt.lcd = Some(create_lcd(self.lcd_kind()));
         if let Some(lcd) = rt.lcd.as_deref_mut() {
             configure_lcd_char_tracing(lcd, *self, rom);

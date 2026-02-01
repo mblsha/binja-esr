@@ -1174,7 +1174,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rom_bytes = fs::read(&rom_path)?;
 
     let mut runtime = CoreRuntime::new();
-    runtime.set_device_model(args.model);
+    runtime.set_device_model(args.model)?;
     args.model.configure_runtime(&mut runtime, &rom_bytes)?;
     runtime
         .memory
