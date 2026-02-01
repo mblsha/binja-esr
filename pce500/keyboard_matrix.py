@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 FIFO_BASE = 0x00BFC96
 if TYPE_CHECKING:
     from .memory import PCE500Memory
-FIFO_SIZE = 8  # 8 events mirrored in RAM
+FIFO_SIZE = 8  # event queue depth
 FIFO_HEAD_ADDR = 0x00BFC9D
 FIFO_TAIL_ADDR = 0x00BFC9E
 
@@ -67,7 +67,7 @@ def _build_key_locations() -> Tuple[Dict[str, KeyLocation], Dict[str, str]]:
         ["BASIC", "X", "V", "N", ",", "7", "8", "9", "÷", "DEL", "PF3"],
         ["Z", "C", "B", "M", ";", "4", "5", "6", "×", "BS", "PF2"],
         ["SHIFT", "CAPS", "SPACE", "↑", "▶", "1", "2", "3", "-", "INS", "PF1"],
-        ["CTRL", "ANS", "↓", "▼", "◀", "0", "+/-", ".", "+", "=", None],
+        ["CTRL", "ANS", "↓", "◀", "ENTER", "0", "+/-", ".", "+", "=", None],
     ]
 
     names: Dict[str, str] = {
@@ -121,7 +121,7 @@ def _build_key_locations() -> Tuple[Dict[str, KeyLocation], Dict[str, str]]:
         "▶": "KEY_RIGHT",
         "↕": "KEY_UP_DOWN",
         "▲▼": "KEY_TRIANGLE_UP_DOWN",
-        "▼": "KEY_DOWN_TRIANGLE",
+        "ENTER": "KEY_ENTER",
         # Function keys
         "PF1": "KEY_F1",
         "PF2": "KEY_F2",
@@ -375,6 +375,13 @@ class KeyboardMatrix:
             idx = (idx + 1) % FIFO_SIZE
         return snapshot
 
+    def consume_pending_events(self) -> None:
+        if self._head == self._tail:
+            return
+        self._fifo = [0x00] * FIFO_SIZE
+        self._head = 0
+        self._tail = 0
+
     def inject_event(self, key_code: str, *, release: bool = False) -> bool:
         """Inject a debounced keyboard event into the FIFO (for scripted tests)."""
 
@@ -514,13 +521,7 @@ class KeyboardMatrix:
     # ------------------------------------------------------------------ #
 
     def _initialise_fifo_memory(self) -> None:
-        if self._writer is None:
-            return
-
-        for offset in range(FIFO_SIZE):
-            self._writer(FIFO_BASE + offset, 0x00)
-        self._writer(FIFO_HEAD_ADDR, self._head)
-        self._writer(FIFO_TAIL_ADDR, self._tail)
+        return
 
     def _active_columns(self) -> Iterable[int]:
         active: List[int] = []
@@ -617,7 +618,6 @@ class KeyboardMatrix:
         return events
 
     def _enqueue_event(self, event: MatrixEvent) -> None:
-        self._refresh_head_from_memory()
         next_tail = (self._tail + 1) % FIFO_SIZE
         if next_tail == self._head:
             # FIFO full: drop oldest entry
@@ -630,25 +630,16 @@ class KeyboardMatrix:
         self._write_tail(self._tail)
 
     def _write_fifo_slot(self, index: int, value: int) -> None:
-        if self._writer is None:
-            return
-        self._writer(FIFO_BASE + index, value & 0xFF)
+        return
 
     def _write_head(self, value: int) -> None:
-        if self._writer is not None:
-            self._writer(FIFO_HEAD_ADDR, value & 0xFF)
+        return
 
     def _write_tail(self, value: int) -> None:
-        if self._writer is not None:
-            self._writer(FIFO_TAIL_ADDR, value & 0xFF)
+        return
 
     def _refresh_head_from_memory(self) -> None:
-        if self._reader is None:
-            return
-        try:
-            self._head = self._reader(FIFO_HEAD_ADDR) % FIFO_SIZE
-        except Exception:
-            pass
+        return
 
 
 __all__ = [

@@ -3123,6 +3123,14 @@ class PCE500Emulator:
         if self.disasm_trace_enabled and reg_name:
             self._on_imem_register_access(pc, reg_name, access_type, value)
 
+        if reg_name == "KIL" and access_type == "read":
+            try:
+                if self.keyboard:
+                    self.keyboard.consume_pending_events()
+                self._key_irq_latched = False
+            except Exception:
+                pass
+
         # Perfetto logging for IMR/ISR writes to spot masking/clearing.
         try:
             if reg_name in ("IMR", "ISR") and access_type == "write":
@@ -3143,6 +3151,12 @@ class PCE500Emulator:
                     and (prev & int(ISRFlag.KEYI))
                     and not (value & int(ISRFlag.KEYI))
                 ):
+                    try:
+                        if self.keyboard:
+                            self.keyboard.consume_pending_events()
+                        self._key_irq_latched = False
+                    except Exception:
+                        pass
                     self._trace_irq_instant(
                         "KEYI_Clear",
                         IRQSource.KEY,
