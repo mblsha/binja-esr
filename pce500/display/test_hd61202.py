@@ -320,7 +320,7 @@ class TestHD61202Controller:
         controller.chips[0].state.y_address = 1
         controller.chips[0].vram[0][0] = 0x42
 
-        data = controller.read(0x2000B)  # CS=10, read, data
+        data = controller.read(0x200B)  # CS=10, read, data
         assert data == 0x42
         assert controller.chips[0].state.y_address == 2
 
