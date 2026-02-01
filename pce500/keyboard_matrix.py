@@ -5,13 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
-# Internal RAM locations used by the ROM keyboard driver.
-FIFO_BASE = 0x00BFC96
 if TYPE_CHECKING:
     from .memory import PCE500Memory
 FIFO_SIZE = 8  # event queue depth
-FIFO_HEAD_ADDR = 0x00BFC9D
-FIFO_TAIL_ADDR = 0x00BFC9E
 COLUMN_COUNT = 16  # 8 KOL + 8 KOH bits (matches Rust keyboard scan width)
 
 # Debounce / repeat defaults derived from ROM behaviour (16 ms fast-timer cadence).
@@ -358,17 +354,14 @@ class KeyboardMatrix:
     def pop_fifo(self) -> Optional[int]:
         """Pop the next FIFO entry (mirrors ROM consumer behaviour)."""
 
-        self._refresh_head_from_memory()
         if self._head == self._tail:
             return None
 
         value = self._fifo[self._head]
         self._head = (self._head + 1) % FIFO_SIZE
-        self._write_head(self._head)
         return value
 
     def fifo_snapshot(self) -> List[int]:
-        self._refresh_head_from_memory()
         snapshot: List[int] = []
         idx = self._head
         while idx != self._tail:
@@ -500,12 +493,8 @@ class KeyboardMatrix:
         for idx in range(FIFO_SIZE):
             value = _to_int(fifo_data[idx]) if idx < len(fifo_data) else 0
             self._fifo[idx] = value & 0xFF
-            self._write_fifo_slot(idx, self._fifo[idx])
-
         self._head = _get_int("head", self._head) % FIFO_SIZE
         self._tail = _get_int("tail", self._tail) % FIFO_SIZE
-        self._write_head(self._head)
-        self._write_tail(self._tail)
 
         self.strobe_count = _get_int("strobe_count", self.strobe_count)
         hist = state.get("column_histogram")
@@ -522,13 +511,7 @@ class KeyboardMatrix:
     # ------------------------------------------------------------------ #
 
     def _initialise_fifo_memory(self) -> None:
-        if self._writer is None:
-            return
-
-        for offset in range(FIFO_SIZE):
-            self._writer(FIFO_BASE + offset, 0x00)
-        self._writer(FIFO_HEAD_ADDR, self._head)
-        self._writer(FIFO_TAIL_ADDR, self._tail)
+        return
 
     def _active_columns(self) -> Iterable[int]:
         active: List[int] = []
@@ -625,38 +608,14 @@ class KeyboardMatrix:
         return events
 
     def _enqueue_event(self, event: MatrixEvent) -> None:
-        self._refresh_head_from_memory()
         next_tail = (self._tail + 1) % FIFO_SIZE
         if next_tail == self._head:
             # FIFO full: drop oldest entry
             self._head = (self._head + 1) % FIFO_SIZE
-            self._write_head(self._head)
 
         self._fifo[self._tail] = event.to_byte()
-        self._write_fifo_slot(self._tail, self._fifo[self._tail])
         self._tail = next_tail
-        self._write_tail(self._tail)
-
-    def _write_fifo_slot(self, index: int, value: int) -> None:
-        if self._writer is None:
-            return
-        self._writer(FIFO_BASE + index, value & 0xFF)
-
-    def _write_head(self, value: int) -> None:
-        if self._writer is not None:
-            self._writer(FIFO_HEAD_ADDR, value & 0xFF)
-
-    def _write_tail(self, value: int) -> None:
-        if self._writer is not None:
-            self._writer(FIFO_TAIL_ADDR, value & 0xFF)
-
-    def _refresh_head_from_memory(self) -> None:
-        if self._reader is None:
-            return
-        try:
-            self._head = self._reader(FIFO_HEAD_ADDR) % FIFO_SIZE
-        except Exception:
-            pass
+        return
 
 
 __all__ = [
@@ -669,9 +628,6 @@ __all__ = [
     "DEFAULT_RELEASE_TICKS",
     "DEFAULT_REPEAT_DELAY_TICKS",
     "DEFAULT_REPEAT_INTERVAL_TICKS",
-    "FIFO_BASE",
-    "FIFO_HEAD_ADDR",
-    "FIFO_TAIL_ADDR",
     "FIFO_SIZE",
     "MatrixEvent",
 ]

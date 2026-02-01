@@ -139,7 +139,7 @@ def test_fc_fz_updates_do_not_clobber_f_upper_bits(backend: str) -> None:
     assert cpu.regs.get(RegisterName.F) == 0xAA  # upper bits unchanged
 
 
-def test_llama_keyboard_bridge_updates_fifo_and_kil() -> None:
+def test_llama_keyboard_bridge_updates_kil() -> None:
     memory = cast(Any, _make_memory(0x00))
     cpu = CPU(memory, reset_on_init=True, backend="llama")
 
@@ -147,12 +147,9 @@ def test_llama_keyboard_bridge_updates_fifo_and_kil() -> None:
     assert cpu.keyboard_press_matrix_code(0x00)
     kil_addr = (0x100000 + IMEMRegisters.KIL) & 0xFFFFFF
     assert memory._raw[kil_addr] == 0x01
-    fifo_base = 0x00BFC96
-    assert memory._raw[fifo_base] == 0x00
 
     assert cpu.keyboard_release_matrix_code(0x00)
     assert memory._raw[kil_addr] == 0x00
-    assert memory._raw[fifo_base + 1] == 0x80
 
 
 class _MemoryWithLcdHook:
