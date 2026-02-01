@@ -142,7 +142,10 @@ class MemoryBus:
         overlay: MemoryOverlay, address: int, cpu_pc: Optional[int]
     ) -> Optional[int]:
         if overlay.read_handler is not None:
-            return overlay.read_handler(address, cpu_pc) & 0xFF
+            value = overlay.read_handler(address, cpu_pc)
+            if value is None:
+                return None
+            return int(value) & 0xFF
 
         if overlay.data is not None:
             offset = address - overlay.start

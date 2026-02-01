@@ -7,7 +7,15 @@ from typing import Dict, List, Optional
 import numpy as np
 from PIL import Image
 
-from .hd61202 import HD61202, parse_command, render_combined_image
+from .hd61202 import (
+    HD61202,
+    ChipSelect,
+    DataInstruction,
+    ReadWrite,
+    decode_access,
+    parse_command,
+    render_combined_image,
+)
 from .pipeline import LCDOperation, LCDPipeline, LCDSnapshot
 from ..tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 
@@ -62,10 +70,21 @@ class HD61202Controller:
                 pass
         return None
 
-    def read(self, address: int, cpu_pc: Optional[int] = None) -> int:
+    def read(self, address: int, cpu_pc: Optional[int] = None) -> Optional[int]:
         """Read from LCD controller at given address."""
-        # Reads are not currently emulated.
-        return 0xFF
+        _ = cpu_pc
+        access = decode_access(address)
+        if access is None:
+            return None
+        cs, di, rw = access
+        if rw != ReadWrite.READ:
+            return None
+        if cs == ChipSelect.BOTH:
+            return None
+        chip = self.chips[0] if cs == ChipSelect.LEFT else self.chips[1]
+        if di == DataInstruction.DATA:
+            return chip.read_data()
+        return chip.read_instruction_status()
 
     @perf_trace("Display")
     def write(self, address: int, value: int, cpu_pc: Optional[int] = None) -> None:

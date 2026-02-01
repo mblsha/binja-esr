@@ -168,28 +168,30 @@ class TestHD61202:
         """Test data reading and auto-increment."""
         chip = HD61202()
         chip.state.page = 1
-        chip.state.y_address = 5
-        chip.vram[1][5] = 0x42
+        chip.state.y_address = 1
+        chip.vram[1][0] = 0x42
 
         # Read data
         data = chip.read_data()
         assert data == 0x42
-        assert chip.state.y_address == 6  # Auto-incremented
+        assert chip.state.y_address == 2  # Buffered read advances Y
 
     def test_read_instruction_status(self):
         """Test status register reading."""
         chip = HD61202()
 
-        # Initial state - display off
-        status = chip.read_instruction_status()
-        assert (status & 0x40) == 0  # Display off
-
-        # Turn on display
         chip.state.on = True
+        chip.state.busy = True
         status = chip.read_instruction_status()
-        assert status & 0x40  # Display on flag (bit 6)
+        assert status & 0x80  # Busy set
+        assert (status & 0x20) == 0  # Display on
+        assert chip.state.busy is False
 
-        # Note: Current implementation always reports ready (BUSY=0)
+        chip.state.on = False
+        chip.state.busy = True
+        status = chip.read_instruction_status()
+        assert status == 0xA0  # Busy + display off
+        assert chip.state.busy is False
 
     def test_reset(self):
         """Test chip reset."""
@@ -201,6 +203,7 @@ class TestHD61202:
         chip.reset()
 
         assert chip.state.on is False
+        assert chip.state.busy is False
         assert chip.state.page == 0
         assert chip.vram[0][0] == 0
         # Note: Current implementation doesn't have reset_flag
@@ -305,20 +308,21 @@ class TestHD61202Controller:
         """Test reading status from chips."""
         controller = HD61202Controller()
         controller.chips[0].state.on = True
-        # Note: current implementation doesn't have busy flag
+        controller.chips[0].state.busy = True
 
-        # Read from controller - current implementation returns 0xFF
-        status = controller.read(0x2001)
-        assert status == 0xFF  # Current implementation always returns 0xFF
+        status = controller.read(0x2009)
+        assert status == 0x80
 
     def test_read_data(self):
         """Test reading data from chip."""
         controller = HD61202Controller()
+        controller.chips[0].state.page = 0
+        controller.chips[0].state.y_address = 1
         controller.chips[0].vram[0][0] = 0x42
 
-        # Current implementation always returns 0xFF for reads
         data = controller.read(0x2000B)  # CS=10, read, data
-        assert data == 0xFF  # Current implementation always returns 0xFF
+        assert data == 0x42
+        assert controller.chips[0].state.y_address == 2
 
     def test_get_display_buffer(self):
         """Test combined display buffer."""

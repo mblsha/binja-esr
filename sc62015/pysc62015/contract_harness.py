@@ -12,7 +12,14 @@ from typing import Literal, Optional, Protocol, Sequence
 
 from pce500.memory import INTERNAL_MEMORY_START, PCE500Memory
 from pce500.keyboard_handler import PCE500KeyboardHandler
-from pce500.display.hd61202 import HD61202, parse_command, ChipSelect
+from pce500.display.hd61202 import (
+    HD61202,
+    ChipSelect,
+    DataInstruction,
+    ReadWrite,
+    decode_access,
+    parse_command,
+)
 
 try:
     import _sc62015_rustcore as rustcore
@@ -146,11 +153,28 @@ class PythonContractBackend:
         self._irq_source = None
 
     def read(self, address: int, pc: Optional[int] = None) -> int:
-        value = int(self.memory.read_byte(address, pc)) & 0xFF
+        if _is_lcd_addr(address):
+            value = self._read_lcd(address)
+        else:
+            value = int(self.memory.read_byte(address, pc)) & 0xFF
         self._events.append(
             ContractEvent(kind="read", address=address & 0xFFFFFF, value=value, pc=pc)
         )
         return value
+
+    def _read_lcd(self, address: int) -> int:
+        access = decode_access(address)
+        if access is None:
+            return int(self.memory.external_memory[address & 0xFFFFF]) & 0xFF
+        cs, di, rw = access
+        if rw != ReadWrite.READ:
+            return int(self.memory.external_memory[address & 0xFFFFF]) & 0xFF
+        if cs == ChipSelect.BOTH:
+            return int(self.memory.external_memory[address & 0xFFFFF]) & 0xFF
+        chip = self._lcd_chips[0] if cs == ChipSelect.LEFT else self._lcd_chips[1]
+        if di == DataInstruction.DATA:
+            return int(chip.read_data()) & 0xFF
+        return int(chip.read_instruction_status()) & 0xFF
 
     def write(self, address: int, value: int, pc: Optional[int] = None) -> None:
         self.memory.write_byte(address, value, pc)

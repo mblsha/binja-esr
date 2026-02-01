@@ -283,15 +283,17 @@ def test_requires_python_overlays_are_delegated():
         assert py_int[offset] == rs_int[offset]
 
 
-def test_lcd_reads_stubbed_to_ff_parity():
+def test_lcd_reads_parity():
     py_backend, rust_backend = _init_backends()
+    fallback_addr = 0xA001
+    fallback_expected = py_backend.memory.external_memory[fallback_addr & 0xFFFFF]
     vectors = [
-        AccessVector(
-            "write", 0x2000, 0x12, pc=0x090000
-        ),  # instruction write (ignored by read stub)
-        AccessVector("read", 0x2001, pc=0x090002),  # instruction read
-        AccessVector("write", 0xA000, 0x34, pc=0x090010),  # high mirror write
-        AccessVector("read", 0xA001, pc=0x090012),  # data read
+        AccessVector("write", 0x2000, 0x82, pc=0x090000),  # Set page=2
+        AccessVector("write", 0x2000, 0x41, pc=0x090002),  # Set Y=1
+        AccessVector("write", 0x2002, 0xAA, pc=0x090004),  # Data write (left)
+        AccessVector("read", 0x200B, pc=0x090006),  # Data read (buffered)
+        AccessVector("read", fallback_addr, pc=0x090008),  # CS=both fallback
+        AccessVector("read", 0x2009, pc=0x09000A),  # Status read (left)
     ]
 
     runs = run_dual(vectors, python_backend=py_backend, rust_backend=rust_backend)
@@ -302,15 +304,20 @@ def test_lcd_reads_stubbed_to_ff_parity():
     rs_events = [(e.kind, e.address, e.value, e.pc) for e in rs_run.events]
     assert py_events == rs_events
 
-    # External memory should remain aligned; read events must report 0xFF on both sides.
-    assert py_run.snapshot.external is not None
-    assert rs_run.snapshot.external is not None
-    py_ext = py_run.snapshot.external
-    rs_ext = rs_run.snapshot.external
-    assert py_ext[0x2000] == rs_ext[0x2000] == 0x12
-    assert py_ext[0xA000] == rs_ext[0xA000] == 0x34
-    assert py_ext[0x2001] == rs_ext[0x2001]
-    assert py_ext[0xA001] == rs_ext[0xA001]
+    data_read = next(
+        e.value for e in py_run.events if e.kind == "read" and e.address == 0x200B
+    )
+    assert data_read == 0xAA
+    fallback_read = next(
+        e.value
+        for e in py_run.events
+        if e.kind == "read" and e.address == fallback_addr
+    )
+    assert fallback_read == fallback_expected
+    status_read = next(
+        e.value for e in py_run.events if e.kind == "read" and e.address == 0x2009
+    )
+    assert status_read == 0xA0
 
 
 def test_exl_dsbl_cadence_parity():
