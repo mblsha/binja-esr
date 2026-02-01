@@ -9,6 +9,9 @@ const GLYPH_STRIDE: usize = 6; // five data columns + spacer
 const GLYPH_COUNT: usize = 96; // ASCII 0x20-0x7F
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
+const PCE500_ARROW_UP_DOWN: [u8; GLYPH_WIDTH] = [0x00, 0x28, 0x6c, 0x6c, 0x28];
+const PCE500_LBRACKET: [u8; GLYPH_WIDTH] = [0x00, 0x7f, 0x7f, 0x41, 0x00];
+const PCE500_RBRACKET: [u8; GLYPH_WIDTH] = [0x00, 0x41, 0x7f, 0x7f, 0x00];
 
 const IQ7000_CELL_BYTES: usize = 6;
 const IQ7000_TEXT_COLS: usize = 16;
@@ -54,6 +57,9 @@ impl Pce500FontMap {
                 glyphs.entry(inverted).or_insert(ch);
             }
         }
+        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '⇳');
+        insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
+        insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
         Self { glyphs }
     }
 
@@ -64,6 +70,19 @@ impl Pce500FontMap {
     fn resolve(&self, pattern: &[u8; GLYPH_WIDTH]) -> char {
         *self.glyphs.get(pattern).unwrap_or(&'?')
     }
+}
+
+fn insert_pce500_special(
+    glyphs: &mut HashMap<[u8; GLYPH_WIDTH], char>,
+    pattern: [u8; GLYPH_WIDTH],
+    ch: char,
+) {
+    glyphs.entry(pattern).or_insert(ch);
+    let mut inverted = [0u8; GLYPH_WIDTH];
+    for (dest, src) in inverted.iter_mut().zip(pattern) {
+        *dest = (!src) & 0x7F;
+    }
+    glyphs.entry(inverted).or_insert(ch);
 }
 
 fn font_base_offset(rom: &[u8], font_base_addr: u32, rom_window_start: u32) -> Option<usize> {

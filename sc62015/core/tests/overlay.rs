@@ -20,11 +20,22 @@ fn eport_reads_return_zero_and_writes_ignored() {
 }
 
 #[test]
-fn lcd_reads_stub_to_ff() {
+fn lcd_reads_return_vram_and_advance() {
     use sc62015_core::lcd::LcdController;
 
     let mut lcd = LcdController::new();
-    // Both instruction/data reads are stubbed to 0xFF to match Python overlay.
-    assert_eq!(lcd.read(0x2001), Some(0xFF));
-    assert_eq!(lcd.read(0x2003), Some(0xFF));
+    let instr_right = 0x2004;
+    let data_right = 0x2006;
+    let read_right = 0x2007;
+
+    // Page 0, Y=0, write then read should return the prior column.
+    lcd.write(instr_right, 0x80); // SetPage 0
+    lcd.write(instr_right, 0x40); // SetY 0
+    lcd.write(data_right, 0x12); // write to col 0 (Y -> 1)
+    assert_eq!(lcd.read(read_right), Some(0x12));
+
+    // Y=63 write should wrap and read back from col 63 when Y==0.
+    lcd.write(instr_right, 0x7F); // SetY 63
+    lcd.write(data_right, 0xAB); // write to col 63 (Y -> 0)
+    assert_eq!(lcd.read(read_right), Some(0xAB));
 }
