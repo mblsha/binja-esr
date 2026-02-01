@@ -38,7 +38,13 @@ pub struct TimerContext {
     pub last_irq_vector: Option<u32>,
     pub irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
     pub delivered_masks: Vec<u8>,
+    instruction_start_cycle: u64,
+    last_mti_fire_cycle: Option<u64>,
+    last_sti_fire_cycle: Option<u64>,
+    fired_mti_since_boundary: bool,
+    fired_sti_since_boundary: bool,
     timer_scale: f64,
+    preserve_phase: bool,
 }
 
 fn default_bit_watch_table() -> serde_json::Map<String, serde_json::Value> {
@@ -121,7 +127,13 @@ impl TimerContext {
             last_irq_vector: None,
             irq_bit_watch: None,
             delivered_masks: Vec::new(),
+            instruction_start_cycle: 0,
+            last_mti_fire_cycle: None,
+            last_sti_fire_cycle: None,
+            fired_mti_since_boundary: false,
+            fired_sti_since_boundary: false,
             timer_scale: 1.0,
+            preserve_phase: true,
         };
         ctx.reset(0);
         ctx
@@ -135,11 +147,42 @@ impl TimerContext {
         };
     }
 
+    pub fn set_preserve_phase(&mut self, preserve: bool) {
+        self.preserve_phase = preserve;
+    }
+
+    pub fn set_instruction_start_cycle(&mut self, cycle: u64) {
+        self.instruction_start_cycle = cycle;
+    }
+
+    pub fn tick_counts(&self, cycle_count: u64) -> (u64, u64) {
+        let mti = Self::tick_count_for(cycle_count, self.mti_period, self.next_mti);
+        let sti = Self::tick_count_for(cycle_count, self.sti_period, self.next_sti);
+        (mti, sti)
+    }
+
+    fn tick_count_for(cycle_count: u64, period: u64, next: u64) -> u64 {
+        if period == 0 {
+            return 0;
+        }
+        let last = next.saturating_sub(period);
+        let mut elapsed = cycle_count.saturating_sub(last);
+        if elapsed >= period {
+            elapsed %= period;
+        }
+        elapsed
+    }
+
     pub fn reset(&mut self, current_cycle: u64) {
         self.irq_pending = false;
         self.irq_source = None;
         self.irq_imr = 0;
         self.irq_isr = 0;
+        self.fired_mti_since_boundary = false;
+        self.fired_sti_since_boundary = false;
+        self.instruction_start_cycle = current_cycle;
+        self.last_mti_fire_cycle = None;
+        self.last_sti_fire_cycle = None;
         self.next_mti = if self.enabled && self.mti_period > 0 {
             current_cycle.wrapping_add(self.mti_period)
         } else {
@@ -173,6 +216,10 @@ impl TimerContext {
         self.last_irq_pc = None;
         self.last_irq_vector = None;
         self.irq_bit_watch = None;
+        self.fired_mti_since_boundary = false;
+        self.fired_sti_since_boundary = false;
+        self.last_mti_fire_cycle = None;
+        self.last_sti_fire_cycle = None;
     }
 
     /// Clear pending/active interrupt bookkeeping after a RESET intrinsic so mirrors reflect
@@ -182,6 +229,10 @@ impl TimerContext {
         self.in_interrupt = false;
         self.irq_source = None;
         self.last_fired = None;
+        self.fired_mti_since_boundary = false;
+        self.fired_sti_since_boundary = false;
+        self.last_mti_fire_cycle = None;
+        self.last_sti_fire_cycle = None;
         self.key_irq_latched = false;
         self.delivered_masks.clear();
         self.interrupt_stack.clear();
@@ -235,22 +286,10 @@ impl TimerContext {
         timer: &TimerInfo,
         interrupts: &InterruptInfo,
         _current_cycle: u64,
-        _allow_scale: bool,
     ) {
         self.enabled = timer.enabled;
-        let mut mti = timer.mti_period.max(0) as u64;
-        let mut sti = timer.sti_period.max(0) as u64;
-        // Optional LLAMA timer scaling for parity with Python loader.
-        if _allow_scale && (self.timer_scale - 1.0).abs() > f64::EPSILON {
-            let apply_scale = |v: u64, scale: f64| -> u64 {
-                let scaled = (v as f64 * scale).round();
-                scaled.max(1.0) as u64
-            };
-            mti = apply_scale(mti, self.timer_scale);
-            sti = apply_scale(sti, self.timer_scale);
-        }
-        self.mti_period = mti;
-        self.sti_period = sti;
+        self.mti_period = timer.mti_period.max(0) as u64;
+        self.sti_period = timer.sti_period.max(0) as u64;
         self.next_mti = timer.next_mti.max(0) as u64;
         self.next_sti = timer.next_sti.max(0) as u64;
         // Python stores absolute targets; do not rebase forward. Allow immediate fire if targets are in the past.
@@ -263,6 +302,10 @@ impl TimerContext {
         self.next_interrupt_id = interrupts.next_id;
         self.irq_imr = interrupts.imr;
         self.irq_isr = interrupts.isr;
+        if self.irq_isr == 0 {
+            self.irq_pending = false;
+            self.irq_source = None;
+        }
         self.irq_bit_watch = interrupts
             .irq_bit_watch
             .as_ref()
@@ -414,18 +457,34 @@ impl TimerContext {
 
         if self.mti_period > 0 && cycle_count >= self.next_mti {
             fired_mti = true;
-            while cycle_count >= self.next_mti {
-                self.next_mti = self.next_mti.wrapping_add(self.mti_period);
+            if self.preserve_phase {
+                while cycle_count >= self.next_mti {
+                    self.next_mti = self.next_mti.wrapping_add(self.mti_period);
+                }
+            } else {
+                self.next_mti = cycle_count.wrapping_add(self.mti_period);
             }
+            self.last_mti_fire_cycle = Some(cycle_count);
         }
         if self.sti_period > 0 && cycle_count >= self.next_sti {
             fired_sti = true;
-            while cycle_count >= self.next_sti {
-                self.next_sti = self.next_sti.wrapping_add(self.sti_period);
+            if self.preserve_phase {
+                while cycle_count >= self.next_sti {
+                    self.next_sti = self.next_sti.wrapping_add(self.sti_period);
+                }
+            } else {
+                self.next_sti = cycle_count.wrapping_add(self.sti_period);
             }
+            self.last_sti_fire_cycle = Some(cycle_count);
         }
 
         if fired_mti || fired_sti {
+            if fired_mti {
+                self.fired_mti_since_boundary = true;
+            }
+            if fired_sti {
+                self.fired_sti_since_boundary = true;
+            }
             if let Some(current_isr) = memory.read_internal_byte(ISR_OFFSET) {
                 let mut new_isr = current_isr;
                 if fired_mti {
@@ -466,6 +525,33 @@ impl TimerContext {
             // Record IMR/ISR transitions for parity bit-watch metadata.
         }
         (fired_mti, fired_sti)
+    }
+
+    pub fn finalize_instruction_with_clamp(&mut self, cycle_count: u64, clamp: bool) {
+        if self.fired_mti_since_boundary {
+            if clamp && self.enabled && self.mti_period > 0 {
+                let fire_cycle = self.last_mti_fire_cycle.unwrap_or(cycle_count);
+                if fire_cycle < cycle_count {
+                    self.next_mti = cycle_count.wrapping_add(self.mti_period);
+                }
+            }
+            self.fired_mti_since_boundary = false;
+            self.last_mti_fire_cycle = None;
+        }
+        if self.fired_sti_since_boundary {
+            if clamp && self.enabled && self.sti_period > 0 {
+                let fire_cycle = self.last_sti_fire_cycle.unwrap_or(cycle_count);
+                if fire_cycle < cycle_count {
+                    self.next_sti = cycle_count.wrapping_add(self.sti_period);
+                }
+            }
+            self.fired_sti_since_boundary = false;
+            self.last_sti_fire_cycle = None;
+        }
+    }
+
+    pub fn finalize_instruction(&mut self, cycle_count: u64) {
+        self.finalize_instruction_with_clamp(cycle_count, true);
     }
 
     /// Tick timers and optionally run a keyboard scan when MTI fires, mirroring Python's _tick_timers.
@@ -689,6 +775,59 @@ mod tests {
     }
 
     #[test]
+    fn tick_counts_track_timer_phase() {
+        let mut timer = TimerContext::new(true, 10, 20);
+        timer.mti_period = 10;
+        timer.sti_period = 20;
+        timer.next_mti = 40;
+        timer.next_sti = 50;
+
+        let (mti, sti) = timer.tick_counts(35);
+        assert_eq!(mti, 5);
+        assert_eq!(sti, 5);
+
+        let (mti2, sti2) = timer.tick_counts(65);
+        assert_eq!(mti2, 5);
+        assert_eq!(sti2, 15);
+    }
+
+    #[test]
+    fn finalize_instruction_discards_remainder() {
+        let mut timer = TimerContext::new(true, 10, 0);
+        let mut mem = MemoryImage::new();
+        timer.reset(0);
+
+        for cycle in 1..=12u64 {
+            timer.tick_timers(&mut mem, cycle, None);
+        }
+        assert!(timer.irq_pending, "timer should have fired by cycle 10");
+        assert_eq!(timer.next_mti, 20, "next_mti should track fire cycle");
+
+        timer.finalize_instruction(12);
+        assert_eq!(timer.next_mti, 22, "finalize should drop in-instruction remainder");
+        let (mti, _) = timer.tick_counts(12);
+        assert_eq!(mti, 0, "ticks reset to 0 at boundary");
+    }
+
+    #[test]
+    fn finalize_instruction_preserves_remainder_when_unclamped() {
+        let mut timer = TimerContext::new(true, 10, 0);
+        let mut mem = MemoryImage::new();
+        timer.reset(0);
+
+        for cycle in 1..=12u64 {
+            timer.tick_timers(&mut mem, cycle, None);
+        }
+        assert!(timer.irq_pending, "timer should have fired by cycle 10");
+        assert_eq!(timer.next_mti, 20, "next_mti should track fire cycle");
+
+        timer.finalize_instruction_with_clamp(12, false);
+        assert_eq!(timer.next_mti, 20, "next_mti should preserve in-instruction remainder");
+        let (mti, _) = timer.tick_counts(12);
+        assert_eq!(mti, 2, "ticks preserve remainder when unclamped");
+    }
+
+    #[test]
     fn snapshot_absolute_targets_match_python_semantics() {
         // Simulate a Python snapshot with absolute next_mti/next_sti values.
         let mut timer = TimerContext::new(true, 20, 30);
@@ -703,7 +842,6 @@ mod tests {
             },
             &InterruptInfo::default(),
             100,
-            false,
         );
         let mut mem = MemoryImage::new();
         let mut cycles = 100u64; // current cycle when snapshot applied
@@ -721,6 +859,31 @@ mod tests {
         assert!(timer.next_mti > 150);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01);
+    }
+
+    #[test]
+    fn apply_snapshot_clears_pending_when_isr_empty() {
+        let mut timer = TimerContext::new(true, 20, 30);
+        let mut interrupts = InterruptInfo::default();
+        interrupts.pending = true;
+        interrupts.source = Some("KEY".to_string());
+        interrupts.isr = 0;
+
+        timer.apply_snapshot_info(
+            &crate::TimerInfo {
+                enabled: true,
+                mti_period: 20,
+                sti_period: 30,
+                next_mti: 150,
+                next_sti: 200,
+                kb_irq_enabled: true,
+            },
+            &interrupts,
+            100,
+        );
+
+        assert!(!timer.irq_pending, "pending should clear when ISR is empty");
+        assert!(timer.irq_source.is_none(), "source should clear when ISR is empty");
     }
 
     #[test]
@@ -958,10 +1121,11 @@ mod tests {
             |mem| {
                 // No new events, but FIFO holds data; mirror to memory now that IRQs are enabled.
                 let ev = kb.scan_tick(mem, true);
-                if ev > 0 || kb.fifo_len() > 0 {
+                let fifo_pending = kb.fifo_len() > 0;
+                if ev > 0 || fifo_pending {
                     kb.write_fifo_to_memory(mem, true);
                 }
-                (ev, kb.fifo_len() > 0, Some(kb.telemetry()))
+                (ev, ev > 0 || fifo_pending, Some(kb.telemetry()))
             },
             None,
             None,
@@ -1000,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_snapshot_scales_timers_for_llama() {
+    fn apply_snapshot_restores_timer_periods_without_scaling() {
         let mut timer = TimerContext::new(true, 100, 200);
         timer.set_timer_scale(0.5);
         timer.apply_snapshot_info(
@@ -1014,36 +1178,6 @@ mod tests {
             },
             &InterruptInfo::default(),
             0,
-            true,
-        );
-
-        // Parity: LLAMA loader scales timers when scale is set.
-        assert_eq!(
-            timer.mti_period, 50,
-            "MTI period should scale by configured factor"
-        );
-        assert_eq!(
-            timer.sti_period, 100,
-            "STI period should scale by configured factor"
-        );
-    }
-
-    #[test]
-    fn apply_snapshot_does_not_scale_when_disabled() {
-        // Maintain previous contract: disable scaling path; periods remain as serialized.
-        let mut timer = TimerContext::new(true, 100, 200);
-        timer.apply_snapshot_info(
-            &crate::TimerInfo {
-                enabled: true,
-                mti_period: 100,
-                sti_period: 200,
-                next_mti: 75,
-                next_sti: 125,
-                kb_irq_enabled: true,
-            },
-            &InterruptInfo::default(),
-            0,
-            false,
         );
 
         assert_eq!(timer.mti_period, 100);

@@ -22,7 +22,7 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 pub const SNAPSHOT_MAGIC: &str = "pc-e500.snapshot";
-pub const SNAPSHOT_VERSION: u32 = 1;
+pub const SNAPSHOT_VERSION: u32 = 2;
 pub const SNAPSHOT_REGISTER_LAYOUT: [(&str, usize); 8] = [
     ("PC", 3),
     ("BA", 2),

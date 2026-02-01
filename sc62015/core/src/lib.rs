@@ -103,16 +103,6 @@ pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new(None);
 #[cfg(not(feature = "perfetto"))]
 pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new();
 
-#[cfg(test)]
-pub(crate) fn perfetto_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    static PERFETTO_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-        std::sync::OnceLock::new();
-    PERFETTO_TEST_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub use snapshot::{load_snapshot, save_snapshot};
 pub use snapshot::{
@@ -419,6 +409,7 @@ impl CoreRuntime {
             host_write: None,
             onk_level: false,
         };
+        rt.set_device_model(DeviceModel::PcE500);
         rt.install_imr_isr_hook();
         rt
     }
@@ -429,6 +420,8 @@ impl CoreRuntime {
 
     pub fn set_device_model(&mut self, model: DeviceModel) {
         self.metadata.device_model = Some(model);
+        self.memory
+            .set_internal_ram_mirror(matches!(model, DeviceModel::PcE500));
     }
 
     pub fn instruction_count(&self) -> u64 {
@@ -525,6 +518,10 @@ impl CoreRuntime {
                     timer.irq_imr = new;
                 } else if offset == IMEM_ISR_OFFSET {
                     timer.irq_isr = new;
+                    if (new & (ISR_KEYI | ISR_ONKI | ISR_MTI | ISR_STI)) == 0 {
+                        timer.irq_pending = false;
+                        timer.irq_source = None;
+                    }
                 }
                 let mut guard = PERFETTO_TRACER.enter();
                 guard.with_some(|tracer| {
@@ -1481,17 +1478,10 @@ impl CoreRuntime {
         self.fast_mode = self.metadata.fast_mode;
         self.memory
             .set_memory_counts(self.metadata.memory_reads, self.metadata.memory_writes);
-        let allow_timer_scale = matches!(
-            self.metadata.backend.as_str(),
-            b if b.eq_ignore_ascii_case("core")
-                || b.eq_ignore_ascii_case("llama")
-                || b.eq_ignore_ascii_case("rust")
-        );
         self.timer.apply_snapshot_info(
             &self.metadata.timer,
             &self.metadata.interrupts,
             self.metadata.cycle_count,
-            allow_timer_scale,
         );
         if let Some(watch) = self.metadata.interrupts.irq_bit_watch.as_ref() {
             self.timer.irq_bit_watch = watch.as_object().cloned();
@@ -1892,8 +1882,8 @@ fn src_mask_for_name(name: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::perfetto_test_guard;
     use super::*;
+    use crate::perfetto::perfetto_test_guard;
     use crate::llama::opcodes::RegName;
     use std::fs;
 

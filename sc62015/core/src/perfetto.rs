@@ -12,19 +12,37 @@ use crate::CoreError;
 pub(crate) use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 #[cfg(all(test, feature = "perfetto"))]
 use std::cell::RefCell;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
+#[cfg(any(feature = "perfetto", test))]
+use std::sync::OnceLock;
 #[cfg(feature = "perfetto")]
-use std::sync::{OnceLock, RwLock};
+use std::sync::RwLock;
 
 #[cfg(not(feature = "perfetto"))]
 #[derive(Clone, Debug)]
 pub enum AnnotationValue {
+    Bool(bool),
+    Int(i64),
     Pointer(u64),
     UInt(u64),
+    Double(f64),
     Str(String),
 }
 
 #[cfg(feature = "perfetto")]
 static CALL_UI_FUNCTION_NAMES: OnceLock<RwLock<HashMap<u32, String>>> = OnceLock::new();
+
+#[cfg(test)]
+static PERFETTO_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn perfetto_test_guard() -> MutexGuard<'static, ()> {
+    PERFETTO_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 /// Install an address→name mapping for Call-UI Perfetto traces.
 ///
@@ -83,8 +101,6 @@ pub struct PerfettoTracer {
     iwrites_track: TrackId,
     call_ui_functions_depth: u32,
     #[cfg(test)]
-    test_thread_id: std::thread::ThreadId,
-    #[cfg(test)]
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
     test_timestamps: RefCell<Vec<i64>>,
@@ -94,6 +110,8 @@ pub struct PerfettoTracer {
     pub(crate) test_mem_write_pcs: RefCell<Vec<Option<u32>>>,
     #[cfg(test)]
     pub(crate) test_counters: RefCell<Vec<(u64, u32, u64, u64)>>, // (instr_index, call_depth, reads, writes)
+    #[cfg(test)]
+    test_owner: std::thread::ThreadId,
 }
 
 #[cfg(feature = "perfetto")]
@@ -163,8 +181,6 @@ impl PerfettoTracer {
             iwrites_track,
             call_ui_functions_depth: 0,
             #[cfg(test)]
-            test_thread_id: std::thread::current().id(),
-            #[cfg(test)]
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_timestamps: RefCell::new(Vec::new()),
@@ -174,6 +190,8 @@ impl PerfettoTracer {
             test_mem_write_pcs: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_counters: RefCell::new(Vec::new()),
+            #[cfg(test)]
+            test_owner: std::thread::current().id(),
         }
     }
 
@@ -181,15 +199,15 @@ impl PerfettoTracer {
         &self.path
     }
 
-    #[cfg(test)]
-    fn test_thread_matches(&self) -> bool {
-        self.test_thread_id == std::thread::current().id()
-    }
-
     fn ts(&self, instr_index: u64, substep: u64) -> i64 {
         (instr_index
             .saturating_mul(self.units_per_instr)
             .saturating_add(substep)) as i64
+    }
+
+    #[cfg(test)]
+    fn test_owner_matches(&self) -> bool {
+        self.test_owner == std::thread::current().id()
     }
 
     fn call_ui_close_open_function_slices(&mut self) {
@@ -213,8 +231,6 @@ impl PerfettoTracer {
         mem_imr: u8,
         mem_isr: u8,
     ) {
-        #[cfg(test)]
-        let record_test = self.test_thread_matches();
         let ts_start = self.ts(instr_index, 0);
         let ts_end = self.ts(instr_index.saturating_add(1), 0);
         let name = if let Some(m) = mnemonic {
@@ -253,11 +269,13 @@ impl PerfettoTracer {
             .update_counter(self.instr_counter_track, instr_index as f64 + 1.0, ts_start);
 
         #[cfg(test)]
-        if record_test {
-            self.test_exec_events
-                .borrow_mut()
-                .push((reg_pc, opcode, instr_index));
-            self.test_timestamps.borrow_mut().push(ts_start);
+        {
+            if self.test_owner_matches() {
+                self.test_exec_events
+                    .borrow_mut()
+                    .push((reg_pc, opcode, instr_index));
+                self.test_timestamps.borrow_mut().push(ts_start);
+            }
         }
     }
 
@@ -285,8 +303,6 @@ impl PerfettoTracer {
         size: u8,
         substep: u64,
     ) {
-        #[cfg(test)]
-        let record_test = self.test_thread_matches();
         let masked_value = if size == 0 || size >= 32 {
             value
         } else {
@@ -298,21 +314,25 @@ impl PerfettoTracer {
         } else {
             self.ewrites_track
         };
-        let mut ev = self
-            .builder
-            .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
-        ev.add_annotations([
-            ("backend", AnnotationValue::Str("rust".to_string())),
-            ("pc", AnnotationValue::Pointer(pc as u64)),
-            ("address", AnnotationValue::Pointer(addr as u64)),
-            ("value", AnnotationValue::UInt(masked_value as u64)),
-            ("space", AnnotationValue::Str(space.to_string())),
-            ("size", AnnotationValue::UInt(size as u64)),
-            ("op_index", AnnotationValue::UInt(instr_index)),
-        ]);
-        ev.finish();
+        {
+            let mut ev = self
+                .builder
+                .add_instant_event(track, format!("Write@0x{addr:06X}"), ts);
+            ev.add_annotations([
+                ("backend", AnnotationValue::Str("rust".to_string())),
+                ("pc", AnnotationValue::Pointer(pc as u64)),
+                ("address", AnnotationValue::Pointer(addr as u64)),
+                ("value", AnnotationValue::UInt(masked_value as u64)),
+                ("space", AnnotationValue::Str(space.to_string())),
+                ("size", AnnotationValue::UInt(size as u64)),
+                ("op_index", AnnotationValue::UInt(instr_index)),
+            ]);
+            ev.finish();
+        }
         #[cfg(test)]
-        if record_test {
+        let allow_test = self.test_owner_matches();
+        #[cfg(test)]
+        if allow_test {
             self.test_timestamps.borrow_mut().push(ts);
         }
     }
@@ -327,8 +347,6 @@ impl PerfettoTracer {
         space: &str,
         size: u8,
     ) {
-        #[cfg(test)]
-        let record_test = self.test_thread_matches();
         let masked_value = if size == 0 || size >= 32 {
             value
         } else {
@@ -363,28 +381,33 @@ impl PerfettoTracer {
             ev.finish();
         }
 
+        #[cfg(test)]
+        let allow_test = self.test_owner_matches();
+
         // Mirror to Memory track for Python parity.
-        let mut mem_alias =
-            self.builder
-                .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
-        mem_alias.add_annotations([
-            ("backend", AnnotationValue::Str("rust".to_string())),
-            ("address", AnnotationValue::Pointer(addr as u64)),
-            ("value", AnnotationValue::UInt(masked_value as u64)),
-            ("space", AnnotationValue::Str(space.to_string())),
-            ("size", AnnotationValue::UInt(size as u64)),
-            ("cycle", AnnotationValue::UInt(cycle)),
-        ]);
-        if let Some(pc_val) = pc_effective {
-            mem_alias.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
+        {
+            let mut mem_alias =
+                self.builder
+                    .add_instant_event(self.memory_track, format!("Write@0x{addr:06X}"), ts);
+            mem_alias.add_annotations([
+                ("backend", AnnotationValue::Str("rust".to_string())),
+                ("address", AnnotationValue::Pointer(addr as u64)),
+                ("value", AnnotationValue::UInt(masked_value as u64)),
+                ("space", AnnotationValue::Str(space.to_string())),
+                ("size", AnnotationValue::UInt(size as u64)),
+                ("cycle", AnnotationValue::UInt(cycle)),
+            ]);
+            if let Some(pc_val) = pc_effective {
+                mem_alias.add_annotation("pc", AnnotationValue::Pointer(pc_val as u64));
+            }
+            if let Some((op_idx, _)) = ctx {
+                mem_alias.add_annotation("op_index", AnnotationValue::UInt(op_idx));
+            }
+            mem_alias.finish();
         }
-        if let Some((op_idx, _)) = ctx {
-            mem_alias.add_annotation("op_index", AnnotationValue::UInt(op_idx));
-        }
-        mem_alias.finish();
 
         #[cfg(test)]
-        if record_test {
+        if allow_test {
             self.test_mem_write_pcs.borrow_mut().push(pc_effective);
         }
     }
@@ -469,8 +492,6 @@ impl PerfettoTracer {
         mem_reads: u64,
         mem_writes: u64,
     ) {
-        #[cfg(test)]
-        let record_test = self.test_thread_matches();
         let ts = self.ts(instr_index, 0);
         self.builder
             .update_counter(self.call_depth_counter, call_depth as f64, ts);
@@ -479,7 +500,7 @@ impl PerfettoTracer {
         self.builder
             .update_counter(self.mem_write_counter, mem_writes as f64, ts);
         #[cfg(test)]
-        if record_test {
+        if self.test_owner_matches() {
             self.test_counters
                 .borrow_mut()
                 .push((instr_index, call_depth, mem_reads, mem_writes));
@@ -746,8 +767,6 @@ impl PerfettoTracer {
 
     /// Function enter/exit markers to mirror Python call/return tracing.
     pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
-        #[cfg(test)]
-        let record_test = self.test_thread_matches();
         let ctx = perfetto_instr_context();
         let op = ctx
             .map(|(idx, _)| idx)
@@ -758,7 +777,7 @@ impl PerfettoTracer {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| format!("sub_{pc_to:06X}"));
             #[cfg(test)]
-            if record_test {
+            if self.test_owner_matches() {
                 self.test_function_slices.borrow_mut().push(label.clone());
             }
             let mut ev = self.builder.begin_slice(self.functions_track, label, ts);

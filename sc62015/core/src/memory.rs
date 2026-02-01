@@ -15,6 +15,8 @@ pub const EXTERNAL_SPACE: usize = 0x100000;
 pub const INTERNAL_SPACE: usize = 0x100;
 pub const INTERNAL_RAM_START: usize = 0xB8000;
 pub const INTERNAL_RAM_SIZE: usize = 0x8000;
+const INTERNAL_RAM_MIRROR_START: u32 = 0x80000;
+const INTERNAL_RAM_MIRROR_END: u32 = 0xBFFFF;
 pub const IMEM_KOL_OFFSET: u32 = 0xF0;
 pub const IMEM_KOH_OFFSET: u32 = 0xF1;
 pub const IMEM_KIL_OFFSET: u32 = 0xF2;
@@ -167,6 +169,7 @@ pub struct MemoryImage {
     readonly_ranges: Vec<(u32, u32)>,
     internal: [u8; INTERNAL_SPACE],
     keyboard_bridge: bool,
+    internal_ram_mirror: bool,
     memory_reads: Cell<u64>,
     memory_writes: Cell<u64>,
     imr_isr_hook: Option<ImrIsrHook>,
@@ -199,6 +202,7 @@ impl MemoryImage {
             readonly_ranges: Vec::new(),
             internal,
             keyboard_bridge: false,
+            internal_ram_mirror: false,
             memory_reads: Cell::new(0),
             memory_writes: Cell::new(0),
             imr_isr_hook: None,
@@ -361,18 +365,9 @@ impl MemoryImage {
     pub fn set_memory_card_slot_present(&mut self, present: bool) {
         self.remove_overlay("memory_card_slot");
         if present {
-            self.add_overlay(MemoryOverlay {
-                start: MEMORY_CARD_SLOT_START,
-                end: MEMORY_CARD_SLOT_END,
-                name: "memory_card_slot".to_string(),
-                data: Some(vec![0u8; 65536]),
-                read_only: false,
-                read_handler: None,
-                write_handler: None,
-                perfetto_thread: Some("Memory_Card".to_string()),
-            });
             return;
         }
+        self.remove_overlay("memory_card");
         // Absent card: reads return 0 and writes are ignored but considered handled.
         self.add_overlay(MemoryOverlay {
             start: MEMORY_CARD_SLOT_START,
@@ -389,6 +384,21 @@ impl MemoryImage {
     pub fn clear_overlay_logs(&self) {
         self.read_log.borrow_mut().clear();
         self.write_log.borrow_mut().clear();
+    }
+
+    pub fn set_internal_ram_mirror(&mut self, enabled: bool) {
+        self.internal_ram_mirror = enabled;
+    }
+
+    fn mirror_internal_ram_address(&self, address: u32) -> u32 {
+        if !self.internal_ram_mirror {
+            return address;
+        }
+        if (INTERNAL_RAM_MIRROR_START..=INTERNAL_RAM_MIRROR_END).contains(&address) {
+            let mask = (INTERNAL_RAM_SIZE as u32).saturating_sub(1);
+            return (INTERNAL_RAM_START as u32).wrapping_add(address & mask);
+        }
+        address
     }
 
     pub fn overlay_read_log(&self) -> Vec<MemoryAccessLog> {
@@ -438,7 +448,8 @@ impl MemoryImage {
             return Some(self.internal[index]);
         }
         // External memory fallback with wrap
-        let idx = (address as usize) & (EXTERNAL_SPACE - 1);
+        let external_addr = self.mirror_internal_ram_address(address);
+        let idx = (external_addr as usize) & (EXTERNAL_SPACE - 1);
         self.external.get(idx).copied()
     }
 
@@ -456,6 +467,7 @@ impl MemoryImage {
         if let Some(value) = self.load_overlay_value(address, bits, pc) {
             return Some(value);
         }
+        let address = self.mirror_internal_ram_address(address);
         let bytes = bits.div_ceil(8).max(1) as usize;
         let mut value = 0u32;
         for offset in 0..bytes {
@@ -486,16 +498,19 @@ impl MemoryImage {
             return Some(());
         }
         let bytes = bits.div_ceil(8).max(1) as usize;
-        if self.is_read_only_range(address, bytes as u32) {
+        let external_addr = self.mirror_internal_ram_address(address);
+        if self.is_read_only_range(external_addr, bytes as u32) {
             return Some(());
         }
         for offset in 0..bytes {
             let byte = ((value >> (offset * 8)) & 0xFF) as u8;
-            self.record_write_capture(address + offset as u32, byte);
-            let slot = &mut self.external[(address as usize + offset) & (EXTERNAL_SPACE - 1)];
+            let logical_addr = address + offset as u32;
+            let phys_addr = external_addr.wrapping_add(offset as u32);
+            self.record_write_capture(logical_addr, byte);
+            let slot = &mut self.external[(phys_addr as usize) & (EXTERNAL_SPACE - 1)];
             if *slot != byte {
                 *slot = byte;
-                self.dirty.push((address + offset as u32, byte));
+                self.dirty.push((logical_addr, byte));
             }
         }
         Some(())
@@ -558,7 +573,8 @@ impl MemoryImage {
         if self.is_read_only_range(address, 1) {
             return;
         }
-        let addr = (address as usize) & (EXTERNAL_SPACE - 1);
+        let physical = self.mirror_internal_ram_address(address);
+        let addr = (physical as usize) & (EXTERNAL_SPACE - 1);
         if let Some(slot) = self.external.get_mut(addr) {
             if *slot != value {
                 *slot = value;
@@ -688,8 +704,9 @@ impl MemoryImage {
         self.memory_writes
             .set(self.memory_writes.get().saturating_add(1));
         let address = canonical_address(address);
+        let physical = self.mirror_internal_ram_address(address);
         self.record_write_capture(address, value);
-        let idx = (address as usize) & (EXTERNAL_SPACE - 1);
+        let idx = (physical as usize) & (EXTERNAL_SPACE - 1);
         if self.external[idx] != value {
             self.external[idx] = value;
             self.dirty.push((address, value));
@@ -1001,6 +1018,20 @@ mod tests {
     }
 
     #[test]
+    fn internal_ram_mirror_routes_0x80000_window() {
+        let mut mem = MemoryImage::new();
+        mem.set_internal_ram_mirror(true);
+        let addr = 0x088000;
+        let value = 0xBEEF;
+        assert_eq!(mem.store(addr, 16, value), Some(()));
+        assert_eq!(mem.load(addr, 16), Some(value));
+        assert_eq!(mem.load(INTERNAL_RAM_START as u32, 16), Some(value));
+        let slice = mem.internal_ram_slice();
+        assert_eq!(slice.get(0), Some(&0xEF));
+        assert_eq!(slice.get(1), Some(&0xBE));
+    }
+
+    #[test]
     fn internal_index_masks_address() {
         let base = INTERNAL_MEMORY_START;
         assert_eq!(MemoryImage::internal_index(base), Some(0));
@@ -1097,7 +1128,7 @@ mod tests {
     #[test]
     fn host_write_without_context_emits_perfetto() {
         use std::fs;
-        let _perfetto_lock = crate::perfetto_test_guard();
+        let _lock = crate::perfetto::perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_host_async.perfetto-trace");
         let _ = fs::remove_file(&tmp);
         let mut guard = crate::PERFETTO_TRACER.enter();
@@ -1118,8 +1149,8 @@ mod tests {
         use crate::llama::eval::{reset_perf_counters, LlamaBus, LlamaExecutor};
         use crate::llama::state::LlamaState;
         use std::fs;
-        let _perfetto_lock = crate::perfetto_test_guard();
 
+        let _lock = crate::perfetto::perfetto_test_guard();
         let mut guard = perfetto_guard();
         // Execute a NOP at PC 0x123 to seed perfetto_last_pc without relying on a live context.
         reset_perf_counters();
@@ -1152,7 +1183,7 @@ mod tests {
 
     #[test]
     fn perfetto_context_falls_back_to_last_pc() {
-        let _perfetto_lock = crate::perfetto_test_guard();
+        let _lock = crate::perfetto::perfetto_test_guard();
         let _guard = perfetto_guard();
         // Establish a last-PC hint by executing a simple instruction.
         crate::llama::eval::reset_perf_counters();
@@ -1299,5 +1330,13 @@ mod tests {
         assert_eq!(mem.load_with_pc(0x040005, 8, None), Some(0));
         mem.store_with_pc(0x040005, 8, 0xFF, None);
         assert_eq!(mem.load_with_pc(0x040005, 8, None), Some(0));
+    }
+
+    #[test]
+    fn memory_card_slot_present_writes_to_external() {
+        let mut mem = MemoryImage::new();
+        mem.set_memory_card_slot_present(true);
+        mem.store_with_pc(0x040000, 8, 0x9F, None);
+        assert_eq!(mem.external_slice()[0x040000], 0x9F);
     }
 }
