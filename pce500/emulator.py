@@ -3151,12 +3151,6 @@ class PCE500Emulator:
                     and (prev & int(ISRFlag.KEYI))
                     and not (value & int(ISRFlag.KEYI))
                 ):
-                    try:
-                        if self.keyboard:
-                            self.keyboard.consume_pending_events()
-                        self._key_irq_latched = False
-                    except Exception:
-                        pass
                     self._trace_irq_instant(
                         "KEYI_Clear",
                         IRQSource.KEY,
