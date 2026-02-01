@@ -3156,8 +3156,7 @@ class PCE500Emulator:
                             INTERNAL_MEMORY_START + IMEMRegisters.IMR
                         )
                         key_unmasked = (
-                            imr_val
-                            & (int(IMRFlag.IRM) | int(IMRFlag.KEY))
+                            imr_val & (int(IMRFlag.IRM) | int(IMRFlag.KEY))
                         ) == (int(IMRFlag.IRM) | int(IMRFlag.KEY))
                         if key_unmasked:
                             if self.keyboard:
