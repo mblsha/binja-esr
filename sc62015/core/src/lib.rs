@@ -14,6 +14,10 @@ pub mod perfetto;
 pub mod sio;
 pub mod snapshot;
 pub mod timer;
+pub mod async_driver;
+pub mod async_cpu;
+pub mod async_devices;
+pub mod async_runtime;
 
 use crate::llama::state::PowerState;
 use crate::llama::{opcodes::RegName, state::LlamaState};
@@ -26,6 +30,12 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 pub use device::{DeviceModel, DeviceTextDecoder};
+pub use async_driver::{
+    current_cycle, emit_event, sleep_cycles, AsyncDriver, CycleSleep, DriverEvent, DriverRunResult,
+};
+pub use async_cpu::{AsyncCpuHandle, AsyncCpuStats, CpuTraceEvent};
+pub use async_devices::{AsyncDisplayTask, AsyncTimerKeyboardTask};
+pub use async_runtime::AsyncRuntimeRunner;
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
@@ -665,6 +675,39 @@ impl CoreRuntime {
                 .memory
                 .read_internal_byte(IMEM_IMR_OFFSET)
                 .unwrap_or(self.timer.irq_imr);
+        }
+    }
+
+    pub(crate) fn tick_timers_and_keyboard(&mut self, cycle: u64) {
+        if self.timer.in_interrupt {
+            return;
+        }
+        let kb_irq_enabled = self.timer.kb_irq_enabled;
+        let _ = self.timer.tick_timers_with_keyboard(
+            &mut self.memory,
+            cycle,
+            |mem| {
+                if let Some(kb) = self.keyboard.as_deref_mut() {
+                    // Parity: always count/key-latch events even when IRQs are masked.
+                    let events = kb.scan_tick(mem, true);
+                    let fifo_pending = kb.fifo_len() > 0;
+                    if events > 0 || (kb_irq_enabled && fifo_pending) {
+                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                    }
+                    (
+                        events,
+                        events > 0 || (kb_irq_enabled && fifo_pending),
+                        Some(kb.telemetry()),
+                    )
+                } else {
+                    (0, false, None)
+                }
+            },
+            Some(self.state.get_reg(RegName::Y)),
+            Some(self.state.get_reg(RegName::PC)),
+        );
+        if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+            self.timer.irq_isr = isr;
         }
     }
 
@@ -1813,6 +1856,10 @@ impl CoreRuntime {
             tracer.record_irq_event("IRQ_Delivered", delivered);
         });
         Ok(())
+    }
+
+    pub async fn step_async(&mut self, instructions: usize) -> Result<()> {
+        self.step(instructions)
     }
 }
 
