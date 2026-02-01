@@ -3151,6 +3151,20 @@ class PCE500Emulator:
                     and (prev & int(ISRFlag.KEYI))
                     and not (value & int(ISRFlag.KEYI))
                 ):
+                    try:
+                        imr_val = self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                        )
+                        key_unmasked = (
+                            imr_val
+                            & (int(IMRFlag.IRM) | int(IMRFlag.KEY))
+                        ) == (int(IMRFlag.IRM) | int(IMRFlag.KEY))
+                        if key_unmasked:
+                            if self.keyboard:
+                                self.keyboard.consume_pending_events()
+                            self._key_irq_latched = False
+                    except Exception:
+                        pass
                     self._trace_irq_instant(
                         "KEYI_Clear",
                         IRQSource.KEY,
