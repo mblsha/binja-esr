@@ -4,9 +4,7 @@
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
-    apply_registers,
-    collect_registers,
-    create_lcd,
+    apply_registers, collect_registers, create_lcd,
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
@@ -246,7 +244,6 @@ struct Args {
     /// Save a snapshot (.pcsnap) after executing.
     #[arg(long, value_name = "PATH")]
     snapshot_out: Option<PathBuf>,
-
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -556,10 +553,7 @@ impl KeySeqRunner {
                         Self::push_log(
                             log_enabled,
                             &mut events,
-                            format!(
-                                "key-seq: wait-screen-change baseline {}",
-                                screen.signature
-                            ),
+                            format!("key-seq: wait-screen-change baseline {}", screen.signature),
                         );
                     } else if screen.signature != action.screen_baseline_hash {
                         Self::push_log(
@@ -1246,11 +1240,8 @@ fn load_snapshot_state(
     }
 
     bus.cycle_count = metadata.cycle_count;
-    bus.timer.apply_snapshot_info(
-        &metadata.timer,
-        &metadata.interrupts,
-        metadata.cycle_count,
-    );
+    bus.timer
+        .apply_snapshot_info(&metadata.timer, &metadata.interrupts, metadata.cycle_count);
     bus.irq_pending = metadata.interrupts.pending;
     bus.in_interrupt = metadata.interrupts.in_interrupt;
     bus.last_irq_src = metadata.interrupts.source.clone();
@@ -1315,23 +1306,25 @@ fn save_snapshot_state(
         ((cycle_count / period) + 1) * period
     }
 
-    let mut metadata = SnapshotMetadata::default();
-    metadata.backend = "rust".to_string();
-    metadata.device_model = None;
-    metadata.instruction_count = instruction_count;
-    metadata.cycle_count = bus.cycle_count;
-    metadata.pc = state.pc() & ADDRESS_MASK;
-    metadata.memory_reads = bus.memory.memory_read_count();
-    metadata.memory_writes = bus.memory.memory_write_count();
-    metadata.call_depth = state.call_depth();
-    metadata.call_sub_level = state.call_sub_level();
-    metadata.power_state = state.power_state();
-    metadata.temps = collect_registers(state)
-        .into_iter()
-        .filter(|(k, _)| k.starts_with("TEMP"))
-        .collect();
-    metadata.readonly_ranges = bus.memory.readonly_ranges().to_vec();
-    metadata.memory_image_size = bus.memory.external_len();
+    let mut metadata = SnapshotMetadata {
+        backend: "rust".to_string(),
+        device_model: None,
+        instruction_count,
+        cycle_count: bus.cycle_count,
+        pc: state.pc() & ADDRESS_MASK,
+        memory_reads: bus.memory.memory_read_count(),
+        memory_writes: bus.memory.memory_write_count(),
+        call_depth: state.call_depth(),
+        call_sub_level: state.call_sub_level(),
+        power_state: state.power_state(),
+        temps: collect_registers(state)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("TEMP"))
+            .collect(),
+        readonly_ranges: bus.memory.readonly_ranges().to_vec(),
+        memory_image_size: bus.memory.external_len(),
+        ..Default::default()
+    };
 
     let (mut timer_info, mut interrupts) = bus.timer.snapshot_info();
     interrupts.pending = bus.irq_pending;
@@ -1349,10 +1342,10 @@ fn save_snapshot_state(
     if timer_info.enabled {
         let mti_period = timer_info.mti_period.max(0) as u64;
         let sti_period = timer_info.sti_period.max(0) as u64;
-        timer_info.next_mti = next_timer_tick(bus.cycle_count, mti_period)
-            .min(i32::MAX as u64) as i32;
-        timer_info.next_sti = next_timer_tick(bus.cycle_count, sti_period)
-            .min(i32::MAX as u64) as i32;
+        timer_info.next_mti =
+            next_timer_tick(bus.cycle_count, mti_period).min(i32::MAX as u64) as i32;
+        timer_info.next_sti =
+            next_timer_tick(bus.cycle_count, sti_period).min(i32::MAX as u64) as i32;
     } else {
         timer_info.next_mti = 0;
         timer_info.next_sti = 0;
@@ -1659,8 +1652,7 @@ fn parse_u64_value(raw: &str) -> Result<u64, String> {
     }
     let lowered = trimmed.to_ascii_lowercase();
     if let Some(hex) = lowered.strip_prefix("0x") {
-        return u64::from_str_radix(hex, 16)
-            .map_err(|_| format!("invalid hex value '{raw}'"));
+        return u64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex value '{raw}'"));
     }
     trimmed
         .parse::<u64>()
@@ -1700,7 +1692,7 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
 
 fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
-    for token_raw in raw.split(|ch| ch == ',' || ch == ';') {
+    for token_raw in raw.split([',', ';']) {
         let token = token_raw.trim();
         if token.is_empty() {
             continue;
@@ -1752,9 +1744,7 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
         }
         if lower.starts_with("wait-screen-draw") {
             if token.contains(':') || token.contains('=') {
-                return Err(format!(
-                    "wait-screen-draw does not take a value: '{token}'"
-                ));
+                return Err(format!("wait-screen-draw does not take a value: '{token}'"));
             }
             actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
             continue;
@@ -1917,9 +1907,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut use_key_seq = false;
     let mut needs_screen_state = false;
     let mut needs_screen_text = false;
-    if let Some(raw) = args.key_seq.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let actions = parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD)
-            .map_err(|err| format!("--key-seq: {err}"))?;
+    if let Some(raw) = args
+        .key_seq
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let actions =
+            parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD).map_err(|err| format!("--key-seq: {err}"))?;
         if !actions.is_empty() {
             for action in &actions {
                 match action.kind {
@@ -2624,8 +2619,8 @@ mod tests {
         let actions = parse_key_seq("space", 10).expect("parse key seq");
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].kind, KeySeqKind::Press);
-        let code = KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE")
-            .expect("expected KEY_SPACE");
+        let code =
+            KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE").expect("expected KEY_SPACE");
         assert_eq!(actions[0].key, Some(AutoKeyKind::Matrix(code)));
     }
 
@@ -2736,10 +2731,7 @@ mod tests {
         assert_eq!(state2.call_sub_level(), 2);
         assert_eq!(bus2.cycle_count, 1234);
         assert_eq!(bus2.memory.load(0x2000, 8).unwrap_or(0), 0x12);
-        assert_eq!(
-            bus2.memory.read_internal_byte(0x10).unwrap_or(0),
-            0x34
-        );
+        assert_eq!(bus2.memory.read_internal_byte(0x10).unwrap_or(0), 0x34);
 
         let _ = std::fs::remove_file(snapshot_path);
     }
