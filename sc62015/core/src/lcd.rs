@@ -289,10 +289,13 @@ impl Hd61202Chip {
 
     #[allow(dead_code)]
     fn read_status(&mut self) -> u8 {
-        // Python HD61202 always reports ready; only ON flag is surfaced.
-        let on = if self.state.on { 0x40 } else { 0x00 };
+        // HD61202 datasheet: DB7=BUSY, DB5=display ON/OFF (0=on, 1=off).
+        let mut status = if self.state.busy { 0x80 } else { 0x00 };
+        if !self.state.on {
+            status |= 0x20;
+        }
         self.state.busy = false;
-        on
+        status
     }
 
     #[allow(dead_code)]
@@ -300,8 +303,10 @@ impl Hd61202Chip {
         self.data_read_count = self.data_read_count.wrapping_add(1);
         let page = (self.state.page as usize) % LCD_PAGES;
         let y = (self.state.y_address as usize) % LCD_WIDTH;
-        let value = self.vram[page][y];
-        self.state.y_address = ((self.state.y_address as usize + 1) % LCD_WIDTH) as u8;
+        // HD61202 datasheet: read data is buffered; return prior column (Y-1) and advance Y.
+        let read_col = if y == 0 { LCD_WIDTH - 1 } else { y - 1 };
+        let value = self.vram[page][read_col];
+        self.state.y_address = ((y + 1) % LCD_WIDTH) as u8;
         value
     }
 }
@@ -636,12 +641,22 @@ impl LcdController {
     }
 
     pub fn read(&mut self, address: u32) -> Option<u8> {
-        let (_cs, _di, rw) = decode_access(address)?;
+        let (cs, di, rw) = decode_access(address)?;
         if rw != ReadWrite::Read {
             return None;
         }
-        // Parity: Python controller wrapper always returns 0xFF and does not update counters/state.
-        Some(0xFF)
+        match di {
+            DataInstruction::Data => match cs {
+                ChipSelect::Right => Some(self.chips[1].read_data()),
+                ChipSelect::Left => Some(self.chips[0].read_data()),
+                ChipSelect::Both => None,
+            },
+            DataInstruction::Instruction => match cs {
+                ChipSelect::Right => Some(self.chips[1].read_status()),
+                ChipSelect::Left => Some(self.chips[0].read_status()),
+                ChipSelect::Both => None,
+            },
+        }
     }
 
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
@@ -1306,37 +1321,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_read_returns_on_flag_and_clears_busy() {
+    fn status_read_reports_busy_and_display_on_per_datasheet() {
         let mut chip = Hd61202Chip::default();
         chip.state.on = true;
         chip.state.busy = true;
         let status = chip.read_status();
-        assert_eq!(status & 0x40, 0x40);
+        assert_eq!(status & 0x80, 0x80);
+        assert_eq!(status & 0x20, 0x00);
         assert!(!chip.state.busy);
     }
 
     #[test]
-    fn status_read_when_off_reports_ready_zero() {
+    fn status_read_reports_display_off_per_datasheet() {
         let mut chip = Hd61202Chip::default();
         chip.state.on = false;
         chip.state.busy = true;
         let status = chip.read_status();
-        assert_eq!(status, 0x00);
+        assert_eq!(status, 0xA0);
         assert!(!chip.state.busy);
     }
 
     #[test]
-    fn data_read_advances_y_address() {
+    fn data_read_returns_previous_column_per_datasheet() {
         let mut chip = Hd61202Chip::default();
         chip.state.page = 0;
-        chip.state.y_address = 0;
+        chip.state.y_address = 1;
         chip.vram[0][0] = 0xAA;
         chip.vram[0][1] = 0xBB;
         let first = chip.read_data();
         let second = chip.read_data();
         assert_eq!(first, 0xAA);
         assert_eq!(second, 0xBB);
-        assert_eq!(chip.state.y_address, 2);
+        assert_eq!(chip.state.y_address, 3);
     }
 
     #[test]
