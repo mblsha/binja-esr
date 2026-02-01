@@ -804,7 +804,10 @@ mod tests {
         assert_eq!(timer.next_mti, 20, "next_mti should track fire cycle");
 
         timer.finalize_instruction(12);
-        assert_eq!(timer.next_mti, 22, "finalize should drop in-instruction remainder");
+        assert_eq!(
+            timer.next_mti, 22,
+            "finalize should drop in-instruction remainder"
+        );
         let (mti, _) = timer.tick_counts(12);
         assert_eq!(mti, 0, "ticks reset to 0 at boundary");
     }
@@ -822,7 +825,10 @@ mod tests {
         assert_eq!(timer.next_mti, 20, "next_mti should track fire cycle");
 
         timer.finalize_instruction_with_clamp(12, false);
-        assert_eq!(timer.next_mti, 20, "next_mti should preserve in-instruction remainder");
+        assert_eq!(
+            timer.next_mti, 20,
+            "next_mti should preserve in-instruction remainder"
+        );
         let (mti, _) = timer.tick_counts(12);
         assert_eq!(mti, 2, "ticks preserve remainder when unclamped");
     }
@@ -864,10 +870,12 @@ mod tests {
     #[test]
     fn apply_snapshot_clears_pending_when_isr_empty() {
         let mut timer = TimerContext::new(true, 20, 30);
-        let mut interrupts = InterruptInfo::default();
-        interrupts.pending = true;
-        interrupts.source = Some("KEY".to_string());
-        interrupts.isr = 0;
+        let interrupts = InterruptInfo {
+            pending: true,
+            source: Some("KEY".to_string()),
+            isr: 0,
+            ..Default::default()
+        };
 
         timer.apply_snapshot_info(
             &crate::TimerInfo {
@@ -883,7 +891,10 @@ mod tests {
         );
 
         assert!(!timer.irq_pending, "pending should clear when ISR is empty");
-        assert!(timer.irq_source.is_none(), "source should clear when ISR is empty");
+        assert!(
+            timer.irq_source.is_none(),
+            "source should clear when ISR is empty"
+        );
     }
 
     #[test]
