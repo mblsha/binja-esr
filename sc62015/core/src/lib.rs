@@ -1,6 +1,10 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:RegisterName
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
+pub mod async_cpu;
+pub mod async_devices;
+pub mod async_driver;
+pub mod async_runtime;
 pub mod device;
 pub mod iq7000;
 pub mod keyboard;
@@ -14,10 +18,6 @@ pub mod perfetto;
 pub mod sio;
 pub mod snapshot;
 pub mod timer;
-pub mod async_driver;
-pub mod async_cpu;
-pub mod async_devices;
-pub mod async_runtime;
 
 use crate::llama::state::PowerState;
 use crate::llama::{opcodes::RegName, state::LlamaState};
@@ -29,13 +29,13 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use thiserror::Error;
 
-pub use device::{DeviceModel, DeviceTextDecoder};
+pub use async_cpu::{AsyncCpuHandle, AsyncCpuStats, CpuTraceEvent};
+pub use async_devices::{AsyncDisplayTask, AsyncTimerKeyboardTask};
 pub use async_driver::{
     current_cycle, emit_event, sleep_cycles, AsyncDriver, CycleSleep, DriverEvent, DriverRunResult,
 };
-pub use async_cpu::{AsyncCpuHandle, AsyncCpuStats, CpuTraceEvent};
-pub use async_devices::{AsyncDisplayTask, AsyncTimerKeyboardTask};
 pub use async_runtime::AsyncRuntimeRunner;
+pub use device::{DeviceModel, DeviceTextDecoder};
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
@@ -1867,7 +1867,6 @@ impl CoreRuntime {
         });
         Ok(())
     }
-
 }
 
 const IMR_MASTER: u8 = 0x80;
@@ -1893,8 +1892,8 @@ fn src_mask_for_name(name: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::perfetto_test_guard;
+    use super::*;
     use crate::llama::opcodes::RegName;
     use std::fs;
 

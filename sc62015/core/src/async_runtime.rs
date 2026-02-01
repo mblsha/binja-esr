@@ -56,18 +56,16 @@ impl AsyncRuntimeRunner {
             }
         }
 
-        let result = stats_cell.borrow_mut().take().unwrap_or_else(|| {
-            Err(CoreError::Other(
-                "async runtime missing stats".to_string(),
-            ))
-        });
+        let result = stats_cell
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| Err(CoreError::Other("async runtime missing stats".to_string())));
         result
     }
 
     pub fn runtime(&self) -> Rc<RefCell<CoreRuntime>> {
         self.runtime.clone()
     }
-
 }
 
 #[cfg(test)]
@@ -147,8 +145,8 @@ mod tests {
     #[test]
     fn async_runner_matches_sync_perfetto_trace() {
         use crate::llama::eval::reset_perf_counters;
-        use crate::perfetto_test_guard;
         use crate::perfetto::PerfettoTracer;
+        use crate::perfetto_test_guard;
         use crate::PERFETTO_TRACER;
         use std::fs;
 
