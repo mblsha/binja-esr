@@ -4,22 +4,28 @@
 use clap::Parser;
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
+    apply_registers,
+    collect_registers,
     create_lcd,
-    keyboard::KeyboardMatrix,
-    lcd::{LcdHal, LcdWriteTrace},
+    keyboard::{KeyboardMatrix, KeyboardSnapshot},
+    lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
-        eval::{perfetto_next_substep, power_on_reset, LlamaBus, LlamaExecutor},
+        eval::{
+            perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, LlamaExecutor,
+        },
         opcodes::RegName,
-        state::LlamaState,
+        state::{mask_for, CallMetricsSnapshot, LlamaState, PowerState},
     },
     memory::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
-        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET, IMEM_SSR_OFFSET,
     },
     pce500::{load_pce500_rom_window_into_memory, ROM_WINDOW_LEN, ROM_WINDOW_START},
     perfetto::set_call_ui_function_names,
+    snapshot,
     timer::TimerContext,
-    DeviceModel, PerfettoTracer, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
+    DeviceModel, DeviceTextDecoder, PerfettoTracer, SnapshotMetadata, ADDRESS_MASK,
+    INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::collections::HashMap;
 use std::env;
@@ -29,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use serde::Serialize;
+use serde_json::json;
 
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
@@ -45,7 +52,7 @@ const IMR_STI: u8 = 0x02;
 const IMR_ONK: u8 = 0x08;
 const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
-const PF2_MENU_PC: u32 = 0x0F1FBF; // observed Python PC after PF2 menu renders
+const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,26 +142,13 @@ struct Args {
     #[arg(long, value_enum, default_value_t = CardMode::Present)]
     card: CardMode,
 
-    /// Run until PF1 menu (ignores steps limit).
+    /// Scripted key sequence (comma/semicolon separated).
+    #[arg(long, value_name = "SEQ")]
+    key_seq: Option<String>,
+
+    /// Log key-seq events (press/release/wait triggers).
     #[arg(long, default_value_t = false)]
-    pf1: bool,
-
-    /// Run PF2 (does not clear RAM) instead of PF1; ignored if --pf1 is set.
-    #[arg(long, default_value_t = false, conflicts_with = "pf1")]
-    pf2: bool,
-
-    /// Optional explicit matrix code to auto-press (overrides --pf1/--pf2). Accepts
-    /// 'pf1', 'pf2', 'on', decimal, or hex (e.g., 0x56).
-    #[arg(long, value_name = "CODE")]
-    auto_key: Option<String>,
-
-    /// Auto-press after this many executed instructions.
-    #[arg(long, default_value_t = 15_000)]
-    auto_after: u64,
-
-    /// Auto-release after this many additional instructions (if pressed).
-    #[arg(long, default_value_t = 1_000)]
-    auto_release_after: u64,
+    key_seq_log: bool,
 
     /// Decode LCD text and require this substring to appear (can repeat).
     #[arg(long, value_name = "TEXT")]
@@ -245,10 +239,15 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     bnida: Option<PathBuf>,
 
-    /// Scenario: wait for boot text, press PF1, wait for S1(MAIN), press PF1 again, then stop once
-    /// the next distinct row0 text appears. Requires a sufficiently large --steps budget.
-    #[arg(long, default_value_t = false)]
-    pf1_twice: bool,
+    /// Load a snapshot (.pcsnap) before executing.
+    #[arg(long, value_name = "PATH")]
+    snapshot_in: Option<PathBuf>,
+
+    /// Save a snapshot (.pcsnap) after executing.
+    #[arg(long, value_name = "PATH")]
+    snapshot_out: Option<PathBuf>,
+
+    // (legacy automation flags removed; use --key-seq instead)
 }
 
 #[derive(Serialize)]
@@ -349,6 +348,278 @@ struct StandaloneBus {
 enum AutoKeyKind {
     Matrix(u8),
     OnKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeySeqKind {
+    Press,
+    WaitOp,
+    WaitText,
+    WaitPower,
+    WaitScreenChange,
+    WaitScreenEmpty,
+    WaitScreenDraw,
+}
+
+#[derive(Clone, Debug)]
+struct KeySeqAction {
+    kind: KeySeqKind,
+    key: Option<AutoKeyKind>,
+    label: String,
+    hold: u64,
+    op_target: u64,
+    op_target_set: bool,
+    text: String,
+    power_on: bool,
+    screen_baseline_set: bool,
+    screen_baseline_hash: u64,
+}
+
+impl KeySeqAction {
+    fn new(kind: KeySeqKind) -> Self {
+        Self {
+            kind,
+            key: None,
+            label: String::new(),
+            hold: 0,
+            op_target: 0,
+            op_target_set: false,
+            text: String::new(),
+            power_on: false,
+            screen_baseline_set: false,
+            screen_baseline_hash: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ScreenState {
+    valid: bool,
+    is_blank: bool,
+    signature: u64,
+    text_valid: bool,
+    text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeySeqEventKind {
+    Press,
+    Release,
+    Log,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct KeySeqEvent {
+    kind: KeySeqEventKind,
+    key: Option<AutoKeyKind>,
+    label: String,
+    op_index: u64,
+    hold: u64,
+    message: String,
+}
+
+struct KeySeqRunner {
+    actions: Vec<KeySeqAction>,
+    log_enabled: bool,
+    active_key: Option<AutoKeyKind>,
+    active_label: String,
+    active_release_at: u64,
+    action_index: usize,
+}
+
+impl KeySeqRunner {
+    fn new(actions: Vec<KeySeqAction>) -> Self {
+        let mut runner = Self {
+            actions,
+            log_enabled: false,
+            active_key: None,
+            active_label: String::new(),
+            active_release_at: 0,
+            action_index: 0,
+        };
+        runner.reset_state();
+        runner
+    }
+
+    fn reset(&mut self, actions: Vec<KeySeqAction>) {
+        self.actions = actions;
+        self.reset_state();
+    }
+
+    fn reset_state(&mut self) {
+        self.active_key = None;
+        self.active_label.clear();
+        self.active_release_at = 0;
+        self.action_index = 0;
+        for action in &mut self.actions {
+            action.op_target_set = false;
+            action.screen_baseline_set = false;
+            action.screen_baseline_hash = 0;
+        }
+    }
+
+    fn set_log_enabled(&mut self, enabled: bool) {
+        self.log_enabled = enabled;
+    }
+
+    fn push_log(log_enabled: bool, events: &mut Vec<KeySeqEvent>, message: String) {
+        if !log_enabled {
+            return;
+        }
+        events.push(KeySeqEvent {
+            kind: KeySeqEventKind::Log,
+            key: None,
+            label: String::new(),
+            op_index: 0,
+            hold: 0,
+            message,
+        });
+    }
+
+    fn step(&mut self, op_index: u64, power_on: bool, screen: &ScreenState) -> Vec<KeySeqEvent> {
+        let mut events = Vec::new();
+        let log_enabled = self.log_enabled;
+        if let Some(active_key) = self.active_key {
+            if op_index >= self.active_release_at {
+                events.push(KeySeqEvent {
+                    kind: KeySeqEventKind::Release,
+                    key: Some(active_key),
+                    label: self.active_label.clone(),
+                    op_index,
+                    hold: 0,
+                    message: String::new(),
+                });
+                Self::push_log(
+                    log_enabled,
+                    &mut events,
+                    format!("key-seq: release {} at {}", self.active_label, op_index),
+                );
+                self.active_key = None;
+                self.active_label.clear();
+            }
+        }
+
+        if self.active_key.is_none() && self.action_index < self.actions.len() {
+            let action = &mut self.actions[self.action_index];
+            match action.kind {
+                KeySeqKind::WaitOp => {
+                    if !action.op_target_set {
+                        action.op_target = action.op_target.saturating_add(op_index);
+                        action.op_target_set = true;
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!("key-seq: wait-op until {}", action.op_target),
+                        );
+                    }
+                    if op_index >= action.op_target {
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!("key-seq: wait-op done at {}", op_index),
+                        );
+                        self.action_index += 1;
+                    }
+                }
+                KeySeqKind::WaitText => {
+                    if screen.text_valid && screen.text.contains(&action.text) {
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!("key-seq: wait-text '{}' at {}", action.text, op_index),
+                        );
+                        self.action_index += 1;
+                    }
+                }
+                KeySeqKind::WaitPower => {
+                    if power_on == action.power_on {
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!(
+                                "key-seq: wait-power {} at {}",
+                                if action.power_on { "on" } else { "off" },
+                                op_index
+                            ),
+                        );
+                        self.action_index += 1;
+                    }
+                }
+                KeySeqKind::WaitScreenChange => {
+                    if !screen.valid {
+                        return events;
+                    }
+                    if !action.screen_baseline_set {
+                        action.screen_baseline_set = true;
+                        action.screen_baseline_hash = screen.signature;
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!(
+                                "key-seq: wait-screen-change baseline {}",
+                                screen.signature
+                            ),
+                        );
+                    } else if screen.signature != action.screen_baseline_hash {
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!("key-seq: wait-screen-change detected at {}", op_index),
+                        );
+                        self.action_index += 1;
+                    }
+                }
+                KeySeqKind::WaitScreenEmpty => {
+                    if screen.valid && screen.is_blank {
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!("key-seq: wait-screen-empty at {}", op_index),
+                        );
+                        self.action_index += 1;
+                    }
+                }
+                KeySeqKind::WaitScreenDraw => {
+                    if screen.valid && !screen.is_blank {
+                        Self::push_log(
+                            log_enabled,
+                            &mut events,
+                            format!("key-seq: wait-screen-draw at {}", op_index),
+                        );
+                        self.action_index += 1;
+                    }
+                }
+                KeySeqKind::Press => {
+                    let key = action.key;
+                    events.push(KeySeqEvent {
+                        kind: KeySeqEventKind::Press,
+                        key,
+                        label: action.label.clone(),
+                        op_index,
+                        hold: action.hold,
+                        message: String::new(),
+                    });
+                    if let Some(key) = key {
+                        self.active_key = Some(key);
+                        self.active_label = action.label.clone();
+                        self.active_release_at = op_index.saturating_add(action.hold);
+                    }
+                    Self::push_log(
+                        log_enabled,
+                        &mut events,
+                        format!(
+                            "key-seq: press {} at {} hold {}",
+                            action.label, op_index, action.hold
+                        ),
+                    );
+                    self.action_index += 1;
+                }
+            }
+        }
+
+        events
+    }
 }
 
 impl StandaloneBus {
@@ -942,6 +1213,178 @@ fn mask_bits(bits: u8) -> u32 {
     }
 }
 
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+fn load_snapshot_state(
+    path: &Path,
+    bus: &mut StandaloneBus,
+    state: &mut LlamaState,
+    model: DeviceModel,
+    rom_bytes: &[u8],
+) -> Result<SnapshotMetadata, Box<dyn Error>> {
+    let loaded = snapshot::load_snapshot(path, &mut bus.memory)?;
+    let metadata = loaded.metadata.clone();
+
+    apply_registers(state, &loaded.registers);
+    state.set_power_state(metadata.power_state);
+    if state.power_state() == PowerState::Halted {
+        // Resume execution if HALT state was saved.
+        state.set_power_state(PowerState::Running);
+    }
+    state.restore_call_metrics(CallMetricsSnapshot {
+        call_stack: Vec::new(),
+        call_depth: metadata.call_depth,
+        call_sub_level: metadata.call_sub_level,
+        call_page_stack: Vec::new(),
+        call_return_widths: Vec::new(),
+    });
+    for (name, value) in metadata.temps.iter() {
+        if let Some(idx_str) = name.strip_prefix("TEMP") {
+            if let Ok(idx) = idx_str.parse::<u8>() {
+                state.set_reg(RegName::Temp(idx), *value & mask_for(RegName::Temp(idx)));
+            }
+        }
+    }
+
+    bus.cycle_count = metadata.cycle_count;
+    bus.timer.apply_snapshot_info(
+        &metadata.timer,
+        &metadata.interrupts,
+        metadata.cycle_count,
+    );
+    bus.irq_pending = metadata.interrupts.pending;
+    bus.in_interrupt = metadata.interrupts.in_interrupt;
+    bus.last_irq_src = metadata.interrupts.source.clone();
+    bus.active_irq_mask = 0;
+    bus.pending_onk = (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & 0x08) != 0;
+    bus.pending_kil = false;
+    bus.lcd_writes = 0;
+    bus.vec_patched = true;
+
+    bus.memory
+        .set_memory_counts(metadata.memory_reads, metadata.memory_writes);
+    let mut readonly = if !metadata.readonly_ranges.is_empty() {
+        metadata.readonly_ranges.clone()
+    } else {
+        Vec::new()
+    };
+    let rom_range = (
+        ROM_WINDOW_START as u32,
+        (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
+    );
+    if !readonly.contains(&rom_range) {
+        readonly.push(rom_range);
+    }
+    bus.memory.set_readonly_ranges(readonly);
+
+    if let Some(kb_meta) = metadata.keyboard.clone() {
+        if let Ok(snapshot) = serde_json::from_value::<KeyboardSnapshot>(kb_meta) {
+            bus.keyboard.load_snapshot_state(&snapshot);
+            if snapshot.fifo_len > 0 {
+                bus.pending_kil = true;
+            }
+        }
+    }
+
+    if let Some(lcd_meta) = metadata.lcd.as_ref() {
+        let kind = lcd_kind_from_snapshot_meta(lcd_meta, model.lcd_kind());
+        if bus.lcd.kind() != kind {
+            bus.lcd = create_lcd(kind);
+        }
+        sc62015_core::device::configure_lcd_char_tracing(bus.lcd.as_mut(), model, rom_bytes);
+        let payload = loaded.lcd_payload.as_deref();
+        let should_load = payload.is_some() || kind == LcdKind::Unknown;
+        if should_load {
+            let _ = bus.lcd.load_snapshot(lcd_meta, payload.unwrap_or(&[]));
+        }
+    }
+
+    Ok(metadata)
+}
+
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+fn save_snapshot_state(
+    path: &Path,
+    bus: &StandaloneBus,
+    state: &LlamaState,
+    instruction_count: u64,
+) -> Result<(), Box<dyn Error>> {
+    fn next_timer_tick(cycle_count: u64, period: u64) -> u64 {
+        if period == 0 {
+            return 0;
+        }
+        ((cycle_count / period) + 1) * period
+    }
+
+    let mut metadata = SnapshotMetadata::default();
+    metadata.backend = "rust".to_string();
+    metadata.device_model = None;
+    metadata.instruction_count = instruction_count;
+    metadata.cycle_count = bus.cycle_count;
+    metadata.pc = state.pc() & ADDRESS_MASK;
+    metadata.memory_reads = bus.memory.memory_read_count();
+    metadata.memory_writes = bus.memory.memory_write_count();
+    metadata.call_depth = state.call_depth();
+    metadata.call_sub_level = state.call_sub_level();
+    metadata.power_state = state.power_state();
+    metadata.temps = collect_registers(state)
+        .into_iter()
+        .filter(|(k, _)| k.starts_with("TEMP"))
+        .collect();
+    metadata.readonly_ranges = bus.memory.readonly_ranges().to_vec();
+    metadata.memory_image_size = bus.memory.external_len();
+
+    let (mut timer_info, mut interrupts) = bus.timer.snapshot_info();
+    interrupts.pending = bus.irq_pending;
+    interrupts.in_interrupt = bus.in_interrupt;
+    interrupts.source = bus.last_irq_src.clone();
+    interrupts.imr = bus
+        .memory
+        .read_internal_byte(IMEM_IMR_OFFSET)
+        .unwrap_or(interrupts.imr);
+    interrupts.isr = bus
+        .memory
+        .read_internal_byte(IMEM_ISR_OFFSET)
+        .unwrap_or(interrupts.isr);
+    // Correctness: normalize timer next ticks.
+    if timer_info.enabled {
+        let mti_period = timer_info.mti_period.max(0) as u64;
+        let sti_period = timer_info.sti_period.max(0) as u64;
+        timer_info.next_mti = next_timer_tick(bus.cycle_count, mti_period)
+            .min(i32::MAX as u64) as i32;
+        timer_info.next_sti = next_timer_tick(bus.cycle_count, sti_period)
+            .min(i32::MAX as u64) as i32;
+    } else {
+        timer_info.next_mti = 0;
+        timer_info.next_sti = 0;
+    }
+    metadata.timer = timer_info;
+    metadata.interrupts = interrupts;
+
+    let kb_state = bus.keyboard.snapshot_state();
+    if let Ok(snapshot) = serde_json::to_value(&kb_state) {
+        metadata.keyboard = Some(snapshot);
+        metadata.kb_metrics = Some(json!({
+            "irq_count": kb_state.irq_count,
+            "strobe_count": kb_state.strobe_count,
+            "column_hist": kb_state.column_histogram,
+            "last_cols": kb_state.active_columns,
+            "last_kol": kb_state.kol,
+            "last_koh": kb_state.koh,
+            "kil_reads": kb_state.kil_read_count,
+            "kb_irq_enabled": bus.timer.kb_irq_enabled,
+        }));
+    }
+
+    let (lcd_meta, payload) = bus.lcd.export_snapshot();
+    metadata.lcd = Some(lcd_meta);
+    metadata.lcd_payload_size = payload.len();
+    let lcd_payload = Some(payload);
+
+    let regs = collect_registers(state);
+    snapshot::save_snapshot(path, &metadata, &regs, &bus.memory, lcd_payload.as_deref())?;
+    Ok(())
+}
+
 impl LlamaBus for StandaloneBus {
     fn load(&mut self, addr: u32, bits: u8) -> u32 {
         let addr = addr & ADDRESS_MASK;
@@ -1209,6 +1652,184 @@ fn parse_matrix_code(raw: &str) -> Result<Option<AutoKeyKind>, Box<dyn Error>> {
     Err(format!("could not parse matrix code '{raw}'").into())
 }
 
+fn parse_u64_value(raw: &str) -> Result<u64, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("missing numeric value".to_string());
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if let Some(hex) = lowered.strip_prefix("0x") {
+        return u64::from_str_radix(hex, 16)
+            .map_err(|_| format!("invalid hex value '{raw}'"));
+    }
+    trimmed
+        .parse::<u64>()
+        .map_err(|_| format!("invalid number '{raw}'"))
+}
+
+fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty key token".to_string());
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if matches!(lowered.as_str(), "enter" | "return" | "ret") {
+        if let Some(code) = KeyboardMatrix::matrix_code_for_key_name("KEY_ENTER") {
+            return Ok(AutoKeyKind::Matrix(code));
+        }
+        return Err("enter key is not mapped in the keyboard matrix".to_string());
+    }
+    if lowered == "space" {
+        if let Some(code) = KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE") {
+            return Ok(AutoKeyKind::Matrix(code));
+        }
+        return Err("space key is not mapped in the keyboard matrix".to_string());
+    }
+    if trimmed.chars().count() == 1 {
+        let ch = trimmed.chars().next().unwrap();
+        if let Some(code) = KeyboardMatrix::matrix_code_for_char(ch) {
+            return Ok(AutoKeyKind::Matrix(code));
+        }
+    }
+    match parse_matrix_code(trimmed) {
+        Ok(Some(kind)) => Ok(kind),
+        Ok(None) => Err(format!("unknown key token '{raw}'")),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
+    let mut actions = Vec::new();
+    for token_raw in raw.split(|ch| ch == ',' || ch == ';') {
+        let token = token_raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if lower.starts_with("wait-op") {
+            let sep = token.find(':').or_else(|| token.find('='));
+            let Some(sep) = sep else {
+                return Err(format!("wait-op missing value: '{token}'"));
+            };
+            let value = token[sep + 1..].trim();
+            let count = parse_u64_value(value)?;
+            let mut action = KeySeqAction::new(KeySeqKind::WaitOp);
+            action.op_target = count;
+            actions.push(action);
+            continue;
+        }
+        if lower.starts_with("wait-text") {
+            let sep = token.find(':').or_else(|| token.find('='));
+            let Some(sep) = sep else {
+                return Err(format!("wait-text missing value: '{token}'"));
+            };
+            let value = token[sep + 1..].trim();
+            if value.is_empty() {
+                return Err(format!("wait-text expects non-empty value: '{token}'"));
+            }
+            let mut action = KeySeqAction::new(KeySeqKind::WaitText);
+            action.text = value.to_string();
+            actions.push(action);
+            continue;
+        }
+        if lower.starts_with("wait-screen-change") {
+            if token.contains(':') || token.contains('=') {
+                return Err(format!(
+                    "wait-screen-change does not take a value: '{token}'"
+                ));
+            }
+            actions.push(KeySeqAction::new(KeySeqKind::WaitScreenChange));
+            continue;
+        }
+        if lower.starts_with("wait-screen-empty") {
+            if token.contains(':') || token.contains('=') {
+                return Err(format!(
+                    "wait-screen-empty does not take a value: '{token}'"
+                ));
+            }
+            actions.push(KeySeqAction::new(KeySeqKind::WaitScreenEmpty));
+            continue;
+        }
+        if lower.starts_with("wait-screen-draw") {
+            if token.contains(':') || token.contains('=') {
+                return Err(format!(
+                    "wait-screen-draw does not take a value: '{token}'"
+                ));
+            }
+            actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
+            continue;
+        }
+        if lower.starts_with("wait-power") {
+            let sep = token.find(':').or_else(|| token.find('='));
+            let Some(sep) = sep else {
+                return Err(format!("wait-power missing value: '{token}'"));
+            };
+            let value = token[sep + 1..].trim().to_ascii_lowercase();
+            if value != "on" && value != "off" {
+                return Err(format!("wait-power expects on/off, got '{value}'"));
+            }
+            let mut action = KeySeqAction::new(KeySeqKind::WaitPower);
+            action.power_on = value == "on";
+            actions.push(action);
+            continue;
+        }
+
+        let mut key_part = token;
+        let mut hold = default_hold;
+        if let Some(colon) = token.find(':') {
+            key_part = token[..colon].trim();
+            let hold_raw = token[colon + 1..].trim();
+            if !hold_raw.is_empty() {
+                hold = parse_u64_value(hold_raw)?;
+            }
+        }
+        let key = resolve_key_seq_key(key_part)?;
+        let mut action = KeySeqAction::new(KeySeqKind::Press);
+        action.key = Some(key);
+        action.label = key_part.to_string();
+        action.hold = hold;
+        actions.push(action);
+    }
+    Ok(actions)
+}
+
+fn capture_screen_state(
+    lcd: &dyn LcdHal,
+    decoder: Option<&DeviceTextDecoder>,
+    include_text: bool,
+) -> ScreenState {
+    let bytes = lcd.display_vram_bytes();
+    let mut signature: u64 = 0xcbf29ce484222325;
+    let mut blank = true;
+    for row in bytes.iter() {
+        for byte in row.iter() {
+            if *byte != 0 {
+                blank = false;
+            }
+            signature ^= u64::from(*byte);
+            signature = signature.wrapping_mul(0x100000001b3);
+        }
+    }
+    let mut text = String::new();
+    let mut text_valid = false;
+    if include_text {
+        if let Some(decoder) = decoder {
+            let lines = decoder.decode_display_text(lcd);
+            if !lines.is_empty() {
+                text = lines.join("\n");
+            }
+            text_valid = true;
+        }
+    }
+    ScreenState {
+        valid: true,
+        is_blank: blank,
+        signature,
+        text_valid,
+        text,
+    }
+}
+
 fn parse_address(raw: &str) -> Result<u32, Box<dyn Error>> {
     let trimmed = raw.trim();
     if let Some(hex) = trimmed.strip_prefix("0x") {
@@ -1271,7 +1892,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let log_dbg = |_msg: &str| {};
 
     let perfetto_base_path = args.perfetto_path.clone();
-    let perfetto_chunk_size: u64 = if args.pf1_twice { 200_000 } else { 0 };
+    let perfetto_chunk_size: u64 = 0;
 
     if args.perfetto {
         // Install BNIDA-derived function names (if available) so the "Functions" track labels
@@ -1292,17 +1913,28 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         rom_path.display()
     );
 
-    let auto_key = if args.pf1_twice {
-        None
-    } else if args.pf1 {
-        Some(AutoKeyKind::Matrix(PF1_CODE))
-    } else if args.pf2 {
-        Some(AutoKeyKind::Matrix(PF2_CODE))
-    } else if let Some(raw) = args.auto_key.as_ref() {
-        parse_matrix_code(raw)?
-    } else {
-        None
-    };
+    let mut key_seq_runner = KeySeqRunner::new(Vec::new());
+    let mut use_key_seq = false;
+    let mut needs_screen_state = false;
+    let mut needs_screen_text = false;
+    if let Some(raw) = args.key_seq.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let actions = parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD)
+            .map_err(|err| format!("--key-seq: {err}"))?;
+        if !actions.is_empty() {
+            for action in &actions {
+                match action.kind {
+                    KeySeqKind::WaitScreenChange
+                    | KeySeqKind::WaitScreenEmpty
+                    | KeySeqKind::WaitScreenDraw => needs_screen_state = true,
+                    KeySeqKind::WaitText => needs_screen_text = true,
+                    _ => {}
+                }
+            }
+            key_seq_runner.reset(actions);
+            key_seq_runner.set_log_enabled(args.key_seq_log);
+            use_key_seq = true;
+        }
+    }
     // Parity: do not auto-strobe; rely on ROM strobes.
     let trace_kbd = args.trace_kbd;
 
@@ -1366,49 +1998,37 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         None,
         None,
     );
-    bus.strobe_all_columns();
-    if auto_key.is_some() {
-        bus.keyboard.set_repeat_enabled(false);
-    }
     let mut state = LlamaState::new();
     let mut executor = LlamaExecutor::new();
-    power_on_reset(&mut bus, &mut state);
-    // power_on_reset seeds PC from the ROM reset vector at 0xFFFFD.
+    let mut base_instruction_count: u64 = 0;
+    if let Some(snapshot_path) = args.snapshot_in.as_ref() {
+        #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+        {
+            let metadata =
+                load_snapshot_state(snapshot_path, &mut bus, &mut state, args.model, &rom_bytes)?;
+            base_instruction_count = metadata.instruction_count;
+            if args.perfetto {
+                set_perf_instr_counter(base_instruction_count);
+            }
+        }
+        #[cfg(any(not(feature = "snapshot"), target_arch = "wasm32"))]
+        {
+            let _ = snapshot_path;
+            return Err("snapshot support is disabled for this build".into());
+        }
+    } else {
+        bus.strobe_all_columns();
+        power_on_reset(&mut bus, &mut state);
+        // power_on_reset seeds PC from the ROM reset vector at 0xFFFFD.
+    }
+    if use_key_seq {
+        bus.keyboard.set_repeat_enabled(false);
+    }
 
     let start = Instant::now();
-    let mut executed: u64 = 0;
-    let auto_press_step: u64 = args.auto_after;
-    let mut auto_release_after: u64 = args.auto_release_after;
-    if args.pf2 && args.auto_release_after == 1_000 {
-        auto_release_after = args.steps;
-    }
-    let mut pressed_key = false;
-    let mut auto_press_consumed = false;
-    let mut release_at: u64 = 0;
+    let mut executed: u64 = base_instruction_count;
     let max_steps = args.steps;
-    let mut _halted_after_pf1 = false;
     let mut perfetto_part: u32 = 1;
-
-    // Optional scenario state machine (PF1 twice, then wait for the next screen).
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Pf1TwiceStage {
-        WaitBootText,
-        Press1,
-        WaitMainText,
-        Press2,
-        WaitNextText,
-        Done,
-    }
-    let mut pf1_stage = if args.pf1_twice {
-        Pf1TwiceStage::WaitBootText
-    } else {
-        Pf1TwiceStage::Done
-    };
-    let mut pf1_release_at: u64 = 0;
-    let mut main_row0_seen: Option<String> = None;
-    let mut _last_lcd_lines: Vec<String> = Vec::new();
-    let mut _next_text_row0: Option<String> = None;
-    let lcd_check_interval: u64 = 5_000;
 
     log_dbg(&format!("entering execute loop for {max_steps} steps"));
     while executed < max_steps {
@@ -1420,75 +2040,35 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if !state.is_off() {
             bus.tick_timers_only();
         }
-        if let Some(code) = auto_key {
-            if !pressed_key && !auto_press_consumed && executed >= auto_press_step {
-                match code {
-                    AutoKeyKind::Matrix(code) => {
-                        bus.press_key(code);
-                        if args.force_pf2_jump && code == PF2_CODE {
-                            state.set_pc(PF2_MENU_PC);
+        if use_key_seq {
+            let screen_state = if needs_screen_state || needs_screen_text {
+                capture_screen_state(bus.lcd(), text_decoder.as_ref(), needs_screen_text)
+            } else {
+                ScreenState::default()
+            };
+            let events = key_seq_runner.step(executed, !state.is_off(), &screen_state);
+            for event in events {
+                match event.kind {
+                    KeySeqEventKind::Press => {
+                        if let Some(key) = event.key {
+                            match key {
+                                AutoKeyKind::Matrix(code) => bus.press_key(code),
+                                AutoKeyKind::OnKey => bus.press_on_key(),
+                            }
                         }
                     }
-                    AutoKeyKind::OnKey => bus.press_on_key(),
-                }
-                pressed_key = true;
-                auto_press_consumed = true;
-                release_at = executed.saturating_add(auto_release_after);
-            } else if pressed_key && executed >= release_at {
-                match code {
-                    AutoKeyKind::Matrix(code) => bus.release_key(code),
-                    AutoKeyKind::OnKey => bus.clear_on_key(),
-                }
-                pressed_key = false;
-            }
-        }
-
-        if pf1_stage != Pf1TwiceStage::Done && executed.is_multiple_of(lcd_check_interval) {
-            let lcd_lines = text_decoder
-                .as_ref()
-                .map(|decoder| decoder.decode_display_text(bus.lcd()))
-                .unwrap_or_default();
-            if !lcd_lines.is_empty() {
-                _last_lcd_lines = lcd_lines.clone();
-            }
-            let row0 = lcd_lines.first().cloned().unwrap_or_default();
-            match pf1_stage {
-                Pf1TwiceStage::WaitBootText => {
-                    if row0.contains("S2(CARD):") {
-                        pf1_stage = Pf1TwiceStage::Press1;
-                    }
-                }
-                Pf1TwiceStage::Press1 => {
-                    bus.press_key(PF1_CODE);
-                    pf1_release_at = executed.saturating_add(40_000);
-                    pf1_stage = Pf1TwiceStage::WaitMainText;
-                }
-                Pf1TwiceStage::WaitMainText => {
-                    if executed >= pf1_release_at {
-                        bus.release_key(PF1_CODE);
-                    }
-                    if row0.contains("S1(MAIN):") {
-                        main_row0_seen = Some(row0.clone());
-                        pf1_stage = Pf1TwiceStage::Press2;
-                    }
-                }
-                Pf1TwiceStage::Press2 => {
-                    bus.press_key(PF1_CODE);
-                    pf1_release_at = executed.saturating_add(40_000);
-                    pf1_stage = Pf1TwiceStage::WaitNextText;
-                }
-                Pf1TwiceStage::WaitNextText => {
-                    if executed >= pf1_release_at {
-                        bus.release_key(PF1_CODE);
-                    }
-                    if let Some(main) = main_row0_seen.as_ref() {
-                        if !row0.trim().is_empty() && row0 != *main {
-                            _next_text_row0 = Some(row0.clone());
-                            pf1_stage = Pf1TwiceStage::Done;
+                    KeySeqEventKind::Release => {
+                        if let Some(key) = event.key {
+                            match key {
+                                AutoKeyKind::Matrix(code) => bus.release_key(code),
+                                AutoKeyKind::OnKey => bus.clear_on_key(),
+                            }
                         }
                     }
+                    KeySeqEventKind::Log => {
+                        println!("{}", event.message);
+                    }
                 }
-                Pf1TwiceStage::Done => {}
             }
         }
         if bus.irq_pending() {
@@ -1682,9 +2262,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 }
                 bus.cycle_count = bus.cycle_count.wrapping_add(1);
                 executed += 1;
-                if pf1_stage == Pf1TwiceStage::Done && args.pf1_twice {
-                    break;
-                }
                 if perfetto_chunk_size > 0
                     && args.perfetto
                     && executed.is_multiple_of(perfetto_chunk_size)
@@ -1830,6 +2407,19 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         };
         fs::write(path, serde_json::to_string_pretty(&dump)?)?;
         println!("Wrote LCD trace dump: {}", path.display());
+    }
+
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+    if let Some(snapshot_path) = args.snapshot_out.as_ref() {
+        if let Err(err) = save_snapshot_state(snapshot_path, &bus, &state, executed) {
+            eprintln!("Failed to save snapshot: {err}");
+        } else {
+            println!("Saved snapshot to {}", snapshot_path.display());
+        }
+    }
+    #[cfg(any(not(feature = "snapshot"), target_arch = "wasm32"))]
+    if args.snapshot_out.is_some() {
+        return Err("snapshot support is disabled for this build".into());
     }
 
     bus.finish_perfetto();
@@ -2009,5 +2599,247 @@ mod tests {
             expected_pc & pc_mask,
             "standalone runner PC seed must honour the PC-E500 reset vector"
         );
+    }
+
+    #[test]
+    fn key_seq_parses_waiters_and_hold() {
+        let actions = parse_key_seq(
+            "pf1:20,wait-op:5,wait-text:MAIN MENU,wait-power:off,wait-screen-change,wait-screen-empty,wait-screen-draw",
+            100,
+        )
+        .expect("parse key seq");
+        assert_eq!(actions.len(), 7);
+        assert_eq!(actions[0].kind, KeySeqKind::Press);
+        assert_eq!(actions[0].hold, 20);
+        assert_eq!(actions[1].kind, KeySeqKind::WaitOp);
+        assert_eq!(actions[2].kind, KeySeqKind::WaitText);
+        assert_eq!(actions[3].kind, KeySeqKind::WaitPower);
+        assert_eq!(actions[4].kind, KeySeqKind::WaitScreenChange);
+        assert_eq!(actions[5].kind, KeySeqKind::WaitScreenEmpty);
+        assert_eq!(actions[6].kind, KeySeqKind::WaitScreenDraw);
+    }
+
+    #[test]
+    fn key_seq_accepts_space_alias() {
+        let actions = parse_key_seq("space", 10).expect("parse key seq");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, KeySeqKind::Press);
+        let code = KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE")
+            .expect("expected KEY_SPACE");
+        assert_eq!(actions[0].key, Some(AutoKeyKind::Matrix(code)));
+    }
+
+    #[test]
+    fn key_seq_wait_op_is_relative() {
+        let actions = parse_key_seq("wait-op:5,pf1", 10).expect("parse key seq");
+        let mut runner = KeySeqRunner::new(actions);
+        let screen = ScreenState::default();
+        let events = runner.step(10, true, &screen);
+        assert!(events.is_empty());
+        let events = runner.step(15, true, &screen);
+        assert!(events.is_empty(), "wait-op completes but does not press");
+        let events = runner.step(16, true, &screen);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, KeySeqEventKind::Press);
+    }
+
+    #[test]
+    fn key_seq_wait_screen_change_tracks_baseline() {
+        let actions = parse_key_seq("wait-screen-change,pf1", 10).expect("parse key seq");
+        let mut runner = KeySeqRunner::new(actions);
+        let screen = ScreenState {
+            valid: true,
+            is_blank: true,
+            signature: 1,
+            text_valid: false,
+            text: String::new(),
+        };
+        let events = runner.step(0, true, &screen);
+        assert!(events.is_empty());
+        let events = runner.step(1, true, &screen);
+        assert!(events.is_empty());
+        let screen_changed = ScreenState {
+            signature: 2,
+            ..screen
+        };
+        let events = runner.step(2, true, &screen_changed);
+        assert!(events.is_empty());
+        let events = runner.step(3, true, &screen_changed);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, KeySeqEventKind::Press);
+    }
+
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+    #[test]
+    fn snapshot_roundtrip_restores_state() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut memory = MemoryImage::new();
+        let _ = memory.store(0x2000, 8, 0x12);
+        memory.write_internal_byte(0x10, 0x34);
+
+        let mut bus = StandaloneBus::new(
+            memory,
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.cycle_count = 1234;
+        bus.timer.next_mti = 111;
+        bus.timer.next_sti = 222;
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::PC, 0x12345);
+        state.set_reg(RegName::A, 0x56);
+        state.call_depth_inc();
+        state.set_call_sub_level(2);
+        state.set_power_state(PowerState::Halted);
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let snapshot_path = std::env::temp_dir().join(format!("pce500_snapshot_{stamp}.pcsnap"));
+        save_snapshot_state(&snapshot_path, &bus, &state, 42).expect("save snapshot");
+
+        let mut bus2 = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut state2 = LlamaState::new();
+        let rom_bytes = vec![0u8; 0x100000];
+        let meta = load_snapshot_state(
+            &snapshot_path,
+            &mut bus2,
+            &mut state2,
+            DeviceModel::PcE500,
+            &rom_bytes,
+        )
+        .expect("load snapshot");
+
+        assert_eq!(meta.instruction_count, 42);
+        assert_eq!(state2.get_reg(RegName::PC) & ADDRESS_MASK, 0x12345);
+        assert_eq!(state2.get_reg(RegName::A) & 0xFF, 0x56);
+        assert_eq!(state2.power_state(), PowerState::Running);
+        assert_eq!(state2.call_sub_level(), 2);
+        assert_eq!(bus2.cycle_count, 1234);
+        assert_eq!(bus2.memory.load(0x2000, 8).unwrap_or(0), 0x12);
+        assert_eq!(
+            bus2.memory.read_internal_byte(0x10).unwrap_or(0),
+            0x34
+        );
+
+        let _ = std::fs::remove_file(snapshot_path);
+    }
+
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+    #[test]
+    fn snapshot_timer_next_is_canonical() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.cycle_count = 1234;
+        bus.timer.next_mti = 9999;
+        bus.timer.next_sti = 8888;
+
+        let state = LlamaState::new();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let snapshot_path =
+            std::env::temp_dir().join(format!("pce500_snapshot_timer_{stamp}.pcsnap"));
+        save_snapshot_state(&snapshot_path, &bus, &state, 0).expect("save snapshot");
+
+        let mut memory = MemoryImage::new();
+        let loaded = snapshot::load_snapshot(&snapshot_path, &mut memory).expect("load snapshot");
+        let meta = loaded.metadata;
+        let expected_mti = ((bus.cycle_count / 10) + 1) * 10;
+        let expected_sti = ((bus.cycle_count / 20) + 1) * 20;
+        assert_eq!(meta.timer.next_mti as u64, expected_mti);
+        assert_eq!(meta.timer.next_sti as u64, expected_sti);
+
+        let _ = std::fs::remove_file(snapshot_path);
+    }
+
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+    #[test]
+    fn snapshot_roundtrip_preserves_off_state() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.cycle_count = 55;
+
+        let mut state = LlamaState::new();
+        state.set_pc(0x22222);
+        state.set_power_state(PowerState::Off);
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let snapshot_path =
+            std::env::temp_dir().join(format!("pce500_snapshot_off_{stamp}.pcsnap"));
+        save_snapshot_state(&snapshot_path, &bus, &state, 7).expect("save snapshot");
+
+        let mut bus2 = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut state2 = LlamaState::new();
+        let rom_bytes = vec![0u8; 0x100000];
+        let meta = load_snapshot_state(
+            &snapshot_path,
+            &mut bus2,
+            &mut state2,
+            DeviceModel::PcE500,
+            &rom_bytes,
+        )
+        .expect("load snapshot");
+
+        assert_eq!(meta.instruction_count, 7);
+        assert_eq!(state2.get_reg(RegName::PC) & ADDRESS_MASK, 0x22222);
+        assert_eq!(state2.power_state(), PowerState::Off);
+
+        let _ = std::fs::remove_file(snapshot_path);
     }
 }

@@ -78,6 +78,11 @@ def main() -> None:
     parser.add_argument(
         "--auto-press-after-steps", type=int, help="Trigger auto key after N steps"
     )
+    parser.add_argument(
+        "--pf1-twice",
+        action="store_true",
+        help="Auto-press PF1 twice (boot -> PF1 -> S1(MAIN) -> PF1)",
+    )
     args = parser.parse_args()
 
     _apply_llama_fast_defaults(args)
@@ -99,6 +104,7 @@ def main() -> None:
         save_lcd=not args.no_lcd,
         auto_press_key=args.auto_press_key,
         auto_press_after_steps=args.auto_press_after_steps,
+        pf1_twice=args.pf1_twice,
         print_stats=True,
     )
 
