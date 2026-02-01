@@ -1868,13 +1868,6 @@ impl CoreRuntime {
         Ok(())
     }
 
-    pub async fn step_async(&mut self, instructions: usize) -> Result<()> {
-        for _ in 0..instructions {
-            crate::async_driver::sleep_cycles(1).await;
-            self.step(1)?;
-        }
-        Ok(())
-    }
 }
 
 const IMR_MASTER: u8 = 0x80;
