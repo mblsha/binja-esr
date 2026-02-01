@@ -522,7 +522,13 @@ class KeyboardMatrix:
     # ------------------------------------------------------------------ #
 
     def _initialise_fifo_memory(self) -> None:
-        return
+        if self._writer is None:
+            return
+
+        for offset in range(FIFO_SIZE):
+            self._writer(FIFO_BASE + offset, 0x00)
+        self._writer(FIFO_HEAD_ADDR, self._head)
+        self._writer(FIFO_TAIL_ADDR, self._tail)
 
     def _active_columns(self) -> Iterable[int]:
         active: List[int] = []
@@ -619,6 +625,7 @@ class KeyboardMatrix:
         return events
 
     def _enqueue_event(self, event: MatrixEvent) -> None:
+        self._refresh_head_from_memory()
         next_tail = (self._tail + 1) % FIFO_SIZE
         if next_tail == self._head:
             # FIFO full: drop oldest entry
@@ -631,16 +638,25 @@ class KeyboardMatrix:
         self._write_tail(self._tail)
 
     def _write_fifo_slot(self, index: int, value: int) -> None:
-        return
+        if self._writer is None:
+            return
+        self._writer(FIFO_BASE + index, value & 0xFF)
 
     def _write_head(self, value: int) -> None:
-        return
+        if self._writer is not None:
+            self._writer(FIFO_HEAD_ADDR, value & 0xFF)
 
     def _write_tail(self, value: int) -> None:
-        return
+        if self._writer is not None:
+            self._writer(FIFO_TAIL_ADDR, value & 0xFF)
 
     def _refresh_head_from_memory(self) -> None:
-        return
+        if self._reader is None:
+            return
+        try:
+            self._head = self._reader(FIFO_HEAD_ADDR) % FIFO_SIZE
+        except Exception:
+            pass
 
 
 __all__ = [

@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const FIFO_SIZE: usize = 8;
+const FIFO_BASE_ADDR: u32 = 0x00BFC96;
+const FIFO_HEAD_ADDR: u32 = 0x00BFC9D;
+const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
 const COLUMN_COUNT: usize = 16; // 8 from KOL, 8 from KOH (KOL.w)
 const DEFAULT_PRESS_TICKS: u8 = 6;
 const DEFAULT_RELEASE_TICKS: u8 = 6;
@@ -388,6 +391,7 @@ impl KeyboardMatrix {
     }
 
     pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
+        self.mirror_fifo_to_memory(memory);
         // Assert KEYI only if keyboard IRQs are enabled, matching Python gating.
         if self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
             if let Some(isr) = memory.read_internal_byte(0xFC) {
@@ -416,6 +420,14 @@ impl KeyboardMatrix {
                 }
             }
         }
+    }
+
+    fn mirror_fifo_to_memory(&self, memory: &mut MemoryImage) {
+        for (idx, value) in self.fifo_storage.iter().enumerate().take(FIFO_SIZE) {
+            let _ = memory.store(FIFO_BASE_ADDR + idx as u32, 8, *value as u32);
+        }
+        let _ = memory.store(FIFO_HEAD_ADDR, 8, self.fifo_head as u32);
+        let _ = memory.store(FIFO_TAIL_ADDR, 8, self.fifo_tail as u32);
     }
 
     pub fn reset(&mut self, _memory: &mut MemoryImage) {
@@ -709,6 +721,7 @@ impl KeyboardMatrix {
                 self.kil_read_count = self.kil_read_count.wrapping_add(1);
                 if self.fifo_count > 0 {
                     self.consume_pending_events();
+                    self.mirror_fifo_to_memory(_memory);
                 }
                 Some(self.kil_latch)
             }
