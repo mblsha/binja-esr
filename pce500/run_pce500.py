@@ -18,6 +18,7 @@ from pce500.emulator import IRQSource
 from sc62015.pysc62015.constants import ISRFlag
 from sc62015.pysc62015.emulator import RegisterName
 
+PF1_KEY = "KEY_F1"
 
 def run_emulator(
     num_steps=20000,
@@ -51,6 +52,10 @@ def run_emulator(
     display_trace_log: str | None = None,
     lcd_trace_file: str | None = None,
     lcd_trace_limit: int = 50000,
+    pf1_twice: bool = False,
+    pf1_hold_instr: int = 40_000,
+    pf1_check_interval: int = 5_000,
+    pf1_twice_stop_on_text: bool = True,
     load_snapshot: str | Path | None = None,
     save_snapshot: str | Path | None = None,
     save_snapshots_at_steps: list[int] | None = None,
@@ -127,6 +132,11 @@ def run_emulator(
 
     def _inject_keyboard_release(key_code: str) -> None:
         _inject_keyboard_event(key_code, release=True)
+
+    if pf1_twice and auto_press_key:
+        if print_stats:
+            print("WARNING: pf1_twice ignores auto_press_key")
+        auto_press_key = None
 
     if print_stats:
         trace_msgs = []
@@ -274,6 +284,44 @@ def run_emulator(
         pending_snapshots = sorted(
             {int(v) for v in save_snapshots_at_steps if int(v) >= 0}
         )
+    pf1_stage = "done"
+    pf1_pressed = False
+    pf1_release_at: int | None = None
+    pf1_main_row0: str | None = None
+    pf1_next_row0: str | None = None
+    pf1_done_at: int | None = None
+    pf1_last_lines: list[str] = []
+    pf1_last_row0 = ""
+    pf1_check_interval = max(1, int(pf1_check_interval))
+    if pf1_twice:
+        pf1_stage = "wait_boot"
+
+    def _press_pf1() -> None:
+        nonlocal pf1_pressed, pf1_release_at
+        if pf1_pressed:
+            return
+        emu.press_key(PF1_KEY)
+        _inject_keyboard_press(PF1_KEY)
+        pf1_pressed = True
+        pf1_release_at = emu.instruction_count + int(pf1_hold_instr)
+
+    def _release_pf1() -> None:
+        nonlocal pf1_pressed, pf1_release_at
+        if not pf1_pressed:
+            return
+        emu.release_key(PF1_KEY)
+        _inject_keyboard_release(PF1_KEY)
+        pf1_pressed = False
+        pf1_release_at = None
+
+    def _decode_lcd_lines() -> list[str]:
+        sync = getattr(emu, "_sync_lcd_from_backend", None)
+        if callable(sync):
+            try:
+                sync()
+            except Exception:
+                pass
+        return decode_display_text(emu.lcd, emu.memory)
     while emu.instruction_count < target_instructions:
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
@@ -382,6 +430,49 @@ def run_emulator(
             except Exception as exc:
                 if print_stats:
                     print(f"[snapshot] failed @instr={emu.instruction_count}: {exc}")
+
+        if pf1_twice:
+            if pf1_pressed and pf1_release_at is not None:
+                if emu.instruction_count >= pf1_release_at:
+                    _release_pf1()
+
+            if pf1_stage != "done" and emu.instruction_count % pf1_check_interval == 0:
+                lines = _decode_lcd_lines()
+                if lines:
+                    pf1_last_lines = lines
+                row0 = lines[0] if lines else ""
+                if row0 and row0 != pf1_last_row0:
+                    pf1_last_row0 = row0
+                    if print_stats:
+                        print(f"[pf1_twice] row0={row0}")
+
+                if pf1_stage == "wait_boot":
+                    if "S2(CARD):" in row0:
+                        pf1_stage = "press1"
+                if pf1_stage == "press1":
+                    _press_pf1()
+                    pf1_stage = "wait_main"
+                elif pf1_stage == "wait_main":
+                    if "S1(MAIN):" in row0:
+                        pf1_main_row0 = row0
+                        pf1_stage = "press2"
+                elif pf1_stage == "press2":
+                    _press_pf1()
+                    pf1_stage = "wait_next"
+                elif pf1_stage == "wait_next":
+                    if row0.strip():
+                        if pf1_main_row0 and row0 != pf1_main_row0:
+                            if "S1(MAIN):" not in row0 and "S2(CARD):" not in row0:
+                                pf1_next_row0 = row0
+                                pf1_stage = "done"
+                                pf1_done_at = emu.instruction_count
+                                if print_stats:
+                                    print(
+                                        "[pf1_twice] next row0="
+                                        f"{row0} @instr={emu.instruction_count}"
+                                    )
+                                if pf1_twice_stop_on_text:
+                                    break
 
         # If sweeping, find active columns from last KOL/KOH and press one row at a time
         if sweep_rows:
@@ -500,6 +591,18 @@ def run_emulator(
         print(f"Executed {emu.instruction_count} instructions")
         print(f"Memory reads: {emu.memory_read_count}")
         print(f"Memory writes: {emu.memory_write_count}")
+
+        if pf1_twice:
+            print("\nPF1 twice status:")
+            print(f"  stage: {pf1_stage}")
+            if pf1_main_row0:
+                print(f"  main_row0: {pf1_main_row0}")
+            if pf1_next_row0:
+                print(f"  next_row0: {pf1_next_row0}")
+            if pf1_done_at is not None:
+                print(f"  done_at: {pf1_done_at}")
+            elif pf1_last_lines:
+                print(f"  last_lines: {pf1_last_lines}")
 
         backend_stats = getattr(emu.cpu, "backend_stats", None)
         if callable(backend_stats):
@@ -622,6 +725,19 @@ def run_emulator(
         if print_stats:
             print(f"Snapshot saved to {snapshot_path}")
 
+    if pf1_twice:
+        setattr(
+            emu,
+            "_pf1_twice_status",
+            {
+                "stage": pf1_stage,
+                "main_row0": pf1_main_row0,
+                "next_row0": pf1_next_row0,
+                "done_at": pf1_done_at,
+                "last_lines": pf1_last_lines,
+            },
+        )
+
     if hasattr(emu, "close"):
         emu.close()
 
@@ -662,6 +778,10 @@ def main(
     display_trace_log: str | None = None,
     lcd_trace: str | None = None,
     lcd_trace_limit: int = 50000,
+    pf1_twice: bool = False,
+    pf1_hold_instr: int = 40_000,
+    pf1_check_interval: int = 5_000,
+    pf1_twice_stop_on_text: bool = True,
     load_snapshot: str | Path | None = None,
     save_snapshot: str | Path | None = None,
     perfetto_on_snapshot: bool = False,
@@ -723,6 +843,10 @@ def main(
         display_trace_log=display_trace_log,
         lcd_trace_file=lcd_trace,
         lcd_trace_limit=lcd_trace_limit,
+        pf1_twice=pf1_twice,
+        pf1_hold_instr=pf1_hold_instr,
+        pf1_check_interval=pf1_check_interval,
+        pf1_twice_stop_on_text=pf1_twice_stop_on_text,
         load_snapshot=load_snapshot,
         save_snapshot=save_snapshot,
         save_snapshots_at_steps=save_snapshots_at_steps,
@@ -853,6 +977,29 @@ if __name__ == "__main__":
         help="Hold the key for at least this many instructions after press",
     )
     parser.add_argument(
+        "--pf1-twice",
+        action="store_true",
+        help="Auto-press PF1 twice: wait for S2(CARD), press PF1, wait for S1(MAIN), press PF1 again",
+    )
+    parser.add_argument(
+        "--pf1-hold-instr",
+        type=int,
+        default=40_000,
+        help="Instructions to hold PF1 during pf1-twice (default: 40000)",
+    )
+    parser.add_argument(
+        "--pf1-check-interval",
+        type=int,
+        default=5_000,
+        help="LCD poll interval for pf1-twice (default: 5000)",
+    )
+    parser.add_argument(
+        "--pf1-twice-stop-on-text",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop early once a new row0 text appears after pf1-twice (default: true)",
+    )
+    parser.add_argument(
         "--sweep-rows",
         action="store_true",
         help="After threshold, iterate one row at a time on the active column (one-bit KIL patterns)",
@@ -976,6 +1123,10 @@ if __name__ == "__main__":
         auto_release_after_instr=args.auto_release_after_instr,
         require_strobes=args.require_strobes,
         min_hold_instr=args.min_hold_instr,
+        pf1_twice=args.pf1_twice,
+        pf1_hold_instr=args.pf1_hold_instr,
+        pf1_check_interval=args.pf1_check_interval,
+        pf1_twice_stop_on_text=args.pf1_twice_stop_on_text,
         sweep_rows=args.sweep_rows,
         sweep_hold_instr=args.sweep_hold_instr,
         debug_draw_on_key=args.debug_draw_on_key,
