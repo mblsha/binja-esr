@@ -83,6 +83,8 @@ pub struct PerfettoTracer {
     iwrites_track: TrackId,
     call_ui_functions_depth: u32,
     #[cfg(test)]
+    test_thread_id: std::thread::ThreadId,
+    #[cfg(test)]
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
     test_timestamps: RefCell<Vec<i64>>,
@@ -161,6 +163,8 @@ impl PerfettoTracer {
             iwrites_track,
             call_ui_functions_depth: 0,
             #[cfg(test)]
+            test_thread_id: std::thread::current().id(),
+            #[cfg(test)]
             test_exec_events: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_timestamps: RefCell::new(Vec::new()),
@@ -175,6 +179,11 @@ impl PerfettoTracer {
 
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    #[cfg(test)]
+    fn test_thread_matches(&self) -> bool {
+        self.test_thread_id == std::thread::current().id()
     }
 
     fn ts(&self, instr_index: u64, substep: u64) -> i64 {
@@ -204,6 +213,8 @@ impl PerfettoTracer {
         mem_imr: u8,
         mem_isr: u8,
     ) {
+        #[cfg(test)]
+        let record_test = self.test_thread_matches();
         let ts_start = self.ts(instr_index, 0);
         let ts_end = self.ts(instr_index.saturating_add(1), 0);
         let name = if let Some(m) = mnemonic {
@@ -242,7 +253,7 @@ impl PerfettoTracer {
             .update_counter(self.instr_counter_track, instr_index as f64 + 1.0, ts_start);
 
         #[cfg(test)]
-        {
+        if record_test {
             self.test_exec_events
                 .borrow_mut()
                 .push((reg_pc, opcode, instr_index));
@@ -274,6 +285,8 @@ impl PerfettoTracer {
         size: u8,
         substep: u64,
     ) {
+        #[cfg(test)]
+        let record_test = self.test_thread_matches();
         let masked_value = if size == 0 || size >= 32 {
             value
         } else {
@@ -299,7 +312,9 @@ impl PerfettoTracer {
         ]);
         ev.finish();
         #[cfg(test)]
-        self.test_timestamps.borrow_mut().push(ts);
+        if record_test {
+            self.test_timestamps.borrow_mut().push(ts);
+        }
     }
 
     /// Record a memory write at a specific manual-clock cycle (used for host/applied writes outside executor).
@@ -312,6 +327,8 @@ impl PerfettoTracer {
         space: &str,
         size: u8,
     ) {
+        #[cfg(test)]
+        let record_test = self.test_thread_matches();
         let masked_value = if size == 0 || size >= 32 {
             value
         } else {
@@ -367,7 +384,9 @@ impl PerfettoTracer {
         mem_alias.finish();
 
         #[cfg(test)]
-        self.test_mem_write_pcs.borrow_mut().push(pc_effective);
+        if record_test {
+            self.test_mem_write_pcs.borrow_mut().push(pc_effective);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -450,6 +469,8 @@ impl PerfettoTracer {
         mem_reads: u64,
         mem_writes: u64,
     ) {
+        #[cfg(test)]
+        let record_test = self.test_thread_matches();
         let ts = self.ts(instr_index, 0);
         self.builder
             .update_counter(self.call_depth_counter, call_depth as f64, ts);
@@ -458,9 +479,11 @@ impl PerfettoTracer {
         self.builder
             .update_counter(self.mem_write_counter, mem_writes as f64, ts);
         #[cfg(test)]
-        self.test_counters
-            .borrow_mut()
-            .push((instr_index, call_depth, mem_reads, mem_writes));
+        if record_test {
+            self.test_counters
+                .borrow_mut()
+                .push((instr_index, call_depth, mem_reads, mem_writes));
+        }
     }
 
     pub fn finish(self) -> Result<()> {
@@ -723,6 +746,8 @@ impl PerfettoTracer {
 
     /// Function enter/exit markers to mirror Python call/return tracing.
     pub fn record_call_flow(&mut self, name: &str, pc_from: u32, pc_to: u32, depth: u32) {
+        #[cfg(test)]
+        let record_test = self.test_thread_matches();
         let ctx = perfetto_instr_context();
         let op = ctx
             .map(|(idx, _)| idx)
@@ -733,7 +758,9 @@ impl PerfettoTracer {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| format!("sub_{pc_to:06X}"));
             #[cfg(test)]
-            self.test_function_slices.borrow_mut().push(label.clone());
+            if record_test {
+                self.test_function_slices.borrow_mut().push(label.clone());
+            }
             let mut ev = self.builder.begin_slice(self.functions_track, label, ts);
             ev.add_annotations([
                 ("from", AnnotationValue::Pointer(pc_from as u64)),

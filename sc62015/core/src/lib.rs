@@ -103,6 +103,16 @@ pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new(None);
 #[cfg(not(feature = "perfetto"))]
 pub static PERFETTO_TRACER: PerfettoHandle = PerfettoHandle::new();
 
+#[cfg(test)]
+pub(crate) fn perfetto_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static PERFETTO_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+        std::sync::OnceLock::new();
+    PERFETTO_TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub use snapshot::{load_snapshot, save_snapshot};
 pub use snapshot::{
@@ -687,7 +697,7 @@ impl CoreRuntime {
             &mut self.memory,
             cycle,
             |mem| {
-                if let Some(kb) = self.keyboard.as_deref_mut() {
+                if let Some(kb) = self.keyboard.as_mut() {
                     // Parity: always count/key-latch events even when IRQs are masked.
                     let events = kb.scan_tick(mem, true);
                     let fifo_pending = kb.fifo_len() > 0;
@@ -1859,7 +1869,11 @@ impl CoreRuntime {
     }
 
     pub async fn step_async(&mut self, instructions: usize) -> Result<()> {
-        self.step(instructions)
+        for _ in 0..instructions {
+            crate::async_driver::sleep_cycles(1).await;
+            self.step(1)?;
+        }
+        Ok(())
     }
 }
 
@@ -1887,18 +1901,9 @@ fn src_mask_for_name(name: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::perfetto_test_guard;
     use crate::llama::opcodes::RegName;
     use std::fs;
-    use std::sync::{MutexGuard, OnceLock};
-
-    static PERFETTO_TEST_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-
-    fn perfetto_test_guard() -> MutexGuard<'static, ()> {
-        PERFETTO_TEST_LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
 
     #[test]
     fn snapshot_roundtrip_preserves_call_and_temps() {

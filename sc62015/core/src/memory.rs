@@ -1097,6 +1097,7 @@ mod tests {
     #[test]
     fn host_write_without_context_emits_perfetto() {
         use std::fs;
+        let _perfetto_lock = crate::perfetto_test_guard();
         let tmp = std::env::temp_dir().join("perfetto_host_async.perfetto-trace");
         let _ = fs::remove_file(&tmp);
         let mut guard = crate::PERFETTO_TRACER.enter();
@@ -1117,6 +1118,7 @@ mod tests {
         use crate::llama::eval::{reset_perf_counters, LlamaBus, LlamaExecutor};
         use crate::llama::state::LlamaState;
         use std::fs;
+        let _perfetto_lock = crate::perfetto_test_guard();
 
         let mut guard = perfetto_guard();
         // Execute a NOP at PC 0x123 to seed perfetto_last_pc without relying on a live context.
@@ -1150,6 +1152,7 @@ mod tests {
 
     #[test]
     fn perfetto_context_falls_back_to_last_pc() {
+        let _perfetto_lock = crate::perfetto_test_guard();
         let _guard = perfetto_guard();
         // Establish a last-PC hint by executing a simple instruction.
         crate::llama::eval::reset_perf_counters();

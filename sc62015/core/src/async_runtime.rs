@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn async_runner_matches_sync_perfetto_trace() {
         use crate::llama::eval::reset_perf_counters;
-        use crate::perfetto::perfetto_test_guard;
+        use crate::perfetto_test_guard;
         use crate::perfetto::PerfettoTracer;
         use crate::PERFETTO_TRACER;
         use std::fs;
