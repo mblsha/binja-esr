@@ -386,6 +386,19 @@ pub struct CoreRuntime {
     onk_level: bool,
 }
 
+struct DeviceRuntimeSettings {
+    internal_ram_mirror: bool,
+}
+
+fn device_runtime_settings(model: DeviceModel) -> Option<DeviceRuntimeSettings> {
+    match model {
+        DeviceModel::PcE500 => Some(DeviceRuntimeSettings {
+            internal_ram_mirror: true,
+        }),
+        DeviceModel::Iq7000 => None,
+    }
+}
+
 impl Default for CoreRuntime {
     fn default() -> Self {
         Self::new()
@@ -409,7 +422,8 @@ impl CoreRuntime {
             host_write: None,
             onk_level: false,
         };
-        rt.set_device_model(DeviceModel::PcE500);
+        rt.set_device_model(DeviceModel::PcE500)
+            .expect("device model settings missing");
         rt.install_imr_isr_hook();
         rt
     }
@@ -418,10 +432,16 @@ impl CoreRuntime {
         self.metadata.device_model.unwrap_or(DeviceModel::PcE500)
     }
 
-    pub fn set_device_model(&mut self, model: DeviceModel) {
+    pub fn set_device_model(&mut self, model: DeviceModel) -> Result<()> {
+        let settings = device_runtime_settings(model).ok_or_else(|| {
+            CoreError::Other(format!(
+                "device model {model:?} missing runtime settings; validate and define for a new model"
+            ))
+        })?;
         self.metadata.device_model = Some(model);
         self.memory
-            .set_internal_ram_mirror(matches!(model, DeviceModel::PcE500));
+            .set_internal_ram_mirror(settings.internal_ram_mirror);
+        Ok(())
     }
 
     pub fn instruction_count(&self) -> u64 {
@@ -1473,6 +1493,8 @@ impl CoreRuntime {
     pub fn load_snapshot(&mut self, path: &std::path::Path) -> Result<()> {
         let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
         self.metadata = loaded.metadata;
+        let model = self.metadata.device_model.unwrap_or(DeviceModel::PcE500);
+        self.set_device_model(model)?;
         apply_registers(&mut self.state, &loaded.registers);
         self.state.set_power_state(self.metadata.power_state);
         self.fast_mode = self.metadata.fast_mode;
