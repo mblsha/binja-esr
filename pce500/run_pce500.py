@@ -14,11 +14,7 @@ from pce500 import PCE500Emulator
 from pce500.display.text_decoder import decode_display_text
 from pce500.tracing.perfetto_tracing import trace_dispatcher
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
-from pce500.emulator import IRQSource
-from sc62015.pysc62015.constants import ISRFlag
 from sc62015.pysc62015.emulator import RegisterName
-
-PF1_KEY = "KEY_F1"
 
 def run_emulator(
     num_steps=20000,
@@ -31,14 +27,6 @@ def run_emulator(
     new_perfetto=False,
     trace_file="pc-e500.perfetto-trace",
     memory_card_present: bool = True,
-    # Optional auto key-press controls
-    auto_press_key: str | None = None,
-    auto_press_after_pc: int | None = None,
-    auto_press_after_steps: int | None = None,
-    auto_hold_instr: int | None = None,
-    auto_release_after_instr: int | None = None,
-    require_strobes: int | None = None,
-    min_hold_instr: int | None = None,
     # Sweep controls: iterate rows on active column, one bit at a time
     sweep_rows: bool = False,
     sweep_hold_instr: int = 2000,
@@ -47,15 +35,10 @@ def run_emulator(
     fast_mode: bool | None = None,
     boot_skip_steps: int = 0,
     disasm_trace: bool = False,
-    press_when_col: int | None = None,
     display_trace: bool = False,
     display_trace_log: str | None = None,
     lcd_trace_file: str | None = None,
     lcd_trace_limit: int = 50000,
-    pf1_twice: bool = False,
-    pf1_hold_instr: int = 40_000,
-    pf1_check_interval: int = 5_000,
-    pf1_twice_stop_on_text: bool = True,
     load_snapshot: str | Path | None = None,
     save_snapshot: str | Path | None = None,
     save_snapshots_at_steps: list[int] | None = None,
@@ -110,33 +93,6 @@ def run_emulator(
         setattr(emu, "fast_mode", bool(resolved_fast_mode))
     except Exception:
         pass
-
-    def _inject_keyboard_event(key_code: str, *, release: bool = False) -> None:
-        """Inject a deterministic keyboard FIFO event for scripted tests."""
-
-        try:
-            matrix = getattr(emu.keyboard, "_matrix", None)
-            inject = getattr(matrix, "inject_event", None) if matrix else None
-            if not callable(inject):
-                return
-            if not inject(key_code, release=release):
-                return
-            emu._set_isr_bits(int(ISRFlag.KEYI))
-            emu._irq_pending = True
-            emu._irq_source = IRQSource.KEY
-        except Exception:
-            pass
-
-    def _inject_keyboard_press(key_code: str) -> None:
-        _inject_keyboard_event(key_code, release=False)
-
-    def _inject_keyboard_release(key_code: str) -> None:
-        _inject_keyboard_event(key_code, release=True)
-
-    if pf1_twice and auto_press_key:
-        if print_stats:
-            print("WARNING: pf1_twice ignores auto_press_key")
-        auto_press_key = None
 
     if print_stats:
         trace_msgs = []
@@ -263,17 +219,7 @@ def run_emulator(
     start_time = time.perf_counter()
     timed_out = False
     pressed = False
-    release_countdown = None
-    # Secondary scheduled press (optional):
-    auto2_key = None
-    auto2_after_steps = None
-    auto2_hold = None
-    auto2_pressed = False
-    auto2_release = None
-    latched_kil_seen = False
-    auto_press_consumed = False
-    strobe_target = None
-    hold_until_instr = None
+    held_keycode: str | None = None
     current_sweep_row = 0
     sweep_hold_until = None
     last_active_cols = []
@@ -284,138 +230,9 @@ def run_emulator(
         pending_snapshots = sorted(
             {int(v) for v in save_snapshots_at_steps if int(v) >= 0}
         )
-    pf1_stage = "done"
-    pf1_pressed = False
-    pf1_release_at: int | None = None
-    pf1_main_row0: str | None = None
-    pf1_next_row0: str | None = None
-    pf1_done_at: int | None = None
-    pf1_last_lines: list[str] = []
-    pf1_last_row0 = ""
-    pf1_check_interval = max(1, int(pf1_check_interval))
-    if pf1_twice:
-        pf1_stage = "wait_boot"
-
-    def _press_pf1() -> None:
-        nonlocal pf1_pressed, pf1_release_at
-        if pf1_pressed:
-            return
-        emu.press_key(PF1_KEY)
-        _inject_keyboard_press(PF1_KEY)
-        pf1_pressed = True
-        pf1_release_at = emu.instruction_count + int(pf1_hold_instr)
-
-    def _release_pf1() -> None:
-        nonlocal pf1_pressed, pf1_release_at
-        if not pf1_pressed:
-            return
-        emu.release_key(PF1_KEY)
-        _inject_keyboard_release(PF1_KEY)
-        pf1_pressed = False
-        pf1_release_at = None
-
-    def _decode_lcd_lines() -> list[str]:
-        sync = getattr(emu, "_sync_lcd_from_backend", None)
-        if callable(sync):
-            try:
-                sync()
-            except Exception:
-                pass
-        return decode_display_text(emu.lcd, emu.memory)
     while emu.instruction_count < target_instructions:
         # Check PC before executing the next instruction
         pc_before = emu.cpu.regs.get(RegisterName.PC)
-
-        # Auto-press once when we first reach thresholds (PC or instruction count)
-        if not auto_press_consumed and not pressed and auto_press_key:
-            # PC-based trigger
-            if auto_press_after_pc is not None and pc_before >= int(
-                auto_press_after_pc
-            ):
-                emu.press_key(auto_press_key)
-                pressed = True
-                auto_press_consumed = True
-                _inject_keyboard_press(auto_press_key)
-                latched_kil_seen = True
-                # Prime the keyboard matrix so the ROM sees the key without
-                # waiting for the timer scheduler to advance a full debounce cycle.
-                try:
-                    # Skip the Python warm-up when the Rust bridge already scans per-instruction.
-                    if not getattr(emu.keyboard, "_bridge_enabled", False):
-                        warm_ticks = 1
-                        matrix = getattr(emu.keyboard, "_matrix", None)
-                        warm_ticks = max(1, int(getattr(matrix, "press_threshold", 1)))
-                        for _ in range(warm_ticks):
-                            emu.keyboard.scan_tick()
-                except Exception:
-                    pass
-                if auto_release_after_instr and auto_release_after_instr > 0:
-                    release_countdown = int(auto_release_after_instr)
-                # Set strobe target if requested
-                if require_strobes and require_strobes > 0:
-                    try:
-                        strobe_target = getattr(emu, "_kb_strobe_count", 0) + int(
-                            require_strobes
-                        )
-                    except Exception:
-                        strobe_target = None
-                # Set minimum hold instructions if requested
-                if min_hold_instr and min_hold_instr > 0:
-                    hold_until_instr = emu.instruction_count + int(min_hold_instr)
-            # Step-count-based trigger
-            elif auto_press_after_steps is not None and emu.instruction_count >= int(
-                auto_press_after_steps
-            ):
-                emu.press_key(auto_press_key)
-                pressed = True
-                auto_press_consumed = True
-                _inject_keyboard_press(auto_press_key)
-                latched_kil_seen = True
-                if auto_release_after_instr and auto_release_after_instr > 0:
-                    release_countdown = int(auto_release_after_instr)
-                if auto_hold_instr and int(auto_hold_instr) > 0:
-                    release_countdown = int(auto_hold_instr)
-                    # Consider latched so countdown can proceed without requiring a KIL read
-                    latched_kil_seen = True
-            elif press_when_col is not None:
-                # Column-based trigger using last observed KOL/KOH (handler mapping)
-                kol = getattr(emu, "_last_kol", 0)
-                koh = getattr(emu, "_last_koh", 0)
-                active_cols = []
-                for col in range(8):
-                    if kol & (1 << col):
-                        active_cols.append(col)
-                for col in range(3):
-                    if koh & (1 << col):
-                        active_cols.append(col + 8)
-                if int(press_when_col) in active_cols:
-                    emu.press_key(auto_press_key)
-                    pressed = True
-                    auto_press_consumed = True
-                    _inject_keyboard_press(auto_press_key)
-                    latched_kil_seen = True
-                    if auto_release_after_instr and auto_release_after_instr > 0:
-                        release_countdown = int(auto_release_after_instr)
-                    if auto_hold_instr and int(auto_hold_instr) > 0:
-                        release_countdown = int(auto_hold_instr)
-                        latched_kil_seen = True
-
-        # Secondary press scheduling (only step-based for simplicity):
-        if auto2_key is None:
-            # Read from attributes if provided by caller (set on emu for quick pass-through)
-            auto2_key = getattr(emu, "_auto2_key", None)
-            auto2_after_steps = getattr(emu, "_auto2_after_steps", None)
-            auto2_hold = getattr(emu, "_auto2_hold", None)
-        if (
-            auto2_key
-            and not auto2_pressed
-            and auto2_after_steps is not None
-            and emu.instruction_count >= int(auto2_after_steps)
-        ):
-            emu.press_key(auto2_key)
-            auto2_pressed = True
-            if auto2_hold and int(auto2_hold) > 0:
-                auto2_release = int(auto2_hold)
 
         emu.step()
 
@@ -430,49 +247,6 @@ def run_emulator(
             except Exception as exc:
                 if print_stats:
                     print(f"[snapshot] failed @instr={emu.instruction_count}: {exc}")
-
-        if pf1_twice:
-            if pf1_pressed and pf1_release_at is not None:
-                if emu.instruction_count >= pf1_release_at:
-                    _release_pf1()
-
-            if pf1_stage != "done" and emu.instruction_count % pf1_check_interval == 0:
-                lines = _decode_lcd_lines()
-                if lines:
-                    pf1_last_lines = lines
-                row0 = lines[0] if lines else ""
-                if row0 and row0 != pf1_last_row0:
-                    pf1_last_row0 = row0
-                    if print_stats:
-                        print(f"[pf1_twice] row0={row0}")
-
-                if pf1_stage == "wait_boot":
-                    if "S2(CARD):" in row0:
-                        pf1_stage = "press1"
-                if pf1_stage == "press1":
-                    _press_pf1()
-                    pf1_stage = "wait_main"
-                elif pf1_stage == "wait_main":
-                    if "S1(MAIN):" in row0:
-                        pf1_main_row0 = row0
-                        pf1_stage = "press2"
-                elif pf1_stage == "press2":
-                    _press_pf1()
-                    pf1_stage = "wait_next"
-                elif pf1_stage == "wait_next":
-                    if row0.strip():
-                        if pf1_main_row0 and row0 != pf1_main_row0:
-                            if "S1(MAIN):" not in row0 and "S2(CARD):" not in row0:
-                                pf1_next_row0 = row0
-                                pf1_stage = "done"
-                                pf1_done_at = emu.instruction_count
-                                if print_stats:
-                                    print(
-                                        "[pf1_twice] next row0="
-                                        f"{row0} @instr={emu.instruction_count}"
-                                    )
-                                if pf1_twice_stop_on_text:
-                                    break
 
         # If sweeping, find active columns from last KOL/KOH and press one row at a time
         if sweep_rows:
@@ -497,9 +271,10 @@ def run_emulator(
                     sweep_hold_until = None
                     # Release any currently held key
                     try:
-                        if pressed and auto_press_key:
-                            emu.release_key(auto_press_key)
+                        if pressed and held_keycode:
+                            emu.release_key(held_keycode)
                             pressed = False
+                            held_keycode = None
                     except Exception:
                         pass
                 last_active_cols = active_cols
@@ -511,9 +286,10 @@ def run_emulator(
                 ):
                     # Release previous key
                     try:
-                        if pressed and auto_press_key:
-                            emu.release_key(auto_press_key)
+                        if pressed and held_keycode:
+                            emu.release_key(held_keycode)
                             pressed = False
+                            held_keycode = None
                     except Exception:
                         pass
                     # Find a key at (active_col, current_sweep_row)
@@ -531,7 +307,7 @@ def run_emulator(
                         keycode = None
                     if keycode:
                         emu.press_key(keycode)
-                        auto_press_key = keycode
+                        held_keycode = keycode
                         pressed = True
                         sweep_hold_until = emu.instruction_count + max(
                             1, int(sweep_hold_instr)
@@ -539,45 +315,6 @@ def run_emulator(
                     # Advance to next row for next time
                     current_sweep_row = (current_sweep_row + 1) % 8
 
-        # If we are holding the key, and we see a KIL read on PF1's column (KO10),
-        # latch that we've been sampled and allow countdown-based release
-        # PF1 is column 10 in the matrix
-        if pressed and not latched_kil_seen:
-            try:
-                if 10 in getattr(emu, "_last_kil_columns", []):
-                    latched_kil_seen = True
-            except Exception:
-                pass
-
-        # Enforce strobe-run hold and/or min hold
-        ready_by_strobes = True
-        if pressed and strobe_target is not None:
-            try:
-                ready_by_strobes = getattr(emu, "_kb_strobe_count", 0) >= strobe_target
-            except Exception:
-                ready_by_strobes = True
-        ready_by_min_hold = True
-        if pressed and hold_until_instr is not None:
-            ready_by_min_hold = emu.instruction_count >= hold_until_instr
-
-        if (
-            pressed
-            and release_countdown is not None
-            and ready_by_strobes
-            and ready_by_min_hold
-        ):
-            release_countdown -= 1
-            if release_countdown <= 0:
-                emu.release_key(auto_press_key)
-                _inject_keyboard_release(auto_press_key)
-                pressed = False
-                release_countdown = None
-        # Secondary release countdown (does not require latch)
-        if auto2_pressed and auto2_release is not None:
-            auto2_release -= 1
-            if auto2_release <= 0:
-                emu.release_key(auto2_key)
-                auto2_release = None
         if timeout_secs > 0 and (time.perf_counter() - start_time) > timeout_secs:
             timed_out = True
             if print_stats:
@@ -591,18 +328,6 @@ def run_emulator(
         print(f"Executed {emu.instruction_count} instructions")
         print(f"Memory reads: {emu.memory_read_count}")
         print(f"Memory writes: {emu.memory_write_count}")
-
-        if pf1_twice:
-            print("\nPF1 twice status:")
-            print(f"  stage: {pf1_stage}")
-            if pf1_main_row0:
-                print(f"  main_row0: {pf1_main_row0}")
-            if pf1_next_row0:
-                print(f"  next_row0: {pf1_next_row0}")
-            if pf1_done_at is not None:
-                print(f"  done_at: {pf1_done_at}")
-            elif pf1_last_lines:
-                print(f"  last_lines: {pf1_last_lines}")
 
         backend_stats = getattr(emu.cpu, "backend_stats", None)
         if callable(backend_stats):
@@ -725,19 +450,6 @@ def run_emulator(
         if print_stats:
             print(f"Snapshot saved to {snapshot_path}")
 
-    if pf1_twice:
-        setattr(
-            emu,
-            "_pf1_twice_status",
-            {
-                "stage": pf1_stage,
-                "main_row0": pf1_main_row0,
-                "next_row0": pf1_next_row0,
-                "done_at": pf1_done_at,
-                "last_lines": pf1_last_lines,
-            },
-        )
-
     if hasattr(emu, "close"):
         emu.close()
 
@@ -755,13 +467,6 @@ def main(
     memory_card_present: bool = True,
     steps: int = 20000,
     timeout_secs: float | None = None,
-    auto_press_key: str | None = None,
-    auto_press_after_pc: int | None = None,
-    auto_press_after_steps: int | None = None,
-    auto_hold_instr: int | None = None,
-    auto_release_after_instr: int | None = None,
-    require_strobes: int | None = None,
-    min_hold_instr: int | None = None,
     sweep_rows: bool = False,
     sweep_hold_instr: int = 2000,
     debug_draw_on_key: bool = False,
@@ -769,19 +474,10 @@ def main(
     fast_mode: bool | None = None,
     boot_skip: int = 0,
     disasm_trace: bool = False,
-    press_when_col: int | None = None,
-    # Secondary auto-press experimental controls
-    auto2_press_key: str | None = None,
-    auto2_press_after_steps: int | None = None,
-    auto2_hold_instr: int | None = None,
     display_trace: bool = False,
     display_trace_log: str | None = None,
     lcd_trace: str | None = None,
     lcd_trace_limit: int = 50000,
-    pf1_twice: bool = False,
-    pf1_hold_instr: int = 40_000,
-    pf1_check_interval: int = 5_000,
-    pf1_twice_stop_on_text: bool = True,
     load_snapshot: str | Path | None = None,
     save_snapshot: str | Path | None = None,
     perfetto_on_snapshot: bool = False,
@@ -824,13 +520,6 @@ def main(
         trace_file=trace_file,
         memory_card_present=bool(memory_card_present),
         timeout_secs=resolved_timeout,
-        auto_press_key=auto_press_key,
-        auto_press_after_pc=auto_press_after_pc,
-        auto_press_after_steps=auto_press_after_steps,
-        auto_hold_instr=auto_hold_instr,
-        auto_release_after_instr=auto_release_after_instr,
-        require_strobes=require_strobes,
-        min_hold_instr=min_hold_instr,
         sweep_rows=sweep_rows,
         sweep_hold_instr=sweep_hold_instr,
         debug_draw_on_key=debug_draw_on_key,
@@ -838,15 +527,10 @@ def main(
         fast_mode=resolved_fast_mode,
         boot_skip_steps=boot_skip,
         disasm_trace=disasm_trace,
-        press_when_col=press_when_col,
         display_trace=display_trace,
         display_trace_log=display_trace_log,
         lcd_trace_file=lcd_trace,
         lcd_trace_limit=lcd_trace_limit,
-        pf1_twice=pf1_twice,
-        pf1_hold_instr=pf1_hold_instr,
-        pf1_check_interval=pf1_check_interval,
-        pf1_twice_stop_on_text=pf1_twice_stop_on_text,
         load_snapshot=load_snapshot,
         save_snapshot=save_snapshot,
         save_snapshots_at_steps=save_snapshots_at_steps,
@@ -854,11 +538,6 @@ def main(
     ) as emu:
         if False:
             pass
-        # Pass-through secondary scheduling parameters via emulator attributes
-        if auto2_press_key and auto2_press_after_steps is not None:
-            setattr(emu, "_auto2_key", auto2_press_key)
-            setattr(emu, "_auto2_after_steps", int(auto2_press_after_steps))
-            setattr(emu, "_auto2_hold", int(auto2_hold_instr or 0))
         # Set performance tracer for SC62015 if profiling
         if profile_emulator:
             emu.memory.set_perf_tracer(tracer)
@@ -942,64 +621,6 @@ if __name__ == "__main__":
         help="Enable/disable memory card emulation (default: present)",
     )
     parser.add_argument(
-        "--auto-press-key",
-        help="Automatically press a key (e.g., KEY_F1) once when PC threshold is reached",
-    )
-    parser.add_argument(
-        "--auto-press-after-pc",
-        type=lambda x: int(x, 0),
-        help="PC threshold (hex or dec). First time PC >= this, the key is pressed",
-    )
-    parser.add_argument(
-        "--auto-press-after-steps",
-        type=int,
-        help="Auto-press key after executing this many instructions",
-    )
-    parser.add_argument(
-        "--auto-hold-instr",
-        type=int,
-        help="Hold the auto-pressed key for this many instructions, then release",
-    )
-    parser.add_argument(
-        "--auto-release-after-instr",
-        type=int,
-        default=500,
-        help="Release the auto-pressed key after N instructions (default: 500)",
-    )
-    parser.add_argument(
-        "--require-strobes",
-        type=int,
-        help="Hold the key until at least this many KOL/KOH writes have occurred after press",
-    )
-    parser.add_argument(
-        "--min-hold-instr",
-        type=int,
-        help="Hold the key for at least this many instructions after press",
-    )
-    parser.add_argument(
-        "--pf1-twice",
-        action="store_true",
-        help="Auto-press PF1 twice: wait for S2(CARD), press PF1, wait for S1(MAIN), press PF1 again",
-    )
-    parser.add_argument(
-        "--pf1-hold-instr",
-        type=int,
-        default=40_000,
-        help="Instructions to hold PF1 during pf1-twice (default: 40000)",
-    )
-    parser.add_argument(
-        "--pf1-check-interval",
-        type=int,
-        default=5_000,
-        help="LCD poll interval for pf1-twice (default: 5000)",
-    )
-    parser.add_argument(
-        "--pf1-twice-stop-on-text",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Stop early once a new row0 text appears after pf1-twice (default: true)",
-    )
-    parser.add_argument(
         "--sweep-rows",
         action="store_true",
         help="After threshold, iterate one row at a time on the active column (one-bit KIL patterns)",
@@ -1036,11 +657,6 @@ if __name__ == "__main__":
         "--disasm-trace",
         action="store_true",
         help="Generate disassembly trace of executed instructions with control flow annotations",
-    )
-    parser.add_argument(
-        "--press-when-col",
-        type=int,
-        help="Press the auto key when this KO column becomes active (handler mapping)",
     )
     parser.add_argument(
         "--display-trace",
@@ -1089,21 +705,6 @@ if __name__ == "__main__":
         help="Prefix (path) for --save-snapshots-at-steps outputs (default: snapshot). "
         "Files will be written as <prefix>_<steps>.pcsnap",
     )
-    # Secondary auto-key scheduling for experiments (step-based)
-    parser.add_argument(
-        "--auto2-press-key",
-        help="Secondary key to press (e.g., KEY_EQUALS)",
-    )
-    parser.add_argument(
-        "--auto2-press-after-steps",
-        type=int,
-        help="Execute secondary key press after this many instructions",
-    )
-    parser.add_argument(
-        "--auto2-hold-instr",
-        type=int,
-        help="Hold the secondary key for this many instructions",
-    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -1116,17 +717,6 @@ if __name__ == "__main__":
         trace_file=args.trace_file,
         profile_emulator=args.profile_emulator,
         memory_card_present=(args.card == "present"),
-        auto_press_key=args.auto_press_key,
-        auto_press_after_pc=args.auto_press_after_pc,
-        auto_press_after_steps=args.auto_press_after_steps,
-        auto_hold_instr=args.auto_hold_instr,
-        auto_release_after_instr=args.auto_release_after_instr,
-        require_strobes=args.require_strobes,
-        min_hold_instr=args.min_hold_instr,
-        pf1_twice=args.pf1_twice,
-        pf1_hold_instr=args.pf1_hold_instr,
-        pf1_check_interval=args.pf1_check_interval,
-        pf1_twice_stop_on_text=args.pf1_twice_stop_on_text,
         sweep_rows=args.sweep_rows,
         sweep_hold_instr=args.sweep_hold_instr,
         debug_draw_on_key=args.debug_draw_on_key,
@@ -1134,10 +724,6 @@ if __name__ == "__main__":
         fast_mode=args.fast_mode,
         boot_skip=args.boot_skip,
         disasm_trace=args.disasm_trace,
-        press_when_col=args.press_when_col,
-        auto2_press_key=args.auto2_press_key,
-        auto2_press_after_steps=args.auto2_press_after_steps,
-        auto2_hold_instr=args.auto2_hold_instr,
         display_trace=args.display_trace,
         display_trace_log=args.display_trace_log,
         lcd_trace=args.lcd_trace,
