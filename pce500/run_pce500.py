@@ -42,6 +42,9 @@ class KeySeqAction:
     op_target: int = 0
     text: str = ""
     power_on: bool | None = None
+    op_target_set: bool = False
+    screen_baseline_set: bool = False
+    screen_baseline: int = 0
 
 
 def _parse_u64_value(raw: str) -> int:
@@ -212,8 +215,6 @@ class KeySeqRunner:
         self.index = 0
         self.active_key: str | None = None
         self.release_at: int | None = None
-        self.wait_start: int | None = None
-        self.screen_baseline: int | None = None
         self.last_poll: int = 0
 
     def done(self) -> bool:
@@ -233,9 +234,6 @@ class KeySeqRunner:
                 self._log(f"key-seq: release {self.active_key} at {op_index}")
                 self.active_key = None
                 self.release_at = None
-                self.wait_start = None
-                self.screen_baseline = None
-                self.index += 1
 
         if self.active_key is not None:
             return
@@ -257,16 +255,17 @@ class KeySeqRunner:
             self.release_at = op_index + hold
             label = action.label or key_code
             self._log(f"key-seq: press {label} at {op_index} hold {hold}")
+            self.index += 1
             return
 
         if action.kind == KeySeqKind.WAIT_OP:
-            if self.wait_start is None:
-                self.wait_start = op_index
+            if not action.op_target_set:
+                action.op_target = action.op_target + op_index
+                action.op_target_set = True
                 self._log(f"key-seq: wait-op until {action.op_target}")
-            if op_index - self.wait_start >= action.op_target:
+            if op_index >= action.op_target:
                 self._log(f"key-seq: wait-op done at {op_index}")
                 self.index += 1
-                self.wait_start = None
             return
 
         if action.kind in (
@@ -284,15 +283,13 @@ class KeySeqRunner:
                     self._log(f"key-seq: wait-text '{action.text}' at {op_index}")
                     self.index += 1
             elif action.kind == KeySeqKind.WAIT_SCREEN_CHANGE:
-                if self.screen_baseline is None:
-                    self.screen_baseline = signature
-                    self._log(
-                        f"key-seq: wait-screen-change baseline {self.screen_baseline}"
-                    )
-                elif signature != self.screen_baseline:
+                if not action.screen_baseline_set:
+                    action.screen_baseline = signature
+                    action.screen_baseline_set = True
+                    self._log(f"key-seq: wait-screen-change baseline {signature}")
+                elif signature != action.screen_baseline:
                     self._log(f"key-seq: wait-screen-change detected at {op_index}")
                     self.index += 1
-                    self.screen_baseline = None
             elif action.kind == KeySeqKind.WAIT_SCREEN_EMPTY:
                 if is_blank:
                     self._log(f"key-seq: wait-screen-empty at {op_index}")
@@ -534,6 +531,9 @@ def run_emulator(
             raise ValueError(f"--key-seq: {exc}")
         key_seq_runner = KeySeqRunner(actions, log=bool(key_seq_log))
     while emu.instruction_count < target_instructions:
+        if key_seq_runner is not None:
+            key_seq_runner.step(emu, emu.instruction_count)
+
         emu.step()
 
         if key_seq_runner is not None:
