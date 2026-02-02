@@ -316,6 +316,9 @@ fn enter_low_power_state<B: LlamaBus>(
     ssr |= 0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
+    if power_state == PowerState::Off {
+        state.record_off_transition(state.pc());
+    }
     state.set_power_state(power_state);
 }
 
