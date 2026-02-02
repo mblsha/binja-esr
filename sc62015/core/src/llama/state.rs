@@ -14,7 +14,7 @@ pub fn mask_for(name: RegName) -> u32 {
     match name {
         RegName::A | RegName::B | RegName::IL | RegName::IH => 0xFF,
         RegName::BA | RegName::I => 0xFFFF,
-        RegName::X | RegName::Y | RegName::U | RegName::S => 0xFFFFFF,
+        RegName::X | RegName::Y | RegName::U | RegName::S => 0x0F_FFFF,
         RegName::PC => 0x0F_FFFF,
         RegName::F | RegName::IMR => 0xFF,
         RegName::FC | RegName::FZ => 0x1,
@@ -36,6 +36,8 @@ pub enum PowerState {
 pub struct LlamaState {
     regs: HashMap<RegName, u32>,
     power_state: PowerState,
+    last_off_pc: Option<u32>,
+    last_off_call_stack: Vec<u32>,
     call_depth: u32,
     call_sub_level: u32,
     call_page_stack: Vec<u32>,
@@ -57,6 +59,8 @@ impl LlamaState {
         Self {
             regs: HashMap::new(),
             power_state: PowerState::Running,
+            last_off_pc: None,
+            last_off_call_stack: Vec::new(),
             call_depth: 0,
             call_sub_level: 0,
             call_page_stack: Vec::new(),
@@ -168,11 +172,25 @@ impl LlamaState {
     }
 
     pub fn power_off(&mut self) {
+        self.record_off_transition(self.pc());
         self.power_state = PowerState::Off;
     }
 
     pub fn set_power_state(&mut self, state: PowerState) {
         self.power_state = state;
+    }
+
+    pub fn record_off_transition(&mut self, pc: u32) {
+        self.last_off_pc = Some(pc & mask_for(RegName::PC));
+        self.last_off_call_stack = self.call_stack.clone();
+    }
+
+    pub fn last_off_pc(&self) -> Option<u32> {
+        self.last_off_pc
+    }
+
+    pub fn last_off_call_stack(&self) -> &[u32] {
+        &self.last_off_call_stack
     }
 
     pub fn set_halted(&mut self, value: bool) {
@@ -198,6 +216,8 @@ impl LlamaState {
     pub fn reset(&mut self) {
         self.regs.clear();
         self.power_state = PowerState::Running;
+        self.last_off_pc = None;
+        self.last_off_call_stack.clear();
         self.call_depth = 0;
         self.call_sub_level = 0;
         self.call_page_stack.clear();
@@ -255,6 +275,10 @@ impl LlamaState {
 
     pub fn peek_call_return_width(&self) -> Option<u8> {
         self.call_return_widths.last().copied()
+    }
+
+    pub fn set_call_depth(&mut self, value: u32) {
+        self.call_depth = value;
     }
 
     pub fn set_call_sub_level(&mut self, value: u32) {
@@ -349,6 +373,14 @@ mod tests {
         assert_eq!(state.get_reg(RegName::F), 0b1111_1110);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 1);
+    }
+
+    #[test]
+    fn x_register_masks_to_20_bits() {
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x9F9F9F);
+
+        assert_eq!(state.get_reg(RegName::X), 0x0F_9F9F);
     }
 
     #[test]

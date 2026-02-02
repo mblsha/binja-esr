@@ -75,6 +75,7 @@ impl AsyncCpuHandle {
                     });
                 }
             }
+
         }
 
         Ok(AsyncCpuStats {
