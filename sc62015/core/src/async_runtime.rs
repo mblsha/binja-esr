@@ -57,18 +57,16 @@ impl AsyncRuntimeRunner {
             }
         }
 
-        let result = stats_cell.borrow_mut().take().unwrap_or_else(|| {
-            Err(CoreError::Other(
-                "async runtime missing stats".to_string(),
-            ))
-        });
+        let result = stats_cell
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| Err(CoreError::Other("async runtime missing stats".to_string())));
         result
     }
 
     pub fn runtime(&self) -> Rc<RefCell<CoreRuntime>> {
         self.runtime.clone()
     }
-
 }
 
 #[cfg(test)]

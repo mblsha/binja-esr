@@ -1,6 +1,6 @@
-use crate::async_driver::sleep_cycles;
-use super::eval::{LlamaBus, LlamaExecutor, PerfettoInstrGuard};
+use super::eval::{LlamaBus, LlamaExecutor};
 use super::state::LlamaState;
+use crate::async_driver::sleep_cycles;
 
 pub struct AsyncLlamaExecutor {
     inner: LlamaExecutor,
@@ -18,12 +18,9 @@ impl AsyncLlamaExecutor {
         opcode: u8,
         state: &mut LlamaState,
         bus: &mut B,
-        ticker: &mut TickHelper<'_>,
+        _ticker: &mut TickHelper<'_>,
     ) -> Result<u8, &'static str> {
-        let trace = PerfettoInstrGuard::begin(state, opcode);
-        let result = self.inner.execute_async(opcode, state, bus, ticker).await;
-        trace.finish(&self.inner, bus);
-        result
+        self.inner.execute(opcode, state, bus)
     }
 }
 
@@ -64,6 +61,7 @@ impl<'a> TickHelper<'a> {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! tick {
     ($ticker:expr) => {
         $ticker.tick_once().await;
@@ -75,4 +73,5 @@ macro_rules! tick {
     };
 }
 
+#[allow(unused_imports)]
 pub(crate) use tick;
