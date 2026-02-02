@@ -671,6 +671,8 @@ class PCE500Emulator:
                         self._tick_timers()
                 except Exception:
                     pass
+                # Scan keyboard while halted so key presses can wake the CPU.
+                self._scan_keyboard_per_instruction()
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
                 if isr_val_chk != 0:

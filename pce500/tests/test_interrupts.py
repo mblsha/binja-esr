@@ -13,6 +13,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 from pce500 import PCE500Emulator
 from pce500.emulator import IRQSource
+from pce500.keyboard_matrix import KEY_LOCATIONS
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 
 
@@ -240,6 +241,16 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
 
     # Trigger
     if g.trigger in (Trigger.KEY_F1, Trigger.KEY_ON):
+        if g.trigger is Trigger.KEY_F1:
+            loc = KEY_LOCATIONS[g.trigger.value]
+            kol = 0
+            koh = 0
+            if loc.column < 8:
+                kol = 1 << loc.column
+            else:
+                koh = 1 << (loc.column - 8)
+            emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOL, kol)
+            emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOH, koh)
         assert emu.press_key(g.trigger.value) is True
     elif g.trigger is Trigger.KEY_OFF:
         emu.press_key(g.trigger.value)
