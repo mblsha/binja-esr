@@ -35,9 +35,10 @@ from .tracing.perfetto_tracing import tracer as new_tracer, perf_trace
 from .scheduler import TimerScheduler, TimerSource
 from .peripherals import PeripheralManager
 
-# Default timer periods in cycles (rough emulation)
-MTI_PERIOD_CYCLES_DEFAULT = 500
-STI_PERIOD_CYCLES_DEFAULT = 5000
+# Default timer periods in cycles (match Rust core timing defaults).
+DEFAULT_CPU_HZ = 1_024_000
+MTI_PERIOD_CYCLES_DEFAULT = DEFAULT_CPU_HZ // 1000 * 2  # 2 ms tick
+STI_PERIOD_CYCLES_DEFAULT = DEFAULT_CPU_HZ // 2  # 0.5 s tick
 
 SNAPSHOT_MAGIC = "pc-e500.snapshot"
 SNAPSHOT_VERSION = 2

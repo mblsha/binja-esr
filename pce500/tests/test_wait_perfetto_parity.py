@@ -14,7 +14,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
 
 
 WAIT_OPCODE = 0xEF
-WAIT_CYCLES = 600  # MTI default period is 500 cycles; ensure at least one tick fires.
+WAIT_CYCLES = 3000  # MTI default period is 2048 cycles; ensure at least one tick fires.
 
 
 def _run_wait_once(

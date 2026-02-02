@@ -16,7 +16,7 @@ use sc62015_core::{
     },
     memory::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
-        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET, IMEM_SSR_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_SSR_OFFSET,
     },
     pce500::{
         load_pce500_rom_window_into_memory, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
@@ -1413,14 +1413,6 @@ impl LlamaBus for StandaloneBus {
         }
         let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
-            if offset == IMEM_KIL_OFFSET {
-                // Honor KSD (keyboard strobe disable) bit in LCC (bit 2).
-                let lcc = self.memory.read_internal_byte(IMEM_LCC_OFFSET).unwrap_or(0);
-                if (lcc & 0x04) != 0 {
-                    self.trace_kbd_access("read-ksd-masked", addr, offset, bits, 0);
-                    return 0;
-                }
-            }
             let had_pending = offset == IMEM_KIL_OFFSET && self.keyboard.fifo_len() > 0;
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
