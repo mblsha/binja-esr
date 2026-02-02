@@ -1333,23 +1333,25 @@ fn save_snapshot_state(
         ((cycle_count / period) + 1) * period
     }
 
-    let mut metadata = SnapshotMetadata::default();
-    metadata.backend = "rust".to_string();
-    metadata.device_model = None;
-    metadata.instruction_count = instruction_count;
-    metadata.cycle_count = bus.cycle_count;
-    metadata.pc = state.pc() & ADDRESS_MASK;
-    metadata.memory_reads = bus.memory.memory_read_count();
-    metadata.memory_writes = bus.memory.memory_write_count();
-    metadata.call_depth = state.call_depth();
-    metadata.call_sub_level = state.call_sub_level();
-    metadata.power_state = state.power_state();
-    metadata.temps = collect_registers(state)
-        .into_iter()
-        .filter(|(k, _)| k.starts_with("TEMP"))
-        .collect();
-    metadata.readonly_ranges = bus.memory.readonly_ranges().to_vec();
-    metadata.memory_image_size = bus.memory.external_len();
+    let mut metadata = SnapshotMetadata {
+        backend: "rust".to_string(),
+        device_model: None,
+        instruction_count,
+        cycle_count: bus.cycle_count,
+        pc: state.pc() & ADDRESS_MASK,
+        memory_reads: bus.memory.memory_read_count(),
+        memory_writes: bus.memory.memory_write_count(),
+        call_depth: state.call_depth(),
+        call_sub_level: state.call_sub_level(),
+        power_state: state.power_state(),
+        temps: collect_registers(state)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("TEMP"))
+            .collect(),
+        readonly_ranges: bus.memory.readonly_ranges().to_vec(),
+        memory_image_size: bus.memory.external_len(),
+        ..Default::default()
+    };
 
     let (mut timer_info, mut interrupts) = bus.timer.snapshot_info();
     interrupts.pending = bus.irq_pending;
@@ -1768,7 +1770,7 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
 
 fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
-    for token_raw in raw.split(|ch| ch == ',' || ch == ';') {
+    for token_raw in raw.split([',', ';']) {
         let token = token_raw.trim();
         if token.is_empty() {
             continue;
