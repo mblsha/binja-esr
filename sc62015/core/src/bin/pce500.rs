@@ -56,10 +56,6 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const TIMER_MTI_PHASE_OFFSET: i64 = 0;
-const TIMER_STI_PHASE_OFFSET: i64 = 0;
-const TIMER_MTI_PERIOD_OFFSET: i64 = 0;
-const TIMER_STI_PERIOD_OFFSET: i64 = 0;
 const CPU_DONE_EVENT: u32 = 1;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -751,7 +747,8 @@ impl StandaloneBus {
         let events = self.keyboard.scan_tick(&mut self.memory, true);
         let fifo_pending = self.keyboard.fifo_len() > 0;
         let pending = events > 0 || fifo_pending;
-        if events > 0 {
+        let kb_irq_enabled = self.timer.kb_irq_enabled;
+        if events > 0 || (kb_irq_enabled && fifo_pending) {
             self.deferred_key_irq = true;
             self.deferred_pending_kil = pending;
             self.last_kbd_access = Some("scan".to_string());
@@ -1223,13 +1220,6 @@ fn mask_bits(bits: u8) -> u32 {
     }
 }
 
-fn adjust_u64(value: u64, offset: i64) -> u64 {
-    if offset >= 0 {
-        value.wrapping_add(offset as u64)
-    } else {
-        value.wrapping_sub((-offset) as u64)
-    }
-}
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 fn load_snapshot_state(
@@ -2070,14 +2060,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     configure_bus_for_model(&mut bus, args.model);
     // Keep default timer-driven scans unless tests override the flag.
     bus.timer.set_preserve_phase(false);
-    if bus.timer.enabled && args.snapshot_in.is_none() {
-        bus.timer.mti_period = adjust_u64(bus.timer.mti_period, TIMER_MTI_PERIOD_OFFSET);
-        bus.timer.sti_period = adjust_u64(bus.timer.sti_period, TIMER_STI_PERIOD_OFFSET);
-        bus.timer.next_mti = adjust_u64(bus.timer.next_mti, TIMER_MTI_PERIOD_OFFSET);
-        bus.timer.next_sti = adjust_u64(bus.timer.next_sti, TIMER_STI_PERIOD_OFFSET);
-        bus.timer.next_mti = adjust_u64(bus.timer.next_mti, TIMER_MTI_PHASE_OFFSET);
-        bus.timer.next_sti = adjust_u64(bus.timer.next_sti, TIMER_STI_PHASE_OFFSET);
-    }
     let mut state = LlamaState::new();
     let executor = AsyncLlamaExecutor::new();
     let mut base_instruction_count: u64 = 0;
