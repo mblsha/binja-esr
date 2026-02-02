@@ -10,9 +10,7 @@ use sc62015_core::{
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
         dispatch,
-        eval::{
-            perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace,
-        },
+        eval::{perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus},
         opcodes::RegName,
         state::{mask_for, LlamaState, PowerState},
     },
@@ -1209,6 +1207,14 @@ impl StandaloneBus {
             self.tick_timers_only(self.cycle_count);
         }
     }
+
+    fn finalize_instruction(&mut self) {
+        self.timer
+            .finalize_instruction_with_clamp(self.cycle_count, self.timer_finalize_clamp);
+        if !self.scan_on_timer {
+            self.tick_keyboard();
+        }
+    }
 }
 
 fn mask_bits(bits: u8) -> u32 {
@@ -1662,39 +1668,6 @@ impl LlamaBus for StandaloneBus {
             .read_internal_byte_silent(offset)
             .or_else(|| self.memory.read_internal_byte(offset))
             .unwrap_or(0)
-    }
-
-    fn timer_trace(&mut self) -> Option<TimerTrace> {
-        let (mti, sti) = self.timer.tick_counts(self.cycle_count);
-        Some(TimerTrace {
-            mti_ticks: mti,
-            sti_ticks: sti,
-        })
-    }
-
-    fn timer_periods(&mut self) -> Option<(u64, u64)> {
-        Some((self.timer.mti_period, self.timer.sti_period))
-    }
-
-    fn finalize_instruction(&mut self) {
-        self.timer
-            .finalize_instruction_with_clamp(self.cycle_count, self.timer_finalize_clamp);
-        if !self.scan_on_timer {
-            self.tick_keyboard();
-        }
-    }
-
-    fn finalize_timer_chunk(&mut self) {
-        self.timer
-            .finalize_instruction_with_clamp(self.cycle_count, self.timer_finalize_clamp);
-    }
-
-    fn set_timer_finalize_clamp(&mut self, clamp: bool) {
-        self.timer_finalize_clamp = clamp;
-    }
-
-    fn mark_instruction_start(&mut self) {
-        self.timer.set_instruction_start_cycle(self.cycle_count);
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
