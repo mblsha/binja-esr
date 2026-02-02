@@ -16,12 +16,11 @@ pub struct AsyncRuntimeRunner {
 impl AsyncRuntimeRunner {
     pub fn new(runtime: Rc<RefCell<CoreRuntime>>) -> Self {
         let clock = runtime.borrow().cycle_count();
-        let runner = Self {
+        Self {
             runtime,
             driver: AsyncDriver::with_clock(clock),
             slice_cycles: DEFAULT_SLICE_CYCLES,
-        };
-        runner
+        }
     }
 
     pub fn with_slice_cycles(mut self, slice_cycles: u64) -> Self {
