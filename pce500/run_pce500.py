@@ -222,9 +222,19 @@ def _inject_keyboard_event(
             return False
         if not inject(key_code, release=release):
             return False
-        emu._set_isr_bits(int(ISRFlag.KEYI))
-        emu._irq_pending = True
-        emu._irq_source = IRQSource.KEY
+        if getattr(emu, "_kb_irq_enabled", True):
+            try:
+                emu._key_irq_latched = True
+            except Exception:
+                pass
+            emu._set_isr_bits(int(ISRFlag.KEYI))
+            emu._irq_pending = True
+            if not getattr(emu, "_in_interrupt", False):
+                emu._irq_source = IRQSource.KEY
+            try:
+                emu._kb_irq_count = int(getattr(emu, "_kb_irq_count", 0)) + 1
+            except Exception:
+                pass
         return True
     except Exception:
         return False
@@ -567,9 +577,6 @@ def run_emulator(
             key_seq_runner.step(emu, emu.instruction_count)
 
         emu.step()
-
-        if key_seq_runner is not None:
-            key_seq_runner.step(emu, emu.instruction_count)
 
         if pending_snapshots and emu.instruction_count >= pending_snapshots[0]:
             snap_step = pending_snapshots.pop(0)
