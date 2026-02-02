@@ -187,8 +187,8 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
 
     # WAIT: compute wait_count = period + delta
     wait_count: Optional[int] = None
-    mti_period = int(getattr(emu, "_timer_mti_period", 500))
-    sti_period = int(getattr(emu, "_timer_sti_period", 5000))
+    mti_period = int(getattr(emu, "_timer_mti_period", 2048))
+    sti_period = int(getattr(emu, "_timer_sti_period", 512000))
     if g.program is Program.WAIT:
         period = mti_period if g.trigger == Trigger.MTI else sti_period
         wait_count = max(0, period + int(g.wait_delta or 0))
