@@ -157,9 +157,7 @@ def _assemble_program(
         entry_src = ENTRY_HALT.format(entry=PROGRAM.entry)
     elif program is Program.WAIT:
         chunks = _wait_chunks(wait_count or 0)
-        wait_body = "\n".join(
-            f"    MV I, 0x{chunk:04X}\n    WAIT" for chunk in chunks
-        )
+        wait_body = "\n".join(f"    MV I, 0x{chunk:04X}\n    WAIT" for chunk in chunks)
         entry_src = ENTRY_WAIT.format(entry=PROGRAM.entry, wait_body=wait_body)
     else:
         entry_src = ENTRY_OFF.format(entry=PROGRAM.entry)

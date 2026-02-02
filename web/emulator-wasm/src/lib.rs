@@ -558,6 +558,7 @@ impl Sc62015Emulator {
         let mut fault: Option<CallFault> = None;
         let mut probe_samples: Vec<ProbeSample> = Vec::new();
         let mut probe_hits: u32 = 0;
+        let mut forced_writes: HashMap<u32, u8> = HashMap::new();
         while steps < max_instructions {
             let current_pc = self.runtime.state.pc() & 0x000f_ffff;
             if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
@@ -629,6 +630,10 @@ impl Sc62015Emulator {
                         write.value,
                         Some(current_pc),
                     );
+                    for offset in 0..size {
+                        let byte = ((write.value >> (8 * offset)) & 0xFF) as u8;
+                        forced_writes.insert(addr.wrapping_add(offset as u32), byte);
+                    }
                 }
                 for entry in patch.regs {
                     if let Some(reg) = reg_from_name(&entry.name) {
@@ -697,13 +702,20 @@ impl Sc62015Emulator {
 
         let after_pc = self.runtime.state.pc();
         let after_sp = self.runtime.state.get_reg(RegName::S);
-        let memory_writes = self
+        let mut memory_writes_map: HashMap<u32, u8> = self
             .runtime
             .memory
             .take_write_capture()
             .into_iter()
+            .collect();
+        if !forced_writes.is_empty() {
+            memory_writes_map.extend(forced_writes);
+        }
+        let mut memory_writes: Vec<MemoryWriteByte> = memory_writes_map
+            .into_iter()
             .map(|(addr, value)| MemoryWriteByte { addr, value })
             .collect();
+        memory_writes.sort_by_key(|entry| entry.addr);
         let lcd_writes = self
             .runtime
             .lcd
