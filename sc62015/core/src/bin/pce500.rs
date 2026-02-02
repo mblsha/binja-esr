@@ -2022,7 +2022,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
     let start = Instant::now();
     let mut executed: u64 = base_instruction_count;
-    let max_steps = args.steps;
+    let max_steps = base_instruction_count.saturating_add(args.steps);
     let mut perfetto_part: u32 = 1;
 
     log_dbg(&format!("entering execute loop for {max_steps} steps"));
