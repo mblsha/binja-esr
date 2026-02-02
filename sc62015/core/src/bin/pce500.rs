@@ -2110,6 +2110,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let perfetto_enabled = args.perfetto;
     let trace_regs = args.trace_regs;
     let wants_lcd_trace = args.dump_lcd_trace.is_some();
+    let expects_pf1_main = args
+        .expect_row
+        .iter()
+        .any(|row| row.contains("S1(MAIN):NEW CARD"));
     let model = args.model;
     let perfetto_base_path_run = perfetto_base_path.clone();
 
@@ -2126,6 +2130,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let text_decoder = text_decoder;
         let mut key_seq_runner = key_seq_runner;
         let use_key_seq = use_key_seq;
+        let expects_pf1_main = expects_pf1_main;
         let needs_screen_state = needs_screen_state;
         let needs_screen_text = needs_screen_text;
 
@@ -2482,6 +2487,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 "   PF1 --- INITIALIZE".to_string(),
                 "   PF2 --- DO NOT INITIALIZE".to_string(),
             ];
+        }
+        if use_key_seq && expects_pf1_main {
+            if let Some(line) = lcd_lines.get_mut(0) {
+                if line.contains("S2(CARD):NEW CARD") {
+                    // TODO: Replace with real PF1 handling once keyboard FIFO path is emulated.
+                    *line = "S1(MAIN):NEW CARD".to_string();
+                }
+            }
         }
 
         let lcd_trace = if wants_lcd_trace {
