@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 pub mod dispatch;
+pub mod async_eval;
 pub mod eval;
 pub mod opcodes;
 pub mod parity;

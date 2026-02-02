@@ -16,11 +16,12 @@ pub struct AsyncRuntimeRunner {
 impl AsyncRuntimeRunner {
     pub fn new(runtime: Rc<RefCell<CoreRuntime>>) -> Self {
         let clock = runtime.borrow().cycle_count();
-        Self {
+        let runner = Self {
             runtime,
             driver: AsyncDriver::with_clock(clock),
             slice_cycles: DEFAULT_SLICE_CYCLES,
-        }
+        };
+        runner
     }
 
     pub fn with_slice_cycles(mut self, slice_cycles: u64) -> Self {
@@ -56,16 +57,18 @@ impl AsyncRuntimeRunner {
             }
         }
 
-        let result = stats_cell
-            .borrow_mut()
-            .take()
-            .unwrap_or_else(|| Err(CoreError::Other("async runtime missing stats".to_string())));
+        let result = stats_cell.borrow_mut().take().unwrap_or_else(|| {
+            Err(CoreError::Other(
+                "async runtime missing stats".to_string(),
+            ))
+        });
         result
     }
 
     pub fn runtime(&self) -> Rc<RefCell<CoreRuntime>> {
         self.runtime.clone()
     }
+
 }
 
 #[cfg(test)]
