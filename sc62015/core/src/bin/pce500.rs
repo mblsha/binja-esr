@@ -2408,6 +2408,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             {
                 Ok(_instr_len) => {
                     bus.handle_irq_return(opcode, &state);
+                    bus.finalize_instruction();
                     bus.apply_deferred_key_irq();
                     executed += 1;
                     if perfetto_chunk_size > 0
