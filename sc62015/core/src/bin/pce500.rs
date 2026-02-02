@@ -9,7 +9,6 @@ use sc62015_core::{
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
-        dispatch,
         eval::{perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus},
         opcodes::RegName,
         state::{mask_for, LlamaState, PowerState},
@@ -57,7 +56,6 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
-const HALT_IDLE_CYCLES: u64 = 3;
 const TIMER_MTI_PHASE_OFFSET: i64 = 0;
 const TIMER_STI_PHASE_OFFSET: i64 = 0;
 const TIMER_MTI_PERIOD_OFFSET: i64 = 0;
@@ -633,7 +631,7 @@ impl StandaloneBus {
             lcd,
             timer,
             cycle_count: 0,
-            timer_finalize_clamp: true,
+            timer_finalize_clamp: false,
             keyboard: KeyboardMatrix::new(),
             lcd_writes: 0,
             log_lcd,
@@ -1665,8 +1663,10 @@ impl LlamaBus for StandaloneBus {
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
-        // Python WAIT decrements I to zero; each loop advances cycle_count and timers.
-        for _ in 0..cycles.max(1) {
+        // Python WAIT burns one instruction cycle without ticking timers, then loops I times.
+        let cycles = cycles.max(1);
+        self.cycle_count = self.cycle_count.wrapping_add(1);
+        for _ in 0..cycles {
             self.advance_cycle();
         }
     }
@@ -2137,6 +2137,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
         log_dbg(&format!("entering execute loop for {max_steps} steps"));
         while executed < max_steps {
+            let mut pre_tick_done = false;
             // Ensure vector table is patched once before executing instructions.
             if !bus.vec_patched {
                 bus.maybe_patch_vectors();
@@ -2209,74 +2210,17 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.timer.last_fired = bus.timer.irq_source.clone();
                 }
                 // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
-                // The Python emulator uses this to prevent the ROM from stalling in low-power
-                // loops when timers/keyboard events are pending.
+                // Mirror Python: tick timers before deciding whether to remain halted.
+                if !state.is_off() {
+                    bus.tick_timers_only(bus.cycle_count);
+                    pre_tick_done = true;
+                }
                 let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                let stay_halted = isr == 0;
-                if stay_halted {
-                    // Remain halted; emit an idle step and advance cycles without executing.
-                    let pc = state.pc() & ADDRESS_MASK;
-                    bus.set_pc(pc);
-                    bus.set_instr_index(executed);
-                    let opcode = bus.load(pc, 8) as u8;
-                    bus.advance_cycles(HALT_IDLE_CYCLES);
-                    bus.finalize_instruction();
-                    let trace_regs = {
-                        let mut guard = PERFETTO_TRACER.enter();
-                        guard.with_some(|_| ()).is_some()
+                if isr == 0 {
+                    if !state.is_off() {
+                        bus.cycle_count = bus.cycle_count.wrapping_add(1);
                     }
-                    .then(|| {
-                        let mut regs = HashMap::new();
-                        for (name, reg) in [
-                            ("A", RegName::A),
-                            ("B", RegName::B),
-                            ("BA", RegName::BA),
-                            ("IL", RegName::IL),
-                            ("IH", RegName::IH),
-                            ("I", RegName::I),
-                            ("X", RegName::X),
-                            ("Y", RegName::Y),
-                            ("U", RegName::U),
-                            ("S", RegName::S),
-                            ("PC", RegName::PC),
-                            ("F", RegName::F),
-                            ("FC", RegName::FC),
-                            ("FZ", RegName::FZ),
-                        ] {
-                            regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
-                        }
-                        regs
-                    });
-                    if let Some(regs) = trace_regs {
-                        let mem_imr = bus.peek_imem_silent(IMEM_IMR_OFFSET);
-                        let mem_isr = bus.peek_imem_silent(IMEM_ISR_OFFSET);
-                        let mnemonic = dispatch::lookup(opcode).map(|entry| entry.name);
-                        let mut guard = PERFETTO_TRACER.enter();
-                        set_perf_instr_counter(executed.saturating_add(1));
-                        guard.with_some(|tracer| {
-                            tracer.record_regs(
-                                executed, pc, pc, opcode, mnemonic, &regs, mem_imr, mem_isr,
-                            );
-                        });
-                    } else {
-                        set_perf_instr_counter(executed.saturating_add(1));
-                    }
-                    bus.apply_deferred_key_irq();
-                    executed = executed.saturating_add(1);
-                    sleep_for_cycles(HALT_IDLE_CYCLES).await;
-                    if perfetto_chunk_size > 0
-                        && perfetto_enabled
-                        && executed.is_multiple_of(perfetto_chunk_size)
-                        && executed > 0
-                    {
-                        rotate_perfetto_trace(&perfetto_base_path_run, perfetto_part);
-                        perfetto_part = perfetto_part.saturating_add(1);
-                    }
-                    if let Some(stop) = stop_pc {
-                        if state.pc() == stop {
-                            break;
-                        }
-                    }
+                    sleep_for_cycles(1).await;
                     continue;
                 }
                 state.set_halted(false);
@@ -2384,11 +2328,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     isr = isr
                 );
             }
+            let run_timer_cycles = !state.is_off();
+            if run_timer_cycles && !pre_tick_done {
+                // Mirror Python: tick timers once per instruction before execution.
+                bus.tick_timers_only(bus.cycle_count);
+            }
             let opcode = bus.load(pc, 8) as u8;
             if perfetto_dbg {
                 eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
             }
-            let run_timer_cycles = !state.is_off();
             let bus_ptr: *mut StandaloneBus = &mut bus;
             let cycle_ptr: *mut u64 = &mut bus.cycle_count;
             // SAFETY: tick_cb is only invoked while the CPU loop owns &mut bus/state.
@@ -2407,6 +2355,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.handle_irq_return(opcode, &state);
                     bus.finalize_instruction();
                     bus.apply_deferred_key_irq();
+                    if run_timer_cycles && opcode != 0xEF {
+                        bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                    }
                     executed += 1;
                     if perfetto_chunk_size > 0
                         && perfetto_enabled
@@ -3195,12 +3146,12 @@ mod tests {
             None,
         );
         assert!(bus.scan_on_timer, "scan_on_timer defaults to true");
-        assert!(bus.timer_finalize_clamp, "timer clamp defaults to true");
+        assert!(!bus.timer_finalize_clamp, "timer clamp defaults to false");
         configure_bus_for_model(&mut bus, DeviceModel::PcE500);
         assert!(!bus.scan_on_timer, "PC-E500 should scan per instruction");
         assert!(
-            bus.timer_finalize_clamp,
-            "timer clamp should remain enabled by default"
+            !bus.timer_finalize_clamp,
+            "timer clamp should remain disabled by default"
         );
         let snap = bus.keyboard.snapshot_state();
         assert_eq!(snap.press_threshold, 1);
