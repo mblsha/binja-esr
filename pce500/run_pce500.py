@@ -13,10 +13,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pce500 import PCE500Emulator
+from pce500.emulator import IRQSource
 from pce500.display.text_decoder import decode_display_text
 from pce500.keyboard_matrix import KEY_LOCATIONS, KEY_NAMES
 from pce500.tracing.perfetto_tracing import trace_dispatcher
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
+from sc62015.pysc62015.constants import ISRFlag
 from sc62015.pysc62015.emulator import RegisterName
 
 KEY_SEQ_DEFAULT_HOLD = 1000
@@ -208,6 +210,26 @@ def _is_power_on(emu: PCE500Emulator) -> bool:
         return True
 
 
+def _inject_keyboard_event(
+    emu: PCE500Emulator, key_code: str, *, release: bool = False
+) -> bool:
+    """Inject a debounced FIFO event and raise KEYI immediately."""
+
+    try:
+        matrix = getattr(emu.keyboard, "_matrix", None)
+        inject = getattr(matrix, "inject_event", None) if matrix else None
+        if not callable(inject):
+            return False
+        if not inject(key_code, release=release):
+            return False
+        emu._set_isr_bits(int(ISRFlag.KEYI))
+        emu._irq_pending = True
+        emu._irq_source = IRQSource.KEY
+        return True
+    except Exception:
+        return False
+
+
 class KeySeqRunner:
     def __init__(self, actions: list[KeySeqAction], *, log: bool = False):
         self.actions = actions
@@ -228,7 +250,13 @@ class KeySeqRunner:
         if self.active_key and self.release_at is not None:
             if op_index >= self.release_at:
                 try:
-                    emu.release_key(self.active_key)
+                    if self.active_key == "KEY_ON":
+                        emu.release_key(self.active_key)
+                    else:
+                        if not _inject_keyboard_event(
+                            emu, self.active_key, release=True
+                        ):
+                            emu.release_key(self.active_key)
                 except Exception:
                     pass
                 self._log(f"key-seq: release {self.active_key} at {op_index}")
@@ -247,7 +275,11 @@ class KeySeqRunner:
                 self.index += 1
                 return
             try:
-                emu.press_key(key_code)
+                if key_code == "KEY_ON":
+                    emu.press_key(key_code)
+                else:
+                    if not _inject_keyboard_event(emu, key_code, release=False):
+                        emu.press_key(key_code)
             except Exception:
                 pass
             hold = max(1, int(action.hold))
