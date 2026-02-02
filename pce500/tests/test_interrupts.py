@@ -65,8 +65,7 @@ entry:
 ENTRY_WAIT = """
 .ORG 0x{entry:05X}
 entry:
-    MV I, 0x{wait_count:04X}
-    WAIT
+{wait_body}
     NOP
 """
 
@@ -138,14 +137,30 @@ class InterruptSpec:
 # ----------------------------- Helpers (unchanged core) -----------------------------
 
 
+def _wait_chunks(wait_count: int) -> list[int]:
+    if wait_count <= 0:
+        return [0]
+    chunks: list[int] = []
+    remaining = wait_count
+    while remaining > 0:
+        chunk = min(0xFFFF, remaining)
+        chunks.append(chunk)
+        remaining -= chunk
+    return chunks
+
+
 def _assemble_program(
     emu: PCE500Emulator, program: Program, wait_count: Optional[int]
-) -> None:
+) -> int:
     asm = Assembler()
     if program is Program.HALT:
         entry_src = ENTRY_HALT.format(entry=PROGRAM.entry)
     elif program is Program.WAIT:
-        entry_src = ENTRY_WAIT.format(entry=PROGRAM.entry, wait_count=wait_count or 0)
+        chunks = _wait_chunks(wait_count or 0)
+        wait_body = "\n".join(
+            f"    MV I, 0x{chunk:04X}\n    WAIT" for chunk in chunks
+        )
+        entry_src = ENTRY_WAIT.format(entry=PROGRAM.entry, wait_body=wait_body)
     else:
         entry_src = ENTRY_OFF.format(entry=PROGRAM.entry)
     handler_src = HANDLER_TEMPLATE.format(
@@ -162,6 +177,7 @@ def _assemble_program(
     vec = PROGRAM.handler & 0xFFFFF
     rom[off : off + 3] = bytes([vec & 0xFF, (vec >> 8) & 0xFF, (vec >> 16) & 0xFF])
     emu.load_rom(bytes(rom))
+    return len(chunks) if program is Program.WAIT else 0
 
 
 def _isolate_other_timer(emu: PCE500Emulator, trig: Trigger) -> None:
@@ -193,7 +209,7 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
         period = mti_period if g.trigger == Trigger.MTI else sti_period
         wait_count = max(0, period + int(g.wait_delta or 0))
 
-    _assemble_program(emu, g.program, wait_count)
+    wait_chunks = _assemble_program(emu, g.program, wait_count)
 
     # Initialize CPU/internal registers
     emu.cpu.regs.set(RegisterName.PC, PROGRAM.entry)
@@ -258,8 +274,9 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
                 emu.step()
     else:
         # WAIT program
-        emu.step()  # MV I
-        emu.step()  # WAIT
+        for _ in range(max(1, wait_chunks)):
+            emu.step()  # MV I
+            emu.step()  # WAIT
         emu.step()  # Attempt delivery
         if e.deliver:
             for _ in range(5):  # Full handler
