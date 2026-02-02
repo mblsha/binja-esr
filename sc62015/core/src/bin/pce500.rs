@@ -1220,7 +1220,6 @@ fn mask_bits(bits: u8) -> u32 {
     }
 }
 
-
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 fn load_snapshot_state(
     path: &Path,

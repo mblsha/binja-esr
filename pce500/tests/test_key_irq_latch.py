@@ -15,8 +15,11 @@ def test_key_latch_survives_release_until_irq_delivered():
 
     # Mask interrupts so KEYI cannot be delivered yet.
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x00)
+    # Activate the KEY_F1 column (column 10 -> KOH bit 2) so scans enqueue events.
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOH, 0x04)
 
     assert emu.press_key("KEY_F1") is True
+    emu.step()
     assert emu._key_irq_latched is True  # type: ignore[attr-defined]
     assert (
         emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
