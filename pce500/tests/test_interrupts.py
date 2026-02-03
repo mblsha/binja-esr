@@ -20,6 +20,8 @@ from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 # ----------------------------- Types & constants -----------------------------
 
 INTERNAL_MEMORY_START: int = 0x100000
+TEST_MTI_PERIOD: int = 200
+TEST_STI_PERIOD: int = 2000
 
 
 class Trigger(Enum):
@@ -194,6 +196,12 @@ def _isolate_other_timer(emu: PCE500Emulator, trig: Trigger) -> None:
 
 def _run_and_observe(g: Given, e: Expect) -> Observed:
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+
+    # Speed up timer-driven scenarios to avoid CI timeouts while keeping semantics intact.
+    emu._timer_mti_period = TEST_MTI_PERIOD  # type: ignore[attr-defined]
+    emu._timer_sti_period = TEST_STI_PERIOD  # type: ignore[attr-defined]
+    emu._timer_next_mti = emu.cycle_count + TEST_MTI_PERIOD  # type: ignore[attr-defined]
+    emu._timer_next_sti = emu.cycle_count + TEST_STI_PERIOD  # type: ignore[attr-defined]
 
     # Optional isolation
     if g.isolate_timers:
