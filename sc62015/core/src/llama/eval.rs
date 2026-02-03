@@ -1255,12 +1255,15 @@ impl LlamaExecutor {
             if length == 0 {
                 // Apply pointer side-effects even when nothing moves; Python still updates
                 // pre/post addressing registers for MVL with zero length, but only for
-                // pre-dec modes (new value lower than current).
+                // pre-dec modes (including wraparound).
                 for m in [decoded.mem, decoded.mem2].into_iter().flatten() {
                     if let Some((reg, new_val)) = m.side_effect {
-                        let curr = state.get_reg(reg);
-                        if new_val < curr {
-                            state.set_reg(reg, new_val);
+                        let mask = mask_for(reg);
+                        let curr = state.get_reg(reg) & mask;
+                        let step = m.bits.div_ceil(8) as u32;
+                        let expected = curr.wrapping_sub(step) & mask;
+                        if (new_val & mask) == expected {
+                            state.set_reg(reg, expected);
                         }
                     }
                 }
