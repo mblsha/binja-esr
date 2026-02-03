@@ -282,7 +282,13 @@ class Registers:
     def get(self, reg: RegisterName) -> int:
         if reg in self.BASE:
             val = self._values[reg]
-            if reg is RegisterName.PC:
+            if reg in (
+                RegisterName.PC,
+                RegisterName.X,
+                RegisterName.Y,
+                RegisterName.U,
+                RegisterName.S,
+            ):
                 return val & PC_MASK
             return val
 
@@ -296,7 +302,13 @@ class Registers:
     def set(self, reg: RegisterName, value: int) -> None:
         if reg in self.BASE:
             mask = (1 << (REGISTER_SIZE[reg] * 8)) - 1
-            if reg is RegisterName.PC:
+            if reg in (
+                RegisterName.PC,
+                RegisterName.X,
+                RegisterName.Y,
+                RegisterName.U,
+                RegisterName.S,
+            ):
                 mask = PC_MASK
             self._values[reg] = value & mask
             return

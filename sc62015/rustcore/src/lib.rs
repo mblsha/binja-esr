@@ -1631,8 +1631,7 @@ impl LlamaCpu {
             .and_then(|obj| obj.extract::<i32>())
         {
             self.call_sub_level = call_depth;
-            self.state
-                .set_call_sub_level(call_depth.max(0) as u32);
+            self.state.set_call_sub_level(call_depth.max(0) as u32);
         }
         // Restore timer/interrupt mirrors if present to match Python snapshot semantics.
         if let Ok(interrupts) = snap.getattr("interrupts") {
