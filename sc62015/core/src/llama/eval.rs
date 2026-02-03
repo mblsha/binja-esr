@@ -169,6 +169,12 @@ const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 // Reset vector is stored in the top three bytes of the address space.
 const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimerTrace {
+    pub mti_ticks: u64,
+    pub sti_ticks: u64,
+}
+
 pub trait LlamaBus {
     fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
         0
@@ -187,6 +193,14 @@ pub trait LlamaBus {
     }
     /// Optional hook for WAIT to spin timers/keyboard for `cycles` iterations (unused for Python parity WAIT).
     fn wait_cycles(&mut self, _cycles: u32) {}
+    /// Optional timer snapshot for perfetto tracing (ticks since last MTI/STI fire).
+    fn timer_trace(&mut self) -> Option<TimerTrace> {
+        None
+    }
+    /// Optional hook to surface the current cycle count for tracing.
+    fn cycle_count(&mut self) -> Option<u64> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,6 +496,8 @@ impl LlamaExecutor {
                     bus.peek_imem_silent(IMEM_ISR_OFFSET),
                 )
             });
+            let timer = bus.timer_trace();
+            let cycle = bus.cycle_count();
             let mnemonic = dispatch::lookup(opcode).map(|entry| entry.name);
             tracer.record_regs(
                 instr_index,
@@ -492,6 +508,9 @@ impl LlamaExecutor {
                 regs,
                 mem_imr,
                 mem_isr,
+                timer.map(|t| t.mti_ticks),
+                timer.map(|t| t.sti_ticks),
+                cycle,
             );
         });
         PERF_LAST_PC.with(|value| value.set(pc_trace));

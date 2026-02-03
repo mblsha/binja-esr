@@ -9,7 +9,7 @@ use sc62015_core::{
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
-        eval::{perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus},
+        eval::{perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace},
         opcodes::RegName,
         state::{mask_for, LlamaState, PowerState},
     },
@@ -1307,6 +1307,7 @@ fn load_snapshot_state(
 }
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+#[allow(clippy::field_reassign_with_default)]
 fn save_snapshot_state(
     path: &Path,
     bus: &StandaloneBus,
@@ -1320,25 +1321,23 @@ fn save_snapshot_state(
         ((cycle_count / period) + 1) * period
     }
 
-    let mut metadata = SnapshotMetadata {
-        backend: "rust".to_string(),
-        device_model: None,
-        instruction_count,
-        cycle_count: bus.cycle_count,
-        pc: state.pc() & ADDRESS_MASK,
-        memory_reads: bus.memory.memory_read_count(),
-        memory_writes: bus.memory.memory_write_count(),
-        call_depth: state.call_depth(),
-        call_sub_level: state.call_sub_level(),
-        power_state: state.power_state(),
-        temps: collect_registers(state)
-            .into_iter()
-            .filter(|(k, _)| k.starts_with("TEMP"))
-            .collect(),
-        readonly_ranges: bus.memory.readonly_ranges().to_vec(),
-        memory_image_size: bus.memory.external_len(),
-        ..Default::default()
-    };
+    let mut metadata = SnapshotMetadata::default();
+    metadata.backend = "rust".to_string();
+    metadata.device_model = None;
+    metadata.instruction_count = instruction_count;
+    metadata.cycle_count = bus.cycle_count;
+    metadata.pc = state.pc() & ADDRESS_MASK;
+    metadata.memory_reads = bus.memory.memory_read_count();
+    metadata.memory_writes = bus.memory.memory_write_count();
+    metadata.call_depth = state.call_depth();
+    metadata.call_sub_level = state.call_sub_level();
+    metadata.power_state = state.power_state();
+    metadata.temps = collect_registers(state)
+        .into_iter()
+        .filter(|(k, _)| k.starts_with("TEMP"))
+        .collect();
+    metadata.readonly_ranges = bus.memory.readonly_ranges().to_vec();
+    metadata.memory_image_size = bus.memory.external_len();
 
     let (mut timer_info, mut interrupts) = bus.timer.snapshot_info();
     interrupts.pending = bus.irq_pending;
@@ -1651,6 +1650,18 @@ impl LlamaBus for StandaloneBus {
             .unwrap_or(0)
     }
 
+    fn timer_trace(&mut self) -> Option<TimerTrace> {
+        let (mti, sti) = self.timer.tick_counts(self.cycle_count);
+        Some(TimerTrace {
+            mti_ticks: mti,
+            sti_ticks: sti,
+        })
+    }
+
+    fn cycle_count(&mut self) -> Option<u64> {
+        Some(self.cycle_count)
+    }
+
     fn wait_cycles(&mut self, cycles: u32) {
         // Python WAIT burns one instruction cycle without ticking timers, then loops I times.
         let cycles = cycles.max(1);
@@ -1711,7 +1722,8 @@ fn parse_u64_value(raw: &str) -> Result<u64, String> {
     }
     let lowered = trimmed.to_ascii_lowercase();
     if let Some(hex) = lowered.strip_prefix("0x") {
-        return u64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex value '{raw}'"));
+        return u64::from_str_radix(hex, 16)
+            .map_err(|_| format!("invalid hex value '{raw}'"));
     }
     trimmed
         .parse::<u64>()
@@ -1803,7 +1815,9 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
         }
         if lower.starts_with("wait-screen-draw") {
             if token.contains(':') || token.contains('=') {
-                return Err(format!("wait-screen-draw does not take a value: '{token}'"));
+                return Err(format!(
+                    "wait-screen-draw does not take a value: '{token}'"
+                ));
             }
             actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
             continue;
@@ -1972,14 +1986,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut use_key_seq = false;
     let mut needs_screen_state = false;
     let mut needs_screen_text = false;
-    if let Some(raw) = args
-        .key_seq
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        let actions =
-            parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD).map_err(|err| format!("--key-seq: {err}"))?;
+    if let Some(raw) = args.key_seq.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let actions = parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD)
+            .map_err(|err| format!("--key-seq: {err}"))?;
         if !actions.is_empty() {
             for action in &actions {
                 match action.kind {
@@ -2083,10 +2092,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let perfetto_enabled = args.perfetto;
     let trace_regs = args.trace_regs;
     let wants_lcd_trace = args.dump_lcd_trace.is_some();
-    let expects_pf1_main = args
-        .expect_row
-        .iter()
-        .any(|row| row.contains("S1(MAIN):NEW CARD"));
     let model = args.model;
     let perfetto_base_path_run = perfetto_base_path.clone();
 
@@ -2103,7 +2108,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let text_decoder = text_decoder;
         let mut key_seq_runner = key_seq_runner;
         let use_key_seq = use_key_seq;
-        let expects_pf1_main = expects_pf1_main;
         let needs_screen_state = needs_screen_state;
         let needs_screen_text = needs_screen_text;
 
@@ -2412,15 +2416,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 "   PF2 --- DO NOT INITIALIZE".to_string(),
             ];
         }
-        if use_key_seq && expects_pf1_main {
-            if let Some(line) = lcd_lines.get_mut(0) {
-                if line.contains("S2(CARD):NEW CARD") {
-                    // TODO: Replace with real PF1 handling once keyboard FIFO path is emulated.
-                    *line = "S1(MAIN):NEW CARD".to_string();
-                }
-            }
-        }
-
         let lcd_trace = if wants_lcd_trace {
             let trace = bus.lcd().display_trace_buffer();
             let trace = trace.map(|row| row.to_vec()).to_vec();

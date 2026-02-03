@@ -14,7 +14,7 @@ pub fn mask_for(name: RegName) -> u32 {
     match name {
         RegName::A | RegName::B | RegName::IL | RegName::IH => 0xFF,
         RegName::BA | RegName::I => 0xFFFF,
-        RegName::X | RegName::Y | RegName::U | RegName::S => 0xFFFFFF,
+        RegName::X | RegName::Y | RegName::U | RegName::S => 0x0F_FFFF,
         RegName::PC => 0x0F_FFFF,
         RegName::F | RegName::IMR => 0xFF,
         RegName::FC | RegName::FZ => 0x1,
@@ -373,6 +373,14 @@ mod tests {
         assert_eq!(state.get_reg(RegName::F), 0b1111_1110);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 1);
+    }
+
+    #[test]
+    fn x_register_masks_to_20_bits() {
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x9F9F9F);
+
+        assert_eq!(state.get_reg(RegName::X), 0x0F_9F9F);
     }
 
     #[test]
