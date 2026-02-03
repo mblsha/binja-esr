@@ -50,16 +50,8 @@ def test_keyboard_interrupt_delivery_from_rom():
     emu.memory.write_byte(0xBFD1E, 0x00)
 
     # Give the ROM a head start so timer interrupts are active.
-    def _run_with_mask(total_steps: int, mask: int) -> None:
-        remaining = total_steps
-        while remaining > 0:
-            chunk = min(5_000, remaining)
-            emu.memory.write_byte(imr_addr, mask & 0xFF)
-            emu.memory.write_byte(isr_addr, 0x00)
-            emu.run(chunk)
-            remaining -= chunk
-
-    _run_with_mask(200_000, 0x00)
+    # Keep IMR under ROM control so the fast-timer ISR can reconfigure masks.
+    emu.run(200_000)
     stats_before = emu.get_interrupt_stats()
     key_before = stats_before["by_source"]["KEY"]
     kb_irq_before = emu._kb_irq_count

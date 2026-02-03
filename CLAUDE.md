@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The Rust LLAMA CLI (`sc62015/core`) is the primary emulator core; the Python emulator remains a parity/legacy harness.
+
 ## Commands
 
 ### Development Setup

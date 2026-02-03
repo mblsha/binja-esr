@@ -10,7 +10,7 @@
 - Root: `plugin.json`, `pyproject.toml`, lint/type configs.
 
 ## Reference Docs
-- `docs/sc62015_python_emulator_surface.md`: Python emulator contract that Rust core must mirror.
+- `docs/sc62015_python_emulator_surface.md`: Python emulator surface/tests; keep in sync with the primary Rust LLAMA core.
 - `.github/workflows/llama-perfetto-smoke.yml`: nightly/dispatch Perfetto trace smoke (NOP/CALL/EMEM MV/DSBL/EMEM reg-indirect/PUSHU).
 
 ## Setup, Build, and Dev Commands
@@ -30,10 +30,10 @@
 - Files/modules: lowercase_with_underscores; tests named `test_*.py`.
 
 ## Rust/Python Parity Notes
-- The Rust emulator implementation is derived from the Python sources; annotate each Rust source file with the Python module/class/function it mirrors to aid audits, and keep those references up to date when code moves.
+- The Rust LLAMA core is primary; keep the Python emulator in lockstep. Annotate each Rust source file with the Python module/class/function it mirrors to aid audits, and keep those references up to date when code moves.
 - Annotations must be machine-parseable: add one or more `// PY_SOURCE: sc62015/pysc62015/<module>.py[:<object>]` comment lines near the top of every Rust source file that trace back to the Python implementation.
 - Verify annotations with `uv run python scripts/check_rust_py_parity_annotations.py`.
-- LLAMA must maintain feature-for-feature, bug-for-bug, and quirk-for-quirk parity with the Python emulator, with gaps covered by automatic tests (parity harnesses, regression tests, and nightly smoke traces).
+- Keep parity both ways: when Rust changes, update Python to match and cover gaps with tests (parity harnesses, regression tests, and nightly smoke traces).
 
 ## Testing Guidelines
 - Framework: `pytest` (see `pytest.ini` collects under `sc62015`).
@@ -54,7 +54,8 @@
 
 ## Runtime & Dev Tips
 - PC‑E500 ROM: Ensure `data/pc-e500.bin` exists. Without it, some emulator features/tests will be skipped.
-- Emulator demo: `uv run python pce500/run_pce500.py` (use `--profile-emulator` to emit `emulator-profile.perfetto-trace`).
+- Primary emulator core: use the Rust CLI (`cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`).
+- Legacy Python wrapper: `uv run python pce500/run_pce500.py` (use `--profile-emulator` to emit `emulator-profile.perfetto-trace`).
 - Binary Ninja: Not required for dev; mocks auto‑load via `FORCE_BINJA_MOCK=1` or `binja-test-mocks`.
 - Native backend: LLAMA is the only Rust core; SCIL/manifest tooling and tests were removed.
 
@@ -62,7 +63,7 @@
 
 - **LLAMA tracing/parity:** Perfetto traces (binary `retrobus-perfetto`) from Python and LLAMA cores align on instruction-index timestamps; `scripts/compare_perfetto_traces.py` compares them. Nightly smoke lives in `.github/workflows/llama-perfetto-smoke.yml`.
 - **CI coverage (Perfetto included):** All guardrails must run in CI—lint, type checks, pytest suites, parity harnesses, and Perfetto comparison jobs. Ensure Perfetto trace comparison (`scripts/compare_perfetto_traces.py` or the smoke workflow) is wired into CI and kept green.
-- **Rust-only runner:** To boot the ROM and view decoded LCD text without Python:
+- **Rust CLI runner (primary):** To boot the ROM and view decoded LCD text:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
   - Default ROM model: `pc-e500` (uses `data/pc-e500.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.

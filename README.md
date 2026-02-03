@@ -42,7 +42,7 @@ The CI workflow uploads coverage results to Codecov on each commit.
 
 ## CLI emulator (terminal LCD)
 
-Run the Rust LLAMA core with a terminal-rendered LCD view:
+The Rust LLAMA CLI is the primary emulator core. Run it with a terminal-rendered LCD view:
 
 ```bash
 cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500
