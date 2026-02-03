@@ -4298,12 +4298,13 @@ mod tests {
         state.set_reg(RegName::IMR, 0x11);
         // Point U into internal space so push lands in the test buffer.
         let sp = INTERNAL_MEMORY_START + 0x40;
+        let sp_masked = sp & mask_for(RegName::U);
         state.set_reg(RegName::U, sp);
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0x2F, &mut state, &mut bus).unwrap(); // PUSHU IMR
         assert_eq!(len, 1);
         let new_sp = state.get_reg(RegName::U);
-        assert_eq!(new_sp, sp.wrapping_sub(1));
+        assert_eq!(new_sp, sp_masked.wrapping_sub(1) & mask_for(RegName::U));
         let stored = bus.load(new_sp, 8) & 0xFF;
         let imr_after = bus.peek_imem(IMEM_IMR_OFFSET) as u32;
         let expected_cleared = 0xAAu32 & 0x7F;
@@ -4322,6 +4323,7 @@ mod tests {
         bus.mem[IMEM_IMR_OFFSET as usize] = imr_saved;
 
         let sp = INTERNAL_MEMORY_START + 0x40;
+        let sp_masked = sp & mask_for(RegName::U);
         let mut state = LlamaState::new();
         state.set_reg(RegName::U, sp);
 
@@ -4335,7 +4337,7 @@ mod tests {
         assert_eq!(len_pop, 1);
         assert_eq!(state.get_reg(RegName::IMR), u32::from(imr_saved));
         assert_eq!(bus.peek_imem(IMEM_IMR_OFFSET), imr_saved);
-        assert_eq!(state.get_reg(RegName::U), sp);
+        assert_eq!(state.get_reg(RegName::U), sp_masked);
     }
 
     #[test]
@@ -4378,7 +4380,7 @@ mod tests {
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0xFD, &mut state, &mut bus).unwrap();
         assert_eq!(len, 2);
-        assert_eq!(state.get_reg(RegName::Y), 0x123456);
+        assert_eq!(state.get_reg(RegName::Y), 0x123456 & mask_for(RegName::Y));
         assert_eq!(state.pc(), 2);
     }
 

@@ -28,9 +28,7 @@ impl AsyncTimerKeyboardTask {
         for _ in 0..cycles {
             sleep_cycles(1).await;
             let cycle = current_cycle();
-            self.runtime
-                .borrow_mut()
-                .tick_timers_and_keyboard(cycle);
+            self.runtime.borrow_mut().tick_timers_and_keyboard(cycle);
         }
     }
 }
@@ -42,7 +40,10 @@ pub struct AsyncDisplayTask {
 
 impl AsyncDisplayTask {
     pub fn new(frame_period: u64, event: DriverEvent) -> Self {
-        Self { frame_period, event }
+        Self {
+            frame_period,
+            event,
+        }
     }
 
     pub async fn run_frames(&self, frames: u64) {

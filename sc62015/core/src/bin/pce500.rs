@@ -9,7 +9,9 @@ use sc62015_core::{
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
-        eval::{perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace},
+        eval::{
+            perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace,
+        },
         opcodes::RegName,
         state::{mask_for, LlamaState, PowerState},
     },
@@ -1722,8 +1724,7 @@ fn parse_u64_value(raw: &str) -> Result<u64, String> {
     }
     let lowered = trimmed.to_ascii_lowercase();
     if let Some(hex) = lowered.strip_prefix("0x") {
-        return u64::from_str_radix(hex, 16)
-            .map_err(|_| format!("invalid hex value '{raw}'"));
+        return u64::from_str_radix(hex, 16).map_err(|_| format!("invalid hex value '{raw}'"));
     }
     trimmed
         .parse::<u64>()
@@ -1815,9 +1816,7 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
         }
         if lower.starts_with("wait-screen-draw") {
             if token.contains(':') || token.contains('=') {
-                return Err(format!(
-                    "wait-screen-draw does not take a value: '{token}'"
-                ));
+                return Err(format!("wait-screen-draw does not take a value: '{token}'"));
             }
             actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
             continue;
@@ -1986,9 +1985,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let mut use_key_seq = false;
     let mut needs_screen_state = false;
     let mut needs_screen_text = false;
-    if let Some(raw) = args.key_seq.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let actions = parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD)
-            .map_err(|err| format!("--key-seq: {err}"))?;
+    if let Some(raw) = args
+        .key_seq
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let actions =
+            parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD).map_err(|err| format!("--key-seq: {err}"))?;
         if !actions.is_empty() {
             for action in &actions {
                 match action.kind {
