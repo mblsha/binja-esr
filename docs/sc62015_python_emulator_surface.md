@@ -1,6 +1,6 @@
 # SC62015 Python Emulator Surface & Test Coverage
 
-This note captures the Python-side contract that the upcoming Rust core must mirror. It focuses on the CPU/LLIL execution surface, memory expectations, configuration knobs, and how the existing pytest suite exercises those behaviours.
+The Rust LLAMA core (rust-cli) is the primary emulator. This note captures the Python-side surface so it can stay in parity with the Rust core. It focuses on the CPU/LLIL execution surface, memory expectations, configuration knobs, and how the existing pytest suite exercises those behaviours.
 
 ## Module Inventory
 - `sc62015.pysc62015.emulator`
@@ -49,7 +49,7 @@ This note captures the Python-side contract that the upcoming Rust core must mir
 5. **LLIL evaluation**: `_execute_instruction_impl` sets the architected PC, decodes the instruction, bumps `call_sub_level` per opcode, fast-paths `WAIT`, lifts to LLIL, and runs the resulting graph via `evaluate_llil`, feeding register and memory accessors. It updates the PC using the decoded `InstructionInfo.length`.
 6. **Post-step state**: The emulator returns `InstructionEvalInfo` containing the Binary Ninja metadata. Register and memory mutations have already been applied through the `Registers` and `Memory` abstractions.
 
-The LLAMA backend must mimic each stage so that existing consumers (assemblers, snapshot steppers, and the PC-E500 device model) continue to work unchanged.
+The Python emulator must stay in lockstep with the Rust core so existing consumers (assemblers, snapshot steppers, and the PC-E500 device model) continue to work unchanged.
 
 ## Memory & Peripheral Expectations
 - `Memory` callbacks are provided by callers; the emulator assumes `read_byte`/`write_byte` raise on out-of-range access. Internal memory accesses use `INTERNAL_MEMORY_START` offsets. Tests rely on this to mirror IMEM behaviour.
