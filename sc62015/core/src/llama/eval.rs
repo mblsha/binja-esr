@@ -2214,14 +2214,12 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // Python WAIT fast-path: zero I/flags and advance PC.
+                // Python WAIT fast-path: clear I, preserve flags, and advance PC.
                 let wait_cycles = state.get_reg(RegName::I);
                 // If the host does not expose wait_cycles, tick timers/keyboard locally to avoid
                 // stalling MTI/STI/KEYI.
                 bus.wait_cycles(wait_cycles.max(1));
                 state.set_reg(RegName::I, 0);
-                state.set_reg(RegName::FC, 0);
-                state.set_reg(RegName::FZ, 0);
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -3670,8 +3668,8 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.pc(), 1);
         assert_eq!(state.get_reg(RegName::I), 0);
-        assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
-        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
+        assert_eq!(state.get_reg(RegName::FC), 1, "WAIT should preserve C");
+        assert_eq!(state.get_reg(RegName::FZ), 1, "WAIT should preserve Z");
     }
 
     struct WaitBus {
@@ -4464,8 +4462,8 @@ mod tests {
         assert_eq!(len, 1);
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.pc(), 1);
-        assert_eq!(state.get_reg(RegName::FC), 0, "WAIT should clear C");
-        assert_eq!(state.get_reg(RegName::FZ), 0, "WAIT should clear Z");
+        assert_eq!(state.get_reg(RegName::FC), 1, "WAIT should preserve C");
+        assert_eq!(state.get_reg(RegName::FZ), 1, "WAIT should preserve Z");
     }
 
     #[test]
