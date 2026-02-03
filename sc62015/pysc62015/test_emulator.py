@@ -1062,7 +1062,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0xE8: 0x33,
         },
         expected_regs={
-            RegisterName.Y: 0x332211,  # Little-endian: low byte first
+            RegisterName.Y: 0x032211,  # Little-endian: low byte first (20-bit)
         },
         expected_asm_str="MV    Y, (IOCS_WS)",
     ),
@@ -1120,7 +1120,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             0x3014: 0x33,  # High byte
         },
         expected_regs={
-            RegisterName.Y: 0x332211,  # Y should contain the 3 bytes from external memory (little-endian)
+            RegisterName.Y: 0x032211,  # Y should contain the 3 bytes from external memory (little-endian, 20-bit)
             RegisterName.X: 0x3000,  # X should remain unchanged (positive offset, not inc/dec)
         },
         expected_asm_str="MV    Y, [X+12]",
