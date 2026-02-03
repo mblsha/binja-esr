@@ -1332,7 +1332,7 @@ struct LlamaCpu {
     state: LlamaState,
     executor: LlamaExecutor,
     memory: Py<PyAny>,
-    call_sub_level: u32,
+    call_sub_level: i32,
     temps: HashMap<u32, u32>,
     mirror: MemoryImage,
     keyboard: KeyboardMatrix,
@@ -1499,7 +1499,7 @@ impl LlamaCpu {
             .map_err(|e| PyRuntimeError::new_err(format!("llama execute: {e}")))?;
         self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
         self.memory_writes = self.memory_writes.saturating_add(bus.memory_writes);
-        self.call_sub_level = self.state.call_sub_level();
+        self.call_sub_level = self.state.call_sub_level() as i32;
         self.sync_temps_from_state();
         if opcode == 0xFE {
             // IR: interrupt entry
@@ -1628,10 +1628,11 @@ impl LlamaCpu {
         }
         if let Ok(call_depth) = snap
             .getattr("call_sub_level")
-            .and_then(|obj| obj.extract::<u32>())
+            .and_then(|obj| obj.extract::<i32>())
         {
             self.call_sub_level = call_depth;
-            self.state.set_call_sub_level(call_depth);
+            self.state
+                .set_call_sub_level(call_depth.max(0) as u32);
         }
         // Restore timer/interrupt mirrors if present to match Python snapshot semantics.
         if let Ok(interrupts) = snap.getattr("interrupts") {
@@ -2013,14 +2014,14 @@ impl LlamaCpu {
     }
 
     #[getter]
-    fn call_sub_level(&self) -> u32 {
+    fn call_sub_level(&self) -> i32 {
         self.call_sub_level
     }
 
     #[setter]
-    fn set_call_sub_level(&mut self, value: u32) {
+    fn set_call_sub_level(&mut self, value: i32) {
         self.call_sub_level = value;
-        self.state.set_call_sub_level(value);
+        self.state.set_call_sub_level(value.max(0) as u32);
     }
 
     #[getter]

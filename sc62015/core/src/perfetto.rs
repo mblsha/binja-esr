@@ -230,6 +230,9 @@ impl PerfettoTracer {
         regs: &HashMap<String, u32>,
         mem_imr: u8,
         mem_isr: u8,
+        timer_mti_ticks: Option<u64>,
+        timer_sti_ticks: Option<u64>,
+        cycle_count: Option<u64>,
     ) {
         let ts_start = self.ts(instr_index, 0);
         let ts_end = self.ts(instr_index.saturating_add(1), 0);
@@ -250,6 +253,15 @@ impl PerfettoTracer {
                 ("mem_imr", AnnotationValue::UInt(mem_imr as u64)),
                 ("mem_isr", AnnotationValue::UInt(mem_isr as u64)),
             ]);
+            if let Some(mti) = timer_mti_ticks {
+                ev.add_annotation("timer_mti_ticks", mti);
+            }
+            if let Some(sti) = timer_sti_ticks {
+                ev.add_annotation("timer_sti_ticks", sti);
+            }
+            if let Some(cycle) = cycle_count {
+                ev.add_annotation("cycle_count", cycle);
+            }
             for (name, value) in regs {
                 let key = format!("reg_{}", name.to_ascii_lowercase());
                 let masked = if name == "BA" {
@@ -828,6 +840,9 @@ impl PerfettoTracer {
         _regs: &HashMap<String, u32>,
         _mem_imr: u8,
         _mem_isr: u8,
+        _timer_mti_ticks: Option<u64>,
+        _timer_sti_ticks: Option<u64>,
+        _cycle_count: Option<u64>,
     ) {
     }
 

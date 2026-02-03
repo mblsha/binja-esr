@@ -99,8 +99,8 @@ def test_llama_add_sets_flags() -> None:
     assert cpu.regs.get(RegisterName.PC) == 0x0002
 
 
-def test_llama_wait_clears_i_and_flags() -> None:
-    # WAIT (0xEF) should clear I/FC/FZ and advance PC by 1
+def test_llama_wait_clears_i_only() -> None:
+    # WAIT (0xEF) should clear I, preserve flags, and advance PC by 1
     memory = _make_memory(0xEF)
     cpu = CPU(memory, reset_on_init=False, backend="llama")
     cpu.regs.set(RegisterName.PC, 0x0000)
@@ -111,8 +111,8 @@ def test_llama_wait_clears_i_and_flags() -> None:
     cpu.execute_instruction(0x0000)
 
     assert cpu.regs.get(RegisterName.I) == 0
-    assert cpu.regs.get(RegisterName.FC) == 0
-    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 1
     assert cpu.regs.get(RegisterName.PC) == 0x0001
 
 

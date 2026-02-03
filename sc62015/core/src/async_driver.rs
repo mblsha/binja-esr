@@ -205,7 +205,8 @@ fn noop_clone(_: *const ()) -> RawWaker {
 
 fn noop(_: *const ()) {}
 
-static NOOP_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
+static NOOP_WAKER_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(noop_clone, noop, noop, noop);
 
 impl Default for AsyncDriver {
     fn default() -> Self {

@@ -18,6 +18,8 @@ lcd_right.png
 .claude/
 *.bin
 *.log
+loop_report_*.json
+loop_report_*.disasm.txt
 
 # Rust build artifacts
 target/
