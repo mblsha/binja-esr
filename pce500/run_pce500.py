@@ -174,6 +174,155 @@ def parse_key_seq(raw: str, default_hold: int) -> list[KeySeqAction]:
     return actions
 
 
+def _fnv1a_64(data: bytes) -> int:
+    hash_value = 0xCBF29CE484222325
+    for byte in data:
+        hash_value ^= byte
+        hash_value = (hash_value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return hash_value
+
+
+def _sync_lcd_from_backend(emu: PCE500Emulator) -> None:
+    try:
+        if hasattr(emu, "_sync_lcd_from_backend"):
+            emu._sync_lcd_from_backend()
+    except Exception:
+        pass
+
+
+def _capture_screen_state(emu: PCE500Emulator) -> tuple[int, bool, str]:
+    _sync_lcd_from_backend(emu)
+    buffer = emu.get_display_buffer()
+    payload = buffer.tobytes()
+    signature = _fnv1a_64(payload)
+    is_blank = not any(payload)
+    lines = decode_display_text(emu.lcd, emu.memory)
+    text = "\n".join(lines) if lines else ""
+    return signature, is_blank, text
+
+
+def _is_power_on(emu: PCE500Emulator) -> bool:
+    try:
+        return not bool(getattr(emu.cpu, "halted"))
+    except Exception:
+        return True
+
+
+class KeySeqRunner:
+    def __init__(self, actions: list[KeySeqAction], *, log: bool = False):
+        self.actions = actions
+        self.log = log
+        self.index = 0
+        self.active_key: str | None = None
+        self.release_at: int | None = None
+        self.last_poll: int = 0
+
+    def done(self) -> bool:
+        return self.index >= len(self.actions) and self.active_key is None
+
+    def _log(self, message: str) -> None:
+        if self.log:
+            print(message)
+
+    def step(self, emu: PCE500Emulator, op_index: int) -> None:
+        if self.active_key and self.release_at is not None:
+            if op_index >= self.release_at:
+                try:
+                    if self.active_key == "KEY_ON":
+                        emu.release_key(self.active_key)
+                    else:
+                        keyboard = getattr(emu, "keyboard", None)
+                        if keyboard is not None and hasattr(keyboard, "release_key"):
+                            keyboard.release_key(self.active_key)
+                        else:
+                            emu.release_key(self.active_key)
+                except Exception:
+                    pass
+                self._log(f"key-seq: release {self.active_key} at {op_index}")
+                self.active_key = None
+                self.release_at = None
+
+        if self.active_key is not None:
+            return
+        if self.index >= len(self.actions):
+            return
+
+        action = self.actions[self.index]
+        if action.kind == KeySeqKind.PRESS:
+            key_code = action.key
+            if not key_code:
+                self.index += 1
+                return
+            try:
+                if key_code == "KEY_ON":
+                    emu.press_key(key_code)
+                else:
+                    keyboard = getattr(emu, "keyboard", None)
+                    if keyboard is not None and hasattr(keyboard, "press_key"):
+                        keyboard.press_key(key_code)
+                    else:
+                        emu.press_key(key_code)
+            except Exception:
+                pass
+            hold = max(1, int(action.hold))
+            self.active_key = key_code
+            self.release_at = op_index + hold
+            label = action.label or key_code
+            self._log(f"key-seq: press {label} at {op_index} hold {hold}")
+            self.index += 1
+            return
+
+        if action.kind == KeySeqKind.WAIT_OP:
+            if not action.op_target_set:
+                action.op_target = action.op_target + op_index
+                action.op_target_set = True
+                self._log(f"key-seq: wait-op until {action.op_target}")
+            if op_index >= action.op_target:
+                self._log(f"key-seq: wait-op done at {op_index}")
+                self.index += 1
+            return
+
+        if action.kind in (
+            KeySeqKind.WAIT_TEXT,
+            KeySeqKind.WAIT_SCREEN_CHANGE,
+            KeySeqKind.WAIT_SCREEN_EMPTY,
+            KeySeqKind.WAIT_SCREEN_DRAW,
+        ):
+            if op_index - self.last_poll < KEY_SEQ_POLL_INTERVAL:
+                return
+            self.last_poll = op_index
+            signature, is_blank, text = _capture_screen_state(emu)
+            if action.kind == KeySeqKind.WAIT_TEXT:
+                if action.text and action.text in text:
+                    self._log(f"key-seq: wait-text '{action.text}' at {op_index}")
+                    self.index += 1
+            elif action.kind == KeySeqKind.WAIT_SCREEN_CHANGE:
+                if not action.screen_baseline_set:
+                    action.screen_baseline = signature
+                    action.screen_baseline_set = True
+                    self._log(f"key-seq: wait-screen-change baseline {signature}")
+                elif signature != action.screen_baseline:
+                    self._log(f"key-seq: wait-screen-change detected at {op_index}")
+                    self.index += 1
+            elif action.kind == KeySeqKind.WAIT_SCREEN_EMPTY:
+                if is_blank:
+                    self._log(f"key-seq: wait-screen-empty at {op_index}")
+                    self.index += 1
+            elif action.kind == KeySeqKind.WAIT_SCREEN_DRAW:
+                if not is_blank:
+                    self._log(f"key-seq: wait-screen-draw at {op_index}")
+                    self.index += 1
+            return
+
+        if action.kind == KeySeqKind.WAIT_POWER:
+            power_on = _is_power_on(emu)
+            if action.power_on is None or power_on == action.power_on:
+                desired = "on" if action.power_on else "off"
+                self._log(f"key-seq: wait-power {desired} at {op_index}")
+                self.index += 1
+            return
+
+
 def run_emulator(
     num_steps=20000,
     dump_pc=None,
@@ -198,6 +347,8 @@ def run_emulator(
     save_snapshot: str | Path | None = None,
     save_snapshots_at_steps: list[int] | None = None,
     save_snapshots_prefix: str | Path = "snapshot",
+    key_seq: str | None = None,
+    key_seq_log: bool = False,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -380,7 +531,16 @@ def run_emulator(
         pending_snapshots = sorted(
             {int(v) for v in save_snapshots_at_steps if int(v) >= 0}
         )
+    key_seq_runner: KeySeqRunner | None = None
+    if key_seq:
+        try:
+            actions = parse_key_seq(key_seq, KEY_SEQ_DEFAULT_HOLD)
+        except Exception as exc:
+            raise ValueError(f"--key-seq: {exc}")
+        key_seq_runner = KeySeqRunner(actions, log=bool(key_seq_log))
     while emu.instruction_count < target_instructions:
+        if key_seq_runner is not None:
+            key_seq_runner.step(emu, emu.instruction_count)
         emu.step()
 
         if pending_snapshots and emu.instruction_count >= pending_snapshots[0]:
@@ -561,6 +721,8 @@ def main(
     perfetto_on_snapshot: bool = False,
     save_snapshots_at_steps: list[int] | None = None,
     save_snapshots_prefix: str | Path = "snapshot",
+    key_seq: str | None = None,
+    key_seq_log: bool = False,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -611,6 +773,8 @@ def main(
         save_snapshot=save_snapshot,
         save_snapshots_at_steps=save_snapshots_at_steps,
         save_snapshots_prefix=save_snapshots_prefix,
+        key_seq=key_seq,
+        key_seq_log=key_seq_log,
     ) as emu:
         if False:
             pass
@@ -770,6 +934,16 @@ if __name__ == "__main__":
         help="Prefix (path) for --save-snapshots-at-steps outputs (default: snapshot). "
         "Files will be written as <prefix>_<steps>.pcsnap",
     )
+    parser.add_argument(
+        "--key-seq",
+        default=None,
+        help="Key sequence script (e.g. 'wait-op:10;pf1:5;wait-text:MAIN MENU').",
+    )
+    parser.add_argument(
+        "--key-seq-log",
+        action="store_true",
+        help="Emit key-seq press/release/wait events while running.",
+    )
     args = parser.parse_args()
     main(
         steps=args.steps,
@@ -800,4 +974,6 @@ if __name__ == "__main__":
             else None
         ),
         save_snapshots_prefix=args.save_snapshots_prefix,
+        key_seq=args.key_seq,
+        key_seq_log=args.key_seq_log,
     )
