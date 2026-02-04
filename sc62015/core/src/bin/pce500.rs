@@ -1764,7 +1764,7 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
 
 fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
-    for token_raw in raw.split([',', ';']) {
+    for token_raw in raw.split(|ch| ch == ',' || ch == ';') {
         let token = token_raw.trim();
         if token.is_empty() {
             continue;
@@ -1816,7 +1816,9 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
         }
         if lower.starts_with("wait-screen-draw") {
             if token.contains(':') || token.contains('=') {
-                return Err(format!("wait-screen-draw does not take a value: '{token}'"));
+                return Err(format!(
+                    "wait-screen-draw does not take a value: '{token}'"
+                ));
             }
             actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
             continue;
