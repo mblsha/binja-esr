@@ -18,9 +18,9 @@ impl AsyncLlamaExecutor {
         opcode: u8,
         state: &mut LlamaState,
         bus: &mut B,
-        _ticker: &mut TickHelper<'_>,
+        ticker: &mut TickHelper<'_>,
     ) -> Result<u8, &'static str> {
-        self.inner.execute(opcode, state, bus)
+        self.inner.execute_async(opcode, state, bus, ticker).await
     }
 }
 

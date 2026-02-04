@@ -121,7 +121,7 @@ impl AsyncDriver {
     {
         self.futures_queue
             .entry(self.clock)
-            .or_default()
+            .or_insert_with(Vec::new)
             .push(Box::pin(future));
     }
 
@@ -157,7 +157,7 @@ impl AsyncDriver {
                         .unwrap_or(self.clock.saturating_add(1));
                     self.futures_queue
                         .entry(wake_cycle)
-                        .or_default()
+                        .or_insert_with(Vec::new)
                         .push(future);
                 }
 
