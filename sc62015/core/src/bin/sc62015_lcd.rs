@@ -25,7 +25,6 @@ const IQ7000_TEXT_ROWS: usize = 8;
 const IQ7000_TEXT_COLS: usize = 16;
 const STATUS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 const PF_KEY_HOLD_STEPS: u64 = 2_000;
-const PF_AUTO_HOLD_STEPS: u64 = 40_000;
 const ON_AUTO_HOLD_CYCLES: u64 = 20_000;
 const BASIC_REPL_HUB_PC: u32 = 0x00FFE09;
 const BASIC_WARM_START_PC: u32 = 0x00F9C94;
@@ -35,8 +34,6 @@ const BASIC_KEY_CODE: u8 = 0x04;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
-const PF1_CODE: u8 = 0x56;
-const OFF_WAIT_PC: u32 = 0x00F1036;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum CardMode {
@@ -101,10 +98,6 @@ struct Args {
     /// Force-enable KEY IRQ delivery when injecting keys (debug helper).
     #[arg(long, default_value_t = false)]
     force_key_irq: bool,
-
-    /// Auto-run the PF1 twice boot flow (wait for S2(CARD), PF1, wait for S1(MAIN), PF1 again).
-    #[arg(long, default_value_t = false)]
-    pf1_twice: bool,
 
     /// Stub-return immediately from IOCS dispatch (debug helper).
     #[arg(long, default_value_t = false)]
@@ -355,7 +348,6 @@ fn format_debug_lines(
     last_key_step: u64,
     pending_releases: &[PendingRelease],
     halted_steps: u64,
-    pf1_stage: Option<Pf1TwiceStage>,
 ) -> Vec<String> {
     let kb_irq = if runtime.timer.kb_irq_enabled {
         "on"
@@ -422,12 +414,6 @@ fn format_debug_lines(
             "CPU: instr={instr} cycles={cycles} state={power_state} halted_steps={halted_steps}"
         ),
         format!("Key: last={last}@{last_step} pending=[{pending}]"),
-        format!(
-            "Auto: pf1_twice={}",
-            pf1_stage
-                .map(|stage| format!("{stage:?}"))
-                .unwrap_or_else(|| "off".to_string())
-        ),
     ]);
     let loop_line = match runtime
         .loop_detector()
@@ -485,7 +471,6 @@ fn format_extra_lines(
     last_key_step: u64,
     pending_releases: &[PendingRelease],
     halted_steps: u64,
-    pf1_stage: Option<Pf1TwiceStage>,
 ) -> Vec<String> {
     let mut lines = format_call_stack_lines(runtime.state.call_stack(), symbols);
     lines.extend(format_debug_lines(
@@ -496,7 +481,6 @@ fn format_extra_lines(
         last_key_step,
         pending_releases,
         halted_steps,
-        pf1_stage,
     ));
     lines
 }
@@ -841,16 +825,6 @@ struct BnidaJson {
     names: Option<HashMap<String, String>>,
     #[serde(default)]
     functions: Option<Vec<u32>>,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Pf1TwiceStage {
-    WaitBootText,
-    Press1,
-    WaitMainText,
-    Press2,
-    WaitNextText,
-    Done,
 }
 
 fn matrix_code_for_char(ch: char) -> Option<u8> {
@@ -1222,12 +1196,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut jump_basic_pending = args.jump_basic;
     let mut halted_steps: u64 = 0;
     let mut last_lcd_check: u64 = 0;
-    let mut pf1_stage = if args.pf1_twice {
-        Pf1TwiceStage::WaitBootText
-    } else {
-        Pf1TwiceStage::Done
-    };
-    let mut main_row0_seen: Option<String> = None;
     let mut fast_init_cleared = false;
     let fast_init_buf = if args.fast_init && matches!(args.model, DeviceModel::PcE500) {
         Some(vec![0u8; ROM_WINDOW_START])
@@ -1255,7 +1223,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             last_key_step,
             &pending_releases,
             halted_steps,
-            Some(pf1_stage).filter(|stage| !matches!(stage, Pf1TwiceStage::Done)),
         );
         render_frame(&blank_lines, &status, &extra_lines, use_tty)?;
         render_extra_lines(&extra_lines, stack_row, use_tty, &mut last_stack_lines)?;
@@ -1371,94 +1338,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 halted_steps = 0;
             }
-            if args.pf1_twice
-                && matches!(pf1_stage, Pf1TwiceStage::Done)
-                && pending_on_release.is_none()
-                && runtime.state.is_halted()
-                && (runtime.state.pc() & 0x000f_ffff) == OFF_WAIT_PC
-            {
-                runtime.press_on_key();
-                pending_on_release =
-                    Some(runtime.cycle_count().saturating_add(ON_AUTO_HOLD_CYCLES));
-                last_key = Some("ON(auto)".to_string());
-                last_key_step = executed;
-                dirty = true;
-            }
-            let should_check_lcd = !matches!(pf1_stage, Pf1TwiceStage::Done)
-                || ((auto_basic_pending || jump_basic_pending) && auto_basic_step.is_none());
+            let should_check_lcd =
+                (auto_basic_pending || jump_basic_pending) && auto_basic_step.is_none();
             if should_check_lcd && executed.saturating_sub(last_lcd_check) >= lcd_check_interval {
                 last_lcd_check = executed;
                 let row0 = decode_row0(&text_decoder, &runtime);
-                match pf1_stage {
-                    Pf1TwiceStage::WaitBootText => {
-                        if row0.contains("S2(CARD):") {
-                            pf1_stage = Pf1TwiceStage::Press1;
-                        }
-                    }
-                    Pf1TwiceStage::Press1 => {
-                        inject_key(
-                            &mut runtime,
-                            PF1_CODE,
-                            executed,
-                            &mut pending_releases,
-                            PF_AUTO_HOLD_STEPS,
-                            args.force_key_irq,
-                        );
-                        last_key = Some("PF1(auto)".to_string());
-                        last_key_step = executed;
-                        pf1_stage = Pf1TwiceStage::WaitMainText;
-                    }
-                    Pf1TwiceStage::WaitMainText => {
-                        if row0.contains("S1(MAIN):") {
-                            main_row0_seen = Some(row0.clone());
-                            pf1_stage = Pf1TwiceStage::Press2;
-                        }
-                    }
-                    Pf1TwiceStage::Press2 => {
-                        inject_key(
-                            &mut runtime,
-                            PF1_CODE,
-                            executed,
-                            &mut pending_releases,
-                            PF_AUTO_HOLD_STEPS,
-                            args.force_key_irq,
-                        );
-                        last_key = Some("PF1(auto2)".to_string());
-                        last_key_step = executed;
-                        if args.jump_basic {
-                            jump_to_basic_loop(&mut runtime);
-                            pf1_stage = Pf1TwiceStage::Done;
-                            jump_basic_pending = false;
-                            if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
-                                auto_type_next_step =
-                                    Some(executed.saturating_add(args.auto_type_delay));
-                            }
-                            dirty = true;
-                        } else {
-                            if args.auto_basic {
-                                auto_basic_step =
-                                    Some(executed.saturating_add(args.auto_basic_delay));
-                            }
-                            pf1_stage = Pf1TwiceStage::WaitNextText;
-                        }
-                    }
-                    Pf1TwiceStage::WaitNextText => {
-                        if let Some(main) = main_row0_seen.as_ref() {
-                            if !row0.trim().is_empty() && row0 != *main {
-                                pf1_stage = Pf1TwiceStage::Done;
-                                if args.auto_basic {
-                                    auto_basic_step =
-                                        Some(executed.saturating_add(args.auto_basic_delay));
-                                    auto_basic_pending = false;
-                                }
-                            }
-                        }
-                    }
-                    Pf1TwiceStage::Done => {}
-                }
                 if (auto_basic_pending || jump_basic_pending)
                     && auto_basic_step.is_none()
-                    && (!args.pf1_twice || matches!(pf1_stage, Pf1TwiceStage::Done))
                     && (row0.contains("S2(CARD):") || row0.contains("S1(MAIN):"))
                 {
                     if jump_basic_pending {
@@ -1516,7 +1402,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     last_key_step,
                     &pending_releases,
                     halted_steps,
-                    Some(pf1_stage).filter(|stage| !matches!(stage, Pf1TwiceStage::Done)),
                 );
                 render_status_line(&status, status_row, use_tty)?;
                 render_extra_lines(&extra_lines, stack_row, use_tty, &mut last_stack_lines)?;
@@ -1554,7 +1439,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 last_key_step,
                 &pending_releases,
                 halted_steps,
-                Some(pf1_stage).filter(|stage| !matches!(stage, Pf1TwiceStage::Done)),
             );
             render_frame(&lines, &status, &extra_lines, use_tty)?;
             render_extra_lines(&extra_lines, stack_row, use_tty, &mut last_stack_lines)?;

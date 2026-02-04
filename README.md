@@ -58,5 +58,4 @@ Notes:
 - Use `--bnida PATH` to show function names in the status line (defaults to `rom-analysis/.../bnida.json` if present).
 - Use `--force-key-irq` if the ROM stays halted at the boot menu (forces KEY interrupts on key press).
 - Use `--card present|absent` to control memory card slot state (PC-E500).
-- Use `--pf1-twice` to auto-drive the boot menu (S2(CARD) → PF1 → S1(MAIN) → PF1).
 - Keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`, Ctrl+C exits.
