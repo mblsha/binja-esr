@@ -1764,7 +1764,7 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
 
 fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
-    for token_raw in raw.split(|ch| ch == ',' || ch == ';') {
+    for token_raw in raw.split([',', ';']) {
         let token = token_raw.trim();
         if token.is_empty() {
             continue;

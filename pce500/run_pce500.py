@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 # Add parent directory to path
@@ -12,9 +14,164 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pce500 import PCE500Emulator
 from pce500.display.text_decoder import decode_display_text
+from pce500.keyboard_matrix import KEY_LOCATIONS, KEY_NAMES
 from pce500.tracing.perfetto_tracing import trace_dispatcher
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from sc62015.pysc62015.emulator import RegisterName
+
+KEY_SEQ_DEFAULT_HOLD = 1000
+KEY_SEQ_POLL_INTERVAL = 200
+
+
+class KeySeqKind(str, Enum):
+    PRESS = "press"
+    WAIT_OP = "wait_op"
+    WAIT_TEXT = "wait_text"
+    WAIT_POWER = "wait_power"
+    WAIT_SCREEN_CHANGE = "wait_screen_change"
+    WAIT_SCREEN_EMPTY = "wait_screen_empty"
+    WAIT_SCREEN_DRAW = "wait_screen_draw"
+
+
+@dataclass
+class KeySeqAction:
+    kind: KeySeqKind
+    key: str | None = None
+    label: str = ""
+    hold: int = 0
+    op_target: int = 0
+    text: str = ""
+    power_on: bool | None = None
+    op_target_set: bool = False
+    screen_baseline_set: bool = False
+    screen_baseline: int = 0
+
+
+def _parse_u64_value(raw: str) -> int:
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("missing numeric value")
+    lowered = raw.lower()
+    if lowered.startswith("0x"):
+        return int(lowered, 16)
+    return int(raw)
+
+
+def resolve_key_seq_key(raw: str) -> str:
+    token = raw.strip()
+    if not token:
+        raise ValueError("empty key token")
+    lowered = token.lower()
+    if lowered in ("enter", "return", "ret"):
+        key = KEY_NAMES.get("ENTER")
+        if key:
+            return key
+        raise ValueError("enter key is not mapped in the keyboard matrix")
+    if lowered == "space":
+        key = KEY_NAMES.get("SPACE")
+        if key:
+            return key
+        raise ValueError("space key is not mapped in the keyboard matrix")
+    if lowered in ("pf1", "pf2", "pf3", "pf4", "pf5"):
+        key = KEY_NAMES.get(lowered.upper())
+        if key:
+            return key
+        raise ValueError(f"{token} key is not mapped in the keyboard matrix")
+    if lowered in ("on", "key_on", "onk"):
+        return "KEY_ON"
+    if token.upper().startswith("KEY_") and token.upper() in KEY_LOCATIONS:
+        return token.upper()
+    if len(token) == 1:
+        if token.isalpha():
+            lookup = token.upper()
+        else:
+            lookup = token
+        key = KEY_NAMES.get(lookup)
+        if key:
+            return key
+    key = KEY_NAMES.get(token)
+    if key:
+        return key
+    raise ValueError(f"unknown key token '{raw}'")
+
+
+def parse_key_seq(raw: str, default_hold: int) -> list[KeySeqAction]:
+    actions: list[KeySeqAction] = []
+    for token_raw in raw.replace(";", ",").split(","):
+        token = token_raw.strip()
+        if not token:
+            continue
+        lowered = token.lower()
+        if lowered.startswith("wait-op"):
+            sep = token.find(":")
+            if sep == -1:
+                sep = token.find("=")
+            if sep == -1:
+                raise ValueError(f"wait-op missing value: '{token}'")
+            count = _parse_u64_value(token[sep + 1 :])
+            actions.append(KeySeqAction(kind=KeySeqKind.WAIT_OP, op_target=count))
+            continue
+        if lowered.startswith("wait-text"):
+            sep = token.find(":")
+            if sep == -1:
+                sep = token.find("=")
+            if sep == -1:
+                raise ValueError(f"wait-text missing value: '{token}'")
+            value = token[sep + 1 :].strip()
+            if not value:
+                raise ValueError(f"wait-text expects non-empty value: '{token}'")
+            actions.append(KeySeqAction(kind=KeySeqKind.WAIT_TEXT, text=value))
+            continue
+        if lowered.startswith("wait-screen-change"):
+            if ":" in token or "=" in token:
+                raise ValueError(f"wait-screen-change does not take a value: '{token}'")
+            actions.append(KeySeqAction(kind=KeySeqKind.WAIT_SCREEN_CHANGE))
+            continue
+        if lowered.startswith("wait-screen-empty"):
+            if ":" in token or "=" in token:
+                raise ValueError(f"wait-screen-empty does not take a value: '{token}'")
+            actions.append(KeySeqAction(kind=KeySeqKind.WAIT_SCREEN_EMPTY))
+            continue
+        if lowered.startswith("wait-screen-draw"):
+            if ":" in token or "=" in token:
+                raise ValueError(f"wait-screen-draw does not take a value: '{token}'")
+            actions.append(KeySeqAction(kind=KeySeqKind.WAIT_SCREEN_DRAW))
+            continue
+        if lowered.startswith("wait-power"):
+            sep = token.find(":")
+            if sep == -1:
+                sep = token.find("=")
+            if sep == -1:
+                raise ValueError(f"wait-power missing value: '{token}'")
+            value = token[sep + 1 :].strip().lower()
+            if value not in ("on", "off"):
+                raise ValueError(f"wait-power expects on/off, got '{value}'")
+            actions.append(
+                KeySeqAction(
+                    kind=KeySeqKind.WAIT_POWER,
+                    power_on=(value == "on"),
+                )
+            )
+            continue
+
+        key_part = token
+        hold = default_hold
+        if ":" in token:
+            key_part, hold_raw = token.split(":", 1)
+            key_part = key_part.strip()
+            hold_raw = hold_raw.strip()
+            if hold_raw:
+                hold = _parse_u64_value(hold_raw)
+        key_code = resolve_key_seq_key(key_part)
+        actions.append(
+            KeySeqAction(
+                kind=KeySeqKind.PRESS,
+                key=key_code,
+                label=key_part,
+                hold=int(hold),
+            )
+        )
+    return actions
 
 
 def run_emulator(
