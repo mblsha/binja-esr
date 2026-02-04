@@ -16,6 +16,7 @@ from pce500.tracing.perfetto_tracing import trace_dispatcher
 from pce500.tracing.perfetto_tracing import tracer as new_tracer
 from sc62015.pysc62015.emulator import RegisterName
 
+
 def run_emulator(
     num_steps=20000,
     dump_pc=None,

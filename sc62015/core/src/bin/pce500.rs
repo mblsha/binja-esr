@@ -1816,9 +1816,7 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
         }
         if lower.starts_with("wait-screen-draw") {
             if token.contains(':') || token.contains('=') {
-                return Err(format!(
-                    "wait-screen-draw does not take a value: '{token}'"
-                ));
+                return Err(format!("wait-screen-draw does not take a value: '{token}'"));
             }
             actions.push(KeySeqAction::new(KeySeqKind::WaitScreenDraw));
             continue;
