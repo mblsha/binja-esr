@@ -9,6 +9,7 @@ use sc62015_core::{
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
+        dispatch,
         eval::{
             perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace,
         },
@@ -17,7 +18,7 @@ use sc62015_core::{
     },
     memory::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
-        IMEM_KOL_OFFSET, IMEM_SSR_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET, IMEM_SSR_OFFSET,
     },
     pce500::{
         load_pce500_rom_window_into_memory, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
@@ -58,6 +59,11 @@ const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
+const HALT_IDLE_CYCLES: u64 = 3;
+const TIMER_MTI_PHASE_OFFSET: i64 = 0;
+const TIMER_STI_PHASE_OFFSET: i64 = 0;
+const TIMER_MTI_PERIOD_OFFSET: i64 = 0;
+const TIMER_STI_PERIOD_OFFSET: i64 = 0;
 const CPU_DONE_EVENT: u32 = 1;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -629,7 +635,7 @@ impl StandaloneBus {
             lcd,
             timer,
             cycle_count: 0,
-            timer_finalize_clamp: false,
+            timer_finalize_clamp: true,
             keyboard: KeyboardMatrix::new(),
             lcd_writes: 0,
             log_lcd,
@@ -749,8 +755,7 @@ impl StandaloneBus {
         let events = self.keyboard.scan_tick(&mut self.memory, true);
         let fifo_pending = self.keyboard.fifo_len() > 0;
         let pending = events > 0 || fifo_pending;
-        let kb_irq_enabled = self.timer.kb_irq_enabled;
-        if events > 0 || (kb_irq_enabled && fifo_pending) {
+        if events > 0 {
             self.deferred_key_irq = true;
             self.deferred_pending_kil = pending;
             self.last_kbd_access = Some("scan".to_string());
@@ -1222,6 +1227,14 @@ fn mask_bits(bits: u8) -> u32 {
     }
 }
 
+fn adjust_u64(value: u64, offset: i64) -> u64 {
+    if offset >= 0 {
+        value.wrapping_add(offset as u64)
+    } else {
+        value.wrapping_sub((-offset) as u64)
+    }
+}
+
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 fn load_snapshot_state(
     path: &Path,
@@ -1401,6 +1414,14 @@ impl LlamaBus for StandaloneBus {
         }
         let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
+            if offset == IMEM_KIL_OFFSET {
+                // Honor KSD (keyboard strobe disable) bit in LCC (bit 2).
+                let lcc = self.memory.read_internal_byte(IMEM_LCC_OFFSET).unwrap_or(0);
+                if (lcc & 0x04) != 0 {
+                    self.trace_kbd_access("read-ksd-masked", addr, offset, bits, 0);
+                    return 0;
+                }
+            }
             let had_pending = offset == IMEM_KIL_OFFSET && self.keyboard.fifo_len() > 0;
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
@@ -2072,6 +2093,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     configure_bus_for_model(&mut bus, args.model);
     // Keep default timer-driven scans unless tests override the flag.
     bus.timer.set_preserve_phase(false);
+    if bus.timer.enabled && args.snapshot_in.is_none() {
+        bus.timer.mti_period = adjust_u64(bus.timer.mti_period, TIMER_MTI_PERIOD_OFFSET);
+        bus.timer.sti_period = adjust_u64(bus.timer.sti_period, TIMER_STI_PERIOD_OFFSET);
+        bus.timer.next_mti = adjust_u64(bus.timer.next_mti, TIMER_MTI_PERIOD_OFFSET);
+        bus.timer.next_sti = adjust_u64(bus.timer.next_sti, TIMER_STI_PERIOD_OFFSET);
+        bus.timer.next_mti = adjust_u64(bus.timer.next_mti, TIMER_MTI_PHASE_OFFSET);
+        bus.timer.next_sti = adjust_u64(bus.timer.next_sti, TIMER_STI_PHASE_OFFSET);
+    }
     let mut state = LlamaState::new();
     let executor = AsyncLlamaExecutor::new();
     let mut base_instruction_count: u64 = 0;
@@ -2126,7 +2155,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
         log_dbg(&format!("entering execute loop for {max_steps} steps"));
         while executed < max_steps {
-            let mut pre_tick_done = false;
+            let pre_tick_done = false;
             // Ensure vector table is patched once before executing instructions.
             if !bus.vec_patched {
                 bus.maybe_patch_vectors();
@@ -2199,17 +2228,85 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     bus.timer.last_fired = bus.timer.irq_source.clone();
                 }
                 // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
-                // Mirror Python: tick timers before deciding whether to remain halted.
-                if !state.is_off() {
-                    bus.tick_timers_only(bus.cycle_count);
-                    pre_tick_done = true;
-                }
+                // The Python emulator uses this to prevent the ROM from stalling in low-power
+                // loops when timers/keyboard events are pending.
                 let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                if isr == 0 {
-                    if !state.is_off() {
-                        bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                let stay_halted = isr == 0;
+                if stay_halted {
+                    // Remain halted; emit an idle step and advance cycles without executing.
+                    let pc = state.pc() & ADDRESS_MASK;
+                    bus.set_pc(pc);
+                    bus.set_instr_index(executed);
+                    let opcode = bus.load(pc, 8) as u8;
+                    bus.advance_cycles(HALT_IDLE_CYCLES);
+                    bus.finalize_instruction();
+                    let trace_regs = {
+                        let mut guard = PERFETTO_TRACER.enter();
+                        guard.with_some(|_| ()).is_some()
                     }
-                    sleep_for_cycles(1).await;
+                    .then(|| {
+                        let mut regs = HashMap::new();
+                        for (name, reg) in [
+                            ("A", RegName::A),
+                            ("B", RegName::B),
+                            ("BA", RegName::BA),
+                            ("IL", RegName::IL),
+                            ("IH", RegName::IH),
+                            ("I", RegName::I),
+                            ("X", RegName::X),
+                            ("Y", RegName::Y),
+                            ("U", RegName::U),
+                            ("S", RegName::S),
+                            ("PC", RegName::PC),
+                            ("F", RegName::F),
+                            ("FC", RegName::FC),
+                            ("FZ", RegName::FZ),
+                        ] {
+                            regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
+                        }
+                        regs
+                    });
+                    if let Some(regs) = trace_regs {
+                        let mem_imr = bus.peek_imem_silent(IMEM_IMR_OFFSET);
+                        let mem_isr = bus.peek_imem_silent(IMEM_ISR_OFFSET);
+                        let (mti, sti) = bus.timer.tick_counts(bus.cycle_count);
+                        let mnemonic = dispatch::lookup(opcode).map(|entry| entry.name);
+                        let mut guard = PERFETTO_TRACER.enter();
+                        set_perf_instr_counter(executed.saturating_add(1));
+                        guard.with_some(|tracer| {
+                            tracer.record_regs(
+                                executed,
+                                pc,
+                                pc,
+                                opcode,
+                                mnemonic,
+                                &regs,
+                                mem_imr,
+                                mem_isr,
+                                Some(mti),
+                                Some(sti),
+                                Some(bus.cycle_count),
+                            );
+                        });
+                    } else {
+                        set_perf_instr_counter(executed.saturating_add(1));
+                    }
+                    bus.apply_deferred_key_irq();
+                    executed = executed.saturating_add(1);
+                    sleep_for_cycles(HALT_IDLE_CYCLES).await;
+                    if perfetto_chunk_size > 0
+                        && perfetto_enabled
+                        && executed.is_multiple_of(perfetto_chunk_size)
+                        && executed > 0
+                    {
+                        rotate_perfetto_trace(&perfetto_base_path_run, perfetto_part);
+                        perfetto_part = perfetto_part.saturating_add(1);
+                    }
+                    if let Some(stop) = stop_pc {
+                        if state.pc() == stop {
+                            break;
+                        }
+                    }
                     continue;
                 }
                 state.set_halted(false);
@@ -3126,12 +3223,12 @@ mod tests {
             None,
         );
         assert!(bus.scan_on_timer, "scan_on_timer defaults to true");
-        assert!(!bus.timer_finalize_clamp, "timer clamp defaults to false");
+        assert!(bus.timer_finalize_clamp, "timer clamp defaults to true");
         configure_bus_for_model(&mut bus, DeviceModel::PcE500);
         assert!(!bus.scan_on_timer, "PC-E500 should scan per instruction");
         assert!(
-            !bus.timer_finalize_clamp,
-            "timer clamp should remain disabled by default"
+            bus.timer_finalize_clamp,
+            "timer clamp should remain enabled by default"
         );
         let snap = bus.keyboard.snapshot_state();
         assert_eq!(snap.press_threshold, 1);
