@@ -102,7 +102,7 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
 }
 
 #[test]
-fn pce500_pf1_twice_reaches_next_screen_via_core_runtime() {
+fn pce500_pf1_reaches_next_screen_via_core_runtime() {
     let rom_path = default_rom_path();
     if !rom_path.exists() {
         eprintln!("Skipping: ROM not present at {}", rom_path.display());
