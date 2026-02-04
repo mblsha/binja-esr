@@ -633,7 +633,7 @@ impl StandaloneBus {
             lcd,
             timer,
             cycle_count: 0,
-            timer_finalize_clamp: true,
+            timer_finalize_clamp: false,
             keyboard: KeyboardMatrix::new(),
             lcd_writes: 0,
             log_lcd,
@@ -3153,12 +3153,12 @@ mod tests {
             None,
         );
         assert!(bus.scan_on_timer, "scan_on_timer defaults to true");
-        assert!(bus.timer_finalize_clamp, "timer clamp defaults to true");
+        assert!(!bus.timer_finalize_clamp, "timer clamp defaults to false");
         configure_bus_for_model(&mut bus, DeviceModel::PcE500);
         assert!(!bus.scan_on_timer, "PC-E500 should scan per instruction");
         assert!(
-            bus.timer_finalize_clamp,
-            "timer clamp should remain enabled by default"
+            !bus.timer_finalize_clamp,
+            "timer clamp should remain disabled by default"
         );
         let snap = bus.keyboard.snapshot_state();
         assert_eq!(snap.press_threshold, 1);
