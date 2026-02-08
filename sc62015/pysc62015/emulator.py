@@ -509,10 +509,9 @@ class Emulator:
 
         # Fast-path: optimize WAIT (opcode 0xEF) to avoid long LLIL loops.
         # Semantics: WAIT performs an idle loop, decrementing I until zero.
-        # This has no side effects other than I reaching 0, so we can skip
-        # lifting/evaluating the loop and set I:=0 directly.
+        # If I is zero, hardware waits a full 16-bit span.
         if opcode == 0xEF:  # WAIT
-            # Build minimal instruction info/length via analyze, and set I to 0
+            # Build minimal instruction info/length via analyze, and set I to 0.
             il = MockLowLevelILFunction()
             info = InstructionInfo()
             instr.analyze(info, address)
@@ -522,7 +521,13 @@ class Emulator:
             )
             # Advance PC (we return early and skip common PC update)
             self.regs.set(RegisterName.PC, address + current_instr_length)
-            # Emulate loop effect: I decremented to 0 (flags unchanged)
+            wait_cycles = self.regs.get(RegisterName.I) & 0xFFFF
+            if wait_cycles == 0:
+                wait_cycles = 0x10000
+            wait_hook = getattr(self.memory, "wait_cycles", None)
+            if callable(wait_hook):
+                wait_hook(int(wait_cycles))
+            # Emulate loop effect: I decremented to 0 (flags unchanged).
             self.regs.set(RegisterName.I, 0)
             # Return without evaluating any LLIL
             return InstructionEvalInfo(instruction_info=info, instruction=instr)

@@ -4,6 +4,14 @@ from .traits import HasWidth
 from typing import Callable
 from binaryninja import InstructionInfo  # type: ignore
 
+REG3_20BIT_MASK = 0x0FFFFF
+REG3_20BIT_REGS = (
+    RegisterName("X"),
+    RegisterName("Y"),
+    RegisterName("U"),
+    RegisterName("S"),
+)
+
 
 class NOP(Instruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
@@ -160,12 +168,7 @@ class MoveInstruction(Instruction):
 
 class MV(MoveInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst_mode = get_addressing_mode(self._pre, 1)
-        src_mode = get_addressing_mode(self._pre, 2)
-
-        # For single addressable operand instructions, always use PRE1
-        if self.opcode in SINGLE_ADDRESSABLE_OPCODES:
-            src_mode = dst_mode
+        dst_mode, src_mode = self._addressing_modes()
 
         operands = tuple(self.operands())
         if len(operands) == 2:
@@ -407,8 +410,55 @@ class ArithmeticInstruction(Instruction):
         assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         return first.width()
 
+    def _lift_regpair_20bit_binary(
+        self,
+        il: LowLevelILFunction,
+        subtract: bool,
+    ) -> bool:
+        if len(self._operands) != 1 or not isinstance(self._operands[0], RegPair):
+            return False
+        pair = self._operands[0]
+        if pair.bit_width() != 20:
+            return False
+
+        lhs_op, rhs_op = tuple(self.operands())
+        assert isinstance(lhs_op, Reg)
+        assert isinstance(rhs_op, Reg)
+
+        mask = il.const(3, REG3_20BIT_MASK)
+        lhs = TempReg(TempMultiByte1, width=3)
+        lhs.lift_assign(il, il.and_expr(3, lhs_op.lift(il), mask))
+        rhs = TempReg(TempMultiByte2, width=3)
+        rhs.lift_assign(il, il.and_expr(3, rhs_op.lift(il), mask))
+        raw = TempReg(TempLoopByteResult, width=3)
+
+        if subtract:
+            raw.lift_assign(il, il.sub(3, lhs.lift(il), rhs.lift(il)))
+            carry_or_borrow = il.compare_unsigned_less_than(
+                3, lhs.lift(il), rhs.lift(il)
+            )
+        else:
+            raw.lift_assign(il, il.add(3, lhs.lift(il), rhs.lift(il)))
+            carry_or_borrow = il.compare_unsigned_greater_than(
+                3, raw.lift(il), il.const(3, REG3_20BIT_MASK)
+            )
+
+        result = TempReg(TempOverallZeroAcc, width=3)
+        result.lift_assign(il, il.and_expr(3, raw.lift(il), mask))
+        lhs_op.lift_assign(il, result.lift(il))
+        il.append(il.set_flag(CFlag, carry_or_borrow))
+        il.append(
+            il.set_flag(ZFlag, il.compare_equal(3, result.lift(il), il.const(3, 0)))
+        )
+        return True
+
 
 class ADD(ArithmeticInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        if self._lift_regpair_20bit_binary(il, subtract=False):
+            return
+        super().lift(il, addr)
+
     def lift_operation2(
         self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex
     ) -> ExpressionIndex:
@@ -425,6 +475,11 @@ class ADC(ArithmeticInstruction):
 
 
 class SUB(ArithmeticInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        if self._lift_regpair_20bit_binary(il, subtract=True):
+            return
+        super().lift(il, addr)
+
     def lift_operation2(
         self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex
     ) -> ExpressionIndex:
@@ -623,6 +678,7 @@ def lift_multi_byte(
     bcd: bool = False,
     subtract: bool = False,
     pre: Optional[int] = None,
+    reg_source_first_byte_only: bool = False,
 ) -> None:
     assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
 
@@ -671,17 +727,32 @@ def lift_multi_byte(
                     il, op_il_math(3, ptr.lift(il), il.const(3, w))
                 )  # ptr is 3 bytes
         else:  # Register operand
+            if reg_source_first_byte_only and not is_dest_op:
+                # DADL/DSBL register source uses the register value for the
+                # first byte only; remaining bytes use 0x00.
+                src_once = TempReg(TempMultiByte2, width=w)
+                src_once.lift_assign(il, op.lift(il))
 
-            def load() -> ExpressionIndex:
-                return op.lift(il)
+                def load() -> ExpressionIndex:
+                    return src_once.lift(il)
 
-            def store(val: ExpressionIndex) -> None:
-                op.lift_assign(il, val)
+                def store(val: ExpressionIndex) -> None:
+                    op.lift_assign(il, val)
 
-            def advance() -> (
-                None
-            ):  # No advancement for direct register operands in a loop
-                pass
+                def advance() -> None:
+                    src_once.lift_assign(il, il.const(w, 0))
+            else:
+
+                def load() -> ExpressionIndex:
+                    return op.lift(il)
+
+                def store(val: ExpressionIndex) -> None:
+                    op.lift_assign(il, val)
+
+                def advance() -> (
+                    None
+                ):  # No advancement for direct register operands in a loop
+                    pass
 
         return load, store, advance
 
@@ -792,7 +863,14 @@ class DADL(ArithmeticInstruction):
         dst, src = self.operands()
         # DADL does not use incoming carry for the first byte (implicitly 0).
         lift_multi_byte(
-            il, dst, src, clear_carry=True, bcd=True, reverse=True, pre=self._pre
+            il,
+            dst,
+            src,
+            clear_carry=True,
+            bcd=True,
+            reverse=True,
+            pre=self._pre,
+            reg_source_first_byte_only=not isinstance(src, Pointer),
         )
 
 
@@ -809,6 +887,7 @@ class DSBL(ArithmeticInstruction):
             reverse=True,
             clear_carry=False,
             pre=self._pre,
+            reg_source_first_byte_only=not isinstance(src, Pointer),
         )
 
 
@@ -1003,6 +1082,30 @@ class IncDecInstruction(Instruction):
 
 
 class INC(IncDecInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        first, *rest = self.operands()
+        assert len(rest) == 0, "Expected only one operand"
+        if isinstance(first, Reg3) and first.reg in REG3_20BIT_REGS:
+            current = il.and_expr(3, first.lift(il), il.const(3, REG3_20BIT_MASK))
+            result = TempReg(TempLoopByteResult, width=3)
+            result.lift_assign(
+                il,
+                il.and_expr(
+                    3,
+                    il.add(3, current, il.const(3, 1)),
+                    il.const(3, REG3_20BIT_MASK),
+                ),
+            )
+            first.lift_assign(il, result.lift(il))
+            il.append(
+                il.set_flag(
+                    ZFlag,
+                    il.compare_equal(3, result.lift(il), il.const(3, 0)),
+                )
+            )
+            return
+        super().lift(il, addr)
+
     def lift_operation1(
         self, il: LowLevelILFunction, il_arg: ExpressionIndex
     ) -> ExpressionIndex:
@@ -1010,6 +1113,30 @@ class INC(IncDecInstruction):
 
 
 class DEC(IncDecInstruction):
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        first, *rest = self.operands()
+        assert len(rest) == 0, "Expected only one operand"
+        if isinstance(first, Reg3) and first.reg in REG3_20BIT_REGS:
+            current = il.and_expr(3, first.lift(il), il.const(3, REG3_20BIT_MASK))
+            result = TempReg(TempLoopByteResult, width=3)
+            result.lift_assign(
+                il,
+                il.and_expr(
+                    3,
+                    il.sub(3, current, il.const(3, 1)),
+                    il.const(3, REG3_20BIT_MASK),
+                ),
+            )
+            first.lift_assign(il, result.lift(il))
+            il.append(
+                il.set_flag(
+                    ZFlag,
+                    il.compare_equal(3, result.lift(il), il.const(3, 0)),
+                )
+            )
+            return
+        super().lift(il, addr)
+
     def lift_operation1(
         self, il: LowLevelILFunction, il_arg: ExpressionIndex
     ) -> ExpressionIndex:
