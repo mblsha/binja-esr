@@ -853,6 +853,11 @@ class Instruction:
     def decode(self, decoder: Decoder, addr: int) -> None:
         self.opcode = decoder.unsigned_byte()
         for op in self.operands_coding():
+            # Some operands (e.g. RegPair) require instruction context while decoding.
+            try:
+                setattr(op, "_parent_instruction", self)
+            except Exception:
+                pass
             op.decode(decoder, addr)
             # Set width for operands that support it based on instruction name
             set_width_fn = getattr(op, "set_width_from_instruction", None)
@@ -898,13 +903,25 @@ class Instruction:
         assert len(ops) == 2, "Expected 2 operands"
         return reversed(ops)
 
-    def render(self) -> List[Token]:
+    def _addressing_modes(self) -> Tuple[AddressingMode, AddressingMode]:
         dst_mode = get_addressing_mode(self._pre, 1)
         src_mode = get_addressing_mode(self._pre, 2)
 
-        # For single addressable operand instructions, always use PRE1
+        # For single addressable operand instructions, always use PRE1.
         if self.opcode in SINGLE_ADDRESSABLE_OPCODES:
             src_mode = dst_mode
+
+        # RegIMemOffset IMEM selector follows PRE1 as well.
+        if (
+            len(self._operands) == 1
+            and self._operands[0].__class__.__name__ == "RegIMemOffset"
+        ):
+            src_mode = dst_mode
+
+        return dst_mode, src_mode
+
+    def render(self) -> List[Token]:
+        dst_mode, src_mode = self._addressing_modes()
 
         tokens: List[Token] = [TInstr(self.name())]
         if len(self._operands) > 0:
@@ -922,12 +939,7 @@ class Instruction:
         info.length += self.length()
 
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst_mode = get_addressing_mode(self._pre, 1)
-        src_mode = get_addressing_mode(self._pre, 2)
-
-        # For single addressable operand instructions, always use PRE1
-        if self.opcode in SINGLE_ADDRESSABLE_OPCODES:
-            src_mode = dst_mode
+        dst_mode, src_mode = self._addressing_modes()
 
         operands = tuple(self.operands())
         if not operands:
@@ -2187,10 +2199,81 @@ class RegPair(HasOperands, Reg3):
         super().__init__()
         self.size = size
 
+    @staticmethod
+    def _regpair_name(code: int, use_r2: bool) -> RegisterName:
+        idx = code & 0x7
+        if use_r2:
+            if idx in (0, 2):
+                return RegisterName("BA")
+            if idx in (1, 3):
+                return RegisterName("I")
+            if idx == 4:
+                return RegisterName("X")
+            if idx == 5:
+                return RegisterName("Y")
+            if idx == 6:
+                return RegisterName("U")
+            return RegisterName("S")
+
+        if idx == 0:
+            return RegisterName("A")
+        if idx == 1:
+            return RegisterName("IL")
+        if idx == 2:
+            return RegisterName("BA")
+        if idx == 3:
+            return RegisterName("I")
+        if idx == 4:
+            return RegisterName("X")
+        if idx == 5:
+            return RegisterName("Y")
+        if idx == 6:
+            return RegisterName("U")
+        return RegisterName("S")
+
+    @staticmethod
+    def _regpair_is_20bit(reg: RegisterName) -> bool:
+        return reg in (
+            RegisterName("X"),
+            RegisterName("Y"),
+            RegisterName("U"),
+            RegisterName("S"),
+        )
+
+    @staticmethod
+    def _uses_r2_mapping(parent: Optional[Any]) -> bool:
+        if parent is None:
+            return False
+        return parent.name() in ("MV", "EX")
+
+    def bit_width(self) -> int:
+        if self.size == 1:
+            return 8
+        if self.size == 2:
+            parent = getattr(self, "_parent_instruction", None)
+            if (
+                self._uses_r2_mapping(parent)
+                and self.reg1 is not None
+                and self.reg2 is not None
+                and (
+                    self._regpair_is_20bit(self.reg1.reg)
+                    or self._regpair_is_20bit(self.reg2.reg)
+                )
+            ):
+                return 20
+            return 16
+        if self.size == 3:
+            return 20
+        if self.reg1 is not None:
+            return self.reg1.width() * 8
+        return 8
+
     def decode(self, decoder: Decoder, addr: int) -> None:
         self.reg_raw = decoder.unsigned_byte()
-        self.reg1 = Reg(REG_NAMES[(self.reg_raw >> 4) & 7])
-        self.reg2 = Reg(REG_NAMES[self.reg_raw & 7])
+        parent = getattr(self, "_parent_instruction", None)
+        use_r2 = self._uses_r2_mapping(parent)
+        self.reg1 = Reg(self._regpair_name((self.reg_raw >> 4) & 7, use_r2))
+        self.reg2 = Reg(self._regpair_name(self.reg_raw & 7, use_r2))
 
         try:
             # high-bits of both halves must be zero: 0x80 and 0x08 must not be set
