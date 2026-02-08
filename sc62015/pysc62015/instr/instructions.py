@@ -434,8 +434,8 @@ class ArithmeticInstruction(Instruction):
 
         if subtract:
             raw.lift_assign(il, il.sub(3, lhs.lift(il), rhs.lift(il)))
-            carry_or_borrow = il.compare_unsigned_less_than(
-                3, lhs.lift(il), rhs.lift(il)
+            carry_or_borrow = il.compare_unsigned_greater_than(
+                3, rhs.lift(il), lhs.lift(il)
             )
         else:
             raw.lift_assign(il, il.add(3, lhs.lift(il), rhs.lift(il)))

@@ -1018,10 +1018,10 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_mem_state={0xBE000: 0xA5, 0xBE001: 0x5A},  # BA=0x5AA5 stored as A5 5A
         expected_asm_str="MV    [X], BA",
     ),
-    # Test case for 30e904d4 instruction - MVW [X], (BP+D4)
+    # Test case for 30e904d4 instruction - MVW [X], (BL)
     InstructionTestCase(
         test_id="MVW_X_indirect_from_BP_30e904d4",
-        instr_bytes=bytes.fromhex("30E904D4"),  # MVW [X], (BP+D4)
+        instr_bytes=bytes.fromhex("30E904D4"),  # MVW [X], (BL)
         init_regs={
             RegisterName.X: 0x080000,  # X points to external memory address 0x080000
             RegisterName.FC: 0,
@@ -1048,7 +1048,7 @@ instruction_test_cases: List[InstructionTestCase] = [
             0x080000: 0x34,  # Word 0x1234 stored little-endian
             0x080001: 0x12,
         },
-        expected_asm_str="MVW   [X], (BP+D4)",
+        expected_asm_str="MVW   [X], (BL)",
     ),
     InstructionTestCase(
         test_id="MV_Y_from_E6_PRE30",
@@ -2095,8 +2095,9 @@ dadl_test_cases: List[AdclDadlTestCase] = [
         expected_asm_str="DADL  (BP+11), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # Start for verification
         # Byte 0 (LSB, addr 0x11): mem[0x11]=0x99, A=0x01. BCD 99 + BCD 01 + 0 = BCD 100 -> mem[0x11]=0x00, FC=1
-        # Byte 1 (MSB, addr 0x10): mem[0x10]=0x01, A=0x01. BCD 01 + BCD 01 + 1 = BCD 03  -> mem[0x10]=0x03, FC=0
-        expected_m_values_after=[0x03, 0x00],  # MSB then LSB
+        # Byte 1 (MSB, addr 0x10): mem[0x10]=0x01, src=0x00 (register source only on first byte), carry-in=1.
+        #                            BCD 01 + BCD 00 + 1 = BCD 02 -> mem[0x10]=0x02, FC=0
+        expected_m_values_after=[0x02, 0x00],  # MSB then LSB
         expected_I_after=0,
         expected_FC_after=0,
         expected_FZ_after=0,  # Overall: (0x03 | 0x00) != 0
@@ -2520,17 +2521,18 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x10: 0x01,  # MSB of (m) -> (m) = BCD 0100
         },
         init_register_state={
-            RegisterName.A: 0x01,  # BCD 01 for A (used for each byte)
+            RegisterName.A: 0x01,  # BCD 01 for A (consumed on first byte only)
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },
         expected_asm_str="DSBL  (BP+11), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,  # MSB addr of (m)
         # Byte 0 (LSB, m_addr 0x11): m[0x11]=0x00, A=0x01. BCD 00 - BCD 01 - 0 = BCD 99. mem[0x11]=0x99, FC_out=1
-        # Byte 1 (MSB, m_addr 0x10): m[0x10]=0x01, A=0x01. BCD 01 - BCD 01 - 1 = BCD 99. mem[0x10]=0x99, FC_out=1
-        expected_m_values_after=[0x99, 0x99],  # MSB, LSB
+        # Byte 1 (MSB, m_addr 0x10): m[0x10]=0x01, src=0x00 (register source only on first byte), borrow-in=1.
+        #                            BCD 01 - BCD 00 - 1 = BCD 00. mem[0x10]=0x00, FC_out=0
+        expected_m_values_after=[0x00, 0x99],  # MSB, LSB
         expected_I_after=0,
-        expected_FC_after=1,  # Borrow from last op
+        expected_FC_after=0,  # Borrow from last op
         expected_FZ_after=0,
     ),
 ]
