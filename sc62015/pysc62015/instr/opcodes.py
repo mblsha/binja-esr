@@ -912,8 +912,10 @@ class Instruction:
             src_mode = dst_mode
 
         # RegIMemOffset IMEM selector follows PRE1 as well.
+        # Keep no-PRE behavior unchanged (operand 2 defaults to BP+n rendering).
         if (
-            len(self._operands) == 1
+            self._pre is not None
+            and len(self._operands) == 1
             and self._operands[0].__class__.__name__ == "RegIMemOffset"
         ):
             src_mode = dst_mode

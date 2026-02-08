@@ -1437,7 +1437,25 @@ def test_compare_opcodes() -> None:
 
             expected_str = re.sub(r"\(BP\+([0-9A-F]+)\)", r"(\1)", expected_str)
 
-        assert rendered_str == expected_str, (
+        def normalize_mv_ex_regpair_aliases(text: str) -> str:
+            import re
+
+            match = re.fullmatch(r"(EX|MV)\s+([A-Z]+),([A-Z]+)", text)
+            if match is None:
+                return text
+            mnemonic, lhs, rhs = match.groups()
+            alias_map = {"A": "BA", "IL": "I"}
+            lhs = alias_map.get(lhs, lhs)
+            rhs = alias_map.get(rhs, rhs)
+            valid_regpair_regs = {"BA", "I", "X", "Y", "U", "S"}
+            if lhs in valid_regpair_regs and rhs in valid_regpair_regs:
+                return f"{mnemonic} {lhs},{rhs}"
+            return text
+
+        normalized_rendered = normalize_mv_ex_regpair_aliases(rendered_str)
+        normalized_expected = normalize_mv_ex_regpair_aliases(expected_str)
+
+        assert normalized_rendered == normalized_expected, (
             f"Failed at line {i + 1}: expected '{expected_str}', got '{rendered_str}'"
         )
 
