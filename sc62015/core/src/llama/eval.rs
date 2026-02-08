@@ -2262,9 +2262,9 @@ impl LlamaExecutor {
                 // WAIT drains I to zero.
                 let raw_i = state.get_reg(RegName::I) & mask_for(RegName::I);
                 let wait_cycles = if raw_i == 0 {
-                    (mask_for(RegName::I) + 1) as u32
+                    mask_for(RegName::I) + 1
                 } else {
-                    raw_i as u32
+                    raw_i
                 };
                 // If the host does not expose wait_cycles, tick timers/keyboard locally to avoid
                 // stalling MTI/STI/KEYI.
@@ -3828,8 +3828,16 @@ mod tests {
         let len = exec.execute(0x45, &mut state, &mut bus).unwrap();
         assert_eq!(len, 2);
         assert_eq!(state.get_reg(RegName::X), 0x000000);
-        assert_eq!(state.get_reg(RegName::FC), 1, "20-bit overflow should set carry");
-        assert_eq!(state.get_reg(RegName::FZ), 1, "wrapped zero should set zero flag");
+        assert_eq!(
+            state.get_reg(RegName::FC),
+            1,
+            "20-bit overflow should set carry"
+        );
+        assert_eq!(
+            state.get_reg(RegName::FZ),
+            1,
+            "wrapped zero should set zero flag"
+        );
         assert_eq!(state.pc(), 2);
     }
 
