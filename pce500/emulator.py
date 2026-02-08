@@ -1146,10 +1146,9 @@ class PCE500Emulator:
                 self.instruction_count += 1
                 # If this was WAIT, simulate the skipped loop to keep timers aligned
                 if wait_sim_count:
-                    if getattr(self.cpu, "backend", None) == "llama" and hasattr(
-                        self.memory, "wait_cycles"
-                    ):
-                        # LLAMA core delegated WAIT-cycle timing via memory.wait_cycles().
+                    if hasattr(self.memory, "wait_cycles"):
+                        # Core backends with WAIT fast-path delegate timer progress via
+                        # memory.wait_cycles(); do not apply WAIT cycles twice.
                         pass
                     else:
                         self._simulate_wait(wait_sim_count)
@@ -1214,10 +1213,9 @@ class PCE500Emulator:
                 self.instruction_count += 1
                 # If this was WAIT, simulate the skipped loop to keep timers aligned
                 if wait_sim_count:
-                    if getattr(self.cpu, "backend", None) == "llama" and hasattr(
-                        self.memory, "wait_cycles"
-                    ):
-                        # LLAMA core delegated WAIT-cycle timing via memory.wait_cycles().
+                    if hasattr(self.memory, "wait_cycles"):
+                        # Core backends with WAIT fast-path delegate timer progress via
+                        # memory.wait_cycles(); do not apply WAIT cycles twice.
                         pass
                     else:
                         self._simulate_wait(wait_sim_count)
