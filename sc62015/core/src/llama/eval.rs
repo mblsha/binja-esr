@@ -1123,7 +1123,8 @@ impl LlamaExecutor {
                         side_effect,
                     };
 
-                    let mode_index = if single_pre { 0 } else { operand_index + 1 };
+                    // Parity: RegIMemOffset uses the first PRE mode for the IMEM selector.
+                    let mode_index = if single_pre { 0 } else { operand_index };
                     let imem_addr =
                         imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw_imem as u8);
                     offset += consumed_ptr;
@@ -1163,33 +1164,18 @@ impl LlamaExecutor {
                 }
                 OperandKind::RegPair(size) => {
                     let raw = bus.load(pc + offset, 8) as u8;
-                    let r1 = match (raw >> 4) & 0x7 {
-                        0 => RegName::A,
-                        1 => RegName::IL,
-                        2 => RegName::BA,
-                        3 => RegName::I,
-                        4 => RegName::X,
-                        5 => RegName::Y,
-                        6 => RegName::U,
-                        7 => RegName::S,
-                        _ => RegName::Unknown("regpair1"),
-                    };
-                    let r2 = match raw & 0x7 {
-                        0 => RegName::A,
-                        1 => RegName::IL,
-                        2 => RegName::BA,
-                        3 => RegName::I,
-                        4 => RegName::X,
-                        5 => RegName::Y,
-                        6 => RegName::U,
-                        7 => RegName::S,
-                        _ => RegName::Unknown("regpair2"),
-                    };
-                    let bits = match size {
-                        1 => 8,
-                        2 => 16,
-                        3 => 24,
-                        _ => 8,
+                    let use_r2 = matches!(entry.kind, InstrKind::Mv | InstrKind::Ex);
+                    let r1 = Self::regpair_name((raw >> 4) & 0x7, use_r2);
+                    let r2 = Self::regpair_name(raw & 0x7, use_r2);
+                    let bits = if matches!(entry.kind, InstrKind::Mv | InstrKind::Ex) {
+                        Self::regpair_bits(*size, r1, r2)
+                    } else {
+                        match *size {
+                            1 => 8,
+                            2 => 16,
+                            3 => 20,
+                            _ => 8,
+                        }
                     };
                     decoded.reg_pair = Some((r1, r2, bits));
                     offset += 1;
@@ -1235,6 +1221,61 @@ impl LlamaExecutor {
             | OperandKind::RegF => Self::operand_reg(op),
             OperandKind::Reg3 => decoded.reg3,
             _ => None,
+        }
+    }
+
+    fn regpair_name(code: u8, use_r2: bool) -> RegName {
+        let idx = code & 0x7;
+        if use_r2 {
+            match idx {
+                0 | 2 => RegName::BA,
+                1 | 3 => RegName::I,
+                4 => RegName::X,
+                5 => RegName::Y,
+                6 => RegName::U,
+                7 => RegName::S,
+                _ => RegName::Unknown("regpair"),
+            }
+        } else {
+            match idx {
+                0 => RegName::A,
+                1 => RegName::IL,
+                2 => RegName::BA,
+                3 => RegName::I,
+                4 => RegName::X,
+                5 => RegName::Y,
+                6 => RegName::U,
+                7 => RegName::S,
+                _ => RegName::Unknown("regpair"),
+            }
+        }
+    }
+
+    fn regpair_bits(size: u8, r1: RegName, r2: RegName) -> u8 {
+        match size {
+            1 => 8,
+            2 => {
+                if Self::regpair_is_20bit(r1) || Self::regpair_is_20bit(r2) {
+                    20
+                } else {
+                    16
+                }
+            }
+            3 => 20,
+            _ => 8,
+        }
+    }
+
+    fn regpair_is_20bit(reg: RegName) -> bool {
+        matches!(reg, RegName::X | RegName::Y | RegName::U | RegName::S)
+    }
+
+    fn reg3_bits(reg: RegName) -> u8 {
+        match reg {
+            RegName::A | RegName::IL => 8,
+            RegName::BA | RegName::I => 16,
+            RegName::X | RegName::Y | RegName::U | RegName::S => 20,
+            _ => 24,
         }
     }
 
@@ -1409,7 +1450,9 @@ impl LlamaExecutor {
             let (val, bits) = src_val.ok_or("missing source")?;
             Self::store_traced(bus, mem.addr, bits, val);
             if let Some((reg, new_val)) = mem.side_effect {
-                state.set_reg(reg, new_val);
+                if !matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
+                    state.set_reg(reg, new_val);
+                }
             }
         } else {
             // Generic move fallback: prefer decoded.mem as destination, otherwise mem2, otherwise A.
@@ -1418,7 +1461,9 @@ impl LlamaExecutor {
             if let Some(mem) = decoded.mem.or(decoded.mem2) {
                 Self::store_traced(bus, mem.addr, mem.bits, masked);
                 if let Some((reg, new_val)) = mem.side_effect {
-                    state.set_reg(reg, new_val);
+                    if !matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
+                        state.set_reg(reg, new_val);
+                    }
                 }
             } else if let Some(reg) = dst_reg.or(src_reg) {
                 state.set_reg(reg, masked);
@@ -2214,12 +2259,18 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                // Python WAIT fast-path: clear I, preserve flags, and advance PC.
-                let wait_cycles = state.get_reg(RegName::I);
+                // WAIT drains I to zero.
+                let raw_i = state.get_reg(RegName::I) & mask_for(RegName::I);
+                let wait_cycles = if raw_i == 0 {
+                    (mask_for(RegName::I) + 1) as u32
+                } else {
+                    raw_i as u32
+                };
                 // If the host does not expose wait_cycles, tick timers/keyboard locally to avoid
                 // stalling MTI/STI/KEYI.
                 bus.wait_cycles(wait_cycles.max(1));
                 state.set_reg(RegName::I, 0);
+                // WAIT does not alter flags on this core.
                 let len = 1 + prefix_len;
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
@@ -2285,7 +2336,7 @@ impl LlamaExecutor {
                 if let Some(reg) = Self::resolved_reg(op, &decoded) {
                     let bits = match op {
                         OperandKind::Reg(_, b) => *b,
-                        OperandKind::Reg3 => 24,
+                        OperandKind::Reg3 => Self::reg3_bits(reg),
                         _ => 8,
                     };
                     Self::alu_unary(state, reg, bits, |v, _| v.wrapping_add(1));
@@ -2310,7 +2361,7 @@ impl LlamaExecutor {
                 if let Some(reg) = Self::resolved_reg(op, &decoded) {
                     let bits = match op {
                         OperandKind::Reg(_, b) => *b,
-                        OperandKind::Reg3 => 24,
+                        OperandKind::Reg3 => Self::reg3_bits(reg),
                         _ => 8,
                     };
                     Self::alu_unary(state, reg, bits, |v, _| v.wrapping_sub(1));
@@ -2358,11 +2409,12 @@ impl LlamaExecutor {
                 let mut dst_addr = mem_dst.addr;
                 let mut src_addr = decoded.mem2.map(|m| m.addr);
                 let src_bits = decoded.mem2.map(|m| m.bits);
-                let src_reg = if src_bits.is_none() {
+                let mut src_reg_byte = if src_bits.is_none() {
                     entry
                         .operands
                         .get(1)
                         .and_then(|op| Self::resolved_reg(op, &decoded))
+                        .map(|reg| (Self::read_reg(state, bus, reg) & 0xFF) as u8)
                 } else {
                     None
                 };
@@ -2384,8 +2436,11 @@ impl LlamaExecutor {
                     let src_byte = if let Some(bits) = src_bits {
                         let addr = src_addr.ok_or("missing source")?;
                         (bus.load(addr, bits) & 0xFF) as u8
-                    } else if let Some(reg) = src_reg {
-                        (Self::read_reg(state, bus, reg) & 0xFF) as u8
+                    } else if let Some(byte) = src_reg_byte {
+                        // DADL/DSBL with register source consumes the register byte once, then
+                        // uses zero for subsequent iterations.
+                        src_reg_byte = Some(0);
+                        byte
                     } else {
                         return Err("missing source");
                     };
@@ -2437,7 +2492,7 @@ impl LlamaExecutor {
                     if let Some(reg) = Self::resolved_reg(op, &decoded) {
                         let bits = match op {
                             OperandKind::Reg(_, b) => *b,
-                            OperandKind::Reg3 => 24,
+                            OperandKind::Reg3 => Self::reg3_bits(reg),
                             _ => 8,
                         };
                         (state.get_reg(reg), bits, None, Some(reg))
@@ -2923,7 +2978,7 @@ impl LlamaExecutor {
                 );
                 payload.insert(
                     "call_depth".to_string(),
-                    AnnotationValue::UInt(state.call_depth() as u64),
+                    AnnotationValue::Int(state.call_depth() as i64),
                 );
                 Self::emit_control_flow_event(
                     entry.name,
@@ -2969,7 +3024,7 @@ impl LlamaExecutor {
                 payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
                 payload.insert(
                     "call_depth".to_string(),
-                    AnnotationValue::UInt(state.call_depth() as u64),
+                    AnnotationValue::Int(state.call_depth() as i64),
                 );
                 Self::emit_control_flow_event(
                     entry.name,
@@ -3009,7 +3064,7 @@ impl LlamaExecutor {
                 payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
                 payload.insert(
                     "call_depth".to_string(),
-                    AnnotationValue::UInt(state.call_depth() as u64),
+                    AnnotationValue::Int(state.call_depth() as i64),
                 );
                 Self::emit_control_flow_event(
                     entry.name,
@@ -3064,7 +3119,7 @@ impl LlamaExecutor {
                 );
                 payload.insert(
                     "call_depth".to_string(),
-                    AnnotationValue::UInt(state.call_depth() as u64),
+                    AnnotationValue::Int(state.call_depth() as i64),
                 );
                 Self::emit_control_flow_event(
                     entry.name,
@@ -3761,6 +3816,40 @@ mod tests {
     }
 
     #[test]
+    fn execute_add_regpair_20bit_carry() {
+        // Program: 0x45 (ADD regpair size=3) with selector byte choosing X += Y.
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0x45;
+        bus.mem[1] = 0x45; // dst=X (4), src=Y (5)
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x0F_FFFF);
+        state.set_reg(RegName::Y, 0x000001);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x45, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(state.get_reg(RegName::X), 0x000000);
+        assert_eq!(state.get_reg(RegName::FC), 1, "20-bit overflow should set carry");
+        assert_eq!(state.get_reg(RegName::FZ), 1, "wrapped zero should set zero flag");
+        assert_eq!(state.pc(), 2);
+    }
+
+    #[test]
+    fn execute_inc_reg3_x_wraps_20bit() {
+        // Program: 0x6C (INC reg3), selector=4 => X.
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0x6C;
+        bus.mem[1] = 0x04;
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0x0F_FFFF);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x6C, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(state.get_reg(RegName::X), 0x000000);
+        assert_eq!(state.get_reg(RegName::FZ), 1);
+        assert_eq!(state.pc(), 2);
+    }
+
+    #[test]
     fn mv_reg_imm_executes() {
         // Program: 0x08 (MV A, imm8) imm=0xAA
         let mut bus = MemBus::with_size(4);
@@ -4009,6 +4098,33 @@ mod tests {
     }
 
     #[test]
+    fn execute_mvl_emem_reg_imem_updates_pointer_by_length() {
+        // Opcode 0xE3: MVL IMem8, EMemReg(post-inc X), with I=3 should advance X by 3.
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x400);
+
+        bus.mem[0x0000] = 0xE3;
+        bus.mem[0x0001] = 0x24; // mode=PostInc, reg=X
+        bus.mem[0x0002] = 0x20; // IMEM destination offset
+
+        state.set_reg(RegName::X, 0x0030);
+        bus.mem[0x0030] = 0x11;
+        bus.mem[0x0031] = 0x22;
+        bus.mem[0x0032] = 0x33;
+        state.set_reg(RegName::I, 3);
+
+        let len = exec.execute(0xE3, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(state.get_reg(RegName::PC), 3);
+        assert_eq!(bus.mem[0x20], 0x11);
+        assert_eq!(bus.mem[0x21], 0x22);
+        assert_eq!(bus.mem[0x22], 0x33);
+        assert_eq!(state.get_reg(RegName::X), 0x0033);
+        assert_eq!(state.get_reg(RegName::I), 0);
+    }
+
+    #[test]
     fn sbc_reg_imm_sets_carry_on_no_borrow() {
         // Program: 0x58 (SBC A, imm8) imm=0x01 with C=1, A=0x03 => result 0x01, carry stays set
         let mut bus = MemBus::with_size(4);
@@ -4111,6 +4227,30 @@ mod tests {
         );
         // IMEM wrapping should keep addresses inside 0x100-byte window.
         assert_eq!(state.get_reg(RegName::I), 0);
+    }
+
+    #[test]
+    fn dadl_reg_source_only_first_byte() {
+        // Opcode 0xC5: DADL (m),A should consume A once, then use zero for remaining bytes.
+        let mut bus = MemBus::with_size(0x200);
+        bus.mem[0] = 0xC5;
+        bus.mem[1] = 0x10; // destination starts at IMEM[0x10], then decrements
+        bus.mem[0x10] = 0x00;
+        bus.mem[0x0F] = 0x00;
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::A, 0x01);
+        state.set_reg(RegName::I, 2);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xC5, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(bus.mem[0x10], 0x01);
+        assert_eq!(
+            bus.mem[0x0F], 0x00,
+            "second byte should add zero, not reuse A"
+        );
+        assert_eq!(state.get_reg(RegName::I), 0);
+        assert_eq!(state.pc(), 2);
     }
 
     #[test]
@@ -4382,6 +4522,22 @@ mod tests {
         let len = exec.execute(0xFD, &mut state, &mut bus).unwrap();
         assert_eq!(len, 2);
         assert_eq!(state.get_reg(RegName::Y), 0x123456 & mask_for(RegName::Y));
+        assert_eq!(state.pc(), 2);
+    }
+
+    #[test]
+    fn mv_regpair_low_codes_map_to_ba_i_for_mv() {
+        let mut bus = MemBus::with_size(4);
+        bus.mem[0] = 0xFD;
+        bus.mem[1] = 0x01; // dst code 0 => BA, src code 1 => I (MV/EX mapping)
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::BA, 0xAA55);
+        state.set_reg(RegName::I, 0x1234);
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xFD, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 2);
+        assert_eq!(state.get_reg(RegName::BA), 0x1234);
+        assert_eq!(state.get_reg(RegName::I), 0x1234);
         assert_eq!(state.pc(), 2);
     }
 
