@@ -179,7 +179,7 @@ fn default_rom_path(model: DeviceModel) -> PathBuf {
 
 fn lcd_geometry(model: DeviceModel) -> (usize, usize) {
     match model {
-        DeviceModel::PcE500 => {
+        DeviceModel::PcE500 | DeviceModel::PcE500Jp => {
             let rows = sc62015_core::lcd::LCD_DISPLAY_ROWS / 8;
             let cols = sc62015_core::lcd::LCD_DISPLAY_COLS / 6;
             (rows, cols)
@@ -556,6 +556,7 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     match model {
         DeviceModel::PcE500 => root.join("rom-analysis/pc-e500/s3-en/bnida.json"),
+        DeviceModel::PcE500Jp => root.join("rom-analysis/pc-e500/jp/bnida.json"),
         DeviceModel::Iq7000 => root.join("rom-analysis/iq-7000/bnida.json"),
     }
 }
@@ -1197,7 +1198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut halted_steps: u64 = 0;
     let mut last_lcd_check: u64 = 0;
     let mut fast_init_cleared = false;
-    let fast_init_buf = if args.fast_init && matches!(args.model, DeviceModel::PcE500) {
+    let fast_init_buf = if args.fast_init && args.model.is_pce500_family() {
         Some(vec![0u8; ROM_WINDOW_START])
     } else {
         None

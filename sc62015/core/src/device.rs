@@ -59,6 +59,9 @@ pub enum DeviceModel {
     #[cfg_attr(feature = "cli", value(name = "pc-e500"))]
     #[serde(rename = "pc-e500")]
     PcE500,
+    #[cfg_attr(feature = "cli", value(name = "pc-e500-jp"))]
+    #[serde(rename = "pc-e500-jp")]
+    PcE500Jp,
 }
 
 /// Configure device-specific LCD character matching for Perfetto tracing.
@@ -68,7 +71,7 @@ pub enum DeviceModel {
 /// device's font tables (either the raw ROM image or a snapshot's external memory dump).
 pub fn configure_lcd_char_tracing(lcd: &mut dyn LcdHal, model: DeviceModel, rom: &[u8]) {
     match model {
-        DeviceModel::PcE500 => {
+        DeviceModel::PcE500 | DeviceModel::PcE500Jp => {
             let matcher = pce500::pce500_font_map_from_rom(rom)
                 .and_then(|font| LcdCharMatcher::from_pce500_font_map(&font));
             if let Some(controller) = lcd.as_any_mut().downcast_mut::<LcdController>() {
@@ -109,6 +112,15 @@ impl DeviceModel {
                 font_base_addr: Some(pce500::ROM_FONT_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
             },
+            Self::PcE500Jp => DeviceSpec {
+                label: "pc-e500-jp",
+                rom_basename: "pc-e500-jp.bin",
+                lcd_kind: LcdKind::Hd61202,
+                rom_window_start: pce500::ROM_WINDOW_START as u32,
+                rom_window_len: pce500::ROM_WINDOW_LEN,
+                font_base_addr: Some(pce500::ROM_FONT_BASE_ADDR),
+                text_decoder: Some(DeviceTextDecoderKind::Pce500),
+            },
         }
     }
 
@@ -120,8 +132,13 @@ impl DeviceModel {
         match trimmed.as_str() {
             "iq-7000" | "iq7000" | "iq_7000" => Some(Self::Iq7000),
             "pc-e500" | "pce500" | "pc_e500" => Some(Self::PcE500),
+            "pc-e500-jp" | "pce500-jp" | "pc_e500_jp" | "pce500jp" => Some(Self::PcE500Jp),
             _ => None,
         }
+    }
+
+    pub fn is_pce500_family(self) -> bool {
+        matches!(self, Self::PcE500 | Self::PcE500Jp)
     }
 
     pub fn label(self) -> &'static str {
@@ -170,6 +187,13 @@ impl DeviceModel {
             Self::Iq7000 => iq7000::load_iq7000_rom_image(rt, rom),
             Self::PcE500 => {
                 let res = pce500::load_pce500_rom_window(rt, rom);
+                if res.is_ok() {
+                    rt.enable_sio_stub();
+                }
+                res
+            }
+            Self::PcE500Jp => {
+                let res = pce500::load_pce500_system_image(rt, rom);
                 if res.is_ok() {
                     rt.enable_sio_stub();
                 }
