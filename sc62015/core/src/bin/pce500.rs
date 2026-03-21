@@ -20,8 +20,9 @@ use sc62015_core::{
         IMEM_KOL_OFFSET, IMEM_SSR_OFFSET,
     },
     pce500::{
-        load_pce500_rom_window_into_memory, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
-        NO_RAM_WINDOW_END, NO_RAM_WINDOW_START, ROM_WINDOW_LEN, ROM_WINDOW_START,
+        load_pce500_rom_window_into_memory, load_pce500_system_image_into_memory,
+        seed_pce500_bootstrap_imem, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD, NO_RAM_WINDOW_END,
+        NO_RAM_WINDOW_START, ROM_WINDOW_LEN, ROM_WINDOW_START,
     },
     perfetto::set_call_ui_function_names,
     sleep_cycles, snapshot,
@@ -34,6 +35,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -128,7 +130,7 @@ impl IrqPerfetto {
 #[derive(Parser, Debug)]
 #[command(
     name = "pce500-llama",
-    about = "Standalone Rust LLAMA runner (ROM selectable; defaults to IQ-7000)."
+    about = "Standalone Rust LLAMA runner (ROM selectable; defaults to PC-E500)."
 )]
 struct Args {
     /// Number of instructions to execute before exiting.
@@ -200,12 +202,16 @@ struct Args {
     perfetto: bool,
 
     /// Path to write the Perfetto trace.
-    #[arg(long, value_name = "PATH", default_value = "iq-7000.perfetto-trace")]
+    #[arg(long, value_name = "PATH", default_value = "pc-e500.perfetto-trace")]
     perfetto_path: PathBuf,
 
     /// Dump LCD write trace (PC + call stack per addressing unit) as JSON.
     #[arg(long, value_name = "PATH")]
     dump_lcd_trace: Option<PathBuf>,
+
+    /// Dump external bus accesses as JSONL (one byte-level event per line).
+    #[arg(long, value_name = "PATH")]
+    dump_bus_trace: Option<PathBuf>,
 
     /// Load function names from a BNIDA export (rom-analysis/.../bnida.json) and use them to label
     /// the "Functions" track in Perfetto traces (replacing sub_XXXXXX fallbacks).
@@ -252,7 +258,14 @@ struct RunSummary {
 }
 
 fn default_rom_path(model: DeviceModel) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../data/{}", model.rom_basename()))
+    let data_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../data/{}", model.rom_basename()));
+    if data_path.exists() {
+        data_path
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../../roms/{}", model.rom_basename()))
+    }
 }
 
 fn default_bnida_path(model: DeviceModel) -> PathBuf {
@@ -263,7 +276,23 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
             .join("../../../rom-analysis/iq-7000/bnida.json"),
         DeviceModel::PcE500 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/pc-e500/s3-en/bnida.json"),
+        DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../rom-analysis/pc-e500/jp/bnida.json"),
     }
+}
+
+#[derive(Serialize)]
+struct BusTraceEvent {
+    index: u64,
+    kind: &'static str,
+    region: &'static str,
+    addr: u32,
+    value: u8,
+    bits: u8,
+    byte_offset: u8,
+    pc: u32,
+    instr_index: u64,
+    cycle: u64,
 }
 
 fn load_bnida_names(
@@ -330,6 +359,8 @@ struct StandaloneBus {
     perfetto_enabled: bool,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
+    bus_trace: Option<BufWriter<fs::File>>,
+    bus_trace_index: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -657,6 +688,8 @@ impl StandaloneBus {
             perfetto_enabled: false,
             host_read,
             host_write,
+            bus_trace: None,
+            bus_trace_index: 0,
         }
     }
 
@@ -670,6 +703,96 @@ impl StandaloneBus {
 
     fn set_instr_index(&mut self, idx: u64) {
         self.instr_index = idx;
+    }
+
+    fn set_bus_trace(&mut self, writer: Option<BufWriter<fs::File>>) {
+        self.bus_trace = writer;
+        self.bus_trace_index = 0;
+    }
+
+    fn finish_bus_trace(&mut self) {
+        if let Some(writer) = self.bus_trace.as_mut() {
+            if let Err(err) = writer.flush() {
+                eprintln!("warning: failed to flush bus trace: {err}");
+            }
+        }
+    }
+
+    fn bus_trace_region(addr: u32) -> Option<&'static str> {
+        let addr = addr & ADDRESS_MASK;
+        if (0x2000..=0x200F).contains(&addr) {
+            return Some("lcd_primary");
+        }
+        if (0xA000..=0xA00F).contains(&addr) {
+            return Some("lcd_mirror");
+        }
+        if (0x010000..=0x01FFFF).contains(&addr) {
+            return Some("ce6_rom");
+        }
+        if (0x040000..=0x07FFFF).contains(&addr) {
+            return Some("ce1_slot");
+        }
+        if (0x080000..=0x0BFFFF).contains(&addr) {
+            return Some("system_ram");
+        }
+        if (0x0C0000..=0x0FFFFF).contains(&addr) {
+            return Some("main_rom");
+        }
+        if (0x000000..=0x03FFFF).contains(&addr) {
+            return Some("low_rom");
+        }
+        None
+    }
+
+    fn trace_bus_access(&mut self, kind: &'static str, addr: u32, bits: u8, value: u32) {
+        if bits == 0 || MemoryImage::is_internal(addr) {
+            return;
+        }
+        let Some(_) = self.bus_trace.as_ref() else {
+            return;
+        };
+
+        let byte_count = bits.div_ceil(8).max(1);
+        let mut write_error: Option<String> = None;
+        for offset in 0..byte_count {
+            let byte_addr = addr.wrapping_add(offset as u32) & ADDRESS_MASK;
+            let Some(region) = Self::bus_trace_region(byte_addr) else {
+                continue;
+            };
+            let event = BusTraceEvent {
+                index: self.bus_trace_index,
+                kind,
+                region,
+                addr: byte_addr,
+                value: ((value >> (offset * 8)) & 0xFF) as u8,
+                bits,
+                byte_offset: offset,
+                pc: self.last_pc,
+                instr_index: self.instr_index,
+                cycle: self.cycle_count,
+            };
+            let line = match serde_json::to_string(&event) {
+                Ok(line) => line,
+                Err(err) => {
+                    write_error = Some(err.to_string());
+                    break;
+                }
+            };
+            if let Some(writer) = self.bus_trace.as_mut() {
+                if let Err(err) = writer
+                    .write_all(line.as_bytes())
+                    .and_then(|_| writer.write_all(b"\n"))
+                {
+                    write_error = Some(err.to_string());
+                    break;
+                }
+            }
+            self.bus_trace_index = self.bus_trace_index.saturating_add(1);
+        }
+        if let Some(err) = write_error {
+            eprintln!("warning: disabling bus trace after write failure: {err}");
+            self.bus_trace = None;
+        }
     }
 
     fn trace_kbd_access(&self, kind: &str, addr: u32, offset: u32, bits: u8, value: u32) {
@@ -1480,6 +1603,7 @@ impl LlamaBus for StandaloneBus {
         if self.memory.requires_python(addr) {
             if let Some(cb) = self.host_read.as_mut() {
                 if let Some(val) = (cb)(addr) {
+                    self.trace_bus_access("read", addr, bits, val as u32);
                     return val as u32;
                 }
             }
@@ -1496,7 +1620,8 @@ impl LlamaBus for StandaloneBus {
                 }
             }
         }
-        self.memory
+        let value = self
+            .memory
             .load(addr, bits)
             .map(|val| {
                 if MemoryImage::is_internal(addr) {
@@ -1512,7 +1637,9 @@ impl LlamaBus for StandaloneBus {
                 }
                 val & mask_bits(bits)
             })
-            .unwrap_or(0)
+            .unwrap_or(0);
+        self.trace_bus_access("read", addr, bits, value);
+        value
     }
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
@@ -1591,6 +1718,7 @@ impl LlamaBus for StandaloneBus {
                     self.log_lcd_count += 1;
                 }
                 self.trace_mem_write(addr, bits, value);
+                self.trace_bus_access("write", addr, bits, value);
             }
             return;
         }
@@ -1603,6 +1731,7 @@ impl LlamaBus for StandaloneBus {
         if self.memory.requires_python(addr) {
             if let Some(cb) = self.host_write.as_mut() {
                 (cb)(addr, value as u8);
+                self.trace_bus_access("write", addr, bits, value);
                 return;
             }
         }
@@ -1617,6 +1746,7 @@ impl LlamaBus for StandaloneBus {
         }
         let _ = self.memory.store(addr, bits, value);
         self.trace_mem_write(addr, bits, value);
+        self.trace_bus_access("write", addr, bits, value);
         if let Some((offset, prev)) = imr_isr_prev {
             if let Some(cur) = self.memory.read_internal_byte(offset) {
                 if cur != prev {
@@ -1686,14 +1816,13 @@ fn load_rom(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 }
 
 fn configure_bus_for_model(bus: &mut StandaloneBus, model: DeviceModel) {
-    if matches!(model, DeviceModel::PcE500) {
+    if model.is_pce500_family() {
         // Baseline emulator key scanning asserts KEYI on the first visible scan.
         bus.keyboard.set_press_threshold(1);
         // Baseline PC-E500 scans the key matrix each instruction (not just on MTI).
         bus.scan_on_timer = false;
     }
-    bus.memory
-        .set_internal_ram_mirror(matches!(model, DeviceModel::PcE500));
+    bus.memory.set_internal_ram_mirror(model.is_pce500_family());
 }
 
 fn parse_matrix_code(raw: &str) -> Result<Option<AutoKeyKind>, Box<dyn Error>> {
@@ -2024,10 +2153,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .map(|raw| parse_address(raw))
         .collect::<Result<_, _>>()?;
     let trace_pc_window = args.trace_pc_window.unwrap_or(0);
+    let use_full_system_image = matches!(args.model, DeviceModel::PcE500Jp);
 
     let mut memory = MemoryImage::new();
-    // Load only ROM region (top 256KB) to mirror Python; leave RAM zeroed.
-    load_pce500_rom_window_into_memory(&mut memory, &rom_bytes);
+    if use_full_system_image {
+        load_pce500_system_image_into_memory(&mut memory, &rom_bytes);
+    } else {
+        // Default standalone path mirrors the legacy Python top-window load.
+        load_pce500_rom_window_into_memory(&mut memory, &rom_bytes);
+    }
     memory.set_readonly_ranges(vec![
         (NO_RAM_WINDOW_START as u32, NO_RAM_WINDOW_END as u32),
         (
@@ -2038,6 +2172,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     memory.set_keyboard_bridge(false);
 
     memory.set_memory_card_slot_present(matches!(args.card, CardMode::Present));
+    if matches!(args.card, CardMode::Present) {
+        // Model the inserted card as a blank writable RAM card so CE1 probes do not
+        // fall through to the underlying system-image filler bytes.
+        memory.load_memory_card(&vec![0u8; 65_536])?;
+    }
 
     // Timer periods align with the 1.024 MHz best-guess hardware clock (fast ≈2 ms, slow ≈0.5 s)
     // unless disabled for debugging.
@@ -2069,6 +2208,15 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         None,
         None,
     );
+    if let Some(path) = args.dump_bus_trace.as_ref() {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let file = fs::File::create(path)?;
+        bus.set_bus_trace(Some(BufWriter::new(file)));
+    }
     configure_bus_for_model(&mut bus, args.model);
     // Keep default timer-driven scans unless tests override the flag.
     bus.timer.set_preserve_phase(false);
@@ -2083,9 +2231,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             set_perf_instr_counter(base_instruction_count);
         }
     } else {
-        bus.strobe_all_columns();
+        if !use_full_system_image {
+            bus.strobe_all_columns();
+        }
         power_on_reset(&mut bus, &mut state);
         // power_on_reset seeds PC from the ROM reset vector at 0xFFFFD.
+        if use_full_system_image {
+            seed_pce500_bootstrap_imem(&mut bus.memory);
+        }
     }
     if use_key_seq {
         bus.keyboard.set_repeat_enabled(false);
@@ -2395,6 +2548,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         bus.finish_perfetto();
+        bus.finish_bus_trace();
 
         let imr_mem = bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr_mem = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
@@ -2499,6 +2653,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let dump = summary.lcd_trace.as_ref().ok_or("missing LCD trace data")?;
         fs::write(path, serde_json::to_string_pretty(dump)?)?;
         println!("Wrote LCD trace dump: {}", path.display());
+    }
+    if let Some(path) = &args.dump_bus_trace {
+        println!("Wrote bus trace dump: {}", path.display());
     }
 
     if args.perf {

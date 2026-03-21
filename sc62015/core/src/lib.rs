@@ -392,7 +392,7 @@ struct DeviceRuntimeSettings {
 
 fn device_runtime_settings(model: DeviceModel) -> Option<DeviceRuntimeSettings> {
     match model {
-        DeviceModel::PcE500 => Some(DeviceRuntimeSettings {
+        DeviceModel::PcE500 | DeviceModel::PcE500Jp => Some(DeviceRuntimeSettings {
             internal_ram_mirror: true,
         }),
         DeviceModel::Iq7000 => None,
