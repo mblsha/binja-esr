@@ -275,7 +275,7 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
         DeviceModel::Iq7000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/iq-7000/bnida.json"),
         DeviceModel::PcE500 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../rom-analysis/pc-e500/s3-en/bnida.json"),
+            .join("../../../rom-analysis/pc-e500/en/bnida.json"),
         DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/pc-e500/jp/bnida.json"),
     }

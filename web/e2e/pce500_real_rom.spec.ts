@@ -11,7 +11,7 @@ async function clickStep20k(page: any, times: number) {
 
 test('real ROM: PF1 changes boot menu', async ({ page }) => {
 	test.skip(process.env.PCE500_E2E_REAL_ROM !== '1', 'Set PCE500_E2E_REAL_ROM=1 to run real-ROM test');
-	test.skip(!process.env.PCE500_ROM_PATH, 'Set PCE500_ROM_PATH to the real pc-e500.bin path');
+	test.skip(!process.env.PCE500_ROM_PATH, 'Set PCE500_ROM_PATH to the real pc-e500-en.bin path');
 	test.skip(!existsSync(process.env.PCE500_ROM_PATH), 'PCE500_ROM_PATH does not exist on disk');
 
 	await page.goto('/');

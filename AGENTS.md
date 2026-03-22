@@ -6,7 +6,7 @@
 - `sc62015/`: Binary Ninja integration (`arch.py`, `view.py`).
 - `sc62015/pysc62015/`: SC62015 assembler/emulator core and unit tests (`test_*.py`).
 - `pce500/`: PC‑E500 device model, tools, and tests.
-- `data/`: ROMs and traces (e.g., `pc-e500.bin`).
+- `data/`: ROMs and traces (e.g., `pc-e500-en.bin`).
 - Root: `plugin.json`, `pyproject.toml`, lint/type configs.
 
 ## Reference Docs
@@ -53,7 +53,7 @@
   - Web (TS/Svelte): `cd web && npm run format:check` (or `npm run format` to fix)
 
 ## Runtime & Dev Tips
-- PC‑E500 ROM: Ensure `data/pc-e500.bin` exists. Without it, some emulator features/tests will be skipped.
+- PC‑E500 ROM: Ensure `data/pc-e500-en.bin` exists. Without it, some emulator features/tests will be skipped.
 - Primary emulator core: use the Rust CLI (`cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`).
 - Legacy Python wrapper: `uv run python pce500/run_pce500.py` (use `--profile-emulator` to emit `emulator-profile.perfetto-trace`).
 - Binary Ninja: Not required for dev; mocks auto‑load via `FORCE_BINJA_MOCK=1` or `binja-test-mocks`.
@@ -66,7 +66,7 @@
 - **Rust CLI runner (primary):** To boot the ROM and view decoded LCD text:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
-  - Default ROM model: `pc-e500` (uses `data/pc-e500.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
+  - Default ROM model: `pc-e500` (uses `data/pc-e500-en.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
 - **LCD terminal UI:** A live terminal renderer that redraws decoded LCD lines on change:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500`
   - Keyboard: Ctrl+1..5 or F1..F5 map to PF1..PF5, Enter maps to `=`, Backspace maps to `BS`, Ctrl+C exits.

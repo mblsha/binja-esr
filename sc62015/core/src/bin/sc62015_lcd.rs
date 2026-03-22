@@ -555,7 +555,7 @@ fn strip_leading_line_comments(raw: &str) -> String {
 fn default_bnida_path(model: DeviceModel) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     match model {
-        DeviceModel::PcE500 => root.join("rom-analysis/pc-e500/s3-en/bnida.json"),
+        DeviceModel::PcE500 => root.join("rom-analysis/pc-e500/en/bnida.json"),
         DeviceModel::PcE500Jp => root.join("rom-analysis/pc-e500/jp/bnida.json"),
         DeviceModel::Iq7000 => root.join("rom-analysis/iq-7000/bnida.json"),
     }

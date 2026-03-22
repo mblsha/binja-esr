@@ -16,7 +16,7 @@ const IOCS_PUBLIC_ENTRY_ADDR: u32 = 0x00FFFE8;
 const IOCS_PUTCHAR_XY: u16 = 0x0041;
 
 fn default_rom_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500.bin")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500-en.bin")
 }
 
 fn call_with_sentinel(rt: &mut CoreRuntime, addr: u32, max_instructions: u32) {

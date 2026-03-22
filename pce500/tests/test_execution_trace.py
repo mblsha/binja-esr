@@ -15,7 +15,7 @@ from sc62015.pysc62015.emulator import RegisterName
 
 def test_pce500_execution_trace():
     """Test executing 100 instructions from PC-E500 ROM entry point."""
-    rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+    rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
     if not rom_path.exists():
         pytest.skip(f"ROM file {rom_path} not found")
 

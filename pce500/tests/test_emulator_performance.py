@@ -24,7 +24,7 @@ class TestEmulatorPerformance:
         4. Memory operation counts are reasonable
         """
         # Check if ROM file exists
-        rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+        rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
         if not rom_path.exists():
             pytest.skip(f"ROM file not found at {rom_path}")
 

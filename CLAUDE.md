@@ -57,7 +57,7 @@ git push -u origin feature-name
 
 ### Important: PC-E500 ROM Requirement
 
-**Alert the user if `data/pc-e500.bin` is not present in the repository.** This ROM file is required for full test coverage of the PC-E500 emulator functionality. Without it, certain integration tests and emulator features cannot be properly tested.
+**Alert the user if `data/pc-e500-en.bin` is not present in the repository.** This ROM file is required for full test coverage of the PC-E500 emulator functionality. Without it, certain integration tests and emulator features cannot be properly tested.
 
 ## Architecture Overview
 
@@ -151,7 +151,7 @@ The PC-E500 emulator (`pce500/`) wraps the SC62015 emulator with Sharp PC-E500 s
 
 ### ROM Loading
 
-The `pc-e500.bin` file is a 1MB memory dump. When loading:
+The `pc-e500-en.bin` file is a 1MB memory dump. When loading:
 - Extract bytes from offset 0xC0000 to 0x100000 (256KB) - this is the actual ROM
 - The ROM is loaded at address 0xC0000 in the emulator's memory space
 - Entry point 0xFFFFD typically contains 0xC2 0x10 0x0F (0x0F10C2 in little-endian)

@@ -13,7 +13,7 @@ from pce500.tracing import TraceEventType, trace_dispatcher
 from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
-ROM_PATH = Path(__file__).resolve().parents[3] / "roms" / "pc-e500.bin"
+ROM_PATH = Path(__file__).resolve().parents[3] / "roms" / "pc-e500-en.bin"
 
 pytestmark = pytest.mark.skipif(
     not ROM_PATH.exists(), reason="pc-e500 ROM image not available"

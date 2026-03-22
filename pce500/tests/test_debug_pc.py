@@ -13,7 +13,7 @@ from sc62015.pysc62015.emulator import RegisterName
 
 def test_debug_pc():
     """Debug why PC isn't advancing."""
-    rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+    rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
     if not rom_path.exists():
         pytest.skip(f"ROM file not found at {rom_path}")
 

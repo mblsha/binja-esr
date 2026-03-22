@@ -105,7 +105,7 @@ impl DeviceModel {
             },
             Self::PcE500 => DeviceSpec {
                 label: "pc-e500",
-                rom_basename: "pc-e500.bin",
+                rom_basename: "pc-e500-en.bin",
                 lcd_kind: LcdKind::Hd61202,
                 rom_window_start: pce500::ROM_WINDOW_START as u32,
                 rom_window_len: pce500::ROM_WINDOW_LEN,

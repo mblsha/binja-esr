@@ -429,7 +429,7 @@ def run_emulator(
             print(f"Internal memory dump will trigger at PC=0x{dump_pc:06X}")
 
     # Load ROM
-    rom_path = Path(__file__).parent.parent / "data" / "pc-e500.bin"
+    rom_path = Path(__file__).parent.parent / "data" / "pc-e500-en.bin"
     if rom_path.exists():
         with open(rom_path, "rb") as f:
             rom_data = f.read()
