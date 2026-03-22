@@ -1747,3 +1747,94 @@ def test_assembler_fails_on_ambiguous_instruction() -> None:
     source_code = "MV A, 0x42"
     bin_file = assembler.assemble(source_code)
     assert bin_file.as_ti_txt().strip() == "@0000\n08 42\nq"
+
+
+NEAR_CONTROL_FLOW_SAME_PAGE_CASES = [
+    ("CALL", "04"),
+    ("JP", "02"),
+    ("JPZ", "14"),
+    ("JPNZ", "15"),
+    ("JPC", "16"),
+    ("JPNC", "17"),
+]
+
+
+@pytest.mark.parametrize(
+    ("mnemonic", "opcode"),
+    NEAR_CONTROL_FLOW_SAME_PAGE_CASES,
+    ids=[case[0].lower() for case in NEAR_CONTROL_FLOW_SAME_PAGE_CASES],
+)
+def test_near_control_flow_same_page_high_org(mnemonic: str, opcode: str) -> None:
+    assembler = Assembler()
+    source_code = dedent(
+        f"""
+            .ORG 0x10100
+        start:
+            {mnemonic} target
+        target:
+            RET
+        """
+    )
+
+    bin_file = assembler.assemble(source_code)
+
+    assert bin_file.as_ti_txt().strip() == f"@10100\n{opcode} 03 01 06\nq"
+
+
+@pytest.mark.parametrize(
+    ("mnemonic", "opcode"),
+    NEAR_CONTROL_FLOW_SAME_PAGE_CASES,
+    ids=[f"{case[0].lower()}_low16" for case in NEAR_CONTROL_FLOW_SAME_PAGE_CASES],
+)
+def test_near_control_flow_same_page_high_org_low16_literal(
+    mnemonic: str, opcode: str
+) -> None:
+    assembler = Assembler()
+    source_code = dedent(
+        f"""
+            .ORG 0x10100
+            {mnemonic} 0x0103
+        target:
+            RET
+        """
+    )
+
+    bin_file = assembler.assemble(source_code)
+
+    assert bin_file.as_ti_txt().strip() == f"@10100\n{opcode} 03 01 06\nq"
+
+
+NEAR_CONTROL_FLOW_CROSS_PAGE_CASES = [
+    ("CALL", "use CALLF"),
+    ("JP", "use JPF"),
+    ("JPZ", "use a conditional branch around JPF"),
+    ("JPNZ", "use a conditional branch around JPF"),
+    ("JPC", "use a conditional branch around JPF"),
+    ("JPNC", "use a conditional branch around JPF"),
+]
+
+
+@pytest.mark.parametrize(
+    ("mnemonic", "hint"),
+    NEAR_CONTROL_FLOW_CROSS_PAGE_CASES,
+    ids=[case[0].lower() for case in NEAR_CONTROL_FLOW_CROSS_PAGE_CASES],
+)
+def test_near_control_flow_cross_page_rejected(mnemonic: str, hint: str) -> None:
+    assembler = Assembler()
+    source_code = dedent(
+        f"""
+            .ORG 0x10100
+        start:
+            {mnemonic} target
+            .ORG 0x20100
+        target:
+            RET
+        """
+    )
+
+    with pytest.raises(AssemblerError) as exc_info:
+        assembler.assemble(source_code)
+
+    message = str(exc_info.value)
+    assert f"{mnemonic} target 0x20100 is not on current page 0x10000" in message
+    assert hint in message

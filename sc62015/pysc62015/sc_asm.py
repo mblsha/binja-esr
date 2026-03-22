@@ -15,6 +15,7 @@ from .instr import (
     Opts,
     IMemOperand,
     IMem8,
+    Imm16,
     ImmOperand,
     Imm20,
     ImmOffset,
@@ -431,6 +432,48 @@ class Assembler:
                     ) from e
         return binfile
 
+    def _normalize_near_control_flow(self, instr: Instruction) -> None:
+        """Resolve page-local CALL/JP* immediates against the current 64 KiB page."""
+
+        near_control_names = {"CALL", "JP", "JPZ", "JPNZ", "JPC", "JPNC"}
+        if instr.name() not in near_control_names:
+            return
+
+        ops = list(instr.operands())
+        if len(ops) != 1:
+            return
+
+        dest = ops[0]
+        if not isinstance(dest, Imm16) or dest.value is None:
+            return
+
+        raw_value = getattr(dest, "_asm_raw_value", None)
+        if isinstance(raw_value, str):
+            try:
+                # Preserve explicit low-16 operands such as ``JP 0x0104`` on high
+                # pages, since the ISA interprets them relative to the current page.
+                if int(raw_value, 0) <= 0xFFFF:
+                    return
+            except ValueError:
+                pass
+
+        target = dest.value
+        current_page = self.current_address & 0xFF0000
+        target_page = target & 0xFF0000
+        if target_page != current_page:
+            if instr.name() == "CALL":
+                hint = "use CALLF"
+            elif instr.name() == "JP":
+                hint = "use JPF"
+            else:
+                hint = "use a conditional branch around JPF"
+            raise AssemblerError(
+                f"{instr.name()} target 0x{target:05X} is not on current page "
+                f"0x{current_page:05X}; {hint}"
+            )
+
+        dest.value = target & 0xFFFF
+
     def _encode_statement(self, statement: Dict[str, Any], line_num: int) -> bytearray:
         """Encodes a single statement into a bytearray."""
         if "instruction" in statement:
@@ -439,7 +482,9 @@ class Assembler:
 
             for op in instr.operands():
                 if hasattr(op, "value") and isinstance(getattr(op, "value"), str):
-                    val = self._evaluate_operand(getattr(op, "value"))
+                    raw_value = getattr(op, "value")
+                    setattr(op, "_asm_raw_value", raw_value)
+                    val = self._evaluate_operand(raw_value)
                     setattr(op, "value", val)
                     if hasattr(op, "extra_hi"):
                         setattr(op, "extra_hi", (val >> 16) & 0xFF)
@@ -453,6 +498,7 @@ class Assembler:
                 offset = getattr(op, "offset", None)
                 if isinstance(offset, ImmOffset) and isinstance(offset.value, str):
                     offset.value = self._evaluate_operand(offset.value)
+            self._normalize_near_control_flow(instr)
             encoder = Encoder()
             instr.encode(encoder, self.current_address)
             return encoder.buf
