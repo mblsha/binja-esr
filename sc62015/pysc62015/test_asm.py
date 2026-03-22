@@ -302,11 +302,130 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
     ),
     AssemblerTestCase(
+        test_id="mv_reg_emem_label_ptr",
+        asm_code="""
+            SECTION data
+            message_ptr:
+                defl message
+            message:
+                defb 0
+            SECTION code
+            start:
+                MV X, [message_ptr]
+        """,
+        expected_ti="""
+            @0000
+            8C 00 00 08
+            @80000
+            03 00 08 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_emem_label_abs",
+        asm_code="""
+            SECTION code
+            start:
+                MV A, [uart_data]
+            SECTION data
+            uart_data:
+                defb 0
+        """,
+        expected_ti="""
+            @0000
+            88 00 00 08
+            @80000
+            00
+            q
+        """,
+    ),
+    AssemblerTestCase(
         test_id="mv_emem_reg",
         asm_code="MV [0x12345], A",
         expected_ti="""
             @0000
             A8 45 23 01
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_emem_label_reg_abs",
+        asm_code="""
+            SECTION code
+            start:
+                MV [uart_data], A
+            SECTION data
+            uart_data:
+                defb 0
+        """,
+        expected_ti="""
+            @0000
+            A8 00 00 08
+            @80000
+            00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_x_simple",
+        asm_code="MV A, [X]",
+        expected_ti="""
+            @0000
+            90 04
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_y_simple",
+        asm_code="MV A, [Y]",
+        expected_ti="""
+            @0000
+            90 05
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_u_simple",
+        asm_code="MV A, [U]",
+        expected_ti="""
+            @0000
+            90 06
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_s_simple",
+        asm_code="MV A, [S]",
+        expected_ti="""
+            @0000
+            90 07
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_x_post_inc",
+        asm_code="MV A, [X++]",
+        expected_ti="""
+            @0000
+            90 24
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_y_pre_dec",
+        asm_code="MV A, [--Y]",
+        expected_ti="""
+            @0000
+            90 35
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_ememreg_x_plus_offset",
+        asm_code="MV A, [X+4]",
+        expected_ti="""
+            @0000
+            90 84 04
             q
         """,
     ),
