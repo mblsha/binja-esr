@@ -69,7 +69,12 @@ start:
     JPZ message_done
 ```
 
-### 2. Disambiguate `[label]` as absolute external memory
+### 2. Disambiguate `[label]` as absolute external memory [done]
+
+Status:
+
+- Done. The explicit register grammar from item 1 also disambiguates bracketed labels, so `[message_ptr]` and `[uart_data]` now parse as absolute external-memory addresses rather than register-indirect operands.
+- Covered by regression tests for `MV X, [message_ptr]`, `MV A, [uart_data]`, `MV [uart_data], A`, and the preserved register-indirect forms `[X]`, `[Y]`, `[U]`, `[S]`, `[X++]`, `[--Y]`, and `[X+4]`.
 
 Current issue:
 
