@@ -358,6 +358,17 @@ class Assembler:
             return instr.length()
         return 0
 
+    def _line_source_info(
+        self, program_ast: Dict[str, Any], line: Dict[str, Any], fallback_index: int
+    ) -> Tuple[int, str]:
+        source_line_num = int(line.get("source_line", fallback_index + 1))
+        source_lines = program_ast["source_text"].splitlines()
+        if 1 <= source_line_num <= len(source_lines):
+            source_line = source_lines[source_line_num - 1]
+        else:
+            source_line = ""
+        return source_line_num, source_line
+
     def _first_pass(self, program_ast: Dict[str, Any]) -> None:
         """Pass 1: Build the symbol table and calculate section sizes."""
         self.symbols = {}
@@ -366,27 +377,35 @@ class Assembler:
         self.instructions_cache.clear()
 
         for i, line in enumerate(program_ast["lines"]):
-            consumed = False
-            if "statement" in line:
-                current_section, consumed = self._apply_location(
-                    line["statement"],
-                    self.section_pointers,
-                    current_section,
-                    True,
-                )
+            source_line_num, source_line = self._line_source_info(program_ast, line, i)
+            try:
+                consumed = False
+                if "statement" in line:
+                    current_section, consumed = self._apply_location(
+                        line["statement"],
+                        self.section_pointers,
+                        current_section,
+                        True,
+                    )
 
-            addr = self.section_pointers[current_section]
+                addr = self.section_pointers[current_section]
 
-            if "label" in line:
-                label_name = line["label"].upper()
-                if label_name in self.symbols:
-                    raise AssemblerError(f"Duplicate label definition: {line['label']}")
-                self.symbols[label_name] = addr
+                if "label" in line:
+                    label_name = line["label"].upper()
+                    if label_name in self.symbols:
+                        raise AssemblerError(
+                            f"Duplicate label definition: {line['label']}"
+                        )
+                    self.symbols[label_name] = addr
 
-            if "statement" in line and not consumed:
-                stmt = line["statement"]
-                size = self._get_statement_size(stmt, i)
-                self.section_pointers[current_section] += size
+                if "statement" in line and not consumed:
+                    stmt = line["statement"]
+                    size = self._get_statement_size(stmt, source_line_num)
+                    self.section_pointers[current_section] += size
+            except Exception as e:
+                raise AssemblerError(
+                    f"on line {source_line_num}: {e}\n> {source_line}"
+                ) from e
 
         # Layout .bss after .data if both exist
         if "data" in self.section_pointers and "bss" in self.section_pointers:
@@ -402,6 +421,7 @@ class Assembler:
         current_section = self.DEFAULT_SECTION
 
         for i, line in enumerate(program_ast["lines"]):
+            source_line_num, source_line = self._line_source_info(program_ast, line, i)
             consumed = False
             if "statement" in line:
                 current_section, consumed = self._apply_location(
@@ -416,7 +436,7 @@ class Assembler:
             if "statement" in line and not consumed:
                 stmt = line["statement"]
                 try:
-                    encoded_bytes = self._encode_statement(stmt, i)
+                    encoded_bytes = self._encode_statement(stmt, source_line_num)
                     if encoded_bytes:
                         if current_section == "bss":
                             # .bss section only reserves space, no data in file
@@ -426,9 +446,8 @@ class Assembler:
 
                     current_section_pointers[current_section] += len(encoded_bytes)
                 except Exception as e:
-                    source_line = program_ast["source_text"].splitlines()[i]
                     raise AssemblerError(
-                        f"on line {i + 1}: {e}\n> {source_line}"
+                        f"on line {source_line_num}: {e}\n> {source_line}"
                     ) from e
         return binfile
 

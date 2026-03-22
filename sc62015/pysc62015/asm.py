@@ -1,7 +1,7 @@
 from typing import Any, List, Optional, Union, cast, TypedDict, Type, Literal
 from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from binaryninja import RegisterName  # type: ignore
-from lark import Lark, Transformer, Token
+from lark import Lark, Transformer, Token, v_args
 from .instr import (
     Instruction,
     Opts,
@@ -89,7 +89,12 @@ grammar_path = os.path.join(os.path.dirname(__file__), "asm.lark")
 with open(grammar_path, "r") as f:
     asm_grammar = f.read()
 
-asm_parser = Lark(asm_grammar, parser="earley", maybe_placeholders=False)
+asm_parser = Lark(
+    asm_grammar,
+    parser="earley",
+    maybe_placeholders=False,
+    propagate_positions=True,
+)
 
 
 class LabelNode(TypedDict):
@@ -117,6 +122,7 @@ class InstructionNode(TypedDict):
 class LineNode(TypedDict, total=False):
     label: Optional[str]
     statement: Optional[Union[SectionNode, DataDirectiveNode, InstructionNode]]
+    source_line: int
 
 
 class ProgramNode(TypedDict):
@@ -141,10 +147,19 @@ class AsmTransformer(Transformer):
         }
 
     def start(self, items: List[LineNode]) -> ProgramNode:
-        # Filter out empty lines and stray NEWLINE tokens
-        return {"lines": [line for line in items if isinstance(line, dict) and line]}
+        # Filter out empty lines and stray NEWLINE tokens, while preserving the
+        # original source line number for non-empty lines.
+        return {
+            "lines": [
+                line
+                for line in items
+                if isinstance(line, dict)
+                and ("label" in line or "statement" in line)
+            ]
+        }
 
-    def line(self, items: List[Any]) -> LineNode:
+    @v_args(meta=True)
+    def line(self, meta: Any, items: List[Any]) -> LineNode:
         # Filter out any stray NEWLINE tokens that might be children of the line rule
         items = [
             item
@@ -153,7 +168,7 @@ class AsmTransformer(Transformer):
         ]
 
         # line: label? statement?
-        out: LineNode = {}
+        out: LineNode = {"source_line": int(meta.line)}
         if not items:
             return out
 

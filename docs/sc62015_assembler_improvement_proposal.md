@@ -171,7 +171,13 @@ Expected cross-page behaviour:
     ; CALL far_page_sub     ; assembler error: use CALLF
 ```
 
-### 4. Preserve original source line numbers in diagnostics
+### 4. Preserve original source line numbers in diagnostics [done]
+
+Status:
+
+- Done. Non-empty `LineNode` entries now retain their original source line numbers from the parser, and assembler errors use that stored line number instead of the compacted AST index.
+- Both passes now report the original line text and line number: first-pass errors such as duplicate labels and second-pass errors such as unresolved symbols are no longer shifted by blank lines or comments.
+- Covered by regression tests for first-pass duplicate-label diagnostics and second-pass unresolved-symbol diagnostics with comments and blank lines present.
 
 Current issue:
 
