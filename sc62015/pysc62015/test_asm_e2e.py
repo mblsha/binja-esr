@@ -36,7 +36,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
                 JP start        ; Infinite loop
         """,
         expected_ihex="""
-            :050000000842020000B4
+            :050000000842020000AF
             :00000001FF
         """,
     ),
@@ -48,30 +48,33 @@ assembler_test_cases: List[AssemblerTestCase] = [
                 defb 0xDE, 0xAD, 0xBE, 0xEF
         """,
         expected_ihex="""
-            :04800000DEADBEEF90
+            :020000040008F2
+            :04000000DEADBEEFC4
             :00000001FF
         """,
     ),
     AssemblerTestCase(
-        test_id="defm_string_and_defw_pointer",
+        test_id="defm_string_and_defl_pointer",
         asm_code="""
             SECTION code
                 JPF message_printer
 
             SECTION data
             message_printer:
-                MVW I, msg_ptr_loc
+                MV X, [msg_ptr_loc]
                 RET
 
             msg_ptr_loc:
-                defw message
+                defl message
 
             message:
                 defm "OK"
+                defb 0
         """,
         expected_ihex="""
-            :04000000030A800075
-            :09800000A3800D004F4B20
+            :0400000003000008F1
+            :020000040008F2
+            :0B0000008C050008060800084F4B00AC
             :00000001FF
         """,
     ),
@@ -99,7 +102,47 @@ assembler_test_cases: List[AssemblerTestCase] = [
             HALT        ; This should be at address 0x0004
         """,
         expected_ihex="""
-            :05000000020400DEEF
+            :0500000002040000DE17
+            :00000001FF
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="pointer_loop",
+        asm_code="""
+            table_ptr:
+                defl table
+
+            table:
+                defb 1, 2, 3, 0
+
+            start:
+                MV X, [table_ptr]
+        read_next:
+                MV A, [X++]
+                CMP A, 0
+                JPZ done
+                JP read_next
+        done:
+                RET
+        """,
+        expected_ihex="""
+            :16000000030000010203008C00000090246000141500020B000605
+            :00000001FF
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="high_org_call_label",
+        asm_code="""
+            .ORG 0x10100
+        start:
+            CALL emit_char
+            RET
+        emit_char:
+            RET
+        """,
+        expected_ihex="""
+            :020000040001F9
+            :050100000404010606E5
             :00000001FF
         """,
     ),
@@ -114,7 +157,6 @@ def test_assembler_e2e(case: AssemblerTestCase) -> None:
     output against the expected golden string.
     """
     assembler = Assembler()
-    return
 
     # dedent is used to remove common leading whitespace from triple-quoted strings,
     # which makes the test cases in the list above much more readable.

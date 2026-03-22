@@ -213,7 +213,13 @@ on line 6: Undefined symbol: missing_label
 >     JP missing_label
 ```
 
-### 5. Turn the missing regression coverage into real tests
+### 5. Turn the missing regression coverage into real tests [done]
+
+Status:
+
+- Done. The focused assembler regressions listed here now exist as active tests in `test_asm.py`: label immediates, bracketed label operands, high-page near `JP`/`JPZ`/`CALL`, cross-page near-control rejection, and line-accurate diagnostics.
+- `test_asm_e2e.py` no longer returns before asserting and now runs real IHEX end-to-end coverage again.
+- The E2E suite was refreshed to match current assembler behavior, including segmented IHEX output for non-zero sections, a valid `defl` pointer fixture, the pointer-walk loop example, and a high-page near `CALL` label case.
 
 Current issue:
 
