@@ -1,6 +1,10 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple, Callable
 import enum
+import os
 from dataclasses import dataclass
+
+os.environ.setdefault("FORCE_BINJA_MOCK", "1")
+from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from binja_test_mocks.coding import FetchDecoder
 
 try:

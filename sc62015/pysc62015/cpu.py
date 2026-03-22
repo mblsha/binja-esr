@@ -6,6 +6,8 @@ import os
 from importlib import import_module
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Tuple, cast
 
+os.environ.setdefault("FORCE_BINJA_MOCK", "1")
+from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from binja_test_mocks.coding import FetchDecoder
 
 from .constants import ADDRESS_SPACE_SIZE

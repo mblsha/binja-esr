@@ -1,4 +1,7 @@
 from typing import Any, List, Optional, Union, cast, TypedDict, Type, Literal
+import os
+
+os.environ.setdefault("FORCE_BINJA_MOCK", "1")
 from binja_test_mocks import binja_api  # noqa: F401  # pyright: ignore
 from binaryninja import RegisterName  # type: ignore
 from lark import Lark, Transformer, Token, v_args
