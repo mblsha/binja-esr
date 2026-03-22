@@ -1838,3 +1838,41 @@ def test_near_control_flow_cross_page_rejected(mnemonic: str, hint: str) -> None
     message = str(exc_info.value)
     assert f"{mnemonic} target 0x20100 is not on current page 0x10000" in message
     assert hint in message
+
+
+def test_diagnostics_preserve_original_source_line_second_pass() -> None:
+    assembler = Assembler()
+    source_code = (
+        "; comment one\n"
+        "\n"
+        ".ORG 0x10100\n"
+        "\n"
+        "start:\n"
+        "    JP missing_label\n"
+    )
+
+    with pytest.raises(AssemblerError) as exc_info:
+        assembler.assemble(source_code)
+
+    message = str(exc_info.value)
+    assert "on line 6: Undefined symbol or invalid number: missing_label" in message
+    assert ">     JP missing_label" in message
+
+
+def test_diagnostics_preserve_original_source_line_first_pass() -> None:
+    assembler = Assembler()
+    source_code = (
+        "start:\n"
+        "    NOP\n"
+        "\n"
+        "; spacer\n"
+        "start:\n"
+        "    RET\n"
+    )
+
+    with pytest.raises(AssemblerError) as exc_info:
+        assembler.assemble(source_code)
+
+    message = str(exc_info.value)
+    assert "on line 5: Duplicate label definition: start" in message
+    assert "> start:" in message
