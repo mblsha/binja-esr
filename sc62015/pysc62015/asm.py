@@ -335,11 +335,7 @@ class AsmTransformer(Transformer):
 
     def jp_reg(self, items: List[Any]) -> InstructionNode:
         reg = cast(Reg, items[0])
-        try:
-            idx = Reg3.reg_idx(cast(RegisterName, reg.reg))
-        except (ValueError, TypeError):
-            # Not a known register, treat as absolute jump to symbol
-            return self.jp_abs([str(reg.reg)])
+        idx = Reg3.reg_idx(cast(RegisterName, reg.reg))
         r = Reg3()
         r.reg = cast(RegisterName, reg.reg)
         r.reg_raw = idx
@@ -418,10 +414,6 @@ class AsmTransformer(Transformer):
 
     def reg(self, items: List[Token]) -> Reg:
         reg_name = str(items[0]).upper()
-        # Specific register types are handled by their rules (_A, _B, etc.)
-        # This is a fallback for general-purpose registers.
-        if reg_name == "B":
-            return RegB()
         return Reg(reg_name)
 
     def _make_reg_pair(self, reg1: Reg, reg2: Reg) -> RegPair:

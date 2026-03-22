@@ -28,7 +28,12 @@ These issues force callers into avoidable workarounds such as hardcoded addresse
 
 ## Proposed Fixes
 
-### 1. Make register names explicit in the grammar
+### 1. Make register names explicit in the grammar [done]
+
+Status:
+
+- Done. Real register names now parse explicitly instead of via generic `CNAME`, so bare labels no longer collide with register operands.
+- Covered by assembler regression tests for `MV X, message`, `MV BA, message`, `JP start`, and `JPZ message_done`.
 
 Current issue:
 
