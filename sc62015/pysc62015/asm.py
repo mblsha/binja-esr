@@ -153,8 +153,7 @@ class AsmTransformer(Transformer):
             "lines": [
                 line
                 for line in items
-                if isinstance(line, dict)
-                and ("label" in line or "statement" in line)
+                if isinstance(line, dict) and ("label" in line or "statement" in line)
             ]
         }
 

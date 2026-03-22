@@ -1842,14 +1842,7 @@ def test_near_control_flow_cross_page_rejected(mnemonic: str, hint: str) -> None
 
 def test_diagnostics_preserve_original_source_line_second_pass() -> None:
     assembler = Assembler()
-    source_code = (
-        "; comment one\n"
-        "\n"
-        ".ORG 0x10100\n"
-        "\n"
-        "start:\n"
-        "    JP missing_label\n"
-    )
+    source_code = "; comment one\n\n.ORG 0x10100\n\nstart:\n    JP missing_label\n"
 
     with pytest.raises(AssemblerError) as exc_info:
         assembler.assemble(source_code)
@@ -1861,14 +1854,7 @@ def test_diagnostics_preserve_original_source_line_second_pass() -> None:
 
 def test_diagnostics_preserve_original_source_line_first_pass() -> None:
     assembler = Assembler()
-    source_code = (
-        "start:\n"
-        "    NOP\n"
-        "\n"
-        "; spacer\n"
-        "start:\n"
-        "    RET\n"
-    )
+    source_code = "start:\n    NOP\n\n; spacer\nstart:\n    RET\n"
 
     with pytest.raises(AssemblerError) as exc_info:
         assembler.assemble(source_code)
