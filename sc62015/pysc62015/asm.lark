@@ -191,7 +191,14 @@ instruction: "NOP"i -> nop
 string_literal: ESCAPED_STRING
 
 // --- Operands ---
-reg: CNAME
+reg: REG_A
+   | REG_IL
+   | REG_BA
+   | REG_I
+   | REG_X
+   | REG_Y
+   | REG_U
+   | REG_S
 atom: NUMBER | CNAME
 
 imem_operand: imem_n
@@ -239,6 +246,14 @@ _A.2: "A"i
 _B.2: "B"i
 _F.2: "F"i
 _IMR.2: "IMR"i
+REG_A.2: "A"i
+REG_IL.2: "IL"i
+REG_BA.2: "BA"i
+REG_I.2: "I"i
+REG_X.2: "X"i
+REG_Y.2: "Y"i
+REG_U.2: "U"i
+REG_S.2: "S"i
 _BP.2: "BP"i
 _PX.2: "PX"i
 _PY.2: "PY"i

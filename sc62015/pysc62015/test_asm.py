@@ -148,6 +148,59 @@ assembler_test_cases: List[AssemblerTestCase] = [
             q
         """,
     ),
+    AssemblerTestCase(
+        test_id="mv_reg_imm_label_20bit",
+        asm_code="""
+            message:
+                defb 0
+            start:
+                MV X, message
+        """,
+        expected_ti="""
+            @0000
+            00 0C 00 00 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="mv_reg_imm_label_16bit",
+        asm_code="""
+            message:
+                defb 0
+            start:
+                MV BA, message
+        """,
+        expected_ti="""
+            @0000
+            00 0A 00 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jp_label_expression",
+        asm_code="""
+            start:
+                JP start
+        """,
+        expected_ti="""
+            @0000
+            02 00 00
+            q
+        """,
+    ),
+    AssemblerTestCase(
+        test_id="jpz_label_expression",
+        asm_code="""
+                JPZ message_done
+            message_done:
+                RET
+        """,
+        expected_ti="""
+            @0000
+            14 03 00 06
+            q
+        """,
+    ),
     # --- Tests for PRE byte generation in MV instructions ---
     AssemblerTestCase(
         test_id="mv_imem_imem_simple_pre",
