@@ -13,7 +13,7 @@ function reportRelativePath(model: RomModel): string {
 		case 'iq-7000':
 			return 'rom-analysis/iq-7000/bnida.json';
 		case 'pc-e500':
-			return 'rom-analysis/pc-e500/s3-en/bnida.json';
+			return 'rom-analysis/pc-e500/en/bnida.json';
 	}
 }
 

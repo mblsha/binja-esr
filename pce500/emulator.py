@@ -2823,7 +2823,7 @@ class PCE500Emulator:
         tests that rely on ROM behaviour need to restore those bytes manually.
 
         Args:
-            rom_image: Full 1MB dump matching ``data/pc-e500.bin``.
+            rom_image: Full 1MB dump matching ``data/pc-e500-en.bin``.
             reset: When true (default) perform a fresh :meth:`reset` before
                 restoring the RAM snapshot so CPU state matches power-on.
             restore_internal_ram: Copy the 0x8000-byte RAM block from the ROM

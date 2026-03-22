@@ -25,12 +25,12 @@ class _RomMemory:
 
 
 def _load_rom() -> bytes:
-    rom_path = Path(__file__).resolve().parent.parent.parent / "data" / "pc-e500.bin"
+    rom_path = Path(__file__).resolve().parent.parent.parent / "data" / "pc-e500-en.bin"
     if not rom_path.exists():
         pytest.skip(f"ROM image missing at {rom_path}")
     data = rom_path.read_bytes()
     if len(data) != 0x100000:
-        pytest.skip("Expected 1MB pc-e500.bin ROM image")
+        pytest.skip("Expected 1MB pc-e500-en.bin ROM image")
     return data
 
 

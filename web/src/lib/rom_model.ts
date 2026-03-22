@@ -13,6 +13,6 @@ export function romBasename(model: RomModel): string {
 		case 'iq-7000':
 			return 'iq-7000.bin';
 		case 'pc-e500':
-			return 'pc-e500.bin';
+			return 'pc-e500-en.bin';
 	}
 }

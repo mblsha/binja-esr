@@ -11,12 +11,12 @@ from pce500.display.text_decoder import decode_display_text
 
 
 def _load_rom() -> bytes:
-    rom_path = Path(__file__).resolve().parent.parent.parent / "data" / "pc-e500.bin"
+    rom_path = Path(__file__).resolve().parent.parent.parent / "data" / "pc-e500-en.bin"
     if not rom_path.exists():
         pytest.skip(f"ROM image missing at {rom_path}")
     data = rom_path.read_bytes()
     if len(data) != 0x100000:
-        pytest.skip(f"Expected 1MB pc-e500.bin at {rom_path}")
+        pytest.skip(f"Expected 1MB pc-e500-en.bin at {rom_path}")
     return data
 
 

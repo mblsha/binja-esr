@@ -9,7 +9,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 
 
 def _rom_image() -> bytes:
-    rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+    rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
     if not rom_path.exists():
         pytest.skip(f"ROM file {rom_path} not found")
     data = rom_path.read_bytes()

@@ -31,7 +31,7 @@ emu = PCE500Emulator(
 )
 
 # Load ROM
-rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500.bin"
+rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
 if rom_path.exists():
     with open(rom_path, "rb") as f:
         rom_data = f.read()

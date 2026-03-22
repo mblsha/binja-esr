@@ -10,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 
 fn default_rom_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500.bin")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500-en.bin")
 }
 
 fn decode_lines(rt: &CoreRuntime, font: &Pce500FontMap) -> Vec<String> {
