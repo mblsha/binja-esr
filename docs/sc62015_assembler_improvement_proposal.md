@@ -107,7 +107,14 @@ start:
     MV [uart_data], A
 ```
 
-### 3. Encode page-local `CALL` and `JP*` targets correctly
+### 3. Encode page-local `CALL` and `JP*` targets correctly [done]
+
+Status:
+
+- Done. The assembler now normalizes resolved near `CALL`, `JP`, `JPZ`, `JPNZ`, `JPC`, and `JPNC` targets onto the current `0xFF0000` page before `Imm16` encoding.
+- Cross-page near control-flow now fails explicitly instead of truncating or relying on encoder overflow, with guidance to use `CALLF`, `JPF`, or a conditional branch around `JPF`.
+- Existing explicit low-16 operands such as `JP 0x0104` on a high page are still accepted as page-local targets.
+- Covered by regression tests for all six near control-flow forms on a high `.ORG`, low-16 literal compatibility cases, and cross-page rejection tests for each mnemonic.
 
 Current issue:
 
