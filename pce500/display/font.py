@@ -21,6 +21,11 @@ _JP_SYMBOL_LABELS = {
     0xEC: "●",
     0xEF: "/",
 }
+_JP_DISPLAY_ALIASES = {
+    (0x00, 0x28, 0x6C, 0x6C, 0x28): "↕",
+    (0x00, 0x7F, 0x7F, 0x41, 0x00): "[",
+    (0x00, 0x41, 0x7F, 0x7F, 0x00): "]",
+}
 _FULLWIDTH_TO_HALFWIDTH = {
     unicodedata.normalize("NFKC", bytes([code]).decode("cp932")): bytes([code]).decode("cp932")
     for code in range(0xA1, 0xE0)
@@ -116,6 +121,10 @@ def font_reverse_lookup(memory) -> Dict[Tuple[int, ...], str]:
 
     reverse: Dict[Tuple[int, ...], str] = {}
     for char, pattern in _font_lookup(memory).items():
+        reverse.setdefault(pattern, char)
+        inverted = tuple((~column) & 0x7F for column in pattern)
+        reverse.setdefault(inverted, char)
+    for pattern, char in _JP_DISPLAY_ALIASES.items():
         reverse.setdefault(pattern, char)
         inverted = tuple((~column) & 0x7F for column in pattern)
         reverse.setdefault(inverted, char)
