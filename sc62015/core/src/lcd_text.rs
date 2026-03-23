@@ -55,7 +55,7 @@ impl Pce500FontMap {
                 insert_pce500_pattern(&mut glyphs, pattern, ch);
             }
         }
-        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '⇳');
+        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '↕');
         insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
         insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
         Self { glyphs }
@@ -78,7 +78,7 @@ impl Pce500FontMap {
             insert_pce500_pattern(&mut glyphs, pattern, ch);
         }
 
-        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '⇳');
+        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '↕');
         insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
         insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
         Self { glyphs }
@@ -942,6 +942,18 @@ mod tests {
 
         let lines = decode_display_text(&lcd, &font);
         assert_eq!(lines[0], "ｦ");
+    }
+
+    #[test]
+    fn decode_display_text_supports_pce500_menu_brackets_and_arrow_aliases() {
+        let font = Pce500FontMap::from_rom(&[0u8; 1], 0, 0);
+        let mut lcd = StaticLcd::new();
+        lcd.paint_cell(0, 0, PCE500_ARROW_UP_DOWN);
+        lcd.paint_cell(1, 0, PCE500_LBRACKET);
+        lcd.paint_cell(2, 0, PCE500_RBRACKET);
+
+        let lines = decode_display_text(&lcd, &font);
+        assert!(lines[0].starts_with("↕[]"));
     }
 
     #[test]

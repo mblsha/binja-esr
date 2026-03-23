@@ -11,6 +11,7 @@ from pce500.display.font import (
     GLYPH_STRIDE,
     GLYPH_WIDTH,
     JP_FONT_ATLAS_BASE,
+    font_reverse_lookup,
     glyph_bitmap,
     glyph_columns,
     text_columns,
@@ -101,3 +102,15 @@ def test_jp_kana_and_fullwidth_aliases_decode_from_jp_atlas():
     assert glyph_columns(memory, "ヲ") == (0x0A, 0x4A, 0x4A, 0x2A, 0x1E)
     assert glyph_columns(memory, "ｫ") == (0x48, 0x28, 0x18, 0x7C, 0x08)
     assert glyph_columns(memory, "ォ") == (0x48, 0x28, 0x18, 0x7C, 0x08)
+
+
+def test_display_aliases_decode_menu_brackets_and_updown_arrow():
+    memory = _SparseMemory()
+    memory.write_bytes(0x00F232B, bytes.fromhex("7c1211127c"))
+    memory.write_bytes(0x00F2589, bytes.fromhex("0a4a4a2a1e"))
+
+    reverse = font_reverse_lookup(memory)
+
+    assert reverse[(0x00, 0x28, 0x6C, 0x6C, 0x28)] == "↕"
+    assert reverse[(0x00, 0x7F, 0x7F, 0x41, 0x00)] == "["
+    assert reverse[(0x00, 0x41, 0x7F, 0x7F, 0x00)] == "]"
