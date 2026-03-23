@@ -10,6 +10,7 @@ from pce500.display.font import (
     GLYPH_HEIGHT,
     GLYPH_STRIDE,
     GLYPH_WIDTH,
+    JP_FONT_ATLAS_BASE,
     glyph_bitmap,
     glyph_columns,
     text_columns,
@@ -22,6 +23,18 @@ class _RomMemory:
 
     def read_byte(self, address: int) -> int:
         return self._data[address]
+
+
+class _SparseMemory:
+    def __init__(self):
+        self._data = {}
+
+    def write_bytes(self, address: int, values: bytes) -> None:
+        for offset, value in enumerate(values):
+            self._data[address + offset] = value
+
+    def read_byte(self, address: int) -> int:
+        return self._data.get(address, 0)
 
 
 def _load_rom() -> bytes:
@@ -71,3 +84,20 @@ def test_text_columns_appends_spacers():
     assert second == list(glyph_columns(memory, "B"))
     # Spacer columns should be present (zeroed) between glyphs.
     assert columns[GLYPH_WIDTH] == 0
+
+
+def test_jp_kana_and_fullwidth_aliases_decode_from_jp_atlas():
+    memory = _SparseMemory()
+    # JP font-layout sentinels used by the decoder.
+    memory.write_bytes(0x00F232B, bytes.fromhex("7c1211127c"))
+    memory.write_bytes(0x00F2589, bytes.fromhex("0a4a4a2a1e"))
+
+    wo_addr = JP_FONT_ATLAS_BASE + 0xA6 * GLYPH_STRIDE
+    o_small_addr = JP_FONT_ATLAS_BASE + 0xAB * GLYPH_STRIDE
+    memory.write_bytes(wo_addr, bytes.fromhex("0a4a4a2a1e00"))
+    memory.write_bytes(o_small_addr, bytes.fromhex("4828187c0800"))
+
+    assert glyph_columns(memory, "ｦ") == (0x0A, 0x4A, 0x4A, 0x2A, 0x1E)
+    assert glyph_columns(memory, "ヲ") == (0x0A, 0x4A, 0x4A, 0x2A, 0x1E)
+    assert glyph_columns(memory, "ｫ") == (0x48, 0x28, 0x18, 0x7C, 0x08)
+    assert glyph_columns(memory, "ォ") == (0x48, 0x28, 0x18, 0x7C, 0x08)

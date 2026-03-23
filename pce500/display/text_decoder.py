@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import List
 
-from .font import GLYPH_HEIGHT, GLYPH_WIDTH, glyph_columns
+from .font import GLYPH_HEIGHT, GLYPH_WIDTH, font_reverse_lookup
 
 CHAR_COLUMNS = 40
 CHAR_ROWS = 4
@@ -15,13 +15,7 @@ CHAR_HEIGHT = GLYPH_HEIGHT
 def decode_display_text(controller, memory) -> List[str]:
     """Decode the current LCD VRAM into textual rows."""
 
-    reverse_lookup: Dict[Tuple[int, ...], str] = {}
-    for code in range(0x20, 0x20 + 96):
-        char = chr(code)
-        glyph = glyph_columns(memory, char)
-        reverse_lookup[glyph] = char
-        inverted = tuple((~column) & 0x7F for column in glyph)
-        reverse_lookup.setdefault(inverted, char)
+    reverse_lookup = font_reverse_lookup(memory)
 
     buffer = controller.get_display_buffer()
     if buffer is None:
