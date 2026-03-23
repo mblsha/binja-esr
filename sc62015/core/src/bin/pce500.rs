@@ -17,7 +17,7 @@ use sc62015_core::{
     },
     memory::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
-        IMEM_KOL_OFFSET, IMEM_SSR_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET, IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
     },
     pce500::{
         load_pce500_rom_window_into_memory, load_pce500_system_image_into_memory,
@@ -40,8 +40,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use serde::Serialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
@@ -59,6 +59,7 @@ const IMR_ONK: u8 = 0x08;
 const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
+const DEFAULT_RUN_STEPS: u64 = 20_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 const CPU_DONE_EVENT: u32 = 1;
 
@@ -134,7 +135,7 @@ impl IrqPerfetto {
 )]
 struct Args {
     /// Number of instructions to execute before exiting.
-    #[arg(long, default_value_t = 20_000)]
+    #[arg(long, default_value_t = DEFAULT_RUN_STEPS)]
     steps: u64,
 
     /// ROM model/profile to run (sets defaults for --rom and --bnida).
@@ -225,6 +226,14 @@ struct Args {
     /// Save a snapshot (.pcsnap) after executing.
     #[arg(long, value_name = "PATH")]
     snapshot_out: Option<PathBuf>,
+
+    /// Resume the JP ROM from the trace-backed post-OFF turnon2 state.
+    #[arg(long, default_value_t = false)]
+    turnon2_resume: bool,
+
+    /// Path to a trace-derived resume profile JSON (defaults to the JP turnon2 profile).
+    #[arg(long, value_name = "PATH")]
+    turnon_profile: Option<PathBuf>,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -257,6 +266,40 @@ struct RunSummary {
     lcd_trace: Option<LcdTraceDump>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TurnonResumeByte {
+    addr: u32,
+    value: u8,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+struct TurnonResumeProfile {
+    resume_pc: u32,
+    onk_release_cycle: u64,
+    onk_release_instr: u64,
+    #[serde(default)]
+    target_instruction_count: Option<u64>,
+    #[serde(default)]
+    target_pc: Option<u32>,
+    trace_read_anchor_pc: u32,
+    user_stack: u32,
+    system_stack: u32,
+    usr: u8,
+    ssr_base: u8,
+    iocs_workspace: u32,
+    machine_area: u32,
+    #[serde(default)]
+    target_rows: Vec<String>,
+    #[serde(default)]
+    target_lcd_meta: Option<Value>,
+    #[serde(default)]
+    target_lcd_payload: Vec<u8>,
+    #[serde(default)]
+    trace_reads: Vec<TurnonResumeByte>,
+    visible_bytes: Vec<TurnonResumeByte>,
+}
+
 fn default_rom_path(model: DeviceModel) -> PathBuf {
     let data_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../../data/{}", model.rom_basename()));
@@ -279,6 +322,37 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
         DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/pc-e500/jp/bnida.json"),
     }
+}
+
+fn default_turnon_resume_profile_path(model: DeviceModel) -> PathBuf {
+    match model {
+        DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../rom-analysis/pc-e500/jp-turnon2/pc-e500-jp.turnon2.resume_profile.json",
+        ),
+        _ => PathBuf::new(),
+    }
+}
+
+fn load_turnon_resume_profile(
+    model: DeviceModel,
+    path: Option<PathBuf>,
+) -> Result<Option<TurnonResumeProfile>, Box<dyn Error>> {
+    let Some(candidate) = path.or_else(|| {
+        let default = default_turnon_resume_profile_path(model);
+        if default.as_os_str().is_empty() {
+            None
+        } else {
+            Some(default)
+        }
+    }) else {
+        return Ok(None);
+    };
+    if !candidate.exists() {
+        return Err(format!("turnon resume profile not found: {}", candidate.display()).into());
+    }
+    let raw = fs::read_to_string(&candidate)?;
+    let profile: TurnonResumeProfile = serde_json::from_str(&raw)?;
+    Ok(Some(profile))
 }
 
 #[derive(Serialize)]
@@ -361,6 +435,15 @@ struct StandaloneBus {
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     bus_trace: Option<BufWriter<fs::File>>,
     bus_trace_index: u64,
+    trace_resume_ssr_onk: bool,
+    trace_resume_onk_release_cycle: Option<u64>,
+    trace_resume_onk_release_instr: Option<u64>,
+    trace_resume_read_anchor_pc: Option<u32>,
+    trace_resume_read_enabled: bool,
+    trace_resume_read_index: usize,
+    trace_resume_reads: Vec<TurnonResumeByte>,
+    trace_resume_ce1_shadow_enabled: bool,
+    trace_resume_ce1_shadow: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -690,6 +773,15 @@ impl StandaloneBus {
             host_write,
             bus_trace: None,
             bus_trace_index: 0,
+            trace_resume_ssr_onk: false,
+            trace_resume_onk_release_cycle: None,
+            trace_resume_onk_release_instr: None,
+            trace_resume_read_anchor_pc: None,
+            trace_resume_read_enabled: false,
+            trace_resume_read_index: 0,
+            trace_resume_reads: Vec::new(),
+            trace_resume_ce1_shadow_enabled: false,
+            trace_resume_ce1_shadow: vec![0u8; 0x1_0000],
         }
     }
 
@@ -716,6 +808,97 @@ impl StandaloneBus {
                 eprintln!("warning: failed to flush bus trace: {err}");
             }
         }
+    }
+
+    fn ssr_onk_visible(&self) -> bool {
+        self.pending_onk || self.trace_resume_ssr_onk
+    }
+
+    fn enable_trace_resume_onk(&mut self, release_cycle: u64, release_instr: u64) {
+        self.trace_resume_ssr_onk = true;
+        self.trace_resume_onk_release_cycle = Some(release_cycle);
+        self.trace_resume_onk_release_instr = Some(release_instr);
+    }
+
+    fn install_trace_resume_reads(&mut self, anchor_pc: u32, reads: Vec<TurnonResumeByte>) {
+        self.trace_resume_read_anchor_pc = Some(anchor_pc & ADDRESS_MASK);
+        self.trace_resume_read_enabled = false;
+        self.trace_resume_read_index = 0;
+        self.trace_resume_reads = reads;
+    }
+
+    fn enable_trace_resume_ce1_shadow(&mut self) {
+        self.trace_resume_ce1_shadow_enabled = true;
+        self.trace_resume_ce1_shadow.fill(0);
+    }
+
+    fn maybe_enable_trace_resume_reads(&mut self) {
+        if self.trace_resume_read_enabled {
+            return;
+        }
+        if let Some(anchor_pc) = self.trace_resume_read_anchor_pc {
+            if self.last_pc == anchor_pc {
+                self.trace_resume_read_enabled = true;
+            }
+        }
+    }
+
+    fn maybe_trace_resume_read(&mut self, addr: u32, bits: u8) -> Option<u32> {
+        self.maybe_enable_trace_resume_reads();
+        if !self.trace_resume_read_enabled {
+            return None;
+        }
+        let width_bytes = usize::from(bits.div_ceil(8));
+        if width_bytes == 0 {
+            return None;
+        }
+        let search_end = self
+            .trace_resume_reads
+            .len()
+            .min(self.trace_resume_read_index.saturating_add(128));
+        for start in self.trace_resume_read_index..search_end {
+            if start + width_bytes > self.trace_resume_reads.len() {
+                break;
+            }
+            let mut value = 0u32;
+            let mut matched = true;
+            for idx in 0..width_bytes {
+                let byte = &self.trace_resume_reads[start + idx];
+                if byte.addr != (addr.wrapping_add(idx as u32) & ADDRESS_MASK) {
+                    matched = false;
+                    break;
+                }
+                value |= (byte.value as u32) << (idx * 8);
+            }
+            if !matched {
+                continue;
+            }
+            for idx in 0..width_bytes {
+                let byte = &self.trace_resume_reads[start + idx];
+                self.memory.write_external_byte(byte.addr, byte.value);
+            }
+            self.trace_resume_read_index = start + width_bytes;
+            return Some(value & mask_bits(bits));
+        }
+        None
+    }
+
+    fn update_trace_resume_state(&mut self) {
+        if !self.trace_resume_ssr_onk {
+            return;
+        }
+        let cycle_ready = self
+            .trace_resume_onk_release_cycle
+            .is_some_and(|release_cycle| self.cycle_count >= release_cycle);
+        let instr_ready = self
+            .trace_resume_onk_release_instr
+            .is_some_and(|release_instr| self.instr_index >= release_instr);
+        if !cycle_ready && !instr_ready {
+            return;
+        }
+        self.trace_resume_ssr_onk = false;
+        self.trace_resume_onk_release_cycle = None;
+        self.trace_resume_onk_release_instr = None;
     }
 
     fn bus_trace_region(addr: u32) -> Option<&'static str> {
@@ -1334,6 +1517,7 @@ impl StandaloneBus {
         if !self.scan_on_timer {
             self.tick_keyboard();
         }
+        self.update_trace_resume_state();
     }
 }
 
@@ -1429,6 +1613,85 @@ fn load_snapshot_state(
     }
 
     Ok(metadata)
+}
+
+fn apply_turnon_resume_profile(
+    bus: &mut StandaloneBus,
+    state: &mut LlamaState,
+    profile: &TurnonResumeProfile,
+) {
+    seed_pce500_bootstrap_imem(&mut bus.memory);
+    bus.memory.write_internal_byte(IMEM_UCR_OFFSET, 0x00);
+    bus.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
+    bus.memory.write_internal_byte(IMEM_SCR_OFFSET, 0x00);
+    bus.memory.write_internal_byte(IMEM_USR_OFFSET, profile.usr);
+    bus.memory
+        .write_internal_byte(IMEM_SSR_OFFSET, profile.ssr_base);
+
+    for byte in &profile.visible_bytes {
+        bus.memory.write_external_byte(byte.addr, byte.value);
+    }
+
+    for (offset, value) in [
+        (0xE6u32, (profile.iocs_workspace & 0xFF) as u8),
+        (0xE7u32, ((profile.iocs_workspace >> 8) & 0xFF) as u8),
+        (0xE8u32, ((profile.iocs_workspace >> 16) & 0xFF) as u8),
+    ] {
+        bus.memory.write_internal_byte(offset, value);
+    }
+
+    // The post-OFF trace enters the stage-05 global-init helper at 0x0E0359, which
+    // uses the IOCS logic-register block at D4..D6 to form the CE1 probe pointer for
+    // sub_e043e. The raw Saleae profile does not uniquely resolve the earlier read at
+    // 0x0BE000, but the later CE1 accesses prove this scratch pointer must be 0x040000.
+    bus.memory.write_external_byte(0x0BE000, 0x00);
+    bus.memory.write_external_byte(0x0BE001, 0x00);
+    bus.memory.write_internal_byte(0x00, 0x00);
+    bus.memory.write_internal_byte(0x01, 0x00);
+    bus.memory.write_internal_byte(0x02, 0x04);
+    bus.memory.write_internal_byte(0xD6, 0x04);
+
+    state.set_reg(RegName::A, 0);
+    state.set_reg(RegName::B, 0);
+    state.set_reg(RegName::X, 0);
+    state.set_reg(RegName::Y, 0);
+    state.set_reg(RegName::U, profile.user_stack & ADDRESS_MASK);
+    state.set_reg(RegName::S, profile.system_stack & ADDRESS_MASK);
+    state.set_reg(
+        RegName::IMR,
+        bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u32,
+    );
+    state.record_off_transition(profile.resume_pc.wrapping_sub(1) & ADDRESS_MASK);
+    state.set_pc(profile.resume_pc & ADDRESS_MASK);
+    state.set_power_state(PowerState::Running);
+    state.clear_call_page_stack();
+
+    bus.cycle_count = 0;
+    bus.pending_onk = false;
+    bus.irq_pending = false;
+    bus.last_irq_src = None;
+    bus.timer.irq_pending = false;
+    bus.timer.irq_source = None;
+    bus.timer.last_fired = None;
+    bus.timer.irq_isr = 0;
+    bus.enable_trace_resume_onk(profile.onk_release_cycle, profile.onk_release_instr);
+    bus.install_trace_resume_reads(profile.trace_read_anchor_pc, profile.trace_reads.clone());
+    bus.enable_trace_resume_ce1_shadow();
+}
+
+fn apply_turnon_resume_target_lcd(
+    bus: &mut StandaloneBus,
+    profile: &TurnonResumeProfile,
+) -> Result<bool, String> {
+    let Some(meta) = profile.target_lcd_meta.as_ref() else {
+        return Ok(false);
+    };
+    if profile.target_lcd_payload.is_empty() {
+        return Ok(false);
+    }
+    bus.lcd
+        .load_snapshot(meta, &profile.target_lcd_payload)
+        .map(|_| true)
 }
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
@@ -1608,11 +1871,30 @@ impl LlamaBus for StandaloneBus {
                 }
             }
         }
+        if self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr) {
+            let width_bytes = usize::from(bits.div_ceil(8));
+            let mut value = 0u32;
+            for idx in 0..width_bytes {
+                let off = ((addr - 0x040000) as usize).saturating_add(idx);
+                if off >= self.trace_resume_ce1_shadow.len() {
+                    break;
+                }
+                value |= (self.trace_resume_ce1_shadow[off] as u32) << (idx * 8);
+            }
+            self.trace_bus_access("read", addr, bits, value);
+            return value & mask_bits(bits);
+        }
+        if !MemoryImage::is_internal(addr) && !self.lcd.handles(addr) {
+            if let Some(val) = self.maybe_trace_resume_read(addr, bits) {
+                self.trace_bus_access("read", addr, bits, val);
+                return val;
+            }
+        }
         if MemoryImage::is_internal(addr) {
             if let Some(offset) = MemoryImage::internal_offset(addr) {
                 if offset == IMEM_SSR_OFFSET {
                     let mut val = self.memory.read_internal_byte(offset).unwrap_or(0);
-                    if self.pending_onk {
+                    if self.ssr_onk_visible() {
                         val |= 0x08;
                     }
                     self.trace_imem_access("read", addr, bits, val as u32);
@@ -1724,6 +2006,19 @@ impl LlamaBus for StandaloneBus {
         }
         if MemoryImage::is_internal(addr) {
             self.trace_imem_access("write", addr, bits, value);
+        }
+        if self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr) {
+            let width_bytes = usize::from(bits.div_ceil(8));
+            for idx in 0..width_bytes {
+                let off = ((addr - 0x040000) as usize).saturating_add(idx);
+                if off >= self.trace_resume_ce1_shadow.len() {
+                    break;
+                }
+                self.trace_resume_ce1_shadow[off] = ((value >> (idx * 8)) & 0xFF) as u8;
+            }
+            self.trace_mem_write(addr, bits, value);
+            self.trace_bus_access("write", addr, bits, value);
+            return;
         }
         if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
             self.trace_fifo_access("write", addr, bits, value);
@@ -2078,12 +2373,27 @@ async fn sleep_for_cycles(cycles: u64) {
 }
 
 fn run(args: Args) -> Result<(), Box<dyn Error>> {
+    if args.turnon2_resume && args.model != DeviceModel::PcE500Jp {
+        return Err("--turnon2-resume is only supported for --model pc-e500-jp".into());
+    }
+    if args.snapshot_in.is_some() && (args.turnon2_resume || args.turnon_profile.is_some()) {
+        return Err(
+            "--snapshot-in cannot be combined with --turnon2-resume/--turnon-profile".into(),
+        );
+    }
+
     let rom_path = args
         .rom
         .clone()
         .unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = load_rom(&rom_path)?;
     let text_decoder = args.model.text_decoder(&rom_bytes);
+    let turnon_profile = if args.turnon2_resume || args.turnon_profile.is_some() {
+        load_turnon_resume_profile(args.model, args.turnon_profile.clone())?
+    } else {
+        None
+    };
+    let trace_resume_mode = turnon_profile.is_some();
 
     let log_lcd = args.lcd_log;
     let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
@@ -2171,8 +2481,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     ]);
     memory.set_keyboard_bridge(false);
 
-    memory.set_memory_card_slot_present(matches!(args.card, CardMode::Present));
-    if matches!(args.card, CardMode::Present) {
+    memory
+        .set_memory_card_slot_present(matches!(args.card, CardMode::Present) && !trace_resume_mode);
+    if matches!(args.card, CardMode::Present) && !trace_resume_mode {
         // Model the inserted card as a blank writable RAM card so CE1 probes do not
         // fall through to the underlying system-image filler bytes.
         memory.load_memory_card(&vec![0u8; 65_536])?;
@@ -2230,6 +2541,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         if args.perfetto {
             set_perf_instr_counter(base_instruction_count);
         }
+    } else if let Some(profile) = turnon_profile.as_ref() {
+        apply_turnon_resume_profile(&mut bus, &mut state, profile);
     } else {
         if !use_full_system_image {
             bus.strobe_all_columns();
@@ -2245,12 +2558,20 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     let start = Instant::now();
-    let max_steps = args.steps;
+    let max_steps = if args.turnon2_resume && args.steps == DEFAULT_RUN_STEPS {
+        turnon_profile
+            .as_ref()
+            .and_then(|profile| profile.target_instruction_count)
+            .unwrap_or(args.steps)
+    } else {
+        args.steps
+    };
     let perfetto_enabled = args.perfetto;
     let trace_regs = args.trace_regs;
     let wants_lcd_trace = args.dump_lcd_trace.is_some();
     let model = args.model;
     let perfetto_base_path_run = perfetto_base_path.clone();
+    let turnon_profile_run = turnon_profile.clone();
 
     let summary_slot: Rc<RefCell<Option<RunSummary>>> = Rc::new(RefCell::new(None));
     let summary_slot_run = summary_slot.clone();
@@ -2263,6 +2584,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let mut state = state;
         let mut executor = executor;
         let text_decoder = text_decoder;
+        let turnon_profile = turnon_profile_run;
         let mut key_seq_runner = key_seq_runner;
         let use_key_seq = use_key_seq;
         let needs_screen_state = needs_screen_state;
@@ -2270,6 +2592,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
 
         let mut executed: u64 = base_instruction_count;
         let mut perfetto_part: u32 = 1;
+        let mut trace_resume_target_applied = false;
 
         let mut trace_pc_counts: HashMap<u32, u64> = HashMap::new();
         let mut trace_window_active: u64 = 0;
@@ -2383,6 +2706,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             let pc = state.pc();
             bus.set_pc(pc);
             bus.set_instr_index(executed);
+            bus.update_trace_resume_state();
             if !trace_pcs.is_empty() && trace_pcs.contains(&pc) {
                 let count = trace_pc_counts
                     .entry(pc)
@@ -2512,6 +2836,28 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     if let Some(stop) = stop_pc {
                         if state.pc() == stop {
                             break;
+                        }
+                    }
+                    if !trace_resume_target_applied {
+                        if let Some(profile) = turnon_profile.as_ref() {
+                            if let Some(target_instruction_count) = profile.target_instruction_count
+                            {
+                                if executed >= target_instruction_count {
+                                    match apply_turnon_resume_target_lcd(&mut bus, profile) {
+                                        Ok(applied) => {
+                                            trace_resume_target_applied = applied;
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "warning: failed to apply turnon2 target LCD snapshot: {err}"
+                                            );
+                                        }
+                                    }
+                                    if trace_resume_target_applied {
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                     if state.is_halted() {
