@@ -9,7 +9,9 @@ pub const SYSTEM_IMAGE_LEN: usize = 0x100000;
 pub const ROM_WINDOW_START: usize = 0x0C0000;
 pub const ROM_WINDOW_LEN: usize = 0x40000;
 pub const ROM_RESET_VECTOR_ADDR: u32 = 0x0FFFFD;
-pub const ROM_FONT_BASE_ADDR: u32 = 0x00F_2215;
+pub const ROM_ENGLISH_FONT_BASE_ADDR: u32 = 0x00F_2215;
+pub const ROM_JP_FONT_ATLAS_BASE_ADDR: u32 = 0x00F_21A5;
+pub const ROM_FONT_BASE_ADDR: u32 = ROM_ENGLISH_FONT_BASE_ADDR;
 pub const NO_RAM_WINDOW_START: usize = 0x00000;
 pub const NO_RAM_WINDOW_END: usize = 0x3FFFF;
 pub const BOOTSTRAP_IMR_VALUE: u8 = 0x43;
@@ -74,7 +76,7 @@ pub fn seed_pce500_bootstrap_imem(memory: &mut MemoryImage) {
 }
 
 pub fn pce500_font_map_from_rom(rom: &[u8]) -> Option<Pce500FontMap> {
-    let font = Pce500FontMap::from_rom(rom, ROM_FONT_BASE_ADDR, ROM_WINDOW_START as u32);
+    let font = Pce500FontMap::from_pce500_rom(rom, ROM_WINDOW_START as u32);
     if font.is_empty() {
         None
     } else {

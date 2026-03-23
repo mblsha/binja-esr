@@ -7,6 +7,11 @@ use std::collections::{HashMap, VecDeque};
 const GLYPH_WIDTH: usize = 5;
 const GLYPH_STRIDE: usize = 6; // five data columns + spacer
 const GLYPH_COUNT: usize = 96; // ASCII 0x20-0x7F
+const PCE500_JP_FONT_ATLAS_BASE_ADDR: u32 = 0x00F_21A5;
+const PCE500_JP_SENTINEL_A_ADDR: u32 = 0x00F_232B;
+const PCE500_JP_SENTINEL_A: [u8; GLYPH_WIDTH] = [0x7C, 0x12, 0x11, 0x12, 0x7C];
+const PCE500_JP_SENTINEL_WO_ADDR: u32 = 0x00F_2589;
+const PCE500_JP_SENTINEL_WO: [u8; GLYPH_WIDTH] = [0x0A, 0x4A, 0x4A, 0x2A, 0x1E];
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
 const PCE500_ARROW_UP_DOWN: [u8; GLYPH_WIDTH] = [0x00, 0x28, 0x6c, 0x6c, 0x28];
@@ -29,7 +34,7 @@ pub struct Pce500FontMap {
 
 impl Pce500FontMap {
     pub fn from_rom(rom: &[u8], font_base_addr: u32, rom_window_start: u32) -> Self {
-        let Some(base) = font_base_offset(rom, font_base_addr, rom_window_start) else {
+        let Some(base) = external_addr_offset(rom, font_base_addr, rom_window_start) else {
             return Self::default();
         };
 
@@ -47,16 +52,32 @@ impl Pce500FontMap {
 
             let codepoint = 0x20 + index as u32;
             if let Some(ch) = char::from_u32(codepoint) {
-                glyphs.insert(pattern, ch);
-                // Match Python decoder: accept inverted glyphs to tolerate polarity differences in
-                // the LCD buffer (0/1 for pixel on).
-                let mut inverted = [0u8; GLYPH_WIDTH];
-                for (dest, src) in inverted.iter_mut().zip(pattern) {
-                    *dest = (!src) & 0x7F;
-                }
-                glyphs.entry(inverted).or_insert(ch);
+                insert_pce500_pattern(&mut glyphs, pattern, ch);
             }
         }
+        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '⇳');
+        insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
+        insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
+        Self { glyphs }
+    }
+
+    pub fn from_pce500_rom(rom: &[u8], rom_window_start: u32) -> Self {
+        if !looks_like_pce500_jp_font(rom, rom_window_start) {
+            return Self::from_rom(rom, crate::pce500::ROM_FONT_BASE_ADDR, rom_window_start);
+        }
+
+        let mut glyphs = HashMap::new();
+        for code in 0u16..=0xFF {
+            let Some(ch) = pce500_jp_display_char(code as u8) else {
+                continue;
+            };
+            let glyph_addr = PCE500_JP_FONT_ATLAS_BASE_ADDR + u32::from(code) * GLYPH_STRIDE as u32;
+            let Some(pattern) = read_pce500_pattern_at(rom, glyph_addr, rom_window_start) else {
+                continue;
+            };
+            insert_pce500_pattern(&mut glyphs, pattern, ch);
+        }
+
         insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '⇳');
         insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
         insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
@@ -72,11 +93,14 @@ impl Pce500FontMap {
     }
 }
 
-fn insert_pce500_special(
+fn insert_pce500_pattern(
     glyphs: &mut HashMap<[u8; GLYPH_WIDTH], char>,
     pattern: [u8; GLYPH_WIDTH],
     ch: char,
 ) {
+    if is_blank_pce500_pattern(&pattern) && ch != ' ' {
+        return;
+    }
     glyphs.entry(pattern).or_insert(ch);
     let mut inverted = [0u8; GLYPH_WIDTH];
     for (dest, src) in inverted.iter_mut().zip(pattern) {
@@ -85,17 +109,64 @@ fn insert_pce500_special(
     glyphs.entry(inverted).or_insert(ch);
 }
 
-fn font_base_offset(rom: &[u8], font_base_addr: u32, rom_window_start: u32) -> Option<usize> {
-    let base = usize::try_from(font_base_addr).ok()?;
+fn insert_pce500_special(
+    glyphs: &mut HashMap<[u8; GLYPH_WIDTH], char>,
+    pattern: [u8; GLYPH_WIDTH],
+    ch: char,
+) {
+    insert_pce500_pattern(glyphs, pattern, ch);
+}
+
+fn external_addr_offset(rom: &[u8], absolute_addr: u32, rom_window_start: u32) -> Option<usize> {
+    let base = usize::try_from(absolute_addr).ok()?;
     if base < rom.len() {
         return Some(base);
     }
-    let window_base = font_base_addr.checked_sub(rom_window_start)?;
+    let window_base = absolute_addr.checked_sub(rom_window_start)?;
     let window_base = usize::try_from(window_base).ok()?;
     if window_base < rom.len() {
         return Some(window_base);
     }
     None
+}
+
+fn read_pce500_pattern_at(
+    rom: &[u8],
+    absolute_addr: u32,
+    rom_window_start: u32,
+) -> Option<[u8; GLYPH_WIDTH]> {
+    let start = external_addr_offset(rom, absolute_addr, rom_window_start)?;
+    if start + GLYPH_WIDTH > rom.len() {
+        return None;
+    }
+    let mut pattern = [0u8; GLYPH_WIDTH];
+    pattern.copy_from_slice(&rom[start..start + GLYPH_WIDTH]);
+    for byte in &mut pattern {
+        *byte &= 0x7F;
+    }
+    Some(pattern)
+}
+
+fn looks_like_pce500_jp_font(rom: &[u8], rom_window_start: u32) -> bool {
+    read_pce500_pattern_at(rom, PCE500_JP_SENTINEL_A_ADDR, rom_window_start)
+        .is_some_and(|pattern| pattern == PCE500_JP_SENTINEL_A)
+        && read_pce500_pattern_at(rom, PCE500_JP_SENTINEL_WO_ADDR, rom_window_start)
+            .is_some_and(|pattern| pattern == PCE500_JP_SENTINEL_WO)
+}
+
+fn is_blank_pce500_pattern(pattern: &[u8; GLYPH_WIDTH]) -> bool {
+    pattern.iter().all(|byte| (byte & 0x7F) == 0)
+}
+
+fn pce500_jp_display_char(code: u8) -> Option<char> {
+    match code {
+        0x20..=0x7E => char::from_u32(u32::from(code)),
+        0xA1..=0xDF => char::from_u32(0xFF61 + u32::from(code - 0xA1)),
+        0xE8 => Some('✳'),
+        0xEC => Some('●'),
+        0xEF => Some('/'),
+        _ => None,
+    }
 }
 
 pub fn decode_display_text(lcd: &dyn LcdHal, font: &Pce500FontMap) -> Vec<String> {
@@ -538,8 +609,102 @@ fn trim_trailing_empty_lines(lines: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lcd::Iq7000LcdController;
-    use crate::lcd::LcdController;
+    use crate::lcd::{
+        Iq7000LcdController, LcdController, LcdDisplayWrite, LcdHal, LcdKind, LcdStats,
+        LcdWriteTrace, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
+    };
+    use serde_json::Value;
+    use std::any::Any;
+
+    const TEST_LCD_PAGES: usize = 8;
+
+    struct StaticLcd {
+        buffer: [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS],
+        vram: [[u8; LCD_DISPLAY_COLS]; TEST_LCD_PAGES],
+    }
+
+    impl StaticLcd {
+        fn new() -> Self {
+            Self {
+                buffer: [[1u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS],
+                vram: [[0u8; LCD_DISPLAY_COLS]; TEST_LCD_PAGES],
+            }
+        }
+
+        fn paint_cell(&mut self, cell_x: usize, cell_y: usize, pattern: [u8; GLYPH_WIDTH]) {
+            let row_base = cell_y * ROWS_PER_CELL;
+            let col_base = cell_x * COLS_PER_CELL;
+            for (dx, column) in pattern.into_iter().enumerate() {
+                for dy in 0..7 {
+                    if ((column >> dy) & 1) != 0 {
+                        self.buffer[row_base + dy][col_base + dx] = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    impl LcdHal for StaticLcd {
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn kind(&self) -> LcdKind {
+            LcdKind::Hd61202
+        }
+
+        fn reset(&mut self) {
+            *self = Self::new();
+        }
+
+        fn handles(&self, _address: u32) -> bool {
+            false
+        }
+
+        fn read(&mut self, _address: u32) -> Option<u8> {
+            None
+        }
+
+        fn write(&mut self, _address: u32, _value: u8) {}
+
+        fn read_placeholder(&self, _address: u32) -> u32 {
+            0
+        }
+
+        fn begin_display_write_capture(&mut self) {}
+
+        fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite> {
+            Vec::new()
+        }
+
+        fn display_buffer(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS] {
+            self.buffer
+        }
+
+        fn chip_display_buffer(&self, _chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS] {
+            [[0u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS]
+        }
+
+        fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; TEST_LCD_PAGES] {
+            self.vram
+        }
+
+        fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; TEST_LCD_PAGES] {
+            [[LcdWriteTrace::default(); LCD_DISPLAY_COLS]; TEST_LCD_PAGES]
+        }
+
+        fn stats(&self) -> LcdStats {
+            LcdStats::default()
+        }
+
+        fn export_snapshot(&self) -> (Value, Vec<u8>) {
+            (Value::Null, Vec::new())
+        }
+
+        fn load_snapshot(&mut self, _metadata: &Value, _payload: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn iq7000_text_decoder_ocr_matches_font_map() {
@@ -744,6 +909,39 @@ mod tests {
 
         // Smoke: matcher can coexist with actual LCD types (no trait coupling).
         let _lcd = LcdController::new();
+    }
+
+    #[test]
+    fn pce500_font_map_from_pce500_rom_decodes_jp_ascii_and_kana() {
+        let mut rom = vec![0u8; 0x100000];
+        let ascii_a = [0x7Cu8, 0x12, 0x11, 0x12, 0x7C];
+        let kana_wo = [0x0Au8, 0x4A, 0x4A, 0x2A, 0x1E];
+
+        rom[PCE500_JP_SENTINEL_A_ADDR as usize..PCE500_JP_SENTINEL_A_ADDR as usize + GLYPH_WIDTH]
+            .copy_from_slice(&ascii_a);
+        rom[PCE500_JP_SENTINEL_WO_ADDR as usize..PCE500_JP_SENTINEL_WO_ADDR as usize + GLYPH_WIDTH]
+            .copy_from_slice(&kana_wo);
+
+        let font = Pce500FontMap::from_pce500_rom(&rom, 0);
+        assert_eq!(font.resolve(&ascii_a), 'A');
+        assert_eq!(font.resolve(&kana_wo), 'ｦ');
+    }
+
+    #[test]
+    fn decode_display_text_supports_pce500_jp_halfwidth_kana() {
+        let mut rom = vec![0u8; 0x100000];
+        let kana_wo = [0x0Au8, 0x4A, 0x4A, 0x2A, 0x1E];
+        rom[PCE500_JP_SENTINEL_A_ADDR as usize..PCE500_JP_SENTINEL_A_ADDR as usize + GLYPH_WIDTH]
+            .copy_from_slice(&PCE500_JP_SENTINEL_A);
+        rom[PCE500_JP_SENTINEL_WO_ADDR as usize..PCE500_JP_SENTINEL_WO_ADDR as usize + GLYPH_WIDTH]
+            .copy_from_slice(&kana_wo);
+
+        let font = Pce500FontMap::from_pce500_rom(&rom, 0);
+        let mut lcd = StaticLcd::new();
+        lcd.paint_cell(0, 0, kana_wo);
+
+        let lines = decode_display_text(&lcd, &font);
+        assert_eq!(lines[0], "ｦ");
     }
 
     #[test]

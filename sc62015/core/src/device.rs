@@ -109,7 +109,7 @@ impl DeviceModel {
                 lcd_kind: LcdKind::Hd61202,
                 rom_window_start: pce500::ROM_WINDOW_START as u32,
                 rom_window_len: pce500::ROM_WINDOW_LEN,
-                font_base_addr: Some(pce500::ROM_FONT_BASE_ADDR),
+                font_base_addr: Some(pce500::ROM_ENGLISH_FONT_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
             },
             Self::PcE500Jp => DeviceSpec {
@@ -118,7 +118,7 @@ impl DeviceModel {
                 lcd_kind: LcdKind::Hd61202,
                 rom_window_start: pce500::ROM_WINDOW_START as u32,
                 rom_window_len: pce500::ROM_WINDOW_LEN,
-                font_base_addr: Some(pce500::ROM_FONT_BASE_ADDR),
+                font_base_addr: Some(pce500::ROM_JP_FONT_ATLAS_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
             },
         }
