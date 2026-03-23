@@ -15,6 +15,7 @@ const PCE500_JP_SENTINEL_WO: [u8; GLYPH_WIDTH] = [0x0A, 0x4A, 0x4A, 0x2A, 0x1E];
 const ROWS_PER_CELL: usize = 8;
 const COLS_PER_CELL: usize = 6;
 const PCE500_ARROW_UP_DOWN: [u8; GLYPH_WIDTH] = [0x00, 0x28, 0x6c, 0x6c, 0x28];
+const PCE500_ARROW_UP_DOWN_NARROW: [u8; GLYPH_WIDTH] = [0x00, 0x28, 0x6c, 0x6c, 0x00];
 const PCE500_LBRACKET: [u8; GLYPH_WIDTH] = [0x00, 0x7f, 0x7f, 0x41, 0x00];
 const PCE500_RBRACKET: [u8; GLYPH_WIDTH] = [0x00, 0x41, 0x7f, 0x7f, 0x00];
 
@@ -56,6 +57,7 @@ impl Pce500FontMap {
             }
         }
         insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '↕');
+        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN_NARROW, '↕');
         insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
         insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
         Self { glyphs }
@@ -79,6 +81,7 @@ impl Pce500FontMap {
         }
 
         insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN, '↕');
+        insert_pce500_special(&mut glyphs, PCE500_ARROW_UP_DOWN_NARROW, '↕');
         insert_pce500_special(&mut glyphs, PCE500_LBRACKET, '[');
         insert_pce500_special(&mut glyphs, PCE500_RBRACKET, ']');
         Self { glyphs }
@@ -954,6 +957,11 @@ mod tests {
 
         let lines = decode_display_text(&lcd, &font);
         assert!(lines[0].starts_with("↕[]"));
+
+        let mut lcd_narrow = StaticLcd::new();
+        lcd_narrow.paint_cell(0, 0, PCE500_ARROW_UP_DOWN_NARROW);
+        let lines = decode_display_text(&lcd_narrow, &font);
+        assert!(lines[0].starts_with("↕"));
     }
 
     #[test]
