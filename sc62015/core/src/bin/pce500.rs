@@ -234,6 +234,10 @@ struct Args {
     /// Path to a trace-derived resume profile JSON (defaults to the JP turnon2 profile).
     #[arg(long, value_name = "PATH")]
     turnon_profile: Option<PathBuf>,
+
+    /// Replace CE1/CE6 with the reset-trace-observed FPGA card values.
+    #[arg(long, default_value_t = false)]
+    reset_trace_card: bool,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -444,6 +448,8 @@ struct StandaloneBus {
     trace_resume_reads: Vec<TurnonResumeByte>,
     trace_resume_ce1_shadow_enabled: bool,
     trace_resume_ce1_shadow: Vec<u8>,
+    trace_reset_ce6_shadow_enabled: bool,
+    trace_reset_ce6_shadow: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -782,6 +788,8 @@ impl StandaloneBus {
             trace_resume_reads: Vec::new(),
             trace_resume_ce1_shadow_enabled: false,
             trace_resume_ce1_shadow: vec![0u8; 0x1_0000],
+            trace_reset_ce6_shadow_enabled: false,
+            trace_reset_ce6_shadow: vec![0u8; 0x1_0000],
         }
     }
 
@@ -830,6 +838,15 @@ impl StandaloneBus {
     fn enable_trace_resume_ce1_shadow(&mut self) {
         self.trace_resume_ce1_shadow_enabled = true;
         self.trace_resume_ce1_shadow.fill(0);
+    }
+
+    fn enable_reset_trace_card(&mut self) {
+        self.trace_resume_ce1_shadow_enabled = true;
+        self.trace_resume_ce1_shadow.fill(0);
+        self.trace_resume_ce1_shadow[0] = 0x55;
+        self.trace_resume_ce1_shadow[1] = 0xCA;
+        self.trace_reset_ce6_shadow_enabled = true;
+        self.trace_reset_ce6_shadow.fill(0);
     }
 
     fn maybe_enable_trace_resume_reads(&mut self) {
@@ -1871,6 +1888,19 @@ impl LlamaBus for StandaloneBus {
                 }
             }
         }
+        if self.trace_reset_ce6_shadow_enabled && (0x010000..=0x01FFFF).contains(&addr) {
+            let width_bytes = usize::from(bits.div_ceil(8));
+            let mut value = 0u32;
+            for idx in 0..width_bytes {
+                let off = ((addr - 0x010000) as usize).saturating_add(idx);
+                if off >= self.trace_reset_ce6_shadow.len() {
+                    break;
+                }
+                value |= (self.trace_reset_ce6_shadow[off] as u32) << (idx * 8);
+            }
+            self.trace_bus_access("read", addr, bits, value);
+            return value & mask_bits(bits);
+        }
         if self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr) {
             let width_bytes = usize::from(bits.div_ceil(8));
             let mut value = 0u32;
@@ -2006,6 +2036,19 @@ impl LlamaBus for StandaloneBus {
         }
         if MemoryImage::is_internal(addr) {
             self.trace_imem_access("write", addr, bits, value);
+        }
+        if self.trace_reset_ce6_shadow_enabled && (0x010000..=0x01FFFF).contains(&addr) {
+            let width_bytes = usize::from(bits.div_ceil(8));
+            for idx in 0..width_bytes {
+                let off = ((addr - 0x010000) as usize).saturating_add(idx);
+                if off >= self.trace_reset_ce6_shadow.len() {
+                    break;
+                }
+                self.trace_reset_ce6_shadow[off] = ((value >> (idx * 8)) & 0xFF) as u8;
+            }
+            self.trace_mem_write(addr, bits, value);
+            self.trace_bus_access("write", addr, bits, value);
+            return;
         }
         if self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr) {
             let width_bytes = usize::from(bits.div_ceil(8));
@@ -2529,6 +2572,9 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         bus.set_bus_trace(Some(BufWriter::new(file)));
     }
     configure_bus_for_model(&mut bus, args.model);
+    if args.reset_trace_card {
+        bus.enable_reset_trace_card();
+    }
     // Keep default timer-driven scans unless tests override the flag.
     bus.timer.set_preserve_phase(false);
     let mut state = LlamaState::new();
