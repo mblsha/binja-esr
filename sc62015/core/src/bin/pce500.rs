@@ -448,8 +448,10 @@ struct StandaloneBus {
     trace_resume_reads: Vec<TurnonResumeByte>,
     trace_resume_ce1_shadow_enabled: bool,
     trace_resume_ce1_shadow: Vec<u8>,
+    trace_reset_ce1_readonly: bool,
     trace_reset_ce6_shadow_enabled: bool,
     trace_reset_ce6_shadow: Vec<u8>,
+    trace_reset_ce6_readonly: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -788,8 +790,10 @@ impl StandaloneBus {
             trace_resume_reads: Vec::new(),
             trace_resume_ce1_shadow_enabled: false,
             trace_resume_ce1_shadow: vec![0u8; 0x1_0000],
+            trace_reset_ce1_readonly: false,
             trace_reset_ce6_shadow_enabled: false,
             trace_reset_ce6_shadow: vec![0u8; 0x1_0000],
+            trace_reset_ce6_readonly: false,
         }
     }
 
@@ -838,6 +842,7 @@ impl StandaloneBus {
     fn enable_trace_resume_ce1_shadow(&mut self) {
         self.trace_resume_ce1_shadow_enabled = true;
         self.trace_resume_ce1_shadow.fill(0);
+        self.trace_reset_ce1_readonly = false;
     }
 
     fn enable_reset_trace_card(&mut self) {
@@ -845,8 +850,10 @@ impl StandaloneBus {
         self.trace_resume_ce1_shadow.fill(0);
         self.trace_resume_ce1_shadow[0] = 0x55;
         self.trace_resume_ce1_shadow[1] = 0xCA;
+        self.trace_reset_ce1_readonly = true;
         self.trace_reset_ce6_shadow_enabled = true;
         self.trace_reset_ce6_shadow.fill(0);
+        self.trace_reset_ce6_readonly = true;
     }
 
     fn maybe_enable_trace_resume_reads(&mut self) {
@@ -2038,6 +2045,11 @@ impl LlamaBus for StandaloneBus {
             self.trace_imem_access("write", addr, bits, value);
         }
         if self.trace_reset_ce6_shadow_enabled && (0x010000..=0x01FFFF).contains(&addr) {
+            self.trace_mem_write(addr, bits, value);
+            self.trace_bus_access("write", addr, bits, value);
+            if self.trace_reset_ce6_readonly {
+                return;
+            }
             let width_bytes = usize::from(bits.div_ceil(8));
             for idx in 0..width_bytes {
                 let off = ((addr - 0x010000) as usize).saturating_add(idx);
@@ -2046,11 +2058,14 @@ impl LlamaBus for StandaloneBus {
                 }
                 self.trace_reset_ce6_shadow[off] = ((value >> (idx * 8)) & 0xFF) as u8;
             }
-            self.trace_mem_write(addr, bits, value);
-            self.trace_bus_access("write", addr, bits, value);
             return;
         }
         if self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr) {
+            self.trace_mem_write(addr, bits, value);
+            self.trace_bus_access("write", addr, bits, value);
+            if self.trace_reset_ce1_readonly {
+                return;
+            }
             let width_bytes = usize::from(bits.div_ceil(8));
             for idx in 0..width_bytes {
                 let off = ((addr - 0x040000) as usize).saturating_add(idx);
@@ -2059,8 +2074,6 @@ impl LlamaBus for StandaloneBus {
                 }
                 self.trace_resume_ce1_shadow[off] = ((value >> (idx * 8)) & 0xFF) as u8;
             }
-            self.trace_mem_write(addr, bits, value);
-            self.trace_bus_access("write", addr, bits, value);
             return;
         }
         if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
@@ -3395,6 +3408,34 @@ mod tests {
             expected_pc & pc_mask,
             "standalone runner PC seed must honour the PC-E500 reset vector"
         );
+    }
+
+    #[test]
+    fn reset_trace_card_keeps_ce1_ce6_read_only() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(false, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.enable_reset_trace_card();
+
+        assert_eq!(bus.load(0x010012, 8), 0x00);
+        assert_eq!(bus.load(0x040000, 8), 0x55);
+        assert_eq!(bus.load(0x040001, 8), 0xCA);
+
+        bus.store(0x010012, 8, 0x99);
+        bus.store(0x040000, 8, 0x00);
+        bus.store(0x040001, 8, 0x00);
+
+        assert_eq!(bus.load(0x010012, 8), 0x00);
+        assert_eq!(bus.load(0x040000, 8), 0x55);
+        assert_eq!(bus.load(0x040001, 8), 0xCA);
     }
 
     #[test]
