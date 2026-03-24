@@ -235,7 +235,8 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     turnon_profile: Option<PathBuf>,
 
-    /// Replace CE1/CE6 with the reset-trace-observed FPGA card values.
+    /// Use reset-trace-backed CE1/CE6 values to reproduce the JP reset-trace boot path
+    /// and reach MAIN MENU parity.
     #[arg(long, default_value_t = false)]
     reset_trace_card: bool,
     // (legacy automation flags removed; use --key-seq instead)
