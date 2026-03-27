@@ -849,9 +849,7 @@ impl StandaloneBus {
     fn enable_reset_trace_card(&mut self) {
         self.trace_resume_ce1_shadow_enabled = true;
         self.trace_resume_ce1_shadow.fill(0);
-        self.trace_resume_ce1_shadow[0] = 0x55;
-        self.trace_resume_ce1_shadow[1] = 0xCA;
-        self.trace_reset_ce1_readonly = true;
+        self.trace_reset_ce1_readonly = false;
         self.trace_reset_ce6_shadow_enabled = true;
         self.trace_reset_ce6_shadow.fill(0);
         self.trace_reset_ce6_readonly = true;
@@ -3412,7 +3410,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_trace_card_keeps_ce1_ce6_read_only() {
+    fn reset_trace_card_uses_blank_writable_ce1_and_zero_filled_ce6() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
             create_lcd(sc62015_core::LcdKind::Hd61202),
@@ -3427,15 +3425,15 @@ mod tests {
         bus.enable_reset_trace_card();
 
         assert_eq!(bus.load(0x010012, 8), 0x00);
-        assert_eq!(bus.load(0x040000, 8), 0x55);
-        assert_eq!(bus.load(0x040001, 8), 0xCA);
+        assert_eq!(bus.load(0x040000, 8), 0x00);
+        assert_eq!(bus.load(0x040001, 8), 0x00);
 
         bus.store(0x010012, 8, 0x99);
-        bus.store(0x040000, 8, 0x00);
-        bus.store(0x040001, 8, 0x00);
+        bus.store(0x040000, 8, 0x4D);
+        bus.store(0x040001, 8, 0xCA);
 
         assert_eq!(bus.load(0x010012, 8), 0x00);
-        assert_eq!(bus.load(0x040000, 8), 0x55);
+        assert_eq!(bus.load(0x040000, 8), 0x4D);
         assert_eq!(bus.load(0x040001, 8), 0xCA);
     }
 
