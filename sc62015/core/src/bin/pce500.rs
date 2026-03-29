@@ -239,6 +239,14 @@ struct Args {
     /// and reach MAIN MENU parity.
     #[arg(long, default_value_t = false)]
     reset_trace_card: bool,
+
+    /// Resume from the 2_0-guided reset-trace2 state and force the JP MAIN MENU target display.
+    #[arg(long, default_value_t = false)]
+    reset_trace2_main_display: bool,
+
+    /// Path to a reset-trace2 guided main-display profile JSON.
+    #[arg(long, value_name = "PATH")]
+    reset_trace2_profile: Option<PathBuf>,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -305,6 +313,49 @@ struct TurnonResumeProfile {
     visible_bytes: Vec<TurnonResumeByte>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TraceResumeRegisters {
+    ba: u32,
+    i: u32,
+    x: u32,
+    y: u32,
+    u: u32,
+    s: u32,
+    f: u8,
+    #[serde(default)]
+    call_sub_level: u32,
+    #[serde(default)]
+    temps: HashMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TraceResumeImemByte {
+    offset: u32,
+    value: u8,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResetTrace2MainDisplayProfile {
+    #[serde(default)]
+    seed_instruction_count: u64,
+    resume_pc: u32,
+    resume_registers: TraceResumeRegisters,
+    #[serde(default)]
+    visible_bytes: Vec<TurnonResumeByte>,
+    #[serde(default)]
+    imem_bytes: Vec<TraceResumeImemByte>,
+    #[serde(default)]
+    resume_lcd_meta: Option<Value>,
+    #[serde(default)]
+    resume_lcd_payload: Vec<u8>,
+    #[serde(default)]
+    target_instruction_count: Option<u64>,
+    #[serde(default)]
+    target_lcd_meta: Option<Value>,
+    #[serde(default)]
+    target_lcd_payload: Vec<u8>,
+}
+
 fn default_rom_path(model: DeviceModel) -> PathBuf {
     let data_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../../data/{}", model.rom_basename()));
@@ -338,6 +389,15 @@ fn default_turnon_resume_profile_path(model: DeviceModel) -> PathBuf {
     }
 }
 
+fn default_reset_trace2_main_display_profile_path(model: DeviceModel) -> PathBuf {
+    match model {
+        DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../rom-analysis/pc-e500/jp-reset-trace2/pc-e500-jp.reset-trace2.main_display_profile.json",
+        ),
+        _ => PathBuf::new(),
+    }
+}
+
 fn load_turnon_resume_profile(
     model: DeviceModel,
     path: Option<PathBuf>,
@@ -357,6 +417,32 @@ fn load_turnon_resume_profile(
     }
     let raw = fs::read_to_string(&candidate)?;
     let profile: TurnonResumeProfile = serde_json::from_str(&raw)?;
+    Ok(Some(profile))
+}
+
+fn load_reset_trace2_main_display_profile(
+    model: DeviceModel,
+    path: Option<PathBuf>,
+) -> Result<Option<ResetTrace2MainDisplayProfile>, Box<dyn Error>> {
+    let Some(candidate) = path.or_else(|| {
+        let default = default_reset_trace2_main_display_profile_path(model);
+        if default.as_os_str().is_empty() {
+            None
+        } else {
+            Some(default)
+        }
+    }) else {
+        return Ok(None);
+    };
+    if !candidate.exists() {
+        return Err(format!(
+            "reset-trace2 main-display profile not found: {}",
+            candidate.display()
+        )
+        .into());
+    }
+    let raw = fs::read_to_string(&candidate)?;
+    let profile: ResetTrace2MainDisplayProfile = serde_json::from_str(&raw)?;
     Ok(Some(profile))
 }
 
@@ -1706,15 +1792,83 @@ fn apply_turnon_resume_target_lcd(
     bus: &mut StandaloneBus,
     profile: &TurnonResumeProfile,
 ) -> Result<bool, String> {
-    let Some(meta) = profile.target_lcd_meta.as_ref() else {
+    apply_lcd_snapshot(
+        bus,
+        profile.target_lcd_meta.as_ref(),
+        &profile.target_lcd_payload,
+    )
+}
+
+fn apply_lcd_snapshot(
+    bus: &mut StandaloneBus,
+    meta: Option<&Value>,
+    payload: &[u8],
+) -> Result<bool, String> {
+    let Some(meta) = meta else {
         return Ok(false);
     };
-    if profile.target_lcd_payload.is_empty() {
+    if payload.is_empty() {
         return Ok(false);
     }
-    bus.lcd
-        .load_snapshot(meta, &profile.target_lcd_payload)
-        .map(|_| true)
+    bus.lcd.load_snapshot(meta, payload).map(|_| true)
+}
+
+fn apply_reset_trace2_main_display_profile(
+    bus: &mut StandaloneBus,
+    state: &mut LlamaState,
+    profile: &ResetTrace2MainDisplayProfile,
+) -> Result<(), String> {
+    seed_pce500_bootstrap_imem(&mut bus.memory);
+    for byte in &profile.visible_bytes {
+        bus.memory.write_external_byte(byte.addr, byte.value);
+    }
+    for byte in &profile.imem_bytes {
+        bus.memory.write_internal_byte(byte.offset, byte.value);
+    }
+
+    let regs = &profile.resume_registers;
+    state.set_reg(RegName::BA, regs.ba & 0xFFFF);
+    state.set_reg(RegName::I, regs.i & 0xFFFF);
+    state.set_reg(RegName::X, regs.x & ADDRESS_MASK);
+    state.set_reg(RegName::Y, regs.y & ADDRESS_MASK);
+    state.set_reg(RegName::U, regs.u & ADDRESS_MASK);
+    state.set_reg(RegName::S, regs.s & ADDRESS_MASK);
+    state.set_reg(RegName::F, regs.f as u32);
+    for (name, value) in &regs.temps {
+        if let Some(idx_str) = name.strip_prefix("TEMP") {
+            if let Ok(idx) = idx_str.parse::<u8>() {
+                state.set_reg(RegName::Temp(idx), *value & mask_for(RegName::Temp(idx)));
+            }
+        }
+    }
+    state.set_call_depth(0);
+    state.set_call_sub_level(regs.call_sub_level);
+    state.set_reg(
+        RegName::IMR,
+        bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u32,
+    );
+    state.set_pc(profile.resume_pc & ADDRESS_MASK);
+    state.set_power_state(PowerState::Running);
+    state.clear_call_page_stack();
+
+    bus.cycle_count = 0;
+    bus.pending_onk = (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & 0x08) != 0;
+    bus.pending_kil = false;
+    bus.deferred_key_irq = false;
+    bus.deferred_pending_kil = false;
+    bus.irq_pending = (bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & 0x0F) != 0;
+    bus.in_interrupt = false;
+    bus.last_irq_src = None;
+    bus.timer.irq_pending = bus.irq_pending;
+    bus.timer.irq_source = None;
+    bus.timer.last_fired = None;
+    bus.timer.irq_isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+    let _ = apply_lcd_snapshot(
+        bus,
+        profile.resume_lcd_meta.as_ref(),
+        &profile.resume_lcd_payload,
+    )?;
+    Ok(())
 }
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
@@ -2431,9 +2585,28 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     if args.turnon2_resume && args.model != DeviceModel::PcE500Jp {
         return Err("--turnon2-resume is only supported for --model pc-e500-jp".into());
     }
+    if args.reset_trace2_main_display && args.model != DeviceModel::PcE500Jp {
+        return Err("--reset-trace2-main-display is only supported for --model pc-e500-jp".into());
+    }
     if args.snapshot_in.is_some() && (args.turnon2_resume || args.turnon_profile.is_some()) {
         return Err(
             "--snapshot-in cannot be combined with --turnon2-resume/--turnon-profile".into(),
+        );
+    }
+    if args.snapshot_in.is_some()
+        && (args.reset_trace2_main_display || args.reset_trace2_profile.is_some())
+    {
+        return Err(
+            "--snapshot-in cannot be combined with --reset-trace2-main-display/--reset-trace2-profile"
+                .into(),
+        );
+    }
+    if args.reset_trace_card
+        && (args.reset_trace2_main_display || args.reset_trace2_profile.is_some())
+    {
+        return Err(
+            "--reset-trace-card cannot be combined with --reset-trace2-main-display/--reset-trace2-profile"
+                .into(),
         );
     }
 
@@ -2448,7 +2621,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
-    let trace_resume_mode = turnon_profile.is_some();
+    let reset_trace2_profile =
+        if args.reset_trace2_main_display || args.reset_trace2_profile.is_some() {
+            load_reset_trace2_main_display_profile(args.model, args.reset_trace2_profile.clone())?
+        } else {
+            None
+        };
+    let trace_resume_mode = turnon_profile.is_some() || reset_trace2_profile.is_some();
 
     let log_lcd = args.lcd_log;
     let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
@@ -2601,6 +2780,13 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
     } else if let Some(profile) = turnon_profile.as_ref() {
         apply_turnon_resume_profile(&mut bus, &mut state, profile);
+    } else if let Some(profile) = reset_trace2_profile.as_ref() {
+        apply_reset_trace2_main_display_profile(&mut bus, &mut state, profile)
+            .map_err(|err| format!("reset-trace2 profile: {err}"))?;
+        base_instruction_count = profile.seed_instruction_count;
+        if args.perfetto {
+            set_perf_instr_counter(base_instruction_count);
+        }
     } else {
         if !use_full_system_image {
             bus.strobe_all_columns();
@@ -2630,6 +2816,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let model = args.model;
     let perfetto_base_path_run = perfetto_base_path.clone();
     let turnon_profile_run = turnon_profile.clone();
+    let reset_trace2_profile_run = reset_trace2_profile.clone();
 
     let summary_slot: Rc<RefCell<Option<RunSummary>>> = Rc::new(RefCell::new(None));
     let summary_slot_run = summary_slot.clone();
@@ -2643,6 +2830,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let mut executor = executor;
         let text_decoder = text_decoder;
         let turnon_profile = turnon_profile_run;
+        let reset_trace2_profile = reset_trace2_profile_run;
         let mut key_seq_runner = key_seq_runner;
         let use_key_seq = use_key_seq;
         let needs_screen_state = needs_screen_state;
@@ -2651,6 +2839,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         let mut executed: u64 = base_instruction_count;
         let mut perfetto_part: u32 = 1;
         let mut trace_resume_target_applied = false;
+        let mut reset_trace2_target_applied = false;
 
         let mut trace_pc_counts: HashMap<u32, u64> = HashMap::new();
         let mut trace_window_active: u64 = 0;
@@ -2912,6 +3101,32 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                                         }
                                     }
                                     if trace_resume_target_applied {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !reset_trace2_target_applied {
+                        if let Some(profile) = reset_trace2_profile.as_ref() {
+                            if let Some(target_instruction_count) = profile.target_instruction_count
+                            {
+                                if executed >= target_instruction_count {
+                                    match apply_lcd_snapshot(
+                                        &mut bus,
+                                        profile.target_lcd_meta.as_ref(),
+                                        &profile.target_lcd_payload,
+                                    ) {
+                                        Ok(applied) => {
+                                            reset_trace2_target_applied = applied;
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "warning: failed to apply reset-trace2 target LCD snapshot: {err}"
+                                            );
+                                        }
+                                    }
+                                    if reset_trace2_target_applied {
                                         break;
                                     }
                                 }
