@@ -71,8 +71,8 @@ pub fn configure_pce500_memory_map(memory: &mut MemoryImage) {
 }
 
 pub fn seed_pce500_bootstrap_imem(memory: &mut MemoryImage) {
-    let _ = memory.write_internal_byte(IMEM_IMR_OFFSET, BOOTSTRAP_IMR_VALUE);
-    let _ = memory.write_internal_byte(IMEM_ISR_OFFSET, BOOTSTRAP_ISR_VALUE);
+    memory.write_internal_byte(IMEM_IMR_OFFSET, BOOTSTRAP_IMR_VALUE);
+    memory.write_internal_byte(IMEM_ISR_OFFSET, BOOTSTRAP_ISR_VALUE);
 }
 
 pub fn pce500_font_map_from_rom(rom: &[u8]) -> Option<Pce500FontMap> {

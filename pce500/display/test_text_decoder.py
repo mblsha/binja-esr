@@ -54,7 +54,9 @@ class _FakeController:
         return self._buffer
 
 
-def _paint_cell(buffer: _FakeBuffer, cell_x: int, cell_y: int, pattern: tuple[int, ...]) -> None:
+def _paint_cell(
+    buffer: _FakeBuffer, cell_x: int, cell_y: int, pattern: tuple[int, ...]
+) -> None:
     row_base = cell_y * 8
     col_base = cell_x * GLYPH_STRIDE
     for col_idx, column in enumerate(pattern):
