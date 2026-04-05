@@ -28,7 +28,9 @@ _JP_DISPLAY_ALIASES = {
     (0x00, 0x41, 0x7F, 0x7F, 0x00): "]",
 }
 _FULLWIDTH_TO_HALFWIDTH = {
-    unicodedata.normalize("NFKC", bytes([code]).decode("cp932")): bytes([code]).decode("cp932")
+    unicodedata.normalize("NFKC", bytes([code]).decode("cp932")): bytes([code]).decode(
+        "cp932"
+    )
     for code in range(0xA1, 0xE0)
 }
 _FONT_LOOKUP_CACHE: Dict[Tuple[object, ...], Dict[str, Tuple[int, ...]]] = {}
@@ -65,7 +67,9 @@ def _is_blank(pattern: Tuple[int, ...]) -> bool:
     return all((byte & 0x7F) == 0 for byte in pattern)
 
 
-def _read_glyph_columns(memory, index: int, *, font_base: int = FONT_BASE) -> Tuple[int, ...]:
+def _read_glyph_columns(
+    memory, index: int, *, font_base: int = FONT_BASE
+) -> Tuple[int, ...]:
     """Return the raw column bytes for a glyph index from a specific font base."""
     if not (0 <= index <= 0xFF):
         raise ValueError(f"Glyph index out of range: {index}")
