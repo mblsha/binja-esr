@@ -78,6 +78,18 @@ def _read_glyph_columns(
     return tuple(memory.read_byte(offset + i) & 0x7F for i in range(GLYPH_WIDTH))
 
 
+def _add_if_visible(
+    mapping: Dict[str, Tuple[int, ...]],
+    label: str,
+    pattern: Tuple[int, ...],
+    *,
+    keep_blank: bool = False,
+) -> None:
+    """Insert a glyph into mapping unless it is blank (unless keep_blank=True)."""
+    if keep_blank or not _is_blank(pattern):
+        mapping[label] = pattern
+
+
 def _font_lookup(memory) -> Dict[str, Tuple[int, ...]]:
     """Build (and cache) the mapping from display characters to column tuples."""
     key = _cache_key(memory)
@@ -90,28 +102,22 @@ def _font_lookup(memory) -> Dict[str, Tuple[int, ...]]:
     if _looks_like_jp_font(memory):
         for code in range(0x20, 0x7F):
             pattern = _read_glyph_columns(memory, code, font_base=JP_FONT_ATLAS_BASE)
-            if _is_blank(pattern) and code != 0x20:
-                continue
-            mapping[chr(code)] = pattern
+            _add_if_visible(mapping, chr(code), pattern, keep_blank=code == 0x20)
 
         for code in range(0xA1, 0xE0):
             pattern = _read_glyph_columns(memory, code, font_base=JP_FONT_ATLAS_BASE)
-            if _is_blank(pattern):
-                continue
-            mapping[bytes([code]).decode("cp932")] = pattern
+            _add_if_visible(mapping, bytes([code]).decode("cp932"), pattern)
 
         for code, label in _JP_SYMBOL_LABELS.items():
             pattern = _read_glyph_columns(memory, code, font_base=JP_FONT_ATLAS_BASE)
-            if _is_blank(pattern):
-                continue
-            mapping[label] = pattern
+            _add_if_visible(mapping, label, pattern)
     else:
         for index in range(GLYPH_COUNT):
             char_code = 0x20 + index
             pattern = _read_glyph_columns(memory, index)
-            if _is_blank(pattern) and char_code != 0x20:
-                continue
-            mapping[chr(char_code)] = pattern
+            _add_if_visible(
+                mapping, chr(char_code), pattern, keep_blank=char_code == 0x20
+            )
 
     _FONT_LOOKUP_CACHE[key] = mapping
     return mapping
