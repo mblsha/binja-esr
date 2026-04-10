@@ -470,14 +470,18 @@ class PCE500Emulator:
     ) -> None:
         """Emit a lightweight IRQ instant to Perfetto/new tracer."""
 
-        if not (new_tracer.enabled or self.perfetto_enabled):
+        if not (
+            new_tracer.enabled
+            or self.perfetto_enabled
+            or trace_dispatcher.has_observers()
+        ):
             return
         data = dict(payload or {})
         if source is not None:
             data.setdefault("src", source.name)
         if new_tracer.enabled:
             new_tracer.instant(self._irq_perfetto_track(source), name, data)
-        elif self.perfetto_enabled or trace_dispatcher.has_observers():
+        else:
             trace_dispatcher.record_instant(
                 self._irq_perfetto_track(source), name, data
             )
@@ -547,7 +551,11 @@ class PCE500Emulator:
 
     def _trace_key_event(self, col: int, row: int, pressed: bool) -> None:
         """Optional hook from keyboard scan to log KEY events into perfetto."""
-        if not (new_tracer.enabled or self.perfetto_enabled):
+        if not (
+            new_tracer.enabled
+            or self.perfetto_enabled
+            or trace_dispatcher.has_observers()
+        ):
             return
         payload = {
             "col": col,
@@ -566,7 +574,7 @@ class PCE500Emulator:
                     op_index = int(getattr(self, "instruction_count", 0))
                 new_tracer.set_manual_clock_units(op_index)
             new_tracer.instant("irq.key", "KeyScanEvent", payload)
-        elif self.perfetto_enabled or trace_dispatcher.has_observers():
+        else:
             trace_dispatcher.record_instant("irq.key", "KeyScanEvent", payload)
 
     def _reset_instruction_access_log(self) -> None:
