@@ -94,12 +94,13 @@ class HD61202Controller:
         except ValueError:
             return
 
-        if command.cs.value == 0b00:
-            self.cs_both_count += 1
-        elif command.cs.value == 0b01:
-            self.cs_right_count += 1
-        elif command.cs.value == 0b10:
-            self.cs_left_count += 1
+        cs_counter_attr = {
+            ChipSelect.BOTH: "cs_both_count",
+            ChipSelect.RIGHT: "cs_right_count",
+            ChipSelect.LEFT: "cs_left_count",
+        }.get(command.cs)
+        if cs_counter_attr is not None:
+            setattr(self, cs_counter_attr, getattr(self, cs_counter_attr) + 1)
 
         operation_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
         self.pipeline.apply(LCDOperation(command=command, pc=operation_pc))
