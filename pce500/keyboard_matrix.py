@@ -338,7 +338,7 @@ class KeyboardMatrix:
 
         events: List[MatrixEvent] = []
         active_cols = set(self._active_columns())
-        for key_code, state in self._key_states.items():
+        for _key_code, state in self._key_states.items():
             generated = self._update_key_state(state, active_cols)
             if generated:
                 events.extend(generated)

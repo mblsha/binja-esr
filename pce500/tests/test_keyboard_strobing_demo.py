@@ -70,7 +70,7 @@ def demonstrate_keyboard_strobing():
     print("-" * 50)
 
     # Run scan without any keys pressed
-    for i in range(9):
+    for _ in range(9):
         emu.step()
 
     col0_result = emu.memory.read_byte(0x00)
@@ -79,7 +79,7 @@ def demonstrate_keyboard_strobing():
     print(f"Column 1 scan result: 0x{col1_result:02X} (expected 0xFF)")
 
     # Continue scanning column 10
-    for i in range(6):
+    for _ in range(6):
         emu.step()
     col10_result = emu.memory.read_byte(0x02)
     print(f"Column 10 scan result: 0x{col10_result:02X} (expected 0xFF)")
@@ -92,7 +92,7 @@ def demonstrate_keyboard_strobing():
     emu.press_key("KEY_Q")
 
     # Run scan again
-    for i in range(9):
+    for _ in range(9):
         emu.step()
 
     col0_result = emu.memory.read_byte(0x00)
@@ -108,7 +108,7 @@ def demonstrate_keyboard_strobing():
     emu.press_key("KEY_P")
 
     # Continue to scan column 10
-    for i in range(6):
+    for _ in range(6):
         emu.step()
     col10_result = emu.memory.read_byte(0x02)
     print(f"Column 10 scan result: 0x{col10_result:02X} (expected 0xFE - bit 0 low)")
@@ -121,7 +121,7 @@ def demonstrate_keyboard_strobing():
 
     # Reset and scan again
     emu.cpu.regs.set(RegisterName.PC, 0x0000)
-    for i in range(9):
+    for _ in range(9):
         emu.step()
 
     col0_result = emu.memory.read_byte(0x00)
