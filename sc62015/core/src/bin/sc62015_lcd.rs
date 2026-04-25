@@ -24,13 +24,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const IQ7000_TEXT_ROWS: usize = 8;
 const IQ7000_TEXT_COLS: usize = 16;
 const STATUS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
-const PF_KEY_HOLD_STEPS: u64 = 2_000;
+const PF_KEY_HOLD_STEPS: u64 = 40_000;
+const CHAR_KEY_HOLD_STEPS: u64 = 10_000;
+const SHIFTED_CHORD_LEAD_STEPS: u64 = 8_000;
 const ON_AUTO_HOLD_CYCLES: u64 = 20_000;
 const BASIC_REPL_HUB_PC: u32 = 0x00FFE09;
 const BASIC_WARM_START_PC: u32 = 0x00F9C94;
 const AUTO_TYPE_START_DELAY_STEPS: u64 = 20_000;
-const AUTO_TYPE_GAP_STEPS: u64 = 5_000;
+const AUTO_TYPE_GAP_STEPS: u64 = 20_000;
 const BASIC_KEY_CODE: u8 = 0x04;
+const ENTER_KEY_CODE: u8 = 0x27;
+const DELETE_KEY_CODE: u8 = 0x4C;
+const BACKSPACE_KEY_CODE: u8 = 0x4D;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -538,6 +543,16 @@ fn decode_row0(
     }
 }
 
+fn decode_display_text(
+    text_decoder: &Option<sc62015_core::device::DeviceTextDecoder>,
+    runtime: &CoreRuntime,
+) -> String {
+    match (text_decoder, runtime.lcd.as_deref()) {
+        (Some(decoder), Some(lcd)) => decoder.decode_display_text(lcd).join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn strip_leading_line_comments(raw: &str) -> String {
     let lines = raw.split('\n');
     let mut output = Vec::new();
@@ -818,6 +833,23 @@ struct PendingRelease {
     due_step: u64,
 }
 
+struct PendingPress {
+    code: u8,
+    due_step: u64,
+    hold_steps: u64,
+    force_key_irq: bool,
+}
+
+struct KeyEventOptions<'a> {
+    pending_on_release: &'a mut Option<u64>,
+    force_key_irq: bool,
+}
+
+enum CharKey {
+    Single(u8),
+    Shifted { modifier: u8, code: u8 },
+}
+
 type SymbolMap = BTreeMap<u32, String>;
 type FunctionSet = BTreeSet<u32>;
 
@@ -893,6 +925,46 @@ fn matrix_code_for_ctrl_digit(digit: char) -> Option<u8> {
     }
 }
 
+fn char_key_for_tui(ch: char) -> Option<CharKey> {
+    let shifted = |code| CharKey::Shifted {
+        modifier: 0x06, // SHIFT
+        code,
+    };
+    match ch {
+        '!' => Some(shifted(0x01)),               // Q
+        '"' => Some(shifted(0x08)),               // W
+        '#' => Some(shifted(0x09)),               // E
+        '$' => Some(shifted(0x10)),               // R
+        '%' => Some(shifted(0x11)),               // T
+        '&' => Some(shifted(0x18)),               // Y
+        '\'' => Some(shifted(0x19)),              // U
+        '<' => Some(shifted(0x20)),               // I
+        '>' => Some(shifted(0x21)),               // O
+        '@' => Some(shifted(0x50)),               // P
+        '[' => Some(shifted(0x03)),               // A
+        ']' => Some(shifted(0x0A)),               // S
+        '{' => Some(shifted(0x0B)),               // D
+        '}' => Some(shifted(0x12)),               // F
+        '\\' | '\u{00A5}' => Some(shifted(0x13)), // G: backslash on EN, yen on JP
+        '|' => Some(shifted(0x1A)),               // H
+        '~' => Some(shifted(0x1B)),               // J
+        '_' => Some(shifted(0x22)),               // K
+        '^' => Some(shifted(0x23)),               // L
+        '?' => Some(shifted(0x24)),               // ,
+        ':' => Some(shifted(0x25)),               // ;
+        _ => matrix_code_for_char(ch).map(CharKey::Single),
+    }
+}
+
+fn auto_type_gap_for_char(ch: char) -> u64 {
+    match char_key_for_tui(ch) {
+        Some(CharKey::Shifted { .. }) => SHIFTED_CHORD_LEAD_STEPS
+            .saturating_add(CHAR_KEY_HOLD_STEPS)
+            .saturating_add(AUTO_TYPE_GAP_STEPS),
+        _ => AUTO_TYPE_GAP_STEPS,
+    }
+}
+
 fn inject_key(
     runtime: &mut CoreRuntime,
     code: u8,
@@ -906,7 +978,7 @@ fn inject_key(
     }
     if let Some(kb) = runtime.keyboard.as_mut() {
         let kb_irq_enabled = runtime.timer.kb_irq_enabled || force_key_irq;
-        let _ = kb.inject_matrix_event(code, false, &mut runtime.memory, kb_irq_enabled);
+        kb.press_matrix_code(code, &mut runtime.memory);
         if kb_irq_enabled {
             runtime.timer.key_irq_latched = true;
             if let Some(cur) = runtime.memory.read_internal_byte(IMEM_ISR_OFFSET) {
@@ -920,7 +992,7 @@ fn inject_key(
             }
         }
         if hold_steps == 0 {
-            let _ = kb.inject_matrix_event(code, true, &mut runtime.memory, kb_irq_enabled);
+            kb.release_matrix_code(code, &mut runtime.memory);
         } else {
             pending_releases.retain(|pending| pending.code != code);
             pending_releases.push(PendingRelease {
@@ -942,6 +1014,78 @@ fn inject_key(
     }
 }
 
+fn inject_char_key(
+    runtime: &mut CoreRuntime,
+    ch: char,
+    executed: u64,
+    pending_releases: &mut Vec<PendingRelease>,
+    pending_presses: &mut Vec<PendingPress>,
+    hold_steps: u64,
+    force_key_irq: bool,
+) -> bool {
+    match char_key_for_tui(ch) {
+        Some(CharKey::Single(code)) => {
+            inject_key(
+                runtime,
+                code,
+                executed,
+                pending_releases,
+                hold_steps,
+                force_key_irq,
+            );
+            true
+        }
+        Some(CharKey::Shifted { modifier, code }) => {
+            let modifier_hold = hold_steps
+                .saturating_add(SHIFTED_CHORD_LEAD_STEPS)
+                .saturating_add(1_000);
+            inject_key(
+                runtime,
+                modifier,
+                executed,
+                pending_releases,
+                modifier_hold,
+                force_key_irq,
+            );
+            pending_presses.push(PendingPress {
+                code,
+                due_step: executed.saturating_add(SHIFTED_CHORD_LEAD_STEPS),
+                hold_steps,
+                force_key_irq,
+            });
+            true
+        }
+        None => false,
+    }
+}
+
+fn apply_pending_presses(
+    runtime: &mut CoreRuntime,
+    pending_presses: &mut Vec<PendingPress>,
+    pending_releases: &mut Vec<PendingRelease>,
+    executed: u64,
+) -> bool {
+    let mut pressed = false;
+    let mut idx = 0;
+    while idx < pending_presses.len() {
+        if pending_presses[idx].due_step <= executed {
+            let pending = pending_presses.swap_remove(idx);
+            inject_key(
+                runtime,
+                pending.code,
+                executed,
+                pending_releases,
+                pending.hold_steps,
+                pending.force_key_irq,
+            );
+            pressed = true;
+        } else {
+            idx += 1;
+        }
+    }
+    pressed
+}
+
 fn apply_pending_releases(
     runtime: &mut CoreRuntime,
     pending_releases: &mut Vec<PendingRelease>,
@@ -954,12 +1098,11 @@ fn apply_pending_releases(
         pending_releases.clear();
         return;
     };
-    let kb_irq_enabled = runtime.timer.kb_irq_enabled;
     let mut idx = 0;
     while idx < pending_releases.len() {
         if pending_releases[idx].due_step <= executed {
             let code = pending_releases[idx].code;
-            let _ = kb.inject_matrix_event(code, true, &mut runtime.memory, kb_irq_enabled);
+            kb.release_matrix_code(code, &mut runtime.memory);
             pending_releases.swap_remove(idx);
         } else {
             idx += 1;
@@ -973,8 +1116,8 @@ fn handle_key_event(
     pf_numbers: bool,
     executed: u64,
     pending_releases: &mut Vec<PendingRelease>,
-    pending_on_release: &mut Option<u64>,
-    force_key_irq: bool,
+    pending_presses: &mut Vec<PendingPress>,
+    options: KeyEventOptions<'_>,
 ) -> KeyFeedback {
     if key.kind != KeyEventKind::Press {
         return KeyFeedback {
@@ -992,7 +1135,7 @@ fn handle_key_event(
             }
             if ch == 'o' || ch == 'O' {
                 runtime.press_on_key();
-                *pending_on_release =
+                *options.pending_on_release =
                     Some(runtime.cycle_count().saturating_add(ON_AUTO_HOLD_CYCLES));
                 return KeyFeedback {
                     label: Some("ON".to_string()),
@@ -1006,7 +1149,7 @@ fn handle_key_event(
                     executed,
                     pending_releases,
                     PF_KEY_HOLD_STEPS,
-                    force_key_irq,
+                    options.force_key_irq,
                 );
                 return KeyFeedback {
                     label: Some(format!("PF{}", ch)),
@@ -1017,21 +1160,42 @@ fn handle_key_event(
     }
     match key.code {
         KeyCode::Enter => {
-            inject_key(runtime, 0x4F, executed, pending_releases, 0, force_key_irq);
+            inject_key(
+                runtime,
+                ENTER_KEY_CODE,
+                executed,
+                pending_releases,
+                CHAR_KEY_HOLD_STEPS,
+                options.force_key_irq,
+            );
             return KeyFeedback {
-                label: Some("=".to_string()),
+                label: Some("ENTER".to_string()),
                 quit: false,
             };
         }
         KeyCode::Backspace => {
-            inject_key(runtime, 0x4D, executed, pending_releases, 0, force_key_irq);
+            inject_key(
+                runtime,
+                BACKSPACE_KEY_CODE,
+                executed,
+                pending_releases,
+                CHAR_KEY_HOLD_STEPS,
+                options.force_key_irq,
+            );
             return KeyFeedback {
                 label: Some("BS".to_string()),
                 quit: false,
             };
         }
         KeyCode::Delete => {
-            inject_key(runtime, 0x4C, executed, pending_releases, 0, force_key_irq);
+            inject_key(
+                runtime,
+                DELETE_KEY_CODE,
+                executed,
+                pending_releases,
+                CHAR_KEY_HOLD_STEPS,
+                options.force_key_irq,
+            );
             return KeyFeedback {
                 label: Some("DEL".to_string()),
                 quit: false,
@@ -1044,7 +1208,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF1".to_string()),
@@ -1058,7 +1222,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF2".to_string()),
@@ -1072,7 +1236,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF3".to_string()),
@@ -1086,7 +1250,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF4".to_string()),
@@ -1100,7 +1264,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF5".to_string()),
@@ -1108,6 +1272,20 @@ fn handle_key_event(
             };
         }
         KeyCode::Char(ch) => {
+            if ch == '\u{8}' || ch == '\u{7f}' {
+                inject_key(
+                    runtime,
+                    BACKSPACE_KEY_CODE,
+                    executed,
+                    pending_releases,
+                    CHAR_KEY_HOLD_STEPS,
+                    options.force_key_irq,
+                );
+                return KeyFeedback {
+                    label: Some("BS".to_string()),
+                    quit: false,
+                };
+            }
             if pf_numbers {
                 if let Some(code) = matrix_code_for_ctrl_digit(ch) {
                     inject_key(
@@ -1116,7 +1294,7 @@ fn handle_key_event(
                         executed,
                         pending_releases,
                         PF_KEY_HOLD_STEPS,
-                        force_key_irq,
+                        options.force_key_irq,
                     );
                     return KeyFeedback {
                         label: Some(format!("PF{}", ch)),
@@ -1124,8 +1302,15 @@ fn handle_key_event(
                     };
                 }
             }
-            if let Some(code) = matrix_code_for_char(ch) {
-                inject_key(runtime, code, executed, pending_releases, 0, force_key_irq);
+            if inject_char_key(
+                runtime,
+                ch,
+                executed,
+                pending_releases,
+                pending_presses,
+                CHAR_KEY_HOLD_STEPS,
+                options.force_key_irq,
+            ) {
                 return KeyFeedback {
                     label: Some(ch.to_string()),
                     quit: false,
@@ -1151,15 +1336,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut runtime = CoreRuntime::new();
     runtime.set_device_model(args.model)?;
     args.model.configure_runtime(&mut runtime, &rom_bytes)?;
-    runtime
-        .memory
-        .set_memory_card_slot_present(matches!(args.card, CardMode::Present));
+    if args.model.is_pce500_family() {
+        if let Some(kb) = runtime.keyboard.as_mut() {
+            kb.set_press_threshold(1);
+        }
+    }
     if args.disable_timers {
         *runtime.timer = TimerContext::new(false, 0, 0);
     } else {
         *runtime.timer =
             TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
     }
+    runtime
+        .memory
+        .set_memory_card_slot_present(matches!(args.card, CardMode::Present));
     let loop_config = LoopDetectorConfig {
         detect_stride: args.refresh_steps,
         ..Default::default()
@@ -1188,6 +1378,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_key: Option<String> = None;
     let mut last_key_step: u64 = 0;
     let mut pending_releases: Vec<PendingRelease> = Vec::new();
+    let mut pending_presses: Vec<PendingPress> = Vec::new();
     let mut pending_on_release: Option<u64> = None;
     let mut auto_type_queue: Vec<char> =
         args.auto_type.clone().unwrap_or_default().chars().collect();
@@ -1276,6 +1467,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 executed = executed.saturating_add(chunk);
                 remaining = remaining.saturating_sub(chunk);
             }
+            if apply_pending_presses(
+                &mut runtime,
+                &mut pending_presses,
+                &mut pending_releases,
+                executed,
+            ) {
+                dirty = true;
+            }
             apply_pending_releases(&mut runtime, &mut pending_releases, executed);
             if let Some(release_cycle) = pending_on_release {
                 if runtime.cycle_count() >= release_cycle {
@@ -1307,23 +1506,33 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut sent = false;
                     while let Some(ch) = auto_type_queue.first().copied() {
                         auto_type_queue.remove(0);
-                        let code = match ch {
-                            '\n' | '\r' => Some(0x4F),
-                            _ => matrix_code_for_char(ch),
-                        };
-                        if let Some(code) = code {
-                            inject_key(
+                        let did_inject = match ch {
+                            '\n' | '\r' => {
+                                inject_key(
+                                    &mut runtime,
+                                    ENTER_KEY_CODE,
+                                    executed,
+                                    &mut pending_releases,
+                                    CHAR_KEY_HOLD_STEPS,
+                                    args.force_key_irq,
+                                );
+                                true
+                            }
+                            _ => inject_char_key(
                                 &mut runtime,
-                                code,
+                                ch,
                                 executed,
                                 &mut pending_releases,
-                                0,
+                                &mut pending_presses,
+                                CHAR_KEY_HOLD_STEPS,
                                 args.force_key_irq,
-                            );
+                            ),
+                        };
+                        if did_inject {
                             last_key = Some(ch.to_string());
                             last_key_step = executed;
                             auto_type_next_step =
-                                Some(executed.saturating_add(AUTO_TYPE_GAP_STEPS));
+                                Some(executed.saturating_add(auto_type_gap_for_char(ch)));
                             sent = true;
                             dirty = true;
                             break;
@@ -1339,27 +1548,33 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 halted_steps = 0;
             }
-            let should_check_lcd =
-                (auto_basic_pending || jump_basic_pending) && auto_basic_step.is_none();
+            let should_check_lcd = (auto_basic_pending
+                || jump_basic_pending
+                || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
+                && auto_basic_step.is_none();
             if should_check_lcd && executed.saturating_sub(last_lcd_check) >= lcd_check_interval {
                 last_lcd_check = executed;
                 let row0 = decode_row0(&text_decoder, &runtime);
-                if (auto_basic_pending || jump_basic_pending)
-                    && auto_basic_step.is_none()
-                    && (row0.contains("S2(CARD):") || row0.contains("S1(MAIN):"))
+                let display_text = decode_display_text(&text_decoder, &runtime);
+                if auto_type_next_step.is_none()
+                    && !auto_type_queue.is_empty()
+                    && display_text.contains('>')
                 {
-                    if jump_basic_pending {
-                        jump_to_basic_loop(&mut runtime);
-                        jump_basic_pending = false;
-                        if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
-                            auto_type_next_step =
-                                Some(executed.saturating_add(args.auto_basic_delay));
-                        }
-                        dirty = true;
-                    } else {
-                        auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
-                        auto_basic_pending = false;
+                    auto_type_next_step = Some(executed.saturating_add(args.auto_type_delay));
+                    dirty = true;
+                    continue;
+                }
+                let row_has_menu = row0.contains("S2(CARD):") || row0.contains("S1(MAIN):");
+                if jump_basic_pending && auto_basic_step.is_none() && row_has_menu {
+                    jump_to_basic_loop(&mut runtime);
+                    jump_basic_pending = false;
+                    if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
+                        auto_type_next_step = Some(executed.saturating_add(args.auto_basic_delay));
                     }
+                    dirty = true;
+                } else if auto_basic_pending && auto_basic_step.is_none() && row_has_menu {
+                    auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    auto_basic_pending = false;
                 }
             }
 
@@ -1372,8 +1587,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             args.pf_numbers,
                             executed,
                             &mut pending_releases,
-                            &mut pending_on_release,
-                            args.force_key_irq,
+                            &mut pending_presses,
+                            KeyEventOptions {
+                                pending_on_release: &mut pending_on_release,
+                                force_key_irq: args.force_key_irq,
+                            },
                         );
                         if feedback.quit {
                             running = false;
