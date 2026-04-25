@@ -269,6 +269,13 @@ fn mode_for_operand(pre: Option<&PreModes>, operand_index: usize) -> AddressingM
     }
 }
 
+fn operand_uses_pre_mode(op: &OperandKind) -> bool {
+    matches!(
+        op,
+        OperandKind::IMem(_) | OperandKind::IMemWidth(_) | OperandKind::EMemIMemWidth(_)
+    )
+}
+
 fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -> u32 {
     let bp = read_imem_byte(bus, IMEM_BP_OFFSET) as u32;
     let px = read_imem_byte(bus, IMEM_PX_OFFSET) as u32;
@@ -927,6 +934,12 @@ impl LlamaExecutor {
         let mut offset = 1u32; // opcode consumed
         let mut decoded = DecodedOperands::default();
         let single_pre = SINGLE_ADDRESSABLE_OPCODES.contains(&entry.opcode);
+        let single_pre_operand = entry
+            .operands
+            .iter()
+            .filter(|op| operand_uses_pre_mode(op))
+            .count()
+            == 1;
         // Opcode-specific decoding quirks
         if entry.opcode == 0xE3 {
             // Encoding order is EMemReg mode byte then IMem8.
@@ -968,7 +981,11 @@ impl LlamaExecutor {
                     } else {
                         &mut decoded.mem2
                     };
-                    let mode_index = if single_pre { 0 } else { operand_index };
+                    let mode_index = if single_pre || single_pre_operand {
+                        0
+                    } else {
+                        operand_index
+                    };
                     *slot = Some(MemOperand {
                         addr: imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw as u8),
                         bits: *bits,
@@ -984,7 +1001,11 @@ impl LlamaExecutor {
                     } else {
                         &mut decoded.mem2
                     };
-                    let mode_index = if single_pre { 0 } else { operand_index };
+                    let mode_index = if single_pre || single_pre_operand {
+                        0
+                    } else {
+                        operand_index
+                    };
                     *slot = Some(MemOperand {
                         addr: imem_addr_for_mode(bus, mode_for_operand(pre, mode_index), raw as u8),
                         bits,
@@ -1027,7 +1048,11 @@ impl LlamaExecutor {
                     offset += consumed;
                 }
                 OperandKind::EMemIMemWidth(bytes) => {
-                    let mode_index = if single_pre { 0 } else { operand_index };
+                    let mode_index = if single_pre || single_pre_operand {
+                        0
+                    } else {
+                        operand_index
+                    };
                     let mode = mode_for_operand(pre, mode_index);
                     let (mem, consumed) = self.decode_imem_ptr(bus, pc + offset, *bytes, mode)?;
                     if decoded.mem.is_none() {
@@ -4785,6 +4810,59 @@ mod tests {
         assert_eq!(state.get_reg(RegName::A), 0x66);
         assert_eq!(state.get_reg(RegName::X), 0x1F);
         assert_eq!(state.pc(), 2);
+    }
+
+    #[test]
+    fn mvw_reg_imem_offset_round_trips_internal_pair_through_u_stack() {
+        let mut bus = MemBus::with_size(0x300);
+        // PRE30 E9 36 D4: MVW [--U], (D4)
+        bus.mem[0] = 0x30;
+        bus.mem[1] = 0xE9;
+        bus.mem[2] = 0x36;
+        bus.mem[3] = 0xD4;
+        // PRE30 E1 26 D4: MVW (D4), [U++]
+        bus.mem[4] = 0x30;
+        bus.mem[5] = 0xE1;
+        bus.mem[6] = 0x26;
+        bus.mem[7] = 0xD4;
+        bus.store(INTERNAL_MEMORY_START + 0xD4, 16, 0x0100);
+
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::U, 0x210);
+        let mut exec = LlamaExecutor::new();
+
+        let len = exec.execute(0x30, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 4);
+        assert_eq!(state.get_reg(RegName::U), 0x20E);
+        assert_eq!(bus.load(0x20E, 16), 0x0100);
+
+        bus.store(INTERNAL_MEMORY_START + 0xD4, 16, 0x9F9F);
+        let len = exec.execute(0x30, &mut state, &mut bus).unwrap();
+        assert_eq!(len, 4);
+        assert_eq!(state.get_reg(RegName::U), 0x210);
+        assert_eq!(bus.load(INTERNAL_MEMORY_START + 0xD4, 16), 0x0100);
+    }
+
+    #[test]
+    fn mvw_external_absolute_uses_first_pre_mode_for_lone_imem_source() {
+        let mut bus = MemBus::with_size(0x300);
+        // PRE30 D9 00 02 00 D4: MVW [0x200], (D4)
+        bus.mem[0] = 0x30;
+        bus.mem[1] = 0xD9;
+        bus.mem[2] = 0x00;
+        bus.mem[3] = 0x02;
+        bus.mem[4] = 0x00;
+        bus.mem[5] = 0xD4;
+        bus.store(INTERNAL_MEMORY_START + 0xEC, 8, 0xAF);
+        bus.store(INTERNAL_MEMORY_START + 0xD4, 16, 0x0101);
+        bus.store(INTERNAL_MEMORY_START + 0x83, 16, 0x9F9F);
+
+        let mut state = LlamaState::new();
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0x30, &mut state, &mut bus).unwrap();
+
+        assert_eq!(len, 6);
+        assert_eq!(bus.load(0x200, 16), 0x0101);
     }
 
     #[test]

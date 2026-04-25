@@ -1051,6 +1051,28 @@ instruction_test_cases: List[InstructionTestCase] = [
         expected_asm_str="MVW   [X], (BL)",
     ),
     InstructionTestCase(
+        test_id="MVW_abs_ext_from_direct_imem_PRE30_D9",
+        instr_bytes=bytes.fromhex("30D9000200D4"),  # PRE30; MVW [00200], (BL)
+        init_mem={
+            INTERNAL_MEMORY_START + IMEMRegisters.BL: 0x01,
+            INTERNAL_MEMORY_START + IMEMRegisters.BH: 0x01,
+            INTERNAL_MEMORY_START + IMEMRegisters.BP: 0xCB,
+            INTERNAL_MEMORY_START + 0x9F: 0x9F,
+            INTERNAL_MEMORY_START + 0xA0: 0x9F,
+            0x000200: 0x00,
+            0x000201: 0x00,
+        },
+        expected_mem_writes=[
+            (0x000200, 0x01),
+            (0x000201, 0x01),
+        ],
+        expected_mem_state={
+            0x000200: 0x01,
+            0x000201: 0x01,
+        },
+        expected_asm_str="MVW   [00200], (BL)",
+    ),
+    InstructionTestCase(
         test_id="MV_Y_from_E6_PRE30",
         instr_bytes=bytes.fromhex("3085E6"),
         init_mem={
