@@ -26,6 +26,7 @@ const IQ7000_TEXT_COLS: usize = 16;
 const STATUS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 const PF_KEY_HOLD_STEPS: u64 = 40_000;
 const CHAR_KEY_HOLD_STEPS: u64 = 10_000;
+const SHIFTED_CHORD_LEAD_STEPS: u64 = 8_000;
 const ON_AUTO_HOLD_CYCLES: u64 = 20_000;
 const BASIC_REPL_HUB_PC: u32 = 0x00FFE09;
 const BASIC_WARM_START_PC: u32 = 0x00F9C94;
@@ -845,6 +846,18 @@ struct PendingRelease {
     due_step: u64,
 }
 
+struct PendingPress {
+    code: u8,
+    due_step: u64,
+    hold_steps: u64,
+    force_key_irq: bool,
+}
+
+enum CharKey {
+    Single(u8),
+    Shifted { modifier: u8, code: u8 },
+}
+
 type SymbolMap = BTreeMap<u32, String>;
 type FunctionSet = BTreeSet<u32>;
 
@@ -920,6 +933,25 @@ fn matrix_code_for_ctrl_digit(digit: char) -> Option<u8> {
     }
 }
 
+fn char_key_for_tui(ch: char) -> Option<CharKey> {
+    match ch {
+        '"' => Some(CharKey::Shifted {
+            modifier: 0x06, // SHIFT
+            code: 0x08,     // W
+        }),
+        _ => matrix_code_for_char(ch).map(CharKey::Single),
+    }
+}
+
+fn auto_type_gap_for_char(ch: char) -> u64 {
+    match char_key_for_tui(ch) {
+        Some(CharKey::Shifted { .. }) => SHIFTED_CHORD_LEAD_STEPS
+            .saturating_add(CHAR_KEY_HOLD_STEPS)
+            .saturating_add(AUTO_TYPE_GAP_STEPS),
+        _ => AUTO_TYPE_GAP_STEPS,
+    }
+}
+
 fn inject_key(
     runtime: &mut CoreRuntime,
     code: u8,
@@ -969,6 +1001,78 @@ fn inject_key(
     }
 }
 
+fn inject_char_key(
+    runtime: &mut CoreRuntime,
+    ch: char,
+    executed: u64,
+    pending_releases: &mut Vec<PendingRelease>,
+    pending_presses: &mut Vec<PendingPress>,
+    hold_steps: u64,
+    force_key_irq: bool,
+) -> bool {
+    match char_key_for_tui(ch) {
+        Some(CharKey::Single(code)) => {
+            inject_key(
+                runtime,
+                code,
+                executed,
+                pending_releases,
+                hold_steps,
+                force_key_irq,
+            );
+            true
+        }
+        Some(CharKey::Shifted { modifier, code }) => {
+            let modifier_hold = hold_steps
+                .saturating_add(SHIFTED_CHORD_LEAD_STEPS)
+                .saturating_add(1_000);
+            inject_key(
+                runtime,
+                modifier,
+                executed,
+                pending_releases,
+                modifier_hold,
+                force_key_irq,
+            );
+            pending_presses.push(PendingPress {
+                code,
+                due_step: executed.saturating_add(SHIFTED_CHORD_LEAD_STEPS),
+                hold_steps,
+                force_key_irq,
+            });
+            true
+        }
+        None => false,
+    }
+}
+
+fn apply_pending_presses(
+    runtime: &mut CoreRuntime,
+    pending_presses: &mut Vec<PendingPress>,
+    pending_releases: &mut Vec<PendingRelease>,
+    executed: u64,
+) -> bool {
+    let mut pressed = false;
+    let mut idx = 0;
+    while idx < pending_presses.len() {
+        if pending_presses[idx].due_step <= executed {
+            let pending = pending_presses.swap_remove(idx);
+            inject_key(
+                runtime,
+                pending.code,
+                executed,
+                pending_releases,
+                pending.hold_steps,
+                pending.force_key_irq,
+            );
+            pressed = true;
+        } else {
+            idx += 1;
+        }
+    }
+    pressed
+}
+
 fn apply_pending_releases(
     runtime: &mut CoreRuntime,
     pending_releases: &mut Vec<PendingRelease>,
@@ -999,6 +1103,7 @@ fn handle_key_event(
     pf_numbers: bool,
     executed: u64,
     pending_releases: &mut Vec<PendingRelease>,
+    pending_presses: &mut Vec<PendingPress>,
     pending_on_release: &mut Option<u64>,
     force_key_irq: bool,
 ) -> KeyFeedback {
@@ -1171,15 +1276,15 @@ fn handle_key_event(
                     };
                 }
             }
-            if let Some(code) = matrix_code_for_char(ch) {
-                inject_key(
-                    runtime,
-                    code,
-                    executed,
-                    pending_releases,
-                    CHAR_KEY_HOLD_STEPS,
-                    force_key_irq,
-                );
+            if inject_char_key(
+                runtime,
+                ch,
+                executed,
+                pending_releases,
+                pending_presses,
+                CHAR_KEY_HOLD_STEPS,
+                force_key_irq,
+            ) {
                 return KeyFeedback {
                     label: Some(ch.to_string()),
                     quit: false,
@@ -1251,6 +1356,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_key: Option<String> = None;
     let mut last_key_step: u64 = 0;
     let mut pending_releases: Vec<PendingRelease> = Vec::new();
+    let mut pending_presses: Vec<PendingPress> = Vec::new();
     let mut pending_on_release: Option<u64> = None;
     let mut auto_type_queue: Vec<char> =
         args.auto_type.clone().unwrap_or_default().chars().collect();
@@ -1345,6 +1451,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 executed = executed.saturating_add(chunk);
                 remaining = remaining.saturating_sub(chunk);
             }
+            if apply_pending_presses(
+                &mut runtime,
+                &mut pending_presses,
+                &mut pending_releases,
+                executed,
+            ) {
+                dirty = true;
+            }
             apply_pending_releases(&mut runtime, &mut pending_releases, executed);
             if let Some(release_cycle) = pending_on_release {
                 if runtime.cycle_count() >= release_cycle {
@@ -1388,27 +1502,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 );
                                 true
                             }
-                            _ => {
-                                if let Some(code) = matrix_code_for_char(ch) {
-                                    inject_key(
-                                        &mut runtime,
-                                        code,
-                                        executed,
-                                        &mut pending_releases,
-                                        CHAR_KEY_HOLD_STEPS,
-                                        args.force_key_irq,
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
+                            _ => inject_char_key(
+                                &mut runtime,
+                                ch,
+                                executed,
+                                &mut pending_releases,
+                                &mut pending_presses,
+                                CHAR_KEY_HOLD_STEPS,
+                                args.force_key_irq,
+                            ),
                         };
                         if did_inject {
                             last_key = Some(ch.to_string());
                             last_key_step = executed;
                             auto_type_next_step =
-                                Some(executed.saturating_add(AUTO_TYPE_GAP_STEPS));
+                                Some(executed.saturating_add(auto_type_gap_for_char(ch)));
                             sent = true;
                             dirty = true;
                             break;
@@ -1549,6 +1657,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             args.pf_numbers,
                             executed,
                             &mut pending_releases,
+                            &mut pending_presses,
                             &mut pending_on_release,
                             args.force_key_irq,
                         );
