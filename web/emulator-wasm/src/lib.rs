@@ -262,6 +262,7 @@ pub struct Sc62015Emulator {
     rom_image: Vec<u8>,
     model: DeviceModel,
     text_decoder: Option<DeviceTextDecoder>,
+    iq7000_rtc_seed: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -273,6 +274,7 @@ impl Sc62015Emulator {
             rom_image: Vec::new(),
             model: DeviceModel::DEFAULT,
             text_decoder: None,
+            iq7000_rtc_seed: None,
         };
         emulator.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
         emulator
@@ -354,6 +356,18 @@ impl Sc62015Emulator {
         self.load_rom(rom)
     }
 
+    pub fn set_iq7000_rtc_yyyymmddhhmm(&mut self, raw: &str) -> Result<(), JsValue> {
+        self.iq7000_rtc_seed = Some(raw.to_string());
+        self.runtime
+            .set_iq7000_clock_seed_yyyymmddhhmm(raw)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    pub fn clear_iq7000_rtc(&mut self) {
+        self.iq7000_rtc_seed = None;
+        self.runtime.clear_iq7000_clock_seed();
+    }
+
     pub fn reset(&mut self) -> Result<(), JsValue> {
         if self.rom_image.is_empty() {
             return Err(JsValue::from_str("ROM not loaded"));
@@ -364,7 +378,17 @@ impl Sc62015Emulator {
         self.model
             .configure_runtime(&mut self.runtime, &rom)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
+            self.runtime
+                .set_iq7000_clock_seed_yyyymmddhhmm(seed)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        }
         self.runtime.power_on_reset();
+        if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
+            self.runtime
+                .set_iq7000_clock_seed_yyyymmddhhmm(seed)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        }
         Ok(())
     }
 

@@ -1,12 +1,14 @@
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/cli.py
 
+use chrono::{Datelike, Local, Timelike};
 use clap::Parser;
 use crc32fast::Hasher as Crc32Hasher;
 use flate2::{write::ZlibEncoder, Compression};
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     apply_registers, collect_registers, create_lcd, emit_event,
+    iq7000::Iq7000ClockSeed,
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
@@ -258,6 +260,10 @@ struct Args {
     /// Path to a reset-trace2 guided main-display profile JSON.
     #[arg(long, value_name = "PATH")]
     reset_trace2_profile: Option<PathBuf>,
+
+    /// IQ-7000 clock seed: host, off, or YYYYMMDDHHMM.
+    #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
+    iq7000_rtc: String,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -289,6 +295,45 @@ struct RunSummary {
     lcd_lines: Vec<String>,
     lcd_pixels: Vec<Vec<u8>>,
     lcd_trace: Option<LcdTraceDump>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Iq7000RtcSeed {
+    clock: Iq7000ClockSeed,
+    source: String,
+}
+
+impl Iq7000RtcSeed {
+    fn from_host_now() -> Result<Self, String> {
+        let now = Local::now();
+        let raw = format!(
+            "{:04}{:02}{:02}{:02}{:02}",
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            now.minute()
+        );
+        Self::from_yyyymmddhhmm(&raw, "host")
+    }
+
+    fn from_yyyymmddhhmm(raw: &str, source: impl Into<String>) -> Result<Self, String> {
+        Ok(Self {
+            clock: Iq7000ClockSeed::from_yyyymmddhhmm(raw)?,
+            source: source.into(),
+        })
+    }
+}
+
+fn parse_iq7000_rtc_arg(raw: &str) -> Result<Option<Iq7000RtcSeed>, String> {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("off") || trimmed.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    if trimmed.eq_ignore_ascii_case("host") || trimmed.is_empty() {
+        return Iq7000RtcSeed::from_host_now().map(Some);
+    }
+    Iq7000RtcSeed::from_yyyymmddhhmm(trimmed, "fixed").map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -551,6 +596,7 @@ struct StandaloneBus {
     trace_reset_ce6_shadow_enabled: bool,
     trace_reset_ce6_shadow: Vec<u8>,
     trace_reset_ce6_readonly: bool,
+    iq7000_clock_seed: Option<Iq7000RtcSeed>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -894,6 +940,7 @@ impl StandaloneBus {
             trace_reset_ce6_shadow_enabled: false,
             trace_reset_ce6_shadow: vec![0u8; 0x1_0000],
             trace_reset_ce6_readonly: false,
+            iq7000_clock_seed: None,
         }
     }
 
@@ -912,6 +959,24 @@ impl StandaloneBus {
     fn set_bus_trace(&mut self, writer: Option<BufWriter<fs::File>>) {
         self.bus_trace = writer;
         self.bus_trace_index = 0;
+    }
+
+    fn install_iq7000_clock_seed(&mut self, seed: Iq7000RtcSeed) {
+        self.iq7000_clock_seed = Some(seed);
+        self.reapply_iq7000_clock_seed();
+    }
+
+    fn reapply_iq7000_clock_seed(&mut self) {
+        let Some(seed) = self.iq7000_clock_seed.as_ref() else {
+            return;
+        };
+        seed.clock.apply_to_memory(&mut self.memory);
+    }
+
+    fn iq7000_clock_workspace_read(&self, addr: u32, bits: u8) -> Option<u32> {
+        self.iq7000_clock_seed
+            .as_ref()
+            .and_then(|seed| seed.clock.read(addr, bits))
     }
 
     fn finish_bus_trace(&mut self) {
@@ -1991,6 +2056,10 @@ impl LlamaBus for StandaloneBus {
         if bits == 0 {
             return 0;
         }
+        if let Some(value) = self.iq7000_clock_workspace_read(addr, bits) {
+            self.trace_bus_access("read", addr, bits, value);
+            return value;
+        }
         let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
             let had_pending = offset == IMEM_KIL_OFFSET && self.keyboard.fifo_len() > 0;
@@ -2727,6 +2796,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                 .into(),
         );
     }
+    let iq7000_clock_seed = if args.model == DeviceModel::Iq7000 {
+        parse_iq7000_rtc_arg(&args.iq7000_rtc).map_err(|err| format!("--iq7000-rtc: {err}"))?
+    } else {
+        None
+    };
 
     let rom_path = args
         .rom
@@ -2871,6 +2945,14 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         None,
         None,
     );
+    if let Some(seed) = iq7000_clock_seed.as_ref() {
+        eprintln!(
+            "[rtc] IQ-7000 clock workspace {} ({})",
+            seed.clock.as_ascii(),
+            seed.source
+        );
+        bus.install_iq7000_clock_seed(seed.clone());
+    }
     if let Some(path) = args.dump_bus_trace.as_ref() {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -2915,6 +2997,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             seed_pce500_bootstrap_imem(&mut bus.memory);
         }
     }
+    bus.reapply_iq7000_clock_seed();
     if use_key_seq {
         bus.keyboard.set_repeat_enabled(false);
     }
@@ -3279,6 +3362,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         if let Some(snapshot_path) = snapshot_out.as_ref() {
+            bus.reapply_iq7000_clock_seed();
             if let Err(err) = save_snapshot_state(snapshot_path, &bus, &state, executed) {
                 eprintln!("Failed to save snapshot: {err}");
             } else {
@@ -3414,6 +3498,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             "pc": format!("0x{:05X}", summary.pc),
             "halted": summary.halted,
             "lcd_writes": summary.lcd_writes,
+            "iq7000_rtc": iq7000_clock_seed.as_ref().map(|seed| json!({
+                "source": seed.source.as_str(),
+                "yyyymmddhhmm": seed.clock.as_ascii(),
+            })),
             "imr_mem": format!("0x{:02X}", summary.imr_mem),
             "isr_mem": format!("0x{:02X}", summary.isr_mem),
             "imr_reg": format!("0x{:02X}", summary.imr_reg),
@@ -3925,6 +4013,56 @@ mod tests {
         let events = runner.step(3, true, &screen_changed);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, KeySeqEventKind::Press);
+    }
+
+    #[test]
+    fn iq7000_rtc_fixed_seed_populates_clock_workspace() {
+        use sc62015_core::iq7000::{
+            CLOCK_INITIALIZED_FLAG as IQ7000_CLOCK_INITIALIZED_FLAG,
+            CLOCK_WORKSPACE_START as IQ7000_CLOCK_WORKSPACE_START,
+        };
+
+        let seed = parse_iq7000_rtc_arg("202604252052")
+            .expect("parse fixed RTC")
+            .expect("seed enabled");
+        assert_eq!(seed.clock.as_ascii(), "202604252052");
+        assert_eq!(
+            seed.clock.read(IQ7000_CLOCK_WORKSPACE_START + 4, 16),
+            Some(u16::from_le_bytes(*b"04") as u32)
+        );
+
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Iq7000Vram),
+            TimerContext::new(false, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.install_iq7000_clock_seed(seed);
+
+        assert_eq!(bus.load(IQ7000_CLOCK_WORKSPACE_START, 8), b'2' as u32);
+        assert_eq!(
+            bus.load(IQ7000_CLOCK_WORKSPACE_START + 10, 16),
+            u16::from_le_bytes(*b"52") as u32
+        );
+        assert_eq!(
+            bus.memory
+                .load(IQ7000_CLOCK_INITIALIZED_FLAG, 8)
+                .unwrap_or(0),
+            1
+        );
+    }
+
+    #[test]
+    fn iq7000_rtc_seed_validates_range_and_off_mode() {
+        assert!(parse_iq7000_rtc_arg("off").expect("off parses").is_none());
+        assert!(parse_iq7000_rtc_arg("202613010000").is_err());
+        assert!(parse_iq7000_rtc_arg("202601012460").is_err());
+        assert!(parse_iq7000_rtc_arg("202601010059").is_ok());
     }
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]

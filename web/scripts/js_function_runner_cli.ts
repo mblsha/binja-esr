@@ -60,6 +60,14 @@ function safeJson(value: unknown): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 }
 
+function hostRtcSeed(): string {
+	const now = new Date();
+	const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+	return `${pad(now.getFullYear(), 4)}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(
+		now.getMinutes(),
+	)}`;
+}
+
 type PerfettoSymbol = { addr: number; name: string };
 type BnidaLoadResult = { symbols: PerfettoSymbol[]; source: string };
 
@@ -234,7 +242,7 @@ async function main() {
 
 	const source = args.stdin
 		? await readAllStdin()
-		: args.evalSource ?? (args.scriptPath ? await readFile(resolve(process.cwd(), args.scriptPath), 'utf8') : null);
+		: (args.evalSource ?? (args.scriptPath ? await readFile(resolve(process.cwd(), args.scriptPath), 'utf8') : null));
 	if (source === null) die(usage().trimEnd());
 
 	await ensureWasmInitialized();
@@ -252,7 +260,10 @@ async function main() {
 	if (!Emulator) die('error: wasm module missing Sc62015Emulator/Pce500Emulator export');
 	const emulator: any = new Emulator();
 	initStubDispatcher(emulator);
-	(emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes));
+	emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes);
+	if (model === 'iq-7000' && typeof emulator.set_iq7000_rtc_yyyymmddhhmm === 'function') {
+		emulator.set_iq7000_rtc_yyyymmddhhmm(hostRtcSeed());
+	}
 
 	try {
 		const result = await loadBnidaSymbols(args, model);
@@ -293,7 +304,11 @@ async function main() {
 		callFunction: async (
 			address: number,
 			maxInstructions: number,
-			options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number }; stubs?: Array<{ id: number; pc: number }> } | null,
+			options?: {
+				trace?: boolean;
+				probe?: { pc: number; maxSamples?: number };
+				stubs?: Array<{ id: number; pc: number }>;
+			} | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
 				const raw =
@@ -338,7 +353,9 @@ async function main() {
 		pressMatrixCode: (code: number) =>
 			runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () => emulator.press_matrix_code?.(code)),
 		releaseMatrixCode: (code: number) =>
-			runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () => emulator.release_matrix_code?.(code)),
+			runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
+				emulator.release_matrix_code?.(code),
+			),
 		injectMatrixEvent: (code: number, release: boolean) =>
 			runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
 				emulator.inject_matrix_event?.(code, release),
