@@ -29,6 +29,10 @@ _CORE_REGISTER_FIELDS: Tuple[str, ...] = (
     "f",
 )
 
+_REGISTER_BINDINGS: Tuple[Tuple[str, RegisterName], ...] = tuple(
+    (field_name, getattr(RegisterName, field_name.upper())) for field_name in _CORE_REGISTER_FIELDS
+)
+
 
 @dataclass(slots=True)
 class CPURegistersSnapshot:
@@ -54,28 +58,20 @@ class CPURegistersSnapshot:
             if value:
                 temps[index] = value
 
+        register_values = {
+            field_name: regs.get(register_name)
+            for field_name, register_name in _REGISTER_BINDINGS
+        }
+
         return cls(
-            pc=regs.get(RegisterName.PC),
-            ba=regs.get(RegisterName.BA),
-            i=regs.get(RegisterName.I),
-            x=regs.get(RegisterName.X),
-            y=regs.get(RegisterName.Y),
-            u=regs.get(RegisterName.U),
-            s=regs.get(RegisterName.S),
-            f=regs.get(RegisterName.F),
+            **register_values,
             temps=temps,
             call_sub_level=regs.call_sub_level,
         )
 
     def apply_to(self, regs: Registers) -> None:
-        regs.set(RegisterName.PC, self.pc)
-        regs.set(RegisterName.BA, self.ba)
-        regs.set(RegisterName.I, self.i)
-        regs.set(RegisterName.X, self.x)
-        regs.set(RegisterName.Y, self.y)
-        regs.set(RegisterName.U, self.u)
-        regs.set(RegisterName.S, self.s)
-        regs.set(RegisterName.F, self.f)
+        for field_name, register_name in _REGISTER_BINDINGS:
+            regs.set(register_name, getattr(self, field_name))
 
         for index in range(NUM_TEMP_REGISTERS):
             value = self.temps.get(index, 0)
@@ -84,16 +80,7 @@ class CPURegistersSnapshot:
         regs.call_sub_level = self.call_sub_level
 
     def to_dict(self) -> Dict[str, int]:
-        values = {
-            "pc": self.pc,
-            "ba": self.ba,
-            "i": self.i,
-            "x": self.x,
-            "y": self.y,
-            "u": self.u,
-            "s": self.s,
-            "f": self.f,
-        }
+        values = {field_name: getattr(self, field_name) for field_name in _CORE_REGISTER_FIELDS}
         for index, value in self.temps.items():
             values[f"TEMP{index}"] = value
         values["call_sub_level"] = self.call_sub_level
