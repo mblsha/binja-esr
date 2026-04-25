@@ -384,6 +384,7 @@ pub struct CoreRuntime {
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     iq7000_clock_seed: Option<iq7000::Iq7000ClockSeed>,
+    iq7000_rtc: Option<iq7000::Iq7000RtcPeripheral>,
     onk_level: bool,
 }
 
@@ -424,6 +425,7 @@ impl CoreRuntime {
             host_read: None,
             host_write: None,
             iq7000_clock_seed: None,
+            iq7000_rtc: None,
             onk_level: false,
         };
         rt.set_device_model(DeviceModel::PcE500)
@@ -503,12 +505,18 @@ impl CoreRuntime {
     pub fn set_iq7000_clock_seed_yyyymmddhhmm(&mut self, raw: &str) -> Result<()> {
         let seed = iq7000::Iq7000ClockSeed::from_yyyymmddhhmm(raw).map_err(CoreError::Other)?;
         seed.apply_to_memory(&mut self.memory);
+        if let Some(rtc) = self.iq7000_rtc.as_mut() {
+            rtc.set_seed(seed.clone());
+        } else {
+            self.iq7000_rtc = Some(iq7000::Iq7000RtcPeripheral::new(seed.clone()));
+        }
         self.iq7000_clock_seed = Some(seed);
         Ok(())
     }
 
     pub fn clear_iq7000_clock_seed(&mut self) {
         self.iq7000_clock_seed = None;
+        self.iq7000_rtc = None;
         for idx in 0..iq7000::CLOCK_WORKSPACE_LEN {
             self.memory
                 .write_external_byte(iq7000::CLOCK_WORKSPACE_START + idx as u32, 0);
@@ -845,6 +853,7 @@ impl CoreRuntime {
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             iq7000_clock_seed: Option<*const iq7000::Iq7000ClockSeed>,
+            iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
             onk_level: bool,
             #[allow(dead_code)]
             cycle: u64,
@@ -884,6 +893,18 @@ impl CoreRuntime {
                         if let Some(val) = (*seed_ptr).read(addr, bits) {
                             (*self.mem).bump_read_count();
                             return val;
+                        }
+                    }
+                    if bits == 8
+                        && !self.iq7000_rtc.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        if offset == iq7000::IMEM_EIL_OFFSET {
+                            let val = (*self.iq7000_rtc).handle_eil_read();
+                            let _ = (*self.mem).store(addr, bits, val as u32);
+                            return val as u32;
                         }
                     }
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
@@ -970,6 +991,18 @@ impl CoreRuntime {
                         }
                     }
                     let python_required = (*self.mem).requires_python(addr);
+                    if bits == 8
+                        && !self.iq7000_rtc.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        if offset == iq7000::IMEM_EOL_OFFSET {
+                            (*self.iq7000_rtc).handle_eol_write(value as u8);
+                            let _ = (*self.mem).store(addr, bits, value);
+                            return;
+                        }
+                    }
                     // Keyboard KOL/KOH/KIL writes.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -1092,19 +1125,6 @@ impl CoreRuntime {
             }
             if let Some(sio) = self.sio.as_mut() {
                 if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
-                    self.metadata.instruction_count =
-                        self.metadata.instruction_count.saturating_add(1);
-                    self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
-                    continue;
-                }
-            }
-            if let Some(seed) = self.iq7000_clock_seed.as_ref() {
-                if iq7000::maybe_short_circuit_rtc_iocs(
-                    seed,
-                    self.state.pc(),
-                    &mut self.state,
-                    &mut self.memory,
-                ) {
                     self.metadata.instruction_count =
                         self.metadata.instruction_count.saturating_add(1);
                     self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
@@ -1268,6 +1288,12 @@ impl CoreRuntime {
                         .sio
                         .as_mut()
                         .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
+                    let iq7000_rtc = self
+                        .iq7000_rtc
+                        .as_mut()
+                        .map_or(std::ptr::null_mut(), |rtc| {
+                            rtc as *mut iq7000::Iq7000RtcPeripheral
+                        });
                     let mut bus = RuntimeBus {
                         mem: &mut self.memory,
                         keyboard_ptr,
@@ -1279,6 +1305,7 @@ impl CoreRuntime {
                             .iq7000_clock_seed
                             .as_ref()
                             .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
+                        iq7000_rtc,
                         onk_level: self.onk_level,
                         cycle: self.metadata.cycle_count,
                         pc: pc_before,
