@@ -638,13 +638,13 @@ fn in_iocs_dispatch(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> bool 
 fn in_delay_routine(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> bool {
     let pc = runtime.state.pc() & 0x000f_ffff;
     if let Some((_base, name, _)) = resolve_symbol(pc, symbols) {
-        if name.starts_with("delay_") {
+        if name.starts_with("delay_") || name == "boot_all_cleared_delay_loop_f7fac" {
             return true;
         }
     }
     if let Some(frame) = runtime.state.call_stack().last().copied() {
         if let Some((_base, name, _)) = resolve_symbol(frame, symbols) {
-            return name.starts_with("delay_");
+            return name.starts_with("delay_") || name == "boot_all_cleared_delay_loop_f7fac";
         }
     }
     false

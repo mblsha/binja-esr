@@ -395,7 +395,9 @@ fn device_runtime_settings(model: DeviceModel) -> Option<DeviceRuntimeSettings> 
         DeviceModel::PcE500 | DeviceModel::PcE500Jp => Some(DeviceRuntimeSettings {
             internal_ram_mirror: true,
         }),
-        DeviceModel::Iq7000 => None,
+        DeviceModel::Iq7000 => Some(DeviceRuntimeSettings {
+            internal_ram_mirror: false,
+        }),
     }
 }
 
@@ -1908,6 +1910,26 @@ mod tests {
     use crate::llama::opcodes::RegName;
     use crate::perfetto::perfetto_test_guard;
     use std::fs;
+
+    #[test]
+    fn iq7000_runtime_model_can_be_configured() {
+        let mut rt = CoreRuntime::new();
+        let rom = vec![0u8; crate::iq7000::ROM_WINDOW_LEN];
+
+        DeviceModel::Iq7000
+            .configure_runtime(&mut rt, &rom)
+            .expect("iq-7000 runtime should configure");
+
+        assert_eq!(rt.device_model(), DeviceModel::Iq7000);
+        assert_eq!(
+            rt.lcd.as_ref().expect("lcd present").kind(),
+            LcdKind::Iq7000Vram
+        );
+        assert!(
+            rt.keyboard.is_some(),
+            "iq-7000 keeps keyboard bridge available for matrix scanning"
+        );
+    }
 
     #[test]
     fn snapshot_roundtrip_preserves_call_and_temps() {

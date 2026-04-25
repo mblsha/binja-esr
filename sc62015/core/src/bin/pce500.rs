@@ -2,6 +2,8 @@
 // PY_SOURCE: pce500/cli.py
 
 use clap::Parser;
+use crc32fast::Hasher as Crc32Hasher;
+use flate2::{write::ZlibEncoder, Compression};
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     apply_registers, collect_registers, create_lcd, emit_event,
@@ -62,6 +64,7 @@ const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
 const DEFAULT_RUN_STEPS: u64 = 20_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 const CPU_DONE_EVENT: u32 = 1;
+const LCD_CAPTURE_SCALE: usize = 3;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum CardMode {
@@ -227,6 +230,14 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     snapshot_out: Option<PathBuf>,
 
+    /// Save the final LCD pixels as a PNG render.
+    #[arg(long, value_name = "PATH")]
+    capture_png: Option<PathBuf>,
+
+    /// Save final run/capture metadata as JSON.
+    #[arg(long, value_name = "PATH")]
+    capture_json: Option<PathBuf>,
+
     /// Resume the JP ROM from the trace-backed post-OFF turnon2 state.
     #[arg(long, default_value_t = false)]
     turnon2_resume: bool,
@@ -276,6 +287,7 @@ struct RunSummary {
     imr_reg: u8,
     lcd_stats: sc62015_core::lcd::LcdStats,
     lcd_lines: Vec<String>,
+    lcd_pixels: Vec<Vec<u8>>,
     lcd_trace: Option<LcdTraceDump>,
 }
 
@@ -544,6 +556,7 @@ struct StandaloneBus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutoKeyKind {
     Matrix(u8),
+    InputEvent(u8),
     OnKey,
 }
 
@@ -1234,6 +1247,22 @@ impl StandaloneBus {
     fn release_key(&mut self, code: u8) {
         // Parity: release updates the matrix state; scan_tick determines when to emit FIFO events.
         self.keyboard.release_matrix_code(code, &mut self.memory);
+    }
+
+    fn inject_input_event(&mut self, code: u8) {
+        let kb_irq_enabled = self.timer.kb_irq_enabled;
+        let events = self
+            .keyboard
+            .inject_input_event(code, &mut self.memory, kb_irq_enabled);
+        if events > 0 {
+            self.pending_kil = true;
+            self.raise_key_irq();
+            if kb_irq_enabled {
+                self.timer.key_irq_latched = true;
+                self.irq_pending = true;
+                self.last_irq_src = Some("KEY".to_string());
+            }
+        }
     }
 
     fn press_on_key(&mut self) {
@@ -2364,12 +2393,26 @@ fn parse_u64_value(raw: &str) -> Result<u64, String> {
         .map_err(|_| format!("invalid number '{raw}'"))
 }
 
+fn parse_u8_value(raw: &str) -> Result<u8, String> {
+    let value = parse_u64_value(raw)?;
+    u8::try_from(value).map_err(|_| format!("value out of u8 range: '{raw}'"))
+}
+
 fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("empty key token".to_string());
     }
     let lowered = trimmed.to_ascii_lowercase();
+    for prefix in ["digitizer", "input", "event"] {
+        if let Some(value) = lowered.strip_prefix(prefix).and_then(|rest| {
+            rest.strip_prefix(':')
+                .or_else(|| rest.strip_prefix('='))
+                .map(str::trim)
+        }) {
+            return Ok(AutoKeyKind::InputEvent(parse_u8_value(value)?));
+        }
+    }
     if matches!(lowered.as_str(), "enter" | "return" | "ret") {
         if let Some(code) = KeyboardMatrix::matrix_code_for_key_name("KEY_ENTER") {
             return Ok(AutoKeyKind::Matrix(code));
@@ -2468,6 +2511,21 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
             actions.push(action);
             continue;
         }
+        if lower.starts_with("digitizer:")
+            || lower.starts_with("digitizer=")
+            || lower.starts_with("input:")
+            || lower.starts_with("input=")
+            || lower.starts_with("event:")
+            || lower.starts_with("event=")
+        {
+            let key = resolve_key_seq_key(token)?;
+            let mut action = KeySeqAction::new(KeySeqKind::Press);
+            action.key = Some(key);
+            action.label = token.to_string();
+            action.hold = default_hold;
+            actions.push(action);
+            continue;
+        }
 
         let mut key_part = token;
         let mut hold = default_hold;
@@ -2523,6 +2581,66 @@ fn capture_screen_state(
         text_valid,
         text,
     }
+}
+
+fn lcd_pixels(lcd: &dyn LcdHal) -> Vec<Vec<u8>> {
+    lcd.display_buffer()
+        .iter()
+        .map(|row| row.iter().map(|px| u8::from(*px != 0)).collect())
+        .collect()
+}
+
+fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    let mut hasher = Crc32Hasher::new();
+    hasher.update(kind);
+    hasher.update(data);
+    out.extend_from_slice(&hasher.finalize().to_be_bytes());
+}
+
+fn write_lcd_png(path: &Path, pixels: &[Vec<u8>], scale: usize) -> Result<(), Box<dyn Error>> {
+    let height = pixels.len();
+    let width = pixels.first().map_or(0, Vec::len);
+    if width == 0 || height == 0 || scale == 0 {
+        return Err("cannot render an empty LCD capture".into());
+    }
+
+    let out_width = width * scale;
+    let out_height = height * scale;
+    let mut raw = Vec::with_capacity((out_width + 1) * out_height);
+    for row in pixels {
+        for _ in 0..scale {
+            raw.push(0); // PNG filter type 0.
+            for pixel in row {
+                let shade = if *pixel == 0 { 0xC8 } else { 0x18 };
+                raw.extend(std::iter::repeat_n(shade, scale));
+            }
+        }
+    }
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&raw)?;
+    let compressed = encoder.finish()?;
+
+    let mut png = Vec::new();
+    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&(out_width as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(out_height as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 0, 0, 0, 0]); // 8-bit grayscale, deflate, no interlace.
+    append_png_chunk(&mut png, b"IHDR", &ihdr);
+    append_png_chunk(&mut png, b"IDAT", &compressed);
+    append_png_chunk(&mut png, b"IEND", &[]);
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(path, png)?;
+    Ok(())
 }
 
 fn parse_address(raw: &str) -> Result<u32, Box<dyn Error>> {
@@ -2867,6 +2985,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             if let Some(key) = event.key {
                                 match key {
                                     AutoKeyKind::Matrix(code) => bus.press_key(code),
+                                    AutoKeyKind::InputEvent(code) => bus.inject_input_event(code),
                                     AutoKeyKind::OnKey => bus.press_on_key(),
                                 }
                             }
@@ -2875,6 +2994,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             if let Some(key) = event.key {
                                 match key {
                                     AutoKeyKind::Matrix(code) => bus.release_key(code),
+                                    AutoKeyKind::InputEvent(_) => {}
                                     AutoKeyKind::OnKey => bus.clear_on_key(),
                                 }
                             }
@@ -3220,6 +3340,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             imr_reg,
             lcd_stats,
             lcd_lines,
+            lcd_pixels: lcd_pixels(bus.lcd()),
             lcd_trace,
         };
         *summary_slot_run.borrow_mut() = Some(summary);
@@ -3275,6 +3396,32 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     }
     if let Some(path) = &args.dump_bus_trace {
         println!("Wrote bus trace dump: {}", path.display());
+    }
+
+    if let Some(path) = &args.capture_png {
+        write_lcd_png(path, &summary.lcd_pixels, LCD_CAPTURE_SCALE)?;
+        println!("Wrote LCD PNG capture: {}", path.display());
+    }
+
+    if let Some(path) = &args.capture_json {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let capture = json!({
+            "executed": summary.executed,
+            "pc": format!("0x{:05X}", summary.pc),
+            "halted": summary.halted,
+            "lcd_writes": summary.lcd_writes,
+            "imr_mem": format!("0x{:02X}", summary.imr_mem),
+            "isr_mem": format!("0x{:02X}", summary.isr_mem),
+            "imr_reg": format!("0x{:02X}", summary.imr_reg),
+            "lcd_lines": &summary.lcd_lines,
+            "lcd_pixels": &summary.lcd_pixels,
+        });
+        fs::write(path, serde_json::to_string_pretty(&capture)?)?;
+        println!("Wrote LCD JSON capture: {}", path.display());
     }
 
     if args.perf {
@@ -3450,6 +3597,33 @@ mod tests {
             bus.keyboard.fifo_len() > 0,
             "scan tick should enqueue FIFO event"
         );
+    }
+
+    #[test]
+    fn exact_input_event_sets_key_irq_without_matrix_release_masking() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Iq7000Vram),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.timer.set_keyboard_irq_enabled(true);
+
+        bus.inject_input_event(0xA3);
+
+        assert_eq!(bus.keyboard.fifo_snapshot(), vec![0xA3]);
+        let isr = bus
+            .memory
+            .read_internal_byte(super::IMEM_ISR_OFFSET)
+            .unwrap_or(0);
+        assert_ne!(isr & super::ISR_KEYI, 0);
+        assert!(bus.pending_kil);
+        assert!(bus.irq_pending);
     }
 
     #[test]
@@ -3703,6 +3877,14 @@ mod tests {
         let code =
             KeyboardMatrix::matrix_code_for_key_name("KEY_SPACE").expect("expected KEY_SPACE");
         assert_eq!(actions[0].key, Some(AutoKeyKind::Matrix(code)));
+    }
+
+    #[test]
+    fn key_seq_accepts_exact_digitizer_events() {
+        let actions = parse_key_seq("digitizer:0xA3", 10).expect("parse key seq");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, KeySeqKind::Press);
+        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0xA3)));
     }
 
     #[test]
