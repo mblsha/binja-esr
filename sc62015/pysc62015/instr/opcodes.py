@@ -911,6 +911,19 @@ class Instruction:
         if self.opcode in SINGLE_ADDRESSABLE_OPCODES:
             src_mode = dst_mode
 
+        # Absolute external-memory forms such as MVW [addr], (n) have two
+        # logical operands but only one operand that consumes the PRE latch.
+        # Hardware applies PRE1 to that lone internal-memory selector.
+        if self._pre is not None:
+            operands = tuple(self.operands())
+            pre_operand_indexes = [
+                index
+                for index, operand in enumerate(operands)
+                if self._operand_uses_pre_mode(operand)
+            ]
+            if len(pre_operand_indexes) == 1 and pre_operand_indexes[0] == 1:
+                src_mode = dst_mode
+
         # RegIMemOffset IMEM selector follows PRE1 as well.
         # Keep no-PRE behavior unchanged (operand 2 defaults to BP+n rendering).
         if (
@@ -921,6 +934,13 @@ class Instruction:
             src_mode = dst_mode
 
         return dst_mode, src_mode
+
+    def _operand_uses_pre_mode(self, operand: Operand) -> bool:
+        if isinstance(operand, (IMem8, IMemOperand)):
+            return True
+        if isinstance(operand, EMemValueOffsetHelper):
+            return isinstance(operand.value, (IMem8, IMemOperand))
+        return False
 
     def render(self) -> List[Token]:
         dst_mode, src_mode = self._addressing_modes()

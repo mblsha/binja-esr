@@ -33,6 +33,10 @@ const BASIC_WARM_START_PC: u32 = 0x00F9C94;
 const AUTO_TYPE_START_DELAY_STEPS: u64 = 20_000;
 const AUTO_TYPE_GAP_STEPS: u64 = 20_000;
 const BASIC_KEY_CODE: u8 = 0x04;
+const ENTER_KEY_CODE: u8 = 0x27;
+const DELETE_KEY_CODE: u8 = 0x4C;
+const BACKSPACE_KEY_CODE: u8 = 0x4D;
+const CLEAR_EXTERNAL_RAM_ROUTINES: &[(u32, u32)] = &[(0x0F0DD9, 0x0F0DEE), (0x0F0DEE, 0x0F0E1F)];
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -117,7 +121,7 @@ struct Args {
     #[arg(long, default_value_t = false)]
     fast_init: bool,
 
-    /// Jump to the BASIC entry point after the PF1 flow (debug helper).
+    /// Jump to the BASIC entry point after an initialized menu is available (debug helper).
     #[arg(long, default_value_t = false)]
     jump_basic: bool,
 
@@ -125,11 +129,7 @@ struct Args {
     #[arg(long)]
     auto_type: Option<String>,
 
-    /// Auto-press PF1 at the new-card initialization prompt (debug helper).
-    #[arg(long, default_value_t = false)]
-    auto_init: bool,
-
-    /// Auto-press the BASIC key after PF1 completes (debug helper).
+    /// Auto-press the BASIC key after an initialized menu is available (debug helper).
     #[arg(long, default_value_t = false)]
     auto_basic: bool,
 
@@ -682,12 +682,25 @@ fn in_sio_routine(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> bool {
 
 fn in_clear_external_ram(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> bool {
     let pc = runtime.state.pc() & 0x000f_ffff;
+    if CLEAR_EXTERNAL_RAM_ROUTINES
+        .iter()
+        .any(|(start, end)| pc >= *start && pc < *end)
+    {
+        return true;
+    }
     if let Some((_base, name, _)) = resolve_symbol(pc, symbols) {
         if name.starts_with("clear_external_ram_") {
             return true;
         }
     }
     if let Some(frame) = runtime.state.call_stack().last().copied() {
+        let frame = frame & 0x000f_ffff;
+        if CLEAR_EXTERNAL_RAM_ROUTINES
+            .iter()
+            .any(|(start, end)| frame >= *start && frame < *end)
+        {
+            return true;
+        }
         if let Some((_base, name, _)) = resolve_symbol(frame, symbols) {
             if name.starts_with("clear_external_ram_") {
                 return true;
@@ -697,11 +710,11 @@ fn in_clear_external_ram(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> 
     false
 }
 
-fn fast_clear_pce500_ram(runtime: &mut CoreRuntime, cleared: &mut bool, zero_buf: &[u8]) {
+fn fast_clear_pce500_ram(runtime: &mut CoreRuntime, cleared: &mut bool, fill_buf: &[u8]) {
     if *cleared {
         return;
     }
-    runtime.memory.write_external_slice(0, zero_buf);
+    runtime.memory.write_external_slice(0, fill_buf);
     *cleared = true;
 }
 
@@ -800,7 +813,7 @@ struct StubReturnConfig<'a> {
     fast_delay: bool,
     stub_sio: bool,
     fast_init: bool,
-    ram_zero_buf: Option<&'a [u8]>,
+    ram_fill_buf: Option<&'a [u8]>,
 }
 
 fn apply_stub_returns(
@@ -825,7 +838,7 @@ fn apply_stub_returns(
         return true;
     }
     if config.fast_init {
-        if let Some(buf) = config.ram_zero_buf {
+        if let Some(buf) = config.ram_fill_buf {
             if in_clear_external_ram(runtime, config.symbols) {
                 fast_clear_pce500_ram(runtime, ram_cleared, buf);
                 force_return_auto(runtime);
@@ -850,6 +863,11 @@ struct PendingPress {
     code: u8,
     due_step: u64,
     hold_steps: u64,
+    force_key_irq: bool,
+}
+
+struct KeyEventOptions<'a> {
+    pending_on_release: &'a mut Option<u64>,
     force_key_irq: bool,
 }
 
@@ -1125,8 +1143,7 @@ fn handle_key_event(
     executed: u64,
     pending_releases: &mut Vec<PendingRelease>,
     pending_presses: &mut Vec<PendingPress>,
-    pending_on_release: &mut Option<u64>,
-    force_key_irq: bool,
+    options: KeyEventOptions<'_>,
 ) -> KeyFeedback {
     if key.kind != KeyEventKind::Press {
         return KeyFeedback {
@@ -1144,7 +1161,7 @@ fn handle_key_event(
             }
             if ch == 'o' || ch == 'O' {
                 runtime.press_on_key();
-                *pending_on_release =
+                *options.pending_on_release =
                     Some(runtime.cycle_count().saturating_add(ON_AUTO_HOLD_CYCLES));
                 return KeyFeedback {
                     label: Some("ON".to_string()),
@@ -1158,7 +1175,7 @@ fn handle_key_event(
                     executed,
                     pending_releases,
                     PF_KEY_HOLD_STEPS,
-                    force_key_irq,
+                    options.force_key_irq,
                 );
                 return KeyFeedback {
                     label: Some(format!("PF{}", ch)),
@@ -1171,25 +1188,25 @@ fn handle_key_event(
         KeyCode::Enter => {
             inject_key(
                 runtime,
-                0x4F,
+                ENTER_KEY_CODE,
                 executed,
                 pending_releases,
                 CHAR_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
-                label: Some("=".to_string()),
+                label: Some("ENTER".to_string()),
                 quit: false,
             };
         }
         KeyCode::Backspace => {
             inject_key(
                 runtime,
-                0x4D,
+                BACKSPACE_KEY_CODE,
                 executed,
                 pending_releases,
                 CHAR_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("BS".to_string()),
@@ -1199,11 +1216,11 @@ fn handle_key_event(
         KeyCode::Delete => {
             inject_key(
                 runtime,
-                0x4C,
+                DELETE_KEY_CODE,
                 executed,
                 pending_releases,
                 CHAR_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("DEL".to_string()),
@@ -1217,7 +1234,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF1".to_string()),
@@ -1231,7 +1248,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF2".to_string()),
@@ -1245,7 +1262,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF3".to_string()),
@@ -1259,7 +1276,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF4".to_string()),
@@ -1273,7 +1290,7 @@ fn handle_key_event(
                 executed,
                 pending_releases,
                 PF_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             );
             return KeyFeedback {
                 label: Some("PF5".to_string()),
@@ -1281,6 +1298,20 @@ fn handle_key_event(
             };
         }
         KeyCode::Char(ch) => {
+            if ch == '\u{8}' || ch == '\u{7f}' {
+                inject_key(
+                    runtime,
+                    BACKSPACE_KEY_CODE,
+                    executed,
+                    pending_releases,
+                    CHAR_KEY_HOLD_STEPS,
+                    options.force_key_irq,
+                );
+                return KeyFeedback {
+                    label: Some("BS".to_string()),
+                    quit: false,
+                };
+            }
             if pf_numbers {
                 if let Some(code) = matrix_code_for_ctrl_digit(ch) {
                     inject_key(
@@ -1289,7 +1320,7 @@ fn handle_key_event(
                         executed,
                         pending_releases,
                         PF_KEY_HOLD_STEPS,
-                        force_key_irq,
+                        options.force_key_irq,
                     );
                     return KeyFeedback {
                         label: Some(format!("PF{}", ch)),
@@ -1304,7 +1335,7 @@ fn handle_key_event(
                 pending_releases,
                 pending_presses,
                 CHAR_KEY_HOLD_STEPS,
-                force_key_irq,
+                options.force_key_irq,
             ) {
                 return KeyFeedback {
                     label: Some(ch.to_string()),
@@ -1383,11 +1414,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.auto_type.clone().unwrap_or_default().chars().collect();
     let mut auto_type_next_step: Option<u64> = None;
     let mut auto_basic_step: Option<u64> = None;
-    let mut auto_main_pf1_step: Option<u64> = None;
-    let mut auto_menu_pf1_step: Option<u64> = None;
-    let mut auto_init_pending = args.auto_init;
-    let mut auto_main_pf1_pending = args.auto_init;
-    let mut auto_menu_pf1_pending = args.auto_init;
     let mut auto_basic_pending = args.auto_basic;
     let mut jump_basic_pending = args.jump_basic;
     let mut halted_steps: u64 = 0;
@@ -1395,7 +1421,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut snapshot_saved = false;
     let mut fast_init_cleared = false;
     let fast_init_buf = if args.fast_init && args.model.is_pce500_family() {
-        Some(vec![0u8; ROM_WINDOW_START])
+        Some(vec![0x9F; ROM_WINDOW_START])
     } else {
         None
     };
@@ -1454,7 +1480,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     fast_delay: args.fast_delay,
                     stub_sio: args.stub_sio,
                     fast_init: args.fast_init,
-                    ram_zero_buf: fast_init_buf.as_deref(),
+                    ram_fill_buf: fast_init_buf.as_deref(),
                 },
             ) {
                 executed = executed.saturating_add(1);
@@ -1515,7 +1541,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             '\n' | '\r' => {
                                 inject_key(
                                     &mut runtime,
-                                    0x4F,
+                                    ENTER_KEY_CODE,
                                     executed,
                                     &mut pending_releases,
                                     CHAR_KEY_HOLD_STEPS,
@@ -1548,49 +1574,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            if let Some(step) = auto_main_pf1_step {
-                if executed >= step {
-                    inject_key(
-                        &mut runtime,
-                        0x56,
-                        executed,
-                        &mut pending_releases,
-                        PF_KEY_HOLD_STEPS,
-                        args.force_key_irq,
-                    );
-                    last_key = Some("PF1".to_string());
-                    last_key_step = executed;
-                    auto_main_pf1_step = None;
-                    dirty = true;
-                }
-            }
-            if let Some(step) = auto_menu_pf1_step {
-                if executed >= step {
-                    inject_key(
-                        &mut runtime,
-                        0x56,
-                        executed,
-                        &mut pending_releases,
-                        PF_KEY_HOLD_STEPS,
-                        args.force_key_irq,
-                    );
-                    last_key = Some("PF1".to_string());
-                    last_key_step = executed;
-                    auto_menu_pf1_step = None;
-                    dirty = true;
-                }
-            }
             if runtime.state.is_halted() {
                 halted_steps = halted_steps.saturating_add(chunk);
             } else {
                 halted_steps = 0;
             }
-            let should_check_lcd = (auto_init_pending
-                || auto_main_pf1_pending
-                || auto_menu_pf1_pending
-                || auto_main_pf1_step.is_some()
-                || auto_menu_pf1_step.is_some()
-                || auto_basic_pending
+            let should_check_lcd = (auto_basic_pending
                 || jump_basic_pending
                 || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
                 && auto_basic_step.is_none();
@@ -1609,33 +1598,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
-                if auto_init_pending && row0.contains("S2(CARD):NEW CARD") {
-                    inject_key(
-                        &mut runtime,
-                        0x56,
-                        executed,
-                        &mut pending_releases,
-                        PF_KEY_HOLD_STEPS,
-                        args.force_key_irq,
-                    );
-                    last_key = Some("PF1".to_string());
-                    last_key_step = executed;
-                    auto_init_pending = false;
-                    dirty = true;
-                    continue;
-                }
-                if auto_main_pf1_pending && row0.contains("S1(MAIN):NEW CARD") {
-                    auto_main_pf1_step = Some(executed.saturating_add(args.auto_basic_delay));
-                    auto_main_pf1_pending = false;
-                    dirty = true;
-                    continue;
-                }
-                if auto_menu_pf1_pending && display_text.contains("MAIN MENU") {
-                    auto_menu_pf1_step = Some(executed.saturating_add(args.auto_basic_delay));
-                    auto_menu_pf1_pending = false;
-                    dirty = true;
-                    continue;
-                }
                 if auto_type_next_step.is_none()
                     && !auto_type_queue.is_empty()
                     && display_text.contains('>')
@@ -1647,9 +1609,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let row_has_menu = row0.contains("S2(CARD):") || row0.contains("S1(MAIN):");
                 if jump_basic_pending
                     && auto_basic_step.is_none()
-                    && !auto_init_pending
                     && (fast_init_cleared
-                        || (!args.auto_init && row_has_menu)
+                        || (!args.fast_init && row_has_menu)
                         || (row_has_menu && !row0.contains("NEW CARD")))
                 {
                     jump_to_basic_loop(&mut runtime);
@@ -1660,7 +1621,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     dirty = true;
                 } else if auto_basic_pending
                     && auto_basic_step.is_none()
-                    && !auto_init_pending
                     && row_has_menu
                     && !row0.contains("NEW CARD")
                 {
@@ -1679,8 +1639,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                             executed,
                             &mut pending_releases,
                             &mut pending_presses,
-                            &mut pending_on_release,
-                            args.force_key_irq,
+                            KeyEventOptions {
+                                pending_on_release: &mut pending_on_release,
+                                force_key_irq: args.force_key_irq,
+                            },
                         );
                         if feedback.quit {
                             running = false;
