@@ -481,6 +481,42 @@ impl Sc62015Emulator {
         }
     }
 
+    pub fn inject_input_event(&mut self, code: u8) -> usize {
+        let Some(kb) = self.runtime.keyboard.as_mut() else {
+            return 0;
+        };
+        let events = kb.inject_input_event(
+            code,
+            &mut self.runtime.memory,
+            self.runtime.timer.kb_irq_enabled,
+        );
+        if events > 0 {
+            let isr = self
+                .runtime
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(0);
+            self.runtime
+                .memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | 0x04);
+            self.runtime.timer.key_irq_latched = true;
+            self.runtime.timer.irq_pending = true;
+            self.runtime.timer.irq_source = Some("KEY".to_string());
+            self.runtime.timer.last_fired = self.runtime.timer.irq_source.clone();
+            self.runtime.timer.irq_imr = self
+                .runtime
+                .memory
+                .read_internal_byte(IMEM_IMR_OFFSET)
+                .unwrap_or(self.runtime.timer.irq_imr);
+            self.runtime.timer.irq_isr = self
+                .runtime
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(self.runtime.timer.irq_isr);
+        }
+        events
+    }
+
     pub fn press_on_key(&mut self) {
         self.runtime.press_on_key();
     }

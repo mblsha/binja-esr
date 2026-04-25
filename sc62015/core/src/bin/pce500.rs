@@ -8,7 +8,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     apply_registers, collect_registers, create_lcd, emit_event,
-    iq7000::Iq7000ClockSeed,
+    iq7000::{self, Iq7000ClockSeed},
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
@@ -3243,6 +3243,18 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     imr = imr,
                     isr = isr
                 );
+            }
+            if let Some(seed) = bus.iq7000_clock_seed.as_ref() {
+                if iq7000::maybe_short_circuit_rtc_iocs(
+                    &seed.clock,
+                    pc,
+                    &mut state,
+                    &mut bus.memory,
+                ) {
+                    bus.finalize_instruction();
+                    executed += 1;
+                    continue;
+                }
             }
             let run_timer_cycles = !state.is_off();
             if run_timer_cycles && !pre_tick_done {
