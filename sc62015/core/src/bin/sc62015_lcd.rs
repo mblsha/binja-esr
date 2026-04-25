@@ -934,11 +934,32 @@ fn matrix_code_for_ctrl_digit(digit: char) -> Option<u8> {
 }
 
 fn char_key_for_tui(ch: char) -> Option<CharKey> {
+    let shifted = |code| CharKey::Shifted {
+        modifier: 0x06, // SHIFT
+        code,
+    };
     match ch {
-        '"' => Some(CharKey::Shifted {
-            modifier: 0x06, // SHIFT
-            code: 0x08,     // W
-        }),
+        '!' => Some(shifted(0x01)),               // Q
+        '"' => Some(shifted(0x08)),               // W
+        '#' => Some(shifted(0x09)),               // E
+        '$' => Some(shifted(0x10)),               // R
+        '%' => Some(shifted(0x11)),               // T
+        '&' => Some(shifted(0x18)),               // Y
+        '\'' => Some(shifted(0x19)),              // U
+        '<' => Some(shifted(0x20)),               // I
+        '>' => Some(shifted(0x21)),               // O
+        '@' => Some(shifted(0x50)),               // P
+        '[' => Some(shifted(0x03)),               // A
+        ']' => Some(shifted(0x0A)),               // S
+        '{' => Some(shifted(0x0B)),               // D
+        '}' => Some(shifted(0x12)),               // F
+        '\\' | '\u{00A5}' => Some(shifted(0x13)), // G: backslash on EN, yen on JP
+        '|' => Some(shifted(0x1A)),               // H
+        '~' => Some(shifted(0x1B)),               // J
+        '_' => Some(shifted(0x22)),               // K
+        '^' => Some(shifted(0x23)),               // L
+        '?' => Some(shifted(0x24)),               // ,
+        ':' => Some(shifted(0x25)),               // ;
         _ => matrix_code_for_char(ch).map(CharKey::Single),
     }
 }
