@@ -59,3 +59,17 @@ Notes:
 - Use `--force-key-irq` if the ROM stays halted at the boot menu (forces KEY interrupts on key press).
 - Use `--card present|absent` to control memory card slot state (PC-E500).
 - Keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`, Ctrl+C exits.
+
+The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captures:
+
+```bash
+cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
+  --model iq-7000 \
+  --snapshot-in PATH/TO/base-state.pcsnap \
+  --key-seq "digitizer:0xA0,wait-op:50000" \
+  --capture-png /tmp/iq7000-a0.png \
+  --capture-json /tmp/iq7000-a0.json
+```
+
+`digitizer:0xNN` injects an exact translated input byte and is intended for card/digitizer
+selection-code probes that are not representable as plain matrix key presses.

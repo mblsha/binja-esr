@@ -311,6 +311,10 @@ impl KeyboardMatrix {
         if release {
             value |= 0x80;
         }
+        self.enqueue_raw_event(value, count_irq)
+    }
+
+    fn enqueue_raw_event(&mut self, value: u8, count_irq: bool) -> usize {
         if self.fifo_count == FIFO_SIZE {
             self.fifo_head = (self.fifo_head + 1) % FIFO_SIZE;
             self.fifo_count -= 1;
@@ -381,6 +385,22 @@ impl KeyboardMatrix {
             self.kil_latch = self.compute_kil(true);
         }
         memory.write_internal_byte(0xF2, self.kil_latch);
+        if events > 0 {
+            self.write_fifo_to_memory(memory, kb_irq_enabled);
+        }
+        events
+    }
+
+    /// Inject an already-translated input event. This preserves all eight bits of `code`,
+    /// which is required for IQ-7000 digitizer/card-sample values that overlap the matrix
+    /// release-event bit.
+    pub fn inject_input_event(
+        &mut self,
+        code: u8,
+        memory: &mut MemoryImage,
+        kb_irq_enabled: bool,
+    ) -> usize {
+        let events = self.enqueue_raw_event(code, true);
         if events > 0 {
             self.write_fifo_to_memory(memory, kb_irq_enabled);
         }
@@ -861,6 +881,17 @@ mod tests {
         );
         let _ = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
         assert_eq!(kb.fifo_len(), 0, "FIFO should drain after KIL read");
+    }
+
+    #[test]
+    fn input_event_injection_preserves_high_bit_codes() {
+        let mut kb = KeyboardMatrix::new();
+        let mut mem = MemoryImage::new();
+
+        let events = kb.inject_input_event(0xA3, &mut mem, false);
+
+        assert_eq!(events, 1);
+        assert_eq!(kb.fifo_snapshot(), vec![0xA3]);
     }
 
     #[test]
