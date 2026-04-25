@@ -1,7 +1,5 @@
 // PY_SOURCE: iq7000/emulator.py:IQ7000Emulator (placeholder)
 
-use crate::llama::opcodes::RegName;
-use crate::llama::state::{mask_for, LlamaState};
 use crate::memory::MemoryImage;
 use crate::{CoreRuntime, Result};
 
@@ -12,8 +10,13 @@ pub const ROM_READONLY_END: u32 = (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32
 pub const CLOCK_WORKSPACE_START: u32 = 0x01FD20;
 pub const CLOCK_WORKSPACE_LEN: usize = 13;
 pub const CLOCK_INITIALIZED_FLAG: u32 = 0x01FE72;
-const RTC_IOCS_HANDLER_ADDR: u32 = 0x0F31EF;
-const RTC_GET_DATETIME_SUBCMD: u8 = 0x44;
+pub const IMEM_EOL_OFFSET: u32 = 0xF3;
+pub const IMEM_EIL_OFFSET: u32 = 0xF5;
+const EOL_STROBE: u8 = 0x01;
+const EOL_OUT_DATA: u8 = 0x02;
+const EIL_IN_DATA: u8 = 0x08;
+const EIL_READY: u8 = 0x10;
+const RTC_COMMAND_CURRENT_DATETIME: u8 = 0xF4;
 
 fn mask_for_bits(bits: u8) -> u32 {
     if bits >= 32 {
@@ -94,53 +97,234 @@ impl Iq7000ClockSeed {
         std::str::from_utf8(&self.bytes[..12]).unwrap_or("")
     }
 
-    fn write_ascii_to(&self, memory: &mut MemoryImage, addr: u32) {
-        for (idx, byte) in self.bytes.iter().copied().enumerate() {
-            let _ = memory.store(addr.wrapping_add(idx as u32), 8, byte as u32);
+    pub fn rtc_datetime_bcd(&self) -> [u8; 6] {
+        let digits = &self.bytes[..12];
+        [
+            packed_bcd(digits[0], digits[1]),
+            packed_bcd(digits[2], digits[3]),
+            packed_bcd(digits[4], digits[5]),
+            packed_bcd(digits[6], digits[7]),
+            packed_bcd(digits[8], digits[9]),
+            packed_bcd(digits[10], digits[11]),
+        ]
+    }
+}
+
+fn packed_bcd(tens: u8, ones: u8) -> u8 {
+    ((tens - b'0') << 4) | (ones - b'0')
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RtcWritePhase {
+    Idle,
+    ReadyHigh,
+    AwaitData,
+    ReadyLow,
+    Complete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RtcReadPhase {
+    Idle,
+    ReadyHigh,
+    ReadyLow,
+    Sample,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Iq7000RtcPeripheral {
+    seed: Iq7000ClockSeed,
+    eol: u8,
+    write_phase: RtcWritePhase,
+    write_acc: u8,
+    write_bits: u8,
+    read_phase: RtcReadPhase,
+    response_bits: Vec<bool>,
+    response_index: usize,
+    payload_remaining: u8,
+    response_after_payload: Vec<u8>,
+    current_read_data: u8,
+    last_command: Option<u8>,
+}
+
+impl Iq7000RtcPeripheral {
+    pub fn new(seed: Iq7000ClockSeed) -> Self {
+        Self {
+            seed,
+            eol: 0,
+            write_phase: RtcWritePhase::Idle,
+            write_acc: 0,
+            write_bits: 0,
+            read_phase: RtcReadPhase::Idle,
+            response_bits: Vec::new(),
+            response_index: 0,
+            payload_remaining: 0,
+            response_after_payload: Vec::new(),
+            current_read_data: 0,
+            last_command: None,
         }
     }
-}
 
-pub fn maybe_short_circuit_rtc_iocs(
-    seed: &Iq7000ClockSeed,
-    pc: u32,
-    state: &mut LlamaState,
-    memory: &mut MemoryImage,
-) -> bool {
-    if (pc & 0x000F_FFFF) != RTC_IOCS_HANDLER_ADDR {
-        return false;
-    }
-    let subcmd = (state.get_reg(RegName::I) & 0xFF) as u8;
-    if subcmd != RTC_GET_DATETIME_SUBCMD {
-        return false;
+    pub fn set_seed(&mut self, seed: Iq7000ClockSeed) {
+        self.seed = seed;
+        self.reset_protocol();
     }
 
-    let dst = state.get_reg(RegName::X);
-    seed.write_ascii_to(memory, dst);
-    state.set_reg(RegName::FC, 0);
-    force_retf(state, memory);
-    true
-}
-
-fn force_retf(state: &mut LlamaState, memory: &mut MemoryImage) {
-    let ret = pop_stack_value(state, memory, 24);
-    state.set_pc(ret & mask_for(RegName::PC));
-    state.call_depth_dec();
-    let _ = state.pop_call_frame();
-}
-
-fn pop_stack_value(state: &mut LlamaState, memory: &mut MemoryImage, bits: u8) -> u32 {
-    let bytes = bits.div_ceil(8);
-    let mask = mask_for(RegName::S);
-    let mut value = 0u32;
-    let mut sp = state.get_reg(RegName::S);
-    for i in 0..bytes {
-        let byte = memory.load_with_pc(sp, 8, Some(state.pc())).unwrap_or(0) & 0xFF;
-        value |= byte << (8 * i);
-        sp = sp.wrapping_add(1) & mask;
+    pub fn seed(&self) -> &Iq7000ClockSeed {
+        &self.seed
     }
-    state.set_reg(RegName::S, sp);
-    value
+
+    pub fn handle_eol_write(&mut self, value: u8) {
+        let strobe_was_low = (self.eol & EOL_STROBE) == 0;
+        self.eol = value;
+
+        if (value & EOL_STROBE) == 0 {
+            self.write_phase = RtcWritePhase::Idle;
+            self.read_phase = RtcReadPhase::Idle;
+            return;
+        }
+
+        if self.has_pending_response() {
+            if strobe_was_low || self.read_phase == RtcReadPhase::Idle {
+                self.read_phase = RtcReadPhase::ReadyHigh;
+            }
+            return;
+        }
+
+        if strobe_was_low
+            || matches!(
+                self.write_phase,
+                RtcWritePhase::Idle | RtcWritePhase::Complete
+            )
+        {
+            self.write_phase = RtcWritePhase::ReadyHigh;
+        } else if self.write_phase == RtcWritePhase::AwaitData {
+            self.latch_host_bit((value & EOL_OUT_DATA) != 0);
+            self.write_phase = RtcWritePhase::ReadyLow;
+        }
+    }
+
+    pub fn handle_eil_read(&mut self) -> u8 {
+        if self.write_phase == RtcWritePhase::ReadyLow {
+            self.write_phase = RtcWritePhase::Complete;
+            return 0;
+        }
+
+        if self.has_pending_response() && (self.eol & EOL_STROBE) != 0 {
+            return self.next_response_eil();
+        }
+
+        match self.write_phase {
+            RtcWritePhase::ReadyHigh => {
+                self.write_phase = RtcWritePhase::AwaitData;
+                EIL_READY
+            }
+            _ => 0,
+        }
+    }
+
+    fn has_pending_response(&self) -> bool {
+        self.response_index < self.response_bits.len()
+    }
+
+    fn reset_protocol(&mut self) {
+        self.write_phase = RtcWritePhase::Idle;
+        self.write_acc = 0;
+        self.write_bits = 0;
+        self.read_phase = RtcReadPhase::Idle;
+        self.response_bits.clear();
+        self.response_index = 0;
+        self.payload_remaining = 0;
+        self.response_after_payload.clear();
+        self.current_read_data = 0;
+        self.last_command = None;
+    }
+
+    fn latch_host_bit(&mut self, bit: bool) {
+        if bit {
+            self.write_acc |= 1 << self.write_bits;
+        }
+        self.write_bits += 1;
+        if self.write_bits == 8 {
+            let byte = self.write_acc;
+            self.write_acc = 0;
+            self.write_bits = 0;
+            if self.payload_remaining > 0 {
+                self.payload_remaining -= 1;
+                if self.payload_remaining == 0 && !self.response_after_payload.is_empty() {
+                    let response = std::mem::take(&mut self.response_after_payload);
+                    self.queue_response_bytes(&response);
+                }
+            } else {
+                self.accept_command(byte);
+            }
+        }
+    }
+
+    fn accept_command(&mut self, command: u8) {
+        self.last_command = Some(command);
+        self.response_bits.clear();
+        self.response_index = 0;
+        self.payload_remaining = 0;
+        self.response_after_payload.clear();
+        match command {
+            0xF0 | 0xF1 => {
+                self.payload_remaining = 6;
+                self.response_after_payload.push(0);
+            }
+            0xF2 => {
+                self.payload_remaining = 2;
+                self.response_after_payload.push(0);
+            }
+            RTC_COMMAND_CURRENT_DATETIME | 0xF5 => {
+                self.queue_response_bytes(&self.seed.rtc_datetime_bcd());
+            }
+            0xF6 => self.queue_response_bytes(&[0, 0]),
+            0xF7 => self.queue_response_bytes(&[0, 0, 0, 0]),
+            0xF8 | 0xFD => self.queue_response_bytes(&[0]),
+            _ => {}
+        }
+    }
+
+    fn queue_response_bytes(&mut self, bytes: &[u8]) {
+        self.response_bits.clear();
+        self.response_index = 0;
+        for byte in bytes {
+            // The ROM read helper XORs the assembled byte with 0xFF before returning it.
+            let wire_byte = !byte;
+            for bit in 0..8 {
+                self.response_bits.push(((wire_byte >> bit) & 1) != 0);
+            }
+        }
+    }
+
+    fn next_response_eil(&mut self) -> u8 {
+        match self.read_phase {
+            RtcReadPhase::Idle | RtcReadPhase::ReadyHigh => {
+                self.read_phase = RtcReadPhase::ReadyLow;
+                EIL_READY
+            }
+            RtcReadPhase::ReadyLow => {
+                self.current_read_data = if self.response_bits[self.response_index] {
+                    EIL_IN_DATA
+                } else {
+                    0
+                };
+                self.read_phase = RtcReadPhase::Sample;
+                self.current_read_data
+            }
+            RtcReadPhase::Sample => {
+                let value = self.current_read_data;
+                self.response_index += 1;
+                self.read_phase = if self.has_pending_response() {
+                    RtcReadPhase::ReadyHigh
+                } else {
+                    RtcReadPhase::Idle
+                };
+                value
+            }
+        }
+    }
 }
 
 pub fn load_iq7000_rom_image(rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
@@ -166,49 +350,93 @@ pub fn load_iq7000_rom_image_into_memory(memory: &mut MemoryImage, rom: &[u8]) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rtc_iocs_44_short_circuit_returns_seeded_datetime() {
-        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
-        let mut memory = MemoryImage::new();
-        let mut state = LlamaState::new();
-        state.set_pc(RTC_IOCS_HANDLER_ADDR);
-        state.set_reg(RegName::I, RTC_GET_DATETIME_SUBCMD as u32);
-        state.set_reg(RegName::X, 0x002000);
-        state.set_reg(RegName::S, 0x000100);
-        let _ = memory.store(0x000100, 8, 0x23);
-        let _ = memory.store(0x000101, 8, 0x01);
-        let _ = memory.store(0x000102, 8, 0x0E);
+    fn host_write_byte(peripheral: &mut Iq7000RtcPeripheral, byte: u8) {
+        for bit in 0..8 {
+            peripheral.handle_eol_write(EOL_STROBE);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            let data = if ((byte >> bit) & 1) != 0 {
+                EOL_STROBE | EOL_OUT_DATA
+            } else {
+                EOL_STROBE
+            };
+            peripheral.handle_eol_write(data);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+        }
+        peripheral.handle_eol_write(0);
+    }
 
-        assert!(maybe_short_circuit_rtc_iocs(
-            &seed,
-            RTC_IOCS_HANDLER_ADDR,
-            &mut state,
-            &mut memory,
-        ));
-
-        let actual: Vec<u8> = (0..CLOCK_WORKSPACE_LEN)
-            .map(|idx| memory.load(0x002000 + idx as u32, 8).unwrap_or(0) as u8)
-            .collect();
-        assert_eq!(&actual[..12], b"202604252119");
-        assert_eq!(actual[12], 0);
-        assert_eq!(state.pc(), 0x0E0123);
-        assert_eq!(state.get_reg(RegName::S), 0x000103);
-        assert_eq!(state.get_reg(RegName::FC), 0);
+    fn host_read_byte_like_rom(peripheral: &mut Iq7000RtcPeripheral) -> u8 {
+        peripheral.handle_eol_write(EOL_STROBE);
+        let mut assembled = 0u8;
+        for _ in 0..8 {
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+            let sample = peripheral.handle_eil_read();
+            let carry = (sample & EIL_IN_DATA) != 0;
+            assembled >>= 1;
+            if carry {
+                assembled |= 0x80;
+            }
+        }
+        peripheral.handle_eol_write(0);
+        assembled ^ 0xFF
     }
 
     #[test]
-    fn rtc_iocs_short_circuit_ignores_unmodeled_subcommands() {
+    fn clock_seed_converts_to_rtc_bcd() {
         let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
-        let mut memory = MemoryImage::new();
-        let mut state = LlamaState::new();
-        state.set_pc(RTC_IOCS_HANDLER_ADDR);
-        state.set_reg(RegName::I, 0x45);
+        assert_eq!(
+            seed.rtc_datetime_bcd(),
+            [0x20, 0x26, 0x04, 0x25, 0x21, 0x19]
+        );
+    }
 
-        assert!(!maybe_short_circuit_rtc_iocs(
-            &seed,
-            RTC_IOCS_HANDLER_ADDR,
-            &mut state,
-            &mut memory,
-        ));
+    #[test]
+    fn rtc_peripheral_accepts_lsb_first_command_bits() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_CURRENT_DATETIME);
+
+        assert_eq!(peripheral.last_command, Some(RTC_COMMAND_CURRENT_DATETIME));
+        assert!(peripheral.has_pending_response());
+    }
+
+    #[test]
+    fn rtc_peripheral_streams_current_datetime_like_rom_read_helper() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_CURRENT_DATETIME);
+        let actual = [
+            host_read_byte_like_rom(&mut peripheral),
+            host_read_byte_like_rom(&mut peripheral),
+            host_read_byte_like_rom(&mut peripheral),
+            host_read_byte_like_rom(&mut peripheral),
+            host_read_byte_like_rom(&mut peripheral),
+            host_read_byte_like_rom(&mut peripheral),
+        ];
+
+        assert_eq!(actual, [0x20, 0x26, 0x04, 0x25, 0x21, 0x19]);
+        assert!(!peripheral.has_pending_response());
+    }
+
+    #[test]
+    fn rtc_peripheral_waits_for_write_payload_before_status_response() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, 0xF1);
+        assert_eq!(peripheral.last_command, Some(0xF1));
+        assert!(!peripheral.has_pending_response());
+
+        for byte in [0x20, 0x26, 0x04, 0x25, 0x21] {
+            host_write_byte(&mut peripheral, byte);
+            assert!(!peripheral.has_pending_response());
+        }
+        host_write_byte(&mut peripheral, 0x19);
+
+        assert!(peripheral.has_pending_response());
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
     }
 }

@@ -8,7 +8,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     apply_registers, collect_registers, create_lcd, emit_event,
-    iq7000::{self, Iq7000ClockSeed},
+    iq7000::{self, Iq7000ClockSeed, Iq7000RtcPeripheral},
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
@@ -597,6 +597,7 @@ struct StandaloneBus {
     trace_reset_ce6_shadow: Vec<u8>,
     trace_reset_ce6_readonly: bool,
     iq7000_clock_seed: Option<Iq7000RtcSeed>,
+    iq7000_rtc: Option<Iq7000RtcPeripheral>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -941,6 +942,7 @@ impl StandaloneBus {
             trace_reset_ce6_shadow: vec![0u8; 0x1_0000],
             trace_reset_ce6_readonly: false,
             iq7000_clock_seed: None,
+            iq7000_rtc: None,
         }
     }
 
@@ -962,6 +964,11 @@ impl StandaloneBus {
     }
 
     fn install_iq7000_clock_seed(&mut self, seed: Iq7000RtcSeed) {
+        if let Some(rtc) = self.iq7000_rtc.as_mut() {
+            rtc.set_seed(seed.clock.clone());
+        } else {
+            self.iq7000_rtc = Some(Iq7000RtcPeripheral::new(seed.clock.clone()));
+        }
         self.iq7000_clock_seed = Some(seed);
         self.reapply_iq7000_clock_seed();
     }
@@ -2062,6 +2069,15 @@ impl LlamaBus for StandaloneBus {
         }
         let kbd_offset = MemoryImage::internal_offset(addr);
         if let Some(offset) = kbd_offset {
+            if bits == 8 && offset == iq7000::IMEM_EIL_OFFSET {
+                if let Some(rtc) = self.iq7000_rtc.as_mut() {
+                    let byte = rtc.handle_eil_read();
+                    let _ = self.memory.store(addr, bits, byte as u32);
+                    self.trace_imem_access("read", addr, bits, byte as u32);
+                    self.trace_bus_access("read", addr, bits, byte as u32);
+                    return byte as u32;
+                }
+            }
             let had_pending = offset == IMEM_KIL_OFFSET && self.keyboard.fifo_len() > 0;
             if let Some(byte) = self.keyboard.handle_read(offset, &mut self.memory) {
                 match offset {
@@ -2226,6 +2242,16 @@ impl LlamaBus for StandaloneBus {
             }
         }
         if let Some(offset) = kbd_offset {
+            if bits == 8 && offset == iq7000::IMEM_EOL_OFFSET {
+                if let Some(rtc) = self.iq7000_rtc.as_mut() {
+                    rtc.handle_eol_write(value as u8);
+                    let _ = self.memory.store(addr, bits, value);
+                    self.trace_imem_access("write", addr, bits, value);
+                    self.trace_mem_write(addr, bits, value);
+                    self.trace_bus_access("write", addr, bits, value);
+                    return;
+                }
+            }
             if self
                 .keyboard
                 .handle_write(offset, value as u8, &mut self.memory)
@@ -3243,18 +3269,6 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                     imr = imr,
                     isr = isr
                 );
-            }
-            if let Some(seed) = bus.iq7000_clock_seed.as_ref() {
-                if iq7000::maybe_short_circuit_rtc_iocs(
-                    &seed.clock,
-                    pc,
-                    &mut state,
-                    &mut bus.memory,
-                ) {
-                    bus.finalize_instruction();
-                    executed += 1;
-                    continue;
-                }
             }
             let run_timer_cycles = !state.is_off();
             if run_timer_cycles && !pre_tick_done {
