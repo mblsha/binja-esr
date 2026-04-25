@@ -31,6 +31,7 @@ const BASIC_WARM_START_PC: u32 = 0x00F9C94;
 const AUTO_TYPE_START_DELAY_STEPS: u64 = 20_000;
 const AUTO_TYPE_GAP_STEPS: u64 = 5_000;
 const BASIC_KEY_CODE: u8 = 0x04;
+const CLEAR_EXTERNAL_RAM_ROUTINES: &[(u32, u32)] = &[(0x0F0DD9, 0x0F0DEE), (0x0F0DEE, 0x0F0E1F)];
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -115,7 +116,7 @@ struct Args {
     #[arg(long, default_value_t = false)]
     fast_init: bool,
 
-    /// Jump to the BASIC entry point after the PF1 flow (debug helper).
+    /// Jump to the BASIC entry point after an initialized menu is available (debug helper).
     #[arg(long, default_value_t = false)]
     jump_basic: bool,
 
@@ -123,7 +124,7 @@ struct Args {
     #[arg(long)]
     auto_type: Option<String>,
 
-    /// Auto-press the BASIC key after PF1 completes (debug helper).
+    /// Auto-press the BASIC key after an initialized menu is available (debug helper).
     #[arg(long, default_value_t = false)]
     auto_basic: bool,
 
@@ -138,6 +139,18 @@ struct Args {
     /// Write loop report JSON on exit (defaults to loop_report_<epoch>.json).
     #[arg(long, value_name = "PATH")]
     loop_report: Option<PathBuf>,
+
+    /// Load a snapshot before running.
+    #[arg(long, value_name = "PATH")]
+    snapshot_in: Option<PathBuf>,
+
+    /// Save a snapshot when --snapshot-on-text appears (or on exit if no trigger is set).
+    #[arg(long, value_name = "PATH")]
+    snapshot_out: Option<PathBuf>,
+
+    /// LCD text substring that triggers --snapshot-out.
+    #[arg(long, value_name = "TEXT")]
+    snapshot_on_text: Option<String>,
 }
 
 struct TerminalGuard {
@@ -538,6 +551,16 @@ fn decode_row0(
     }
 }
 
+fn decode_display_text(
+    text_decoder: &Option<sc62015_core::device::DeviceTextDecoder>,
+    runtime: &CoreRuntime,
+) -> String {
+    match (text_decoder, runtime.lcd.as_deref()) {
+        (Some(decoder), Some(lcd)) => decoder.decode_display_text(lcd).join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn strip_leading_line_comments(raw: &str) -> String {
     let lines = raw.split('\n');
     let mut output = Vec::new();
@@ -654,12 +677,25 @@ fn in_sio_routine(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> bool {
 
 fn in_clear_external_ram(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> bool {
     let pc = runtime.state.pc() & 0x000f_ffff;
+    if CLEAR_EXTERNAL_RAM_ROUTINES
+        .iter()
+        .any(|(start, end)| pc >= *start && pc < *end)
+    {
+        return true;
+    }
     if let Some((_base, name, _)) = resolve_symbol(pc, symbols) {
         if name.starts_with("clear_external_ram_") {
             return true;
         }
     }
     if let Some(frame) = runtime.state.call_stack().last().copied() {
+        let frame = frame & 0x000f_ffff;
+        if CLEAR_EXTERNAL_RAM_ROUTINES
+            .iter()
+            .any(|(start, end)| frame >= *start && frame < *end)
+        {
+            return true;
+        }
         if let Some((_base, name, _)) = resolve_symbol(frame, symbols) {
             if name.starts_with("clear_external_ram_") {
                 return true;
@@ -669,11 +705,11 @@ fn in_clear_external_ram(runtime: &CoreRuntime, symbols: Option<&SymbolMap>) -> 
     false
 }
 
-fn fast_clear_pce500_ram(runtime: &mut CoreRuntime, cleared: &mut bool, zero_buf: &[u8]) {
+fn fast_clear_pce500_ram(runtime: &mut CoreRuntime, cleared: &mut bool, fill_buf: &[u8]) {
     if *cleared {
         return;
     }
-    runtime.memory.write_external_slice(0, zero_buf);
+    runtime.memory.write_external_slice(0, fill_buf);
     *cleared = true;
 }
 
@@ -772,7 +808,7 @@ struct StubReturnConfig<'a> {
     fast_delay: bool,
     stub_sio: bool,
     fast_init: bool,
-    ram_zero_buf: Option<&'a [u8]>,
+    ram_fill_buf: Option<&'a [u8]>,
 }
 
 fn apply_stub_returns(
@@ -797,7 +833,7 @@ fn apply_stub_returns(
         return true;
     }
     if config.fast_init {
-        if let Some(buf) = config.ram_zero_buf {
+        if let Some(buf) = config.ram_fill_buf {
             if in_clear_external_ram(runtime, config.symbols) {
                 fast_clear_pce500_ram(runtime, ram_cleared, buf);
                 force_return_auto(runtime);
@@ -1165,7 +1201,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
     runtime.enable_loop_detector(loop_config);
-    runtime.power_on_reset();
+    if let Some(snapshot_in) = args.snapshot_in.as_ref() {
+        runtime.load_snapshot(snapshot_in)?;
+    } else {
+        runtime.power_on_reset();
+    }
 
     let text_decoder = args.model.text_decoder(&rom_bytes);
     let (line_count, width) = lcd_geometry(args.model);
@@ -1197,9 +1237,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut jump_basic_pending = args.jump_basic;
     let mut halted_steps: u64 = 0;
     let mut last_lcd_check: u64 = 0;
+    let mut snapshot_saved = false;
     let mut fast_init_cleared = false;
     let fast_init_buf = if args.fast_init && args.model.is_pce500_family() {
-        Some(vec![0u8; ROM_WINDOW_START])
+        Some(vec![0x9F; ROM_WINDOW_START])
     } else {
         None
     };
@@ -1258,7 +1299,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     fast_delay: args.fast_delay,
                     stub_sio: args.stub_sio,
                     fast_init: args.fast_init,
-                    ram_zero_buf: fast_init_buf.as_deref(),
+                    ram_fill_buf: fast_init_buf.as_deref(),
                 },
             ) {
                 executed = executed.saturating_add(1);
@@ -1344,22 +1385,38 @@ fn main() -> Result<(), Box<dyn Error>> {
             if should_check_lcd && executed.saturating_sub(last_lcd_check) >= lcd_check_interval {
                 last_lcd_check = executed;
                 let row0 = decode_row0(&text_decoder, &runtime);
-                if (auto_basic_pending || jump_basic_pending)
-                    && auto_basic_step.is_none()
-                    && (row0.contains("S2(CARD):") || row0.contains("S1(MAIN):"))
-                {
-                    if jump_basic_pending {
-                        jump_to_basic_loop(&mut runtime);
-                        jump_basic_pending = false;
-                        if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
-                            auto_type_next_step =
-                                Some(executed.saturating_add(args.auto_basic_delay));
+                let display_text = decode_display_text(&text_decoder, &runtime);
+                if !snapshot_saved {
+                    if let (Some(path), Some(needle)) =
+                        (args.snapshot_out.as_ref(), args.snapshot_on_text.as_ref())
+                    {
+                        if display_text.contains(needle) {
+                            runtime.save_snapshot(path)?;
+                            eprintln!("[snapshot] saved to {}", path.display());
+                            snapshot_saved = true;
                         }
-                        dirty = true;
-                    } else {
-                        auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
-                        auto_basic_pending = false;
                     }
+                }
+                let row_has_menu = row0.contains("S2(CARD):") || row0.contains("S1(MAIN):");
+                if jump_basic_pending
+                    && auto_basic_step.is_none()
+                    && (fast_init_cleared
+                        || (!args.fast_init && row_has_menu)
+                        || (row_has_menu && !row0.contains("NEW CARD")))
+                {
+                    jump_to_basic_loop(&mut runtime);
+                    jump_basic_pending = false;
+                    if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
+                        auto_type_next_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    }
+                    dirty = true;
+                } else if auto_basic_pending
+                    && auto_basic_step.is_none()
+                    && row_has_menu
+                    && !row0.contains("NEW CARD")
+                {
+                    auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    auto_basic_pending = false;
                 }
             }
 
@@ -1424,6 +1481,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => Vec::new(),
         };
         let lines = normalize_lines(lines, line_count, width);
+        if !snapshot_saved {
+            if let (Some(path), Some(needle)) =
+                (args.snapshot_out.as_ref(), args.snapshot_on_text.as_ref())
+            {
+                if lines.join("\n").contains(needle) {
+                    runtime.save_snapshot(path)?;
+                    eprintln!("[snapshot] saved to {}", path.display());
+                    snapshot_saved = true;
+                }
+            }
+        }
         if first_draw || dirty || lines != last_lines {
             let status = format_status(
                 &runtime,
@@ -1462,6 +1530,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let json = serde_json::to_string_pretty(report)?;
             fs::write(&path, json)?;
             eprintln!("[loop] report saved to {}", path.display());
+        }
+    }
+
+    if !snapshot_saved {
+        if let Some(path) = args.snapshot_out.as_ref() {
+            runtime.save_snapshot(path)?;
+            eprintln!("[snapshot] saved to {}", path.display());
         }
     }
 
