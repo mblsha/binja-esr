@@ -1098,6 +1098,19 @@ impl CoreRuntime {
                     continue;
                 }
             }
+            if let Some(seed) = self.iq7000_clock_seed.as_ref() {
+                if iq7000::maybe_short_circuit_rtc_iocs(
+                    seed,
+                    self.state.pc(),
+                    &mut self.state,
+                    &mut self.memory,
+                ) {
+                    self.metadata.instruction_count =
+                        self.metadata.instruction_count.saturating_add(1);
+                    self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                    continue;
+                }
+            }
             let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
                 let imr = self
