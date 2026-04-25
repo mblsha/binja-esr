@@ -1,5 +1,6 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py
 
+use chrono::{Datelike, Local, Timelike};
 use clap::Parser;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
@@ -99,6 +100,10 @@ struct Args {
     /// BNIDA JSON file with function names to show in the status line.
     #[arg(long, value_name = "PATH")]
     bnida: Option<PathBuf>,
+
+    /// IQ-7000 clock seed: host, off, or YYYYMMDDHHMM.
+    #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
+    iq7000_rtc: String,
 
     /// Force-enable KEY IRQ delivery when injecting keys (debug helper).
     #[arg(long, default_value_t = false)]
@@ -1325,6 +1330,42 @@ fn handle_key_event(
     }
 }
 
+fn iq7000_host_rtc_seed() -> String {
+    let now = Local::now();
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}",
+        now.year(),
+        now.month(),
+        now.day(),
+        now.hour(),
+        now.minute()
+    )
+}
+
+fn apply_iq7000_rtc_arg(
+    runtime: &mut CoreRuntime,
+    model: DeviceModel,
+    raw: &str,
+) -> Result<(), Box<dyn Error>> {
+    if model != DeviceModel::Iq7000 {
+        return Ok(());
+    }
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("off") || trimmed.eq_ignore_ascii_case("none") {
+        runtime.clear_iq7000_clock_seed();
+        return Ok(());
+    }
+    let seed = if trimmed.eq_ignore_ascii_case("host") || trimmed.is_empty() {
+        iq7000_host_rtc_seed()
+    } else {
+        trimmed.to_string()
+    };
+    runtime
+        .set_iq7000_clock_seed_yyyymmddhhmm(&seed)
+        .map_err(|err| format!("--iq7000-rtc: {err}"))?;
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     if args.refresh_steps == 0 {
@@ -1336,6 +1377,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut runtime = CoreRuntime::new();
     runtime.set_device_model(args.model)?;
     args.model.configure_runtime(&mut runtime, &rom_bytes)?;
+    apply_iq7000_rtc_arg(&mut runtime, args.model, &args.iq7000_rtc)?;
     if args.model.is_pce500_family() {
         if let Some(kb) = runtime.keyboard.as_mut() {
             kb.set_press_threshold(1);
@@ -1356,6 +1398,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     runtime.enable_loop_detector(loop_config);
     runtime.power_on_reset();
+    apply_iq7000_rtc_arg(&mut runtime, args.model, &args.iq7000_rtc)?;
 
     let text_decoder = args.model.text_decoder(&rom_bytes);
     let (line_count, width) = lcd_geometry(args.model);

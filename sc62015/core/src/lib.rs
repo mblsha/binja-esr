@@ -383,6 +383,7 @@ pub struct CoreRuntime {
     pub timer: Box<TimerContext>,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
+    iq7000_clock_seed: Option<iq7000::Iq7000ClockSeed>,
     onk_level: bool,
 }
 
@@ -422,6 +423,7 @@ impl CoreRuntime {
             timer: Box::new(TimerContext::new(false, 0, 0)),
             host_read: None,
             host_write: None,
+            iq7000_clock_seed: None,
             onk_level: false,
         };
         rt.set_device_model(DeviceModel::PcE500)
@@ -496,6 +498,23 @@ impl CoreRuntime {
     pub fn clear_host_overlays(&mut self) {
         self.host_read = None;
         self.host_write = None;
+    }
+
+    pub fn set_iq7000_clock_seed_yyyymmddhhmm(&mut self, raw: &str) -> Result<()> {
+        let seed = iq7000::Iq7000ClockSeed::from_yyyymmddhhmm(raw).map_err(CoreError::Other)?;
+        seed.apply_to_memory(&mut self.memory);
+        self.iq7000_clock_seed = Some(seed);
+        Ok(())
+    }
+
+    pub fn clear_iq7000_clock_seed(&mut self) {
+        self.iq7000_clock_seed = None;
+        for idx in 0..iq7000::CLOCK_WORKSPACE_LEN {
+            self.memory
+                .write_external_byte(iq7000::CLOCK_WORKSPACE_START + idx as u32, 0);
+        }
+        self.memory
+            .write_external_byte(iq7000::CLOCK_INITIALIZED_FLAG, 0);
     }
 
     pub fn enable_sio_stub(&mut self) {
@@ -825,6 +844,7 @@ impl CoreRuntime {
             sio_ptr: *mut SioStub,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
+            iq7000_clock_seed: Option<*const iq7000::Iq7000ClockSeed>,
             onk_level: bool,
             #[allow(dead_code)]
             cycle: u64,
@@ -860,6 +880,12 @@ impl CoreRuntime {
                         }
                     }
                     let python_required = (*self.mem).requires_python(addr);
+                    if let Some(seed_ptr) = self.iq7000_clock_seed {
+                        if let Some(val) = (*seed_ptr).read(addr, bits) {
+                            (*self.mem).bump_read_count();
+                            return val;
+                        }
+                    }
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -1236,6 +1262,10 @@ impl CoreRuntime {
                         sio_ptr,
                         host_read,
                         host_write,
+                        iq7000_clock_seed: self
+                            .iq7000_clock_seed
+                            .as_ref()
+                            .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
                         onk_level: self.onk_level,
                         cycle: self.metadata.cycle_count,
                         pc: pc_before,
@@ -1928,6 +1958,43 @@ mod tests {
         assert!(
             rt.keyboard.is_some(),
             "iq-7000 keeps keyboard bridge available for matrix scanning"
+        );
+    }
+
+    #[test]
+    fn iq7000_clock_seed_populates_and_clears_workspace() {
+        let mut rt = CoreRuntime::new();
+        rt.set_iq7000_clock_seed_yyyymmddhhmm("202604252119")
+            .expect("clock seed");
+
+        let mut bytes = Vec::new();
+        for idx in 0..12 {
+            bytes.push(
+                rt.memory
+                    .load(crate::iq7000::CLOCK_WORKSPACE_START + idx, 8)
+                    .unwrap_or(0) as u8,
+            );
+        }
+        assert_eq!(std::str::from_utf8(&bytes).unwrap(), "202604252119");
+        assert_eq!(
+            rt.memory
+                .load(crate::iq7000::CLOCK_INITIALIZED_FLAG, 8)
+                .unwrap_or(0),
+            1
+        );
+
+        rt.clear_iq7000_clock_seed();
+        assert_eq!(
+            rt.memory
+                .load(crate::iq7000::CLOCK_WORKSPACE_START, 8)
+                .unwrap_or(1),
+            0
+        );
+        assert_eq!(
+            rt.memory
+                .load(crate::iq7000::CLOCK_INITIALIZED_FLAG, 8)
+                .unwrap_or(1),
+            0
         );
     }
 
