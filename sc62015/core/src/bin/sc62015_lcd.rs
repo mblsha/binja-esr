@@ -24,12 +24,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const IQ7000_TEXT_ROWS: usize = 8;
 const IQ7000_TEXT_COLS: usize = 16;
 const STATUS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
-const PF_KEY_HOLD_STEPS: u64 = 2_000;
+const PF_KEY_HOLD_STEPS: u64 = 40_000;
+const CHAR_KEY_HOLD_STEPS: u64 = 10_000;
 const ON_AUTO_HOLD_CYCLES: u64 = 20_000;
 const BASIC_REPL_HUB_PC: u32 = 0x00FFE09;
 const BASIC_WARM_START_PC: u32 = 0x00F9C94;
 const AUTO_TYPE_START_DELAY_STEPS: u64 = 20_000;
-const AUTO_TYPE_GAP_STEPS: u64 = 5_000;
+const AUTO_TYPE_GAP_STEPS: u64 = 20_000;
 const BASIC_KEY_CODE: u8 = 0x04;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
@@ -123,6 +124,10 @@ struct Args {
     #[arg(long)]
     auto_type: Option<String>,
 
+    /// Auto-press PF1 at the new-card initialization prompt (debug helper).
+    #[arg(long, default_value_t = false)]
+    auto_init: bool,
+
     /// Auto-press the BASIC key after PF1 completes (debug helper).
     #[arg(long, default_value_t = false)]
     auto_basic: bool,
@@ -138,6 +143,18 @@ struct Args {
     /// Write loop report JSON on exit (defaults to loop_report_<epoch>.json).
     #[arg(long, value_name = "PATH")]
     loop_report: Option<PathBuf>,
+
+    /// Load a snapshot before running.
+    #[arg(long, value_name = "PATH")]
+    snapshot_in: Option<PathBuf>,
+
+    /// Save a snapshot when --snapshot-on-text appears (or on exit if no trigger is set).
+    #[arg(long, value_name = "PATH")]
+    snapshot_out: Option<PathBuf>,
+
+    /// LCD text substring that triggers --snapshot-out.
+    #[arg(long, value_name = "TEXT")]
+    snapshot_on_text: Option<String>,
 }
 
 struct TerminalGuard {
@@ -538,6 +555,16 @@ fn decode_row0(
     }
 }
 
+fn decode_display_text(
+    text_decoder: &Option<sc62015_core::device::DeviceTextDecoder>,
+    runtime: &CoreRuntime,
+) -> String {
+    match (text_decoder, runtime.lcd.as_deref()) {
+        (Some(decoder), Some(lcd)) => decoder.decode_display_text(lcd).join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn strip_leading_line_comments(raw: &str) -> String {
     let lines = raw.split('\n');
     let mut output = Vec::new();
@@ -906,7 +933,7 @@ fn inject_key(
     }
     if let Some(kb) = runtime.keyboard.as_mut() {
         let kb_irq_enabled = runtime.timer.kb_irq_enabled || force_key_irq;
-        let _ = kb.inject_matrix_event(code, false, &mut runtime.memory, kb_irq_enabled);
+        kb.press_matrix_code(code, &mut runtime.memory);
         if kb_irq_enabled {
             runtime.timer.key_irq_latched = true;
             if let Some(cur) = runtime.memory.read_internal_byte(IMEM_ISR_OFFSET) {
@@ -920,7 +947,7 @@ fn inject_key(
             }
         }
         if hold_steps == 0 {
-            let _ = kb.inject_matrix_event(code, true, &mut runtime.memory, kb_irq_enabled);
+            kb.release_matrix_code(code, &mut runtime.memory);
         } else {
             pending_releases.retain(|pending| pending.code != code);
             pending_releases.push(PendingRelease {
@@ -954,12 +981,11 @@ fn apply_pending_releases(
         pending_releases.clear();
         return;
     };
-    let kb_irq_enabled = runtime.timer.kb_irq_enabled;
     let mut idx = 0;
     while idx < pending_releases.len() {
         if pending_releases[idx].due_step <= executed {
             let code = pending_releases[idx].code;
-            let _ = kb.inject_matrix_event(code, true, &mut runtime.memory, kb_irq_enabled);
+            kb.release_matrix_code(code, &mut runtime.memory);
             pending_releases.swap_remove(idx);
         } else {
             idx += 1;
@@ -1017,21 +1043,42 @@ fn handle_key_event(
     }
     match key.code {
         KeyCode::Enter => {
-            inject_key(runtime, 0x4F, executed, pending_releases, 0, force_key_irq);
+            inject_key(
+                runtime,
+                0x4F,
+                executed,
+                pending_releases,
+                CHAR_KEY_HOLD_STEPS,
+                force_key_irq,
+            );
             return KeyFeedback {
                 label: Some("=".to_string()),
                 quit: false,
             };
         }
         KeyCode::Backspace => {
-            inject_key(runtime, 0x4D, executed, pending_releases, 0, force_key_irq);
+            inject_key(
+                runtime,
+                0x4D,
+                executed,
+                pending_releases,
+                CHAR_KEY_HOLD_STEPS,
+                force_key_irq,
+            );
             return KeyFeedback {
                 label: Some("BS".to_string()),
                 quit: false,
             };
         }
         KeyCode::Delete => {
-            inject_key(runtime, 0x4C, executed, pending_releases, 0, force_key_irq);
+            inject_key(
+                runtime,
+                0x4C,
+                executed,
+                pending_releases,
+                CHAR_KEY_HOLD_STEPS,
+                force_key_irq,
+            );
             return KeyFeedback {
                 label: Some("DEL".to_string()),
                 quit: false,
@@ -1125,7 +1172,14 @@ fn handle_key_event(
                 }
             }
             if let Some(code) = matrix_code_for_char(ch) {
-                inject_key(runtime, code, executed, pending_releases, 0, force_key_irq);
+                inject_key(
+                    runtime,
+                    code,
+                    executed,
+                    pending_releases,
+                    CHAR_KEY_HOLD_STEPS,
+                    force_key_irq,
+                );
                 return KeyFeedback {
                     label: Some(ch.to_string()),
                     quit: false,
@@ -1151,21 +1205,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut runtime = CoreRuntime::new();
     runtime.set_device_model(args.model)?;
     args.model.configure_runtime(&mut runtime, &rom_bytes)?;
-    runtime
-        .memory
-        .set_memory_card_slot_present(matches!(args.card, CardMode::Present));
+    if args.model.is_pce500_family() {
+        if let Some(kb) = runtime.keyboard.as_mut() {
+            kb.set_press_threshold(1);
+        }
+    }
     if args.disable_timers {
         *runtime.timer = TimerContext::new(false, 0, 0);
     } else {
         *runtime.timer =
             TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
     }
+    runtime
+        .memory
+        .set_memory_card_slot_present(matches!(args.card, CardMode::Present));
     let loop_config = LoopDetectorConfig {
         detect_stride: args.refresh_steps,
         ..Default::default()
     };
     runtime.enable_loop_detector(loop_config);
-    runtime.power_on_reset();
+    if let Some(snapshot_in) = args.snapshot_in.as_ref() {
+        runtime.load_snapshot(snapshot_in)?;
+    } else {
+        runtime.power_on_reset();
+    }
 
     let text_decoder = args.model.text_decoder(&rom_bytes);
     let (line_count, width) = lcd_geometry(args.model);
@@ -1193,10 +1256,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.auto_type.clone().unwrap_or_default().chars().collect();
     let mut auto_type_next_step: Option<u64> = None;
     let mut auto_basic_step: Option<u64> = None;
+    let mut auto_main_pf1_step: Option<u64> = None;
+    let mut auto_menu_pf1_step: Option<u64> = None;
+    let mut auto_init_pending = args.auto_init;
+    let mut auto_main_pf1_pending = args.auto_init;
+    let mut auto_menu_pf1_pending = args.auto_init;
     let mut auto_basic_pending = args.auto_basic;
     let mut jump_basic_pending = args.jump_basic;
     let mut halted_steps: u64 = 0;
     let mut last_lcd_check: u64 = 0;
+    let mut snapshot_saved = false;
     let mut fast_init_cleared = false;
     let fast_init_buf = if args.fast_init && args.model.is_pce500_family() {
         Some(vec![0u8; ROM_WINDOW_START])
@@ -1307,19 +1376,35 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mut sent = false;
                     while let Some(ch) = auto_type_queue.first().copied() {
                         auto_type_queue.remove(0);
-                        let code = match ch {
-                            '\n' | '\r' => Some(0x4F),
-                            _ => matrix_code_for_char(ch),
+                        let did_inject = match ch {
+                            '\n' | '\r' => {
+                                inject_key(
+                                    &mut runtime,
+                                    0x4F,
+                                    executed,
+                                    &mut pending_releases,
+                                    CHAR_KEY_HOLD_STEPS,
+                                    args.force_key_irq,
+                                );
+                                true
+                            }
+                            _ => {
+                                if let Some(code) = matrix_code_for_char(ch) {
+                                    inject_key(
+                                        &mut runtime,
+                                        code,
+                                        executed,
+                                        &mut pending_releases,
+                                        CHAR_KEY_HOLD_STEPS,
+                                        args.force_key_irq,
+                                    );
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                         };
-                        if let Some(code) = code {
-                            inject_key(
-                                &mut runtime,
-                                code,
-                                executed,
-                                &mut pending_releases,
-                                0,
-                                args.force_key_irq,
-                            );
+                        if did_inject {
                             last_key = Some(ch.to_string());
                             last_key_step = executed;
                             auto_type_next_step =
@@ -1334,32 +1419,124 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+            if let Some(step) = auto_main_pf1_step {
+                if executed >= step {
+                    inject_key(
+                        &mut runtime,
+                        0x56,
+                        executed,
+                        &mut pending_releases,
+                        PF_KEY_HOLD_STEPS,
+                        args.force_key_irq,
+                    );
+                    last_key = Some("PF1".to_string());
+                    last_key_step = executed;
+                    auto_main_pf1_step = None;
+                    dirty = true;
+                }
+            }
+            if let Some(step) = auto_menu_pf1_step {
+                if executed >= step {
+                    inject_key(
+                        &mut runtime,
+                        0x56,
+                        executed,
+                        &mut pending_releases,
+                        PF_KEY_HOLD_STEPS,
+                        args.force_key_irq,
+                    );
+                    last_key = Some("PF1".to_string());
+                    last_key_step = executed;
+                    auto_menu_pf1_step = None;
+                    dirty = true;
+                }
+            }
             if runtime.state.is_halted() {
                 halted_steps = halted_steps.saturating_add(chunk);
             } else {
                 halted_steps = 0;
             }
-            let should_check_lcd =
-                (auto_basic_pending || jump_basic_pending) && auto_basic_step.is_none();
+            let should_check_lcd = (auto_init_pending
+                || auto_main_pf1_pending
+                || auto_menu_pf1_pending
+                || auto_main_pf1_step.is_some()
+                || auto_menu_pf1_step.is_some()
+                || auto_basic_pending
+                || jump_basic_pending
+                || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
+                && auto_basic_step.is_none();
             if should_check_lcd && executed.saturating_sub(last_lcd_check) >= lcd_check_interval {
                 last_lcd_check = executed;
                 let row0 = decode_row0(&text_decoder, &runtime);
-                if (auto_basic_pending || jump_basic_pending)
-                    && auto_basic_step.is_none()
-                    && (row0.contains("S2(CARD):") || row0.contains("S1(MAIN):"))
-                {
-                    if jump_basic_pending {
-                        jump_to_basic_loop(&mut runtime);
-                        jump_basic_pending = false;
-                        if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
-                            auto_type_next_step =
-                                Some(executed.saturating_add(args.auto_basic_delay));
+                let display_text = decode_display_text(&text_decoder, &runtime);
+                if !snapshot_saved {
+                    if let (Some(path), Some(needle)) =
+                        (args.snapshot_out.as_ref(), args.snapshot_on_text.as_ref())
+                    {
+                        if display_text.contains(needle) {
+                            runtime.save_snapshot(path)?;
+                            eprintln!("[snapshot] saved to {}", path.display());
+                            snapshot_saved = true;
                         }
-                        dirty = true;
-                    } else {
-                        auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
-                        auto_basic_pending = false;
                     }
+                }
+                if auto_init_pending && row0.contains("S2(CARD):NEW CARD") {
+                    inject_key(
+                        &mut runtime,
+                        0x56,
+                        executed,
+                        &mut pending_releases,
+                        PF_KEY_HOLD_STEPS,
+                        args.force_key_irq,
+                    );
+                    last_key = Some("PF1".to_string());
+                    last_key_step = executed;
+                    auto_init_pending = false;
+                    dirty = true;
+                    continue;
+                }
+                if auto_main_pf1_pending && row0.contains("S1(MAIN):NEW CARD") {
+                    auto_main_pf1_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    auto_main_pf1_pending = false;
+                    dirty = true;
+                    continue;
+                }
+                if auto_menu_pf1_pending && display_text.contains("MAIN MENU") {
+                    auto_menu_pf1_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    auto_menu_pf1_pending = false;
+                    dirty = true;
+                    continue;
+                }
+                if auto_type_next_step.is_none()
+                    && !auto_type_queue.is_empty()
+                    && display_text.contains('>')
+                {
+                    auto_type_next_step = Some(executed.saturating_add(args.auto_type_delay));
+                    dirty = true;
+                    continue;
+                }
+                let row_has_menu = row0.contains("S2(CARD):") || row0.contains("S1(MAIN):");
+                if jump_basic_pending
+                    && auto_basic_step.is_none()
+                    && !auto_init_pending
+                    && (fast_init_cleared
+                        || (!args.auto_init && row_has_menu)
+                        || (row_has_menu && !row0.contains("NEW CARD")))
+                {
+                    jump_to_basic_loop(&mut runtime);
+                    jump_basic_pending = false;
+                    if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
+                        auto_type_next_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    }
+                    dirty = true;
+                } else if auto_basic_pending
+                    && auto_basic_step.is_none()
+                    && !auto_init_pending
+                    && row_has_menu
+                    && !row0.contains("NEW CARD")
+                {
+                    auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
+                    auto_basic_pending = false;
                 }
             }
 
@@ -1424,6 +1601,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => Vec::new(),
         };
         let lines = normalize_lines(lines, line_count, width);
+        if !snapshot_saved {
+            if let (Some(path), Some(needle)) =
+                (args.snapshot_out.as_ref(), args.snapshot_on_text.as_ref())
+            {
+                if lines.join("\n").contains(needle) {
+                    runtime.save_snapshot(path)?;
+                    eprintln!("[snapshot] saved to {}", path.display());
+                    snapshot_saved = true;
+                }
+            }
+        }
         if first_draw || dirty || lines != last_lines {
             let status = format_status(
                 &runtime,
@@ -1462,6 +1650,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let json = serde_json::to_string_pretty(report)?;
             fs::write(&path, json)?;
             eprintln!("[loop] report saved to {}", path.display());
+        }
+    }
+
+    if !snapshot_saved {
+        if let Some(path) = args.snapshot_out.as_ref() {
+            runtime.save_snapshot(path)?;
+            eprintln!("[snapshot] saved to {}", path.display());
         }
     }
 
