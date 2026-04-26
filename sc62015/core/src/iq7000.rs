@@ -18,6 +18,517 @@ const EIL_IN_DATA: u8 = 0x08;
 const EIL_READY: u8 = 0x10;
 const RTC_COMMAND_CURRENT_DATETIME: u8 = 0xF4;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Iq7000ContractStatus {
+    Confirmed,
+    RuntimeCovered,
+    StructurallyMapped,
+    RomAuthoritative,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000IocsDeviceRecord {
+    pub device: u8,
+    pub attr: u8,
+    pub handler: u32,
+    pub name: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_IOCS_DEVICE_RECORDS: &[Iq7000IocsDeviceRecord] = &[
+    Iq7000IocsDeviceRecord {
+        device: 0x00,
+        attr: 0xA2,
+        handler: 0x00F04A5,
+        name: "STDO:SCRN:",
+        status: Iq7000ContractStatus::RuntimeCovered,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x01,
+        attr: 0xA1,
+        handler: 0x00F360A,
+        name: "STDI:KYBD:",
+        status: Iq7000ContractStatus::RuntimeCovered,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x02,
+        attr: 0xD3,
+        handler: 0x00FA5FE,
+        name: "COM:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x03,
+        attr: 0xA2,
+        handler: 0x00FB439,
+        name: "STDL:PRN:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x04,
+        attr: 0xD7,
+        handler: 0x00FAEC0,
+        name: "CAS:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x06,
+        attr: 0xC3,
+        handler: 0x00F7C83,
+        name: "S1:S2:S3:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x08,
+        attr: 0x00,
+        handler: 0x00F5702,
+        name: "SYSTM:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x0A,
+        attr: 0x00,
+        handler: 0x00F31EF,
+        name: "RTC:",
+        status: Iq7000ContractStatus::RuntimeCovered,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x0B,
+        attr: 0xC0,
+        handler: 0x00FBC3D,
+        name: "PANET:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x0C,
+        attr: 0x53,
+        handler: 0x00FBC00,
+        name: "PACOM:",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x0D,
+        attr: 0x00,
+        handler: 0x00F6777,
+        name: "dev0D:System/UserDic/Alarm",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000IocsDeviceRecord {
+        device: 0x0E,
+        attr: 0x00,
+        handler: 0x00F5C88,
+        name: "dev0E:SCR handshake",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000HeaderRecord {
+    pub address: u32,
+    pub name: &'static str,
+    pub attr: Option<u8>,
+    pub entry_or_walker: Option<u32>,
+    pub trailer_ptr: Option<u32>,
+    pub trailer_index: Option<u8>,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_HEADER_RECORDS: &[Iq7000HeaderRecord] = &[
+    Iq7000HeaderRecord {
+        address: 0x051720,
+        name: "STDO:SCRN:",
+        attr: Some(0xA2),
+        entry_or_walker: Some(0x0602EC),
+        trailer_ptr: Some(0x05174F),
+        trailer_index: Some(0x01),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x051740,
+        name: "STDI:KYBD:",
+        attr: Some(0xA1),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x05175C),
+        trailer_index: Some(0x02),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x051750,
+        name: "COM:",
+        attr: Some(0xD3),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x05176E),
+        trailer_index: Some(0x03),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x051760,
+        name: "STDL:PRN:",
+        attr: Some(0xA2),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x05177B),
+        trailer_index: Some(0x04),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x051770,
+        name: "CAS:",
+        attr: Some(0xD7),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x051790),
+        trailer_index: Some(0x06),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x051780,
+        name: "S1:S2:S3:S4:",
+        attr: Some(0xC3),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x05179F),
+        trailer_index: Some(0x05),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x051790,
+        name: "E:F:G:",
+        attr: Some(0x83),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x0517AE),
+        trailer_index: Some(0x0C),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x0517A0,
+        name: "PACOM:",
+        attr: Some(0xD7),
+        entry_or_walker: None,
+        trailer_ptr: Some(0x0517B7),
+        trailer_index: Some(0x09),
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000HeaderRecord {
+        address: 0x0517B0,
+        name: "SYSTEM block",
+        attr: None,
+        entry_or_walker: Some(0x048C31),
+        trailer_ptr: None,
+        trailer_index: None,
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
+pub const IQ7000_STDO_WALKER_BLOB_START: u32 = 0x060200;
+pub const IQ7000_STDO_WALKER_ENTRY: u32 = 0x0602EC;
+pub const IQ7000_STDO_WALKER_DEVICE_STRING_ADDR: u32 = 0x060980;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000KeyboardSelector {
+    pub raw_code: u8,
+    pub translated_code: u8,
+    pub label: &'static str,
+}
+
+pub const IQ7000_APP_SELECTOR_MAP: &[Iq7000KeyboardSelector] = &[
+    Iq7000KeyboardSelector {
+        raw_code: 0x18,
+        translated_code: 0x51,
+        label: "CALENDAR",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x19,
+        translated_code: 0x50,
+        label: "SCHEDULE",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x10,
+        translated_code: 0x52,
+        label: "TEL",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x08,
+        translated_code: 0x53,
+        label: "MEMO",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x00,
+        translated_code: 0x54,
+        label: "CALC",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x1A,
+        translated_code: 0x55,
+        label: "CARD/SAMPLES",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x11,
+        translated_code: 0x56,
+        label: "WORLD",
+    },
+    Iq7000KeyboardSelector {
+        raw_code: 0x09,
+        translated_code: 0x57,
+        label: "HOME",
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000KeyboardActionTarget {
+    pub address: u32,
+    pub role: &'static str,
+}
+
+pub const IQ7000_KEYBOARD_ACTION_TARGETS: &[Iq7000KeyboardActionTarget] = &[
+    Iq7000KeyboardActionTarget {
+        address: 0x00F523E,
+        role: "clear keycode bit 0x04",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F5247,
+        role: "ack alarm IRQ then run RTC alarm worker when pending",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F525D,
+        role: "RETF stub",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F563C,
+        role: "serial RX interrupt handler",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F537C,
+        role: "RETF stub before reset/rescan helper at 0xF537D",
+    },
+];
+
+pub const IQ7000_KEYBOARD_SCAN_CHAIN: &[u32] = &[
+    0x00F5394, 0x00F54D9, 0x00F537D, 0x00F5510, 0x00F5588, 0x00F55AE,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000CommandTarget {
+    pub index_or_command: u8,
+    pub target: u32,
+    pub role: &'static str,
+}
+
+pub const IQ7000_RAM_DISK_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x3F,
+        target: 0x00F7D2D,
+        role: "init/reset",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x40,
+        target: 0x00F7D88,
+        role: "reset/media select",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x41,
+        target: 0x00F80AE,
+        role: "workspace select/preflight",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x42,
+        target: 0x00F80E3,
+        role: "IMR-masked workspace resize/copy",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x43,
+        target: 0x00F818E,
+        role: "retry wrapper around resize/copy",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x44,
+        target: 0x00F81AA,
+        role: "length/free delta query",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x45,
+        target: 0x00F81BC,
+        role: "overlap-safe memmove",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x46,
+        target: 0x00F823F,
+        role: "record helper, pending full semantics",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x47,
+        target: 0x00F8269,
+        role: "record helper, pending full semantics",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x48,
+        target: 0x00F8308,
+        role: "record helper, pending full semantics",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x49,
+        target: 0x00F8330,
+        role: "IMR-masked record iterator",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4A,
+        target: 0x00F7CD3,
+        role: "media base select",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4B,
+        target: 0x00F8360,
+        role: "bounds/room check",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4C,
+        target: 0x00F8390,
+        role: "current record finder",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4D,
+        target: 0x00F83C8,
+        role: "record checksum/validator",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4E,
+        target: 0x00F89BF,
+        role: "pending classification",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4F,
+        target: 0x00F8A65,
+        role: "pending classification",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x50,
+        target: 0x00F8AA2,
+        role: "pending classification",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x51,
+        target: 0x00F8469,
+        role: "workspace select wrapper",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x52,
+        target: 0x00F84BA,
+        role: "workspace select wrapper",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x53,
+        target: 0x00F8412,
+        role: "pending classification",
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000RtcCommandSpec {
+    pub command: u8,
+    pub payload_len: u8,
+    pub response_len: u8,
+    pub role: &'static str,
+}
+
+pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
+    Iq7000RtcCommandSpec {
+        command: 0xF0,
+        payload_len: 6,
+        response_len: 1,
+        role: "write packed BCD/status",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF1,
+        payload_len: 6,
+        response_len: 1,
+        role: "write packed BCD/status",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF2,
+        payload_len: 2,
+        response_len: 1,
+        role: "short write/status",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF4,
+        payload_len: 0,
+        response_len: 6,
+        role: "read current datetime BCD",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF5,
+        payload_len: 0,
+        response_len: 6,
+        role: "read datetime-like BCD",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF6,
+        payload_len: 0,
+        response_len: 2,
+        role: "read short status/value",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF7,
+        payload_len: 0,
+        response_len: 4,
+        role: "read 4-byte status/value",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xF8,
+        payload_len: 0,
+        response_len: 1,
+        role: "read status",
+    },
+    Iq7000RtcCommandSpec {
+        command: 0xFD,
+        payload_len: 0,
+        response_len: 1,
+        role: "read status",
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000DeviceGap {
+    pub area: &'static str,
+    pub rust_contract: &'static str,
+    pub remaining: &'static str,
+}
+
+pub const IQ7000_REMAINING_GAPS: &[Iq7000DeviceGap] = &[
+    Iq7000DeviceGap {
+        area: "STDO:SCRN",
+        rust_contract: "96x64 VRAM/font rendering plus STDO header/walker constants",
+        remaining: "prove every 0x51720 header field against the 0x060200 walker",
+    },
+    Iq7000DeviceGap {
+        area: "STDI:KYBD",
+        rust_contract: "selector map, scan chain, and action-target table",
+        remaining: "complete physical matrix row/column map and every translation action target",
+    },
+    Iq7000DeviceGap {
+        area: "COM/PANET/PACOM/PRN",
+        rust_contract: "IOCS device records and known serial helper tables",
+        remaining: "full command ABI and hardware timing constants",
+    },
+    Iq7000DeviceGap {
+        area: "CAS",
+        rust_contract: "IOCS device record and known CAS front-end addresses",
+        remaining: "record/chunk byte format, retry timing, and exact error codes",
+    },
+    Iq7000DeviceGap {
+        area: "S1:S2:S3:S4 / E:F:G",
+        rust_contract: "0xF7CA9 command table and workspace helper roles",
+        remaining: "full partition/file metadata semantics",
+    },
+    Iq7000DeviceGap {
+        area: "RTC",
+        rust_contract: "E-port RTC protocol and command response lengths",
+        remaining: "alarm/status/write subcommands and ON-key/power interactions",
+    },
+    Iq7000DeviceGap {
+        area: "SYSTM/dev0D/dev0E",
+        rust_contract: "IOCS device records and command-range ownership",
+        remaining: "full list-editor/alarm/SCR-handshake command semantics",
+    },
+];
+
 fn mask_for_bits(bits: u8) -> u32 {
     if bits >= 32 {
         u32::MAX
@@ -380,6 +891,139 @@ mod tests {
         }
         peripheral.handle_eol_write(0);
         assembled ^ 0xFF
+    }
+
+    #[test]
+    fn iocs_device_records_lock_known_handlers() {
+        assert_eq!(IQ7000_IOCS_DEVICE_RECORDS.len(), 12);
+
+        let stdo = IQ7000_IOCS_DEVICE_RECORDS
+            .iter()
+            .find(|record| record.name == "STDO:SCRN:")
+            .expect("STDO record");
+        assert_eq!(stdo.device, 0x00);
+        assert_eq!(stdo.attr, 0xA2);
+        assert_eq!(stdo.handler, 0x00F04A5);
+        assert_eq!(stdo.status, Iq7000ContractStatus::RuntimeCovered);
+
+        let rtc = IQ7000_IOCS_DEVICE_RECORDS
+            .iter()
+            .find(|record| record.name == "RTC:")
+            .expect("RTC record");
+        assert_eq!(rtc.device, 0x0A);
+        assert_eq!(rtc.handler, 0x00F31EF);
+
+        let dev0d = IQ7000_IOCS_DEVICE_RECORDS
+            .iter()
+            .find(|record| record.device == 0x0D)
+            .expect("dev0D record");
+        assert_eq!(dev0d.handler, 0x00F6777);
+        assert_eq!(dev0d.name, "dev0D:System/UserDic/Alarm");
+    }
+
+    #[test]
+    fn header_records_lock_stdo_walker_and_trailers() {
+        let stdo = IQ7000_HEADER_RECORDS
+            .iter()
+            .find(|record| record.address == 0x051720)
+            .expect("STDO header record");
+        assert_eq!(stdo.name, "STDO:SCRN:");
+        assert_eq!(stdo.attr, Some(0xA2));
+        assert_eq!(stdo.entry_or_walker, Some(IQ7000_STDO_WALKER_ENTRY));
+        assert_eq!(stdo.trailer_ptr, Some(0x05174F));
+        assert_eq!(stdo.trailer_index, Some(0x01));
+
+        assert_eq!(IQ7000_STDO_WALKER_BLOB_START, 0x060200);
+        assert_eq!(IQ7000_STDO_WALKER_ENTRY, 0x0602EC);
+        assert_eq!(IQ7000_STDO_WALKER_DEVICE_STRING_ADDR, 0x060980);
+
+        let system = IQ7000_HEADER_RECORDS
+            .iter()
+            .find(|record| record.name == "SYSTEM block")
+            .expect("SYSTEM header block");
+        assert_eq!(system.entry_or_walker, Some(0x048C31));
+        assert_eq!(system.trailer_index, None);
+    }
+
+    #[test]
+    fn keyboard_selector_contract_covers_builtin_apps() {
+        let actual: Vec<(&str, u8, u8)> = IQ7000_APP_SELECTOR_MAP
+            .iter()
+            .map(|selector| (selector.label, selector.raw_code, selector.translated_code))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                ("CALENDAR", 0x18, 0x51),
+                ("SCHEDULE", 0x19, 0x50),
+                ("TEL", 0x10, 0x52),
+                ("MEMO", 0x08, 0x53),
+                ("CALC", 0x00, 0x54),
+                ("CARD/SAMPLES", 0x1A, 0x55),
+                ("WORLD", 0x11, 0x56),
+                ("HOME", 0x09, 0x57),
+            ]
+        );
+
+        assert_eq!(IQ7000_KEYBOARD_SCAN_CHAIN[0], 0x00F5394);
+        assert_eq!(IQ7000_KEYBOARD_SCAN_CHAIN[5], 0x00F55AE);
+        assert!(IQ7000_KEYBOARD_ACTION_TARGETS
+            .iter()
+            .any(|target| target.address == 0x00F563C
+                && target.role == "serial RX interrupt handler"));
+    }
+
+    #[test]
+    fn ramdisk_and_rtc_command_contracts_cover_known_tables() {
+        assert_eq!(IQ7000_RAM_DISK_COMMAND_TABLE.len(), 0x15);
+        assert_eq!(
+            IQ7000_RAM_DISK_COMMAND_TABLE[0],
+            Iq7000CommandTarget {
+                index_or_command: 0x3F,
+                target: 0x00F7D2D,
+                role: "init/reset",
+            }
+        );
+        assert_eq!(
+            IQ7000_RAM_DISK_COMMAND_TABLE[0x14],
+            Iq7000CommandTarget {
+                index_or_command: 0x53,
+                target: 0x00F8412,
+                role: "pending classification",
+            }
+        );
+
+        let current_time = IQ7000_RTC_COMMAND_SPECS
+            .iter()
+            .find(|spec| spec.command == RTC_COMMAND_CURRENT_DATETIME)
+            .expect("F4 RTC command");
+        assert_eq!(current_time.payload_len, 0);
+        assert_eq!(current_time.response_len, 6);
+
+        let write_bcd = IQ7000_RTC_COMMAND_SPECS
+            .iter()
+            .find(|spec| spec.command == 0xF1)
+            .expect("F1 RTC command");
+        assert_eq!(write_bcd.payload_len, 6);
+        assert_eq!(write_bcd.response_len, 1);
+    }
+
+    #[test]
+    fn remaining_gap_contract_names_all_open_device_families() {
+        for area in [
+            "STDO:SCRN",
+            "STDI:KYBD",
+            "COM/PANET/PACOM/PRN",
+            "CAS",
+            "S1:S2:S3:S4 / E:F:G",
+            "RTC",
+            "SYSTM/dev0D/dev0E",
+        ] {
+            assert!(
+                IQ7000_REMAINING_GAPS.iter().any(|gap| gap.area == area),
+                "missing gap entry for {area}"
+            );
+        }
     }
 
     #[test]
