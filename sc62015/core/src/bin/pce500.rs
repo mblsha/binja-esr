@@ -160,6 +160,10 @@ struct Args {
     #[arg(long, value_name = "SEQ")]
     key_seq: Option<String>,
 
+    /// JSON scenario file with steps/key_seq/expect/capture/debug settings.
+    #[arg(long, value_name = "PATH")]
+    scenario: Option<PathBuf>,
+
     /// Log key-seq events (press/release/wait triggers).
     #[arg(long, default_value_t = false)]
     key_seq_log: bool,
@@ -241,6 +245,14 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     capture_json: Option<PathBuf>,
 
+    /// Save structured debug probes as JSON.
+    #[arg(long, value_name = "PATH")]
+    debug_probe_json: Option<PathBuf>,
+
+    /// Add debug memory range probe as NAME@ADDR:LEN or ADDR:LEN (can repeat).
+    #[arg(long, value_name = "NAME@ADDR:LEN")]
+    debug_probe_range: Vec<String>,
+
     /// Resume the JP ROM from the trace-backed post-OFF turnon2 state.
     #[arg(long, default_value_t = false)]
     turnon2_resume: bool,
@@ -296,6 +308,56 @@ struct RunSummary {
     lcd_lines: Vec<String>,
     lcd_pixels: Vec<Vec<u8>>,
     lcd_trace: Option<LcdTraceDump>,
+    debug_probe: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ScenarioFile {
+    #[serde(default)]
+    model: Option<DeviceModel>,
+    #[serde(default)]
+    steps: Option<u64>,
+    #[serde(default)]
+    key_seq: Option<ScenarioKeySeq>,
+    #[serde(default)]
+    key_seq_log: Option<bool>,
+    #[serde(default)]
+    expect_text: Vec<String>,
+    #[serde(default)]
+    expect_row: Vec<String>,
+    #[serde(default)]
+    capture_png: Option<PathBuf>,
+    #[serde(default)]
+    capture_json: Option<PathBuf>,
+    #[serde(default)]
+    debug_probe_json: Option<PathBuf>,
+    #[serde(default)]
+    debug_probe_range: Vec<String>,
+    #[serde(default)]
+    iq7000_rtc: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ScenarioKeySeq {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ScenarioKeySeq {
+    fn join(self) -> String {
+        match self {
+            Self::One(raw) => raw,
+            Self::Many(parts) => parts.join(";"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DebugProbeRange {
+    name: String,
+    addr: u32,
+    len: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -423,6 +485,59 @@ fn default_rom_path(model: DeviceModel) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../../roms/{}", model.rom_basename()))
     }
+}
+
+fn resolve_scenario_path(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+fn apply_scenario(args: &mut Args) -> Result<(), Box<dyn Error>> {
+    let Some(path) = args.scenario.clone() else {
+        return Ok(());
+    };
+    let raw = fs::read_to_string(&path)?;
+    let scenario: ScenarioFile = serde_json::from_str(&raw)?;
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+
+    if let Some(model) = scenario.model {
+        args.model = model;
+    }
+    if let Some(steps) = scenario.steps {
+        args.steps = steps;
+    }
+    if let Some(key_seq) = scenario.key_seq {
+        args.key_seq = Some(key_seq.join());
+    }
+    if let Some(enabled) = scenario.key_seq_log {
+        args.key_seq_log = enabled;
+    }
+    if !scenario.expect_text.is_empty() {
+        args.expect_text = scenario.expect_text;
+    }
+    if !scenario.expect_row.is_empty() {
+        args.expect_row = scenario.expect_row;
+    }
+    if let Some(capture_png) = scenario.capture_png {
+        args.capture_png = Some(resolve_scenario_path(base, capture_png));
+    }
+    if let Some(capture_json) = scenario.capture_json {
+        args.capture_json = Some(resolve_scenario_path(base, capture_json));
+    }
+    if let Some(debug_probe_json) = scenario.debug_probe_json {
+        args.debug_probe_json = Some(resolve_scenario_path(base, debug_probe_json));
+    }
+    if !scenario.debug_probe_range.is_empty() {
+        args.debug_probe_range = scenario.debug_probe_range;
+    }
+    if let Some(iq7000_rtc) = scenario.iq7000_rtc {
+        args.iq7000_rtc = iq7000_rtc;
+    }
+
+    Ok(())
 }
 
 fn default_bnida_path(model: DeviceModel) -> PathBuf {
@@ -2505,6 +2620,25 @@ fn parse_u8_value(raw: &str) -> Result<u8, String> {
     u8::try_from(value).map_err(|_| format!("value out of u8 range: '{raw}'"))
 }
 
+fn iq7000_named_key(raw: &str) -> Option<AutoKeyKind> {
+    let code = match raw {
+        "calc" => 0x00,
+        "search-up" | "search_up" | "search-prev" | "search_previous" => 0x03,
+        "memo" => 0x08,
+        "home" => 0x09,
+        "search-down" | "search_down" | "search-next" | "search_next" => 0x0B,
+        "tel" | "telephone" => 0x10,
+        "calendar" => 0x18,
+        "schedule" => 0x19,
+        "card" | "card-samples" | "samples" => 0x1A,
+        "world" => 0x1B,
+        "line" | "newline" | "memo-line" | "memo-return" | "hooked-return" => 0x3D,
+        "memo-enter" | "store" | "enter" | "return" | "ret" => 0x45,
+        _ => return None,
+    };
+    Some(AutoKeyKind::InputEvent(code))
+}
+
 fn generated_key_seq_key(model: DeviceModel, ch: char) -> Option<AutoKeyKind> {
     let input = lookup_generated_key_input(model.label(), ch)?;
     match input.kind {
@@ -2525,6 +2659,11 @@ fn resolve_key_seq_key(model: DeviceModel, raw: &str) -> Result<AutoKeyKind, Str
         return Err("empty key token".to_string());
     }
     let lowered = trimmed.to_ascii_lowercase();
+    if model == DeviceModel::Iq7000 {
+        if let Some(key) = iq7000_named_key(&lowered) {
+            return Ok(key);
+        }
+    }
     for prefix in ["digitizer", "input", "event"] {
         if let Some(value) = lowered.strip_prefix(prefix).and_then(|rest| {
             rest.strip_prefix(':')
@@ -2639,6 +2778,16 @@ fn parse_key_seq(
             actions.push(action);
             continue;
         }
+        if lower.starts_with("text:")
+            || lower.starts_with("text=")
+            || lower.starts_with("type:")
+            || lower.starts_with("type=")
+        {
+            let sep = token.find(':').or_else(|| token.find('=')).unwrap();
+            let value = &token[sep + 1..];
+            push_text_key_seq_actions(&mut actions, value, default_hold, model)?;
+            continue;
+        }
         if lower.starts_with("digitizer:")
             || lower.starts_with("digitizer=")
             || lower.starts_with("input:")
@@ -2672,6 +2821,36 @@ fn parse_key_seq(
         actions.push(action);
     }
     Ok(actions)
+}
+
+fn push_text_key_seq_actions(
+    actions: &mut Vec<KeySeqAction>,
+    text: &str,
+    default_hold: u64,
+    model: DeviceModel,
+) -> Result<(), String> {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let key = if ch == '\\' && chars.peek().copied() == Some('n') {
+            chars.next();
+            resolve_key_seq_key(model, "newline")?
+        } else {
+            generated_key_seq_key(model, ch)
+                .or_else(|| KeyboardMatrix::matrix_code_for_char(ch).map(AutoKeyKind::Matrix))
+                .ok_or_else(|| {
+                    format!(
+                        "text input character '{ch}' is not mapped for {}",
+                        model.label()
+                    )
+                })?
+        };
+        let mut action = KeySeqAction::new(KeySeqKind::Press);
+        action.key = Some(key);
+        action.label = ch.to_string();
+        action.hold = default_hold;
+        actions.push(action);
+    }
+    Ok(())
 }
 
 fn capture_screen_state(
@@ -2716,6 +2895,86 @@ fn lcd_pixels(lcd: &dyn LcdHal) -> Vec<Vec<u8>> {
         .iter()
         .map(|row| row.iter().map(|px| u8::from(*px != 0)).collect())
         .collect()
+}
+
+fn read_memory_bytes(memory: &MemoryImage, addr: u32, len: usize) -> Vec<u8> {
+    (0..len)
+        .map(|idx| {
+            memory
+                .load(addr.wrapping_add(idx as u32) & ADDRESS_MASK, 8)
+                .unwrap_or(0) as u8
+        })
+        .collect()
+}
+
+fn bytes_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn build_debug_probe(
+    model: DeviceModel,
+    bus: &StandaloneBus,
+    state: &LlamaState,
+    executed: u64,
+    ranges: &[DebugProbeRange],
+) -> Value {
+    let range_json: Vec<Value> = ranges
+        .iter()
+        .map(|range| {
+            let bytes = read_memory_bytes(&bus.memory, range.addr, range.len);
+            json!({
+                "name": range.name,
+                "addr": format!("0x{:05X}", range.addr),
+                "len": range.len,
+                "bytes": bytes,
+                "hex": bytes_hex(&bytes),
+            })
+        })
+        .collect();
+
+    let storage_workspace = read_memory_bytes(&bus.memory, 0x1FD00, 0x40);
+    let iocs_workspace_ptr = read_memory_bytes(&bus.memory, 0x1FE36, 3);
+
+    json!({
+        "model": model.label(),
+        "executed": executed,
+        "pc": format!("0x{:05X}", state.pc() & ADDRESS_MASK),
+        "halted": state.is_halted(),
+        "keyboard": {
+            "fifo": bus.keyboard.fifo_snapshot(),
+            "fifo_len": bus.keyboard.fifo_len(),
+            "pending_kil": bus.pending_kil,
+            "irq_pending": bus.irq_pending,
+            "last_access": bus.last_kbd_access,
+            "kil_reads": bus.kil_reads,
+            "rom_koh_reads": bus.rom_koh_reads,
+            "rom_kol_reads": bus.rom_kol_reads,
+        },
+        "imem": {
+            "imr": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0)),
+            "isr": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0)),
+            "kol": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_KOL_OFFSET).unwrap_or(0)),
+            "koh": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_KOH_OFFSET).unwrap_or(0)),
+            "kil": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0)),
+            "scr": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_SCR_OFFSET).unwrap_or(0)),
+            "ssr": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0)),
+            "ucr": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_UCR_OFFSET).unwrap_or(0)),
+            "usr": format!("0x{:02X}", bus.memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0)),
+        },
+        "iq7000": {
+            "storage_workspace_addr": "0x1FD00",
+            "storage_workspace": storage_workspace,
+            "storage_workspace_hex": bytes_hex(&storage_workspace),
+            "iocs_workspace_ptr_addr": "0x1FE36",
+            "iocs_workspace_ptr": iocs_workspace_ptr,
+            "iocs_workspace_ptr_hex": bytes_hex(&iocs_workspace_ptr),
+        },
+        "ranges": range_json,
+    })
 }
 
 fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
@@ -2790,6 +3049,39 @@ fn parse_expected_row(raw: &str) -> Result<(usize, String), String> {
     Ok((row_idx, text.to_string()))
 }
 
+fn parse_debug_probe_range(raw: &str) -> Result<DebugProbeRange, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty debug probe range".to_string());
+    }
+    let (name, rest) = match trimmed.split_once('@') {
+        Some((name, rest)) => (name.trim().to_string(), rest.trim()),
+        None => ("range".to_string(), trimmed),
+    };
+    if name.is_empty() {
+        return Err(format!("debug probe range has empty name: '{raw}'"));
+    }
+    let (addr_raw, len_raw) = rest.split_once(':').ok_or_else(|| {
+        format!("debug probe range must be NAME@ADDR:LEN or ADDR:LEN, got '{raw}'")
+    })?;
+    let addr = parse_address(addr_raw.trim()).map_err(|err| err.to_string())? & ADDRESS_MASK;
+    let len_u64 = parse_u64_value(len_raw.trim())?;
+    let len =
+        usize::try_from(len_u64).map_err(|_| format!("range length too large: '{len_raw}'"))?;
+    if len == 0 {
+        return Err(format!(
+            "debug probe range length must be non-zero: '{raw}'"
+        ));
+    }
+    Ok(DebugProbeRange { name, addr, len })
+}
+
+fn parse_debug_probe_ranges(raw: &[String]) -> Result<Vec<DebugProbeRange>, String> {
+    raw.iter()
+        .map(|item| parse_debug_probe_range(item))
+        .collect()
+}
+
 fn perfetto_part_path(base: &Path, part: u32) -> PathBuf {
     if part == 0 {
         return base.to_path_buf();
@@ -2827,7 +3119,9 @@ async fn sleep_for_cycles(cycles: u64) {
     sleep_cycles(cycles).await;
 }
 
-fn run(args: Args) -> Result<(), Box<dyn Error>> {
+fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
+    apply_scenario(&mut args)?;
+
     if args.turnon2_resume && args.model != DeviceModel::PcE500Jp {
         return Err("--turnon2-resume is only supported for --model pc-e500-jp".into());
     }
@@ -2883,6 +3177,11 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
     let log_lcd = args.lcd_log;
     let log_lcd_limit = args.lcd_log_limit.unwrap_or(50);
     let log_dbg = |_msg: &str| {};
+    let debug_probe_ranges = parse_debug_probe_ranges(&args.debug_probe_range)
+        .map_err(|err| format!("--debug-probe-range: {err}"))?;
+    let wants_debug_probe = args.debug_probe_json.is_some()
+        || args.capture_json.is_some()
+        || !debug_probe_ranges.is_empty();
 
     let perfetto_base_path = args.perfetto_path.clone();
 
@@ -3481,6 +3780,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             None
         };
 
+        let debug_probe = wants_debug_probe.then(|| {
+            build_debug_probe(model, &bus, &state, executed, &debug_probe_ranges)
+        });
+
         let summary = RunSummary {
             executed,
             pc: state.pc(),
@@ -3493,6 +3796,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             lcd_lines,
             lcd_pixels: lcd_pixels(bus.lcd()),
             lcd_trace,
+            debug_probe,
         };
         *summary_slot_run.borrow_mut() = Some(summary);
         emit_event(DriverEvent::User(CPU_DONE_EVENT));
@@ -3549,6 +3853,20 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         println!("Wrote bus trace dump: {}", path.display());
     }
 
+    if let Some(path) = &args.debug_probe_json {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let probe = summary
+            .debug_probe
+            .as_ref()
+            .ok_or("missing debug probe data")?;
+        fs::write(path, serde_json::to_string_pretty(probe)?)?;
+        println!("Wrote debug probe JSON: {}", path.display());
+    }
+
     if let Some(path) = &args.capture_png {
         write_lcd_png(path, &summary.lcd_pixels, LCD_CAPTURE_SCALE)?;
         println!("Wrote LCD PNG capture: {}", path.display());
@@ -3574,6 +3892,7 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
             "imr_reg": format!("0x{:02X}", summary.imr_reg),
             "lcd_lines": &summary.lcd_lines,
             "lcd_pixels": &summary.lcd_pixels,
+            "debug_probe": &summary.debug_probe,
         });
         fs::write(path, serde_json::to_string_pretty(&capture)?)?;
         println!("Wrote LCD JSON capture: {}", path.display());
@@ -4053,6 +4372,48 @@ mod tests {
         let actions = parse_key_seq("0", 10, DeviceModel::Iq7000).expect("parse key seq");
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x20)));
+    }
+
+    #[test]
+    fn key_seq_accepts_named_iq_controls() {
+        let actions = parse_key_seq(
+            "memo,text:XMAS\\nPRESENTS,memo-enter,search-down",
+            10,
+            DeviceModel::Iq7000,
+        )
+        .expect("parse key seq");
+        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x08)));
+        assert_eq!(actions[5].key, Some(AutoKeyKind::InputEvent(0x3D)));
+        assert_eq!(
+            actions[actions.len() - 2].key,
+            Some(AutoKeyKind::InputEvent(0x45))
+        );
+        assert_eq!(
+            actions[actions.len() - 1].key,
+            Some(AutoKeyKind::InputEvent(0x0B))
+        );
+    }
+
+    #[test]
+    fn debug_probe_range_parser_accepts_named_hex_range() {
+        assert_eq!(
+            parse_debug_probe_range("storage@0x1fd00:0x40").expect("range"),
+            DebugProbeRange {
+                name: "storage".to_string(),
+                addr: 0x1FD00,
+                len: 0x40,
+            }
+        );
+    }
+
+    #[test]
+    fn scenario_key_seq_many_joins_with_semicolon() {
+        let seq = ScenarioKeySeq::Many(vec![
+            "memo".to_string(),
+            "text:HELLO".to_string(),
+            "memo-enter".to_string(),
+        ]);
+        assert_eq!(seq.join(), "memo;text:HELLO;memo-enter");
     }
 
     #[test]

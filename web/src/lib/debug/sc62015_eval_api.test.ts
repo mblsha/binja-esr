@@ -112,6 +112,23 @@ describe('createEvalApi', () => {
 		expect(await api.lcd.textString()).toEqual('A\nB');
 	});
 
+	it('lcd.pixels returns a plain array for screenshots', async () => {
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: async () => {},
+			step: async () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			lcdPixels: () => new Uint8Array([0, 1, 1, 0]),
+		};
+		const api = createEvalApi(adapter as any);
+		expect(await api.lcd.pixels()).toEqual([0, 1, 1, 0]);
+	});
+
 	it('withProbe forwards probe to callFunction and invokes handler for returned samples', async () => {
 		const probeHits: number[] = [];
 		const capturedOptions: any[] = [];
