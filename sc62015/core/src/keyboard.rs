@@ -134,6 +134,12 @@ const KEY_NAMES: [Option<&str>; 88] = [
 ];
 const KEY_ROWS: usize = 8;
 const KEY_COLUMNS: usize = KEY_NAMES.len() / KEY_ROWS;
+const PCE500_IOCS_WS_PTR: u32 = 0x00BFD17;
+const PCE500_IOCS_WS_PTR_MIRROR: u32 = 0x1000E6;
+const PCE500_KEY_FIFO_BASE_OFFSET: u32 = 0x02;
+const PCE500_KEY_FIFO_TAIL_OFFSET: u32 = 0x04;
+const PCE500_KEY_FIFO_HEAD_OFFSET: u32 = 0x05;
+const PCE500_KEY_FIFO_CAPACITY: u8 = 0x10;
 
 #[derive(Default)]
 pub struct KeyboardMatrix {
@@ -436,6 +442,72 @@ impl KeyboardMatrix {
                 }
             }
         }
+    }
+
+    /// Drain debounced matrix events into the PC-E500 ROM IOCS key FIFO.
+    ///
+    /// The generic keyboard matrix owns the physical scan/debounce FIFO. The PC-E500 ROM
+    /// consumes a separate ring buffer inside the IOCS workspace (`IOCS_WS+0x50` after
+    /// normal boot). Timer-driven scans call this after `scan_tick` so `STDI:41h/42h/43h`
+    /// can observe physical key events without tests seeding the ROM FIFO directly.
+    pub fn drain_fifo_to_pce500_iocs_workspace(
+        &mut self,
+        memory: &mut MemoryImage,
+        kb_irq_enabled: bool,
+    ) -> usize {
+        if self.fifo_count == 0 {
+            self.keyi_latch = false;
+            return 0;
+        }
+
+        let Some(base) = read_u24(memory, PCE500_IOCS_WS_PTR_MIRROR)
+            .or_else(|| read_u24(memory, PCE500_IOCS_WS_PTR))
+        else {
+            return 0;
+        };
+        if base == 0 {
+            return 0;
+        }
+
+        let Some(buffer_offset) = memory.load(base + PCE500_KEY_FIFO_BASE_OFFSET, 8) else {
+            return 0;
+        };
+        let Some(mut tail) = memory
+            .load(base + PCE500_KEY_FIFO_TAIL_OFFSET, 8)
+            .map(|v| v as u8)
+        else {
+            return 0;
+        };
+        let Some(head) = memory
+            .load(base + PCE500_KEY_FIFO_HEAD_OFFSET, 8)
+            .map(|v| v as u8)
+        else {
+            return 0;
+        };
+
+        let events = self.fifo_snapshot();
+        let mut written = 0usize;
+        for event in events {
+            let next_tail = tail.wrapping_add(1) & (PCE500_KEY_FIFO_CAPACITY - 1);
+            if next_tail == (head & (PCE500_KEY_FIFO_CAPACITY - 1)) {
+                break;
+            }
+            let slot = base + buffer_offset + u32::from(tail & (PCE500_KEY_FIFO_CAPACITY - 1));
+            let _ = memory.store(slot, 8, u32::from(event));
+            tail = next_tail;
+            written += 1;
+        }
+
+        if written > 0 {
+            let _ = memory.store(base + PCE500_KEY_FIFO_TAIL_OFFSET, 8, u32::from(tail));
+            if kb_irq_enabled {
+                if let Some(isr) = memory.read_internal_byte(0xFC) {
+                    memory.write_internal_byte(0xFC, isr | 0x04);
+                }
+            }
+            self.consume_pending_events();
+        }
+        written
     }
 
     pub fn reset(&mut self, _memory: &mut MemoryImage) {
@@ -823,6 +895,13 @@ impl KeyboardMatrix {
         }
         events
     }
+}
+
+fn read_u24(memory: &MemoryImage, addr: u32) -> Option<u32> {
+    let lo = memory.load(addr, 8)?;
+    let mid = memory.load(addr + 1, 8)?;
+    let hi = memory.load(addr + 2, 8)?;
+    Some((lo & 0xff) | ((mid & 0xff) << 8) | ((hi & 0xff) << 16))
 }
 
 #[cfg(test)]

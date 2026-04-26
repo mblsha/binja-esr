@@ -16,6 +16,21 @@ const CARD_CREATE_TOP_BLOCK_PC: u32 = 0x00F034B;
 const CARD_CREATE_BLOCK_PC: u32 = 0x00F039E;
 const CARD_DELETE_BLOCK_PC: u32 = 0x00F043E;
 const CARD_CONDENSE_PC: u32 = 0x00F0A19;
+const CARD_FILE_CREATE_PC: u32 = 0x00F0470;
+const CARD_FILE_OPEN_PC: u32 = 0x00F0517;
+const CARD_FILE_CLOSE_PC: u32 = 0x00F0570;
+const CARD_FILE_READ_BLOCK_PC: u32 = 0x00F0633;
+const CARD_FILE_WRITE_BLOCK_PC: u32 = 0x00F0752;
+const CARD_FILE_READ_BYTE_PC: u32 = 0x00F05F9;
+const CARD_FILE_WRITE_BYTE_PC: u32 = 0x00F073A;
+const CARD_FILE_VERIFY_PC: u32 = 0x00F067C;
+const CARD_FILE_PEEK_PC: u32 = 0x00F061C;
+const CARD_FILE_SEEK_PC: u32 = 0x00F07AD;
+const CARD_FILE_INFO_PC: u32 = 0x00F0821;
+const CARD_FILE_CHANGE_DIR_PC: u32 = 0x00F0859;
+const CARD_FILE_SEARCH_PC: u32 = 0x00F08DC;
+const CARD_FILE_RENAME_DELETE_PC: u32 = 0x00F09D8;
+const CARD_FILE_FREE_PC: u32 = 0x00F0948;
 const RAMDISK_READ_BLOCK_PC: u32 = 0x00E4A70;
 const RAMDISK_WRITE_BLOCK_PC: u32 = 0x00E4A94;
 const RAMDISK_FORMAT_PC: u32 = 0x00E4C6E;
@@ -338,6 +353,8 @@ fn normalise_name(name: &str) -> Result<String, StorageError> {
 pub struct Pce500PeripheralBridge {
     pub cassette: CassetteTapeImage,
     pub card: MemoryCardImage,
+    open_file: Option<String>,
+    open_file_pos: usize,
 }
 
 impl Pce500PeripheralBridge {
@@ -345,6 +362,8 @@ impl Pce500PeripheralBridge {
         Self {
             cassette: CassetteTapeImage::new(),
             card: MemoryCardImage::new(card_capacity),
+            open_file: None,
+            open_file_pos: 0,
         }
     }
 
@@ -367,6 +386,21 @@ impl Pce500PeripheralBridge {
             CARD_CREATE_TOP_BLOCK_PC => self.card_create(state, memory, true),
             CARD_DELETE_BLOCK_PC => self.card_delete(state, memory),
             CARD_CONDENSE_PC => self.card_condense(state, memory),
+            CARD_FILE_CREATE_PC => self.card_file_create(state, memory),
+            CARD_FILE_OPEN_PC => self.card_file_open(state, memory),
+            CARD_FILE_CLOSE_PC => self.card_file_close(state, memory),
+            CARD_FILE_READ_BLOCK_PC => self.card_file_read_block(state, memory, true),
+            CARD_FILE_WRITE_BLOCK_PC => self.card_file_write_block(state, memory),
+            CARD_FILE_READ_BYTE_PC => self.card_file_read_byte(state),
+            CARD_FILE_WRITE_BYTE_PC => self.card_file_write_byte(state),
+            CARD_FILE_VERIFY_PC => self.card_file_verify(state, memory),
+            CARD_FILE_PEEK_PC => self.card_file_read_block(state, memory, false),
+            CARD_FILE_SEEK_PC => self.card_file_seek(state),
+            CARD_FILE_INFO_PC => self.card_file_info(state, memory),
+            CARD_FILE_CHANGE_DIR_PC => Ok(()),
+            CARD_FILE_SEARCH_PC => self.card_search(state, memory),
+            CARD_FILE_RENAME_DELETE_PC => self.card_file_rename_or_delete(state, memory),
+            CARD_FILE_FREE_PC => self.card_file_free(state),
             RAMDISK_READ_BLOCK_PC => self.ramdisk_read(state, memory),
             RAMDISK_WRITE_BLOCK_PC => self.ramdisk_write(state, memory),
             RAMDISK_FORMAT_PC => self.ramdisk_format(state, memory),
@@ -470,6 +504,163 @@ impl Pce500PeripheralBridge {
         Ok(())
     }
 
+    fn card_file_create(&mut self, state: &LlamaState, memory: &MemoryImage) -> Result<(), u8> {
+        let name = read_card_name(memory, state.get_reg(RegName::X))?;
+        self.card
+            .create(&name, state.get_reg(RegName::Y) as usize, false)
+            .map(|_| {
+                self.open_file = Some(name);
+                self.open_file_pos = 0;
+            })
+            .map_err(storage_error_code)
+    }
+
+    fn card_file_open(&mut self, state: &LlamaState, memory: &MemoryImage) -> Result<(), u8> {
+        let name = read_card_name(memory, state.get_reg(RegName::X))?;
+        self.card.find(&name).map_err(storage_error_code)?;
+        self.open_file = Some(normalise_name(&name).map_err(storage_error_code)?);
+        self.open_file_pos = 0;
+        Ok(())
+    }
+
+    fn card_file_close(&mut self, _state: &LlamaState, _memory: &MemoryImage) -> Result<(), u8> {
+        self.open_file = None;
+        self.open_file_pos = 0;
+        Ok(())
+    }
+
+    fn card_file_read_block(
+        &mut self,
+        state: &mut LlamaState,
+        memory: &mut MemoryImage,
+        advance: bool,
+    ) -> Result<(), u8> {
+        let len = state.get_reg(RegName::Y) as usize;
+        let block = self.open_block()?;
+        let available = block.data.len().saturating_sub(self.open_file_pos);
+        let len = len.min(available);
+        write_bytes(
+            memory,
+            state.get_reg(RegName::X),
+            &block.data[self.open_file_pos..self.open_file_pos + len],
+        );
+        if advance {
+            self.open_file_pos = self.open_file_pos.saturating_add(len);
+        }
+        state.set_reg(RegName::Y, len as u32);
+        Ok(())
+    }
+
+    fn card_file_write_block(
+        &mut self,
+        state: &LlamaState,
+        memory: &MemoryImage,
+    ) -> Result<(), u8> {
+        let len = state.get_reg(RegName::Y) as usize;
+        let payload = read_bytes(memory, state.get_reg(RegName::X), len);
+        let name = self.open_file_name()?;
+        let block = self
+            .card
+            .resize(&name, self.open_file_pos + len)
+            .map_err(storage_error_code)?;
+        block.data[self.open_file_pos..self.open_file_pos + len].copy_from_slice(&payload);
+        self.open_file_pos += len;
+        Ok(())
+    }
+
+    fn card_file_read_byte(&mut self, state: &mut LlamaState) -> Result<(), u8> {
+        let byte = {
+            let block = self.open_block()?;
+            *block.data.get(self.open_file_pos).ok_or(0x01)?
+        };
+        self.open_file_pos += 1;
+        state.set_reg(RegName::A, u32::from(byte));
+        Ok(())
+    }
+
+    fn card_file_write_byte(&mut self, state: &LlamaState) -> Result<(), u8> {
+        let name = self.open_file_name()?;
+        let block = self
+            .card
+            .resize(&name, self.open_file_pos + 1)
+            .map_err(storage_error_code)?;
+        block.data[self.open_file_pos] = (state.get_reg(RegName::A) & 0xff) as u8;
+        self.open_file_pos += 1;
+        Ok(())
+    }
+
+    fn card_file_verify(&mut self, state: &LlamaState, memory: &MemoryImage) -> Result<(), u8> {
+        let len = state.get_reg(RegName::Y) as usize;
+        let expected = read_bytes(memory, state.get_reg(RegName::X), len);
+        let block = self.open_block()?;
+        if block
+            .data
+            .get(self.open_file_pos..self.open_file_pos + len)
+            .is_some_and(|actual| actual == expected.as_slice())
+        {
+            self.open_file_pos += len;
+            Ok(())
+        } else {
+            Err(0x0B)
+        }
+    }
+
+    fn card_file_seek(&mut self, state: &LlamaState) -> Result<(), u8> {
+        let pos = state.get_reg(RegName::Y) as usize;
+        let block = self.open_block()?;
+        if pos <= block.data.len() {
+            self.open_file_pos = pos;
+            Ok(())
+        } else {
+            Err(0x01)
+        }
+    }
+
+    fn card_file_info(
+        &mut self,
+        state: &mut LlamaState,
+        memory: &mut MemoryImage,
+    ) -> Result<(), u8> {
+        let block = self.open_block()?;
+        state.set_reg(RegName::Y, block.data.len() as u32);
+        write_bytes(memory, state.get_reg(RegName::X), block.name.as_bytes());
+        Ok(())
+    }
+
+    fn card_file_rename_or_delete(
+        &mut self,
+        state: &LlamaState,
+        memory: &MemoryImage,
+    ) -> Result<(), u8> {
+        let command = state.get_reg(RegName::I) & 0xff;
+        let name = read_card_name(memory, state.get_reg(RegName::X))?;
+        if command == 0x2D {
+            let new_name = read_card_name(memory, state.get_reg(RegName::Y))?;
+            self.card
+                .rename(&name, &new_name)
+                .map(|_| {
+                    self.open_file = Some(normalise_name(&new_name).unwrap_or(new_name));
+                    self.open_file_pos = 0;
+                })
+                .map_err(storage_error_code)
+        } else {
+            self.card
+                .delete(&name)
+                .map(|_| {
+                    if self.open_file.as_deref() == normalise_name(&name).ok().as_deref() {
+                        self.open_file = None;
+                        self.open_file_pos = 0;
+                    }
+                })
+                .map_err(storage_error_code)
+        }
+    }
+
+    fn card_file_free(&mut self, state: &mut LlamaState) -> Result<(), u8> {
+        state.set_reg(RegName::Y, self.card.free() as u32);
+        Ok(())
+    }
+
     fn ramdisk_format(&mut self, state: &LlamaState, _memory: &MemoryImage) -> Result<(), u8> {
         let size = state.get_reg(RegName::Y) as usize;
         if self
@@ -511,12 +702,20 @@ impl Pce500PeripheralBridge {
         block.data.copy_from_slice(&payload);
         Ok(())
     }
+
+    fn open_file_name(&self) -> Result<String, u8> {
+        self.open_file.clone().ok_or(0x01)
+    }
+
+    fn open_block(&self) -> Result<&MemoryCardBlock, u8> {
+        let name = self.open_file.as_deref().ok_or(0x01)?;
+        self.card.find(name).map_err(storage_error_code)
+    }
 }
 
 fn set_call_result(state: &mut LlamaState, result: Result<(), u8>) {
     match result {
         Ok(()) => {
-            state.set_reg(RegName::A, 0);
             state.set_reg(RegName::FC, 0);
         }
         Err(code) => {
