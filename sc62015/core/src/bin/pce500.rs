@@ -84,7 +84,6 @@ const IQ7P_HEADER_LEN: usize = 13;
 const IQ7P_MAX_BODY_LEN: usize = 16 * 1024 * 1024;
 const IQ7P_CMD_HELLO: u8 = 0x01;
 const IQ7P_CMD_READ_MEMORY: u8 = 0x10;
-const IQ7P_CMD_WRITE_MEMORY: u8 = 0x11;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum CardMode {
@@ -3494,26 +3493,6 @@ fn iq7p_get_u64(body: &Value, key: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("missing or invalid '{key}'"))
 }
 
-fn iq7p_decode_hex(raw: &str) -> Result<Vec<u8>, String> {
-    let mut cleaned = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        if ch.is_ascii_whitespace() || ch == '_' {
-            continue;
-        }
-        cleaned.push(ch);
-    }
-    if cleaned.len() % 2 != 0 {
-        return Err("hex data must have an even number of digits".to_string());
-    }
-    let mut out = Vec::with_capacity(cleaned.len() / 2);
-    for idx in (0..cleaned.len()).step_by(2) {
-        let byte = u8::from_str_radix(&cleaned[idx..idx + 2], 16)
-            .map_err(|err| format!("invalid hex byte at offset {idx}: {err}"))?;
-        out.push(byte);
-    }
-    Ok(out)
-}
-
 fn iq7p_encode_hex(data: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(data.len() * 2);
@@ -3555,29 +3534,6 @@ fn iq7p_handle_request(memory: &mut MemoryImage, request: &Iq7pMessage) -> Value
                 "address": address,
                 "length": length,
                 "data": iq7p_encode_hex(&data),
-            })
-        }
-        IQ7P_CMD_WRITE_MEMORY => {
-            let address = match iq7p_get_u64(&request.body, "address") {
-                Ok(value) => (value as u32) & ADDRESS_MASK,
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let raw = match request.body.get("data").and_then(Value::as_str) {
-                Some(raw) => raw,
-                None => return json!({"ok": false, "error": "missing or invalid 'data'"}),
-            };
-            let data = match iq7p_decode_hex(raw) {
-                Ok(data) => data,
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            for (offset, byte) in data.iter().enumerate() {
-                let addr = address.wrapping_add(offset as u32) & ADDRESS_MASK;
-                memory.write_external_byte(addr, *byte);
-            }
-            json!({
-                "ok": true,
-                "address": address,
-                "written": data.len(),
             })
         }
         other => json!({
