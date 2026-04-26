@@ -40,7 +40,8 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
@@ -72,6 +73,15 @@ const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
 const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
 const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
 const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
+const IQ7P_ACK: u8 = 0xFA;
+const IQ7P_NAK: u8 = 0xF0;
+const IQ7P_MAGIC: &[u8; 4] = b"IQ7P";
+const IQ7P_VERSION: u8 = 1;
+const IQ7P_HEADER_LEN: usize = 13;
+const IQ7P_MAX_BODY_LEN: usize = 16 * 1024 * 1024;
+const IQ7P_CMD_HELLO: u8 = 0x01;
+const IQ7P_CMD_READ_MEMORY: u8 = 0x10;
+const IQ7P_CMD_WRITE_MEMORY: u8 = 0x11;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum CardMode {
@@ -281,6 +291,14 @@ struct Args {
     /// IQ-7000 clock seed: host, off, or YYYYMMDDHHMM.
     #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
     iq7000_rtc: String,
+
+    /// Listen for IQ7P host-debug clients after executing --steps.
+    #[arg(long, value_name = "HOST:PORT")]
+    iq7p_listen: Option<String>,
+
+    /// Number of IQ7P client connections to serve before exiting.
+    #[arg(long, default_value_t = 1)]
+    iq7p_clients: usize,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -3185,6 +3203,300 @@ fn parse_debug_probe_ranges(raw: &[String]) -> Result<Vec<DebugProbeRange>, Stri
         .collect()
 }
 
+#[derive(Debug)]
+struct Iq7pMessage {
+    command: u8,
+    flags: u8,
+    sequence: u16,
+    body: Value,
+}
+
+fn iq7p_checksum(payload: &[u8]) -> u16 {
+    payload
+        .iter()
+        .fold(0u32, |acc, byte| acc.wrapping_add(u32::from(*byte))) as u16
+}
+
+fn iq7p_decode_frame(raw: &[u8]) -> Result<&[u8], String> {
+    if raw.len() < 2 {
+        return Err("frame is too short".to_string());
+    }
+    let payload = &raw[..raw.len() - 2];
+    let expected = u16::from_le_bytes([raw[raw.len() - 2], raw[raw.len() - 1]]);
+    let actual = iq7p_checksum(payload);
+    if expected != actual {
+        return Err(format!(
+            "checksum mismatch: got 0x{expected:04X}, expected 0x{actual:04X}"
+        ));
+    }
+    Ok(payload)
+}
+
+fn iq7p_decode_message(payload: &[u8]) -> Result<Iq7pMessage, String> {
+    if payload.len() < IQ7P_HEADER_LEN {
+        return Err("message payload is too short".to_string());
+    }
+    if &payload[..4] != IQ7P_MAGIC {
+        return Err(format!("bad message magic: {:02X?}", &payload[..4]));
+    }
+    let version = payload[4];
+    if version != IQ7P_VERSION {
+        return Err(format!("unsupported protocol version {version}"));
+    }
+    let command = payload[5];
+    let flags = payload[6];
+    let sequence = u16::from_le_bytes([payload[7], payload[8]]);
+    let body_len = u32::from_le_bytes([payload[9], payload[10], payload[11], payload[12]]);
+    let body_len = usize::try_from(body_len).map_err(|_| "body length too large".to_string())?;
+    if payload.len() - IQ7P_HEADER_LEN != body_len {
+        return Err(format!(
+            "body length mismatch: header={body_len}, actual={}",
+            payload.len() - IQ7P_HEADER_LEN
+        ));
+    }
+    let body: Value = serde_json::from_slice(&payload[IQ7P_HEADER_LEN..])
+        .map_err(|err| format!("invalid JSON body: {err}"))?;
+    if !body.is_object() {
+        return Err("message body must decode to a JSON object".to_string());
+    }
+    Ok(Iq7pMessage {
+        command,
+        flags,
+        sequence,
+        body,
+    })
+}
+
+fn iq7p_encode_message_frame(
+    command: u8,
+    sequence: u16,
+    flags: u8,
+    body: &Value,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let body_bytes = serde_json::to_vec(body)?;
+    if body_bytes.len() > IQ7P_MAX_BODY_LEN {
+        return Err(format!("message body too large: {}", body_bytes.len()).into());
+    }
+    let mut payload = Vec::with_capacity(IQ7P_HEADER_LEN + body_bytes.len() + 2);
+    payload.extend_from_slice(IQ7P_MAGIC);
+    payload.push(IQ7P_VERSION);
+    payload.push(command);
+    payload.push(flags);
+    payload.extend_from_slice(&sequence.to_le_bytes());
+    payload.extend_from_slice(&(body_bytes.len() as u32).to_le_bytes());
+    payload.extend_from_slice(&body_bytes);
+    let checksum = iq7p_checksum(&payload);
+    payload.extend_from_slice(&checksum.to_le_bytes());
+    Ok(payload)
+}
+
+fn iq7p_read_message(stream: &mut TcpStream) -> Result<Iq7pMessage, Box<dyn Error>> {
+    let mut header = [0u8; IQ7P_HEADER_LEN];
+    stream.read_exact(&mut header)?;
+    if &header[..4] != IQ7P_MAGIC {
+        let _ = stream.write_all(&[IQ7P_NAK]);
+        return Err(format!("bad request magic: {:02X?}", &header[..4]).into());
+    }
+    let body_len = u32::from_le_bytes([header[9], header[10], header[11], header[12]]);
+    let body_len = usize::try_from(body_len).map_err(|_| "body length too large")?;
+    if body_len > IQ7P_MAX_BODY_LEN {
+        let _ = stream.write_all(&[IQ7P_NAK]);
+        return Err(format!("request body too large: {body_len}").into());
+    }
+    let mut raw = Vec::with_capacity(IQ7P_HEADER_LEN + body_len + 2);
+    raw.extend_from_slice(&header);
+    let mut rest = vec![0u8; body_len + 2];
+    stream.read_exact(&mut rest)?;
+    raw.extend_from_slice(&rest);
+    let payload = match iq7p_decode_frame(&raw) {
+        Ok(payload) => payload,
+        Err(err) => {
+            let _ = stream.write_all(&[IQ7P_NAK]);
+            return Err(err.into());
+        }
+    };
+    let message = match iq7p_decode_message(payload) {
+        Ok(message) => message,
+        Err(err) => {
+            let _ = stream.write_all(&[IQ7P_NAK]);
+            return Err(err.into());
+        }
+    };
+    stream.write_all(&[IQ7P_ACK])?;
+    Ok(message)
+}
+
+fn iq7p_write_response(
+    stream: &mut TcpStream,
+    request: &Iq7pMessage,
+    body: Value,
+) -> Result<(), Box<dyn Error>> {
+    let response = iq7p_encode_message_frame(
+        request.command | 0x80,
+        request.sequence,
+        request.flags,
+        &body,
+    )?;
+    stream.write_all(&response)?;
+    let mut ack = [0u8; 1];
+    stream.read_exact(&mut ack)?;
+    if ack[0] != IQ7P_ACK {
+        return Err(format!("client rejected response with 0x{:02X}", ack[0]).into());
+    }
+    Ok(())
+}
+
+fn iq7p_get_u64(body: &Value, key: &str) -> Result<u64, String> {
+    body.get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("missing or invalid '{key}'"))
+}
+
+fn iq7p_decode_hex(raw: &str) -> Result<Vec<u8>, String> {
+    let mut cleaned = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_whitespace() || ch == '_' {
+            continue;
+        }
+        cleaned.push(ch);
+    }
+    if cleaned.len() % 2 != 0 {
+        return Err("hex data must have an even number of digits".to_string());
+    }
+    let mut out = Vec::with_capacity(cleaned.len() / 2);
+    for idx in (0..cleaned.len()).step_by(2) {
+        let byte = u8::from_str_radix(&cleaned[idx..idx + 2], 16)
+            .map_err(|err| format!("invalid hex byte at offset {idx}: {err}"))?;
+        out.push(byte);
+    }
+    Ok(out)
+}
+
+fn iq7p_encode_hex(data: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(data.len() * 2);
+    for byte in data {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0F) as usize] as char);
+    }
+    out
+}
+
+fn iq7p_handle_request(bus: &mut StandaloneBus, request: &Iq7pMessage) -> Value {
+    match request.command {
+        IQ7P_CMD_HELLO => json!({
+            "ok": true,
+            "peer": "rust-cli-iq7p",
+            "protocol": "IQ7P",
+            "version": IQ7P_VERSION,
+            "memory_size": bus.memory.external_len(),
+        }),
+        IQ7P_CMD_READ_MEMORY => {
+            let address = match iq7p_get_u64(&request.body, "address") {
+                Ok(value) => (value as u32) & ADDRESS_MASK,
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let length = match iq7p_get_u64(&request.body, "length") {
+                Ok(value) => match usize::try_from(value) {
+                    Ok(value) => value,
+                    Err(_) => return json!({"ok": false, "error": "length is too large"}),
+                },
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let mut data = Vec::with_capacity(length);
+            for offset in 0..length {
+                let addr = address.wrapping_add(offset as u32) & ADDRESS_MASK;
+                data.push(bus.memory.load(addr, 8).unwrap_or(0) as u8);
+            }
+            json!({
+                "ok": true,
+                "address": address,
+                "length": length,
+                "data": iq7p_encode_hex(&data),
+            })
+        }
+        IQ7P_CMD_WRITE_MEMORY => {
+            let address = match iq7p_get_u64(&request.body, "address") {
+                Ok(value) => (value as u32) & ADDRESS_MASK,
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let raw = match request.body.get("data").and_then(Value::as_str) {
+                Some(raw) => raw,
+                None => return json!({"ok": false, "error": "missing or invalid 'data'"}),
+            };
+            let data = match iq7p_decode_hex(raw) {
+                Ok(data) => data,
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            for (offset, byte) in data.iter().enumerate() {
+                let addr = address.wrapping_add(offset as u32) & ADDRESS_MASK;
+                bus.memory.write_external_byte(addr, *byte);
+            }
+            json!({
+                "ok": true,
+                "address": address,
+                "written": data.len(),
+            })
+        }
+        other => json!({
+            "ok": false,
+            "error": format!("unsupported IQ7P command 0x{other:02X}"),
+        }),
+    }
+}
+
+fn serve_iq7p_connection(
+    stream: &mut TcpStream,
+    bus: &mut StandaloneBus,
+) -> Result<(), Box<dyn Error>> {
+    loop {
+        let request = match iq7p_read_message(stream) {
+            Ok(message) => message,
+            Err(err) => {
+                if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+                    if matches!(
+                        io_err.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                    ) {
+                        break;
+                    }
+                }
+                return Err(err);
+            }
+        };
+        let body = iq7p_handle_request(bus, &request);
+        iq7p_write_response(stream, &request, body)?;
+    }
+    Ok(())
+}
+
+fn serve_iq7p_clients(
+    bind: &str,
+    client_count: usize,
+    bus: &mut StandaloneBus,
+) -> Result<(), Box<dyn Error>> {
+    if client_count == 0 {
+        return Err("--iq7p-clients must be greater than zero".into());
+    }
+    let listener = TcpListener::bind(bind)?;
+    let local_addr = listener.local_addr()?;
+    println!("[iq7p] listening on tcp://{local_addr} for {client_count} client(s)");
+    for client_idx in 0..client_count {
+        let (mut stream, peer_addr) = listener.accept()?;
+        println!(
+            "[iq7p] accepted client {}/{} from {}",
+            client_idx + 1,
+            client_count,
+            peer_addr
+        );
+        serve_iq7p_connection(&mut stream, bus)?;
+    }
+    println!("[iq7p] served {client_count} client(s)");
+    Ok(())
+}
+
 fn perfetto_part_path(base: &Path, part: u32) -> PathBuf {
     if part == 0 {
         return base.to_path_buf();
@@ -3484,6 +3796,8 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let summary_slot_run = summary_slot.clone();
     let mut driver = AsyncDriver::new();
     let snapshot_out = args.snapshot_out.clone();
+    let iq7p_listen = args.iq7p_listen.clone();
+    let iq7p_clients = args.iq7p_clients;
     let base_instruction_count = base_instruction_count;
 
     driver.spawn(async move {
@@ -3827,6 +4141,13 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     state.pc() & ADDRESS_MASK,
                     bus.cycle_count
                 );
+            }
+        }
+
+        if let Some(bind) = iq7p_listen.as_ref() {
+            bus.reapply_iq7000_clock_seed();
+            if let Err(err) = serve_iq7p_clients(bind, iq7p_clients, &mut bus) {
+                eprintln!("IQ7P server failed: {err}");
             }
         }
 
