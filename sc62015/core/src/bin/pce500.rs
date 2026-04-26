@@ -8,6 +8,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use retrobus_perfetto::{AnnotationValue, PerfettoTraceBuilder, TrackId};
 use sc62015_core::{
     apply_registers, collect_registers, create_lcd, emit_event,
+    generated_key_input::{lookup_generated_key_input, GeneratedKeyInputKind},
     iq7000::{self, Iq7000ClockSeed, Iq7000RtcPeripheral},
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
@@ -603,6 +604,7 @@ struct StandaloneBus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AutoKeyKind {
     Matrix(u8),
+    Chord { modifier: u8, code: u8 },
     InputEvent(u8),
     OnKey,
 }
@@ -2503,7 +2505,21 @@ fn parse_u8_value(raw: &str) -> Result<u8, String> {
     u8::try_from(value).map_err(|_| format!("value out of u8 range: '{raw}'"))
 }
 
-fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
+fn generated_key_seq_key(model: DeviceModel, ch: char) -> Option<AutoKeyKind> {
+    let input = lookup_generated_key_input(model.label(), ch)?;
+    match input.kind {
+        GeneratedKeyInputKind::Matrix => match input.modifier {
+            Some(modifier) => Some(AutoKeyKind::Chord {
+                modifier,
+                code: input.code,
+            }),
+            None => Some(AutoKeyKind::Matrix(input.code)),
+        },
+        GeneratedKeyInputKind::InputEvent => Some(AutoKeyKind::InputEvent(input.code)),
+    }
+}
+
+fn resolve_key_seq_key(model: DeviceModel, raw: &str) -> Result<AutoKeyKind, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("empty key token".to_string());
@@ -2532,6 +2548,9 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
     }
     if trimmed.chars().count() == 1 {
         let ch = trimmed.chars().next().unwrap();
+        if let Some(key) = generated_key_seq_key(model, ch) {
+            return Ok(key);
+        }
         if let Some(code) = KeyboardMatrix::matrix_code_for_char(ch) {
             return Ok(AutoKeyKind::Matrix(code));
         }
@@ -2543,7 +2562,11 @@ fn resolve_key_seq_key(raw: &str) -> Result<AutoKeyKind, String> {
     }
 }
 
-fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, String> {
+fn parse_key_seq(
+    raw: &str,
+    default_hold: u64,
+    model: DeviceModel,
+) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
     for token_raw in raw.split([',', ';']) {
         let token = token_raw.trim();
@@ -2623,7 +2646,7 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
             || lower.starts_with("event:")
             || lower.starts_with("event=")
         {
-            let key = resolve_key_seq_key(token)?;
+            let key = resolve_key_seq_key(model, token)?;
             let mut action = KeySeqAction::new(KeySeqKind::Press);
             action.key = Some(key);
             action.label = token.to_string();
@@ -2641,7 +2664,7 @@ fn parse_key_seq(raw: &str, default_hold: u64) -> Result<Vec<KeySeqAction>, Stri
                 hold = parse_u64_value(hold_raw)?;
             }
         }
-        let key = resolve_key_seq_key(key_part)?;
+        let key = resolve_key_seq_key(model, key_part)?;
         let mut action = KeySeqAction::new(KeySeqKind::Press);
         action.key = Some(key);
         action.label = key_part.to_string();
@@ -2892,8 +2915,8 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
-        let actions =
-            parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD).map_err(|err| format!("--key-seq: {err}"))?;
+        let actions = parse_key_seq(raw, KEY_SEQ_DEFAULT_HOLD, args.model)
+            .map_err(|err| format!("--key-seq: {err}"))?;
         if !actions.is_empty() {
             for action in &actions {
                 match action.kind {
@@ -3104,6 +3127,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             if let Some(key) = event.key {
                                 match key {
                                     AutoKeyKind::Matrix(code) => bus.press_key(code),
+                                    AutoKeyKind::Chord { modifier, code } => {
+                                        bus.press_key(modifier);
+                                        bus.press_key(code);
+                                    }
                                     AutoKeyKind::InputEvent(code) => bus.inject_input_event(code),
                                     AutoKeyKind::OnKey => bus.press_on_key(),
                                 }
@@ -3113,6 +3140,10 @@ fn run(args: Args) -> Result<(), Box<dyn Error>> {
                             if let Some(key) = event.key {
                                 match key {
                                     AutoKeyKind::Matrix(code) => bus.release_key(code),
+                                    AutoKeyKind::Chord { modifier, code } => {
+                                        bus.release_key(code);
+                                        bus.release_key(modifier);
+                                    }
                                     AutoKeyKind::InputEvent(_) => {}
                                     AutoKeyKind::OnKey => bus.clear_on_key(),
                                 }
@@ -3980,6 +4011,7 @@ mod tests {
         let actions = parse_key_seq(
             "pf1:20,wait-op:5,wait-text:MAIN MENU,wait-power:off,wait-screen-change,wait-screen-empty,wait-screen-draw",
             100,
+            DeviceModel::PcE500,
         )
         .expect("parse key seq");
         assert_eq!(actions.len(), 7);
@@ -3995,7 +4027,7 @@ mod tests {
 
     #[test]
     fn key_seq_accepts_space_alias() {
-        let actions = parse_key_seq("space", 10).expect("parse key seq");
+        let actions = parse_key_seq("space", 10, DeviceModel::PcE500).expect("parse key seq");
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].kind, KeySeqKind::Press);
         let code =
@@ -4004,8 +4036,29 @@ mod tests {
     }
 
     #[test]
+    fn key_seq_uses_generated_shifted_pc_input_map() {
+        let actions = parse_key_seq("!", 10, DeviceModel::PcE500).expect("parse key seq");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].key,
+            Some(AutoKeyKind::Chord {
+                modifier: 0x06,
+                code: 0x01,
+            })
+        );
+    }
+
+    #[test]
+    fn key_seq_uses_generated_iq_input_map() {
+        let actions = parse_key_seq("0", 10, DeviceModel::Iq7000).expect("parse key seq");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x20)));
+    }
+
+    #[test]
     fn key_seq_accepts_exact_digitizer_events() {
-        let actions = parse_key_seq("digitizer:0xA3", 10).expect("parse key seq");
+        let actions =
+            parse_key_seq("digitizer:0xA3", 10, DeviceModel::PcE500).expect("parse key seq");
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].kind, KeySeqKind::Press);
         assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0xA3)));
@@ -4013,7 +4066,8 @@ mod tests {
 
     #[test]
     fn key_seq_wait_op_is_relative() {
-        let actions = parse_key_seq("wait-op:5,pf1", 10).expect("parse key seq");
+        let actions =
+            parse_key_seq("wait-op:5,pf1", 10, DeviceModel::PcE500).expect("parse key seq");
         let mut runner = KeySeqRunner::new(actions);
         let screen = ScreenState::default();
         let events = runner.step(10, true, &screen);
@@ -4027,7 +4081,8 @@ mod tests {
 
     #[test]
     fn key_seq_wait_screen_change_tracks_baseline() {
-        let actions = parse_key_seq("wait-screen-change,pf1", 10).expect("parse key seq");
+        let actions = parse_key_seq("wait-screen-change,pf1", 10, DeviceModel::PcE500)
+            .expect("parse key seq");
         let mut runner = KeySeqRunner::new(actions);
         let screen = ScreenState {
             valid: true,
