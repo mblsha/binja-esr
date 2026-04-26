@@ -1266,6 +1266,347 @@ pub const IQ7000_DEV0E_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000SemanticContract {
+    pub area: &'static str,
+    pub address: u32,
+    pub name: &'static str,
+    pub inputs: &'static str,
+    pub outputs: &'static str,
+    pub side_effects: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_UI_CALLER_CONTRACTS: &[Iq7000SemanticContract] = &[
+    Iq7000SemanticContract {
+        area: "system setup menu",
+        address: 0x00C2880,
+        name: "system_setup_menu_labels",
+        inputs: "ROM descriptor text",
+        outputs: "SCHEDULE ALARM / DAILY ALARM / USER'S DIC / TEL FILE NAME / SET UP menu labels",
+        side_effects: "feeds the setup UI that dispatches through dev0D services",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "user dictionary UI",
+        address: 0x00F6740,
+        name: "user_dict_menu_descriptor",
+        inputs: "encoded descriptor with action ids 1/2/3",
+        outputs: "USER'S DIC > ADD / DELETE / MODIFY / SELECT WORD",
+        side_effects: "selects user-dictionary edit flows backed by dev0D record/list helpers",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "schedule alarm storage",
+        address: 0x00E6F46,
+        name: "schedule_alarm_file_name",
+        inputs: "workspace selector in U+0x0B",
+        outputs: "opens RAM-disk record namespace S_ALARM 1",
+        side_effects: "calls ram_disk_workspace_preflight_f80ae and seeds DI with the record base",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "daily alarm storage",
+        address: 0x00F719A,
+        name: "daily_alarm_file_name",
+        inputs: "workspace selector in U+0x0B",
+        outputs: "opens RAM-disk record namespace D_ALARM 1",
+        side_effects: "calls ram_disk_workspace_preflight_f80ae and seeds DI with the record base",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "user dictionary transfer UI",
+        address: 0x00DBEE0,
+        name: "transport_target_menu",
+        inputs: "ROM descriptor text",
+        outputs: "<CASSETTE TAPE> / <SIO> / <PRINTER> / <PC LINK> / <DIAG PROGRAM>",
+        side_effects:
+            "routes setup/user-dictionary transfer flows toward CAS/COM/PRN/PACOM-style transports",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
+pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
+    Iq7000SemanticContract {
+        area: "RTC current time",
+        address: 0x00F3454,
+        name: "rtc_read_current_datetime_ascii",
+        inputs: "low-level RTC command F4",
+        outputs: "YYYYMMDDHHMM-style buffer via BCD nibble formatter",
+        side_effects:
+            "used by World/Home live-clock renderer and backed by the Rust E-port RTC peripheral",
+        status: Iq7000ContractStatus::RuntimeCovered,
+    },
+    Iq7000SemanticContract {
+        area: "RTC write",
+        address: 0x00F33A2,
+        name: "rtc_pack_bcd_then_write_f0",
+        inputs: "12 ASCII date/time nibbles at X, D4=0x0C",
+        outputs: "packed BCD payload sent with RTC opcode F0",
+        side_effects: "waits for one-byte status response from the RTC device",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC write",
+        address: 0x00F3410,
+        name: "rtc_write_f1_from_workspace",
+        inputs: "workspace buffer parsed through sub_f33d4",
+        outputs: "six-byte payload sent with RTC opcode F1",
+        side_effects: "waits for one-byte status response from the RTC device",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC short write",
+        address: 0x00F3431,
+        name: "rtc_write_f2_short_value",
+        inputs: "two-byte/nibble value parsed through sub_f33ca",
+        outputs: "short payload sent with RTC opcode F2",
+        side_effects: "waits for one-byte status response from the RTC device",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm IRQ",
+        address: 0x00F70FD,
+        name: "rtc_alarm_worker",
+        inputs: "BA flags from rtc_alarm_state_query_eca65 and state byte 1FE75",
+        outputs: "dispatches phase1/phase2 alarm handlers depending on BA&1 / BA&2",
+        side_effects: "loads alarm payload via FFFDC BA=0x33, sets 1FE75 bits 0x01/0x02",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm phase",
+        address: 0x00F6FB9,
+        name: "rtc_alarm_phase1",
+        inputs: "alarm payload state prepared in 1FE75/1FE76",
+        outputs: "phase-1 alarm scheduling/list update",
+        side_effects: "called by dev0D IL=0x5E and rtc_alarm_worker_f70fd",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm phase",
+        address: 0x00F6FEC,
+        name: "rtc_alarm_phase2",
+        inputs: "BA mode flag, alarm payload state",
+        outputs: "phase-2 alarm scheduling/list update",
+        side_effects: "called by dev0D IL=0x5D and rtc_alarm_worker_f70fd",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
+pub const IQ7000_STORAGE_SIDE_EFFECT_CONTRACTS: &[Iq7000SemanticContract] = &[
+    Iq7000SemanticContract {
+        area: "RAM disk init",
+        address: 0x00F7D2D,
+        name: "ram_disk_init_reset",
+        inputs: "drive selector in 0x1000D7",
+        outputs: "1FD00/1FD03/1FD09/1FD0C workspace/media pointers",
+        side_effects: "probes 0x18000/0x20000-class RAM bases and clears stale pointers on failure",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RAM disk status",
+        address: 0x00F8269,
+        name: "ram_disk_status_template",
+        inputs: "selected workspace and caller buffer",
+        outputs: "0x2E-byte template, formatted 8.3 name, 0xFF terminator",
+        side_effects: "returns A=0x00/0x09/0x0C/0xFF according to readiness and room checks",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RAM disk listing",
+        address: 0x00F89BF,
+        name: "ram_disk_directory_or_block_listing",
+        inputs: "workspace offsets at Y+0x03/0x09 and IOCS buffer state",
+        outputs: "records with 0x29 header and trailing 0xFF terminator",
+        side_effects: "writes A=0x0C to U+8 on bounds/error paths",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000SemanticContract {
+        area: "CAS low-level",
+        address: 0x00FB253,
+        name: "cas_receive_record_primitive",
+        inputs: "record buffer U and builder state at (*E6)+0x43",
+        outputs: "received record header/payload or carry-set failure",
+        side_effects: "feeds CAS load/verify paths through 0xB2 record validation",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000SemanticContract {
+        area: "CAS low-level",
+        address: 0x00FB32B,
+        name: "cas_transmit_record_primitive",
+        inputs: "record header/payload at U and builder counters",
+        outputs: "transmitted chunk or carry-set failure",
+        side_effects: "used by chunked writer 0xFAF8D with 0x1C00-byte chunks",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000SemanticContract {
+        area: "CAS retry/status",
+        address: 0x00F35DA,
+        name: "cas_rtc_ready_ack_helper",
+        inputs: "flag byte 1FDC6 bit 0x10",
+        outputs: "clears pending flag or returns immediately",
+        side_effects: "busy-waits, masks FD with 0x8F, ORs FD with 0x40 when acking",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+pub const IQ7000_LINK_ABI_CONTRACTS: &[Iq7000SemanticContract] = &[
+    Iq7000SemanticContract {
+        area: "PACOM/PANET dispatch",
+        address: 0x00FBC29,
+        name: "pacom_panet_word_table",
+        inputs: "IL index or IL-0x3F alias",
+        outputs: "16-bit in-bank target pushed to S then RET",
+        side_effects: "selects handshake/frame/record helper entries",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PACOM/PANET handshake",
+        address: 0x00FBC3F,
+        name: "receive_a5_reply_8000",
+        inputs: "incoming 0xA5 byte over EIH/EOH bit-banged link",
+        outputs: "reply bytes 0x80, 0x00; carry clear on success",
+        side_effects: "uses IMR=0xC0 critical section and EOH.7/EIH.6 handshake",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PACOM/PANET handshake",
+        address: 0x00FBC7A,
+        name: "send_a5_parse_response",
+        inputs: "link peer ready on EIH.6",
+        outputs: "success on 0xF0/0x01 or 0x80 response pattern",
+        side_effects: "common failures go through FBC72 cleanup and return carry set",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PACOM/PANET frame send",
+        address: 0x00FBCF9,
+        name: "send_frame_checksum_wait_fa",
+        inputs: "payload at X and length in Y",
+        outputs: "payload plus 16-bit additive checksum, expects ACK 0xFA",
+        side_effects: "returns carry set on timeout/check failure",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PACOM/PANET frame receive",
+        address: 0x00FBD54,
+        name: "receive_frame_checksum_ack",
+        inputs: "destination buffer X and length Y",
+        outputs: "payload bytes and ACK 0xFA on checksum match, 0xF0 on mismatch",
+        side_effects: "returns carry clear only when checksum matches",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PRN dispatch",
+        address: 0x00FB477,
+        name: "printer_word_table_dispatch",
+        inputs: "IL<0x3F maps via IL-8, else IL-0x3F",
+        outputs: "16-bit in-bank target pushed to S then RET",
+        side_effects: "shares prologue/epilogue and bit-banged helpers with PACOM/PANET",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
+pub const IQ7000_KEY_TRANSLATION_SEMANTICS: &[Iq7000SemanticContract] = &[
+    Iq7000SemanticContract {
+        area: "keyboard scanner",
+        address: 0x00F55AE,
+        name: "matrix_to_translation_code",
+        inputs: "row, column from sweep loop",
+        outputs: "idx=col*8+row; primary byte from 1FDC5+2+idx; optional secondary byte from 1FDCD",
+        side_effects: "returns keycode/dispatch index to higher-level STDI paths",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "keyboard dequeue",
+        address: 0x00F3652,
+        name: "key_fetch_state_gate",
+        inputs: "caller A flags, ring indices at (*E6)+4/+5, scan flags 1FDC5/1FDBE",
+        outputs: "stable key byte or A=0xFE/carry-set when gated",
+        side_effects: "may synthesize wake/poll event 0x8F0F when A&0x80 and ring is empty",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "keyboard state",
+        address: 0x00F383C,
+        name: "keycode_state_dispatch",
+        inputs: "keycode from dequeue/scan path",
+        outputs: "updates current code 1FD4A and returns repeat/state carry",
+        side_effects: "handles special A==1/A==9 toggles through IOCS IL=0x46",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "keyboard shell",
+        address: 0x00E2974,
+        name: "shell_read_input_event",
+        inputs: "IOCS STDI device 1, IL=0x49",
+        outputs: "foreground UI input event consumed by app selector loops",
+        side_effects: "special translated app codes are routed by shell/app dispatchers",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000StatusContract {
+    pub area: &'static str,
+    pub code: u8,
+    pub meaning: &'static str,
+    pub producers: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_STATUS_CONTRACTS: &[Iq7000StatusContract] = &[
+    Iq7000StatusContract {
+        area: "dev0D/list editor",
+        code: 0x06,
+        meaning: "not found / invalid record / end of linked record list",
+        producers: "F681B, F683A, F6853 and related user-dictionary walkers",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "dev0D/list editor",
+        code: 0x0C,
+        meaning: "bounds or size failure during copy/insert/edit",
+        producers: "F6853, F68A9, F6A6C and storage/list copy helpers",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "IOCS dispatch",
+        code: 0xFF,
+        meaning: "generic out-of-range or failed operation",
+        producers: "dev0D out-of-range, RAM-disk dispatcher failures, several storage helpers",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "COM/link",
+        code: 0xFE,
+        meaning: "deferred/busy/timeout-style failure",
+        producers: "COM gates and PACOM/PANET BBCD when 1FDC5&0x40 is set",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "PACOM/PANET",
+        code: 0xFA,
+        meaning: "frame checksum accepted ACK",
+        producers: "receive frame FBD54/FBD4B",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "PACOM/PANET",
+        code: 0xF0,
+        meaning: "frame checksum mismatch or negative handshake response",
+        producers: "receive frame FBD54/FBD4B and A5 response parser",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "RAM disk",
+        code: 0x09,
+        meaning: "workspace/template/status helper specific failure",
+        producers: "F8269 readiness/template helper",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Iq7000DeviceGap {
     pub area: &'static str,
     pub rust_contract: &'static str,
@@ -1844,6 +2185,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn semantic_contracts_cover_remaining_rom_solvable_iq7000_gaps() {
+        assert!(IQ7000_UI_CALLER_CONTRACTS.iter().any(|entry| {
+            entry.address == 0x00F6740 && entry.name == "user_dict_menu_descriptor"
+        }));
+        assert!(IQ7000_RTC_SEMANTIC_CONTRACTS
+            .iter()
+            .any(|entry| { entry.address == 0x00F70FD && entry.name == "rtc_alarm_worker" }));
+        assert!(IQ7000_STORAGE_SIDE_EFFECT_CONTRACTS.iter().any(|entry| {
+            entry.address == 0x00FB32B && entry.name == "cas_transmit_record_primitive"
+        }));
+        assert!(IQ7000_LINK_ABI_CONTRACTS.iter().any(|entry| {
+            entry.address == 0x00FBD54 && entry.name == "receive_frame_checksum_ack"
+        }));
+        assert!(IQ7000_KEY_TRANSLATION_SEMANTICS.iter().any(|entry| {
+            entry.address == 0x00F55AE && entry.outputs.contains("idx=col*8+row")
+        }));
+        assert!(IQ7000_STATUS_CONTRACTS
+            .iter()
+            .any(|entry| { entry.area == "PACOM/PANET" && entry.code == 0xFA }));
     }
 
     #[test]
