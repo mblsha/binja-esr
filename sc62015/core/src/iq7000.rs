@@ -1616,6 +1616,34 @@ pub const IQ7000_UI_CALLER_CONTRACTS: &[Iq7000SemanticContract] = &[
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
+        area: "alarm list UI",
+        address: 0x00E6B82,
+        name: "set_alarm_record_list_dispatch",
+        inputs: "shared record/list workspace and alarm record pointers",
+        outputs: "visible list of schedule/daily alarm records whose flag byte has bit 0x40 set",
+        side_effects: "filters alarm records before rendering/selecting set-alarm entries",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "daily alarm UI",
+        address: 0x00E1512,
+        name: "daily_alarm_editor_entry",
+        inputs: "C00A service request and D_ALARM 1 record namespace",
+        outputs: "DAILY ALARM editor with up to eight rendered alarm records",
+        side_effects: "opens D_ALARM 1, draws the title, and enters the edit/toggle loop at E16CB",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "schedule alarm UI",
+        address: 0x00E70CA,
+        name: "schedule_alarm_list_manager",
+        inputs: "SCHEDULE1/ANN/S_ALARM workspace descriptors and current C004 clock data",
+        outputs: "schedule-alarm list/editor state",
+        side_effects:
+            "uses record flag bit 0x40 for enabled alarms and routes set/unset through elapsed-time validation",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
         area: "user dictionary transfer UI",
         address: 0x00DBEE0,
         name: "transport_target_menu",
@@ -1670,8 +1698,10 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         address: 0x00F70FD,
         name: "rtc_alarm_worker",
         inputs: "BA flags from rtc_alarm_state_query_eca65 and state byte 1FE75",
-        outputs: "dispatches phase1/phase2 alarm handlers depending on BA&1 / BA&2",
-        side_effects: "loads alarm payload via FFFDC BA=0x33, sets 1FE75 bits 0x01/0x02",
+        outputs:
+            "queues the 0x0C-byte alarm payload in 1FE76 and dispatches phase1/phase2 handlers depending on BA&1 / BA&2",
+        side_effects:
+            "loads alarm payload via FFFDC BA=0x33, sets 1FE75 bits 0x01/0x02, then phase2 clears ISR bit 0x08",
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
@@ -1688,8 +1718,10 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         address: 0x00F6FEC,
         name: "rtc_alarm_phase2",
         inputs: "A mode flag, 0x18-byte scratch frame, alarm payload state at 1FE76/1FE7E",
-        outputs: "builds or processes alarm payload, calls C004 IL=0x32/0x33 and ECA65 IL=0x42/0x43",
-        side_effects: "sets 1FE75 bit 0x02 on successful payload update and clears ISR bit 0x08",
+        outputs:
+            "rebuilds the next daily or schedule 0x0C-byte alarm payload, calls C004 IL=0x32/0x33 and ECA65 IL=0x42/0x43",
+        side_effects:
+            "copies the success payload to 1FE76, sets 1FE75 bit 0x02, and clears ISR bit 0x08",
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
@@ -1717,6 +1749,35 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         inputs: "mode A, source/destination scratch buffers and S_ALARM 1 namespace",
         outputs: "0x0C-byte schedule-alarm payload with ':' field separators",
         side_effects: "walks S_ALARM 1 records via dev0D IL=0x45/0x47 and clears 1FE75 bit 0x10 on exit",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm event consumer",
+        address: 0x00E000F,
+        name: "alarm_service_c00a",
+        inputs: "queued alarm state in 1FE75 plus payload buffers 1FE76/1FE7E",
+        outputs: "schedule alarm callback dispatch or daily alarm alert screen",
+        side_effects:
+            "sets 1FE75 bit 0x10 while servicing, searches S_ALARM 1 or D_ALARM 1, and clears active service bits after daily alarm display",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm setting",
+        address: 0x00E1A0F,
+        name: "daily_alarm_commit_phase2",
+        inputs: "D_ALARM 1 record changes and enabled flag bit 0x40",
+        outputs: "dev0D IL=0x5D phase2 request with CL=0x000D and A=0x80",
+        side_effects: "causes rtc_alarm_phase2_f6fec to rebuild/program the next alarm payload",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm setting",
+        address: 0x00E1278,
+        name: "alarm_time_compare_current_clock",
+        inputs: "candidate 0x0C-byte alarm timestamp and current C004 clock/alarm record from IL=0x41",
+        outputs: "carry set when the candidate is elapsed/invalid",
+        side_effects:
+            "used by alarm_time_elapsed_guard_e6b52 before enabling schedule alarms; failure displays ALARM TIME ELAPSED",
         status: Iq7000ContractStatus::Confirmed,
     },
 ];
