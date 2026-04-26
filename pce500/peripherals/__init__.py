@@ -4,6 +4,13 @@ from .manager import PeripheralManager
 from .serial import SerialAdapter, SerialSnapshot, SerialQueuedByte
 from .cassette import CassetteAdapter, CassetteSnapshot
 from .stdio import StdIODeviceAdapter, StdIOSnapshot
+from .storage import (
+    BlockNotFoundError,
+    DuplicateBlockError,
+    InsufficientSpaceError,
+    MemoryCardImage,
+    RamDiskImage,
+)
 
 __all__ = [
     "PeripheralManager",
@@ -14,4 +21,9 @@ __all__ = [
     "CassetteSnapshot",
     "StdIODeviceAdapter",
     "StdIOSnapshot",
+    "MemoryCardImage",
+    "RamDiskImage",
+    "BlockNotFoundError",
+    "DuplicateBlockError",
+    "InsufficientSpaceError",
 ]

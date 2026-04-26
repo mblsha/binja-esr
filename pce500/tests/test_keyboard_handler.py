@@ -95,3 +95,48 @@ class TestKeyboardHandler:
         self.handler.scan_tick()
         repeat_events = self.handler.scan_tick()
         assert repeat_events and repeat_events[0].repeat
+
+    def test_press_bounce_below_threshold_does_not_enqueue(self) -> None:
+        self.handler._matrix.press_threshold = 3
+        _select_column(self.handler, "KEY_A")
+
+        assert self.handler.press_key("KEY_A")
+        assert self.handler.scan_tick() == []
+        self.handler.release_key("KEY_A")
+        assert self.handler.scan_tick() == []
+
+        assert self.handler.fifo_snapshot() == []
+
+    def test_release_debounce_holds_until_threshold(self) -> None:
+        self.handler._matrix.release_threshold = 3
+        _select_column(self.handler, "KEY_A")
+        assert self.handler.press_key("KEY_A")
+        self.handler.scan_tick()
+        press_events = self.handler.scan_tick()
+        assert press_events and not press_events[0].release
+
+        self.handler.release_key("KEY_A")
+        assert self.handler.scan_tick() == []
+        assert self.handler.scan_tick() == []
+        release_events = self.handler.scan_tick()
+
+        assert release_events and release_events[0].release
+        assert self.handler.fifo_snapshot() == [
+            KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row,
+            0x80 | (KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row),
+        ]
+
+    def test_repeat_interval_is_stable_after_first_repeat(self) -> None:
+        self.handler._matrix.repeat_delay = 1
+        self.handler._matrix.repeat_interval = 3
+        _select_column(self.handler, "KEY_F1")
+        assert self.handler.press_key("KEY_F1")
+        self.handler.scan_tick()
+        self.handler.scan_tick()
+
+        first_repeat = self.handler.scan_tick()
+        assert first_repeat and first_repeat[0].repeat
+        assert self.handler.scan_tick() == []
+        assert self.handler.scan_tick() == []
+        next_repeat = self.handler.scan_tick()
+        assert next_repeat and next_repeat[0].repeat

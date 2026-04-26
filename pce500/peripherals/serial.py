@@ -24,6 +24,11 @@ UART_REGISTER_ADDRS: Dict[IMEMRegisters, int] = {
 
 SERIAL_WORKSPACE_ADDRS: Iterable[int] = range(0x00BFE40, 0x00BFE48)
 SERIAL_HANDSHAKE_ADDR = 0x00BFE46
+SERIAL_EIL_ADDR = INTERNAL_MEMORY_START + IMEMRegisters.EIL.value
+
+# ROM command 4Ah reads CS from EIL bit 2; command 4Bh reads CD from EIL bit 1.
+SERIAL_EIL_CS_MASK = 0x04
+SERIAL_EIL_CD_MASK = 0x02
 
 
 @dataclass
@@ -42,6 +47,7 @@ class SerialSnapshot:
 
     ucr: int
     usr: int
+    eil: int
     handshake: int
     workspace: Dict[int, int] = field(default_factory=dict)
     rx_queue: List[SerialQueuedByte] = field(default_factory=list)
@@ -87,6 +93,7 @@ class SerialAdapter:
         return SerialSnapshot(
             ucr=self._read_register(IMEMRegisters.UCR),
             usr=self._read_register(IMEMRegisters.USR),
+            eil=self._memory.read_byte(SERIAL_EIL_ADDR) & 0xFF,
             handshake=self._memory.read_byte(SERIAL_HANDSHAKE_ADDR),
             workspace=workspace,
             rx_queue=list(self._rx_queue),
@@ -98,6 +105,7 @@ class SerialAdapter:
 
         self._write_register(IMEMRegisters.UCR, snapshot.ucr)
         self._write_register(IMEMRegisters.USR, snapshot.usr)
+        self._memory.write_byte(SERIAL_EIL_ADDR, snapshot.eil & 0xFF)
         for addr, value in snapshot.workspace.items():
             self._memory.write_byte(addr, value & 0xFF)
         self._memory.write_byte(SERIAL_HANDSHAKE_ADDR, snapshot.handshake & 0xFF)
@@ -173,6 +181,27 @@ class SerialAdapter:
 
         return self._memory.read_byte(SERIAL_HANDSHAKE_ADDR) & 0xFF
 
+    def set_input_lines(
+        self, *, cs: bool | None = None, cd: bool | None = None
+    ) -> None:
+        """Set COM: input status bits that the ROM reads through EIL."""
+
+        value = self._memory.read_byte(SERIAL_EIL_ADDR) & 0xFF
+        if cs is not None:
+            value = _set_mask(value, SERIAL_EIL_CS_MASK, cs)
+        if cd is not None:
+            value = _set_mask(value, SERIAL_EIL_CD_MASK, cd)
+        self._memory.write_byte(SERIAL_EIL_ADDR, value & 0xFF)
+
+    def input_lines(self) -> dict[str, bool]:
+        """Return the COM: input line states visible through EIL."""
+
+        value = self._memory.read_byte(SERIAL_EIL_ADDR) & 0xFF
+        return {
+            "cs": bool(value & SERIAL_EIL_CS_MASK),
+            "cd": bool(value & SERIAL_EIL_CD_MASK),
+        }
+
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
@@ -224,3 +253,9 @@ class SerialAdapter:
 
     def _write_register(self, reg: IMEMRegisters, value: int) -> None:
         self._memory.write_byte(UART_REGISTER_ADDRS[reg], value & 0xFF)
+
+
+def _set_mask(value: int, mask: int, enabled: bool) -> int:
+    if enabled:
+        return value | mask
+    return value & ~mask
