@@ -451,6 +451,26 @@ pub const IQ7000_KEYBOARD_ACTION_TARGETS: &[Iq7000KeyboardActionTarget] = &[
         address: 0x00F537C,
         role: "RETF stub before reset/rescan helper at 0xF537D",
     },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F525E,
+        role: "timer scan tick: increments 1FD67 and launches the matrix scanner",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F527F,
+        role: "serial TX interrupt action: services COM IL=0x46 or defers with 1FDC5 bit 0x40",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F55CF,
+        role: "queue translated key event into the 16-byte IOCS ring buffer",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F5623,
+        role: "test keyboard ring-full flag at IOCS workspace offset +4 bit 0x80",
+    },
+    Iq7000KeyboardActionTarget {
+        address: 0x00F562F,
+        role: "compute keyboard ring head-tail delta from IOCS workspace offsets +4/+5",
+    },
 ];
 
 pub const IQ7000_KEYBOARD_SCAN_CHAIN: &[u32] = &[
@@ -706,6 +726,257 @@ pub const IQ7000_COM_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
         index_or_command: 0x5F,
         target: 0x00FAE76,
         role: "flow-control gate",
+    },
+];
+
+pub const IQ7000_PRN_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x08,
+        target: 0x00FB5DC,
+        role: "clear printer buffer state",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x09,
+        target: 0x00FB600,
+        role: "status check then clear printer buffer",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x0A,
+        target: 0x00FB4E6,
+        role: "fixed error A=1",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x0B,
+        target: 0x00FB4FC,
+        role: "put character with CR/LF/TAB handling",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x0C,
+        target: 0x00FB4E6,
+        role: "fixed error A=1",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x0D,
+        target: 0x00FB605,
+        role: "write caller block through put-character loop",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x0E,
+        target: 0x00FB4E6,
+        role: "fixed error A=1",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x3F,
+        target: 0x00FB9ED,
+        role: "seed default printer/PANET config bytes",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x40,
+        target: 0x00FB4EA,
+        role: "config dispatch for mode A=0/1/2",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x41,
+        target: 0x00FB6FD,
+        role: "printing UI and bit-banged send workflow",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x42,
+        target: 0x00FB95D,
+        role: "packet transfer variant with shared prologue",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x43,
+        target: 0x00FB953,
+        role: "packet transfer variant with leading mode flag",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x44,
+        target: 0x00FB5DC,
+        role: "clear printer buffer state alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x45,
+        target: 0x00FB600,
+        role: "status check then clear alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x46,
+        target: 0x00FB605,
+        role: "write block alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x47,
+        target: 0x00FB4FC,
+        role: "put character alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x48,
+        target: 0x00FBBC3,
+        role: "mask EOH link bits to 0x3F",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x49,
+        target: 0x00FBBAF,
+        role: "set EOH bit 7",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4A,
+        target: 0x00FBBB4,
+        role: "clear EOH bit 7",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4B,
+        target: 0x00FBBB9,
+        role: "poll EIH bit 6",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4C,
+        target: 0x00FB828,
+        role: "send C0 handshake and expect link ACK",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4D,
+        target: 0x00FBA15,
+        role: "send AA handshake and read two response bytes",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4E,
+        target: 0x00FBA38,
+        role: "send A5 handshake and read two response bytes",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4F,
+        target: 0x00FBA63,
+        role: "wait for EIH.6 high with timeout",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x50,
+        target: 0x00FBA81,
+        role: "alternate wait for EIH.6 high with timeout",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x51,
+        target: 0x00FB99A,
+        role: "expect FA acknowledgement",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x52,
+        target: 0x00FBB7C,
+        role: "send byte with extra delay",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x53,
+        target: 0x00FBB2F,
+        role: "send byte bit-by-bit",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x54,
+        target: 0x00FBB86,
+        role: "send byte and add checksum",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x55,
+        target: 0x00FBB91,
+        role: "sync-send byte and add checksum",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x56,
+        target: 0x00FBB9C,
+        role: "sync-send byte",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x57,
+        target: 0x00FBAA2,
+        role: "receive byte bit-by-bit",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x58,
+        target: 0x00FBAE9,
+        role: "receive byte and add checksum",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x59,
+        target: 0x00FBAF7,
+        role: "sync-receive byte and add checksum",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5A,
+        target: 0x00FBB05,
+        role: "link RX wait loop",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5B,
+        target: 0x00FBB20,
+        role: "sync-receive byte",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5C,
+        target: 0x00FBBCD,
+        role: "shared ready/defer gate",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5D,
+        target: 0x00FBBEB,
+        role: "shared bit-bang prologue",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5E,
+        target: 0x00FBBE0,
+        role: "shared bit-bang epilogue",
+    },
+];
+
+pub const IQ7000_PACOM_PANET_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x00,
+        target: 0x00FBC3B,
+        role: "no-op success",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x01,
+        target: 0x00FBC3B,
+        role: "no-op success",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x02,
+        target: 0x00FBCC0,
+        role: "prepare PACOM record/buffer backend",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x03,
+        target: 0x00FB600,
+        role: "printer-style status check then clear",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x04,
+        target: 0x00FBD54,
+        role: "receive frame, validate checksum, send ACK/NAK",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x05,
+        target: 0x00FBCF9,
+        role: "send frame with checksum and wait for ACK",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x06,
+        target: 0x00FBC3F,
+        role: "receive A5 handshake and reply 80 00",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x07,
+        target: 0x00FBC7A,
+        role: "send A5 handshake and parse response",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x08,
+        target: 0x00FBD4B,
+        role: "receive frame with first-byte guard",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x09,
+        target: 0x00F069F,
+        role: "stub return",
     },
 ];
 
@@ -1089,6 +1360,37 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
     },
 ];
 
+pub const IQ7000_RTC_PAYLOAD_FIELDS: &[Iq7000MediaFormatField] = &[
+    Iq7000MediaFormatField {
+        offset: 0x00,
+        width: 1,
+        name: "century_status_bcd",
+        role: "first packed byte used by F0/F1 writes and F4/F5/F7 ASCII formatter; low nibble selects 19xx/20xx prefix",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x01,
+        width: 5,
+        name: "packed_datetime_pairs",
+        role: "remaining YY/MM/DD/HH/MM-style BCD pairs consumed by the common parser/formatter",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x00,
+        width: 2,
+        name: "short_alarm_value",
+        role: "F2 write payload and F6 read response parsed/formatted through the short BCD path",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x00,
+        width: 1,
+        name: "one_byte_status",
+        role: "F8 and FD status helpers read one byte through cas_rtc_preamble_f333d",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
 pub const IQ7000_DEV0D_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
     Iq7000CommandTarget {
         index_or_command: 0x3F,
@@ -1376,19 +1678,46 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         area: "RTC alarm phase",
         address: 0x00F6FB9,
         name: "rtc_alarm_phase1",
-        inputs: "alarm payload state prepared in 1FE75/1FE76",
-        outputs: "phase-1 alarm scheduling/list update",
-        side_effects: "called by dev0D IL=0x5E and rtc_alarm_worker_f70fd",
-        status: Iq7000ContractStatus::StructurallyMapped,
+        inputs: "scratch frame size 0x18, X=U, key C004, IL=0x41",
+        outputs: "refreshes the C004 alarm/list record via CALLF FFFDC",
+        side_effects: "masks IMR bit 0x08, preserves D6/D8, called by dev0D IL=0x5E and rtc_alarm_worker_f70fd",
+        status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
         area: "RTC alarm phase",
         address: 0x00F6FEC,
         name: "rtc_alarm_phase2",
-        inputs: "BA mode flag, alarm payload state",
-        outputs: "phase-2 alarm scheduling/list update",
-        side_effects: "called by dev0D IL=0x5D and rtc_alarm_worker_f70fd",
-        status: Iq7000ContractStatus::StructurallyMapped,
+        inputs: "A mode flag, 0x18-byte scratch frame, alarm payload state at 1FE76/1FE7E",
+        outputs: "builds or processes alarm payload, calls C004 IL=0x32/0x33 and ECA65 IL=0x42/0x43",
+        side_effects: "sets 1FE75 bit 0x02 on successful payload update and clears ISR bit 0x08",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm refresh",
+        address: 0x00E1211,
+        name: "rtc_alarm_refresh_wrapper",
+        inputs: "X points at 1FE76 alarm payload buffer",
+        outputs: "refreshes alarm payload via CA69 IL=0x44 and F6F79 IL=0x0C",
+        side_effects: "allocates 0x0D scratch bytes and stores failure byte at U on carry",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm payload",
+        address: 0x00E02E1,
+        name: "daily_alarm_payload_build",
+        inputs: "source/destination scratch buffers and D_ALARM 1 namespace",
+        outputs: "0x0C-byte daily-alarm payload with ':' field separators",
+        side_effects: "walks D_ALARM 1 records via dev0D IL=0x45/0x47 and tests record flag bit 0x40",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RTC alarm payload",
+        address: 0x00E0239,
+        name: "schedule_alarm_payload_process",
+        inputs: "mode A, source/destination scratch buffers and S_ALARM 1 namespace",
+        outputs: "0x0C-byte schedule-alarm payload with ':' field separators",
+        side_effects: "walks S_ALARM 1 records via dev0D IL=0x45/0x47 and clears 1FE75 bit 0x10 on exit",
+        status: Iq7000ContractStatus::Confirmed,
     },
 ];
 
@@ -1414,11 +1743,38 @@ pub const IQ7000_STORAGE_SIDE_EFFECT_CONTRACTS: &[Iq7000SemanticContract] = &[
     Iq7000SemanticContract {
         area: "RAM disk listing",
         address: 0x00F89BF,
-        name: "ram_disk_directory_or_block_listing",
+        name: "ram_disk_insert_space_and_shift_records",
         inputs: "workspace offsets at Y+0x03/0x09 and IOCS buffer state",
-        outputs: "records with 0x29 header and trailing 0xFF terminator",
-        side_effects: "writes A=0x0C to U+8 on bounds/error paths",
-        status: Iq7000ContractStatus::StructurallyMapped,
+        outputs: "shifted record region and adjusted Y+0x16/Y+0x26 offsets",
+        side_effects: "memmoves existing records through F81BC; writes U+0x0E=A=0x0C/0xFF on bounds/preflight errors",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RAM disk copy",
+        address: 0x00F8A65,
+        name: "ram_disk_copy_record_body_from_offset",
+        inputs: "caller length in DL and source pointer from U+0x00",
+        outputs: "copies bytes from record body after 0x29-byte header using F6F88",
+        side_effects: "writes U+0x08=A=0x0C on bounds failure",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RAM disk copy",
+        address: 0x00F8AA2,
+        name: "ram_disk_copy_record_body_to_offset",
+        inputs: "caller length in DL and destination pointer from U+0x00",
+        outputs: "copies bytes to record body after 0x29-byte header using F6F88",
+        side_effects: "zero length returns current offset in U+0x00; bounds failure writes U+0x08=A=0x0C",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "RAM disk status",
+        address: 0x00F8416,
+        name: "ram_disk_workspace_status_check",
+        inputs: "drive selector in CH and current workspace header",
+        outputs: "carry clear when workspace is ready and caller pointer is in range",
+        side_effects: "returns A=0x05 when Y+0x0C bit0 blocks public operations",
+        status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
         area: "CAS low-level",
@@ -1445,6 +1801,33 @@ pub const IQ7000_STORAGE_SIDE_EFFECT_CONTRACTS: &[Iq7000SemanticContract] = &[
         inputs: "flag byte 1FDC6 bit 0x10",
         outputs: "clears pending flag or returns immediately",
         side_effects: "busy-waits, masks FD with 0x8F, ORs FD with 0x40 when acking",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "CAS/link retry",
+        address: 0x00FBBCD,
+        name: "shared_ready_defer_gate",
+        inputs: "1FDC5 bit 0x40 and keyboard/link readiness helper F54D9",
+        outputs: "A=0xFE carry-set when deferred, A=0xFF carry-clear on readiness helper failure",
+        side_effects: "used inside send/receive timeout loops before retrying bit-banged link operations",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "CAS/link retry",
+        address: 0x00FBB2F,
+        name: "shared_bitbang_send_byte_retry",
+        inputs: "A byte payload, EIH.6 handshake, EOH.7 data output",
+        outputs: "carry clear after eight acknowledged bits",
+        side_effects: "uses 0x00EB and 0x049E timeout loops; clears EOH bits and returns A=0 on timeout",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "CAS/link retry",
+        address: 0x00FBAA2,
+        name: "shared_bitbang_receive_byte_retry",
+        inputs: "EIH.6 handshake and EOH.7 acknowledge output",
+        outputs: "received byte after eight sampled bits",
+        side_effects: "uses 0x00EB/0x049E timeout loops and shared ready/defer gate on stalls",
         status: Iq7000ContractStatus::Confirmed,
     },
 ];
@@ -1504,6 +1887,44 @@ pub const IQ7000_LINK_ABI_CONTRACTS: &[Iq7000SemanticContract] = &[
         side_effects: "shares prologue/epilogue and bit-banged helpers with PACOM/PANET",
         status: Iq7000ContractStatus::StructurallyMapped,
     },
+    Iq7000SemanticContract {
+        area: "PRN output",
+        address: 0x00FB4FC,
+        name: "printer_putchar_control_handler",
+        inputs: "A character byte and IOCS workspace offsets +3E/+3F/+40/+41",
+        outputs: "buffered character, padded line flush, or CR/LF/TAB expansion",
+        side_effects:
+            "uses 1FE52 bits to suppress NUL/TAB handling and calls B666/B62E/B624 buffer helpers",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PRN output",
+        address: 0x00FB6FD,
+        name: "printer_printing_ui_send_workflow",
+        inputs: "printer/PANET config and current output buffer",
+        outputs: "PRINTING status UI and bit-banged payload transfer",
+        side_effects: "uses IOCS IL=0x5E/0x42/0x5F around the inline 'PRINTING' label",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PANET packet",
+        address: 0x00FB8A7,
+        name: "panet_packet_xfer_mode1",
+        inputs: "packet buffer X, 1FE50 mode flags, 1FE51 zero-pad count",
+        outputs: "packet bytes sent with 0x59/0x70 framing and FA ACK",
+        side_effects:
+            "may invert bytes when 1FE50 bit 0x40 is set; loops over 0x10 or 0x0C byte records",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "PANET packet",
+        address: 0x00FB8AF,
+        name: "panet_packet_xfer_mode0",
+        inputs: "packet buffer X, 1FE50 mode flags, 1FE51 zero-pad count",
+        outputs: "packet bytes sent with 0x59/0x70 framing and FA ACK",
+        side_effects: "same transport as mode1 but without the leading BP+00 mode bit",
+        status: Iq7000ContractStatus::Confirmed,
+    },
 ];
 
 pub const IQ7000_KEY_TRANSLATION_SEMANTICS: &[Iq7000SemanticContract] = &[
@@ -1532,6 +1953,24 @@ pub const IQ7000_KEY_TRANSLATION_SEMANTICS: &[Iq7000SemanticContract] = &[
         inputs: "keycode from dequeue/scan path",
         outputs: "updates current code 1FD4A and returns repeat/state carry",
         side_effects: "handles special A==1/A==9 toggles through IOCS IL=0x46",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "keyboard queue",
+        address: 0x00F55CF,
+        name: "translated_key_queue_push",
+        inputs: "translated keycode A and modifier/repeat byte B",
+        outputs: "writes keycode into IOCS workspace ring at base [(*E6)+2] + head",
+        side_effects: "advances head modulo 0x10, sets ring-full bit 0x80, and invokes optional callback 1FDD0",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000SemanticContract {
+        area: "keyboard repeat",
+        address: 0x00F5394,
+        name: "keyboard_scan_repeat_manager",
+        inputs: "previous scan state 1FDBC/1FDBE, repeat delay 1FDC1, repeat rate 1FDC2",
+        outputs: "new key, release, or repeat events queued through F55CF",
+        side_effects: "sets 1FDC5 bit 0x80 for ON/EA activity and updates scan state words",
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
@@ -1604,6 +2043,20 @@ pub const IQ7000_STATUS_CONTRACTS: &[Iq7000StatusContract] = &[
         producers: "F8269 readiness/template helper",
         status: Iq7000ContractStatus::StructurallyMapped,
     },
+    Iq7000StatusContract {
+        area: "RAM disk",
+        code: 0x05,
+        meaning: "public operation blocked by workspace header lock/busy bit",
+        producers: "F8416 workspace status check when Y+0x0C bit0 is set",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000StatusContract {
+        area: "PACOM/PANET",
+        code: 0x0B,
+        meaning: "guarded receive-frame first byte did not match caller expectation",
+        producers: "FBD4B/FBD54 guarded receive path",
+        status: Iq7000ContractStatus::Confirmed,
+    },
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1626,8 +2079,8 @@ pub const IQ7000_REMAINING_GAPS: &[Iq7000DeviceGap] = &[
     },
     Iq7000DeviceGap {
         area: "COM/PANET/PACOM/PRN",
-        rust_contract: "IOCS records, COM IL table, line/status/ring/flow helpers",
-        remaining: "cycle-accurate external UART/printer/PANET/PACOM peripherals",
+        rust_contract: "IOCS records, COM/PRN/PACOM/PANET IL tables, line/status/ring/flow/link helpers",
+        remaining: "cycle-accurate external UART/printer/PANET/PACOM peripherals and user-facing call-site traces",
     },
     Iq7000DeviceGap {
         area: "CAS",
@@ -1646,8 +2099,8 @@ pub const IQ7000_REMAINING_GAPS: &[Iq7000DeviceGap] = &[
     },
     Iq7000DeviceGap {
         area: "SYSTM/dev0D/dev0E",
-        rust_contract: "dev0D/dev0E command tables and list/alarm/SCR roles",
-        remaining: "UI caller naming and stateful list/alarm side effects",
+        rust_contract: "dev0D/dev0E command tables and named setup/user-dictionary/list/alarm/SCR caller roles",
+        remaining: "stateful list/alarm side effects and finer per-screen call-site labels",
     },
 ];
 
@@ -2207,6 +2660,31 @@ mod tests {
         assert!(IQ7000_STATUS_CONTRACTS
             .iter()
             .any(|entry| { entry.area == "PACOM/PANET" && entry.code == 0xFA }));
+    }
+
+    #[test]
+    fn focused_disassembly_contracts_close_priority_iq7000_gaps() {
+        assert!(IQ7000_RTC_PAYLOAD_FIELDS
+            .iter()
+            .any(|field| field.name == "century_status_bcd"));
+        assert!(IQ7000_RTC_SEMANTIC_CONTRACTS.iter().any(|entry| {
+            entry.address == 0x00E02E1 && entry.name == "daily_alarm_payload_build"
+        }));
+        assert!(IQ7000_STORAGE_SIDE_EFFECT_CONTRACTS.iter().any(|entry| {
+            entry.address == 0x00F8AA2 && entry.name == "ram_disk_copy_record_body_to_offset"
+        }));
+        assert!(IQ7000_PRN_COMMAND_TABLE
+            .iter()
+            .any(|entry| { entry.index_or_command == 0x41 && entry.target == 0x00FB6FD }));
+        assert!(IQ7000_PACOM_PANET_COMMAND_TABLE
+            .iter()
+            .any(|entry| { entry.index_or_command == 0x04 && entry.target == 0x00FBD54 }));
+        assert!(IQ7000_KEY_TRANSLATION_SEMANTICS.iter().any(|entry| {
+            entry.address == 0x00F55CF && entry.name == "translated_key_queue_push"
+        }));
+        assert!(IQ7000_STATUS_CONTRACTS
+            .iter()
+            .any(|entry| entry.area == "RAM disk" && entry.code == 0x05));
     }
 
     #[test]
