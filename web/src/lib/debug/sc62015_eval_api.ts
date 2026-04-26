@@ -149,6 +149,7 @@ export interface EmulatorAdapter {
 	read8(addr: number): number;
 	write8(addr: number, value: number): void;
 	lcdText?(): string[] | null;
+	lcdPixels?(): Uint8Array | number[] | null;
 	pressMatrixCode?(code: number): void;
 	releaseMatrixCode?(code: number): void;
 	injectMatrixEvent?(code: number, release: boolean): void;
@@ -183,6 +184,7 @@ export interface EvalApi {
 	lcd: {
 		text(): Promise<string[]>;
 		textString(): Promise<string>;
+		pixels(): Promise<number[]>;
 	};
 	keyboard: {
 		press(code: number): Promise<void>;
@@ -542,6 +544,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		lcd: {
 			text: async () => adapter.lcdText?.() ?? [],
 			textString: async () => (adapter.lcdText?.() ?? []).join('\n'),
+			pixels: async () => Array.from(adapter.lcdPixels?.() ?? []),
 		},
 		keyboard: {
 			press: async (code: number) => {

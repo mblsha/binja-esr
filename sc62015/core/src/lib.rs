@@ -6,6 +6,7 @@ pub mod async_devices;
 pub mod async_driver;
 pub mod async_runtime;
 pub mod device;
+pub mod generated_key_input;
 pub mod iq7000;
 pub mod keyboard;
 pub mod lcd;
