@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Literal
 
 from ..memory import PCE500Memory
 from ..scheduler import TimerScheduler
@@ -26,12 +26,71 @@ class CassetteSnapshot:
     workspace: Dict[int, int] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class CassetteBlock:
+    """Deterministic cassette block used by tests and future ROM adapters."""
+
+    kind: Literal["header", "data"]
+    payload: bytes
+    checksum: int
+
+    @classmethod
+    def from_payload(
+        cls, kind: Literal["header", "data"], payload: bytes
+    ) -> "CassetteBlock":
+        if kind == "header" and len(payload) != 0x30:
+            raise ValueError("cassette header blocks must be exactly 0x30 bytes")
+        return cls(kind=kind, payload=bytes(payload), checksum=sum(payload) & 0xFF)
+
+    def verify(self) -> bool:
+        return self.checksum == (sum(self.payload) & 0xFF)
+
+
+@dataclass
+class CassetteTapeImage:
+    """Simple ordered cassette image with deterministic read/verify behavior."""
+
+    blocks: list[CassetteBlock] = field(default_factory=list)
+    cursor: int = 0
+
+    def append_header(self, payload: bytes) -> CassetteBlock:
+        block = CassetteBlock.from_payload("header", payload)
+        self.blocks.append(block)
+        return block
+
+    def append_data(self, payload: bytes) -> CassetteBlock:
+        block = CassetteBlock.from_payload("data", payload)
+        self.blocks.append(block)
+        return block
+
+    def rewind(self) -> None:
+        self.cursor = 0
+
+    def read_next(
+        self, expected_kind: Literal["header", "data"] | None = None
+    ) -> CassetteBlock:
+        if self.cursor >= len(self.blocks):
+            raise EOFError("cassette image is at end of tape")
+        block = self.blocks[self.cursor]
+        if expected_kind is not None and block.kind != expected_kind:
+            raise ValueError(f"expected {expected_kind} block, got {block.kind}")
+        if not block.verify():
+            raise ValueError("cassette block checksum mismatch")
+        self.cursor += 1
+        return block
+
+    def verify_next(self, payload: bytes) -> bool:
+        block = self.read_next()
+        return block.payload == bytes(payload)
+
+
 class CassetteAdapter:
     """Helper for manipulating cassette workspace fields."""
 
     def __init__(self, memory: PCE500Memory, scheduler: TimerScheduler) -> None:
         self._memory = memory
         self._scheduler = scheduler
+        self.tape = CassetteTapeImage()
 
     def snapshot(self) -> CassetteSnapshot:
         """Capture tracked workspace bytes."""
