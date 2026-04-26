@@ -1,5 +1,5 @@
 use sc62015_core::memory::{IMEM_EIL_OFFSET, IMEM_RXD_OFFSET, IMEM_TXD_OFFSET, IMEM_USR_OFFSET};
-use sc62015_core::{MemoryImage, SioInputLines, SioStub};
+use sc62015_core::{MemoryImage, SioInputLines, SioStub, SioTimedEvent, SioTimingConfig};
 
 const USR_RX_READY: u8 = 0x20;
 const USR_TX_EMPTY: u8 = 0x10;
@@ -29,6 +29,92 @@ fn receive_queue_sets_status_and_error_bits() {
     let usr_after = memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0);
     assert_eq!(usr_after & USR_RX_READY, 0);
     assert_eq!(usr_after & USR_ERROR_MASK, 0);
+}
+
+#[test]
+fn timing_profile_delays_rx_ready_tx_complete_handshake_and_timeout() {
+    let mut memory = MemoryImage::new();
+    let mut stub = SioStub::new();
+    stub.set_timing_config(SioTimingConfig {
+        rx_ready_delay_cycles: 3,
+        tx_complete_cycles: 2,
+        handshake_delay_cycles: 4,
+        direct_input_timeout_cycles: 5,
+        xoff_threshold: 8,
+        xon_threshold: 2,
+    });
+
+    stub.queue_receive_byte(0x42, &mut memory);
+    assert_eq!(
+        memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0) & USR_RX_READY,
+        0
+    );
+    assert_eq!(stub.tick_cycles(2, &mut memory), vec![]);
+    assert_eq!(
+        stub.tick_cycles(1, &mut memory),
+        vec![SioTimedEvent::RxReady(0x42)]
+    );
+    assert_ne!(
+        memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0) & USR_RX_READY,
+        0
+    );
+    assert_eq!(stub.consume_received(&mut memory).unwrap().value, 0x42);
+
+    stub.queue_transmit(0x55, &mut memory);
+    assert_eq!(stub.tick_cycles(1, &mut memory), vec![]);
+    assert_eq!(
+        stub.tick_cycles(1, &mut memory),
+        vec![SioTimedEvent::TxComplete(0x55)]
+    );
+
+    stub.set_input_lines_delayed(true, false);
+    assert_eq!(stub.tick_cycles(3, &mut memory), vec![]);
+    assert_eq!(
+        stub.tick_cycles(1, &mut memory),
+        vec![SioTimedEvent::HandshakeSettled(SioInputLines {
+            cs: true,
+            cd: false,
+        })]
+    );
+    assert_eq!(
+        stub.input_lines(&memory),
+        SioInputLines {
+            cs: true,
+            cd: false,
+        }
+    );
+
+    stub.set_direct_input_timeout(true);
+    assert_eq!(stub.tick_cycles(4, &mut memory), vec![]);
+    assert_eq!(
+        stub.tick_cycles(1, &mut memory),
+        vec![SioTimedEvent::DirectInputTimeout]
+    );
+}
+
+#[test]
+fn xon_xoff_events_follow_receive_queue_watermarks() {
+    let mut memory = MemoryImage::new();
+    let mut stub = SioStub::new();
+    stub.set_timing_config(SioTimingConfig {
+        rx_ready_delay_cycles: 0,
+        tx_complete_cycles: 1,
+        handshake_delay_cycles: 1,
+        direct_input_timeout_cycles: 1,
+        xoff_threshold: 3,
+        xon_threshold: 1,
+    });
+
+    stub.queue_receive_byte(0x10, &mut memory);
+    stub.queue_receive_byte(0x11, &mut memory);
+    assert_eq!(stub.tick_cycles(1, &mut memory), vec![]);
+    stub.queue_receive_byte(0x12, &mut memory);
+    assert_eq!(stub.tick_cycles(1, &mut memory), vec![SioTimedEvent::Xoff]);
+
+    assert_eq!(stub.consume_received(&mut memory).unwrap().value, 0x10);
+    assert_eq!(stub.tick_cycles(1, &mut memory), vec![]);
+    assert_eq!(stub.consume_received(&mut memory).unwrap().value, 0x11);
+    assert_eq!(stub.tick_cycles(1, &mut memory), vec![SioTimedEvent::Xon]);
 }
 
 #[test]

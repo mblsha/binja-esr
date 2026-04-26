@@ -147,6 +147,130 @@ impl CassetteTapeImage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CassettePulseTiming {
+    pub p01: u16,
+    pub p00: u16,
+    pub p11: u16,
+    pub p10: u16,
+    pub threshold: u16,
+}
+
+impl Default for CassettePulseTiming {
+    fn default() -> Self {
+        Self {
+            p01: 12,
+            p00: 12,
+            p11: 24,
+            p10: 24,
+            threshold: 18,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CassettePulse {
+    pub high: bool,
+    pub cycles: u16,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum CassettePulseError {
+    #[error("cassette pulse stream has odd phase count")]
+    OddPhaseCount,
+    #[error("cassette pulse stream is not byte aligned")]
+    NotByteAligned,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CassettePulseStream {
+    pub timing: CassettePulseTiming,
+    pub pulses: Vec<CassettePulse>,
+}
+
+impl CassettePulseStream {
+    pub fn encode_bytes(timing: CassettePulseTiming, bytes: &[u8]) -> Self {
+        let mut pulses = Vec::with_capacity(bytes.len() * 16);
+        for byte in bytes {
+            for bit in 0..8 {
+                let one = (byte >> (7 - bit)) & 1 != 0;
+                if one {
+                    pulses.push(CassettePulse {
+                        high: true,
+                        cycles: timing.p11,
+                    });
+                    pulses.push(CassettePulse {
+                        high: false,
+                        cycles: timing.p10,
+                    });
+                } else {
+                    pulses.push(CassettePulse {
+                        high: true,
+                        cycles: timing.p01,
+                    });
+                    pulses.push(CassettePulse {
+                        high: false,
+                        cycles: timing.p00,
+                    });
+                }
+            }
+        }
+        Self { timing, pulses }
+    }
+
+    pub fn decode_bytes(&self) -> Result<Vec<u8>, CassettePulseError> {
+        if self.pulses.len() % 2 != 0 {
+            return Err(CassettePulseError::OddPhaseCount);
+        }
+        let bit_count = self.pulses.len() / 2;
+        if bit_count % 8 != 0 {
+            return Err(CassettePulseError::NotByteAligned);
+        }
+
+        let mut bytes = Vec::with_capacity(bit_count / 8);
+        let mut current = 0u8;
+        for (idx, pair) in self.pulses.chunks_exact(2).enumerate() {
+            let average = (u32::from(pair[0].cycles) + u32::from(pair[1].cycles)) / 2;
+            let one = average >= u32::from(self.timing.threshold);
+            current = (current << 1) | u8::from(one);
+            if idx % 8 == 7 {
+                bytes.push(current);
+                current = 0;
+            }
+        }
+        Ok(bytes)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CassetteRetryPolicy {
+    pub max_retries: u8,
+    pub motor_settle_cycles: u32,
+    pub retry_spacing_cycles: u32,
+}
+
+impl Default for CassetteRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            motor_settle_cycles: 2_000,
+            retry_spacing_cycles: 1_000,
+        }
+    }
+}
+
+impl CassetteRetryPolicy {
+    pub fn attempt_deadlines(&self) -> Vec<u32> {
+        let mut deadlines = Vec::with_capacity(usize::from(self.max_retries) + 1);
+        let mut cycle = self.motor_settle_cycles;
+        for _ in 0..=self.max_retries {
+            deadlines.push(cycle);
+            cycle = cycle.saturating_add(self.retry_spacing_cycles);
+        }
+        deadlines
+    }
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum StorageError {
     #[error("block name must not be empty")]
@@ -161,6 +285,12 @@ pub enum StorageError {
     BlockNotFound(String),
     #[error("insufficient card space for: {0}")]
     InsufficientSpace(String),
+    #[error("media image is too small for the memory card header")]
+    InvalidMediaHeader,
+    #[error("media block chain is truncated")]
+    TruncatedMediaBlock,
+    #[error("media block header marker is invalid")]
+    InvalidMediaBlockMarker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +419,80 @@ impl MemoryCardImage {
 
     pub fn condense(&mut self) {
         self.blocks.retain(|block| block.size() > 0);
+    }
+
+    pub fn to_media_bytes(&self) -> Vec<u8> {
+        const SLOT_HEADER_LEN: usize = 0x18;
+        const BLOCK_HEADER_LEN: usize = 0x18;
+        let mut image = vec![0u8; self.capacity.max(SLOT_HEADER_LEN + 1)];
+        image[0x12] = SLOT_HEADER_LEN as u8;
+        let mut cursor = SLOT_HEADER_LEN;
+        for block in &self.blocks {
+            let advance = BLOCK_HEADER_LEN + block.data.len();
+            if cursor + advance + 1 > image.len() {
+                image.resize(cursor + advance + 1, 0);
+            }
+            image[cursor] = 0xFB;
+            let mut name = [b' '; 11];
+            for (idx, byte) in block.name.as_bytes().iter().take(11).enumerate() {
+                name[idx] = *byte;
+            }
+            image[cursor + 1..cursor + 12].copy_from_slice(&name);
+            write_u24_slice(&mut image[cursor + 0x11..cursor + 0x14], advance as u32);
+            image[cursor + BLOCK_HEADER_LEN..cursor + BLOCK_HEADER_LEN + block.data.len()]
+                .copy_from_slice(&block.data);
+            cursor += advance;
+        }
+        if cursor >= image.len() {
+            image.resize(cursor + 1, 0);
+        }
+        image[cursor] = 0xFF;
+        image
+    }
+
+    pub fn from_media_bytes(bytes: &[u8]) -> Result<Self, StorageError> {
+        const SLOT_HEADER_LEN: usize = 0x18;
+        const BLOCK_HEADER_LEN: usize = 0x18;
+        if bytes.len() < SLOT_HEADER_LEN {
+            return Err(StorageError::InvalidMediaHeader);
+        }
+        if read_u24_slice(&bytes[0x12..0x15]) != SLOT_HEADER_LEN as u32 {
+            return Err(StorageError::InvalidMediaHeader);
+        }
+
+        let mut cursor = SLOT_HEADER_LEN;
+        let mut blocks = Vec::new();
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                0xFF => {
+                    return Ok(Self {
+                        capacity: bytes.len(),
+                        blocks,
+                    });
+                }
+                0xFB => {}
+                _ => return Err(StorageError::InvalidMediaBlockMarker),
+            }
+            if cursor + BLOCK_HEADER_LEN > bytes.len() {
+                return Err(StorageError::TruncatedMediaBlock);
+            }
+            let name = std::str::from_utf8(&bytes[cursor + 1..cursor + 12])
+                .map_err(|_| StorageError::InvalidMediaBlockMarker)?
+                .trim()
+                .to_string();
+            let advance = read_u24_slice(&bytes[cursor + 0x11..cursor + 0x14]) as usize;
+            if advance < BLOCK_HEADER_LEN || cursor + advance > bytes.len() {
+                return Err(StorageError::TruncatedMediaBlock);
+            }
+            let data = bytes[cursor + BLOCK_HEADER_LEN..cursor + advance].to_vec();
+            blocks.push(MemoryCardBlock {
+                name: normalise_name(&name)?,
+                data,
+                protected: false,
+            });
+            cursor += advance;
+        }
+        Err(StorageError::TruncatedMediaBlock)
     }
 
     fn find_by_normalised_name(&self, name: &str) -> Option<&MemoryCardBlock> {
@@ -730,7 +934,12 @@ fn storage_error_code(error: StorageError) -> u8 {
         StorageError::BlockNotFound(_) => 0x02,
         StorageError::DuplicateBlock(_) => 0x05,
         StorageError::InsufficientSpace(_) => 0x3C,
-        StorageError::EmptyName | StorageError::NameTooLong | StorageError::InvalidSize => 0x0A,
+        StorageError::EmptyName
+        | StorageError::NameTooLong
+        | StorageError::InvalidSize
+        | StorageError::InvalidMediaHeader
+        | StorageError::TruncatedMediaBlock
+        | StorageError::InvalidMediaBlockMarker => 0x0A,
     }
 }
 
@@ -760,6 +969,16 @@ fn write_bytes(memory: &mut MemoryImage, addr: u32, bytes: &[u8]) {
     for (offset, byte) in bytes.iter().enumerate() {
         let _ = memory.store(addr.wrapping_add(offset as u32), 8, u32::from(*byte));
     }
+}
+
+fn read_u24_slice(bytes: &[u8]) -> u32 {
+    u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | (u32::from(bytes[2]) << 16)
+}
+
+fn write_u24_slice(bytes: &mut [u8], value: u32) {
+    bytes[0] = (value & 0xff) as u8;
+    bytes[1] = ((value >> 8) & 0xff) as u8;
+    bytes[2] = ((value >> 16) & 0xff) as u8;
 }
 
 fn force_return_auto(state: &mut LlamaState, memory: &mut MemoryImage) {

@@ -53,11 +53,15 @@ pub use memory::{
     INTERNAL_SPACE,
 };
 pub use pce500_peripherals::{
-    CassetteBlock, CassetteBlockKind, CassetteError, CassetteTapeImage, MemoryCardBlock,
-    MemoryCardImage, Pce500PeripheralBridge, RamDiskImage, StorageError,
+    CassetteBlock, CassetteBlockKind, CassetteError, CassettePulse, CassettePulseError,
+    CassettePulseStream, CassettePulseTiming, CassetteRetryPolicy, CassetteTapeImage,
+    MemoryCardBlock, MemoryCardImage, Pce500PeripheralBridge, RamDiskImage, StorageError,
 };
 pub use perfetto::PerfettoTracer;
-pub use sio::{SioInputLines, SioQueuedByte, SioSnapshot, SioStub};
+pub use sio::{
+    SioInputLines, SioQueuedByte, SioSnapshot, SioStub, SioTimedEvent, SioTimingConfig,
+    SioTimingSnapshot,
+};
 #[cfg(feature = "perfetto")]
 pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>;
 #[cfg(feature = "perfetto")]
