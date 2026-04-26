@@ -32,8 +32,8 @@ use sc62015_core::{
     perfetto::set_call_ui_function_names,
     sleep_cycles, snapshot,
     timer::TimerContext,
-    AsyncDriver, DeviceModel, DeviceTextDecoder, DriverEvent, PerfettoTracer, SnapshotMetadata,
-    ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
+    AsyncDriver, CoreRuntime, DeviceModel, DeviceTextDecoder, DriverEvent, PerfettoTracer,
+    SnapshotMetadata, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -299,6 +299,14 @@ struct Args {
     /// Number of IQ7P client connections to serve before exiting.
     #[arg(long, default_value_t = 1)]
     iq7p_clients: usize,
+
+    /// Drive the IQ-7000 ROM UI into PC-Link mode before serving IQ7P.
+    #[arg(long, default_value_t = false)]
+    iq7p_enter_pclink: bool,
+
+    /// Serve IQ7P immediately after the scripted key sequence completes.
+    #[arg(long, default_value_t = false)]
+    iq7p_serve_after_key_seq: bool,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -751,6 +759,7 @@ struct StandaloneBus {
 enum AutoKeyKind {
     Matrix(u8),
     Chord { modifier: u8, code: u8 },
+    Event(u8),
     InputEvent(u8),
     OnKey,
 }
@@ -758,6 +767,8 @@ enum AutoKeyKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KeySeqKind {
     Press,
+    KeyDown,
+    KeyUp,
     WaitOp,
     WaitText,
     WaitPower,
@@ -866,6 +877,10 @@ impl KeySeqRunner {
 
     fn set_log_enabled(&mut self, enabled: bool) {
         self.log_enabled = enabled;
+    }
+
+    fn is_complete(&self) -> bool {
+        self.action_index >= self.actions.len() && self.active_key.is_none()
     }
 
     fn push_log(log_enabled: bool, events: &mut Vec<KeySeqEvent>, message: String) {
@@ -1014,6 +1029,40 @@ impl KeySeqRunner {
                             "key-seq: press {} at {} hold {}",
                             action.label, op_index, action.hold
                         ),
+                    );
+                    self.action_index += 1;
+                }
+                KeySeqKind::KeyDown => {
+                    let key = action.key;
+                    events.push(KeySeqEvent {
+                        kind: KeySeqEventKind::Press,
+                        key,
+                        label: action.label.clone(),
+                        op_index,
+                        hold: 0,
+                        message: String::new(),
+                    });
+                    Self::push_log(
+                        log_enabled,
+                        &mut events,
+                        format!("key-seq: down {} at {}", action.label, op_index),
+                    );
+                    self.action_index += 1;
+                }
+                KeySeqKind::KeyUp => {
+                    let key = action.key;
+                    events.push(KeySeqEvent {
+                        kind: KeySeqEventKind::Release,
+                        key,
+                        label: action.label.clone(),
+                        op_index,
+                        hold: 0,
+                        message: String::new(),
+                    });
+                    Self::push_log(
+                        log_enabled,
+                        &mut events,
+                        format!("key-seq: up {} at {}", action.label, op_index),
                     );
                     self.action_index += 1;
                 }
@@ -1479,6 +1528,22 @@ impl StandaloneBus {
         let events = self
             .keyboard
             .inject_input_event(code, &mut self.memory, kb_irq_enabled);
+        if events > 0 {
+            self.pending_kil = true;
+            self.raise_key_irq();
+            if kb_irq_enabled {
+                self.timer.key_irq_latched = true;
+                self.irq_pending = true;
+                self.last_irq_src = Some("KEY".to_string());
+            }
+        }
+    }
+
+    fn inject_matrix_event(&mut self, code: u8, release: bool) {
+        let kb_irq_enabled = self.timer.kb_irq_enabled;
+        let events =
+            self.keyboard
+                .inject_matrix_event(code, release, &mut self.memory, kb_irq_enabled);
         if events > 0 {
             self.pending_kil = true;
             self.raise_key_irq();
@@ -2221,6 +2286,20 @@ impl LlamaBus for StandaloneBus {
         if bits == 0 {
             return 0;
         }
+        if bits > 8 && MemoryImage::is_internal(addr) {
+            if let Some(start) = MemoryImage::internal_offset(addr) {
+                let bytes = u32::from(bits.div_ceil(8).max(1));
+                let end = start.saturating_add(bytes.saturating_sub(1));
+                if start <= IMEM_KIL_OFFSET && end >= IMEM_KOL_OFFSET {
+                    let mut out = 0u32;
+                    for byte_offset in 0..bytes {
+                        let byte = self.load(addr.wrapping_add(byte_offset), 8) & 0xFF;
+                        out |= byte << (byte_offset * 8);
+                    }
+                    return out & mask_bits(bits);
+                }
+            }
+        }
         if let Some(value) = self.iq7000_clock_workspace_read(addr, bits) {
             self.trace_bus_access("read", addr, bits, value);
             return value;
@@ -2388,6 +2467,19 @@ impl LlamaBus for StandaloneBus {
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
         let addr = addr & ADDRESS_MASK;
+        if bits > 8 && MemoryImage::is_internal(addr) {
+            if let Some(start) = MemoryImage::internal_offset(addr) {
+                let bytes = u32::from(bits.div_ceil(8).max(1));
+                let end = start.saturating_add(bytes.saturating_sub(1));
+                if start <= IMEM_KIL_OFFSET && end >= IMEM_KOL_OFFSET {
+                    for byte_offset in 0..bytes {
+                        let byte = (value >> (byte_offset * 8)) & 0xFF;
+                        self.store(addr.wrapping_add(byte_offset), 8, byte);
+                    }
+                    return;
+                }
+            }
+        }
         let kbd_offset = MemoryImage::internal_offset(addr);
         let mut imr_isr_prev: Option<(u32, u8)> = None;
         if MemoryImage::is_internal(addr) {
@@ -2607,6 +2699,11 @@ fn configure_bus_for_model(bus: &mut StandaloneBus, model: DeviceModel) {
         bus.keyboard.set_press_threshold(1);
         // Baseline PC-E500 scans the key matrix each instruction (not just on MTI).
         bus.scan_on_timer = false;
+    } else if matches!(model, DeviceModel::Iq7000) {
+        bus.keyboard.set_columns_active_high(true);
+        bus.keyboard.disable_fifo_mirroring();
+        bus.keyboard.set_keyi_on_any_press(true);
+        bus.keyboard.set_raw_kil(true);
     }
     bus.memory.set_internal_ram_mirror(model.is_pce500_family());
 }
@@ -2665,11 +2762,12 @@ fn iq7000_named_key(raw: &str) -> Option<AutoKeyKind> {
         "schedule" => 0x19,
         "card" | "card-samples" | "samples" => 0x1A,
         "world" => 0x1B,
+        "option" | "opts" | "settings" => 0x1D,
         "line" | "newline" | "memo-line" | "memo-return" | "hooked-return" => 0x3D,
         "memo-enter" | "store" | "enter" | "return" | "ret" => 0x45,
         _ => return None,
     };
-    Some(AutoKeyKind::InputEvent(code))
+    Some(AutoKeyKind::Event(code))
 }
 
 fn generated_key_seq_key(model: DeviceModel, ch: char) -> Option<AutoKeyKind> {
@@ -2682,7 +2780,7 @@ fn generated_key_seq_key(model: DeviceModel, ch: char) -> Option<AutoKeyKind> {
             }),
             None => Some(AutoKeyKind::Matrix(input.code)),
         },
-        GeneratedKeyInputKind::InputEvent => Some(AutoKeyKind::InputEvent(input.code)),
+        GeneratedKeyInputKind::InputEvent => Some(AutoKeyKind::Event(input.code)),
     }
 }
 
@@ -2697,7 +2795,16 @@ fn resolve_key_seq_key(model: DeviceModel, raw: &str) -> Result<AutoKeyKind, Str
             return Ok(key);
         }
     }
-    for prefix in ["digitizer", "input", "event"] {
+    for prefix in ["event"] {
+        if let Some(value) = lowered.strip_prefix(prefix).and_then(|rest| {
+            rest.strip_prefix(':')
+                .or_else(|| rest.strip_prefix('='))
+                .map(str::trim)
+        }) {
+            return Ok(AutoKeyKind::Event(parse_u8_value(value)?));
+        }
+    }
+    for prefix in ["digitizer", "input", "raw-input", "raw_event", "raw-event"] {
         if let Some(value) = lowered.strip_prefix(prefix).and_then(|rest| {
             rest.strip_prefix(':')
                 .or_else(|| rest.strip_prefix('='))
@@ -2740,7 +2847,7 @@ fn parse_key_seq(
     model: DeviceModel,
 ) -> Result<Vec<KeySeqAction>, String> {
     let mut actions = Vec::new();
-    for token_raw in raw.split([',', ';']) {
+    'tokens: for token_raw in raw.split([',', ';']) {
         let token = token_raw.trim();
         if token.is_empty() {
             continue;
@@ -2810,6 +2917,34 @@ fn parse_key_seq(
             action.power_on = value == "on";
             actions.push(action);
             continue;
+        }
+        for (prefix, kind) in [
+            ("down", KeySeqKind::KeyDown),
+            ("keydown", KeySeqKind::KeyDown),
+            ("key-down", KeySeqKind::KeyDown),
+            ("press", KeySeqKind::KeyDown),
+            ("up", KeySeqKind::KeyUp),
+            ("keyup", KeySeqKind::KeyUp),
+            ("key-up", KeySeqKind::KeyUp),
+            ("release", KeySeqKind::KeyUp),
+        ] {
+            if let Some(rest) = lower.strip_prefix(prefix).and_then(|tail| {
+                tail.strip_prefix(':')
+                    .or_else(|| tail.strip_prefix('='))
+                    .map(str::trim)
+            }) {
+                if rest.is_empty() {
+                    return Err(format!("{prefix} expects a key token: '{token}'"));
+                }
+                let sep = token.find(':').or_else(|| token.find('=')).unwrap();
+                let raw_rest = token[sep + 1..].trim();
+                let key = resolve_key_seq_key(model, raw_rest)?;
+                let mut action = KeySeqAction::new(kind);
+                action.key = Some(key);
+                action.label = raw_rest.to_string();
+                actions.push(action);
+                continue 'tokens;
+            }
         }
         if lower.starts_with("text:")
             || lower.starts_with("text=")
@@ -3382,14 +3517,14 @@ fn iq7p_encode_hex(data: &[u8]) -> String {
     out
 }
 
-fn iq7p_handle_request(bus: &mut StandaloneBus, request: &Iq7pMessage) -> Value {
+fn iq7p_handle_request(memory: &mut MemoryImage, request: &Iq7pMessage) -> Value {
     match request.command {
         IQ7P_CMD_HELLO => json!({
             "ok": true,
             "peer": "rust-cli-iq7p",
             "protocol": "IQ7P",
             "version": IQ7P_VERSION,
-            "memory_size": bus.memory.external_len(),
+            "memory_size": memory.external_len(),
         }),
         IQ7P_CMD_READ_MEMORY => {
             let address = match iq7p_get_u64(&request.body, "address") {
@@ -3406,7 +3541,7 @@ fn iq7p_handle_request(bus: &mut StandaloneBus, request: &Iq7pMessage) -> Value 
             let mut data = Vec::with_capacity(length);
             for offset in 0..length {
                 let addr = address.wrapping_add(offset as u32) & ADDRESS_MASK;
-                data.push(bus.memory.load(addr, 8).unwrap_or(0) as u8);
+                data.push(memory.load(addr, 8).unwrap_or(0) as u8);
             }
             json!({
                 "ok": true,
@@ -3430,7 +3565,7 @@ fn iq7p_handle_request(bus: &mut StandaloneBus, request: &Iq7pMessage) -> Value 
             };
             for (offset, byte) in data.iter().enumerate() {
                 let addr = address.wrapping_add(offset as u32) & ADDRESS_MASK;
-                bus.memory.write_external_byte(addr, *byte);
+                memory.write_external_byte(addr, *byte);
             }
             json!({
                 "ok": true,
@@ -3447,7 +3582,7 @@ fn iq7p_handle_request(bus: &mut StandaloneBus, request: &Iq7pMessage) -> Value 
 
 fn serve_iq7p_connection(
     stream: &mut TcpStream,
-    bus: &mut StandaloneBus,
+    memory: &mut MemoryImage,
 ) -> Result<(), Box<dyn Error>> {
     loop {
         let request = match iq7p_read_message(stream) {
@@ -3466,7 +3601,7 @@ fn serve_iq7p_connection(
                 return Err(err);
             }
         };
-        let body = iq7p_handle_request(bus, &request);
+        let body = iq7p_handle_request(memory, &request);
         iq7p_write_response(stream, &request, body)?;
     }
     Ok(())
@@ -3475,7 +3610,7 @@ fn serve_iq7p_connection(
 fn serve_iq7p_clients(
     bind: &str,
     client_count: usize,
-    bus: &mut StandaloneBus,
+    memory: &mut MemoryImage,
 ) -> Result<(), Box<dyn Error>> {
     if client_count == 0 {
         return Err("--iq7p-clients must be greater than zero".into());
@@ -3491,7 +3626,7 @@ fn serve_iq7p_clients(
             client_count,
             peer_addr
         );
-        serve_iq7p_connection(&mut stream, bus)?;
+        serve_iq7p_connection(&mut stream, memory)?;
     }
     println!("[iq7p] served {client_count} client(s)");
     Ok(())
@@ -3534,8 +3669,139 @@ async fn sleep_for_cycles(cycles: u64) {
     sleep_cycles(cycles).await;
 }
 
+fn runtime_inject_matrix_event(runtime: &mut CoreRuntime, code: u8, release: bool) {
+    let Some(keyboard) = runtime.keyboard.as_mut() else {
+        return;
+    };
+    keyboard.inject_matrix_event(
+        code,
+        release,
+        &mut runtime.memory,
+        runtime.timer.kb_irq_enabled,
+    );
+}
+
+fn runtime_tap_event(
+    runtime: &mut CoreRuntime,
+    code: u8,
+    hold_instructions: usize,
+) -> Result<(), Box<dyn Error>> {
+    runtime_inject_matrix_event(runtime, code, false);
+    runtime.step(hold_instructions)?;
+    runtime_inject_matrix_event(runtime, code, true);
+    Ok(())
+}
+
+fn runtime_lcd_lines(
+    runtime: &CoreRuntime,
+    text_decoder: Option<&DeviceTextDecoder>,
+) -> Vec<String> {
+    let Some(decoder) = text_decoder else {
+        return Vec::new();
+    };
+    let Some(lcd) = runtime.lcd.as_deref() else {
+        return Vec::new();
+    };
+    decoder.decode_display_text(lcd)
+}
+
+fn run_iq7000_pclink_ui_path(
+    args: &Args,
+    rom_bytes: &[u8],
+    text_decoder: Option<&DeviceTextDecoder>,
+    iq7000_clock_seed: Option<&Iq7000RtcSeed>,
+) -> Result<(), Box<dyn Error>> {
+    if args.snapshot_in.is_some() {
+        return Err("--iq7p-enter-pclink cannot be combined with --snapshot-in".into());
+    }
+
+    let mut runtime = CoreRuntime::new();
+    *runtime.timer = TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
+    args.model.configure_runtime(&mut runtime, rom_bytes)?;
+    if let Some(seed) = iq7000_clock_seed {
+        runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
+    }
+    runtime.power_on_reset();
+    if let Some(seed) = iq7000_clock_seed {
+        runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
+    }
+
+    runtime.step(500_000)?;
+    runtime_tap_event(&mut runtime, 0x08, 1_000)?; // MEMO
+    runtime.step(160_000)?;
+    runtime_inject_matrix_event(&mut runtime, 0x02, false); // physical SHIFT down
+    runtime.step(80_000)?;
+    runtime_inject_matrix_event(&mut runtime, 0x1D, false); // shifted C / OPTION
+    runtime.step(500_000)?;
+    runtime_inject_matrix_event(&mut runtime, 0x1D, true);
+    runtime_inject_matrix_event(&mut runtime, 0x02, true); // SHIFT up before selecting 4
+    runtime.step(80_000)?;
+    runtime_tap_event(&mut runtime, 0x22, 1_000)?; // 4 -> PC LINK
+    runtime.step(800_000)?;
+
+    let lcd_lines = runtime_lcd_lines(&runtime, text_decoder);
+    let lcd_text = lcd_lines.join("\n");
+    if !lcd_text.contains("LINK READY") {
+        return Err(
+            format!("IQ-7000 PC-Link UI did not reach LINK READY; LCD={lcd_text:?}").into(),
+        );
+    }
+    println!("[iq7p] IQ-7000 ROM UI reached PC-Link mode");
+    println!("LCD (decoded text):");
+    for line in &lcd_lines {
+        println!("  {line}");
+    }
+
+    if let Some(path) = args.capture_png.as_ref() {
+        let lcd = runtime.lcd.as_deref().ok_or("missing LCD runtime")?;
+        write_lcd_png(
+            path,
+            &lcd_pixels(lcd),
+            LCD_CAPTURE_SCALE,
+            lcd_annunciators(args.model, &runtime.memory).as_ref(),
+        )?;
+        println!("Wrote LCD PNG capture: {}", path.display());
+    }
+    if let Some(path) = args.capture_json.as_ref() {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let capture = json!({
+            "executed": runtime.instruction_count(),
+            "pc": format!("0x{:05X}", runtime.state.pc() & ADDRESS_MASK),
+            "lcd_lines": lcd_lines,
+            "lcd_annunciators": lcd_annunciators(args.model, &runtime.memory),
+        });
+        fs::write(path, serde_json::to_string_pretty(&capture)?)?;
+        println!("Wrote LCD JSON capture: {}", path.display());
+    }
+
+    if let Some(bind) = args.iq7p_listen.as_ref() {
+        serve_iq7p_clients(bind, args.iq7p_clients, &mut runtime.memory)?;
+    }
+    if let Some(path) = args.snapshot_out.as_ref() {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        runtime.save_snapshot(path)?;
+        println!("Saved snapshot to {}", path.display());
+    }
+
+    Ok(())
+}
+
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
+
+    if args.iq7p_enter_pclink {
+        if args.model != DeviceModel::Iq7000 {
+            return Err("--iq7p-enter-pclink is only supported for --model iq-7000".into());
+        }
+    }
 
     if args.turnon2_resume && args.model != DeviceModel::PcE500Jp {
         return Err("--turnon2-resume is only supported for --model pc-e500-jp".into());
@@ -3576,6 +3842,14 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = load_rom(&rom_path)?;
     let text_decoder = args.model.text_decoder(&rom_bytes);
+    if args.iq7p_enter_pclink {
+        return run_iq7000_pclink_ui_path(
+            &args,
+            &rom_bytes,
+            text_decoder.as_ref(),
+            iq7000_clock_seed.as_ref(),
+        );
+    }
     let turnon_profile = if args.turnon2_resume || args.turnon_profile.is_some() {
         load_turnon_resume_profile(args.model, args.turnon_profile.clone())?
     } else {
@@ -3665,19 +3939,28 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let use_full_system_image = matches!(args.model, DeviceModel::PcE500Jp);
 
     let mut memory = MemoryImage::new();
-    if use_full_system_image {
-        load_pce500_system_image_into_memory(&mut memory, &rom_bytes);
-    } else {
-        // Default standalone path mirrors the legacy Python top-window load.
-        load_pce500_rom_window_into_memory(&mut memory, &rom_bytes);
+    match args.model {
+        DeviceModel::Iq7000 => iq7000::load_iq7000_rom_image_into_memory(&mut memory, &rom_bytes),
+        DeviceModel::PcE500Jp if use_full_system_image => {
+            load_pce500_system_image_into_memory(&mut memory, &rom_bytes);
+        }
+        _ => {
+            // Default standalone path mirrors the legacy Python top-window load.
+            load_pce500_rom_window_into_memory(&mut memory, &rom_bytes);
+        }
     }
-    memory.set_readonly_ranges(vec![
-        (NO_RAM_WINDOW_START as u32, NO_RAM_WINDOW_END as u32),
-        (
-            ROM_WINDOW_START as u32,
-            (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
-        ),
-    ]);
+    let readonly_ranges = if matches!(args.model, DeviceModel::Iq7000) {
+        vec![(iq7000::ROM_READONLY_START, iq7000::ROM_READONLY_END)]
+    } else {
+        vec![
+            (NO_RAM_WINDOW_START as u32, NO_RAM_WINDOW_END as u32),
+            (
+                ROM_WINDOW_START as u32,
+                (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
+            ),
+        ]
+    };
+    memory.set_readonly_ranges(readonly_ranges);
     memory.set_keyboard_bridge(false);
 
     memory
@@ -3761,7 +4044,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             set_perf_instr_counter(base_instruction_count);
         }
     } else {
-        if !use_full_system_image {
+        if args.model.is_pce500_family() && !use_full_system_image {
             bus.strobe_all_columns();
         }
         power_on_reset(&mut bus, &mut state);
@@ -3798,6 +4081,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let snapshot_out = args.snapshot_out.clone();
     let iq7p_listen = args.iq7p_listen.clone();
     let iq7p_clients = args.iq7p_clients;
+    let iq7p_serve_after_key_seq = args.iq7p_serve_after_key_seq;
     let base_instruction_count = base_instruction_count;
 
     driver.spawn(async move {
@@ -3847,6 +4131,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                                         bus.press_key(modifier);
                                         bus.press_key(code);
                                     }
+                                    AutoKeyKind::Event(code) => bus.inject_matrix_event(code, false),
                                     AutoKeyKind::InputEvent(code) => bus.inject_input_event(code),
                                     AutoKeyKind::OnKey => bus.press_on_key(),
                                 }
@@ -3860,6 +4145,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                                         bus.release_key(code);
                                         bus.release_key(modifier);
                                     }
+                                    AutoKeyKind::Event(code) => bus.inject_matrix_event(code, true),
                                     AutoKeyKind::InputEvent(_) => {}
                                     AutoKeyKind::OnKey => bus.clear_on_key(),
                                 }
@@ -4142,11 +4428,15 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     bus.cycle_count
                 );
             }
+            if iq7p_serve_after_key_seq && use_key_seq && key_seq_runner.is_complete() {
+                println!("key-seq: completed at {executed}");
+                break;
+            }
         }
 
         if let Some(bind) = iq7p_listen.as_ref() {
             bus.reapply_iq7000_clock_seed();
-            if let Err(err) = serve_iq7p_clients(bind, iq7p_clients, &mut bus) {
+            if let Err(err) = serve_iq7p_clients(bind, iq7p_clients, &mut bus.memory) {
                 eprintln!("IQ7P server failed: {err}");
             }
         }
@@ -4802,7 +5092,7 @@ mod tests {
     fn key_seq_uses_generated_iq_input_map() {
         let actions = parse_key_seq("0", 10, DeviceModel::Iq7000).expect("parse key seq");
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x20)));
+        assert_eq!(actions[0].key, Some(AutoKeyKind::Event(0x20)));
     }
 
     #[test]
@@ -4813,15 +5103,15 @@ mod tests {
             DeviceModel::Iq7000,
         )
         .expect("parse key seq");
-        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x08)));
-        assert_eq!(actions[5].key, Some(AutoKeyKind::InputEvent(0x3D)));
+        assert_eq!(actions[0].key, Some(AutoKeyKind::Event(0x08)));
+        assert_eq!(actions[5].key, Some(AutoKeyKind::Event(0x3D)));
         assert_eq!(
             actions[actions.len() - 2].key,
-            Some(AutoKeyKind::InputEvent(0x45))
+            Some(AutoKeyKind::Event(0x45))
         );
         assert_eq!(
             actions[actions.len() - 1].key,
-            Some(AutoKeyKind::InputEvent(0x0B))
+            Some(AutoKeyKind::Event(0x0B))
         );
     }
 
@@ -4830,10 +5120,27 @@ mod tests {
         let actions = parse_key_seq("shift,function,caps,caps-off", 10, DeviceModel::Iq7000)
             .expect("parse key seq");
         assert_eq!(actions.len(), 4);
-        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x01)));
-        assert_eq!(actions[1].key, Some(AutoKeyKind::InputEvent(0x04)));
-        assert_eq!(actions[2].key, Some(AutoKeyKind::InputEvent(0x09)));
-        assert_eq!(actions[3].key, Some(AutoKeyKind::InputEvent(0x09)));
+        assert_eq!(actions[0].key, Some(AutoKeyKind::Event(0x01)));
+        assert_eq!(actions[1].key, Some(AutoKeyKind::Event(0x04)));
+        assert_eq!(actions[2].key, Some(AutoKeyKind::Event(0x09)));
+        assert_eq!(actions[3].key, Some(AutoKeyKind::Event(0x09)));
+    }
+
+    #[test]
+    fn key_seq_accepts_event_down_up_for_shifted_iq_menus() {
+        let actions = parse_key_seq(
+            "down:event:0x02,option,up:event:0x02",
+            10,
+            DeviceModel::Iq7000,
+        )
+        .expect("parse key seq");
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].kind, KeySeqKind::KeyDown);
+        assert_eq!(actions[0].key, Some(AutoKeyKind::Event(0x02)));
+        assert_eq!(actions[1].kind, KeySeqKind::Press);
+        assert_eq!(actions[1].key, Some(AutoKeyKind::Event(0x1D)));
+        assert_eq!(actions[2].kind, KeySeqKind::KeyUp);
+        assert_eq!(actions[2].key, Some(AutoKeyKind::Event(0x02)));
     }
 
     #[test]
