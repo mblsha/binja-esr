@@ -37,6 +37,13 @@ const BASIC_KEY_CODE: u8 = 0x04;
 const ENTER_KEY_CODE: u8 = 0x27;
 const DELETE_KEY_CODE: u8 = 0x4C;
 const BACKSPACE_KEY_CODE: u8 = 0x4D;
+const IQ7000_SHIFT_EVENT_CODE: u8 = 0x01;
+const IQ7000_FUNCTION_EVENT_CODE: u8 = 0x04;
+const IQ7000_CAPS_EVENT_CODE: u8 = 0x09;
+const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
+const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
+const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
+const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -262,6 +269,103 @@ fn render_frame(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn iq7000_runtime() -> CoreRuntime {
+        let mut runtime = CoreRuntime::new();
+        runtime
+            .set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        runtime
+    }
+
+    #[test]
+    fn iq7000_status_line_reports_shift_caps_annunciators() {
+        let mut runtime = iq7000_runtime();
+        assert_eq!(
+            format_iq7000_annunciator_status(&runtime),
+            " lcd=SHIFT:off,CAPS:off"
+        );
+        runtime
+            .memory
+            .store(
+                IQ7000_KEY_STATE_ADDR,
+                8,
+                (IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR) as u32,
+            )
+            .expect("store annunciator state");
+        assert_eq!(
+            format_iq7000_annunciator_status(&runtime),
+            " lcd=SHIFT:on,CAPS:on"
+        );
+    }
+
+    #[test]
+    fn iq7000_tui_function_keys_inject_shift_caps_events() {
+        let mut runtime = iq7000_runtime();
+        let mut pending_on_release = None;
+        let mut pending_releases = Vec::new();
+        let mut pending_presses = Vec::new();
+
+        let feedback = handle_key_event(
+            &mut runtime,
+            KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE),
+            false,
+            0,
+            &mut pending_releases,
+            &mut pending_presses,
+            KeyEventOptions {
+                pending_on_release: &mut pending_on_release,
+                force_key_irq: false,
+                model: DeviceModel::Iq7000,
+            },
+        );
+        assert_eq!(feedback.label.as_deref(), Some("SHIFT"));
+
+        let feedback = handle_key_event(
+            &mut runtime,
+            KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE),
+            false,
+            0,
+            &mut pending_releases,
+            &mut pending_presses,
+            KeyEventOptions {
+                pending_on_release: &mut pending_on_release,
+                force_key_irq: false,
+                model: DeviceModel::Iq7000,
+            },
+        );
+        assert_eq!(feedback.label.as_deref(), Some("CAPS"));
+
+        let feedback = handle_key_event(
+            &mut runtime,
+            KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE),
+            false,
+            0,
+            &mut pending_releases,
+            &mut pending_presses,
+            KeyEventOptions {
+                pending_on_release: &mut pending_on_release,
+                force_key_irq: false,
+                model: DeviceModel::Iq7000,
+            },
+        );
+        assert_eq!(feedback.label.as_deref(), Some("FUNCTION"));
+
+        let fifo = runtime.keyboard.as_ref().expect("keyboard").fifo_snapshot();
+        assert_eq!(
+            fifo,
+            vec![
+                IQ7000_SHIFT_EVENT_CODE,
+                IQ7000_CAPS_EVENT_CODE,
+                IQ7000_FUNCTION_EVENT_CODE,
+            ]
+        );
+    }
+}
+
 fn render_status_line(status: &str, row: u16, use_tty: bool) -> Result<(), Box<dyn Error>> {
     if !use_tty {
         return Ok(());
@@ -301,7 +405,37 @@ fn format_status(
         .as_ref()
         .map(|label| format!(" last_key={label}@{last_key_step}"))
         .unwrap_or_default();
-    format!("{pc_display} steps={executed} state={power_state}{key_status} (Ctrl+C to exit)")
+    let iq_status = format_iq7000_annunciator_status(runtime);
+    format!(
+        "{pc_display} steps={executed} state={power_state}{key_status}{iq_status} (Ctrl+C to exit)"
+    )
+}
+
+fn iq7000_annunciator_raw(runtime: &CoreRuntime) -> u8 {
+    let shadow = runtime
+        .memory
+        .load(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8)
+        .unwrap_or(0) as u8;
+    let key_state = runtime.memory.load(IQ7000_KEY_STATE_ADDR, 8).unwrap_or(0) as u8;
+    shadow | key_state
+}
+
+fn format_iq7000_annunciator_status(runtime: &CoreRuntime) -> String {
+    if runtime.device_model() != DeviceModel::Iq7000 {
+        return String::new();
+    }
+    let raw = iq7000_annunciator_raw(runtime);
+    let shift = if raw & IQ7000_SHIFT_ANNUNCIATOR != 0 {
+        "on"
+    } else {
+        "off"
+    };
+    let caps = if raw & IQ7000_CAPS_ANNUNCIATOR != 0 {
+        "on"
+    } else {
+        "off"
+    };
+    format!(" lcd=SHIFT:{shift},CAPS:{caps}")
 }
 
 fn resolve_symbol(addr: u32, symbols: Option<&SymbolMap>) -> Option<(u32, String, u32)> {
@@ -848,6 +982,7 @@ struct PendingPress {
 struct KeyEventOptions<'a> {
     pending_on_release: &'a mut Option<u64>,
     force_key_irq: bool,
+    model: DeviceModel,
 }
 
 enum CharKey {
@@ -1019,6 +1154,39 @@ fn inject_key(
     }
 }
 
+fn inject_input_event(runtime: &mut CoreRuntime, code: u8, force_key_irq: bool) -> bool {
+    if force_key_irq && !runtime.timer.kb_irq_enabled {
+        runtime.timer.kb_irq_enabled = true;
+    }
+    let Some(kb) = runtime.keyboard.as_mut() else {
+        return false;
+    };
+    let kb_irq_enabled = runtime.timer.kb_irq_enabled || force_key_irq;
+    let events = kb.inject_input_event(code, &mut runtime.memory, kb_irq_enabled);
+    if events == 0 {
+        return false;
+    }
+    if kb_irq_enabled {
+        runtime.timer.key_irq_latched = true;
+        runtime.timer.irq_pending = true;
+        if runtime.timer.irq_source.is_none() && !runtime.timer.in_interrupt {
+            runtime.timer.irq_source = Some("KEY".to_string());
+        }
+    }
+    if force_key_irq {
+        let current = runtime
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(0);
+        let next = current | IMR_MASTER | IMR_KEY;
+        if next != current {
+            runtime.memory.write_internal_byte(IMEM_IMR_OFFSET, next);
+            runtime.state.set_reg(RegName::IMR, next as u32);
+        }
+    }
+    true
+}
+
 fn inject_char_key(
     runtime: &mut CoreRuntime,
     ch: char,
@@ -1164,6 +1332,14 @@ fn handle_key_event(
         }
     }
     match key.code {
+        KeyCode::CapsLock if options.model == DeviceModel::Iq7000 => {
+            if inject_input_event(runtime, IQ7000_CAPS_EVENT_CODE, options.force_key_irq) {
+                return KeyFeedback {
+                    label: Some("CAPS".to_string()),
+                    quit: false,
+                };
+            }
+        }
         KeyCode::Enter => {
             inject_key(
                 runtime,
@@ -1275,6 +1451,30 @@ fn handle_key_event(
                 label: Some("PF5".to_string()),
                 quit: false,
             };
+        }
+        KeyCode::F(6) if options.model == DeviceModel::Iq7000 => {
+            if inject_input_event(runtime, IQ7000_SHIFT_EVENT_CODE, options.force_key_irq) {
+                return KeyFeedback {
+                    label: Some("SHIFT".to_string()),
+                    quit: false,
+                };
+            }
+        }
+        KeyCode::F(7) if options.model == DeviceModel::Iq7000 => {
+            if inject_input_event(runtime, IQ7000_CAPS_EVENT_CODE, options.force_key_irq) {
+                return KeyFeedback {
+                    label: Some("CAPS".to_string()),
+                    quit: false,
+                };
+            }
+        }
+        KeyCode::F(8) if options.model == DeviceModel::Iq7000 => {
+            if inject_input_event(runtime, IQ7000_FUNCTION_EVENT_CODE, options.force_key_irq) {
+                return KeyFeedback {
+                    label: Some("FUNCTION".to_string()),
+                    quit: false,
+                };
+            }
         }
         KeyCode::Char(ch) => {
             if ch == '\u{8}' || ch == '\u{7f}' {
@@ -1634,6 +1834,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             KeyEventOptions {
                                 pending_on_release: &mut pending_on_release,
                                 force_key_irq: args.force_key_irq,
+                                model: args.model,
                             },
                         );
                         if feedback.quit {

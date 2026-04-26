@@ -68,6 +68,10 @@ const DEFAULT_RUN_STEPS: u64 = 20_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 const CPU_DONE_EVENT: u32 = 1;
 const LCD_CAPTURE_SCALE: usize = 3;
+const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
+const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
+const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
+const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum CardMode {
@@ -307,8 +311,17 @@ struct RunSummary {
     lcd_stats: sc62015_core::lcd::LcdStats,
     lcd_lines: Vec<String>,
     lcd_pixels: Vec<Vec<u8>>,
+    lcd_annunciators: Option<LcdAnnunciators>,
     lcd_trace: Option<LcdTraceDump>,
     debug_probe: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct LcdAnnunciators {
+    source: &'static str,
+    raw: u8,
+    shift: bool,
+    caps: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2623,9 +2636,11 @@ fn parse_u8_value(raw: &str) -> Result<u8, String> {
 fn iq7000_named_key(raw: &str) -> Option<AutoKeyKind> {
     let code = match raw {
         "calc" => 0x00,
+        "shift" | "iq-shift" => 0x01,
         "search-up" | "search_up" | "search-prev" | "search_previous" => 0x03,
+        "function" | "fn" => 0x04,
         "memo" => 0x08,
-        "home" => 0x09,
+        "home" | "caps" | "caps-lock" | "caps-off" | "iq-caps" => 0x09,
         "search-down" | "search_down" | "search-next" | "search_next" => 0x0B,
         "tel" | "telephone" => 0x10,
         "calendar" => 0x18,
@@ -2897,6 +2912,22 @@ fn lcd_pixels(lcd: &dyn LcdHal) -> Vec<Vec<u8>> {
         .collect()
 }
 
+fn iq7000_lcd_annunciators(memory: &MemoryImage) -> LcdAnnunciators {
+    let shadow = memory.load(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8).unwrap_or(0) as u8;
+    let key_state = memory.load(IQ7000_KEY_STATE_ADDR, 8).unwrap_or(0) as u8;
+    let raw = shadow | key_state;
+    LcdAnnunciators {
+        source: if shadow != 0 { "0x006160" } else { "0x001FDA3" },
+        raw,
+        shift: raw & IQ7000_SHIFT_ANNUNCIATOR != 0,
+        caps: raw & IQ7000_CAPS_ANNUNCIATOR != 0,
+    }
+}
+
+fn lcd_annunciators(model: DeviceModel, memory: &MemoryImage) -> Option<LcdAnnunciators> {
+    (model == DeviceModel::Iq7000).then(|| iq7000_lcd_annunciators(memory))
+}
+
 fn read_memory_bytes(memory: &MemoryImage, addr: u32, len: usize) -> Vec<u8> {
     (0..len)
         .map(|idx| {
@@ -2938,6 +2969,7 @@ fn build_debug_probe(
 
     let storage_workspace = read_memory_bytes(&bus.memory, 0x1FD00, 0x40);
     let iocs_workspace_ptr = read_memory_bytes(&bus.memory, 0x1FE36, 3);
+    let annunciators = lcd_annunciators(model, &bus.memory);
 
     json!({
         "model": model.label(),
@@ -2972,6 +3004,7 @@ fn build_debug_probe(
             "iocs_workspace_ptr_addr": "0x1FE36",
             "iocs_workspace_ptr": iocs_workspace_ptr,
             "iocs_workspace_ptr_hex": bytes_hex(&iocs_workspace_ptr),
+            "lcd_annunciators": annunciators,
         },
         "ranges": range_json,
     })
@@ -2987,7 +3020,73 @@ fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&hasher.finalize().to_be_bytes());
 }
 
-fn write_lcd_png(path: &Path, pixels: &[Vec<u8>], scale: usize) -> Result<(), Box<dyn Error>> {
+fn iq7000_status_glyph(ch: char) -> Option<[u8; 5]> {
+    match ch {
+        'A' => Some([0b010, 0b101, 0b111, 0b101, 0b101]),
+        'C' => Some([0b111, 0b100, 0b100, 0b100, 0b111]),
+        'F' => Some([0b111, 0b100, 0b110, 0b100, 0b100]),
+        'H' => Some([0b101, 0b101, 0b111, 0b101, 0b101]),
+        'I' => Some([0b111, 0b010, 0b010, 0b010, 0b111]),
+        'P' => Some([0b110, 0b101, 0b110, 0b100, 0b100]),
+        'S' => Some([0b111, 0b100, 0b111, 0b001, 0b111]),
+        'T' => Some([0b111, 0b010, 0b010, 0b010, 0b010]),
+        _ => None,
+    }
+}
+
+fn draw_iq7000_status_label(pixels: &mut [Vec<u8>], x: usize, y: usize, label: &str, active: bool) {
+    let shade = if active { 1 } else { 2 };
+    for (char_idx, ch) in label.chars().enumerate() {
+        let Some(rows) = iq7000_status_glyph(ch) else {
+            continue;
+        };
+        let glyph_x = x + char_idx * 4;
+        for (row_idx, bits) in rows.into_iter().enumerate() {
+            let py = y + row_idx;
+            if py >= pixels.len() {
+                continue;
+            }
+            for col in 0..3 {
+                if bits & (1 << (2 - col)) == 0 {
+                    continue;
+                }
+                let px = glyph_x + col;
+                if px < pixels[py].len() {
+                    pixels[py][px] = shade;
+                }
+            }
+        }
+    }
+}
+
+fn pixels_with_iq7000_annunciators(
+    pixels: &[Vec<u8>],
+    annunciators: Option<&LcdAnnunciators>,
+) -> Vec<Vec<u8>> {
+    let Some(annunciators) = annunciators else {
+        return pixels.to_vec();
+    };
+    let width = pixels.first().map_or(0, Vec::len);
+    if width == 0 {
+        return pixels.to_vec();
+    }
+
+    let mut out = pixels.to_vec();
+    out.push(vec![0; width]);
+    let label_y = out.len();
+    out.extend((0..6).map(|_| vec![0; width]));
+    draw_iq7000_status_label(&mut out, 2, label_y, "SHIFT", annunciators.shift);
+    draw_iq7000_status_label(&mut out, 32, label_y, "CAPS", annunciators.caps);
+    out
+}
+
+fn write_lcd_png(
+    path: &Path,
+    pixels: &[Vec<u8>],
+    scale: usize,
+    annunciators: Option<&LcdAnnunciators>,
+) -> Result<(), Box<dyn Error>> {
+    let pixels = pixels_with_iq7000_annunciators(pixels, annunciators);
     let height = pixels.len();
     let width = pixels.first().map_or(0, Vec::len);
     if width == 0 || height == 0 || scale == 0 {
@@ -2997,11 +3096,15 @@ fn write_lcd_png(path: &Path, pixels: &[Vec<u8>], scale: usize) -> Result<(), Bo
     let out_width = width * scale;
     let out_height = height * scale;
     let mut raw = Vec::with_capacity((out_width + 1) * out_height);
-    for row in pixels {
+    for row in &pixels {
         for _ in 0..scale {
             raw.push(0); // PNG filter type 0.
             for pixel in row {
-                let shade = if *pixel == 0 { 0xC8 } else { 0x18 };
+                let shade = match *pixel {
+                    0 => 0xC8,
+                    1 => 0x18,
+                    _ => 0x78,
+                };
                 raw.extend(std::iter::repeat_n(shade, scale));
             }
         }
@@ -3795,6 +3898,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             lcd_stats,
             lcd_lines,
             lcd_pixels: lcd_pixels(bus.lcd()),
+            lcd_annunciators: lcd_annunciators(model, &bus.memory),
             lcd_trace,
             debug_probe,
         };
@@ -3868,7 +3972,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(path) = &args.capture_png {
-        write_lcd_png(path, &summary.lcd_pixels, LCD_CAPTURE_SCALE)?;
+        write_lcd_png(
+            path,
+            &summary.lcd_pixels,
+            LCD_CAPTURE_SCALE,
+            summary.lcd_annunciators.as_ref(),
+        )?;
         println!("Wrote LCD PNG capture: {}", path.display());
     }
 
@@ -3892,6 +4001,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             "imr_reg": format!("0x{:02X}", summary.imr_reg),
             "lcd_lines": &summary.lcd_lines,
             "lcd_pixels": &summary.lcd_pixels,
+            "lcd_annunciators": &summary.lcd_annunciators,
             "debug_probe": &summary.debug_probe,
         });
         fs::write(path, serde_json::to_string_pretty(&capture)?)?;
@@ -4392,6 +4502,66 @@ mod tests {
             actions[actions.len() - 1].key,
             Some(AutoKeyKind::InputEvent(0x0B))
         );
+    }
+
+    #[test]
+    fn key_seq_accepts_iq_shift_and_caps_controls() {
+        let actions = parse_key_seq("shift,function,caps,caps-off", 10, DeviceModel::Iq7000)
+            .expect("parse key seq");
+        assert_eq!(actions.len(), 4);
+        assert_eq!(actions[0].key, Some(AutoKeyKind::InputEvent(0x01)));
+        assert_eq!(actions[1].key, Some(AutoKeyKind::InputEvent(0x04)));
+        assert_eq!(actions[2].key, Some(AutoKeyKind::InputEvent(0x09)));
+        assert_eq!(actions[3].key, Some(AutoKeyKind::InputEvent(0x09)));
+    }
+
+    #[test]
+    fn iq7000_lcd_annunciators_reads_shadow_and_workspace_state() {
+        let mut memory = MemoryImage::new();
+        memory
+            .store(IQ7000_KEY_STATE_ADDR, 8, IQ7000_CAPS_ANNUNCIATOR as u32)
+            .expect("store key state");
+        let ann = iq7000_lcd_annunciators(&memory);
+        assert_eq!(ann.raw, IQ7000_CAPS_ANNUNCIATOR);
+        assert!(ann.caps);
+        assert!(!ann.shift);
+        assert_eq!(ann.source, "0x001FDA3");
+
+        memory
+            .store(
+                IQ7000_ANNUNCIATOR_SHADOW_ADDR,
+                8,
+                IQ7000_SHIFT_ANNUNCIATOR as u32,
+            )
+            .expect("store annunciator shadow");
+        let ann = iq7000_lcd_annunciators(&memory);
+        assert_eq!(ann.raw, IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR);
+        assert!(ann.shift);
+        assert!(ann.caps);
+        assert_eq!(ann.source, "0x006160");
+    }
+
+    #[test]
+    fn iq7000_png_capture_adds_annunciator_strip() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("iq7000_lcd_annunciators_{stamp}.png"));
+        let pixels = vec![vec![0u8, 1u8], vec![1u8, 0u8]];
+        let ann = LcdAnnunciators {
+            source: "test",
+            raw: IQ7000_CAPS_ANNUNCIATOR,
+            shift: false,
+            caps: true,
+        };
+        write_lcd_png(&path, &pixels, 1, Some(&ann)).expect("write png");
+        let png = std::fs::read(&path).expect("read png");
+        let width = u32::from_be_bytes(png[16..20].try_into().expect("width"));
+        let height = u32::from_be_bytes(png[20..24].try_into().expect("height"));
+        assert_eq!(width, 2);
+        assert_eq!(height, 9);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -77,9 +77,18 @@ cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
 
 `digitizer:0xNN` and `event:0xNN` still inject exact translated input bytes. For
 IQ-7000 app/editor work, the runner also accepts named event keys such as
-`calendar`, `memo`, `tel`, `home`, `world`, `search-up`, `search-down`,
-`newline`, and `memo-enter`. `text:...` expands printable characters through the
-generated per-model input map; use `\\n` inside text to emit the MEMO newline key.
+`calendar`, `memo`, `tel`, `home`, `world`, `shift`, `caps`, `caps-off`,
+`search-up`, `search-down`, `newline`, and `memo-enter`. `caps-off` injects the
+CAPS key once; the IQ-7000 ROM starts with CAPS enabled, so include it before
+lowercase/mixed-case text entry on a freshly booted image. `text:...` expands
+printable characters through the generated per-model input map; use `\\n` inside
+text to emit the MEMO newline key. IQ-7000 PNG/JSON captures also report the
+ROM's SHIFT/CAPS LCD annunciators.
+
+In the live terminal LCD (`sc62015-lcd --model iq-7000`), `F6` injects the
+IQ-7000 SHIFT event, `F7` injects CAPS, and `F8` injects the FUNCTION event;
+Caps Lock is also accepted when the terminal reports it. The status line shows
+`lcd=SHIFT:...,CAPS:...`.
 
 For repeatable captures, put the same settings in a scenario JSON file:
 
