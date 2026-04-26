@@ -250,6 +250,160 @@ describe('createEvalApi', () => {
 		expect(ops).toEqual(['inject:86:0', 'step:5', 'inject:86:1']);
 	});
 
+	it('explicit key namespaces distinguish event and physical input', async () => {
+		const ops: string[] = [];
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: () => {},
+			step: async (n: number) => ops.push(`step:${n}`),
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			injectMatrixEvent: (code: number, release: boolean) => ops.push(`event:${code}:${release ? 1 : 0}`),
+			pressMatrixCode: (code: number) => ops.push(`phys-press:${code}`),
+			releaseMatrixCode: (code: number) => ops.push(`phys-release:${code}`),
+		};
+		const api = createEvalApi(adapter as any);
+		await api.keys.tap('app:calendar', 1);
+		await api.keys.tap('event:0x0B', 2);
+		await api.keys.tap('phys:0x56', 3);
+		expect(ops).toEqual([
+			'event:24:0',
+			'step:1',
+			'event:24:1',
+			'event:11:0',
+			'step:2',
+			'event:11:1',
+			'phys-press:86',
+			'step:3',
+			'phys-release:86',
+		]);
+	});
+
+	it('wait.lcdStable waits for repeated nonblank LCD signatures', async () => {
+		const frames = [
+			[0, 0, 0, 0],
+			[1, 0, 0, 0],
+			[1, 1, 0, 0],
+			[1, 1, 0, 0],
+		];
+		let frame = 0;
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: () => {},
+			step: async () => {
+				frame = Math.min(frame + 1, frames.length - 1);
+			},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			lcdPixels: () => frames[frame],
+		};
+		const api = createEvalApi(adapter as any);
+		const result = await api.wait.lcdStable({ chunkInstructions: 10, quietSamples: 2, maxInstructions: 100 });
+		expect(result.instructions).toBe(30);
+	});
+
+	it('calendar pixel assertion checks compact day-number grid', async () => {
+		const width = 96;
+		const height = 64;
+		const pixels = new Array(width * height).fill(0);
+		const digits: Record<string, string[]> = {
+			'0': ['####', '#..#', '#..#', '#..#', '#..#', '####'],
+			'1': ['...#', '...#', '...#', '...#', '...#', '...#'],
+			'2': ['####', '...#', '####', '#...', '#...', '####'],
+			'3': ['####', '...#', '####', '...#', '...#', '####'],
+			'4': ['#..#', '#..#', '####', '...#', '...#', '...#'],
+			'5': ['####', '#...', '####', '...#', '...#', '####'],
+			'6': ['####', '#...', '####', '#..#', '#..#', '####'],
+			'7': ['####', '#..#', '#..#', '...#', '...#', '...#'],
+			'8': ['####', '#..#', '####', '#..#', '#..#', '####'],
+			'9': ['####', '#..#', '####', '...#', '...#', '####'],
+		};
+		const onesX = [5, 19, 33, 47, 61, 75, 89];
+		const rowY = [17, 25, 33, 41, 49, 57];
+		function drawDigit(x: number, y: number, digit: string) {
+			for (let row = 0; row < digits[digit].length; row++) {
+				for (let col = 0; col < digits[digit][row].length; col++) {
+					if (digits[digit][row][col] === '#') pixels[(y + row) * width + x + col] = 1;
+				}
+			}
+		}
+		function drawDay(row: number, col: number, day: number) {
+			const text = String(day);
+			if (text.length === 1) {
+				drawDigit(onesX[col], rowY[row], text);
+			} else {
+				drawDigit(onesX[col] - 5, rowY[row], text[0]);
+				drawDigit(onesX[col], rowY[row], text[1]);
+			}
+		}
+		const weeks = [
+			[0, 0, 0, 1, 2, 3, 4],
+			[5, 6, 7, 8, 9, 10, 11],
+			[12, 13, 14, 15, 16, 17, 18],
+			[19, 20, 21, 22, 23, 24, 25],
+			[26, 27, 28, 29, 30, 0, 0],
+		];
+		for (let row = 0; row < weeks.length; row++) {
+			for (let col = 0; col < weeks[row].length; col++) {
+				if (weeks[row][col]) drawDay(row, col, weeks[row][col]);
+			}
+		}
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: () => {},
+			step: () => {},
+			getReg: () => 0,
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			lcdPixels: () => pixels,
+		};
+		const api = createEvalApi(adapter as any);
+		const assertion = await api.lcd.assertCalendarMonth({ year: 2026, month: 4, day: 26 });
+		expect(assertion.title).toBe('*** APR 2026 ***');
+		expect(assertion.checkedDays).toHaveLength(30);
+		expect(assertion.dayOfYear).toBe(116);
+		expect(assertion.daysRemaining).toBe(249);
+		expect(assertion.weekOfYear).toBe(17);
+	});
+
+	it('proof metadata renders readable yaml', async () => {
+		const adapter = {
+			callFunction: async () => {
+				throw new Error('not used');
+			},
+			reset: () => {},
+			step: () => {},
+			getReg: (name: string) => (name === 'PC' ? 0xf1234 : 0),
+			setReg: () => {},
+			read8: () => 0,
+			write8: () => {},
+			lcdText: () => ['*** APR 2026 ***'],
+			lcdPixels: () => [1, 0, 1, 0],
+		};
+		const api = createEvalApi(adapter as any);
+		const yaml = await api.proof.metadataYaml({
+			label: 'calendar-apr-2026',
+			keySequence: 'app:calendar',
+			assertions: { calendar: 'ok' },
+			includeGeneratedAt: false,
+		});
+		expect(yaml).toContain('schema: iq7000-screen-proof/v1');
+		expect(yaml).toContain('label: calendar-apr-2026');
+		expect(yaml).toContain('- app:calendar');
+		expect(yaml).toContain('final_pc: 0xF1234');
+	});
+
 	it('iocs.putc writes IMEM byte registers when provided', async () => {
 		const writes: Array<{ addr: number; value: number }> = [];
 		const regWrites: Array<{ name: string; value: number }> = [];

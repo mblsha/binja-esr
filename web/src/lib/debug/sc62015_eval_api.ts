@@ -128,6 +128,43 @@ export type EvalResetOptions = {
 	warmupTicks?: number;
 };
 
+export type EvalWaitOptions = {
+	chunkInstructions?: number;
+	maxInstructions?: number;
+	quietSamples?: number;
+	requireNonBlank?: boolean;
+};
+
+export type EvalCalendarMonthOptions = {
+	year: number;
+	month: number;
+	day?: number;
+	width?: number;
+	height?: number;
+};
+
+export type EvalCalendarMonthAssertion = {
+	ok: true;
+	title: string;
+	year: number;
+	month: number;
+	day: number | null;
+	weeks: number[][];
+	checkedDays: number[];
+	dayOfYear: number | null;
+	daysRemaining: number | null;
+	weekOfYear: number | null;
+};
+
+export type EvalProofMetadataInput = {
+	label?: string;
+	keySequence?: string[] | string;
+	assertions?: unknown;
+	artifacts?: Record<string, string>;
+	includeGeneratedAt?: boolean;
+	context?: Record<string, unknown>;
+};
+
 export type EvalApiOptions = {};
 
 export interface EmulatorAdapter {
@@ -185,6 +222,7 @@ export interface EvalApi {
 		text(): Promise<string[]>;
 		textString(): Promise<string>;
 		pixels(): Promise<number[]>;
+		assertCalendarMonth(options: EvalCalendarMonthOptions): Promise<EvalCalendarMonthAssertion>;
 	};
 	keyboard: {
 		press(code: number): Promise<void>;
@@ -192,10 +230,37 @@ export interface EvalApi {
 		tap(code: number, holdInstructions?: number): Promise<void>;
 		injectEvent(code: number, release: boolean): Promise<void>;
 	};
+	keys: {
+		tap(spec: string | number, holdInstructions?: number): Promise<void>;
+		event: {
+			press(code: number): Promise<void>;
+			release(code: number): Promise<void>;
+			tap(code: number, holdInstructions?: number): Promise<void>;
+		};
+		phys: {
+			press(code: number): Promise<void>;
+			release(code: number): Promise<void>;
+			tap(code: number, holdInstructions?: number): Promise<void>;
+		};
+		app: {
+			tap(name: string, holdInstructions?: number): Promise<void>;
+		};
+	};
 	onKey: {
 		press(): Promise<void>;
 		release(): Promise<void>;
 		tap(holdInstructions?: number): Promise<void>;
+	};
+	wait: {
+		lcdStable(options?: EvalWaitOptions): Promise<{ instructions: number; signature: string }>;
+		screenChange(
+			options?: EvalWaitOptions & { baseline?: number[] },
+		): Promise<{ instructions: number; signature: string }>;
+		textIncludes(text: string, options?: EvalWaitOptions): Promise<{ instructions: number; text: string }>;
+	};
+	proof: {
+		metadata(input?: EvalProofMetadataInput): Promise<Record<string, unknown>>;
+		metadataYaml(input?: EvalProofMetadataInput): Promise<string>;
 	};
 	perfetto: {
 		trace<T>(name: string, body: () => Promise<T> | T): Promise<T>;
@@ -213,7 +278,42 @@ const DEFAULT_MAX_INSTRUCTIONS = 200_000;
 const DEFAULT_WARMUP_TICKS = 0;
 const DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 const DEFAULT_PROBE_MAX_SAMPLES = 256;
+const DEFAULT_WAIT_CHUNK_INSTRUCTIONS = 20_000;
+const DEFAULT_WAIT_MAX_INSTRUCTIONS = 1_000_000;
+const DEFAULT_WAIT_QUIET_SAMPLES = 3;
 const IMEM_BASE_ADDR = 0x0010_0000;
+const IQ7000_LCD_WIDTH = 96;
+const IQ7000_LCD_HEIGHT = 64;
+
+const IQ7000_APP_EVENT_CODES = Object.freeze({
+	calc: 0x00,
+	shift: 0x01,
+	memo: 0x08,
+	home: 0x09,
+	tel: 0x10,
+	telephone: 0x10,
+	calendar: 0x18,
+	schedule: 0x19,
+	card: 0x1a,
+	'card-samples': 0x1a,
+	samples: 0x1a,
+	world: 0x1b,
+} satisfies Record<string, number>);
+
+const IQ7000_CALENDAR_DAY_ONES_X = [5, 19, 33, 47, 61, 75, 89];
+const IQ7000_CALENDAR_DAY_Y = [17, 25, 33, 41, 49, 57];
+const IQ7000_COMPACT_DIGITS = Object.freeze({
+	'0': ['####', '#..#', '#..#', '#..#', '#..#', '####'],
+	'1': ['...#', '...#', '...#', '...#', '...#', '...#'],
+	'2': ['####', '...#', '####', '#...', '#...', '####'],
+	'3': ['####', '...#', '####', '...#', '...#', '####'],
+	'4': ['#..#', '#..#', '####', '...#', '...#', '...#'],
+	'5': ['####', '#...', '####', '...#', '...#', '####'],
+	'6': ['####', '#...', '####', '#..#', '#..#', '####'],
+	'7': ['####', '#..#', '#..#', '...#', '...#', '...#'],
+	'8': ['####', '#..#', '####', '#..#', '#..#', '####'],
+	'9': ['####', '#..#', '####', '...#', '...#', '####'],
+} satisfies Record<string, string[]>);
 
 const RESULT_REGISTER_ORDER: RegisterName[] = ['A', 'B', 'BA', 'IL', 'IH', 'I', 'X', 'Y', 'U', 'S', 'F', 'IMR', 'PC'];
 
@@ -277,6 +377,155 @@ function diffRegisters(before: Record<string, number>, after: Record<string, num
 	}
 	changed.sort((a, b) => a.localeCompare(b));
 	return changed;
+}
+
+function parseByteSpec(raw: string): number | null {
+	const trimmed = raw.trim().toLowerCase();
+	if (!trimmed) return null;
+	const value = trimmed.startsWith('0x') ? Number.parseInt(trimmed.slice(2), 16) : Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(value) || value < 0 || value > 0xff) return null;
+	return value & 0xff;
+}
+
+function resolveAppEventCode(name: string): number {
+	const key = name.trim().toLowerCase();
+	const code = IQ7000_APP_EVENT_CODES[key as keyof typeof IQ7000_APP_EVENT_CODES];
+	if (code === undefined) {
+		throw new Error(`Unknown IQ-7000 app key '${name}'`);
+	}
+	return code;
+}
+
+function pixelSignature(pixels: number[]): string {
+	let hash = 0x811c9dc5;
+	let lit = 0;
+	for (const value of pixels) {
+		if (value) lit += 1;
+		hash ^= value ? 1 : 0;
+		hash = Math.imul(hash, 0x01000193) >>> 0;
+	}
+	return `${hash.toString(16).padStart(8, '0')}:${lit}`;
+}
+
+function isBlankPixels(pixels: number[]): boolean {
+	return !pixels.some(Boolean);
+}
+
+function compactDigitMatches(pixels: number[], width: number, x: number, y: number, digit: string): boolean {
+	const pattern = IQ7000_COMPACT_DIGITS[digit as keyof typeof IQ7000_COMPACT_DIGITS];
+	if (!pattern) return false;
+	if (x < 0 || y < 0 || y + pattern.length > Math.floor(pixels.length / width)) return false;
+	for (let row = 0; row < pattern.length; row++) {
+		for (let col = 0; col < pattern[row].length; col++) {
+			const expected = pattern[row][col] === '#';
+			const actual = Boolean(pixels[(y + row) * width + x + col]);
+			if (actual !== expected) return false;
+		}
+	}
+	return true;
+}
+
+function assertCompactNumber(pixels: number[], width: number, onesX: number, y: number, value: number): void {
+	const digits = String(value);
+	if (digits.length === 1) {
+		if (!compactDigitMatches(pixels, width, onesX, y, digits)) {
+			throw new Error(`Calendar day ${value} did not match compact digit pixels at (${onesX}, ${y})`);
+		}
+		return;
+	}
+	if (digits.length !== 2) {
+		throw new Error(`Calendar compact assertion only supports 1-2 digit day numbers, got ${value}`);
+	}
+	const tensX = onesX - 5;
+	if (!compactDigitMatches(pixels, width, tensX, y, digits[0])) {
+		throw new Error(`Calendar day ${value} tens digit did not match compact pixels at (${tensX}, ${y})`);
+	}
+	if (!compactDigitMatches(pixels, width, onesX, y, digits[1])) {
+		throw new Error(`Calendar day ${value} ones digit did not match compact pixels at (${onesX}, ${y})`);
+	}
+}
+
+function daysInMonth(year: number, month: number): number {
+	return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function monthWeeksSundayFirst(year: number, month: number): number[][] {
+	const days = daysInMonth(year, month);
+	const firstDay = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+	const weeks: number[][] = [];
+	let day = 1;
+	while (day <= days) {
+		const week = Array(7).fill(0) as number[];
+		for (let dow = weeks.length === 0 ? firstDay : 0; dow < 7 && day <= days; dow++) {
+			week[dow] = day++;
+		}
+		weeks.push(week);
+	}
+	return weeks;
+}
+
+function dayOfYearUtc(year: number, month: number, day: number): number {
+	const start = Date.UTC(year, 0, 1);
+	const current = Date.UTC(year, month - 1, day);
+	return Math.floor((current - start) / 86_400_000) + 1;
+}
+
+function daysInYearUtc(year: number): number {
+	return dayOfYearUtc(year, 12, 31);
+}
+
+function isoWeekUtc(year: number, month: number, day: number): number {
+	const date = new Date(Date.UTC(year, month - 1, day));
+	const dow = date.getUTCDay() || 7;
+	date.setUTCDate(date.getUTCDate() + 4 - dow);
+	const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+	return Math.ceil(((date.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+}
+
+function monthTitle(year: number, month: number): string {
+	const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+	return `*** ${months[month - 1] ?? '???'} ${year} ***`;
+}
+
+function yamlScalar(value: string): string {
+	if (/^[A-Za-z0-9_./:-]+$/.test(value) && value !== 'null' && value !== 'true' && value !== 'false') {
+		return value;
+	}
+	return JSON.stringify(value);
+}
+
+function toYaml(value: unknown, indent = 0): string {
+	const pad = ' '.repeat(indent);
+	if (value === null || value === undefined) return 'null';
+	if (typeof value === 'string') return yamlScalar(value);
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	if (Array.isArray(value)) {
+		if (!value.length) return '[]';
+		return value
+			.map((entry) => {
+				if (entry && typeof entry === 'object') {
+					const nested = toYaml(entry, indent + 2);
+					return `${pad}- ${nested.trimStart()}`;
+				}
+				return `${pad}- ${toYaml(entry, indent + 2).trimStart()}`;
+			})
+			.join('\n');
+	}
+	if (typeof value === 'object') {
+		const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
+		if (!entries.length) return '{}';
+		return entries
+			.map(([key, entry]) => {
+				if (entry && typeof entry === 'object') {
+					const nested = toYaml(entry, indent + 2);
+					if (!nested.includes('\n')) return `${pad}${key}: ${nested.trimStart()}`;
+					return `${pad}${key}:\n${nested}`;
+				}
+				return `${pad}${key}: ${toYaml(entry, indent + 2)}`;
+			})
+			.join('\n');
+	}
+	return yamlScalar(String(value));
 }
 
 export const Reg = Object.freeze(
@@ -349,6 +598,27 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			return byte;
 		}
 		throw new Error('iocs.putc requires a string or number');
+	}
+
+	async function tapEvent(code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) {
+		adapter.injectMatrixEvent?.(code & 0xff, false);
+		if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+		adapter.injectMatrixEvent?.(code & 0xff, true);
+	}
+
+	async function tapPhysical(code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) {
+		adapter.pressMatrixCode?.(code & 0xff);
+		if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+		adapter.releaseMatrixCode?.(code & 0xff);
+	}
+
+	function normalizeWaitOptions(options?: EvalWaitOptions) {
+		return {
+			chunkInstructions: options?.chunkInstructions ?? DEFAULT_WAIT_CHUNK_INSTRUCTIONS,
+			maxInstructions: options?.maxInstructions ?? DEFAULT_WAIT_MAX_INSTRUCTIONS,
+			quietSamples: options?.quietSamples ?? DEFAULT_WAIT_QUIET_SAMPLES,
+			requireNonBlank: options?.requireNonBlank ?? true,
+		};
 	}
 
 	const api: EvalApi = {
@@ -545,6 +815,46 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			text: async () => adapter.lcdText?.() ?? [],
 			textString: async () => (adapter.lcdText?.() ?? []).join('\n'),
 			pixels: async () => Array.from(adapter.lcdPixels?.() ?? []),
+			assertCalendarMonth: async (options) => {
+				const { year, month } = options;
+				if (!Number.isInteger(year) || year < 1) throw new Error(`Invalid calendar year: ${year}`);
+				if (!Number.isInteger(month) || month < 1 || month > 12) throw new Error(`Invalid calendar month: ${month}`);
+				const width = options.width ?? IQ7000_LCD_WIDTH;
+				const height = options.height ?? IQ7000_LCD_HEIGHT;
+				const pixels = Array.from(adapter.lcdPixels?.() ?? []);
+				if (pixels.length !== width * height) {
+					throw new Error(`LCD pixel payload length mismatch: expected ${width * height}, got ${pixels.length}`);
+				}
+				const weeks = monthWeeksSundayFirst(year, month);
+				if (weeks.length > IQ7000_CALENDAR_DAY_Y.length) {
+					throw new Error(
+						`Calendar month needs ${weeks.length} week rows; assertion supports ${IQ7000_CALENDAR_DAY_Y.length}`,
+					);
+				}
+				const checkedDays: number[] = [];
+				for (let row = 0; row < weeks.length; row++) {
+					for (let col = 0; col < 7; col++) {
+						const day = weeks[row][col];
+						if (!day) continue;
+						assertCompactNumber(pixels, width, IQ7000_CALENDAR_DAY_ONES_X[col], IQ7000_CALENDAR_DAY_Y[row], day);
+						checkedDays.push(day);
+					}
+				}
+				const day = options.day ?? null;
+				const dayOfYear = day === null ? null : dayOfYearUtc(year, month, day);
+				return {
+					ok: true,
+					title: monthTitle(year, month),
+					year,
+					month,
+					day,
+					weeks,
+					checkedDays,
+					dayOfYear,
+					daysRemaining: day === null ? null : daysInYearUtc(year) - dayOfYearUtc(year, month, day),
+					weekOfYear: day === null ? null : isoWeekUtc(year, month, day),
+				};
+			},
 		},
 		keyboard: {
 			press: async (code: number) => {
@@ -557,9 +867,50 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.injectMatrixEvent?.(code & 0xff, Boolean(release));
 			},
 			tap: async (code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
-				adapter.injectMatrixEvent?.(code & 0xff, false);
-				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
-				adapter.injectMatrixEvent?.(code & 0xff, true);
+				await tapEvent(code, holdInstructions);
+			},
+		},
+		keys: {
+			tap: async (spec, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				if (typeof spec === 'number') {
+					await tapEvent(spec, holdInstructions);
+					return;
+				}
+				const [kindRaw, valueRaw] = spec.includes(':') ? spec.split(/:(.*)/s, 2) : ['event', spec];
+				const kind = kindRaw.trim().toLowerCase();
+				const value = valueRaw.trim();
+				if (kind === 'event') {
+					const code = parseByteSpec(value);
+					if (code === null) throw new Error(`Invalid event key spec '${spec}'`);
+					await tapEvent(code, holdInstructions);
+					return;
+				}
+				if (kind === 'phys' || kind === 'physical' || kind === 'matrix') {
+					const code = parseByteSpec(value);
+					if (code === null) throw new Error(`Invalid physical key spec '${spec}'`);
+					await tapPhysical(code, holdInstructions);
+					return;
+				}
+				if (kind === 'app') {
+					await tapEvent(resolveAppEventCode(value), holdInstructions);
+					return;
+				}
+				throw new Error(`Unknown key namespace '${kindRaw}' in '${spec}'`);
+			},
+			event: {
+				press: async (code) => adapter.injectMatrixEvent?.(code & 0xff, false),
+				release: async (code) => adapter.injectMatrixEvent?.(code & 0xff, true),
+				tap: tapEvent,
+			},
+			phys: {
+				press: async (code) => adapter.pressMatrixCode?.(code & 0xff),
+				release: async (code) => adapter.releaseMatrixCode?.(code & 0xff),
+				tap: tapPhysical,
+			},
+			app: {
+				tap: async (name, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
+					await tapEvent(resolveAppEventCode(name), holdInstructions);
+				},
 			},
 		},
 		onKey: {
@@ -573,6 +924,98 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.pressOnKey?.();
 				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 				adapter.releaseOnKey?.();
+			},
+		},
+		wait: {
+			lcdStable: async (options) => {
+				const opts = normalizeWaitOptions(options);
+				let instructions = 0;
+				let last: string | null = null;
+				let stable = 0;
+				while (instructions <= opts.maxInstructions) {
+					await Promise.resolve(adapter.step(opts.chunkInstructions));
+					instructions += opts.chunkInstructions;
+					const pixels = Array.from(adapter.lcdPixels?.() ?? []);
+					if (opts.requireNonBlank && isBlankPixels(pixels)) {
+						last = null;
+						stable = 0;
+						continue;
+					}
+					const signature = pixelSignature(pixels);
+					if (signature === last) {
+						stable += 1;
+						if (stable >= opts.quietSamples) return { instructions, signature };
+					} else {
+						last = signature;
+						stable = 1;
+					}
+				}
+				throw new Error(`LCD did not become stable within ${opts.maxInstructions} instructions`);
+			},
+			screenChange: async (options) => {
+				const opts = normalizeWaitOptions({ ...options, requireNonBlank: options?.requireNonBlank ?? false });
+				const baseline = options?.baseline
+					? pixelSignature(options.baseline)
+					: pixelSignature(Array.from(adapter.lcdPixels?.() ?? []));
+				let instructions = 0;
+				while (instructions <= opts.maxInstructions) {
+					await Promise.resolve(adapter.step(opts.chunkInstructions));
+					instructions += opts.chunkInstructions;
+					const pixels = Array.from(adapter.lcdPixels?.() ?? []);
+					if (opts.requireNonBlank && isBlankPixels(pixels)) continue;
+					const signature = pixelSignature(pixels);
+					if (signature !== baseline) return { instructions, signature };
+				}
+				throw new Error(`LCD did not change within ${opts.maxInstructions} instructions`);
+			},
+			textIncludes: async (text, options) => {
+				const opts = normalizeWaitOptions({ ...options, requireNonBlank: false });
+				let instructions = 0;
+				while (instructions <= opts.maxInstructions) {
+					const current = (adapter.lcdText?.() ?? []).join('\n');
+					if (current.includes(text)) return { instructions, text: current };
+					await Promise.resolve(adapter.step(opts.chunkInstructions));
+					instructions += opts.chunkInstructions;
+				}
+				throw new Error(`LCD text did not include '${text}' within ${opts.maxInstructions} instructions`);
+			},
+		},
+		proof: {
+			metadata: async (input = {}) => {
+				const pixels = Array.from(adapter.lcdPixels?.() ?? []);
+				const lines = adapter.lcdText?.() ?? [];
+				const keySequence =
+					typeof input.keySequence === 'string'
+						? input.keySequence
+								.split(/[;,]/)
+								.map((part) => part.trim())
+								.filter(Boolean)
+						: input.keySequence;
+				return {
+					schema: 'iq7000-screen-proof/v1',
+					label: input.label,
+					generated_at: input.includeGeneratedAt === false ? undefined : new Date().toISOString(),
+					context: input.context,
+					key_sequence: keySequence,
+					assertions: input.assertions,
+					emulator: {
+						final_pc: `0x${adapter.getReg('PC').toString(16).toUpperCase().padStart(5, '0')}`,
+					},
+					lcd: {
+						text: lines,
+						pixels: {
+							width: IQ7000_LCD_WIDTH,
+							height: IQ7000_LCD_HEIGHT,
+							count: pixels.length,
+							signature: pixelSignature(pixels),
+						},
+					},
+					artifacts: input.artifacts,
+				};
+			},
+			metadataYaml: async (input = {}) => {
+				const metadata = await api.proof.metadata(input);
+				return `${toYaml(metadata)}\n`;
 			},
 		},
 		perfetto: {

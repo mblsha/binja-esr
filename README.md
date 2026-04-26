@@ -112,3 +112,28 @@ For repeatable captures, put the same settings in a scenario JSON file:
 
 Run it with `--scenario path/to/scenario.json`. Relative capture/debug paths are
 resolved relative to the scenario file.
+
+The web/WASM Function Runner has the same deterministic IQ-7000 RTC seeding for
+screen probes:
+
+```bash
+cd web
+npm run fnr:cli -- --model iq-7000 --iq7000-rtc 202604261330 --eval '
+await e.step(100000);
+await e.keys.app.tap("calendar");
+await e.wait.screenChange();
+await e.wait.lcdStable();
+const calendar = await e.lcd.assertCalendarMonth({ year: 2026, month: 4, day: 26 });
+const proof = await e.proof.metadata({ label: "calendar-apr-2026", assertions: { calendar } });
+return { lines: await e.lcd.text(), proof };
+' --proof-yaml calendar-proof.yaml
+```
+
+For new Function Runner scripts, prefer the explicit key namespaces:
+`e.keys.app.tap("calendar")` for app selectors, `e.keys.event.tap(0x18)` for
+ROM-visible translated events, and `e.keys.phys.tap(0xNN)` for raw physical
+matrix/scanner codes. `e.lcd.assertCalendarMonth(...)` validates the compact
+calendar day-number pixels directly, while `e.lcd.text()` now decodes those
+same compact monthly-calendar day rows for readable CI output. `--proof-yaml`
+writes concise YAML metadata with the RTC seed, ROM path, assertions, LCD text,
+and pixel signature.

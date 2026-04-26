@@ -23,6 +23,20 @@ const IQ7000_CELL_BYTES: usize = 6;
 const IQ7000_TEXT_COLS: usize = 16;
 const IQ7000_TEXT_ROWS: usize = 8;
 const IQ7000_DATE_SLASH: [u8; IQ7000_CELL_BYTES] = [0x10, 0x10, 0x54, 0x10, 0x10, 0x00];
+const IQ7000_CALENDAR_DAY_ONES_X: [usize; 7] = [5, 19, 33, 47, 61, 75, 89];
+const IQ7000_CALENDAR_DAY_Y: [usize; 6] = [17, 25, 33, 41, 49, 57];
+const IQ7000_COMPACT_DIGITS: [[&str; 6]; 10] = [
+    ["####", "#..#", "#..#", "#..#", "#..#", "####"],
+    ["...#", "...#", "...#", "...#", "...#", "...#"],
+    ["####", "...#", "####", "#...", "#...", "####"],
+    ["####", "...#", "####", "...#", "...#", "####"],
+    ["#..#", "#..#", "####", "...#", "...#", "...#"],
+    ["####", "#...", "####", "...#", "...#", "####"],
+    ["####", "#...", "####", "#..#", "#..#", "####"],
+    ["####", "#..#", "#..#", "...#", "...#", "...#"],
+    ["####", "#..#", "####", "#..#", "#..#", "####"],
+    ["####", "#..#", "####", "...#", "...#", "####"],
+];
 
 const IQ7000_LARGE_CELL_HALF_BYTES: usize = 8;
 const IQ7000_LARGE_CELL_BYTES: usize = IQ7000_LARGE_CELL_HALF_BYTES * 2;
@@ -356,7 +370,178 @@ pub fn decode_iq7000_display_text_auto(
     }
 
     trim_trailing_empty_lines(&mut out);
+    if let Some(calendar) = decode_iq7000_calendar_compact_text(&bytes, &out) {
+        return calendar;
+    }
     out
+}
+
+fn is_iq7000_calendar_title(line: &str) -> bool {
+    line.starts_with("*** ") && line.ends_with(" ***") && line.len() >= 16
+}
+
+fn parse_iq7000_calendar_title(line: &str) -> Option<(usize, u32)> {
+    let parts: Vec<&str> = line.trim_matches('*').split_whitespace().collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let month = match parts[0] {
+        "JAN" => 1,
+        "FEB" => 2,
+        "MAR" => 3,
+        "APR" => 4,
+        "MAY" => 5,
+        "JUN" => 6,
+        "JUL" => 7,
+        "AUG" => 8,
+        "SEP" => 9,
+        "OCT" => 10,
+        "NOV" => 11,
+        "DEC" => 12,
+        _ => return None,
+    };
+    let year = parts[1].parse().ok()?;
+    Some((month, year))
+}
+
+fn iq7000_days_in_month(month: usize, year: u32) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+fn iq7000_pixel(bytes: &[[u8; LCD_DISPLAY_COLS]; 8], x: usize, y: usize) -> bool {
+    if x >= LCD_DISPLAY_COLS || y >= bytes.len() * 8 {
+        return false;
+    }
+    (bytes[y / 8][x] & (0x80u8 >> (y % 8))) != 0
+}
+
+fn iq7000_compact_digit_matches(
+    bytes: &[[u8; LCD_DISPLAY_COLS]; 8],
+    x: usize,
+    y: usize,
+    digit: usize,
+) -> bool {
+    let Some(pattern) = IQ7000_COMPACT_DIGITS.get(digit) else {
+        return false;
+    };
+    if x + 4 > LCD_DISPLAY_COLS || y + pattern.len() > bytes.len() * 8 {
+        return false;
+    }
+    for (row, bits) in pattern.iter().enumerate() {
+        for (col, expected_ch) in bits.as_bytes().iter().copied().enumerate() {
+            let expected = expected_ch == b'#';
+            if iq7000_pixel(bytes, x + col, y + row) != expected {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn iq7000_compact_digit_at(bytes: &[[u8; LCD_DISPLAY_COLS]; 8], x: usize, y: usize) -> Option<u8> {
+    (0..=9)
+        .find(|digit| iq7000_compact_digit_matches(bytes, x, y, *digit))
+        .map(|digit| b'0' + digit as u8)
+}
+
+fn iq7000_compact_digit_area_blank(
+    bytes: &[[u8; LCD_DISPLAY_COLS]; 8],
+    x: usize,
+    y: usize,
+) -> bool {
+    if x + 4 > LCD_DISPLAY_COLS || y + 6 > bytes.len() * 8 {
+        return true;
+    }
+    for row in 0..6 {
+        for col in 0..4 {
+            if iq7000_pixel(bytes, x + col, y + row) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn decode_iq7000_calendar_day_cell(
+    bytes: &[[u8; LCD_DISPLAY_COLS]; 8],
+    ones_x: usize,
+    y: usize,
+) -> Option<u8> {
+    let ones = iq7000_compact_digit_at(bytes, ones_x, y)?;
+    if ones_x >= 5 && !iq7000_compact_digit_area_blank(bytes, ones_x - 5, y) {
+        let tens = iq7000_compact_digit_at(bytes, ones_x - 5, y)?;
+        let value = (tens - b'0') * 10 + (ones - b'0');
+        return (value <= 31).then_some(value);
+    }
+    Some(ones - b'0')
+}
+
+fn decode_iq7000_calendar_compact_text(
+    bytes: &[[u8; LCD_DISPLAY_COLS]; 8],
+    decoded: &[String],
+) -> Option<Vec<String>> {
+    let title = decoded.first()?.trim_end();
+    if !is_iq7000_calendar_title(title) {
+        return None;
+    }
+    let (month, year) = parse_iq7000_calendar_title(title)?;
+    let days_in_month = iq7000_days_in_month(month, year);
+
+    let mut rows: Vec<Vec<Option<u8>>> = Vec::new();
+    let mut decoded_day_count = 0usize;
+    let mut expected_day = 1u8;
+    for y in IQ7000_CALENDAR_DAY_Y {
+        let mut row = Vec::with_capacity(7);
+        let mut row_has_day = false;
+        for ones_x in IQ7000_CALENDAR_DAY_ONES_X {
+            if expected_day > days_in_month {
+                row.push(None);
+                continue;
+            }
+            let day = decode_iq7000_calendar_day_cell(bytes, ones_x, y);
+            if let Some(day) = day {
+                if day != expected_day {
+                    return None;
+                }
+                row_has_day = true;
+                decoded_day_count += 1;
+                expected_day = expected_day.saturating_add(1);
+                row.push(Some(day));
+            } else {
+                row.push(None);
+            }
+        }
+        if row_has_day {
+            rows.push(row);
+        }
+    }
+    if decoded_day_count != usize::from(days_in_month) {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(2 + rows.len());
+    out.push(title.to_string());
+    out.push("S M T W T F S".to_string());
+    for row in rows {
+        let mut line = String::new();
+        for (idx, day) in row.into_iter().enumerate() {
+            if idx > 0 {
+                line.push(' ');
+            }
+            match day {
+                Some(value) => line.push_str(&format!("{value:>2}")),
+                None => line.push_str("  "),
+            }
+        }
+        out.push(line.trim_end().to_string());
+    }
+    Some(out)
 }
 
 #[derive(Clone)]
