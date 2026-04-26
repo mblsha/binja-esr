@@ -222,6 +222,159 @@ pub const IQ7000_STDO_WALKER_ENTRY: u32 = 0x0602EC;
 pub const IQ7000_STDO_WALKER_DEVICE_STRING_ADDR: u32 = 0x060980;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000RomField {
+    pub address: u32,
+    pub width: u8,
+    pub value: u64,
+    pub name: &'static str,
+    pub role: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_STDO_HEADER_FIELDS: &[Iq7000RomField] = &[
+    Iq7000RomField {
+        address: 0x051720,
+        width: 6,
+        value: 0x47303A3B3D42,
+        name: "stdo_header_preamble_tag_seed",
+        role: "raw STDO preamble bytes consumed by the colocated bootstrap/walker path",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000RomField {
+        address: 0x051726,
+        width: 3,
+        value: IQ7000_STDO_WALKER_ENTRY as u64,
+        name: "stdo_header_walker_entry",
+        role: "24-bit pointer into the 0x060200 walker blob",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000RomField {
+        address: 0x051729,
+        width: 3,
+        value: 0x05173C,
+        name: "stdo_header_next_record_ptr",
+        role: "24-bit pointer to the next header record boundary",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000RomField {
+        address: 0x05172C,
+        width: 1,
+        value: 0x00,
+        name: "stdo_header_zero_flag",
+        role: "flag byte; no nonzero use identified in decoded walker paths",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000RomField {
+        address: 0x05172D,
+        width: 1,
+        value: 0xA2,
+        name: "stdo_header_iocs_attr",
+        role: "matches the STDO IOCS blob attribute",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000RomField {
+        address: 0x05172E,
+        width: 1,
+        value: 0xDF,
+        name: "stdo_header_mode_mask",
+        role: "mode/mask byte adjacent to attr; exact bit semantics pending",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000RomField {
+        address: 0x05172F,
+        width: 1,
+        value: 0x0D,
+        name: "stdo_header_terminator_or_selector",
+        role: "trailing selector/terminator byte in long STDO preamble",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000RomField {
+        address: 0x051730,
+        width: 12,
+        value: 0,
+        name: "stdo_header_name_chunk",
+        role: "length/name bytes for STDO:SCRN: ending at the NUL before trailer",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000RomField {
+        address: 0x05173C,
+        width: 4,
+        value: 0x0105174F,
+        name: "stdo_header_trailer",
+        role: "24-bit intra-header pointer 0x05174F plus trailer index 0x01",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000WalkerStep {
+    pub address: u32,
+    pub role: &'static str,
+    pub consumed_state: &'static str,
+    pub produced_state: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_STDO_WALKER_STEPS: &[Iq7000WalkerStep] = &[
+    Iq7000WalkerStep {
+        address: 0x060204,
+        role: "copy up to six bytes from a device tag, stopping at ':' and padding with space",
+        consumed_state: "Y source tag, X destination tag buffer",
+        produced_state: "six-byte display/device tag field",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000WalkerStep {
+        address: 0x060225,
+        role: "walk linked records through [X] until [X+3] matches D6",
+        consumed_state: "record list pointer in X, selector in D6",
+        produced_state: "carry-coded match result",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000WalkerStep {
+        address: 0x06026A,
+        role: "walk records rooted at 0x3FD4A and emit IL=0x40 through the walker callback",
+        consumed_state: "3FD4A linked-list root, record tag at X+5",
+        produced_state: "callback-visible copied tag and advanced X=[X]",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000WalkerStep {
+        address: 0x0602B1,
+        role: "scan 0x1F-byte records behind (PX+0A) until an 0xFF marker",
+        consumed_state: "(PX+0A) base and +0x0C length",
+        produced_state: "D8 record index/count",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000WalkerStep {
+        address: 0x0604DA,
+        role: "store a record index into the 0x3FD2F table",
+        consumed_state: "A table index, D8 record index",
+        produced_state: "3FD2F[A]=D8",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000WalkerStep {
+        address: 0x060892,
+        role: "initialize walker header tables and emit stdo:stdi:stdl: tags",
+        consumed_state: "walker scratch at 0x3FD2F..0x3FD45 and string at 0x06098D",
+        produced_state: "cleared table, FFFF terminator, initialized tag set",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000WalkerStep {
+        address: 0x0609A5,
+        role: "compare 8.3-style names with ? wildcard and dot separator handling",
+        consumed_state: "X/Y name buffers",
+        produced_state: "carry-coded compare result",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000WalkerStep {
+        address: 0x060A2B,
+        role: "format a four-byte name, '.', then two-byte suffix",
+        consumed_state: "source bytes and output pointer",
+        produced_state: "formatted dotted label",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Iq7000KeyboardSelector {
     pub raw_code: u8,
     pub translated_code: u8,
@@ -305,11 +458,256 @@ pub const IQ7000_KEYBOARD_SCAN_CHAIN: &[u32] = &[
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000KeyboardMatrixContract {
+    pub address: u32,
+    pub name: &'static str,
+    pub role: &'static str,
+    pub f0_effect: &'static str,
+    pub f1_effect: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_KEYBOARD_MATRIX_CONTRACTS: &[Iq7000KeyboardMatrixContract] = &[
+    Iq7000KeyboardMatrixContract {
+        address: 0x00F3713,
+        name: "empty_ring_halt_wait",
+        role:
+            "when no queued key is available, drives F0/F1 high and HALTs for the next scan event",
+        f0_effect: "F0=0xFF",
+        f1_effect: "F1|=0x3F",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000KeyboardMatrixContract {
+        address: 0x00F537D,
+        name: "matrix_line_reset",
+        role: "clears keyboard output lines and pulses LCC until KIL settles",
+        f0_effect: "F0=0x00",
+        f1_effect: "F1&=0xC0",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000KeyboardMatrixContract {
+        address: 0x00F54D9,
+        name: "scan_prime",
+        role: "primes SCR/LCC and raises the high output-line enable bit before a sweep",
+        f0_effect: "unchanged",
+        f1_effect: "F1|=0x20",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000KeyboardMatrixContract {
+        address: 0x00F5510,
+        name: "sweep_seed",
+        role: "seeds the sweep mask/counter before falling into the bit scanner",
+        f0_effect: "mask seeded indirectly through 0x100001",
+        f1_effect: "column mask seeded indirectly through 0x100002",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000KeyboardMatrixContract {
+        address: 0x00F5548,
+        name: "row_column_probe",
+        role: "sets KOL from caller arg, ORs a 5-bit mask into KOH, reads KIL through 1FDAB[row]",
+        f0_effect: "F0 receives the active output-line mask",
+        f1_effect: "F1 receives the high column mask ORed into KOH",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000KeyboardMatrixContract {
+        address: 0x00F55AE,
+        name: "row_column_translate",
+        role: "computes idx=col*8+row and translates via 1FDC5/1FDCD tables",
+        f0_effect: "not modified",
+        f1_effect: "not modified",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000TranslationTableAnchor {
+    pub address: u32,
+    pub role: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_KEYBOARD_TRANSLATION_TABLES: &[Iq7000TranslationTableAnchor] = &[
+    Iq7000TranslationTableAnchor {
+        address: 0x00F4019,
+        role: "8x8 unshifted/runtime keycode grid used through 1FDC5",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000TranslationTableAnchor {
+        address: 0x0050DB7,
+        role: "8x8 shifted/ASCII-like keycode grid used through 1FDCD",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000TranslationTableAnchor {
+        address: 0x001FDAB,
+        role: "row mask table consumed by the physical KIL sampler",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000TranslationTableAnchor {
+        address: 0x001FDC5,
+        role: "primary translation-table pointer/flag byte; bit 0x40 gates scan dequeue",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000TranslationTableAnchor {
+        address: 0x001FDCD,
+        role: "secondary translation table used when primary byte is >=0x60",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Iq7000CommandTarget {
     pub index_or_command: u8,
     pub target: u32,
     pub role: &'static str,
 }
+
+pub const IQ7000_COM_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x20,
+        target: 0x00FA7E3,
+        role: "rearm line and flow",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x21,
+        target: 0x00FA7E3,
+        role: "rearm line and flow",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x22,
+        target: 0x00FA81A,
+        role: "line close worker",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x23,
+        target: 0x00FA74D,
+        role: "read bytes",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x24,
+        target: 0x00FA6A5,
+        role: "load line/config block",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x25,
+        target: 0x00FA6EC,
+        role: "sync countdown and service",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x26,
+        target: 0x00FA67A,
+        role: "send byte with line config",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x27,
+        target: 0x00FA670,
+        role: "read/compare bytes frontend",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x28,
+        target: 0x00FA7A2,
+        role: "TX/RX gate",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x29,
+        target: 0x00FA861,
+        role: "stub error A=0x0A",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x2A,
+        target: 0x00FA845,
+        role: "prepare DD/DB/DA pointers",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x2F,
+        target: 0x00FAB65,
+        role: "reset COM state and rings",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x31,
+        target: 0x00FAC34,
+        role: "send control byte",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x32,
+        target: 0x00FA8E1,
+        role: "TX state machine",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x34,
+        target: 0x00FAD7C,
+        role: "set EOH bit 0x20",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x35,
+        target: 0x00FAD81,
+        role: "clear EOH bit 0x20",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x36,
+        target: 0x00FAD86,
+        role: "set KOH bit 0x40",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x37,
+        target: 0x00FAD8B,
+        role: "clear KOH bit 0x40",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x38,
+        target: 0x00FAD90,
+        role: "set KOH bit 0x80",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x39,
+        target: 0x00FAD95,
+        role: "clear KOH bit 0x80",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x3A,
+        target: 0x00FAD9A,
+        role: "test EIH bit 0x10",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x3B,
+        target: 0x00FADA4,
+        role: "test EIH bit 0x04",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x3C,
+        target: 0x00FADC3,
+        role: "write UCR and OR line flags",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4F,
+        target: 0x00FADDD,
+        role: "clear COM ring head/tail",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x51,
+        target: 0x00FADED,
+        role: "read line status",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x54,
+        target: 0x00FAE0A,
+        role: "set lines by mask then read status",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x55,
+        target: 0x00FAE2A,
+        role: "clear lines by mask then read status",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x59,
+        target: 0x00FAB9B,
+        role: "handshake UCR loop",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5F,
+        target: 0x00FAE76,
+        role: "flow-control gate",
+    },
+];
 
 pub const IQ7000_RAM_DISK_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
     Iq7000CommandTarget {
@@ -419,6 +817,213 @@ pub const IQ7000_RAM_DISK_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
     },
 ];
 
+pub const IQ7000_CAS_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x20,
+        target: 0x00FAF35,
+        role: "record-builder frontend, backend mode 0",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x21,
+        target: 0x00FAF35,
+        role: "record-builder frontend, backend mode 0",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x22,
+        target: 0x00FB24B,
+        role: "record-builder clear/finish",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x23,
+        target: 0x00FB041,
+        role: "record read/load",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x24,
+        target: 0x00FAF8D,
+        role: "chunked record write",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x27,
+        target: 0x00FB03D,
+        role: "record read verify/alternate mode",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x2F,
+        target: 0x00FAF25,
+        role: "unconditional builder offset seed",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x30,
+        target: 0x00FAF21,
+        role: "conditional builder offset seed when A==0",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x31,
+        target: 0x00FAF35,
+        role: "record-builder frontend alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x32,
+        target: 0x00FB24B,
+        role: "record-builder clear/finish alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x33,
+        target: 0x00FB041,
+        role: "record read/load alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x34,
+        target: 0x00FAF8D,
+        role: "chunked record write alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x35,
+        target: 0x00FB03D,
+        role: "record verify alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x3F,
+        target: 0x00FAF25,
+        role: "unconditional builder offset seed alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x40,
+        target: 0x00FAF21,
+        role: "conditional builder offset seed alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x41,
+        target: 0x00FAF35,
+        role: "record-builder frontend alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x42,
+        target: 0x00FB24B,
+        role: "record-builder clear/finish alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x43,
+        target: 0x00FB041,
+        role: "record read/load alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x44,
+        target: 0x00FAF8D,
+        role: "chunked record write alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x45,
+        target: 0x00FB03D,
+        role: "record verify alias",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x46,
+        target: 0x00F0108,
+        role: "suspicious unused/filler target",
+    },
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Iq7000MediaFormatField {
+    pub offset: u8,
+    pub width: u8,
+    pub name: &'static str,
+    pub role: &'static str,
+    pub status: Iq7000ContractStatus,
+}
+
+pub const IQ7000_CAS_RECORD_FIELDS: &[Iq7000MediaFormatField] = &[
+    Iq7000MediaFormatField {
+        offset: 0x00,
+        width: 1,
+        name: "record_type",
+        role: "0xB2 marker required by read/write validators",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x01,
+        width: 11,
+        name: "name_8_3",
+        role: "space-padded 8.3-style name/pattern field",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x12,
+        width: 2,
+        name: "chunk_payload_len",
+        role: "payload length for this 0x1C00-byte-bounded chunk",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x18,
+        width: 2,
+        name: "sequence",
+        role: "record sequence compared against builder offset +0x11",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+];
+
+pub const IQ7000_RAM_DISK_METADATA_FIELDS: &[Iq7000MediaFormatField] = &[
+    Iq7000MediaFormatField {
+        offset: 0x00,
+        width: 3,
+        name: "workspace_base_ptr",
+        role: "drive workspace pointer root at 1FD00/1FD09/1FD0F",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x03,
+        width: 3,
+        name: "media_base_ptr",
+        role: "media/data base pointer, initialized from 1FDEB or selected card RAM",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x0C,
+        width: 1,
+        name: "busy_or_locked_flags",
+        role: "bit0 blocks some public operations",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x11,
+        width: 1,
+        name: "record_flags",
+        role: "bit0 marks not-ready/locked in readiness checks",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x12,
+        width: 2,
+        name: "capacity_or_end_guard",
+        role: "used by init/repair path to validate available record space",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x16,
+        width: 3,
+        name: "record_region_start",
+        role: "start offset for record/list data",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x19,
+        width: 3,
+        name: "record_region_end",
+        role: "end/current offset for record/list data",
+        status: Iq7000ContractStatus::Confirmed,
+    },
+    Iq7000MediaFormatField {
+        offset: 0x26,
+        width: 3,
+        name: "record_data_base_offset",
+        role: "base offset used by list/status/template commands",
+        status: Iq7000ContractStatus::StructurallyMapped,
+    },
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Iq7000RtcCommandSpec {
     pub command: u8,
@@ -484,6 +1089,182 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
     },
 ];
 
+pub const IQ7000_DEV0D_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x3F,
+        target: 0x00F67D7,
+        role: "noop success",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x40,
+        target: 0x00F67D7,
+        role: "noop success",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x41,
+        target: 0x00F67D9,
+        role: "record lookup and validate",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x42,
+        target: 0x00F6805,
+        role: "seek last matching record",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x43,
+        target: 0x00F681B,
+        role: "next record skip invalid",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x44,
+        target: 0x00F683A,
+        role: "previous record skip invalid",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x45,
+        target: 0x00F6BC7,
+        role: "field match mode 0",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x46,
+        target: 0x00F6C0F,
+        role: "field match mode 1",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x47,
+        target: 0x00F6BBF,
+        role: "next then mode 0",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x48,
+        target: 0x00F6C07,
+        role: "previous then mode 1",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x49,
+        target: 0x00F6C44,
+        role: "field match mode 2",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4A,
+        target: 0x00F6C75,
+        role: "field match mode 3",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4B,
+        target: 0x00F6C3C,
+        role: "next then mode 2",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4C,
+        target: 0x00F6C6D,
+        role: "previous then mode 3",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4D,
+        target: 0x00F6853,
+        role: "copy blocks",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4E,
+        target: 0x00F68A9,
+        role: "insert/copy worker",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x4F,
+        target: 0x00F6A6C,
+        role: "edit worker",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x50,
+        target: 0x00F6974,
+        role: "edit preflight",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x51,
+        target: 0x00F6D30,
+        role: "advance and apply",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x52,
+        target: 0x00F6C9E,
+        role: "count matching records",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x53,
+        target: 0x00F69D3,
+        role: "allocate/copy/insert",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x54,
+        target: 0x00F6CC0,
+        role: "apply changes",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x55,
+        target: 0x00F6D54,
+        role: "index to checked 7-byte offset",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x56,
+        target: 0x00F70E3,
+        role: "compare dispatch",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x57,
+        target: 0x00F71A6,
+        role: "daily alarm service",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x58,
+        target: 0x00F7286,
+        role: "alarm service",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x59,
+        target: 0x00F8733,
+        role: "user dictionary transfer/search",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5A,
+        target: 0x00F8914,
+        role: "user dictionary fixed compare search",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5B,
+        target: 0x00F6A34,
+        role: "cursor adjust",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5C,
+        target: 0x00F70FD,
+        role: "RTC alarm worker",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5D,
+        target: 0x00F6FEC,
+        role: "RTC alarm phase 2",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x5E,
+        target: 0x00F6FB9,
+        role: "RTC alarm phase 1",
+    },
+];
+
+pub const IQ7000_DEV0E_COMMAND_TABLE: &[Iq7000CommandTarget] = &[
+    Iq7000CommandTarget {
+        index_or_command: 0x40,
+        target: 0x00F5CA8,
+        role: "store X to global 0x0CAE5C",
+    },
+    Iq7000CommandTarget {
+        index_or_command: 0x41,
+        target: 0x00F5CAE,
+        role: "timed SCR/SSR wait variant",
+    },
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Iq7000DeviceGap {
     pub area: &'static str,
@@ -494,38 +1275,38 @@ pub struct Iq7000DeviceGap {
 pub const IQ7000_REMAINING_GAPS: &[Iq7000DeviceGap] = &[
     Iq7000DeviceGap {
         area: "STDO:SCRN",
-        rust_contract: "96x64 VRAM/font rendering plus STDO header/walker constants",
-        remaining: "prove every 0x51720 header field against the 0x060200 walker",
+        rust_contract: "rendering, exact STDO header fields, and decoded walker steps",
+        remaining: "only mirrored-header/hardware-parity caller tracing remains",
     },
     Iq7000DeviceGap {
         area: "STDI:KYBD",
-        rust_contract: "selector map, scan chain, and action-target table",
-        remaining: "complete physical matrix row/column map and every translation action target",
+        rust_contract: "selector map, scan chain, F0/F1 contracts, and translation table anchors",
+        remaining: "hardware keycap-to-row/column parity labels",
     },
     Iq7000DeviceGap {
         area: "COM/PANET/PACOM/PRN",
-        rust_contract: "IOCS device records and known serial helper tables",
-        remaining: "full command ABI and hardware timing constants",
+        rust_contract: "IOCS records, COM IL table, line/status/ring/flow helpers",
+        remaining: "cycle-accurate external UART/printer/PANET/PACOM peripherals",
     },
     Iq7000DeviceGap {
         area: "CAS",
-        rust_contract: "IOCS device record and known CAS front-end addresses",
-        remaining: "record/chunk byte format, retry timing, and exact error codes",
+        rust_contract: "CAS IL table, record fields, chunked load/write/verify paths",
+        remaining: "analog transport timing and hardware retry parity",
     },
     Iq7000DeviceGap {
         area: "S1:S2:S3:S4 / E:F:G",
-        rust_contract: "0xF7CA9 command table and workspace helper roles",
-        remaining: "full partition/file metadata semantics",
+        rust_contract: "command table, helper roles, and workspace metadata fields",
+        remaining: "byte-for-byte external media image parity fixtures",
     },
     Iq7000DeviceGap {
         area: "RTC",
-        rust_contract: "E-port RTC protocol and command response lengths",
-        remaining: "alarm/status/write subcommands and ON-key/power interactions",
+        rust_contract: "current-time peripheral, command lengths, and alarm worker entries",
+        remaining: "stateful alarm write/status and ON-key wake scheduling",
     },
     Iq7000DeviceGap {
         area: "SYSTM/dev0D/dev0E",
-        rust_contract: "IOCS device records and command-range ownership",
-        remaining: "full list-editor/alarm/SCR-handshake command semantics",
+        rust_contract: "dev0D/dev0E command tables and list/alarm/SCR roles",
+        remaining: "UI caller naming and stateful list/alarm side effects",
     },
 ];
 
@@ -943,6 +1724,15 @@ mod tests {
             .expect("SYSTEM header block");
         assert_eq!(system.entry_or_walker, Some(0x048C31));
         assert_eq!(system.trailer_index, None);
+
+        assert!(IQ7000_STDO_HEADER_FIELDS.iter().any(|field| {
+            field.address == 0x051726
+                && field.value == u64::from(IQ7000_STDO_WALKER_ENTRY)
+                && field.name == "stdo_header_walker_entry"
+        }));
+        assert!(IQ7000_STDO_WALKER_STEPS.iter().any(|step| {
+            step.address == 0x060892 && step.role.contains("initialize walker header tables")
+        }));
     }
 
     #[test]
@@ -971,6 +1761,13 @@ mod tests {
             .iter()
             .any(|target| target.address == 0x00F563C
                 && target.role == "serial RX interrupt handler"));
+        assert!(IQ7000_KEYBOARD_MATRIX_CONTRACTS.iter().any(|entry| {
+            entry.address == 0x00F5548
+                && entry.f0_effect == "F0 receives the active output-line mask"
+        }));
+        assert!(IQ7000_KEYBOARD_TRANSLATION_TABLES
+            .iter()
+            .any(|entry| entry.address == 0x00F4019));
     }
 
     #[test]
@@ -1006,6 +1803,47 @@ mod tests {
             .expect("F1 RTC command");
         assert_eq!(write_bcd.payload_len, 6);
         assert_eq!(write_bcd.response_len, 1);
+    }
+
+    #[test]
+    fn device_command_contracts_cover_serial_cas_storage_and_system_tables() {
+        assert!(IQ7000_COM_COMMAND_TABLE.iter().any(|entry| {
+            entry.index_or_command == 0x5F
+                && entry.target == 0x00FAE76
+                && entry.role == "flow-control gate"
+        }));
+        assert!(IQ7000_CAS_COMMAND_TABLE.iter().any(|entry| {
+            entry.index_or_command == 0x24
+                && entry.target == 0x00FAF8D
+                && entry.role == "chunked record write"
+        }));
+        assert!(IQ7000_CAS_RECORD_FIELDS
+            .iter()
+            .any(|field| { field.offset == 0x18 && field.name == "sequence" }));
+        assert!(IQ7000_RAM_DISK_METADATA_FIELDS
+            .iter()
+            .any(|field| { field.offset == 0x16 && field.name == "record_region_start" }));
+        assert_eq!(IQ7000_DEV0D_COMMAND_TABLE.len(), 0x20);
+        assert!(IQ7000_DEV0D_COMMAND_TABLE.iter().any(|entry| {
+            entry.index_or_command == 0x5C
+                && entry.target == 0x00F70FD
+                && entry.role == "RTC alarm worker"
+        }));
+        assert_eq!(
+            IQ7000_DEV0E_COMMAND_TABLE,
+            &[
+                Iq7000CommandTarget {
+                    index_or_command: 0x40,
+                    target: 0x00F5CA8,
+                    role: "store X to global 0x0CAE5C",
+                },
+                Iq7000CommandTarget {
+                    index_or_command: 0x41,
+                    target: 0x00F5CAE,
+                    role: "timed SCR/SSR wait variant",
+                },
+            ]
+        );
     }
 
     #[test]
