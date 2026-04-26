@@ -68,6 +68,7 @@ pub struct SioSnapshot {
     pub workspace: Vec<(u32, u8)>,
     pub rx_queue: Vec<SioQueuedByte>,
     pub tx_queue: Vec<u8>,
+    pub timing: SioTimingSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,21 +77,83 @@ pub struct SioInputLines {
     pub cd: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SioTimingConfig {
+    pub rx_ready_delay_cycles: u32,
+    pub tx_complete_cycles: u32,
+    pub handshake_delay_cycles: u32,
+    pub direct_input_timeout_cycles: u32,
+    pub xoff_threshold: usize,
+    pub xon_threshold: usize,
+}
+
+impl Default for SioTimingConfig {
+    fn default() -> Self {
+        Self {
+            rx_ready_delay_cycles: 0,
+            tx_complete_cycles: 1,
+            handshake_delay_cycles: 0,
+            direct_input_timeout_cycles: 0,
+            xoff_threshold: 12,
+            xon_threshold: 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SioTimingSnapshot {
+    pub config: SioTimingConfig,
+    pub rx_ready_countdown: Option<u32>,
+    pub tx_complete_countdown: Option<u32>,
+    pub handshake_countdown: Option<u32>,
+    pub direct_input_timeout_countdown: Option<u32>,
+    pub flow_paused: bool,
+    pub xoff_sent: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SioTimedEvent {
+    RxReady(u8),
+    TxComplete(u8),
+    HandshakeSettled(SioInputLines),
+    DirectInputTimeout,
+    Xoff,
+    Xon,
+}
+
 #[derive(Debug, Default)]
 pub struct SioStub {
     rx_queue: VecDeque<SioQueuedByte>,
+    pending_rx_queue: VecDeque<SioQueuedByte>,
     tx_queue: VecDeque<u8>,
     auto_response: u8,
     direct_input_timeout: bool,
+    timing_config: SioTimingConfig,
+    rx_ready_countdown: Option<u32>,
+    tx_complete_countdown: Option<u32>,
+    handshake_countdown: Option<u32>,
+    direct_input_timeout_countdown: Option<u32>,
+    pending_lines: Option<SioInputLines>,
+    flow_paused: bool,
+    xoff_sent: bool,
 }
 
 impl SioStub {
     pub fn new() -> Self {
         Self {
             rx_queue: VecDeque::new(),
+            pending_rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
             auto_response: 0x41,
             direct_input_timeout: false,
+            timing_config: SioTimingConfig::default(),
+            rx_ready_countdown: None,
+            tx_complete_countdown: None,
+            handshake_countdown: None,
+            direct_input_timeout_countdown: None,
+            pending_lines: None,
+            flow_paused: false,
+            xoff_sent: false,
         }
     }
 
@@ -104,6 +167,66 @@ impl SioStub {
 
     pub fn set_direct_input_timeout(&mut self, enabled: bool) {
         self.direct_input_timeout = enabled;
+        self.direct_input_timeout_countdown = enabled.then_some(
+            self.timing_config
+                .direct_input_timeout_cycles
+                .max(u32::from(enabled)),
+        );
+    }
+
+    pub fn set_timing_config(&mut self, config: SioTimingConfig) {
+        self.timing_config = config;
+    }
+
+    pub fn timing_snapshot(&self) -> SioTimingSnapshot {
+        SioTimingSnapshot {
+            config: self.timing_config,
+            rx_ready_countdown: self.rx_ready_countdown,
+            tx_complete_countdown: self.tx_complete_countdown,
+            handshake_countdown: self.handshake_countdown,
+            direct_input_timeout_countdown: self.direct_input_timeout_countdown,
+            flow_paused: self.flow_paused,
+            xoff_sent: self.xoff_sent,
+        }
+    }
+
+    pub fn tick_cycles(&mut self, cycles: u32, memory: &mut MemoryImage) -> Vec<SioTimedEvent> {
+        let mut events = Vec::new();
+        for _ in 0..cycles {
+            if countdown_elapsed(&mut self.rx_ready_countdown) {
+                if let Some(entry) = self.pending_rx_queue.pop_front() {
+                    self.rx_queue.push_back(entry);
+                    self.latch_next_received(memory);
+                    events.push(SioTimedEvent::RxReady(entry.value));
+                    if !self.pending_rx_queue.is_empty() {
+                        self.rx_ready_countdown =
+                            Some(self.timing_config.rx_ready_delay_cycles.max(1));
+                    }
+                }
+            }
+            if countdown_elapsed(&mut self.tx_complete_countdown) {
+                if let Some(value) = self.tx_queue.pop_front() {
+                    events.push(SioTimedEvent::TxComplete(value));
+                }
+                if !self.tx_queue.is_empty() {
+                    self.tx_complete_countdown = Some(self.timing_config.tx_complete_cycles.max(1));
+                }
+            }
+            if countdown_elapsed(&mut self.handshake_countdown) {
+                if let Some(lines) = self.pending_lines.take() {
+                    self.set_input_lines(memory, Some(lines.cs), Some(lines.cd));
+                    events.push(SioTimedEvent::HandshakeSettled(lines));
+                }
+            }
+            if countdown_elapsed(&mut self.direct_input_timeout_countdown) {
+                if self.direct_input_timeout && self.rx_queue.is_empty() {
+                    events.push(SioTimedEvent::DirectInputTimeout);
+                }
+            }
+            events.extend(self.update_flow_control());
+        }
+        self.apply_status(memory);
+        events
     }
 
     pub fn snapshot(&self, memory: &MemoryImage) -> SioSnapshot {
@@ -115,6 +238,7 @@ impl SioStub {
             workspace: serial_workspace(memory),
             rx_queue: self.rx_queue.iter().copied().collect(),
             tx_queue: self.tx_queue.iter().copied().collect(),
+            timing: self.timing_snapshot(),
         }
     }
 
@@ -128,6 +252,14 @@ impl SioStub {
         }
         self.rx_queue = VecDeque::from(snapshot.rx_queue);
         self.tx_queue = VecDeque::from(snapshot.tx_queue);
+        self.pending_rx_queue.clear();
+        self.timing_config = snapshot.timing.config;
+        self.rx_ready_countdown = snapshot.timing.rx_ready_countdown;
+        self.tx_complete_countdown = snapshot.timing.tx_complete_countdown;
+        self.handshake_countdown = snapshot.timing.handshake_countdown;
+        self.direct_input_timeout_countdown = snapshot.timing.direct_input_timeout_countdown;
+        self.flow_paused = snapshot.timing.flow_paused;
+        self.xoff_sent = snapshot.timing.xoff_sent;
         self.latch_next_received(memory);
         self.apply_status(memory);
     }
@@ -140,13 +272,21 @@ impl SioStub {
         framing_error: bool,
         memory: &mut MemoryImage,
     ) {
-        self.rx_queue.push_back(SioQueuedByte {
+        let entry = SioQueuedByte {
             value,
             parity_error,
             overrun_error,
             framing_error,
-        });
-        self.latch_next_received(memory);
+        };
+        if self.timing_config.rx_ready_delay_cycles == 0 {
+            self.rx_queue.push_back(entry);
+            self.latch_next_received(memory);
+        } else {
+            self.pending_rx_queue.push_back(entry);
+            if self.rx_ready_countdown.is_none() {
+                self.rx_ready_countdown = Some(self.timing_config.rx_ready_delay_cycles);
+            }
+        }
         self.apply_status(memory);
     }
 
@@ -168,12 +308,19 @@ impl SioStub {
         self.rx_queue.iter().copied().collect()
     }
 
+    pub fn pending_delayed_receive(&self) -> Vec<SioQueuedByte> {
+        self.pending_rx_queue.iter().copied().collect()
+    }
+
     pub fn pending_transmit(&self) -> Vec<u8> {
         self.tx_queue.iter().copied().collect()
     }
 
     pub fn queue_transmit(&mut self, value: u8, memory: &mut MemoryImage) {
         self.tx_queue.push_back(value);
+        if self.tx_complete_countdown.is_none() {
+            self.tx_complete_countdown = Some(self.timing_config.tx_complete_cycles.max(1));
+        }
         self.apply_status(memory);
     }
 
@@ -203,6 +350,11 @@ impl SioStub {
             value = set_mask(value, SERIAL_EIL_CD_MASK, enabled);
         }
         memory.write_internal_byte(IMEM_EIL_OFFSET, value);
+    }
+
+    pub fn set_input_lines_delayed(&mut self, cs: bool, cd: bool) {
+        self.pending_lines = Some(SioInputLines { cs, cd });
+        self.handshake_countdown = Some(self.timing_config.handshake_delay_cycles.max(1));
     }
 
     pub fn input_lines(&self, memory: &MemoryImage) -> SioInputLines {
@@ -297,8 +449,7 @@ impl SioStub {
 
     fn queue_auto_response(&mut self, memory: &mut MemoryImage) {
         let response = self.auto_response;
-        self.rx_queue.push_back(SioQueuedByte::new(response));
-        self.latch_next_received(memory);
+        self.queue_receive_byte(response, memory);
     }
 
     fn consume_rx(&mut self, memory: &mut MemoryImage) -> u8 {
@@ -364,6 +515,36 @@ impl SioStub {
         }
         state.set_reg(RegName::S, sp);
         value
+    }
+}
+
+fn countdown_elapsed(countdown: &mut Option<u32>) -> bool {
+    let Some(value) = countdown.as_mut() else {
+        return false;
+    };
+    *value = value.saturating_sub(1);
+    if *value == 0 {
+        *countdown = None;
+        true
+    } else {
+        false
+    }
+}
+
+impl SioStub {
+    fn update_flow_control(&mut self) -> Vec<SioTimedEvent> {
+        let pending = self.rx_queue.len() + self.pending_rx_queue.len();
+        if !self.xoff_sent && pending >= self.timing_config.xoff_threshold {
+            self.flow_paused = true;
+            self.xoff_sent = true;
+            vec![SioTimedEvent::Xoff]
+        } else if self.xoff_sent && pending <= self.timing_config.xon_threshold {
+            self.flow_paused = false;
+            self.xoff_sent = false;
+            vec![SioTimedEvent::Xon]
+        } else {
+            Vec::new()
+        }
     }
 }
 
