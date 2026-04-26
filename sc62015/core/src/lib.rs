@@ -14,6 +14,7 @@ pub mod llama;
 pub mod loop_detector;
 pub mod memory;
 pub mod pce500;
+pub mod pce500_peripherals;
 pub mod perfetto;
 pub mod sio;
 pub mod snapshot;
@@ -51,8 +52,12 @@ pub use memory::{
     INTERNAL_ADDR_MASK, INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START,
     INTERNAL_SPACE,
 };
+pub use pce500_peripherals::{
+    CassetteBlock, CassetteBlockKind, CassetteError, CassetteTapeImage, MemoryCardBlock,
+    MemoryCardImage, Pce500PeripheralBridge, RamDiskImage, StorageError,
+};
 pub use perfetto::PerfettoTracer;
-pub use sio::SioStub;
+pub use sio::{SioInputLines, SioQueuedByte, SioSnapshot, SioStub};
 #[cfg(feature = "perfetto")]
 pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>;
 #[cfg(feature = "perfetto")]
@@ -380,6 +385,7 @@ pub struct CoreRuntime {
     pub keyboard: Option<KeyboardMatrix>,
     pub lcd: Option<Box<dyn LcdHal>>,
     pub sio: Option<SioStub>,
+    pub pce500_peripherals: Option<Pce500PeripheralBridge>,
     pub timer: Box<TimerContext>,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
@@ -421,6 +427,7 @@ impl CoreRuntime {
             keyboard: Some(KeyboardMatrix::new()),
             lcd: Some(Box::new(LcdController::new())),
             sio: None,
+            pce500_peripherals: None,
             timer: Box::new(TimerContext::new(false, 0, 0)),
             host_read: None,
             host_write: None,
@@ -530,6 +537,12 @@ impl CoreRuntime {
             let mut stub = SioStub::new();
             stub.init(&mut self.memory);
             self.sio = Some(stub);
+        }
+    }
+
+    pub fn enable_pce500_peripheral_bridge(&mut self, card_capacity: usize) {
+        if self.pce500_peripherals.is_none() {
+            self.pce500_peripherals = Some(Pce500PeripheralBridge::new(card_capacity));
         }
     }
 
@@ -1125,6 +1138,14 @@ impl CoreRuntime {
             }
             if let Some(sio) = self.sio.as_mut() {
                 if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
+                    self.metadata.instruction_count =
+                        self.metadata.instruction_count.saturating_add(1);
+                    self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                    continue;
+                }
+            }
+            if let Some(bridge) = self.pce500_peripherals.as_mut() {
+                if bridge.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
                     self.metadata.instruction_count =
                         self.metadata.instruction_count.saturating_add(1);
                     self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
