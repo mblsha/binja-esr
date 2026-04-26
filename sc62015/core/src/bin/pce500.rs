@@ -1287,8 +1287,13 @@ impl StandaloneBus {
             return;
         }
         let kb_irq_enabled = self.timer.kb_irq_enabled;
-        self.keyboard
-            .write_fifo_to_memory(&mut self.memory, kb_irq_enabled);
+        let drained = self
+            .keyboard
+            .drain_fifo_to_pce500_iocs_workspace(&mut self.memory, kb_irq_enabled);
+        if drained == 0 {
+            self.keyboard
+                .write_fifo_to_memory(&mut self.memory, kb_irq_enabled);
+        }
         self.pending_kil = true;
         self.raise_key_irq();
         if kb_irq_enabled {
@@ -1652,7 +1657,12 @@ impl StandaloneBus {
                 let fifo_pending = self.keyboard.fifo_len() > 0;
                 pending_kil = events > 0 || fifo_pending;
                 if events > 0 || (kb_irq_enabled && fifo_pending) {
-                    self.keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
+                    let drained = self
+                        .keyboard
+                        .drain_fifo_to_pce500_iocs_workspace(mem, kb_irq_enabled);
+                    if drained == 0 {
+                        self.keyboard.write_fifo_to_memory(mem, kb_irq_enabled);
+                    }
                 }
                 (events, pending_kil, Some(self.keyboard.telemetry()))
             },

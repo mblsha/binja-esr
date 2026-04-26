@@ -1,5 +1,8 @@
+use sc62015_core::lcd_text::Pce500FontMap;
 use sc62015_core::llama::opcodes::RegName;
-use sc62015_core::pce500::{load_pce500_rom_window, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
+use sc62015_core::pce500::{
+    load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
+};
 use sc62015_core::CoreRuntime;
 use std::fs;
 use std::path::PathBuf;
@@ -36,6 +39,16 @@ pub fn boot_pce500() -> Option<CoreRuntime> {
     rt.power_on_reset();
     rt.step(20_000).expect("boot");
     Some(rt)
+}
+
+pub fn load_pce500_font() -> Option<Pce500FontMap> {
+    let rom_path = default_rom_path();
+    if !rom_path.exists() {
+        eprintln!("Skipping: ROM not present at {}", rom_path.display());
+        return None;
+    }
+    let rom = fs::read(&rom_path).expect("read ROM");
+    Some(pce500_font_map_from_rom(&rom).expect("load font map"))
 }
 
 #[allow(dead_code)]

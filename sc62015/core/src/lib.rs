@@ -752,6 +752,10 @@ impl CoreRuntime {
             return;
         }
         let kb_irq_enabled = self.timer.kb_irq_enabled;
+        let mirror_pce500_fifo = matches!(
+            self.device_model(),
+            DeviceModel::PcE500 | DeviceModel::PcE500Jp
+        );
         let _ = self.timer.tick_timers_with_keyboard(
             &mut self.memory,
             cycle,
@@ -761,7 +765,14 @@ impl CoreRuntime {
                     let events = kb.scan_tick(mem, true);
                     let fifo_pending = kb.fifo_len() > 0;
                     if events > 0 || (kb_irq_enabled && fifo_pending) {
-                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                        let drained = if mirror_pce500_fifo {
+                            kb.drain_fifo_to_pce500_iocs_workspace(mem, kb_irq_enabled)
+                        } else {
+                            0
+                        };
+                        if drained == 0 {
+                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                        }
                     }
                     (
                         events,
@@ -1245,6 +1256,10 @@ impl CoreRuntime {
                     self.metadata.cycle_count = new_cycle;
                     if !self.timer.in_interrupt {
                         let kb_irq_enabled = self.timer.kb_irq_enabled;
+                        let mirror_pce500_fifo = matches!(
+                            self.device_model(),
+                            DeviceModel::PcE500 | DeviceModel::PcE500Jp
+                        );
                         let _ = self.timer.tick_timers_with_keyboard(
                             &mut self.memory,
                             new_cycle,
@@ -1253,7 +1268,17 @@ impl CoreRuntime {
                                     // Parity: always count/key-latch events even when IRQs are masked.
                                     let events = kb.scan_tick(mem, true);
                                     if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                        let drained = if mirror_pce500_fifo {
+                                            kb.drain_fifo_to_pce500_iocs_workspace(
+                                                mem,
+                                                kb_irq_enabled,
+                                            )
+                                        } else {
+                                            0
+                                        };
+                                        if drained == 0 {
+                                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                        }
                                     }
                                     (events, kb.fifo_len() > 0, Some(kb.telemetry()))
                                 } else {
@@ -1397,6 +1422,10 @@ impl CoreRuntime {
                 let prev_cycle = self.metadata.cycle_count;
                 let new_cycle = prev_cycle.wrapping_add(cycle_increment);
                 if run_timer_cycles {
+                    let mirror_pce500_fifo = matches!(
+                        self.device_model(),
+                        DeviceModel::PcE500 | DeviceModel::PcE500Jp
+                    );
                     for cyc in prev_cycle + 1..=new_cycle {
                         if !self.timer.in_interrupt {
                             let kb_irq_enabled = self.timer.kb_irq_enabled;
@@ -1408,7 +1437,17 @@ impl CoreRuntime {
                                         // Parity: always count/key-latch events even when IRQs are masked.
                                         let events = kb.scan_tick(mem, true);
                                         if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                            let drained = if mirror_pce500_fifo {
+                                                kb.drain_fifo_to_pce500_iocs_workspace(
+                                                    mem,
+                                                    kb_irq_enabled,
+                                                )
+                                            } else {
+                                                0
+                                            };
+                                            if drained == 0 {
+                                                kb.write_fifo_to_memory(mem, kb_irq_enabled);
+                                            }
                                         }
                                         (events, kb.fifo_len() > 0, Some(kb.telemetry()))
                                     } else {
