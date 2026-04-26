@@ -62,6 +62,9 @@ const IMR_KEY: u8 = 0x04;
 const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
 const IMR_ONK: u8 = 0x08;
+const SSR_ONK_VISIBLE: u8 = 0x02;
+const SSR_ONK_LEGACY_VISIBLE: u8 = 0x08;
+const SSR_ONK_VISIBLE_MASK: u8 = SSR_ONK_VISIBLE | SSR_ONK_LEGACY_VISIBLE;
 const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
 const KEY_SEQ_DEFAULT_HOLD: u64 = 1_000;
@@ -258,6 +261,14 @@ struct Args {
     /// Save final run/capture metadata as JSON.
     #[arg(long, value_name = "PATH")]
     capture_json: Option<PathBuf>,
+
+    /// Save the IQ-7000 PC-Link-ready LCD pixels before serving IQ7P clients.
+    #[arg(long, value_name = "PATH")]
+    iq7p_ready_capture_png: Option<PathBuf>,
+
+    /// Save IQ-7000 PC-Link-ready run/capture metadata before serving IQ7P clients.
+    #[arg(long, value_name = "PATH")]
+    iq7p_ready_capture_json: Option<PathBuf>,
 
     /// Save structured debug probes as JSON.
     #[arg(long, value_name = "PATH")]
@@ -1558,7 +1569,7 @@ impl StandaloneBus {
     fn press_on_key(&mut self) {
         // ON key is not part of the matrix; assert ONK input and pending IRQ.
         let ssr = self.memory.read_internal_byte(0xFF).unwrap_or(0);
-        let new_ssr = ssr | 0x08;
+        let new_ssr = ssr | SSR_ONK_VISIBLE_MASK;
         self.memory.write_internal_byte(0xFF, new_ssr);
         if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
             if (isr & ISR_ONKI) == 0 {
@@ -1575,7 +1586,7 @@ impl StandaloneBus {
 
     fn clear_on_key(&mut self) {
         let ssr = self.memory.read_internal_byte(0xFF).unwrap_or(0);
-        let new_ssr = ssr & !0x08;
+        let new_ssr = ssr & !SSR_ONK_VISIBLE_MASK;
         self.memory.write_internal_byte(0xFF, new_ssr);
         self.pending_onk = false;
     }
@@ -1740,13 +1751,7 @@ impl StandaloneBus {
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
             | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
         // Deliver highest-priority pending respecting masks.
-        let (src, mask) = if self.pending_onk && (isr & ISR_ONKI != 0) {
-            // Python parity: prefer a newly pending ONK even if IMR doesn't yet mask it in.
-            (Some("ONK"), ISR_ONKI)
-        } else if self.pending_kil && (isr & ISR_KEYI != 0) {
-            // Python parity: prefer a newly pending KEY even if IMR doesn't yet mask it in.
-            (Some("KEY"), ISR_KEYI)
-        } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
+        let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
             (Some("ONK"), ISR_ONKI)
         } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY) != 0 {
             (Some("KEY"), ISR_KEYI)
@@ -1996,7 +2001,8 @@ fn load_snapshot_state(
     bus.in_interrupt = metadata.interrupts.in_interrupt;
     bus.last_irq_src = metadata.interrupts.source.clone();
     bus.active_irq_mask = 0;
-    bus.pending_onk = (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & 0x08) != 0;
+    bus.pending_onk =
+        (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & SSR_ONK_VISIBLE_MASK) != 0;
     bus.pending_kil = false;
     bus.deferred_key_irq = false;
     bus.deferred_pending_kil = false;
@@ -2176,7 +2182,8 @@ fn apply_reset_trace2_main_display_profile(
     state.clear_call_page_stack();
 
     bus.cycle_count = 0;
-    bus.pending_onk = (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & 0x08) != 0;
+    bus.pending_onk =
+        (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & SSR_ONK_VISIBLE_MASK) != 0;
     bus.pending_kil = false;
     bus.deferred_key_irq = false;
     bus.deferred_pending_kil = false;
@@ -2436,7 +2443,7 @@ impl LlamaBus for StandaloneBus {
                 if offset == IMEM_SSR_OFFSET {
                     let mut val = self.memory.read_internal_byte(offset).unwrap_or(0);
                     if self.ssr_onk_visible() {
-                        val |= 0x08;
+                        val |= SSR_ONK_VISIBLE_MASK;
                     }
                     self.trace_imem_access("read", addr, bits, val as u32);
                     return (val as u32) & mask_bits(bits);
@@ -3692,6 +3699,47 @@ fn runtime_tap_event(
     Ok(())
 }
 
+fn runtime_apply_key_event(runtime: &mut CoreRuntime, key: AutoKeyKind, release: bool) {
+    match key {
+        AutoKeyKind::Matrix(code) => {
+            let Some(keyboard) = runtime.keyboard.as_mut() else {
+                return;
+            };
+            if release {
+                keyboard.release_matrix_code(code, &mut runtime.memory);
+            } else {
+                keyboard.press_matrix_code(code, &mut runtime.memory);
+            }
+        }
+        AutoKeyKind::Chord { modifier, code } => {
+            if release {
+                runtime_apply_key_event(runtime, AutoKeyKind::Matrix(code), true);
+                runtime_apply_key_event(runtime, AutoKeyKind::Matrix(modifier), true);
+            } else {
+                runtime_apply_key_event(runtime, AutoKeyKind::Matrix(modifier), false);
+                runtime_apply_key_event(runtime, AutoKeyKind::Matrix(code), false);
+            }
+        }
+        AutoKeyKind::Event(code) => runtime_inject_matrix_event(runtime, code, release),
+        AutoKeyKind::InputEvent(code) => {
+            if release {
+                return;
+            }
+            let Some(keyboard) = runtime.keyboard.as_mut() else {
+                return;
+            };
+            keyboard.inject_input_event(code, &mut runtime.memory, runtime.timer.kb_irq_enabled);
+        }
+        AutoKeyKind::OnKey => {
+            if release {
+                runtime.release_on_key();
+            } else {
+                runtime.press_on_key();
+            }
+        }
+    }
+}
+
 fn runtime_lcd_lines(
     runtime: &CoreRuntime,
     text_decoder: Option<&DeviceTextDecoder>,
@@ -3703,6 +3751,130 @@ fn runtime_lcd_lines(
         return Vec::new();
     };
     decoder.decode_display_text(lcd)
+}
+
+fn write_runtime_lcd_capture(
+    model: DeviceModel,
+    runtime: &CoreRuntime,
+    text_decoder: Option<&DeviceTextDecoder>,
+    capture_png: Option<&PathBuf>,
+    capture_json: Option<&PathBuf>,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let lcd_lines = runtime_lcd_lines(runtime, text_decoder);
+    if let Some(path) = capture_png {
+        let lcd = runtime.lcd.as_deref().ok_or("missing LCD runtime")?;
+        write_lcd_png(
+            path,
+            &lcd_pixels(lcd),
+            LCD_CAPTURE_SCALE,
+            lcd_annunciators(model, &runtime.memory).as_ref(),
+        )?;
+        println!("Wrote LCD PNG capture: {}", path.display());
+    }
+    if let Some(path) = capture_json {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let capture = json!({
+            "executed": runtime.instruction_count(),
+            "pc": format!("0x{:05X}", runtime.state.pc() & ADDRESS_MASK),
+            "halted": runtime.state.is_halted(),
+            "lcd_lines": lcd_lines,
+            "lcd_annunciators": lcd_annunciators(model, &runtime.memory),
+        });
+        fs::write(path, serde_json::to_string_pretty(&capture)?)?;
+        println!("Wrote LCD JSON capture: {}", path.display());
+    }
+    Ok(lcd_lines)
+}
+
+fn run_runtime_key_seq(
+    runtime: &mut CoreRuntime,
+    raw_key_seq: &str,
+    max_instructions: u64,
+    model: DeviceModel,
+    text_decoder: Option<&DeviceTextDecoder>,
+    log_enabled: bool,
+) -> Result<(), Box<dyn Error>> {
+    let actions = parse_key_seq(raw_key_seq, KEY_SEQ_DEFAULT_HOLD, model)
+        .map_err(|err| format!("--key-seq: {err}"))?;
+    if actions.is_empty() {
+        return Ok(());
+    }
+    let mut needs_screen_state = false;
+    let mut needs_screen_text = false;
+    for action in &actions {
+        match action.kind {
+            KeySeqKind::WaitScreenChange
+            | KeySeqKind::WaitScreenEmpty
+            | KeySeqKind::WaitScreenDraw => needs_screen_state = true,
+            KeySeqKind::WaitText => needs_screen_text = true,
+            _ => {}
+        }
+    }
+    let mut runner = KeySeqRunner::new(actions);
+    runner.set_log_enabled(log_enabled);
+    let start = runtime.instruction_count();
+    let deadline = start.saturating_add(max_instructions);
+    while runtime.instruction_count() < deadline {
+        let screen_state = if needs_screen_state || needs_screen_text {
+            let lcd = runtime.lcd.as_deref().ok_or("missing LCD runtime")?;
+            capture_screen_state(lcd, text_decoder, needs_screen_text)
+        } else {
+            ScreenState::default()
+        };
+        let events = runner.step(
+            runtime.instruction_count(),
+            !runtime.state.is_off(),
+            &screen_state,
+        );
+        for event in events {
+            match event.kind {
+                KeySeqEventKind::Press => {
+                    if let Some(key) = event.key {
+                        runtime_apply_key_event(runtime, key, false);
+                    }
+                }
+                KeySeqEventKind::Release => {
+                    if let Some(key) = event.key {
+                        runtime_apply_key_event(runtime, key, true);
+                    }
+                }
+                KeySeqEventKind::Log => println!("{}", event.message),
+            }
+        }
+        if runner.is_complete() {
+            println!("key-seq: completed at {}", runtime.instruction_count());
+            return Ok(());
+        }
+        let now = runtime.instruction_count();
+        let mut step_count = 1_u64;
+        if let Some(release_at) = runner.active_key.map(|_| runner.active_release_at) {
+            if release_at > now {
+                step_count = release_at - now;
+            }
+        } else if runner.action_index < runner.actions.len() {
+            let action = &runner.actions[runner.action_index];
+            match action.kind {
+                KeySeqKind::WaitOp if action.op_target_set && action.op_target > now => {
+                    step_count = action.op_target - now;
+                }
+                KeySeqKind::WaitText | KeySeqKind::WaitScreenChange => {
+                    step_count = 1_000;
+                }
+                KeySeqKind::WaitScreenEmpty | KeySeqKind::WaitScreenDraw => {
+                    step_count = 1_000;
+                }
+                _ => {}
+            }
+        }
+        let remaining = deadline.saturating_sub(now);
+        let bounded = step_count.min(remaining).max(1);
+        runtime.step(usize::try_from(bounded).unwrap_or(usize::MAX))?;
+    }
+    Err(format!("--key-seq did not complete within {max_instructions} instruction(s)").into())
 }
 
 fn run_iq7000_pclink_ui_path(
@@ -3752,34 +3924,56 @@ fn run_iq7000_pclink_ui_path(
         println!("  {line}");
     }
 
-    if let Some(path) = args.capture_png.as_ref() {
-        let lcd = runtime.lcd.as_deref().ok_or("missing LCD runtime")?;
-        write_lcd_png(
-            path,
-            &lcd_pixels(lcd),
-            LCD_CAPTURE_SCALE,
-            lcd_annunciators(args.model, &runtime.memory).as_ref(),
-        )?;
-        println!("Wrote LCD PNG capture: {}", path.display());
-    }
-    if let Some(path) = args.capture_json.as_ref() {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-        let capture = json!({
-            "executed": runtime.instruction_count(),
-            "pc": format!("0x{:05X}", runtime.state.pc() & ADDRESS_MASK),
-            "lcd_lines": lcd_lines,
-            "lcd_annunciators": lcd_annunciators(args.model, &runtime.memory),
-        });
-        fs::write(path, serde_json::to_string_pretty(&capture)?)?;
-        println!("Wrote LCD JSON capture: {}", path.display());
-    }
+    let has_post_key_seq = args
+        .key_seq
+        .as_ref()
+        .is_some_and(|raw| !raw.trim().is_empty());
+    let ready_capture_png = args.iq7p_ready_capture_png.as_ref().or_else(|| {
+        (!has_post_key_seq)
+            .then_some(args.capture_png.as_ref())
+            .flatten()
+    });
+    let ready_capture_json = args.iq7p_ready_capture_json.as_ref().or_else(|| {
+        (!has_post_key_seq)
+            .then_some(args.capture_json.as_ref())
+            .flatten()
+    });
+    write_runtime_lcd_capture(
+        args.model,
+        &runtime,
+        text_decoder,
+        ready_capture_png,
+        ready_capture_json,
+    )?;
 
     if let Some(bind) = args.iq7p_listen.as_ref() {
         serve_iq7p_clients(bind, args.iq7p_clients, &mut runtime.memory)?;
+    }
+    if let Some(raw_key_seq) = args
+        .key_seq
+        .as_ref()
+        .map(|raw| raw.trim())
+        .filter(|raw| !raw.is_empty())
+    {
+        run_runtime_key_seq(
+            &mut runtime,
+            raw_key_seq,
+            args.steps,
+            args.model,
+            text_decoder,
+            args.key_seq_log,
+        )?;
+        let final_lines = write_runtime_lcd_capture(
+            args.model,
+            &runtime,
+            text_decoder,
+            args.capture_png.as_ref(),
+            args.capture_json.as_ref(),
+        )?;
+        println!("LCD after key-seq (decoded text):");
+        for line in &final_lines {
+            println!("  {line}");
+        }
     }
     if let Some(path) = args.snapshot_out.as_ref() {
         if let Some(parent) = path.parent() {
@@ -4694,6 +4888,20 @@ mod tests {
             .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_ONK);
         // Assert ONK input and ISR bit.
         bus.press_on_key();
+        let ssr = bus
+            .memory
+            .read_internal_byte(super::IMEM_SSR_OFFSET)
+            .unwrap_or(0);
+        assert_eq!(
+            ssr & super::SSR_ONK_VISIBLE,
+            super::SSR_ONK_VISIBLE,
+            "IQ-7000 scanner-visible SSR bit should latch after ON key"
+        );
+        assert_eq!(
+            ssr & super::SSR_ONK_LEGACY_VISIBLE,
+            super::SSR_ONK_LEGACY_VISIBLE,
+            "legacy SSR ONK bit should remain visible after ON key"
+        );
         let isr = bus
             .memory
             .read_internal_byte(super::IMEM_ISR_OFFSET)
@@ -4919,6 +5127,38 @@ mod tests {
         );
         assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));
         assert!(bus.in_interrupt);
+    }
+
+    #[test]
+    fn deliver_irq_does_not_force_masked_onk_over_unmasked_timer() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x0200);
+        bus.memory
+            .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_MTI);
+        bus.memory
+            .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_ONKI | super::ISR_MTI);
+        bus.pending_onk = true;
+        bus.irq_pending = true;
+
+        bus.deliver_irq(&mut state);
+
+        assert_eq!(
+            bus.active_irq_mask,
+            super::ISR_MTI,
+            "masked ONK must not override the ROM-visible unmasked timer source"
+        );
+        assert_eq!(bus.last_irq_src.as_deref(), Some("MTI"));
     }
 
     #[test]

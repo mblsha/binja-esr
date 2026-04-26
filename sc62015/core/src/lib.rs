@@ -990,7 +990,7 @@ impl CoreRuntime {
                         if offset == 0xFF {
                             let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
-                                val |= 0x08;
+                                val |= SSR_ONK_VISIBLE_MASK;
                             }
                             return val as u32;
                         }
@@ -2027,6 +2027,9 @@ const ISR_MTI: u8 = 0x01;
 const ISR_STI: u8 = 0x02;
 const ISR_KEYI: u8 = 0x04;
 const ISR_ONKI: u8 = 0x08;
+const SSR_ONK_VISIBLE: u8 = 0x02;
+const SSR_ONK_LEGACY_VISIBLE: u8 = 0x08;
+const SSR_ONK_VISIBLE_MASK: u8 = SSR_ONK_VISIBLE | SSR_ONK_LEGACY_VISIBLE;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
 fn src_mask_for_name(name: &str) -> Option<u8> {
@@ -2307,7 +2310,11 @@ mod tests {
             .memory
             .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
             .unwrap_or(0);
-        assert_eq!(ssr_before & 0x08, 0, "SSR ONK bit should start clear");
+        assert_eq!(
+            ssr_before & SSR_ONK_VISIBLE_MASK,
+            0,
+            "SSR ONK bits should start clear"
+        );
 
         rt.press_on_key();
         // Read SSR through the runtime bus path (simulating CPU load).
@@ -2325,7 +2332,7 @@ mod tests {
                         if offset == crate::memory::IMEM_SSR_OFFSET {
                             let mut val = self.mem.read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
-                                val |= 0x08;
+                                val |= SSR_ONK_VISIBLE_MASK;
                             }
                             return val as u32;
                         }
@@ -2342,10 +2349,15 @@ mod tests {
                 8,
             ) as u8
         };
-        assert_ne!(
-            ssr_after & 0x08,
-            0,
-            "SSR should reflect ONK level when pressed"
+        assert_eq!(
+            ssr_after & SSR_ONK_VISIBLE,
+            SSR_ONK_VISIBLE,
+            "SSR bit 0x02 should reflect ONK level when pressed"
+        );
+        assert_eq!(
+            ssr_after & SSR_ONK_LEGACY_VISIBLE,
+            SSR_ONK_LEGACY_VISIBLE,
+            "SSR bit 0x08 should remain visible for existing ONK users"
         );
 
         rt.release_on_key();
@@ -2354,9 +2366,9 @@ mod tests {
             .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
             .unwrap_or(0);
         assert_eq!(
-            ssr_clear & 0x08,
+            ssr_clear & SSR_ONK_VISIBLE_MASK,
             0,
-            "SSR ONK bit should clear after release"
+            "SSR ONK bits should clear after release"
         );
     }
 
