@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -18,6 +18,8 @@ type RunnerArgs = {
 	bnidaPath: string | null;
 	disableBnida: boolean;
 	requireBnida: boolean;
+	iq7000Rtc: string;
+	proofYamlPath: string | null;
 	scriptPath: string | null;
 	evalSource: string | null;
 	stdin: boolean;
@@ -36,6 +38,8 @@ Options:
   --bnida <path>             BNIDA export for function trace labels
   --no-bnida                 Disable auto-loading BNIDA symbols
   --require-bnida            Fail if BNIDA symbols cannot be loaded
+  --iq7000-rtc <seed>        IQ-7000 RTC seed: host, off, or YYYYMMDDHHMM (default: host)
+  --proof-yaml <path>        Write run/proof metadata as YAML
   --eval <js>                Inline script (async JS)
   --stdin                    Read script from stdin
   --help                     Show this help
@@ -66,6 +70,59 @@ function hostRtcSeed(): string {
 	return `${pad(now.getFullYear(), 4)}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(
 		now.getMinutes(),
 	)}`;
+}
+
+function resolveIq7000Rtc(raw: string): { mode: 'host' | 'off' | 'fixed'; seed: string | null } {
+	const trimmed = raw.trim().toLowerCase();
+	if (trimmed === 'host' || trimmed === '') return { mode: 'host', seed: hostRtcSeed() };
+	if (trimmed === 'off') return { mode: 'off', seed: null };
+	if (!/^\d{12}$/.test(trimmed)) {
+		die(`error: --iq7000-rtc expects host, off, or YYYYMMDDHHMM; got '${raw}'`);
+	}
+	return { mode: 'fixed', seed: trimmed };
+}
+
+function yamlScalar(value: string): string {
+	if (/^[A-Za-z0-9_./:-]+$/.test(value) && value !== 'null' && value !== 'true' && value !== 'false') {
+		return value;
+	}
+	return JSON.stringify(value);
+}
+
+function toYaml(value: unknown, indent = 0): string {
+	const pad = ' '.repeat(indent);
+	if (value === null || value === undefined) return 'null';
+	if (typeof value === 'string') return yamlScalar(value);
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	if (Array.isArray(value)) {
+		if (!value.length) return '[]';
+		return value
+			.map((entry) => {
+				if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+					const nested = toYaml(entry, indent + 2);
+					return `${pad}- ${nested.trimStart()}`;
+				}
+				return `${pad}- ${toYaml(entry, indent + 2).trimStart()}`;
+			})
+			.join('\n');
+	}
+	if (typeof value === 'object') {
+		const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
+		if (!entries.length) return '{}';
+		return entries
+			.map(([key, entry]) => {
+				if (entry && typeof entry === 'object') {
+					const nested = toYaml(entry, indent + 2);
+					if (!nested.includes('\n') && (Array.isArray(entry) ? entry.length === 0 : Object.keys(entry).length === 0)) {
+						return `${pad}${key}: ${nested.trimStart()}`;
+					}
+					return `${pad}${key}:\n${nested}`;
+				}
+				return `${pad}${key}: ${toYaml(entry, indent + 2)}`;
+			})
+			.join('\n');
+	}
+	return yamlScalar(String(value));
 }
 
 type PerfettoSymbol = { addr: number; name: string };
@@ -164,6 +221,8 @@ function parseArgs(argv: string[]): RunnerArgs {
 	let bnidaPath: string | null = null;
 	let disableBnida = false;
 	let requireBnida = false;
+	let iq7000Rtc = 'host';
+	let proofYamlPath: string | null = null;
 	let evalSource: string | null = null;
 	let stdin = false;
 	let scriptPath: string | null = null;
@@ -202,6 +261,18 @@ function parseArgs(argv: string[]): RunnerArgs {
 			requireBnida = true;
 			continue;
 		}
+		if (arg === '--iq7000-rtc') {
+			const next = argv[++i];
+			if (!next) die('error: --iq7000-rtc requires host, off, or YYYYMMDDHHMM');
+			iq7000Rtc = next;
+			continue;
+		}
+		if (arg === '--proof-yaml') {
+			const next = argv[++i];
+			if (!next) die('error: --proof-yaml requires a path');
+			proofYamlPath = next;
+			continue;
+		}
 		if (arg === '--eval') {
 			const next = argv[++i];
 			if (next === undefined) die('error: --eval requires JS source');
@@ -217,7 +288,18 @@ function parseArgs(argv: string[]): RunnerArgs {
 		scriptPath = arg;
 	}
 
-	return { model, romPath, bnidaPath, disableBnida, requireBnida, scriptPath, evalSource, stdin };
+	return {
+		model,
+		romPath,
+		bnidaPath,
+		disableBnida,
+		requireBnida,
+		iq7000Rtc,
+		proofYamlPath,
+		scriptPath,
+		evalSource,
+		stdin,
+	};
 }
 
 async function ensureWasmInitialized(): Promise<void> {
@@ -261,8 +343,14 @@ async function main() {
 	const emulator: any = new Emulator();
 	initStubDispatcher(emulator);
 	emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes);
+	let iq7000Rtc: { mode: 'host' | 'off' | 'fixed'; seed: string | null } | null = null;
 	if (model === 'iq-7000' && typeof emulator.set_iq7000_rtc_yyyymmddhhmm === 'function') {
-		emulator.set_iq7000_rtc_yyyymmddhhmm(hostRtcSeed());
+		iq7000Rtc = resolveIq7000Rtc(args.iq7000Rtc);
+		if (iq7000Rtc.seed === null) {
+			emulator.clear_iq7000_rtc?.();
+		} else {
+			emulator.set_iq7000_rtc_yyyymmddhhmm(iq7000Rtc.seed);
+		}
 	}
 
 	try {
@@ -373,12 +461,36 @@ async function main() {
 
 	const api = createEvalApi(adapter);
 	let resultJson: string | null = null;
+	let resultValue: unknown = null;
 	let error: string | null = null;
 	try {
 		const result = await runUserJs(source, api, Reg, Flag, IOCS);
+		resultValue = result;
 		resultJson = safeJson(result);
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
+	}
+
+	if (args.proofYamlPath) {
+		const outputPath = resolve(process.cwd(), args.proofYamlPath);
+		await mkdir(dirname(outputPath), { recursive: true });
+		const proofValue =
+			resultValue && typeof resultValue === 'object' && 'proof' in resultValue
+				? (resultValue as Record<string, unknown>).proof
+				: null;
+		const proof = {
+			proof: proofValue ?? undefined,
+			run: {
+				generated_at: new Date().toISOString(),
+				source: 'fnr:cli',
+				status: error ? 'error' : 'ok',
+			},
+			rom: { model, path: resolvedRomPath },
+			iq7000_rtc: iq7000Rtc,
+			result: proofValue ? undefined : resultValue,
+			error,
+		};
+		await writeFile(outputPath, `${toYaml(proof)}\n`, 'utf8');
 	}
 
 	console.log(
@@ -389,6 +501,7 @@ async function main() {
 			resultJson,
 			error,
 			rom: { model, path: resolvedRomPath },
+			iq7000Rtc,
 		}),
 	);
 
