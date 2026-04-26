@@ -22,6 +22,7 @@ const PCE500_RBRACKET: [u8; GLYPH_WIDTH] = [0x00, 0x41, 0x7f, 0x7f, 0x00];
 const IQ7000_CELL_BYTES: usize = 6;
 const IQ7000_TEXT_COLS: usize = 16;
 const IQ7000_TEXT_ROWS: usize = 8;
+const IQ7000_DATE_SLASH: [u8; IQ7000_CELL_BYTES] = [0x10, 0x10, 0x54, 0x10, 0x10, 0x00];
 
 const IQ7000_LARGE_CELL_HALF_BYTES: usize = 8;
 const IQ7000_LARGE_CELL_BYTES: usize = IQ7000_LARGE_CELL_HALF_BYTES * 2;
@@ -222,7 +223,7 @@ impl Iq7000FontMap {
             }
             let mut pattern = [0u8; IQ7000_CELL_BYTES];
             pattern.copy_from_slice(&rom[start..start + IQ7000_CELL_BYTES]);
-            if let Some(ch) = char::from_u32(codepoint) {
+            if let Some(ch) = iq7000_display_char(codepoint as u8) {
                 glyphs.entry(pattern).or_insert(ch);
                 let mut inverted = [0u8; IQ7000_CELL_BYTES];
                 for (dst, src_byte) in inverted.iter_mut().zip(pattern) {
@@ -231,6 +232,7 @@ impl Iq7000FontMap {
                 glyphs.entry(inverted).or_insert(ch);
             }
         }
+        insert_iq7000_pattern(&mut glyphs, IQ7000_DATE_SLASH, '/');
         Self { glyphs }
     }
 
@@ -241,6 +243,19 @@ impl Iq7000FontMap {
     fn resolve(&self, pattern: &[u8; IQ7000_CELL_BYTES]) -> char {
         *self.glyphs.get(pattern).unwrap_or(&'?')
     }
+}
+
+fn insert_iq7000_pattern(
+    glyphs: &mut HashMap<[u8; IQ7000_CELL_BYTES], char>,
+    pattern: [u8; IQ7000_CELL_BYTES],
+    ch: char,
+) {
+    glyphs.entry(pattern).or_insert(ch);
+    let mut inverted = [0u8; IQ7000_CELL_BYTES];
+    for (dst, src_byte) in inverted.iter_mut().zip(pattern) {
+        *dst = !src_byte;
+    }
+    glyphs.entry(inverted).or_insert(ch);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -263,7 +278,7 @@ impl Iq7000LargeFontMap {
             }
             let mut pattern = [0u8; IQ7000_LARGE_CELL_BYTES];
             pattern.copy_from_slice(&rom[start..start + IQ7000_LARGE_CELL_BYTES]);
-            if let Some(ch) = char::from_u32(codepoint) {
+            if let Some(ch) = iq7000_display_char(codepoint as u8) {
                 glyphs.entry(pattern).or_insert(ch);
                 let mut inverted = [0u8; IQ7000_LARGE_CELL_BYTES];
                 for (dst, src_byte) in inverted.iter_mut().zip(pattern) {
@@ -281,6 +296,16 @@ impl Iq7000LargeFontMap {
 
     fn resolve(&self, pattern: &[u8; IQ7000_LARGE_CELL_BYTES]) -> char {
         *self.glyphs.get(pattern).unwrap_or(&'?')
+    }
+}
+
+fn iq7000_display_char(code: u8) -> Option<char> {
+    match code {
+        // Runtime MEMO validation shows the editor emits this glyph for typed '/'.
+        // The ROM font table is not a pure ASCII map for punctuation.
+        0x3B => Some('/'),
+        0x20..=0x7F => char::from_u32(u32::from(code)),
+        _ => None,
     }
 }
 
@@ -734,6 +759,23 @@ mod tests {
 
         let lines = decode_iq7000_display_text(&lcd, &font);
         assert_eq!(lines, vec!["AB"]);
+    }
+
+    #[test]
+    fn iq7000_text_decoder_maps_memo_date_slash_glyph() {
+        let mut rom = vec![0u8; 0x80 * IQ7000_CELL_BYTES];
+        let slash = IQ7000_DATE_SLASH;
+        rom[(0x3B * IQ7000_CELL_BYTES)..(0x3B * IQ7000_CELL_BYTES + IQ7000_CELL_BYTES)]
+            .copy_from_slice(&slash);
+        let font = Iq7000FontMap::from_rom(&rom, 0);
+
+        let mut lcd = Iq7000LcdController::new();
+        for (idx, byte) in slash.into_iter().enumerate() {
+            lcd.write(0x4000 + (0x5F - idx as u32), byte);
+        }
+
+        let lines = decode_iq7000_display_text(&lcd, &font);
+        assert_eq!(lines, vec!["/"]);
     }
 
     #[test]

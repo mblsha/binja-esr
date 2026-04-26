@@ -68,11 +68,38 @@ The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captur
 ```bash
 cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
   --model iq-7000 \
-  --snapshot-in PATH/TO/base-state.pcsnap \
-  --key-seq "digitizer:0xA0,wait-op:50000" \
+  --key-seq "memo,text:PASSPORT NO.\\nM6711888\\nEXPIRES 12/25/90,memo-enter,memo,search-down" \
   --capture-png /tmp/iq7000-a0.png \
-  --capture-json /tmp/iq7000-a0.json
+  --capture-json /tmp/iq7000-a0.json \
+  --debug-probe-json /tmp/iq7000-a0.debug.json \
+  --debug-probe-range storage@0x1fd00:0x40
 ```
 
-`digitizer:0xNN` injects an exact translated input byte and is intended for card/digitizer
-selection-code probes that are not representable as plain matrix key presses.
+`digitizer:0xNN` and `event:0xNN` still inject exact translated input bytes. For
+IQ-7000 app/editor work, the runner also accepts named event keys such as
+`calendar`, `memo`, `tel`, `home`, `world`, `search-up`, `search-down`,
+`newline`, and `memo-enter`. `text:...` expands printable characters through the
+generated per-model input map; use `\\n` inside text to emit the MEMO newline key.
+
+For repeatable captures, put the same settings in a scenario JSON file:
+
+```json
+{
+  "model": "iq-7000",
+  "steps": 3000000,
+  "key_seq": [
+    "memo",
+    "text:PASSPORT NO.\\nM6711888\\nEXPIRES 12/25/90",
+    "memo-enter",
+    "memo",
+    "search-down"
+  ],
+  "capture_png": "memo.png",
+  "capture_json": "memo.json",
+  "debug_probe_json": "memo.debug.json",
+  "debug_probe_range": ["storage@0x1fd00:0x40"]
+}
+```
+
+Run it with `--scenario path/to/scenario.json`. Relative capture/debug paths are
+resolved relative to the scenario file.
