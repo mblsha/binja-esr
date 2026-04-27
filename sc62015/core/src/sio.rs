@@ -126,7 +126,7 @@ pub struct SioStub {
     rx_queue: VecDeque<SioQueuedByte>,
     pending_rx_queue: VecDeque<SioQueuedByte>,
     tx_queue: VecDeque<u8>,
-    auto_response: u8,
+    auto_response: Option<u8>,
     direct_input_timeout: bool,
     timing_config: SioTimingConfig,
     rx_ready_countdown: Option<u32>,
@@ -144,7 +144,7 @@ impl SioStub {
             rx_queue: VecDeque::new(),
             pending_rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
-            auto_response: 0x41,
+            auto_response: Some(0x41),
             direct_input_timeout: false,
             timing_config: SioTimingConfig::default(),
             rx_ready_countdown: None,
@@ -162,7 +162,11 @@ impl SioStub {
     }
 
     pub fn set_auto_response(&mut self, value: u8) {
-        self.auto_response = value;
+        self.auto_response = Some(value);
+    }
+
+    pub fn disable_auto_response(&mut self) {
+        self.auto_response = None;
     }
 
     pub fn set_direct_input_timeout(&mut self, enabled: bool) {
@@ -382,7 +386,7 @@ impl SioStub {
             state.set_reg(RegName::A, 0x00);
             state.set_reg(RegName::FC, 1);
         } else {
-            let response = self.auto_response;
+            let response = self.auto_response.unwrap_or(0);
             memory.write_internal_byte(IMEM_RXD_OFFSET, response);
             memory.write_internal_byte(IMEM_BH_OFFSET, response);
             state.set_reg(RegName::A, u32::from(response));
@@ -448,8 +452,9 @@ impl SioStub {
     }
 
     fn queue_auto_response(&mut self, memory: &mut MemoryImage) {
-        let response = self.auto_response;
-        self.queue_receive_byte(response, memory);
+        if let Some(response) = self.auto_response {
+            self.queue_receive_byte(response, memory);
+        }
     }
 
     fn consume_rx(&mut self, memory: &mut MemoryImage) -> u8 {
@@ -591,6 +596,23 @@ mod tests {
         assert_eq!(value, 0x41);
         let usr_after = memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0);
         assert_eq!(usr_after & USR_RX_READY, 0);
+    }
+
+    #[test]
+    fn tx_write_can_disable_auto_response() {
+        let mut memory = MemoryImage::new();
+        let mut stub = SioStub::new();
+        stub.init(&mut memory);
+        stub.disable_auto_response();
+
+        assert!(stub.handle_write(IMEM_TXD_OFFSET, 0x55, &mut memory));
+
+        assert_eq!(stub.pending_transmit(), vec![0x55]);
+        assert!(stub.pending_receive().is_empty());
+        assert_eq!(
+            memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0) & USR_RX_READY,
+            0
+        );
     }
 
     #[test]

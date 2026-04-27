@@ -36,11 +36,11 @@ use sc62015_core::{
     SnapshotMetadata, ADDRESS_MASK, INTERNAL_MEMORY_START, PERFETTO_TRACER,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -48,6 +48,9 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+#[cfg(test)]
+use sc62015_core::memory::IMEM_EIH_OFFSET;
 
 const FIFO_BASE_ADDR: u32 = 0x00BFC96;
 const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
@@ -84,6 +87,21 @@ const IQ7P_HEADER_LEN: usize = 13;
 const IQ7P_MAX_BODY_LEN: usize = 16 * 1024 * 1024;
 const IQ7P_CMD_HELLO: u8 = 0x01;
 const IQ7P_CMD_READ_MEMORY: u8 = 0x10;
+const IQ7P_CMD_LIST_DATASETS: u8 = 0x20;
+const IQ7P_CMD_LIST_ENTRIES: u8 = 0x21;
+const IQ7P_CMD_PUT_ENTRY: u8 = 0x22;
+const IQ7P_CMD_DELETE_ENTRY: u8 = 0x23;
+const IQ7P_CMD_ERASE_DATASET: u8 = 0x24;
+const IQ7P_CMD_EXPORT_STATE: u8 = 0x25;
+const IQ7P_CMD_IMPORT_STATE: u8 = 0x26;
+const PCLINK_SERIAL_RX_PACE_STEPS: u32 = 1_000;
+const PCLINK_SERIAL_POST_CLIENT_SETTLE_STEPS: usize = 2_500_000;
+const PCLINK_SERIAL_XON: u8 = 0x11;
+const PCLINK_SERIAL_XOFF: u8 = 0x13;
+#[cfg(test)]
+const IQ7000_PACOM_EIH_DATA: u8 = 0x40;
+#[cfg(test)]
+const IQ7000_PACOM_RELEASE_STEPS: u8 = 8;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum CardMode {
@@ -306,6 +324,14 @@ struct Args {
     #[arg(long, value_name = "HOST:PORT")]
     iq7p_listen: Option<String>,
 
+    /// Listen for raw PC-Link serial bytes and bridge them to IQ-7000 SC62015 UART registers.
+    #[arg(long, value_name = "HOST:PORT")]
+    pclink_serial_listen: Option<String>,
+
+    /// Number of raw PC-Link serial socket clients to serve before exiting.
+    #[arg(long, default_value_t = 1)]
+    pclink_serial_clients: usize,
+
     /// Number of IQ7P client connections to serve before exiting.
     #[arg(long, default_value_t = 1)]
     iq7p_clients: usize,
@@ -313,6 +339,10 @@ struct Args {
     /// Drive the IQ-7000 ROM UI into PC-Link mode before serving IQ7P.
     #[arg(long, default_value_t = false)]
     iq7p_enter_pclink: bool,
+
+    /// Type a MEMO through the IQ-7000 foreground ROM UI before entering PC-Link.
+    #[arg(long, value_name = "TEXT")]
+    iq7000_seed_memo: Vec<String>,
 
     /// Serve IQ7P immediately after the scripted key sequence completes.
     #[arg(long, default_value_t = false)]
@@ -358,6 +388,18 @@ struct LcdAnnunciators {
     raw: u8,
     shift: bool,
     caps: bool,
+}
+
+#[derive(Debug, Clone)]
+struct Iq7pMemoUpload {
+    id: String,
+    lines: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct Iq7pSessionState {
+    datasets: HashMap<String, HashMap<String, Value>>,
+    pending_memos: Vec<Iq7pMemoUpload>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -3065,6 +3107,23 @@ fn capture_screen_state(
 }
 
 fn lcd_pixels(lcd: &dyn LcdHal) -> Vec<Vec<u8>> {
+    if lcd.kind() == LcdKind::Iq7000Vram {
+        const IQ7000_COLS: usize = 96;
+        const IQ7000_ROWS: usize = 64;
+        const IQ7000_PAGES: usize = IQ7000_ROWS / 8;
+        let bytes = lcd.display_vram_bytes();
+        let mut out = vec![vec![0u8; IQ7000_COLS]; IQ7000_ROWS];
+        for page in 0..IQ7000_PAGES {
+            for col in 0..IQ7000_COLS {
+                let byte = bytes[page][col];
+                for dy in 0..8usize {
+                    let bit = 7usize.saturating_sub(dy);
+                    out[(page * 8) + dy][col] = (byte >> bit) & 1;
+                }
+            }
+        }
+        return out;
+    }
     lcd.display_buffer()
         .iter()
         .map(|row| row.iter().map(|px| u8::from(*px != 0)).collect())
@@ -3493,6 +3552,169 @@ fn iq7p_get_u64(body: &Value, key: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("missing or invalid '{key}'"))
 }
 
+fn iq7p_get_str<'a>(body: &'a Value, key: &str) -> Result<&'a str, String> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("missing or invalid '{key}'"))
+}
+
+fn iq7p_dataset_catalog() -> Value {
+    json!([
+        {"name": "calendar", "description": "Calendar-facing host records", "schema_status": "experimental"},
+        {"name": "tel", "description": "Telephone-book files TEL 1/2/3", "schema_status": "experimental"},
+        {"name": "memo", "description": "Memo records", "schema_status": "experimental"},
+        {"name": "schedule", "description": "Schedule records", "schema_status": "experimental"},
+        {"name": "ann", "description": "Anniversary records ANN 1/2", "schema_status": "experimental"},
+        {"name": "s_alarm", "description": "Schedule-alarm records", "schema_status": "experimental"},
+        {"name": "d_alarm", "description": "Daily-alarm records", "schema_status": "experimental"},
+        {"name": "user_dic", "description": "User dictionary records", "schema_status": "experimental"},
+        {"name": "raw", "description": "Raw experimental payload bytes", "schema_status": "raw"},
+    ])
+}
+
+fn iq7p_normalize_dataset(raw: &str) -> String {
+    let normalized = raw.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "telephone" | "phone" => "tel".to_string(),
+        "cal" => "calendar".to_string(),
+        "anniversary" => "ann".to_string(),
+        "salarm" | "schedule_alarm" => "s_alarm".to_string(),
+        "dalarm" | "daily_alarm" => "d_alarm".to_string(),
+        "user_dictionary" | "users_dic" | "dic" => "user_dic".to_string(),
+        _ => normalized,
+    }
+}
+
+fn iq7p_entry_id(entry: &Value) -> Result<String, String> {
+    entry
+        .get("id")
+        .or_else(|| entry.get("entry_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.to_string())
+        .ok_or_else(|| "entry must contain non-empty id".to_string())
+}
+
+fn iq7p_memo_line_is_typeable(line: &str) -> bool {
+    line.chars()
+        .all(|ch| generated_key_seq_key(DeviceModel::Iq7000, ch).is_some())
+}
+
+fn iq7p_memo_lines_from_entry(entry: &Value) -> Result<Vec<String>, String> {
+    let fields = entry
+        .get("fields")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "memo entry.fields must be an object".to_string())?;
+    let mut lines = Vec::new();
+    if let Some(title) = fields.get("title").and_then(Value::as_str) {
+        if !title.trim().is_empty() {
+            lines.push(title.to_ascii_uppercase());
+        }
+    }
+    if let Some(raw_lines) = fields.get("lines").and_then(Value::as_array) {
+        for value in raw_lines {
+            let Some(line) = value.as_str() else {
+                return Err("memo fields.lines must contain strings".to_string());
+            };
+            lines.push(line.to_ascii_uppercase());
+        }
+    }
+    if let Some(text) = fields.get("text").and_then(Value::as_str) {
+        for line in text.replace("\r\n", "\n").replace('\r', "\n").split('\n') {
+            if !line.is_empty() {
+                lines.push(line.to_ascii_uppercase());
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Err("memo entry needs title, text, or lines".to_string());
+    }
+    for line in &lines {
+        if !iq7p_memo_line_is_typeable(line) {
+            return Err(format!(
+                "memo line contains characters not mapped for IQ-7000 input: {line:?}"
+            ));
+        }
+    }
+    Ok(lines)
+}
+
+fn iq7p_store_entry(
+    session: &mut Iq7pSessionState,
+    dataset: &str,
+    entry: &Value,
+) -> Result<Value, String> {
+    let entry_id = iq7p_entry_id(entry)?;
+    let dataset = iq7p_normalize_dataset(dataset);
+    let pending_memo_lines = if dataset == "memo" {
+        Some(iq7p_memo_lines_from_entry(entry)?)
+    } else {
+        None
+    };
+    let entry_for_store = entry.clone();
+    session
+        .datasets
+        .entry(dataset.clone())
+        .or_default()
+        .insert(entry_id.clone(), entry_for_store);
+    let queued_for_rom_ui = if let Some(lines) = pending_memo_lines {
+        session.pending_memos.push(Iq7pMemoUpload {
+            id: entry_id.clone(),
+            lines,
+        });
+        true
+    } else {
+        false
+    };
+    Ok(json!({
+        "ok": true,
+        "dataset": dataset,
+        "id": entry_id,
+        "queued_for_rom_ui": queued_for_rom_ui,
+    }))
+}
+
+fn iq7p_import_dataset_entries(
+    session: &mut Iq7pSessionState,
+    dataset: &str,
+    entries: &Value,
+    dry_run: bool,
+) -> Result<usize, String> {
+    let mut count = 0usize;
+    match entries {
+        Value::Array(values) => {
+            for entry in values {
+                if !entry.is_object() {
+                    return Err(format!("{dataset} entries must be objects"));
+                }
+                if !dry_run {
+                    iq7p_store_entry(session, dataset, entry)?;
+                }
+                count = count.saturating_add(1);
+            }
+        }
+        Value::Object(map) => {
+            for (entry_id, raw_entry) in map {
+                if !raw_entry.is_object() {
+                    return Err(format!("{dataset}.{entry_id} must be an object"));
+                }
+                let mut entry = raw_entry.clone();
+                if entry.get("id").is_none() {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert("id".to_string(), Value::String(entry_id.clone()));
+                    }
+                }
+                if !dry_run {
+                    iq7p_store_entry(session, dataset, &entry)?;
+                }
+                count = count.saturating_add(1);
+            }
+        }
+        _ => return Err(format!("{dataset} entries must be an object or list")),
+    }
+    Ok(count)
+}
+
 fn iq7p_encode_hex(data: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(data.len() * 2);
@@ -3503,7 +3725,11 @@ fn iq7p_encode_hex(data: &[u8]) -> String {
     out
 }
 
-fn iq7p_handle_request(memory: &mut MemoryImage, request: &Iq7pMessage) -> Value {
+fn iq7p_handle_request(
+    memory: &mut MemoryImage,
+    session: &mut Iq7pSessionState,
+    request: &Iq7pMessage,
+) -> Value {
     match request.command {
         IQ7P_CMD_HELLO => json!({
             "ok": true,
@@ -3511,6 +3737,12 @@ fn iq7p_handle_request(memory: &mut MemoryImage, request: &Iq7pMessage) -> Value
             "protocol": "IQ7P",
             "version": IQ7P_VERSION,
             "memory_size": memory.external_len(),
+            "datasets": iq7p_dataset_catalog(),
+            "capabilities": {
+                "read_memory": true,
+                "dataset_state": true,
+                "memo_rom_ui_apply_after_pclink": true,
+            },
         }),
         IQ7P_CMD_READ_MEMORY => {
             let address = match iq7p_get_u64(&request.body, "address") {
@@ -3536,6 +3768,88 @@ fn iq7p_handle_request(memory: &mut MemoryImage, request: &Iq7pMessage) -> Value
                 "data": iq7p_encode_hex(&data),
             })
         }
+        IQ7P_CMD_LIST_DATASETS => json!({"ok": true, "datasets": iq7p_dataset_catalog()}),
+        IQ7P_CMD_LIST_ENTRIES => {
+            let dataset = match iq7p_get_str(&request.body, "dataset") {
+                Ok(value) => iq7p_normalize_dataset(value),
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let entries = session
+                .datasets
+                .get(&dataset)
+                .map(|items| items.values().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            json!({"ok": true, "dataset": dataset, "entries": entries})
+        }
+        IQ7P_CMD_PUT_ENTRY => {
+            let dataset = match iq7p_get_str(&request.body, "dataset") {
+                Ok(value) => value,
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let Some(entry) = request.body.get("entry").filter(|value| value.is_object()) else {
+                return json!({"ok": false, "error": "missing or invalid 'entry'"});
+            };
+            match iq7p_store_entry(session, dataset, entry) {
+                Ok(value) => value,
+                Err(err) => json!({"ok": false, "error": err}),
+            }
+        }
+        IQ7P_CMD_DELETE_ENTRY => {
+            let dataset = match iq7p_get_str(&request.body, "dataset") {
+                Ok(value) => iq7p_normalize_dataset(value),
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let entry_id = match iq7p_get_str(&request.body, "id") {
+                Ok(value) => value.to_string(),
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let deleted = session
+                .datasets
+                .get_mut(&dataset)
+                .and_then(|entries| entries.remove(&entry_id))
+                .is_some();
+            json!({"ok": true, "dataset": dataset, "id": entry_id, "deleted": deleted})
+        }
+        IQ7P_CMD_ERASE_DATASET => {
+            let dataset = match iq7p_get_str(&request.body, "dataset") {
+                Ok(value) => iq7p_normalize_dataset(value),
+                Err(err) => return json!({"ok": false, "error": err}),
+            };
+            let erased = session
+                .datasets
+                .insert(dataset.clone(), HashMap::new())
+                .map(|entries| entries.len())
+                .unwrap_or_default();
+            json!({"ok": true, "dataset": dataset, "erased": erased})
+        }
+        IQ7P_CMD_EXPORT_STATE => json!({
+            "ok": true,
+            "state": {
+                "format": "iq7000-pclink-state-v1",
+                "datasets": &session.datasets,
+            },
+        }),
+        IQ7P_CMD_IMPORT_STATE => {
+            let dry_run = request
+                .body
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let Some(state) = request.body.get("state").and_then(Value::as_object) else {
+                return json!({"ok": false, "error": "missing or invalid 'state'"});
+            };
+            let Some(datasets) = state.get("datasets").and_then(Value::as_object) else {
+                return json!({"ok": false, "error": "missing or invalid 'state.datasets'"});
+            };
+            let mut imported = 0usize;
+            for (dataset, entries) in datasets {
+                match iq7p_import_dataset_entries(session, dataset, entries, dry_run) {
+                    Ok(count) => imported = imported.saturating_add(count),
+                    Err(err) => return json!({"ok": false, "error": err}),
+                }
+            }
+            json!({"ok": true, "dry_run": dry_run, "datasets": datasets.len(), "entries": imported})
+        }
         other => json!({
             "ok": false,
             "error": format!("unsupported IQ7P command 0x{other:02X}"),
@@ -3546,6 +3860,7 @@ fn iq7p_handle_request(memory: &mut MemoryImage, request: &Iq7pMessage) -> Value
 fn serve_iq7p_connection(
     stream: &mut TcpStream,
     memory: &mut MemoryImage,
+    session: &mut Iq7pSessionState,
 ) -> Result<(), Box<dyn Error>> {
     loop {
         let request = match iq7p_read_message(stream) {
@@ -3564,7 +3879,7 @@ fn serve_iq7p_connection(
                 return Err(err);
             }
         };
-        let body = iq7p_handle_request(memory, &request);
+        let body = iq7p_handle_request(memory, session, &request);
         iq7p_write_response(stream, &request, body)?;
     }
     Ok(())
@@ -3574,6 +3889,7 @@ fn serve_iq7p_clients(
     bind: &str,
     client_count: usize,
     memory: &mut MemoryImage,
+    session: &mut Iq7pSessionState,
 ) -> Result<(), Box<dyn Error>> {
     if client_count == 0 {
         return Err("--iq7p-clients must be greater than zero".into());
@@ -3589,9 +3905,348 @@ fn serve_iq7p_clients(
             client_count,
             peer_addr
         );
-        serve_iq7p_connection(&mut stream, memory)?;
+        serve_iq7p_connection(&mut stream, memory, session)?;
     }
     println!("[iq7p] served {client_count} client(s)");
+    Ok(())
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacomHostTxPhase {
+    WaitRomReadyLow,
+    WaitRomAckHigh,
+    ReleaseHigh(u8),
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PacomHostTxByte {
+    byte: u8,
+    bit_index: u8,
+    phase: PacomHostTxPhase,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacomRomRxPhase {
+    WaitStartLow,
+    WaitData,
+    WaitSpacingHigh,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PacomRomRxByte {
+    byte: u8,
+    bit_index: u8,
+    phase: PacomRomRxPhase,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct Iq7000PclinkSerialPeer {
+    host_to_rom: VecDeque<u8>,
+    rom_to_host: VecDeque<u8>,
+    host_tx: Option<PacomHostTxByte>,
+    rom_rx: Option<PacomRomRxByte>,
+    eih_high: bool,
+}
+
+#[cfg(test)]
+impl Iq7000PclinkSerialPeer {
+    fn attach(&mut self, memory: &mut MemoryImage) {
+        self.eih_high = true;
+        self.drive_eih(memory, true);
+    }
+
+    fn queue_host_bytes(&mut self, bytes: &[u8]) {
+        self.host_to_rom.extend(bytes.iter().copied());
+    }
+
+    fn pop_rom_byte(&mut self) -> Option<u8> {
+        self.rom_to_host.pop_front()
+    }
+
+    fn before_instruction(&mut self, memory: &mut MemoryImage) {
+        self.advance_host_tx_release(memory);
+        if self.host_tx.is_none() && self.rom_rx.is_none() {
+            if let Some(byte) = self.host_to_rom.pop_front() {
+                self.host_tx = Some(PacomHostTxByte {
+                    byte,
+                    bit_index: 0,
+                    phase: PacomHostTxPhase::WaitRomReadyLow,
+                });
+                self.drive_eih(memory, false);
+            }
+        }
+    }
+
+    fn observe_eoh_write(&mut self, eoh_high: bool, memory: &mut MemoryImage) {
+        if let Some(tx) = self.host_tx.as_mut() {
+            let mut drive: Option<bool> = None;
+            match tx.phase {
+                PacomHostTxPhase::WaitRomReadyLow => {
+                    if !eoh_high {
+                        let bit = ((tx.byte >> (7 - tx.bit_index)) & 1) != 0;
+                        tx.phase = PacomHostTxPhase::WaitRomAckHigh;
+                        drive = Some(bit);
+                    }
+                }
+                PacomHostTxPhase::WaitRomAckHigh => {
+                    if eoh_high {
+                        tx.phase = PacomHostTxPhase::ReleaseHigh(IQ7000_PACOM_RELEASE_STEPS);
+                        drive = Some(true);
+                    }
+                }
+                PacomHostTxPhase::ReleaseHigh(_) => {}
+            }
+            if let Some(high) = drive {
+                self.drive_eih(memory, high);
+            }
+            return;
+        }
+
+        if let Some(rx) = self.rom_rx.as_mut() {
+            let mut drive: Option<bool> = None;
+            let mut completed_byte: Option<u8> = None;
+            match rx.phase {
+                PacomRomRxPhase::WaitStartLow => {
+                    if !eoh_high {
+                        rx.phase = PacomRomRxPhase::WaitData;
+                    }
+                }
+                PacomRomRxPhase::WaitData => {
+                    rx.byte = (rx.byte << 1) | u8::from(eoh_high);
+                    rx.bit_index = rx.bit_index.saturating_add(1);
+                    rx.phase = PacomRomRxPhase::WaitSpacingHigh;
+                    drive = Some(true);
+                }
+                PacomRomRxPhase::WaitSpacingHigh => {
+                    if eoh_high {
+                        if rx.bit_index >= 8 {
+                            completed_byte = Some(rx.byte);
+                            drive = Some(true);
+                        } else {
+                            rx.phase = PacomRomRxPhase::WaitStartLow;
+                            drive = Some(false);
+                        }
+                    }
+                }
+            }
+            if let Some(byte) = completed_byte {
+                self.rom_to_host.push_back(byte);
+                self.rom_rx = None;
+            }
+            if let Some(high) = drive {
+                self.drive_eih(memory, high);
+            }
+            return;
+        }
+
+        if !eoh_high {
+            self.rom_rx = Some(PacomRomRxByte {
+                byte: 0,
+                bit_index: 0,
+                phase: PacomRomRxPhase::WaitData,
+            });
+            self.drive_eih(memory, false);
+        }
+    }
+
+    fn advance_host_tx_release(&mut self, memory: &mut MemoryImage) {
+        let mut next_bit = false;
+        let mut finished = false;
+        if let Some(tx) = self.host_tx.as_mut() {
+            if let PacomHostTxPhase::ReleaseHigh(remaining) = &mut tx.phase {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    tx.bit_index = tx.bit_index.saturating_add(1);
+                    if tx.bit_index >= 8 {
+                        finished = true;
+                    } else {
+                        tx.phase = PacomHostTxPhase::WaitRomReadyLow;
+                        next_bit = true;
+                    }
+                }
+            }
+        }
+        if finished {
+            self.host_tx = None;
+            self.drive_eih(memory, true);
+        } else if next_bit {
+            self.drive_eih(memory, false);
+        }
+    }
+
+    fn drive_eih(&mut self, memory: &mut MemoryImage, high: bool) {
+        self.eih_high = high;
+        let current = memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0);
+        let next = if high {
+            current | IQ7000_PACOM_EIH_DATA
+        } else {
+            current & !IQ7000_PACOM_EIH_DATA
+        };
+        if next != current {
+            memory.write_internal_byte(IMEM_EIH_OFFSET, next);
+        }
+    }
+}
+
+fn serve_iq7000_pclink_serial_clients(
+    bind: &str,
+    client_count: usize,
+    runtime: &mut CoreRuntime,
+) -> Result<(), Box<dyn Error>> {
+    if client_count == 0 {
+        return Err("--pclink-serial-clients must be greater than zero".into());
+    }
+
+    let listener = TcpListener::bind(bind)?;
+    listener.set_nonblocking(true)?;
+    let local_addr = listener.local_addr()?;
+    println!("[pclink-serial] listening on tcp://{local_addr} for {client_count} client(s)");
+
+    runtime.enable_sio_stub();
+    if let Some(sio) = runtime.sio.as_mut() {
+        sio.disable_auto_response();
+    }
+    runtime.memory.clear_dirty();
+
+    let mut stream: Option<TcpStream> = None;
+    let mut pending_read = VecDeque::<u8>::new();
+    let mut pending_write = VecDeque::<u8>::new();
+    let mut rx_pace_steps = 0u32;
+    let mut rom_flow_paused = false;
+    let mut served = 0usize;
+    let mut accepted = 0usize;
+    let mut host_rx_bytes = 0usize;
+    let mut rom_tx_bytes = 0usize;
+
+    while served < client_count {
+        if stream.is_none() {
+            match listener.accept() {
+                Ok((accepted_stream, peer_addr)) => {
+                    accepted_stream.set_nonblocking(true)?;
+                    accepted += 1;
+                    println!(
+                        "[pclink-serial] accepted client {accepted}/{client_count} from {peer_addr}"
+                    );
+                    stream = Some(accepted_stream);
+                    pending_read.clear();
+                    pending_write.clear();
+                    rx_pace_steps = 0;
+                    rom_flow_paused = false;
+                    host_rx_bytes = 0;
+                    rom_tx_bytes = 0;
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        let mut close_stream = false;
+        if let Some(client) = stream.as_mut() {
+            let mut read_buf = [0u8; 256];
+            loop {
+                match client.read(&mut read_buf) {
+                    Ok(0) => {
+                        close_stream = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        host_rx_bytes = host_rx_bytes.saturating_add(n);
+                        println!(
+                            "[pclink-serial] host->rom {} byte(s): {}",
+                            n,
+                            iq7p_encode_hex(&read_buf[..n])
+                        );
+                        for byte in &read_buf[..n] {
+                            pending_read.push_back(*byte);
+                        }
+                    }
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                        ) =>
+                    {
+                        close_stream = true;
+                        break;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+
+        if rx_pace_steps == 0 && !rom_flow_paused {
+            let sio_idle = runtime.sio.as_ref().is_none_or(|sio| {
+                sio.pending_receive().is_empty() && sio.pending_delayed_receive().is_empty()
+            });
+            if sio_idle {
+                if let Some(byte) = pending_read.pop_front() {
+                    runtime.queue_sio_receive_byte(byte);
+                    rx_pace_steps = PCLINK_SERIAL_RX_PACE_STEPS;
+                }
+            }
+        }
+        runtime.step(1)?;
+        rx_pace_steps = rx_pace_steps.saturating_sub(1);
+        let mut completed_tx = Vec::new();
+        if let Some(sio) = runtime.sio.as_mut() {
+            while let Some(byte) = sio.complete_transmit(&mut runtime.memory) {
+                completed_tx.push(byte);
+            }
+        }
+        for byte in completed_tx {
+            if byte == PCLINK_SERIAL_XOFF {
+                rom_flow_paused = true;
+            } else if byte == PCLINK_SERIAL_XON {
+                rom_flow_paused = false;
+            }
+            pending_write.push_back(byte);
+            rom_tx_bytes = rom_tx_bytes.saturating_add(1);
+            runtime.assert_sio_transmit_ready();
+        }
+
+        if let Some(client) = stream.as_mut() {
+            while !pending_write.is_empty() {
+                let buf: Vec<u8> = pending_write.iter().take(256).copied().collect();
+                match client.write(&buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        for _ in 0..n {
+                            pending_write.pop_front();
+                        }
+                    }
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                        ) =>
+                    {
+                        close_stream = true;
+                        break;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+
+        if close_stream {
+            stream = None;
+            pending_write.clear();
+            served += 1;
+            println!(
+                "[pclink-serial] client {served}/{client_count} disconnected ({host_rx_bytes} host->rom byte(s), {rom_tx_bytes} rom->host byte(s))"
+            );
+        }
+    }
+
+    println!("[pclink-serial] served {client_count} client(s)");
+    runtime.step(PCLINK_SERIAL_POST_CLIENT_SETTLE_STEPS)?;
     Ok(())
 }
 
@@ -3652,6 +4307,19 @@ fn runtime_tap_event(
     runtime_inject_matrix_event(runtime, code, false);
     runtime.step(hold_instructions)?;
     runtime_inject_matrix_event(runtime, code, true);
+    Ok(())
+}
+
+fn runtime_tap_key(
+    runtime: &mut CoreRuntime,
+    key: AutoKeyKind,
+    hold_instructions: usize,
+    after_instructions: usize,
+) -> Result<(), Box<dyn Error>> {
+    runtime_apply_key_event(runtime, key, false);
+    runtime.step(hold_instructions)?;
+    runtime_apply_key_event(runtime, key, true);
+    runtime.step(after_instructions)?;
     Ok(())
 }
 
@@ -3833,6 +4501,100 @@ fn run_runtime_key_seq(
     Err(format!("--key-seq did not complete within {max_instructions} instruction(s)").into())
 }
 
+fn apply_iq7p_pending_memos_via_rom_ui(
+    runtime: &mut CoreRuntime,
+    memos: &[Iq7pMemoUpload],
+) -> Result<(), Box<dyn Error>> {
+    if memos.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "[iq7p] applying {} queued MEMO entr{} through the IQ-7000 ROM UI",
+        memos.len(),
+        if memos.len() == 1 { "y" } else { "ies" }
+    );
+    runtime_tap_key(runtime, AutoKeyKind::OnKey, 1_000, 250_000)?;
+    runtime_tap_key(runtime, AutoKeyKind::Event(0x08), 35_000, 200_000)?; // MEMO
+    for memo in memos {
+        for (line_idx, line) in memo.lines.iter().enumerate() {
+            if line_idx != 0 {
+                runtime_tap_key(runtime, AutoKeyKind::Event(0x3D), 35_000, 70_000)?;
+            }
+            for ch in line.chars() {
+                let Some(key) = generated_key_seq_key(DeviceModel::Iq7000, ch) else {
+                    return Err(format!(
+                        "queued MEMO {} contains unmapped IQ-7000 input character {ch:?}",
+                        memo.id
+                    )
+                    .into());
+                };
+                runtime_tap_key(runtime, key, 35_000, 55_000)?;
+            }
+        }
+        runtime_tap_key(runtime, AutoKeyKind::Event(0x45), 35_000, 1_000_000)?; // ENTER/store
+        println!("[iq7p] stored MEMO {} via ROM UI", memo.id);
+    }
+    Ok(())
+}
+
+fn iq7000_seed_memo_lines(raw: &str) -> Vec<String> {
+    raw.replace("\\n", "\n")
+        .split(['\n', '|'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_ascii_uppercase())
+        .collect()
+}
+
+fn type_iq7000_memo_lines_via_rom_ui(
+    runtime: &mut CoreRuntime,
+    label: &str,
+    lines: &[String],
+) -> Result<(), Box<dyn Error>> {
+    if lines.is_empty() {
+        return Err(format!("{label} is empty").into());
+    }
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx != 0 {
+            runtime_tap_key(runtime, AutoKeyKind::Event(0x3D), 35_000, 70_000)?;
+        }
+        for ch in line.chars() {
+            let Some(key) = generated_key_seq_key(DeviceModel::Iq7000, ch) else {
+                return Err(
+                    format!("{label} contains unmapped IQ-7000 input character {ch:?}").into(),
+                );
+            };
+            runtime_tap_key(runtime, key, 35_000, 55_000)?;
+        }
+    }
+    runtime_tap_key(runtime, AutoKeyKind::Event(0x45), 35_000, 1_000_000)?; // ENTER/store
+    Ok(())
+}
+
+fn seed_iq7000_memos_via_rom_ui(
+    runtime: &mut CoreRuntime,
+    memos: &[String],
+) -> Result<(), Box<dyn Error>> {
+    if memos.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "[iq7000-seed] typing {} MEMO entr{} through the IQ-7000 ROM UI",
+        memos.len(),
+        if memos.len() == 1 { "y" } else { "ies" }
+    );
+    for (idx, raw) in memos.iter().enumerate() {
+        let lines = iq7000_seed_memo_lines(raw);
+        type_iq7000_memo_lines_via_rom_ui(
+            runtime,
+            &format!("--iq7000-seed-memo #{}", idx + 1),
+            &lines,
+        )?;
+        println!("[iq7000-seed] stored MEMO {}", idx + 1);
+    }
+    Ok(())
+}
+
 fn run_iq7000_pclink_ui_path(
     args: &Args,
     rom_bytes: &[u8],
@@ -3857,6 +4619,11 @@ fn run_iq7000_pclink_ui_path(
     runtime.step(500_000)?;
     runtime_tap_event(&mut runtime, 0x08, 1_000)?; // MEMO
     runtime.step(160_000)?;
+    seed_iq7000_memos_via_rom_ui(&mut runtime, &args.iq7000_seed_memo)?;
+    if !args.iq7000_seed_memo.is_empty() {
+        runtime_tap_event(&mut runtime, 0x08, 1_000)?; // return to a fresh MEMO prompt
+        runtime.step(250_000)?;
+    }
     runtime_inject_matrix_event(&mut runtime, 0x02, false); // physical SHIFT down
     runtime.step(80_000)?;
     runtime_inject_matrix_event(&mut runtime, 0x1D, false); // shifted C / OPTION
@@ -3902,8 +4669,21 @@ fn run_iq7000_pclink_ui_path(
         ready_capture_json,
     )?;
 
+    if let Some(bind) = args.pclink_serial_listen.as_ref() {
+        serve_iq7000_pclink_serial_clients(bind, args.pclink_serial_clients, &mut runtime)?;
+    }
+
+    let mut iq7p_session = Iq7pSessionState::default();
     if let Some(bind) = args.iq7p_listen.as_ref() {
-        serve_iq7p_clients(bind, args.iq7p_clients, &mut runtime.memory)?;
+        serve_iq7p_clients(
+            bind,
+            args.iq7p_clients,
+            &mut runtime.memory,
+            &mut iq7p_session,
+        )?;
+    }
+    if !iq7p_session.pending_memos.is_empty() {
+        apply_iq7p_pending_memos_via_rom_ui(&mut runtime, &iq7p_session.pending_memos)?;
     }
     if let Some(raw_key_seq) = args
         .key_seq
@@ -3951,6 +4731,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         if args.model != DeviceModel::Iq7000 {
             return Err("--iq7p-enter-pclink is only supported for --model iq-7000".into());
         }
+    }
+    if args.pclink_serial_listen.is_some() && !args.iq7p_enter_pclink {
+        return Err("--pclink-serial-listen requires --iq7p-enter-pclink".into());
+    }
+    if args.pclink_serial_listen.is_some() && args.iq7p_listen.is_some() {
+        return Err("--pclink-serial-listen cannot be combined with --iq7p-listen".into());
     }
 
     if args.turnon2_resume && args.model != DeviceModel::PcE500Jp {
@@ -4586,8 +5372,16 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
 
         if let Some(bind) = iq7p_listen.as_ref() {
             bus.reapply_iq7000_clock_seed();
-            if let Err(err) = serve_iq7p_clients(bind, iq7p_clients, &mut bus.memory) {
+            let mut iq7p_session = Iq7pSessionState::default();
+            if let Err(err) =
+                serve_iq7p_clients(bind, iq7p_clients, &mut bus.memory, &mut iq7p_session)
+            {
                 eprintln!("IQ7P server failed: {err}");
+            }
+            if !iq7p_session.pending_memos.is_empty() {
+                eprintln!(
+                    "warning: queued IQ7P MEMO entries require --iq7p-enter-pclink to apply through the ROM UI"
+                );
             }
         }
 
@@ -5340,6 +6134,109 @@ mod tests {
     }
 
     #[test]
+    fn iq7p_put_entry_queues_memo_for_rom_ui() {
+        let mut memory = MemoryImage::new();
+        let mut session = Iq7pSessionState::default();
+        let request = Iq7pMessage {
+            command: IQ7P_CMD_PUT_ENTRY,
+            sequence: 1,
+            flags: 0,
+            body: json!({
+                "dataset": "memo",
+                "entry": {
+                    "id": "fun",
+                    "fields": {
+                        "title": "pc link",
+                        "text": "hello from socket"
+                    }
+                }
+            }),
+        };
+
+        let response = iq7p_handle_request(&mut memory, &mut session, &request);
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["queued_for_rom_ui"], true);
+        assert_eq!(session.pending_memos.len(), 1);
+        assert_eq!(
+            session.pending_memos[0].lines,
+            vec!["PC LINK".to_string(), "HELLO FROM SOCKET".to_string()]
+        );
+    }
+
+    #[test]
+    fn pclink_serial_peer_drives_host_byte_msb_first() {
+        let mut memory = MemoryImage::new();
+        let mut peer = Iq7000PclinkSerialPeer::default();
+        peer.attach(&mut memory);
+        peer.queue_host_bytes(&[0xA5]);
+
+        peer.before_instruction(&mut memory);
+        assert_eq!(
+            memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA,
+            0
+        );
+
+        let bits = [true, false, true, false, false, true, false, true];
+        for (idx, bit) in bits.iter().copied().enumerate() {
+            peer.observe_eoh_write(false, &mut memory);
+            assert_eq!(
+                memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA
+                    != 0,
+                bit
+            );
+            peer.observe_eoh_write(true, &mut memory);
+            assert_ne!(
+                memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA,
+                0
+            );
+            for _ in 0..IQ7000_PACOM_RELEASE_STEPS {
+                peer.before_instruction(&mut memory);
+            }
+            if idx < bits.len() - 1 {
+                assert_eq!(
+                    memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA,
+                    0
+                );
+            }
+        }
+
+        assert!(peer.host_tx.is_none());
+        assert_ne!(
+            memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA,
+            0
+        );
+    }
+
+    #[test]
+    fn pclink_serial_peer_collects_rom_byte_msb_first() {
+        let mut memory = MemoryImage::new();
+        let mut peer = Iq7000PclinkSerialPeer::default();
+        peer.attach(&mut memory);
+
+        let bits = [true, false, false, false, false, false, false, false];
+        peer.observe_eoh_write(false, &mut memory);
+        for (idx, bit) in bits.iter().copied().enumerate() {
+            peer.observe_eoh_write(bit, &mut memory);
+            assert_ne!(
+                memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA,
+                0
+            );
+            peer.observe_eoh_write(true, &mut memory);
+            if idx < bits.len() - 1 {
+                assert_eq!(
+                    memory.read_internal_byte(IMEM_EIH_OFFSET).unwrap_or(0) & IQ7000_PACOM_EIH_DATA,
+                    0
+                );
+                peer.observe_eoh_write(false, &mut memory);
+            }
+        }
+
+        assert_eq!(peer.pop_rom_byte(), Some(0x80));
+        assert!(peer.rom_rx.is_none());
+    }
+
+    #[test]
     fn iq7000_lcd_annunciators_reads_shadow_and_workspace_state() {
         let mut memory = MemoryImage::new();
         memory
@@ -5386,6 +6283,20 @@ mod tests {
         assert_eq!(width, 2);
         assert_eq!(height, 9);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn iq7000_lcd_pixels_render_vram_as_96_by_64() {
+        let mut lcd = create_lcd(sc62015_core::LcdKind::Iq7000Vram);
+        lcd.write(0x405A, 0x80);
+        lcd.write(0x605A, 0x40);
+
+        let pixels = lcd_pixels(lcd.as_ref());
+
+        assert_eq!(pixels.len(), 64);
+        assert!(pixels.iter().all(|row| row.len() == 96));
+        assert_eq!(pixels[0][5], 1);
+        assert_eq!(pixels[33][5], 1);
     }
 
     #[test]
