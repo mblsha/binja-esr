@@ -545,6 +545,74 @@ impl CoreRuntime {
         }
     }
 
+    pub fn queue_sio_receive_byte(&mut self, value: u8) {
+        self.enable_sio_stub();
+        if let Some(sio) = self.sio.as_mut() {
+            sio.queue_receive_byte(value, &mut self.memory);
+        }
+        self.assert_irq_source(ISR_RXI, "RX");
+    }
+
+    fn refresh_sio_interrupts(&mut self) {
+        if self.sio.is_none() {
+            return;
+        }
+        let usr = self.memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0);
+        let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        let mut new_isr = isr;
+        let mut source = None;
+
+        if (usr & USR_RX_READY) != 0 && (imr & IMR_RX) != 0 {
+            new_isr |= ISR_RXI;
+            source = Some("RX");
+        }
+
+        if new_isr == isr {
+            return;
+        }
+        self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+        self.timer.irq_isr = new_isr;
+        self.timer.irq_imr = imr;
+        if !self.timer.in_interrupt && (new_isr & imr & ISR_KNOWN_MASK) != 0 {
+            self.timer.irq_pending = true;
+            if let Some(src) = source {
+                match self.timer.irq_source.as_deref() {
+                    None => self.timer.irq_source = Some(src.to_string()),
+                    Some(cur) if irq_source_priority(src) < irq_source_priority(cur) => {
+                        self.timer.irq_source = Some(src.to_string());
+                    }
+                    _ => {}
+                }
+            }
+            self.timer.last_fired = self.timer.irq_source.clone();
+        }
+    }
+
+    pub fn assert_sio_transmit_ready(&mut self) {
+        self.assert_irq_source(ISR_TXI, "TX");
+    }
+
+    fn assert_irq_source(&mut self, mask: u8, source: &str) {
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if (isr & mask) == 0 {
+            self.memory.write_internal_byte(IMEM_ISR_OFFSET, isr | mask);
+        }
+        self.timer.irq_isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        if !self.timer.in_interrupt {
+            self.timer.irq_pending = true;
+            self.timer.irq_source = Some(source.to_string());
+            self.timer.last_fired = self.timer.irq_source.clone();
+        }
+    }
+
     pub fn enable_pce500_peripheral_bridge(&mut self, card_capacity: usize) {
         if self.pce500_peripherals.is_none() {
             self.pce500_peripherals = Some(Pce500PeripheralBridge::new(card_capacity));
@@ -585,7 +653,7 @@ impl CoreRuntime {
                     timer.irq_imr = new;
                 } else if offset == IMEM_ISR_OFFSET {
                     timer.irq_isr = new;
-                    if (new & (ISR_KEYI | ISR_ONKI | ISR_MTI | ISR_STI)) == 0 {
+                    if (new & ISR_KNOWN_MASK) == 0 {
                         timer.irq_pending = false;
                         timer.irq_source = None;
                     }
@@ -814,10 +882,16 @@ impl CoreRuntime {
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         // Parity: Python marks irq_pending as soon as ISR bits are asserted, even if IMR master is 0
         // or the source mask is currently disabled. Delivery is still gated later.
-        let src = if (isr_effective & ISR_KEYI) != 0 {
-            Some("KEY")
+        let src = if (isr_effective & ISR_RXI) != 0 {
+            Some("RX")
+        } else if (isr_effective & ISR_TXI) != 0 {
+            Some("TX")
+        } else if (isr_effective & ISR_IRQ10) != 0 {
+            Some("IRQ10")
         } else if (isr_effective & ISR_ONKI) != 0 {
             Some("ONK")
+        } else if (isr_effective & ISR_KEYI) != 0 {
+            Some("KEY")
         } else if (isr_effective & ISR_MTI) != 0 {
             Some("MTI")
         } else if (isr_effective & ISR_STI) != 0 {
@@ -836,7 +910,7 @@ impl CoreRuntime {
             None => self.timer.irq_source = src.map(str::to_string),
             Some(cur) => {
                 if let Some(src_name) = src {
-                    if (src_name == "KEY" || src_name == "ONK") && cur != "KEY" && cur != "ONK" {
+                    if irq_source_priority(src_name) < irq_source_priority(cur) {
                         self.timer.irq_source = Some(src_name.to_string());
                     }
                 }
@@ -936,6 +1010,23 @@ impl CoreRuntime {
                             return val as u32;
                         }
                     }
+                    if bits > 8
+                        && !self.sio_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let bytes = bits.div_ceil(8).max(1) as u32;
+                        let start = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        let end = start.saturating_add(bytes.saturating_sub(1));
+                        if start <= IMEM_TXD_OFFSET && end >= IMEM_UCR_OFFSET {
+                            let mut out = 0u32;
+                            for byte_offset in 0..bytes {
+                                let byte = self.load(addr.wrapping_add(byte_offset), 8) & 0xFF;
+                                out |= byte << (byte_offset * 8);
+                            }
+                            return out;
+                        }
+                    }
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
                     if !self.keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
@@ -1029,6 +1120,22 @@ impl CoreRuntime {
                         if offset == iq7000::IMEM_EOL_OFFSET {
                             (*self.iq7000_rtc).handle_eol_write(value as u8);
                             let _ = (*self.mem).store(addr, bits, value);
+                            return;
+                        }
+                    }
+                    if bits > 8
+                        && !self.sio_ptr.is_null()
+                        && MemoryImage::is_internal(addr)
+                        && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
+                    {
+                        let bytes = bits.div_ceil(8).max(1) as u32;
+                        let start = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                        let end = start.saturating_add(bytes.saturating_sub(1));
+                        if start <= IMEM_TXD_OFFSET && end >= IMEM_UCR_OFFSET {
+                            for byte_offset in 0..bytes {
+                                let byte = (value >> (byte_offset * 8)) & 0xFF;
+                                self.store(addr.wrapping_add(byte_offset), 8, byte);
+                            }
                             return;
                         }
                     }
@@ -1189,10 +1296,16 @@ impl CoreRuntime {
                     .as_deref()
                     .map(str::to_string)
                     .or_else(|| {
-                        if (isr & ISR_KEYI) != 0 {
-                            Some("KEY".to_string())
+                        if (isr & ISR_RXI) != 0 {
+                            Some("RX".to_string())
+                        } else if (isr & ISR_TXI) != 0 {
+                            Some("TX".to_string())
+                        } else if (isr & ISR_IRQ10) != 0 {
+                            Some("IRQ10".to_string())
                         } else if (isr & ISR_ONKI) != 0 {
                             Some("ONK".to_string())
+                        } else if (isr & ISR_KEYI) != 0 {
+                            Some("KEY".to_string())
                         } else if (isr & ISR_MTI) != 0 {
                             Some("MTI".to_string())
                         } else if (isr & ISR_STI) != 0 {
@@ -1215,6 +1328,8 @@ impl CoreRuntime {
                         Some(imr_reg),
                     );
                 });
+                // Mirror SIO hardware status bits into ISR before foreground/IRQ polling.
+                self.refresh_sio_interrupts();
                 // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
                 self.refresh_key_irq_latch();
                 // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
@@ -1236,10 +1351,16 @@ impl CoreRuntime {
                                 .read_internal_byte(IMEM_IMR_OFFSET)
                                 .unwrap_or(self.timer.irq_imr);
                             if self.timer.irq_source.is_none() {
-                                let src = if (isr & ISR_KEYI) != 0 {
-                                    "KEY"
+                                let src = if (isr & ISR_RXI) != 0 {
+                                    "RX"
+                                } else if (isr & ISR_TXI) != 0 {
+                                    "TX"
+                                } else if (isr & ISR_IRQ10) != 0 {
+                                    "IRQ10"
                                 } else if (isr & ISR_ONKI) != 0 {
                                     "ONK"
+                                } else if (isr & ISR_KEYI) != 0 {
+                                    "KEY"
                                 } else if (isr & ISR_MTI) != 0 {
                                     "MTI"
                                 } else if (isr & ISR_STI) != 0 {
@@ -1482,10 +1603,16 @@ impl CoreRuntime {
                             self.memory
                                 .read_internal_byte(IMEM_ISR_OFFSET)
                                 .and_then(|isr| {
-                                    if (isr & ISR_KEYI) != 0 {
-                                        Some(ISR_KEYI)
+                                    if (isr & ISR_RXI) != 0 {
+                                        Some(ISR_RXI)
+                                    } else if (isr & ISR_TXI) != 0 {
+                                        Some(ISR_TXI)
+                                    } else if (isr & ISR_IRQ10) != 0 {
+                                        Some(ISR_IRQ10)
                                     } else if (isr & ISR_ONKI) != 0 {
                                         Some(ISR_ONKI)
+                                    } else if (isr & ISR_KEYI) != 0 {
+                                        Some(ISR_KEYI)
                                     } else if (isr & ISR_MTI) != 0 {
                                         Some(ISR_MTI)
                                     } else if (isr & ISR_STI) != 0 {
@@ -1754,10 +1881,16 @@ impl CoreRuntime {
             .as_deref()
             .map(str::to_string)
             .or_else(|| {
-                if (isr & ISR_KEYI) != 0 {
-                    Some("KEY".to_string())
+                if (isr & ISR_RXI) != 0 {
+                    Some("RX".to_string())
+                } else if (isr & ISR_TXI) != 0 {
+                    Some("TX".to_string())
+                } else if (isr & ISR_IRQ10) != 0 {
+                    Some("IRQ10".to_string())
                 } else if (isr & ISR_ONKI) != 0 {
                     Some("ONK".to_string())
+                } else if (isr & ISR_KEYI) != 0 {
+                    Some("KEY".to_string())
                 } else if (isr & ISR_MTI) != 0 {
                     Some("MTI".to_string())
                 } else if (isr & ISR_STI) != 0 {
@@ -1796,11 +1929,17 @@ impl CoreRuntime {
         if !irm_enabled {
             return Ok(());
         }
-        // Match Python ordering: deliver KEY before ONK when both are set/enabled.
-        let src = if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
-            Some((ISR_KEYI, "KEY"))
+        // Match the IQ-7000 ROM interrupt dispatcher priority.
+        let src = if (isr & ISR_RXI != 0) && (imr & IMR_RX != 0) {
+            Some((ISR_RXI, "RX"))
+        } else if (isr & ISR_TXI != 0) && (imr & IMR_TX != 0) {
+            Some((ISR_TXI, "TX"))
+        } else if (isr & ISR_IRQ10 != 0) && (imr & IMR_IRQ10 != 0) {
+            Some((ISR_IRQ10, "IRQ10"))
         } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
             Some((ISR_ONKI, "ONK"))
+        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
+            Some((ISR_KEYI, "KEY"))
         } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
             Some((ISR_MTI, "MTI"))
         } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
@@ -2023,17 +2162,41 @@ const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
 const IMR_KEY: u8 = 0x04;
 const IMR_ONK: u8 = 0x08;
+const IMR_IRQ10: u8 = 0x10;
+const IMR_RX: u8 = 0x20;
+const IMR_TX: u8 = 0x40;
 const ISR_MTI: u8 = 0x01;
 const ISR_STI: u8 = 0x02;
 const ISR_KEYI: u8 = 0x04;
 const ISR_ONKI: u8 = 0x08;
+const ISR_IRQ10: u8 = 0x10;
+const ISR_RXI: u8 = 0x20;
+const ISR_TXI: u8 = 0x40;
+const ISR_KNOWN_MASK: u8 = ISR_MTI | ISR_STI | ISR_KEYI | ISR_ONKI | ISR_IRQ10 | ISR_RXI | ISR_TXI;
+const USR_RX_READY: u8 = 0x20;
 const SSR_ONK_VISIBLE: u8 = 0x02;
 const SSR_ONK_LEGACY_VISIBLE: u8 = 0x08;
 const SSR_ONK_VISIBLE_MASK: u8 = SSR_ONK_VISIBLE | SSR_ONK_LEGACY_VISIBLE;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
+fn irq_source_priority(name: &str) -> u8 {
+    match name {
+        "RX" => 0,
+        "TX" => 1,
+        "IRQ10" => 2,
+        "ONK" => 3,
+        "KEY" => 4,
+        "STI" => 5,
+        "MTI" => 6,
+        _ => u8::MAX,
+    }
+}
+
 fn src_mask_for_name(name: &str) -> Option<u8> {
     match name {
+        "RX" => Some(ISR_RXI),
+        "TX" => Some(ISR_TXI),
+        "IRQ10" => Some(ISR_IRQ10),
         "KEY" => Some(ISR_KEYI),
         "ONK" => Some(ISR_ONKI),
         "MTI" => Some(ISR_MTI),
@@ -2563,6 +2726,98 @@ mod tests {
         assert!(
             rt.timer.irq_pending,
             "MTI with IMR master 0 should still latch pending like Python"
+        );
+    }
+
+    #[test]
+    fn sio_receive_byte_asserts_serial_rx_irq() {
+        let mut rt = CoreRuntime::new();
+        rt.queue_sio_receive_byte(0xA5);
+
+        assert_eq!(
+            rt.sio
+                .as_ref()
+                .expect("SIO stub should be enabled")
+                .pending_receive()
+                .iter()
+                .map(|entry| entry.value)
+                .collect::<Vec<_>>(),
+            vec![0xA5]
+        );
+        assert_eq!(rt.memory.read_internal_byte(IMEM_RXD_OFFSET), Some(0xA5));
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0) & 0x20,
+            0,
+            "USR.RX_READY should be visible after host byte injection"
+        );
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_RXI,
+            0,
+            "serial RX ISR bit should be asserted"
+        );
+        assert!(rt.timer.irq_pending);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("RX"));
+    }
+
+    #[test]
+    fn serial_rx_irq_delivers_when_imr_enables_rx() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::PC, 0x0010);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory.write_external_byte(0x0FFFFA, 0x78);
+        rt.memory.write_external_byte(0x0FFFFB, 0x56);
+        rt.memory.write_external_byte(0x0FFFFC, 0x00);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_RX);
+
+        rt.queue_sio_receive_byte(0xA5);
+        rt.deliver_pending_irq().expect("deliver serial RX IRQ");
+
+        assert_eq!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x005678);
+        assert!(rt.timer.in_interrupt);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("RX"));
+        assert_eq!(rt.timer.delivered_masks, vec![ISR_RXI]);
+    }
+
+    #[test]
+    fn sio_transmit_complete_asserts_serial_tx_irq() {
+        let mut rt = CoreRuntime::new();
+        rt.enable_sio_stub();
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_TX);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
+
+        rt.assert_sio_transmit_ready();
+
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_TXI,
+            0,
+            "completed TXD transmission should assert serial TXI"
+        );
+        assert!(rt.timer.irq_pending);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("TX"));
+    }
+
+    #[test]
+    fn sio_transmit_complete_reasserts_inside_irq_without_nesting() {
+        let mut rt = CoreRuntime::new();
+        rt.enable_sio_stub();
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_TX);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
+        rt.timer.in_interrupt = true;
+        rt.timer.irq_pending = false;
+
+        rt.assert_sio_transmit_ready();
+
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_TXI,
+            0,
+            "TXI should be visible to the ROM TX handler after it clears ISR.0x40"
+        );
+        assert!(
+            !rt.timer.irq_pending,
+            "refreshing TXI while already in an interrupt must not request nested delivery"
         );
     }
 
