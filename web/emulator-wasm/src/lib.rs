@@ -5,7 +5,7 @@
 
 use js_sys::Uint8Array;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
 use base64::Engine;
@@ -238,6 +238,30 @@ struct StubPatch {
 struct PerfettoFunctionSymbol {
     addr: u32,
     name: String,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+struct SioBridgePumpOptions {
+    #[serde(default)]
+    host_bytes: Vec<u8>,
+    #[serde(default)]
+    max_instructions: u32,
+    #[serde(default)]
+    rx_pace_instructions: u32,
+    #[serde(default)]
+    rx_pace_remaining: u32,
+    #[serde(default)]
+    flow_paused: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SioBridgePumpResult {
+    consumed: u32,
+    tx_bytes: Vec<u8>,
+    instructions: u32,
+    rx_pace_remaining: u32,
+    flow_paused: bool,
+    rx_idle: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -523,6 +547,134 @@ impl Sc62015Emulator {
 
     pub fn release_on_key(&mut self) {
         self.runtime.release_on_key();
+    }
+
+    pub fn sio_enable_bridge(&mut self) {
+        self.runtime.enable_sio_stub();
+        if let Some(sio) = self.runtime.sio.as_mut() {
+            sio.disable_auto_response();
+        }
+        self.runtime.memory.clear_dirty();
+    }
+
+    pub fn sio_queue_rx_byte(&mut self, value: u8) {
+        self.runtime.queue_sio_receive_byte(value);
+    }
+
+    pub fn sio_rx_idle(&self) -> bool {
+        self.runtime.sio.as_ref().is_none_or(|sio| {
+            sio.pending_receive().is_empty() && sio.pending_delayed_receive().is_empty()
+        })
+    }
+
+    pub fn sio_pending_rx_len(&self) -> u32 {
+        self.runtime.sio.as_ref().map_or(0, |sio| {
+            (sio.pending_receive().len() + sio.pending_delayed_receive().len()) as u32
+        })
+    }
+
+    pub fn sio_pending_tx_len(&self) -> u32 {
+        self.runtime
+            .sio
+            .as_ref()
+            .map_or(0, |sio| sio.pending_transmit().len() as u32)
+    }
+
+    pub fn sio_drain_tx_bytes(&mut self) -> Uint8Array {
+        let mut out = Vec::new();
+        loop {
+            let byte = self
+                .runtime
+                .sio
+                .as_mut()
+                .and_then(|sio| sio.complete_transmit(&mut self.runtime.memory));
+            let Some(byte) = byte else {
+                break;
+            };
+            out.push(byte);
+            self.runtime.assert_sio_transmit_ready();
+        }
+        Uint8Array::from(out.as_slice())
+    }
+
+    pub fn sio_assert_tx_ready(&mut self) {
+        self.runtime.assert_sio_transmit_ready();
+    }
+
+    pub fn sio_bridge_pump(&mut self, options: JsValue) -> Result<JsValue, JsValue> {
+        let opts: SioBridgePumpOptions = if options.is_undefined() || options.is_null() {
+            SioBridgePumpOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?
+        };
+        let mut pending = VecDeque::<u8>::from(opts.host_bytes);
+        let max_instructions = opts.max_instructions.max(1);
+        let rx_pace_instructions = opts.rx_pace_instructions.max(1);
+        let mut rx_pace_remaining = opts.rx_pace_remaining;
+        let mut flow_paused = opts.flow_paused;
+        let mut consumed = 0u32;
+        let mut tx_bytes = Vec::new();
+        let mut instructions = 0u32;
+
+        self.runtime.enable_sio_stub();
+        if let Some(sio) = self.runtime.sio.as_mut() {
+            sio.disable_auto_response();
+        }
+
+        for _ in 0..max_instructions {
+            let sio_idle = self.runtime.sio.as_ref().is_none_or(|sio| {
+                sio.pending_receive().is_empty() && sio.pending_delayed_receive().is_empty()
+            });
+            if rx_pace_remaining == 0 && !flow_paused && sio_idle {
+                if let Some(byte) = pending.pop_front() {
+                    self.runtime.queue_sio_receive_byte(byte);
+                    consumed = consumed.saturating_add(1);
+                    rx_pace_remaining = rx_pace_instructions;
+                }
+            }
+
+            self.runtime
+                .step(1)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            instructions = instructions.saturating_add(1);
+            rx_pace_remaining = rx_pace_remaining.saturating_sub(1);
+
+            loop {
+                let byte = self
+                    .runtime
+                    .sio
+                    .as_mut()
+                    .and_then(|sio| sio.complete_transmit(&mut self.runtime.memory));
+                let Some(byte) = byte else {
+                    break;
+                };
+                if byte == 0x13 {
+                    flow_paused = true;
+                } else if byte == 0x11 {
+                    flow_paused = false;
+                }
+                tx_bytes.push(byte);
+                self.runtime.assert_sio_transmit_ready();
+            }
+
+            if tx_bytes.len() >= 256 {
+                break;
+            }
+        }
+
+        let rx_idle = self.runtime.sio.as_ref().is_none_or(|sio| {
+            sio.pending_receive().is_empty() && sio.pending_delayed_receive().is_empty()
+        });
+        let result = SioBridgePumpResult {
+            consumed,
+            tx_bytes,
+            instructions,
+            rx_pace_remaining,
+            flow_paused,
+            rx_idle,
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn configure_timer(&mut self, enabled: bool, mti_period: u64, sti_period: u64) {

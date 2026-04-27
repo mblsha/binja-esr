@@ -135,6 +135,24 @@ export type EvalWaitOptions = {
 	requireNonBlank?: boolean;
 };
 
+export type EvalPcLinkSerialServeOptions = {
+	clients?: number;
+	rxPaceInstructions?: number;
+	pumpInstructions?: number;
+	postClientSettleInstructions?: number;
+	maxInstructions?: number;
+	yieldEveryInstructions?: number;
+};
+
+export type EvalPcLinkSerialServeResult = {
+	ok: true;
+	bind: string;
+	clients: number;
+	hostRxBytes: number;
+	romTxBytes: number;
+	instructions: number;
+};
+
 export type EvalCalendarMonthOptions = {
 	year: number;
 	month: number;
@@ -192,6 +210,10 @@ export interface EmulatorAdapter {
 	injectMatrixEvent?(code: number, release: boolean): void;
 	pressOnKey?(): void;
 	releaseOnKey?(): void;
+	servePclinkSerial?(
+		bind: string,
+		options?: EvalPcLinkSerialServeOptions,
+	): Promise<EvalPcLinkSerialServeResult> | EvalPcLinkSerialServeResult;
 	registerStub?(stub: StubRegistration): void;
 	clearStubs?(): void;
 }
@@ -250,6 +272,9 @@ export interface EvalApi {
 		press(): Promise<void>;
 		release(): Promise<void>;
 		tap(holdInstructions?: number): Promise<void>;
+	};
+	pclinkSerial: {
+		serve(bind: string, options?: EvalPcLinkSerialServeOptions): Promise<EvalPcLinkSerialServeResult>;
 	};
 	wait: {
 		lcdStable(options?: EvalWaitOptions): Promise<{ instructions: number; signature: string }>;
@@ -924,6 +949,14 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				adapter.pressOnKey?.();
 				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 				adapter.releaseOnKey?.();
+			},
+		},
+		pclinkSerial: {
+			serve: async (bind, options) => {
+				if (typeof adapter.servePclinkSerial !== 'function') {
+					throw new Error('PC-Link serial serving is not available in this runtime.');
+				}
+				return await Promise.resolve(adapter.servePclinkSerial(bind, options));
 			},
 		},
 		wait: {

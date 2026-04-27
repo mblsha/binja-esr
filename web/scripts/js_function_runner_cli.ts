@@ -1,9 +1,18 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer, type Server, type Socket } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
+import { setImmediate as yieldImmediate } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { createEvalApi, Flag, Reg, type EmulatorAdapter } from '../src/lib/debug/sc62015_eval_api';
+import {
+	createEvalApi,
+	Flag,
+	Reg,
+	type EmulatorAdapter,
+	type EvalPcLinkSerialServeOptions,
+	type EvalPcLinkSerialServeResult,
+} from '../src/lib/debug/sc62015_eval_api';
 import { IOCS } from '../src/lib/debug/iocs';
 import { runUserJs } from '../src/lib/debug/run_user_js';
 import { normalizeRomModel, romBasename, type RomModel } from '../src/lib/rom_model';
@@ -128,6 +137,12 @@ function toYaml(value: unknown, indent = 0): string {
 type PerfettoSymbol = { addr: number; name: string };
 type BnidaLoadResult = { symbols: PerfettoSymbol[]; source: string };
 
+const DEFAULT_PCLINK_RX_PACE_INSTRUCTIONS = 1_000;
+const DEFAULT_PCLINK_PUMP_INSTRUCTIONS = 20_000;
+const DEFAULT_PCLINK_POST_CLIENT_SETTLE_INSTRUCTIONS = 2_500_000;
+const DEFAULT_PCLINK_MAX_INSTRUCTIONS = 60_000_000;
+const DEFAULT_PCLINK_YIELD_EVERY_INSTRUCTIONS = 1_000;
+
 let stubDispatcher: StubDispatcher | null = null;
 
 function initStubDispatcher(emulator: any) {
@@ -183,6 +198,248 @@ function parseAddress(key: string): number | null {
 	const value = Number.parseInt(trimmed, 10);
 	if (!Number.isFinite(value)) return null;
 	return value >>> 0;
+}
+
+function parseBindAddress(bind: string): { host: string; port: number } {
+	const trimmed = bind.trim();
+	if (!trimmed) die('error: PC-Link serial bind address is empty');
+	if (trimmed.startsWith('tcp://')) {
+		const url = new URL(trimmed);
+		const port = Number.parseInt(url.port, 10);
+		if (!url.hostname || !Number.isFinite(port)) {
+			die(`error: invalid PC-Link serial bind address '${bind}'`);
+		}
+		return { host: url.hostname, port };
+	}
+	const split = trimmed.lastIndexOf(':');
+	if (split < 0) {
+		die(`error: PC-Link serial bind address must be HOST:PORT, got '${bind}'`);
+	}
+	const host = trimmed.slice(0, split);
+	const port = Number.parseInt(trimmed.slice(split + 1), 10);
+	if (!host || !Number.isFinite(port) || port < 0 || port > 65535) {
+		die(`error: invalid PC-Link serial bind address '${bind}'`);
+	}
+	return { host, port };
+}
+
+function onceListening(server: Server): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const cleanup = () => {
+			server.off('listening', onListening);
+			server.off('error', onError);
+		};
+		const onListening = () => {
+			cleanup();
+			resolve();
+		};
+		const onError = (err: Error) => {
+			cleanup();
+			reject(err);
+		};
+		server.once('listening', onListening);
+		server.once('error', onError);
+	});
+}
+
+type SocketAcceptor = {
+	next(): Promise<Socket>;
+	close(): void;
+};
+
+function createSocketAcceptor(server: Server): SocketAcceptor {
+	const sockets: Socket[] = [];
+	const waiters: Array<{ resolve: (socket: Socket) => void; reject: (err: Error) => void }> = [];
+	let closed = false;
+	let lastError: Error | null = null;
+
+	const onConnection = (socket: Socket) => {
+		const waiter = waiters.shift();
+		if (waiter) {
+			waiter.resolve(socket);
+			return;
+		}
+		sockets.push(socket);
+	};
+	const onError = (err: Error) => {
+		lastError = err;
+		while (waiters.length) waiters.shift()?.reject(err);
+	};
+
+	server.on('connection', onConnection);
+	server.on('error', onError);
+
+	return {
+		next() {
+			const socket = sockets.shift();
+			if (socket) return Promise.resolve(socket);
+			if (lastError) return Promise.reject(lastError);
+			if (closed) return Promise.reject(new Error('PC-Link serial server is closed'));
+			return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+		},
+		close() {
+			closed = true;
+			server.off('connection', onConnection);
+			server.off('error', onError);
+			for (const socket of sockets.splice(0)) socket.destroy();
+			while (waiters.length) waiters.shift()?.reject(new Error('PC-Link serial server is closed'));
+		},
+	};
+}
+
+function writeSocket(socket: Socket, data: Uint8Array): Promise<void> {
+	if (!data.length || socket.destroyed) return Promise.resolve();
+	return new Promise((resolve, reject) => {
+		socket.write(Buffer.from(data), (err) => {
+			if (err) reject(err);
+			else resolve();
+		});
+	});
+}
+
+function toUint8Array(value: unknown): Uint8Array {
+	if (value instanceof Uint8Array) return value;
+	if (Array.isArray(value)) return Uint8Array.from(value.map((byte) => Number(byte) & 0xff));
+	if (value && typeof value === 'object' && Symbol.iterator in value) {
+		return Uint8Array.from(Array.from(value as Iterable<unknown>, (byte) => Number(byte) & 0xff));
+	}
+	return new Uint8Array();
+}
+
+async function servePclinkSerial(
+	emulator: any,
+	bind: string,
+	options: EvalPcLinkSerialServeOptions = {},
+): Promise<EvalPcLinkSerialServeResult> {
+	if (typeof emulator.sio_enable_bridge !== 'function') {
+		throw new Error('WASM runtime does not expose sio_enable_bridge; rebuild emulator-wasm');
+	}
+	for (const method of ['sio_bridge_pump', 'step'] as const) {
+		if (typeof emulator[method] !== 'function') {
+			throw new Error(`WASM runtime does not expose ${method}; rebuild emulator-wasm`);
+		}
+	}
+
+	const clientCount = options.clients ?? 1;
+	if (!Number.isInteger(clientCount) || clientCount <= 0) {
+		throw new Error(`pclinkSerial.serve clients must be greater than zero, got ${clientCount}`);
+	}
+	const rxPaceInstructions = options.rxPaceInstructions ?? DEFAULT_PCLINK_RX_PACE_INSTRUCTIONS;
+	const pumpInstructions = options.pumpInstructions ?? DEFAULT_PCLINK_PUMP_INSTRUCTIONS;
+	const postClientSettleInstructions =
+		options.postClientSettleInstructions ?? DEFAULT_PCLINK_POST_CLIENT_SETTLE_INSTRUCTIONS;
+	const maxInstructions = options.maxInstructions ?? DEFAULT_PCLINK_MAX_INSTRUCTIONS;
+	const yieldEveryInstructions = options.yieldEveryInstructions ?? DEFAULT_PCLINK_YIELD_EVERY_INSTRUCTIONS;
+
+	emulator.sio_enable_bridge();
+
+	const { host, port } = parseBindAddress(bind);
+	const server = createServer();
+	const acceptor = createSocketAcceptor(server);
+	server.listen(port, host);
+	await onceListening(server);
+	const local = server.address();
+	const localText = typeof local === 'object' && local ? `${local.address}:${local.port}` : `${host}:${port}`;
+	console.error(`[fnr-pclink] listening on tcp://${localText} for ${clientCount} client(s)`);
+
+	let totalHostRx = 0;
+	let totalRomTx = 0;
+	let totalInstructions = 0;
+	try {
+		for (let clientIndex = 0; clientIndex < clientCount; clientIndex++) {
+			const socket = await acceptor.next();
+			socket.setNoDelay(true);
+			const peer = `${socket.remoteAddress ?? 'unknown'}:${socket.remotePort ?? 0}`;
+			console.error(`[fnr-pclink] accepted client ${clientIndex + 1}/${clientCount} from ${peer}`);
+
+			const pendingRead: number[] = [];
+			let socketClosed = false;
+			let socketError: Error | null = null;
+			let romFlowPaused = false;
+			let rxPaceRemaining = 0;
+			let hostRxBytes = 0;
+			let romTxBytes = 0;
+			let instructions = 0;
+			let instructionsSinceYield = 0;
+
+			socket.on('data', (chunk: Buffer) => {
+				hostRxBytes += chunk.length;
+				totalHostRx += chunk.length;
+				for (const byte of chunk) pendingRead.push(byte & 0xff);
+			});
+			socket.on('close', () => {
+				socketClosed = true;
+			});
+			socket.on('error', (err) => {
+				socketError = err;
+				socketClosed = true;
+			});
+
+			while (!socketClosed || pendingRead.length > 0) {
+				if (socketError) throw socketError;
+				if (instructions >= maxInstructions) {
+					throw new Error(
+						`PC-Link serial client exceeded ${maxInstructions} instruction(s) ` +
+							`(${hostRxBytes} host->rom byte(s), ${romTxBytes} rom->host byte(s))`,
+					);
+				}
+
+				const hostChunk = pendingRead.slice(0, 512);
+				const remainingInstructions = Math.max(1, maxInstructions - instructions);
+				const rawPump = emulator.sio_bridge_pump({
+					host_bytes: hostChunk,
+					max_instructions: Math.min(pumpInstructions, remainingInstructions),
+					rx_pace_instructions: rxPaceInstructions,
+					rx_pace_remaining: rxPaceRemaining,
+					flow_paused: romFlowPaused,
+				}) as Record<string, unknown>;
+
+				const consumed = Math.max(0, Math.min(Number(rawPump.consumed ?? 0), pendingRead.length));
+				if (consumed > 0) pendingRead.splice(0, consumed);
+				rxPaceRemaining = Math.max(0, Number(rawPump.rx_pace_remaining ?? rxPaceRemaining));
+				romFlowPaused = Boolean(rawPump.flow_paused ?? romFlowPaused);
+				const pumpInstructionCount = Math.max(0, Number(rawPump.instructions ?? 0));
+				instructions += pumpInstructionCount;
+				totalInstructions += pumpInstructionCount;
+				instructionsSinceYield += pumpInstructionCount;
+
+				const tx = toUint8Array(rawPump.tx_bytes);
+				if (tx.length > 0) {
+					romTxBytes += tx.length;
+					totalRomTx += tx.length;
+					await writeSocket(socket, tx);
+				}
+
+				if (instructionsSinceYield >= yieldEveryInstructions) {
+					instructionsSinceYield = 0;
+					await yieldImmediate();
+				}
+			}
+
+			socket.destroy();
+			console.error(
+				`[fnr-pclink] client ${clientIndex + 1}/${clientCount} disconnected ` +
+					`(${hostRxBytes} host->rom byte(s), ${romTxBytes} rom->host byte(s), ${instructions} instruction(s))`,
+			);
+		}
+	} finally {
+		acceptor.close();
+		server.close();
+	}
+
+	if (postClientSettleInstructions > 0) {
+		emulator.step(postClientSettleInstructions);
+		totalInstructions += postClientSettleInstructions;
+	}
+	console.error(`[fnr-pclink] served ${clientCount} client(s)`);
+	return {
+		ok: true,
+		bind: `tcp://${localText}`,
+		clients: clientCount,
+		hostRxBytes: totalHostRx,
+		romTxBytes: totalRomTx,
+		instructions: totalInstructions,
+	};
 }
 
 async function loadBnidaSymbols(args: RunnerArgs, model: RomModel): Promise<BnidaLoadResult | null> {
@@ -451,6 +708,8 @@ async function main() {
 			),
 		pressOnKey: () => runWithError('onkey.press()', () => emulator.press_on_key?.()),
 		releaseOnKey: () => runWithError('onkey.release()', () => emulator.release_on_key?.()),
+		servePclinkSerial: (bind, options) =>
+			runWithErrorAsync(`pclinkSerial.serve(${bind})`, () => servePclinkSerial(emulator, bind, options)),
 		registerStub: (stub: StubRegistration) => {
 			requireStubDispatcher().registerStub(stub);
 		},
