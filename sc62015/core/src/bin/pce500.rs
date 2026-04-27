@@ -79,21 +79,6 @@ const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
 const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
 const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
 const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
-const IQ7P_ACK: u8 = 0xFA;
-const IQ7P_NAK: u8 = 0xF0;
-const IQ7P_MAGIC: &[u8; 4] = b"IQ7P";
-const IQ7P_VERSION: u8 = 1;
-const IQ7P_HEADER_LEN: usize = 13;
-const IQ7P_MAX_BODY_LEN: usize = 16 * 1024 * 1024;
-const IQ7P_CMD_HELLO: u8 = 0x01;
-const IQ7P_CMD_READ_MEMORY: u8 = 0x10;
-const IQ7P_CMD_LIST_DATASETS: u8 = 0x20;
-const IQ7P_CMD_LIST_ENTRIES: u8 = 0x21;
-const IQ7P_CMD_PUT_ENTRY: u8 = 0x22;
-const IQ7P_CMD_DELETE_ENTRY: u8 = 0x23;
-const IQ7P_CMD_ERASE_DATASET: u8 = 0x24;
-const IQ7P_CMD_EXPORT_STATE: u8 = 0x25;
-const IQ7P_CMD_IMPORT_STATE: u8 = 0x26;
 const PCLINK_SERIAL_RX_PACE_STEPS: u32 = 1_000;
 const PCLINK_SERIAL_POST_CLIENT_SETTLE_STEPS: usize = 2_500_000;
 const PCLINK_SERIAL_XON: u8 = 0x11;
@@ -279,11 +264,11 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     capture_json: Option<PathBuf>,
 
-    /// Save the IQ-7000 PC-Link-ready LCD pixels before serving IQ7P clients.
+    /// Save the IQ-7000 PC-Link-ready LCD pixels before serving PC-Link serial clients.
     #[arg(long, value_name = "PATH")]
     iq7p_ready_capture_png: Option<PathBuf>,
 
-    /// Save IQ-7000 PC-Link-ready run/capture metadata before serving IQ7P clients.
+    /// Save IQ-7000 PC-Link-ready run/capture metadata before serving PC-Link serial clients.
     #[arg(long, value_name = "PATH")]
     iq7p_ready_capture_json: Option<PathBuf>,
 
@@ -320,10 +305,6 @@ struct Args {
     #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
     iq7000_rtc: String,
 
-    /// Listen for IQ7P host-debug clients after executing --steps.
-    #[arg(long, value_name = "HOST:PORT")]
-    iq7p_listen: Option<String>,
-
     /// Listen for raw PC-Link serial bytes and bridge them to IQ-7000 SC62015 UART registers.
     #[arg(long, value_name = "HOST:PORT")]
     pclink_serial_listen: Option<String>,
@@ -332,21 +313,13 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     pclink_serial_clients: usize,
 
-    /// Number of IQ7P client connections to serve before exiting.
-    #[arg(long, default_value_t = 1)]
-    iq7p_clients: usize,
-
-    /// Drive the IQ-7000 ROM UI into PC-Link mode before serving IQ7P.
+    /// Drive the IQ-7000 ROM UI into PC-Link mode before serving PC-Link serial clients.
     #[arg(long, default_value_t = false)]
     iq7p_enter_pclink: bool,
 
     /// Type a MEMO through the IQ-7000 foreground ROM UI before entering PC-Link.
     #[arg(long, value_name = "TEXT")]
     iq7000_seed_memo: Vec<String>,
-
-    /// Serve IQ7P immediately after the scripted key sequence completes.
-    #[arg(long, default_value_t = false)]
-    iq7p_serve_after_key_seq: bool,
     // (legacy automation flags removed; use --key-seq instead)
 }
 
@@ -388,18 +361,6 @@ struct LcdAnnunciators {
     raw: u8,
     shift: bool,
     caps: bool,
-}
-
-#[derive(Debug, Clone)]
-struct Iq7pMemoUpload {
-    id: String,
-    lines: Vec<String>,
-}
-
-#[derive(Debug, Default)]
-struct Iq7pSessionState {
-    datasets: HashMap<String, HashMap<String, Value>>,
-    pending_memos: Vec<Iq7pMemoUpload>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -3403,319 +3364,7 @@ fn parse_debug_probe_ranges(raw: &[String]) -> Result<Vec<DebugProbeRange>, Stri
         .collect()
 }
 
-#[derive(Debug)]
-struct Iq7pMessage {
-    command: u8,
-    flags: u8,
-    sequence: u16,
-    body: Value,
-}
-
-fn iq7p_checksum(payload: &[u8]) -> u16 {
-    payload
-        .iter()
-        .fold(0u32, |acc, byte| acc.wrapping_add(u32::from(*byte))) as u16
-}
-
-fn iq7p_decode_frame(raw: &[u8]) -> Result<&[u8], String> {
-    if raw.len() < 2 {
-        return Err("frame is too short".to_string());
-    }
-    let payload = &raw[..raw.len() - 2];
-    let expected = u16::from_le_bytes([raw[raw.len() - 2], raw[raw.len() - 1]]);
-    let actual = iq7p_checksum(payload);
-    if expected != actual {
-        return Err(format!(
-            "checksum mismatch: got 0x{expected:04X}, expected 0x{actual:04X}"
-        ));
-    }
-    Ok(payload)
-}
-
-fn iq7p_decode_message(payload: &[u8]) -> Result<Iq7pMessage, String> {
-    if payload.len() < IQ7P_HEADER_LEN {
-        return Err("message payload is too short".to_string());
-    }
-    if &payload[..4] != IQ7P_MAGIC {
-        return Err(format!("bad message magic: {:02X?}", &payload[..4]));
-    }
-    let version = payload[4];
-    if version != IQ7P_VERSION {
-        return Err(format!("unsupported protocol version {version}"));
-    }
-    let command = payload[5];
-    let flags = payload[6];
-    let sequence = u16::from_le_bytes([payload[7], payload[8]]);
-    let body_len = u32::from_le_bytes([payload[9], payload[10], payload[11], payload[12]]);
-    let body_len = usize::try_from(body_len).map_err(|_| "body length too large".to_string())?;
-    if payload.len() - IQ7P_HEADER_LEN != body_len {
-        return Err(format!(
-            "body length mismatch: header={body_len}, actual={}",
-            payload.len() - IQ7P_HEADER_LEN
-        ));
-    }
-    let body: Value = serde_json::from_slice(&payload[IQ7P_HEADER_LEN..])
-        .map_err(|err| format!("invalid JSON body: {err}"))?;
-    if !body.is_object() {
-        return Err("message body must decode to a JSON object".to_string());
-    }
-    Ok(Iq7pMessage {
-        command,
-        flags,
-        sequence,
-        body,
-    })
-}
-
-fn iq7p_encode_message_frame(
-    command: u8,
-    sequence: u16,
-    flags: u8,
-    body: &Value,
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let body_bytes = serde_json::to_vec(body)?;
-    if body_bytes.len() > IQ7P_MAX_BODY_LEN {
-        return Err(format!("message body too large: {}", body_bytes.len()).into());
-    }
-    let mut payload = Vec::with_capacity(IQ7P_HEADER_LEN + body_bytes.len() + 2);
-    payload.extend_from_slice(IQ7P_MAGIC);
-    payload.push(IQ7P_VERSION);
-    payload.push(command);
-    payload.push(flags);
-    payload.extend_from_slice(&sequence.to_le_bytes());
-    payload.extend_from_slice(&(body_bytes.len() as u32).to_le_bytes());
-    payload.extend_from_slice(&body_bytes);
-    let checksum = iq7p_checksum(&payload);
-    payload.extend_from_slice(&checksum.to_le_bytes());
-    Ok(payload)
-}
-
-fn iq7p_read_message(stream: &mut TcpStream) -> Result<Iq7pMessage, Box<dyn Error>> {
-    let mut header = [0u8; IQ7P_HEADER_LEN];
-    stream.read_exact(&mut header)?;
-    if &header[..4] != IQ7P_MAGIC {
-        let _ = stream.write_all(&[IQ7P_NAK]);
-        return Err(format!("bad request magic: {:02X?}", &header[..4]).into());
-    }
-    let body_len = u32::from_le_bytes([header[9], header[10], header[11], header[12]]);
-    let body_len = usize::try_from(body_len).map_err(|_| "body length too large")?;
-    if body_len > IQ7P_MAX_BODY_LEN {
-        let _ = stream.write_all(&[IQ7P_NAK]);
-        return Err(format!("request body too large: {body_len}").into());
-    }
-    let mut raw = Vec::with_capacity(IQ7P_HEADER_LEN + body_len + 2);
-    raw.extend_from_slice(&header);
-    let mut rest = vec![0u8; body_len + 2];
-    stream.read_exact(&mut rest)?;
-    raw.extend_from_slice(&rest);
-    let payload = match iq7p_decode_frame(&raw) {
-        Ok(payload) => payload,
-        Err(err) => {
-            let _ = stream.write_all(&[IQ7P_NAK]);
-            return Err(err.into());
-        }
-    };
-    let message = match iq7p_decode_message(payload) {
-        Ok(message) => message,
-        Err(err) => {
-            let _ = stream.write_all(&[IQ7P_NAK]);
-            return Err(err.into());
-        }
-    };
-    stream.write_all(&[IQ7P_ACK])?;
-    Ok(message)
-}
-
-fn iq7p_write_response(
-    stream: &mut TcpStream,
-    request: &Iq7pMessage,
-    body: Value,
-) -> Result<(), Box<dyn Error>> {
-    let response = iq7p_encode_message_frame(
-        request.command | 0x80,
-        request.sequence,
-        request.flags,
-        &body,
-    )?;
-    stream.write_all(&response)?;
-    let mut ack = [0u8; 1];
-    stream.read_exact(&mut ack)?;
-    if ack[0] != IQ7P_ACK {
-        return Err(format!("client rejected response with 0x{:02X}", ack[0]).into());
-    }
-    Ok(())
-}
-
-fn iq7p_get_u64(body: &Value, key: &str) -> Result<u64, String> {
-    body.get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("missing or invalid '{key}'"))
-}
-
-fn iq7p_get_str<'a>(body: &'a Value, key: &str) -> Result<&'a str, String> {
-    body.get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("missing or invalid '{key}'"))
-}
-
-fn iq7p_dataset_catalog() -> Value {
-    json!([
-        {"name": "calendar", "description": "Calendar-facing host records", "schema_status": "experimental"},
-        {"name": "tel", "description": "Telephone-book files TEL 1/2/3", "schema_status": "experimental"},
-        {"name": "memo", "description": "Memo records", "schema_status": "experimental"},
-        {"name": "schedule", "description": "Schedule records", "schema_status": "experimental"},
-        {"name": "ann", "description": "Anniversary records ANN 1/2", "schema_status": "experimental"},
-        {"name": "s_alarm", "description": "Schedule-alarm records", "schema_status": "experimental"},
-        {"name": "d_alarm", "description": "Daily-alarm records", "schema_status": "experimental"},
-        {"name": "user_dic", "description": "User dictionary records", "schema_status": "experimental"},
-        {"name": "raw", "description": "Raw experimental payload bytes", "schema_status": "raw"},
-    ])
-}
-
-fn iq7p_normalize_dataset(raw: &str) -> String {
-    let normalized = raw.trim().to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "telephone" | "phone" => "tel".to_string(),
-        "cal" => "calendar".to_string(),
-        "anniversary" => "ann".to_string(),
-        "salarm" | "schedule_alarm" => "s_alarm".to_string(),
-        "dalarm" | "daily_alarm" => "d_alarm".to_string(),
-        "user_dictionary" | "users_dic" | "dic" => "user_dic".to_string(),
-        _ => normalized,
-    }
-}
-
-fn iq7p_entry_id(entry: &Value) -> Result<String, String> {
-    entry
-        .get("id")
-        .or_else(|| entry.get("entry_id"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.to_string())
-        .ok_or_else(|| "entry must contain non-empty id".to_string())
-}
-
-fn iq7p_memo_line_is_typeable(line: &str) -> bool {
-    line.chars()
-        .all(|ch| generated_key_seq_key(DeviceModel::Iq7000, ch).is_some())
-}
-
-fn iq7p_memo_lines_from_entry(entry: &Value) -> Result<Vec<String>, String> {
-    let fields = entry
-        .get("fields")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "memo entry.fields must be an object".to_string())?;
-    let mut lines = Vec::new();
-    if let Some(title) = fields.get("title").and_then(Value::as_str) {
-        if !title.trim().is_empty() {
-            lines.push(title.to_ascii_uppercase());
-        }
-    }
-    if let Some(raw_lines) = fields.get("lines").and_then(Value::as_array) {
-        for value in raw_lines {
-            let Some(line) = value.as_str() else {
-                return Err("memo fields.lines must contain strings".to_string());
-            };
-            lines.push(line.to_ascii_uppercase());
-        }
-    }
-    if let Some(text) = fields.get("text").and_then(Value::as_str) {
-        for line in text.replace("\r\n", "\n").replace('\r', "\n").split('\n') {
-            if !line.is_empty() {
-                lines.push(line.to_ascii_uppercase());
-            }
-        }
-    }
-    if lines.is_empty() {
-        return Err("memo entry needs title, text, or lines".to_string());
-    }
-    for line in &lines {
-        if !iq7p_memo_line_is_typeable(line) {
-            return Err(format!(
-                "memo line contains characters not mapped for IQ-7000 input: {line:?}"
-            ));
-        }
-    }
-    Ok(lines)
-}
-
-fn iq7p_store_entry(
-    session: &mut Iq7pSessionState,
-    dataset: &str,
-    entry: &Value,
-) -> Result<Value, String> {
-    let entry_id = iq7p_entry_id(entry)?;
-    let dataset = iq7p_normalize_dataset(dataset);
-    let pending_memo_lines = if dataset == "memo" {
-        Some(iq7p_memo_lines_from_entry(entry)?)
-    } else {
-        None
-    };
-    let entry_for_store = entry.clone();
-    session
-        .datasets
-        .entry(dataset.clone())
-        .or_default()
-        .insert(entry_id.clone(), entry_for_store);
-    let queued_for_rom_ui = if let Some(lines) = pending_memo_lines {
-        session.pending_memos.push(Iq7pMemoUpload {
-            id: entry_id.clone(),
-            lines,
-        });
-        true
-    } else {
-        false
-    };
-    Ok(json!({
-        "ok": true,
-        "dataset": dataset,
-        "id": entry_id,
-        "queued_for_rom_ui": queued_for_rom_ui,
-    }))
-}
-
-fn iq7p_import_dataset_entries(
-    session: &mut Iq7pSessionState,
-    dataset: &str,
-    entries: &Value,
-    dry_run: bool,
-) -> Result<usize, String> {
-    let mut count = 0usize;
-    match entries {
-        Value::Array(values) => {
-            for entry in values {
-                if !entry.is_object() {
-                    return Err(format!("{dataset} entries must be objects"));
-                }
-                if !dry_run {
-                    iq7p_store_entry(session, dataset, entry)?;
-                }
-                count = count.saturating_add(1);
-            }
-        }
-        Value::Object(map) => {
-            for (entry_id, raw_entry) in map {
-                if !raw_entry.is_object() {
-                    return Err(format!("{dataset}.{entry_id} must be an object"));
-                }
-                let mut entry = raw_entry.clone();
-                if entry.get("id").is_none() {
-                    if let Some(obj) = entry.as_object_mut() {
-                        obj.insert("id".to_string(), Value::String(entry_id.clone()));
-                    }
-                }
-                if !dry_run {
-                    iq7p_store_entry(session, dataset, &entry)?;
-                }
-                count = count.saturating_add(1);
-            }
-        }
-        _ => return Err(format!("{dataset} entries must be an object or list")),
-    }
-    Ok(count)
-}
-
-fn iq7p_encode_hex(data: &[u8]) -> String {
+fn encode_hex(data: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(data.len() * 2);
     for byte in data {
@@ -3723,192 +3372,6 @@ fn iq7p_encode_hex(data: &[u8]) -> String {
         out.push(HEX[(byte & 0x0F) as usize] as char);
     }
     out
-}
-
-fn iq7p_handle_request(
-    memory: &mut MemoryImage,
-    session: &mut Iq7pSessionState,
-    request: &Iq7pMessage,
-) -> Value {
-    match request.command {
-        IQ7P_CMD_HELLO => json!({
-            "ok": true,
-            "peer": "rust-cli-iq7p",
-            "protocol": "IQ7P",
-            "version": IQ7P_VERSION,
-            "memory_size": memory.external_len(),
-            "datasets": iq7p_dataset_catalog(),
-            "capabilities": {
-                "read_memory": true,
-                "dataset_state": true,
-                "memo_rom_ui_apply_after_pclink": true,
-            },
-        }),
-        IQ7P_CMD_READ_MEMORY => {
-            let address = match iq7p_get_u64(&request.body, "address") {
-                Ok(value) => (value as u32) & ADDRESS_MASK,
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let length = match iq7p_get_u64(&request.body, "length") {
-                Ok(value) => match usize::try_from(value) {
-                    Ok(value) => value,
-                    Err(_) => return json!({"ok": false, "error": "length is too large"}),
-                },
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let mut data = Vec::with_capacity(length);
-            for offset in 0..length {
-                let addr = address.wrapping_add(offset as u32) & ADDRESS_MASK;
-                data.push(memory.load(addr, 8).unwrap_or(0) as u8);
-            }
-            json!({
-                "ok": true,
-                "address": address,
-                "length": length,
-                "data": iq7p_encode_hex(&data),
-            })
-        }
-        IQ7P_CMD_LIST_DATASETS => json!({"ok": true, "datasets": iq7p_dataset_catalog()}),
-        IQ7P_CMD_LIST_ENTRIES => {
-            let dataset = match iq7p_get_str(&request.body, "dataset") {
-                Ok(value) => iq7p_normalize_dataset(value),
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let entries = session
-                .datasets
-                .get(&dataset)
-                .map(|items| items.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            json!({"ok": true, "dataset": dataset, "entries": entries})
-        }
-        IQ7P_CMD_PUT_ENTRY => {
-            let dataset = match iq7p_get_str(&request.body, "dataset") {
-                Ok(value) => value,
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let Some(entry) = request.body.get("entry").filter(|value| value.is_object()) else {
-                return json!({"ok": false, "error": "missing or invalid 'entry'"});
-            };
-            match iq7p_store_entry(session, dataset, entry) {
-                Ok(value) => value,
-                Err(err) => json!({"ok": false, "error": err}),
-            }
-        }
-        IQ7P_CMD_DELETE_ENTRY => {
-            let dataset = match iq7p_get_str(&request.body, "dataset") {
-                Ok(value) => iq7p_normalize_dataset(value),
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let entry_id = match iq7p_get_str(&request.body, "id") {
-                Ok(value) => value.to_string(),
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let deleted = session
-                .datasets
-                .get_mut(&dataset)
-                .and_then(|entries| entries.remove(&entry_id))
-                .is_some();
-            json!({"ok": true, "dataset": dataset, "id": entry_id, "deleted": deleted})
-        }
-        IQ7P_CMD_ERASE_DATASET => {
-            let dataset = match iq7p_get_str(&request.body, "dataset") {
-                Ok(value) => iq7p_normalize_dataset(value),
-                Err(err) => return json!({"ok": false, "error": err}),
-            };
-            let erased = session
-                .datasets
-                .insert(dataset.clone(), HashMap::new())
-                .map(|entries| entries.len())
-                .unwrap_or_default();
-            json!({"ok": true, "dataset": dataset, "erased": erased})
-        }
-        IQ7P_CMD_EXPORT_STATE => json!({
-            "ok": true,
-            "state": {
-                "format": "iq7000-pclink-state-v1",
-                "datasets": &session.datasets,
-            },
-        }),
-        IQ7P_CMD_IMPORT_STATE => {
-            let dry_run = request
-                .body
-                .get("dry_run")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let Some(state) = request.body.get("state").and_then(Value::as_object) else {
-                return json!({"ok": false, "error": "missing or invalid 'state'"});
-            };
-            let Some(datasets) = state.get("datasets").and_then(Value::as_object) else {
-                return json!({"ok": false, "error": "missing or invalid 'state.datasets'"});
-            };
-            let mut imported = 0usize;
-            for (dataset, entries) in datasets {
-                match iq7p_import_dataset_entries(session, dataset, entries, dry_run) {
-                    Ok(count) => imported = imported.saturating_add(count),
-                    Err(err) => return json!({"ok": false, "error": err}),
-                }
-            }
-            json!({"ok": true, "dry_run": dry_run, "datasets": datasets.len(), "entries": imported})
-        }
-        other => json!({
-            "ok": false,
-            "error": format!("unsupported IQ7P command 0x{other:02X}"),
-        }),
-    }
-}
-
-fn serve_iq7p_connection(
-    stream: &mut TcpStream,
-    memory: &mut MemoryImage,
-    session: &mut Iq7pSessionState,
-) -> Result<(), Box<dyn Error>> {
-    loop {
-        let request = match iq7p_read_message(stream) {
-            Ok(message) => message,
-            Err(err) => {
-                if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
-                    if matches!(
-                        io_err.kind(),
-                        std::io::ErrorKind::UnexpectedEof
-                            | std::io::ErrorKind::ConnectionReset
-                            | std::io::ErrorKind::BrokenPipe
-                    ) {
-                        break;
-                    }
-                }
-                return Err(err);
-            }
-        };
-        let body = iq7p_handle_request(memory, session, &request);
-        iq7p_write_response(stream, &request, body)?;
-    }
-    Ok(())
-}
-
-fn serve_iq7p_clients(
-    bind: &str,
-    client_count: usize,
-    memory: &mut MemoryImage,
-    session: &mut Iq7pSessionState,
-) -> Result<(), Box<dyn Error>> {
-    if client_count == 0 {
-        return Err("--iq7p-clients must be greater than zero".into());
-    }
-    let listener = TcpListener::bind(bind)?;
-    let local_addr = listener.local_addr()?;
-    println!("[iq7p] listening on tcp://{local_addr} for {client_count} client(s)");
-    for client_idx in 0..client_count {
-        let (mut stream, peer_addr) = listener.accept()?;
-        println!(
-            "[iq7p] accepted client {}/{} from {}",
-            client_idx + 1,
-            client_count,
-            peer_addr
-        );
-        serve_iq7p_connection(&mut stream, memory, session)?;
-    }
-    println!("[iq7p] served {client_count} client(s)");
-    Ok(())
 }
 
 #[cfg(test)]
@@ -4159,7 +3622,7 @@ fn serve_iq7000_pclink_serial_clients(
                         println!(
                             "[pclink-serial] host->rom {} byte(s): {}",
                             n,
-                            iq7p_encode_hex(&read_buf[..n])
+                            encode_hex(&read_buf[..n])
                         );
                         for byte in &read_buf[..n] {
                             pending_read.push_back(*byte);
@@ -4501,42 +3964,6 @@ fn run_runtime_key_seq(
     Err(format!("--key-seq did not complete within {max_instructions} instruction(s)").into())
 }
 
-fn apply_iq7p_pending_memos_via_rom_ui(
-    runtime: &mut CoreRuntime,
-    memos: &[Iq7pMemoUpload],
-) -> Result<(), Box<dyn Error>> {
-    if memos.is_empty() {
-        return Ok(());
-    }
-    println!(
-        "[iq7p] applying {} queued MEMO entr{} through the IQ-7000 ROM UI",
-        memos.len(),
-        if memos.len() == 1 { "y" } else { "ies" }
-    );
-    runtime_tap_key(runtime, AutoKeyKind::OnKey, 1_000, 250_000)?;
-    runtime_tap_key(runtime, AutoKeyKind::Event(0x08), 35_000, 200_000)?; // MEMO
-    for memo in memos {
-        for (line_idx, line) in memo.lines.iter().enumerate() {
-            if line_idx != 0 {
-                runtime_tap_key(runtime, AutoKeyKind::Event(0x3D), 35_000, 70_000)?;
-            }
-            for ch in line.chars() {
-                let Some(key) = generated_key_seq_key(DeviceModel::Iq7000, ch) else {
-                    return Err(format!(
-                        "queued MEMO {} contains unmapped IQ-7000 input character {ch:?}",
-                        memo.id
-                    )
-                    .into());
-                };
-                runtime_tap_key(runtime, key, 35_000, 55_000)?;
-            }
-        }
-        runtime_tap_key(runtime, AutoKeyKind::Event(0x45), 35_000, 1_000_000)?; // ENTER/store
-        println!("[iq7p] stored MEMO {} via ROM UI", memo.id);
-    }
-    Ok(())
-}
-
 fn iq7000_seed_memo_lines(raw: &str) -> Vec<String> {
     raw.replace("\\n", "\n")
         .split(['\n', '|'])
@@ -4641,7 +4068,7 @@ fn run_iq7000_pclink_ui_path(
             format!("IQ-7000 PC-Link UI did not reach LINK READY; LCD={lcd_text:?}").into(),
         );
     }
-    println!("[iq7p] IQ-7000 ROM UI reached PC-Link mode");
+    println!("[pclink] IQ-7000 ROM UI reached PC-Link mode");
     println!("LCD (decoded text):");
     for line in &lcd_lines {
         println!("  {line}");
@@ -4673,18 +4100,6 @@ fn run_iq7000_pclink_ui_path(
         serve_iq7000_pclink_serial_clients(bind, args.pclink_serial_clients, &mut runtime)?;
     }
 
-    let mut iq7p_session = Iq7pSessionState::default();
-    if let Some(bind) = args.iq7p_listen.as_ref() {
-        serve_iq7p_clients(
-            bind,
-            args.iq7p_clients,
-            &mut runtime.memory,
-            &mut iq7p_session,
-        )?;
-    }
-    if !iq7p_session.pending_memos.is_empty() {
-        apply_iq7p_pending_memos_via_rom_ui(&mut runtime, &iq7p_session.pending_memos)?;
-    }
     if let Some(raw_key_seq) = args
         .key_seq
         .as_ref()
@@ -4734,9 +4149,6 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     }
     if args.pclink_serial_listen.is_some() && !args.iq7p_enter_pclink {
         return Err("--pclink-serial-listen requires --iq7p-enter-pclink".into());
-    }
-    if args.pclink_serial_listen.is_some() && args.iq7p_listen.is_some() {
-        return Err("--pclink-serial-listen cannot be combined with --iq7p-listen".into());
     }
 
     if args.turnon2_resume && args.model != DeviceModel::PcE500Jp {
@@ -5015,9 +4427,6 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let summary_slot_run = summary_slot.clone();
     let mut driver = AsyncDriver::new();
     let snapshot_out = args.snapshot_out.clone();
-    let iq7p_listen = args.iq7p_listen.clone();
-    let iq7p_clients = args.iq7p_clients;
-    let iq7p_serve_after_key_seq = args.iq7p_serve_after_key_seq;
     let base_instruction_count = base_instruction_count;
 
     driver.spawn(async move {
@@ -5362,25 +4771,6 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     executed,
                     state.pc() & ADDRESS_MASK,
                     bus.cycle_count
-                );
-            }
-            if iq7p_serve_after_key_seq && use_key_seq && key_seq_runner.is_complete() {
-                println!("key-seq: completed at {executed}");
-                break;
-            }
-        }
-
-        if let Some(bind) = iq7p_listen.as_ref() {
-            bus.reapply_iq7000_clock_seed();
-            let mut iq7p_session = Iq7pSessionState::default();
-            if let Err(err) =
-                serve_iq7p_clients(bind, iq7p_clients, &mut bus.memory, &mut iq7p_session)
-            {
-                eprintln!("IQ7P server failed: {err}");
-            }
-            if !iq7p_session.pending_memos.is_empty() {
-                eprintln!(
-                    "warning: queued IQ7P MEMO entries require --iq7p-enter-pclink to apply through the ROM UI"
                 );
             }
         }
@@ -6131,37 +5521,6 @@ mod tests {
         assert_eq!(actions[1].key, Some(AutoKeyKind::Event(0x1D)));
         assert_eq!(actions[2].kind, KeySeqKind::KeyUp);
         assert_eq!(actions[2].key, Some(AutoKeyKind::Event(0x02)));
-    }
-
-    #[test]
-    fn iq7p_put_entry_queues_memo_for_rom_ui() {
-        let mut memory = MemoryImage::new();
-        let mut session = Iq7pSessionState::default();
-        let request = Iq7pMessage {
-            command: IQ7P_CMD_PUT_ENTRY,
-            sequence: 1,
-            flags: 0,
-            body: json!({
-                "dataset": "memo",
-                "entry": {
-                    "id": "fun",
-                    "fields": {
-                        "title": "pc link",
-                        "text": "hello from socket"
-                    }
-                }
-            }),
-        };
-
-        let response = iq7p_handle_request(&mut memory, &mut session, &request);
-
-        assert_eq!(response["ok"], true);
-        assert_eq!(response["queued_for_rom_ui"], true);
-        assert_eq!(session.pending_memos.len(), 1);
-        assert_eq!(
-            session.pending_memos[0].lines,
-            vec!["PC LINK".to_string(), "HELLO FROM SOCKET".to_string()]
-        );
     }
 
     #[test]
