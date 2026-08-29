@@ -3277,7 +3277,7 @@ fn write_lcd_png(
     let mut raw = Vec::with_capacity((out_width + 1) * out_height);
     for row in &pixels {
         for _ in 0..scale {
-            raw.push(0); // PNG filter type 0.
+            raw.extend(std::iter::once(0)); // PNG filter type 0.
             for pixel in row {
                 let shade = match *pixel {
                     0 => 0xC8,
@@ -3393,9 +3393,9 @@ struct PacomHostTxByte {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PacomRomRxPhase {
-    WaitStartLow,
-    WaitData,
-    WaitSpacingHigh,
+    StartLow,
+    Data,
+    SpacingHigh,
 }
 
 #[cfg(test)]
@@ -3474,24 +3474,24 @@ impl Iq7000PclinkSerialPeer {
             let mut drive: Option<bool> = None;
             let mut completed_byte: Option<u8> = None;
             match rx.phase {
-                PacomRomRxPhase::WaitStartLow => {
+                PacomRomRxPhase::StartLow => {
                     if !eoh_high {
-                        rx.phase = PacomRomRxPhase::WaitData;
+                        rx.phase = PacomRomRxPhase::Data;
                     }
                 }
-                PacomRomRxPhase::WaitData => {
+                PacomRomRxPhase::Data => {
                     rx.byte = (rx.byte << 1) | u8::from(eoh_high);
                     rx.bit_index = rx.bit_index.saturating_add(1);
-                    rx.phase = PacomRomRxPhase::WaitSpacingHigh;
+                    rx.phase = PacomRomRxPhase::SpacingHigh;
                     drive = Some(true);
                 }
-                PacomRomRxPhase::WaitSpacingHigh => {
+                PacomRomRxPhase::SpacingHigh => {
                     if eoh_high {
                         if rx.bit_index >= 8 {
                             completed_byte = Some(rx.byte);
                             drive = Some(true);
                         } else {
-                            rx.phase = PacomRomRxPhase::WaitStartLow;
+                            rx.phase = PacomRomRxPhase::StartLow;
                             drive = Some(false);
                         }
                     }
@@ -3511,7 +3511,7 @@ impl Iq7000PclinkSerialPeer {
             self.rom_rx = Some(PacomRomRxByte {
                 byte: 0,
                 bit_index: 0,
-                phase: PacomRomRxPhase::WaitData,
+                phase: PacomRomRxPhase::Data,
             });
             self.drive_eih(memory, false);
         }
@@ -4142,10 +4142,8 @@ fn run_iq7000_pclink_ui_path(
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
 
-    if args.iq7p_enter_pclink {
-        if args.model != DeviceModel::Iq7000 {
-            return Err("--iq7p-enter-pclink is only supported for --model iq-7000".into());
-        }
+    if args.iq7p_enter_pclink && args.model != DeviceModel::Iq7000 {
+        return Err("--iq7p-enter-pclink is only supported for --model iq-7000".into());
     }
     if args.pclink_serial_listen.is_some() && !args.iq7p_enter_pclink {
         return Err("--pclink-serial-listen requires --iq7p-enter-pclink".into());

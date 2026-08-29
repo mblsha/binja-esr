@@ -264,7 +264,7 @@ impl LoopDetector {
 
     fn maybe_detect(&mut self, current_idx: u64) {
         let stride = self.config.detect_stride;
-        if stride > 0 && (current_idx + 1) % stride != 0 {
+        if stride > 0 && !(current_idx + 1).is_multiple_of(stride) {
             return;
         }
         self.detect(current_idx);

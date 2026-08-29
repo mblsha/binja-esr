@@ -340,9 +340,7 @@ impl KeyboardMatrix {
             self.keyi_latch = false;
             return;
         }
-        for slot in &mut self.fifo_storage {
-            *slot = 0;
-        }
+        self.fifo_storage.fill(0);
         self.fifo_head = 0;
         self.fifo_tail = 0;
         self.fifo_count = 0;
