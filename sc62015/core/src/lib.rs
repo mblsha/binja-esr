@@ -884,18 +884,18 @@ impl CoreRuntime {
         // or the source mask is currently disabled. Delivery is still gated later.
         let src = if (isr_effective & ISR_RXI) != 0 {
             Some("RX")
+        } else if (isr_effective & ISR_EXI) != 0 {
+            Some("EX")
         } else if (isr_effective & ISR_TXI) != 0 {
             Some("TX")
-        } else if (isr_effective & ISR_IRQ10) != 0 {
-            Some("IRQ10")
         } else if (isr_effective & ISR_ONKI) != 0 {
             Some("ONK")
         } else if (isr_effective & ISR_KEYI) != 0 {
             Some("KEY")
-        } else if (isr_effective & ISR_MTI) != 0 {
-            Some("MTI")
         } else if (isr_effective & ISR_STI) != 0 {
             Some("STI")
+        } else if (isr_effective & ISR_MTI) != 0 {
+            Some("MTI")
         } else {
             None
         };
@@ -1298,18 +1298,18 @@ impl CoreRuntime {
                     .or_else(|| {
                         if (isr & ISR_RXI) != 0 {
                             Some("RX".to_string())
+                        } else if (isr & ISR_EXI) != 0 {
+                            Some("EX".to_string())
                         } else if (isr & ISR_TXI) != 0 {
                             Some("TX".to_string())
-                        } else if (isr & ISR_IRQ10) != 0 {
-                            Some("IRQ10".to_string())
                         } else if (isr & ISR_ONKI) != 0 {
                             Some("ONK".to_string())
                         } else if (isr & ISR_KEYI) != 0 {
                             Some("KEY".to_string())
-                        } else if (isr & ISR_MTI) != 0 {
-                            Some("MTI".to_string())
                         } else if (isr & ISR_STI) != 0 {
                             Some("STI".to_string())
+                        } else if (isr & ISR_MTI) != 0 {
+                            Some("MTI".to_string())
                         } else {
                             None
                         }
@@ -1353,18 +1353,18 @@ impl CoreRuntime {
                             if self.timer.irq_source.is_none() {
                                 let src = if (isr & ISR_RXI) != 0 {
                                     "RX"
+                                } else if (isr & ISR_EXI) != 0 {
+                                    "EX"
                                 } else if (isr & ISR_TXI) != 0 {
                                     "TX"
-                                } else if (isr & ISR_IRQ10) != 0 {
-                                    "IRQ10"
                                 } else if (isr & ISR_ONKI) != 0 {
                                     "ONK"
                                 } else if (isr & ISR_KEYI) != 0 {
                                     "KEY"
-                                } else if (isr & ISR_MTI) != 0 {
-                                    "MTI"
                                 } else if (isr & ISR_STI) != 0 {
                                     "STI"
+                                } else if (isr & ISR_MTI) != 0 {
+                                    "MTI"
                                 } else {
                                     "IRQ"
                                 };
@@ -1593,51 +1593,16 @@ impl CoreRuntime {
                 self.metadata.cycle_count = new_cycle;
                 if opcode == 0x01 {
                     let irq_src = self.timer.irq_source.clone();
-                    // If irq_source was lost, fall back to the delivered mask stack or live ISR bits.
-                    let stack_mask = self.timer.delivered_masks.pop();
-                    let clear_mask = irq_src
-                        .as_deref()
-                        .and_then(src_mask_for_name)
-                        .or(stack_mask)
-                        .or_else(|| {
-                            self.memory
-                                .read_internal_byte(IMEM_ISR_OFFSET)
-                                .and_then(|isr| {
-                                    if (isr & ISR_RXI) != 0 {
-                                        Some(ISR_RXI)
-                                    } else if (isr & ISR_TXI) != 0 {
-                                        Some(ISR_TXI)
-                                    } else if (isr & ISR_IRQ10) != 0 {
-                                        Some(ISR_IRQ10)
-                                    } else if (isr & ISR_ONKI) != 0 {
-                                        Some(ISR_ONKI)
-                                    } else if (isr & ISR_KEYI) != 0 {
-                                        Some(ISR_KEYI)
-                                    } else if (isr & ISR_MTI) != 0 {
-                                        Some(ISR_MTI)
-                                    } else if (isr & ISR_STI) != 0 {
-                                        Some(ISR_STI)
-                                    } else {
-                                        None
-                                    }
-                                })
-                        });
+                    // RETI restores the hardware interrupt frame but does not acknowledge ISR.
+                    // The ROM dispatcher explicitly clears the selected ISR bit before RETI.
+                    let delivered_mask = self.timer.delivered_masks.pop();
                     self.timer.in_interrupt = false;
-                    if irq_src.as_deref().is_some_and(|s| s == "KEY") {
+                    if irq_src.as_deref().is_some_and(|source| source == "KEY") {
+                        // Retire the synthetic host-key delivery latch. This is emulator bridge
+                        // bookkeeping, not an architectural ISR acknowledgement.
                         self.timer.key_irq_latched = false;
                     }
                     self.timer.irq_source = None;
-                    // Clear the delivered ISR bit, preferring explicit source but falling back to the saved mask.
-                    if let Some(src_mask) = clear_mask {
-                        let isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET;
-                        if let Some(isr_val) = self.memory.load(isr_addr, 8) {
-                            let prev = isr_val as u8;
-                            let cleared = prev & (!src_mask);
-                            let _ = self.memory.store(isr_addr, 8, cleared as u32);
-                            self.timer
-                                .record_bit_watch_transition("ISR", prev, cleared, pc_before);
-                        }
-                    }
                     // Drop any stale interrupt-stack frames (used only for bookkeeping).
                     let _ = self.timer.interrupt_stack.pop();
                     let mut guard = PERFETTO_TRACER.enter();
@@ -1655,7 +1620,7 @@ impl CoreRuntime {
                             "src".to_string(),
                             perfetto::AnnotationValue::Str(irq_src.unwrap_or_default()),
                         );
-                        if let Some(mask) = clear_mask {
+                        if let Some(mask) = delivered_mask {
                             payload.insert(
                                 "mask".to_string(),
                                 perfetto::AnnotationValue::UInt(mask as u64),
@@ -1883,18 +1848,18 @@ impl CoreRuntime {
             .or_else(|| {
                 if (isr & ISR_RXI) != 0 {
                     Some("RX".to_string())
+                } else if (isr & ISR_EXI) != 0 {
+                    Some("EX".to_string())
                 } else if (isr & ISR_TXI) != 0 {
                     Some("TX".to_string())
-                } else if (isr & ISR_IRQ10) != 0 {
-                    Some("IRQ10".to_string())
                 } else if (isr & ISR_ONKI) != 0 {
                     Some("ONK".to_string())
                 } else if (isr & ISR_KEYI) != 0 {
                     Some("KEY".to_string())
-                } else if (isr & ISR_MTI) != 0 {
-                    Some("MTI".to_string())
                 } else if (isr & ISR_STI) != 0 {
                     Some("STI".to_string())
+                } else if (isr & ISR_MTI) != 0 {
+                    Some("MTI".to_string())
                 } else {
                     None
                 }
@@ -1932,18 +1897,18 @@ impl CoreRuntime {
         // Match the IQ-7000 ROM interrupt dispatcher priority.
         let src = if (isr & ISR_RXI != 0) && (imr & IMR_RX != 0) {
             Some((ISR_RXI, "RX"))
+        } else if (isr & ISR_EXI != 0) && (imr & IMR_EX != 0) {
+            Some((ISR_EXI, "EX"))
         } else if (isr & ISR_TXI != 0) && (imr & IMR_TX != 0) {
             Some((ISR_TXI, "TX"))
-        } else if (isr & ISR_IRQ10 != 0) && (imr & IMR_IRQ10 != 0) {
-            Some((ISR_IRQ10, "IRQ10"))
         } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
             Some((ISR_ONKI, "ONK"))
         } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
             Some((ISR_KEYI, "KEY"))
-        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
-            Some((ISR_MTI, "MTI"))
         } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
             Some((ISR_STI, "STI"))
+        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
+            Some((ISR_MTI, "MTI"))
         } else {
             None
         };
@@ -2162,17 +2127,17 @@ const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
 const IMR_KEY: u8 = 0x04;
 const IMR_ONK: u8 = 0x08;
-const IMR_IRQ10: u8 = 0x10;
+const IMR_TX: u8 = 0x10;
 const IMR_RX: u8 = 0x20;
-const IMR_TX: u8 = 0x40;
+const IMR_EX: u8 = 0x40;
 const ISR_MTI: u8 = 0x01;
 const ISR_STI: u8 = 0x02;
 const ISR_KEYI: u8 = 0x04;
 const ISR_ONKI: u8 = 0x08;
-const ISR_IRQ10: u8 = 0x10;
+const ISR_TXI: u8 = 0x10;
 const ISR_RXI: u8 = 0x20;
-const ISR_TXI: u8 = 0x40;
-const ISR_KNOWN_MASK: u8 = ISR_MTI | ISR_STI | ISR_KEYI | ISR_ONKI | ISR_IRQ10 | ISR_RXI | ISR_TXI;
+const ISR_EXI: u8 = 0x40;
+const ISR_KNOWN_MASK: u8 = ISR_MTI | ISR_STI | ISR_KEYI | ISR_ONKI | ISR_TXI | ISR_RXI | ISR_EXI;
 const USR_RX_READY: u8 = 0x20;
 const SSR_ONK_VISIBLE: u8 = 0x02;
 const SSR_ONK_LEGACY_VISIBLE: u8 = 0x08;
@@ -2182,26 +2147,13 @@ const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 fn irq_source_priority(name: &str) -> u8 {
     match name {
         "RX" => 0,
-        "TX" => 1,
-        "IRQ10" => 2,
+        "EX" => 1,
+        "TX" => 2,
         "ONK" => 3,
         "KEY" => 4,
         "STI" => 5,
         "MTI" => 6,
         _ => u8::MAX,
-    }
-}
-
-fn src_mask_for_name(name: &str) -> Option<u8> {
-    match name {
-        "RX" => Some(ISR_RXI),
-        "TX" => Some(ISR_TXI),
-        "IRQ10" => Some(ISR_IRQ10),
-        "KEY" => Some(ISR_KEYI),
-        "ONK" => Some(ISR_ONKI),
-        "MTI" => Some(ISR_MTI),
-        "STI" => Some(ISR_STI),
-        _ => None,
     }
 }
 
@@ -2813,12 +2765,40 @@ mod tests {
         assert_ne!(
             rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_TXI,
             0,
-            "TXI should be visible to the ROM TX handler after it clears ISR.0x40"
+            "TXI should be visible to the ROM TX handler after it clears ISR.0x10"
         );
         assert!(
             !rt.timer.irq_pending,
             "refreshing TXI while already in an interrupt must not request nested delivery"
         );
+    }
+
+    #[test]
+    fn interrupt_layout_and_priority_match_rom_dispatcher() {
+        assert_eq!((ISR_TXI, ISR_RXI, ISR_EXI), (0x10, 0x20, 0x40));
+        assert_eq!((IMR_TX, IMR_RX, IMR_EX), (0x10, 0x20, 0x40));
+
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_internal_byte(
+            IMEM_ISR_OFFSET,
+            ISR_RXI | ISR_EXI | ISR_TXI | ISR_STI | ISR_MTI,
+        );
+        rt.arm_pending_irq_from_isr();
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("RX"));
+
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_EXI | ISR_TXI | ISR_STI | ISR_MTI);
+        rt.arm_pending_irq_from_isr();
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("EX"));
+
+        rt.timer.irq_pending = false;
+        rt.timer.irq_source = None;
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_STI | ISR_MTI);
+        rt.arm_pending_irq_from_isr();
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("STI"));
     }
 
     #[test]
@@ -3384,7 +3364,7 @@ mod tests {
     }
 
     #[test]
-    fn reti_clears_interrupt_state_and_isr_bit() {
+    fn reti_clears_bookkeeping_but_preserves_isr_bit() {
         let mut rt = CoreRuntime::new();
         // Prepare stack and vector to a RETI instruction.
         rt.state.set_reg(RegName::S, 0x0200);
@@ -3405,7 +3385,7 @@ mod tests {
         assert!(rt.timer.in_interrupt, "interrupt flag should set on entry");
         assert_eq!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x0010);
 
-        // Second step: execute RETI, clear bookkeeping and ISR bit.
+        // Second step: RETI restores state and clears emulator bookkeeping only.
         rt.step(1).expect("execute reti");
         assert!(!rt.timer.in_interrupt, "RETI should clear in_interrupt");
         assert!(
@@ -3417,11 +3397,15 @@ mod tests {
             "irq source should clear after RETI"
         );
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & ISR_KEYI, 0, "RETI should clear delivered ISR bit");
+        assert_eq!(
+            isr & ISR_KEYI,
+            ISR_KEYI,
+            "firmware, not RETI, must acknowledge the delivered ISR bit"
+        );
     }
 
     #[test]
-    fn reti_uses_interrupt_stack_mask_when_source_missing() {
+    fn reti_preserves_isr_when_interrupt_source_bookkeeping_is_missing() {
         let mut rt = CoreRuntime::new();
         // Fake a pending interrupt state with a delivered mask stored separately.
         rt.state.set_reg(RegName::S, 0x0030);
@@ -3434,7 +3418,7 @@ mod tests {
         rt.memory.write_external_byte(0x0032, 0x34);
         rt.memory.write_external_byte(0x0033, 0x12);
         rt.memory.write_external_byte(0x0034, 0x00);
-        // ISR has ONK bit set; irq_source unknown but delivered_masks carries mask.
+        // ISR has ONK set; irq_source is unknown but bookkeeping retains the mask.
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
         rt.timer.in_interrupt = true;
         rt.timer.interrupt_stack = vec![1]; // flow id placeholder
@@ -3444,11 +3428,7 @@ mod tests {
         rt.step(1).expect("execute reti without source");
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
-            isr & ISR_ONKI,
-            0,
-            "RETI should clear ISR using delivered mask when source is None"
-        );
+        assert_eq!(isr & ISR_ONKI, ISR_ONKI, "RETI must not acknowledge ISR");
         assert!(rt.timer.interrupt_stack.is_empty());
         assert!(rt.timer.delivered_masks.is_empty());
     }

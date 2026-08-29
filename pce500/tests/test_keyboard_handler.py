@@ -1,4 +1,4 @@
-"""Tests for the high-level keyboard handler and FIFO buffering."""
+"""ROM-informed high-level keyboard-model and FIFO contracts."""
 
 from __future__ import annotations
 

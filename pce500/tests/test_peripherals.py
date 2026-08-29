@@ -1,3 +1,5 @@
+"""PeripheralManager model contracts; these are not real-device conformance tests."""
+
 from __future__ import annotations
 
 from pce500.memory import PCE500Memory, INTERNAL_MEMORY_START

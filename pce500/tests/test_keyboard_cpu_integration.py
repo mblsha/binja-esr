@@ -1,4 +1,4 @@
-"""Integration tests for keyboard to CPU communication."""
+"""Synthetic CPU-to-keyboard-model integration tests (no stock ROM execution)."""
 
 import unittest
 import sys

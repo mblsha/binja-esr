@@ -1,3 +1,9 @@
+"""Emulator memory, interrupt-instruction, and Python scheduler contracts.
+
+These tests do not execute the stock ROM dispatcher. ROM-grounded dispatcher
+coverage lives in ``test_keyboard_interrupt_rom.py``.
+"""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -71,46 +77,15 @@ def test_internal_memory_alias_writes(alias_base: int) -> None:
     assert alias_val == 0xAA
 
 
-def test_reti_keeps_isr_bit_until_firmware_clears_python() -> None:
-    # Use Python emulator as reference: set ISR key bit, deliver IRQ, ensure RETI does not auto-clear.
-    with _backend("python"):
-        emu = Emulator()
-
-    mem = emu.memory
-
-    # Mock an ISR bit and IMR enabling KEY
-    mem.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x04)  # KEYI
-    mem.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x84)  # IRM+KEY
-
-    # Force IRQ delivery bookkeeping
-    emu._irq_source = IRQSource.KEY
-    emu._in_interrupt = True
-
-    # Prepare stack for RETI: IMR, F, PC bytes
-    sp = 0x0100
-    mem.write_byte(sp, 0x84)
-    mem.write_byte(sp + 1, 0x7C)
-    mem.write_byte(sp + 2, 0x12)
-    mem.write_byte(sp + 3, 0x34)
-    mem.write_byte(sp + 4, 0x05)
-    emu.cpu.regs.set(RegisterName.S, sp)
-
-    mem.write_byte(0x0000, 0x01)  # RETI opcode
-    emu.cpu.regs.set(RegisterName.PC, 0x0000)
-
-    emu.step()
-
-    isr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
-    assert isr_after & 0x04 == 0x04
-    imr_after = mem.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR)
-    assert imr_after == 0x84
-
-
-def test_reti_keeps_isr_bit_until_firmware_clears_llama() -> None:
-    if "llama" not in available_backends():
+@pytest.mark.parametrize("backend", ["python", "llama"])
+def test_reti_restores_interrupt_frame_without_acknowledging_isr(
+    backend: str,
+) -> None:
+    """Match the ROM contract: firmware acknowledges ISR before executing RETI."""
+    if backend == "llama" and "llama" not in available_backends():
         pytest.skip("LLAMA backend not available")
 
-    with _backend("llama"):
+    with _backend(backend if backend != "python" else None):
         emu = Emulator()
 
     mem = emu.memory
@@ -174,6 +149,37 @@ def test_imr_masks_irq_pending(backend: str) -> None:
     assert emu._irq_pending
 
 
+@pytest.mark.parametrize(
+    ("pending", "expected"),
+    [
+        (ISRFlag.ONKI | ISRFlag.KEYI | ISRFlag.STI | ISRFlag.MTI, IRQSource.ONK),
+        (ISRFlag.STI | ISRFlag.MTI, IRQSource.STI),
+    ],
+)
+def test_pending_source_bookkeeping_matches_rom_priority(
+    pending: ISRFlag, expected: IRQSource
+) -> None:
+    emu = Emulator()
+    emu._timer_enabled = False
+    emu._in_interrupt = True
+    emu._irq_pending = False
+    emu._irq_source = None
+    emu.memory.write_byte(0x0000, 0x00)
+    emu.cpu.regs.set(RegisterName.PC, 0x0000)
+    emu.memory.write_byte(
+        INTERNAL_MEMORY_START + IMEMRegisters.IMR,
+        int(IMRFlag.IRM) | int(pending),
+    )
+    emu.memory.write_byte(
+        INTERNAL_MEMORY_START + IMEMRegisters.ISR,
+        int(pending),
+    )
+
+    emu.step()
+
+    assert emu._irq_source is expected
+
+
 @pytest.mark.parametrize("backend", ["python", "llama"])
 def test_timer_irq_arms_only_when_imr_allows(backend: str) -> None:
     if backend == "llama" and "llama" not in available_backends():
@@ -197,7 +203,6 @@ def test_timer_irq_arms_only_when_imr_allows(backend: str) -> None:
     emu.cycle_count = emu._scheduler.next_mti
     emu.step()
     assert emu.memory.read_byte(isr_addr) & int(ISRFlag.MTI)
-    assert emu.memory.read_byte(isr_addr) & int(ISRFlag.MTI)
 
     # Enable IRM+MTI and fire again: IRQ should either arm pending or deliver.
     emu.memory.write_byte(imr_addr, int(IMRFlag.IRM) | int(IMRFlag.MTI))
@@ -208,6 +213,7 @@ def test_timer_irq_arms_only_when_imr_allows(backend: str) -> None:
 
 
 def test_timer_advances_while_interrupt_handler_is_active() -> None:
+    """Pin the Python scheduler model; real-device ISR relatch timing is unverified."""
     emu = Emulator()
     emu._timer_enabled = True
     emu._timer_mti_period = 2

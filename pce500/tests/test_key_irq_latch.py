@@ -1,3 +1,5 @@
+"""Host keyboard-bridge latch policy; not a stock-ROM or hardware contract."""
+
 from __future__ import annotations
 
 from sc62015.pysc62015.constants import ISRFlag
@@ -10,6 +12,7 @@ INTERNAL_MEMORY_START = 0x100000
 
 
 def test_key_latch_survives_release_until_irq_delivered():
+    """Preserve a synthetic host key event until the emulator can deliver it."""
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
     emu._timer_enabled = False  # type: ignore[attr-defined]
 

@@ -90,6 +90,22 @@ class IRQSource(Enum):
     ONK = 3  # On-key interrupt     → ISR bit 3
 
 
+_IRQ_PRIORITY = (
+    IRQSource.ONK,
+    IRQSource.KEY,
+    IRQSource.STI,
+    IRQSource.MTI,
+)
+
+
+def _highest_pending_irq_source(isr: int) -> Optional[IRQSource]:
+    """Return the highest-priority low interrupt source selected by the ROM."""
+    for source in _IRQ_PRIORITY:
+        if isr & (1 << source.value):
+            return source
+    return None
+
+
 # Define constants locally to avoid heavy imports
 INTERNAL_MEMORY_START = 0x100000
 KOL, KOH, KIL = IMEMRegisters.KOL, IMEMRegisters.KOH, IMEMRegisters.KIL
@@ -678,15 +694,7 @@ class PCE500Emulator:
                 if isr_val_chk != 0:
                     # Cancel HALT and arm a pending interrupt; infer a plausible source
                     self.cpu.state.halted = False
-                    for b in (
-                        IRQSource.MTI.value,
-                        IRQSource.STI.value,
-                        IRQSource.KEY.value,
-                        IRQSource.ONK.value,
-                    ):
-                        if isr_val_chk & (1 << b):
-                            self._irq_source = IRQSource(b)
-                            break
+                    self._irq_source = _highest_pending_irq_source(isr_val_chk)
                     setattr(self, "_irq_pending", True)
                     _log_irq_debug(
                         f"HALT wake IRQ pending (ISR=0x{isr_val_chk:02X}) source={self._irq_source}"
@@ -793,16 +801,7 @@ class PCE500Emulator:
                 imr_probe = self.memory.read_byte(imr_addr_chk) & 0xFF
                 isr_probe = self.memory.read_byte(isr_addr_chk) & 0xFF
 
-            pending_src = None
-            for b, src in (
-                (IRQSource.KEY.value, IRQSource.KEY),
-                (IRQSource.ONK.value, IRQSource.ONK),
-                (IRQSource.MTI.value, IRQSource.MTI),
-                (IRQSource.STI.value, IRQSource.STI),
-            ):
-                if isr_probe & (1 << b):
-                    pending_src = src
-                    break
+            pending_src = _highest_pending_irq_source(isr_probe & imr_probe)
 
             if (
                 getattr(self, "_in_interrupt", False)
@@ -862,18 +861,9 @@ class PCE500Emulator:
                     imr_reg_val = self.cpu.regs.get(RegisterName.IMR) & 0xFF
                 except Exception:
                     pass
+                pending_src = _highest_pending_irq_source(isr_val_chk & imr_val_chk)
                 # Trace the pending check to see if KEYI is masked/cleared.
                 try:
-                    pending_src = None
-                    for b, src in (
-                        (IRQSource.KEY.value, IRQSource.KEY),
-                        (IRQSource.ONK.value, IRQSource.ONK),
-                        (IRQSource.MTI.value, IRQSource.MTI),
-                        (IRQSource.STI.value, IRQSource.STI),
-                    ):
-                        if isr_val_chk & (1 << b):
-                            pending_src = src
-                            break
                     self._trace_irq_instant(
                         "IRQ_PendingCheck",
                         pending_src,
@@ -890,15 +880,9 @@ class PCE500Emulator:
                     )
                 except Exception:
                     pass
-                # If we have a pending source but no latched irq_source, adopt it.
-                # Prefer a newly pending KEY/ONK over an existing latched source so keyboard IRQs are not starved by timers.
+                # Label delivery with the highest-priority enabled source selected by ROM.
                 if pending_src is not None:
-                    if getattr(self, "_irq_source", None) is None:
-                        self._irq_source = pending_src
-                    elif pending_src in (IRQSource.KEY, IRQSource.ONK) and getattr(
-                        self, "_irq_source", None
-                    ) not in (IRQSource.KEY, IRQSource.ONK):
-                        self._irq_source = pending_src
+                    self._irq_source = pending_src
                 # Trace unexpected IMR=0 reads to spot masking.
                 if imr_val_chk == 0:
                     self._trace_irq_instant(
