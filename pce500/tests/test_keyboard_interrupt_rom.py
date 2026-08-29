@@ -5,7 +5,19 @@ from pathlib import Path
 import pytest
 
 from pce500 import PCE500Emulator
+from pce500.emulator import IMRFlag, ISRFlag, IRQSource
+from sc62015.pysc62015 import RegisterName
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+
+
+DISPATCHER = 0xF1FB5
+DISPATCHER_ACK = 0xF2059
+KEY_HANDLER = 0xF2061
+ROM_VECTOR_TABLE = 0xF0C44
+RAM_VECTOR_TABLE = 0xBFCC6
+RETURN_PC = 0xB8000
+SYSTEM_FRAME = 0xBFE00
+USER_STACK = 0xBFF00
 
 
 def _rom_image() -> bytes:
@@ -18,16 +30,15 @@ def _rom_image() -> bytes:
     return data
 
 
-def _warm_until_key_interrupt(
+def _warm_until_host_key_event(
     emu: PCE500Emulator, target: int, chunk_steps: int = 20_000, max_chunks: int = 10
 ) -> None:
-    """Run the emulator in chunks until KEY interrupts reach the target."""
+    """Run in chunks until the host keyboard bridge observes a scan event."""
     for _ in range(max_chunks):
         emu.run(chunk_steps)
-        stats = emu.get_interrupt_stats()
-        if stats["by_source"]["KEY"] >= target:
+        if emu._kb_irq_count >= target:
             return
-    pytest.fail("Keyboard interrupt count did not increase as expected")
+    pytest.fail("Host keyboard event count did not increase as expected")
 
 
 def _warm_until_keyboard_strobes(
@@ -41,36 +52,47 @@ def _warm_until_keyboard_strobes(
     pytest.fail("Keyboard strobe count did not increase as expected")
 
 
-def _run_with_mask_until(
-    emu: PCE500Emulator,
-    *,
-    imr_addr: int,
-    isr_addr: int,
-    target_strobes: int,
-    max_steps: int,
-) -> None:
-    """Single-step with IMR/ISR masked until keyboard strobe progress is observed."""
-    for _ in range(max_steps):
-        emu.memory.write_byte(imr_addr, 0x00)
-        emu.memory.write_byte(isr_addr, 0x00)
+def _run_dispatcher(
+    rom_image: bytes, *, active_imr: int, saved_imr: int, isr: int
+) -> tuple[PCE500Emulator, list[int]]:
+    """Execute the stock interrupt dispatcher from a hardware-shaped frame."""
+    emu = PCE500Emulator(save_lcd_on_exit=False, perfetto_trace=False)
+    emu.load_rom(rom_image[0xC0000:0x100000], start_address=0xC0000)
+    emu._timer_enabled = False
+    emu._in_interrupt = True
+    emu._irq_pending = False
+    emu._irq_source = IRQSource.KEY
+    emu._key_irq_latched = False
+
+    vector_bytes = rom_image[ROM_VECTOR_TABLE : ROM_VECTOR_TABLE + 24]
+    for offset, value in enumerate(vector_bytes):
+        emu.memory.write_byte(RAM_VECTOR_TABLE + offset, value)
+
+    imr_addr = 0x100000 + IMEMRegisters.IMR
+    isr_addr = 0x100000 + IMEMRegisters.ISR
+    emu.memory.write_byte(imr_addr, active_imr)
+    emu.memory.write_byte(isr_addr, isr)
+
+    # Hardware frame at S: saved IMR, saved F, saved 24-bit return PC.
+    emu.memory.write_byte(SYSTEM_FRAME, saved_imr)
+    emu.memory.write_byte(SYSTEM_FRAME + 1, 0)
+    emu.memory.write_bytes(3, SYSTEM_FRAME + 2, RETURN_PC)
+    emu.memory.write_byte(RETURN_PC, 0x00)
+    emu.cpu.regs.set(RegisterName.S, SYSTEM_FRAME)
+    emu.cpu.regs.set(RegisterName.U, USER_STACK)
+    emu.cpu.regs.set(RegisterName.PC, DISPATCHER)
+
+    visited: list[int] = []
+    for _ in range(80):
+        visited.append(emu.cpu.regs.get(RegisterName.PC))
         emu.step()
-        if emu._kb_strobe_count >= target_strobes:
-            return
-    pytest.fail("Keyboard strobe count did not advance under masked execution")
+        if emu.cpu.regs.get(RegisterName.PC) == RETURN_PC:
+            return emu, visited
+    pytest.fail("ROM interrupt dispatcher did not return within 80 instructions")
 
 
-def _run_with_mask_steps(
-    emu: PCE500Emulator, *, imr_addr: int, isr_addr: int, steps: int
-) -> None:
-    """Advance a bounded number of masked single steps without trace overhead."""
-    for _ in range(steps):
-        emu.memory.write_byte(imr_addr, 0x00)
-        emu.memory.write_byte(isr_addr, 0x00)
-        emu.step()
-
-
-def test_keyboard_interrupt_delivery_from_rom():
-    """Verify the ROM fast-timer ISR raises KEY interrupts after bootstrap."""
+def test_rom_keyboard_scan_path_observes_host_key_without_key_irq_delivery():
+    """Separate ROM scan activity from the masked host KEYI bridge."""
     rom_image = _rom_image()
 
     # Create emulator with ROM code loaded and restore the runtime RAM snapshot.
@@ -80,7 +102,7 @@ def test_keyboard_interrupt_delivery_from_rom():
     emu._trace_execution = lambda *_args, **_kwargs: None
     emu._emit_instruction_trace_event = lambda *_args, **_kwargs: None
 
-    # Ensure IMR/ISR match the expected defaults even if the caller overrides arguments.
+    # Defaults are IRM | EXM | STM | MTM; KEYM is intentionally disabled.
     imr_addr = 0x100000 + IMEMRegisters.IMR
     isr_addr = 0x100000 + IMEMRegisters.ISR
     assert emu.memory.read_byte(imr_addr) == 0x43
@@ -98,7 +120,7 @@ def test_keyboard_interrupt_delivery_from_rom():
 
     # Drive a key press long enough for the ROM to observe it.
     emu.press_key("KEY_A")
-    _warm_until_key_interrupt(emu, key_before + 1)
+    _warm_until_host_key_event(emu, kb_irq_before + 1)
 
     # Release without waiting for the trailing edge; this test only asserts
     # positive KEY interrupt delivery from the press path.
@@ -108,53 +130,61 @@ def test_keyboard_interrupt_delivery_from_rom():
     key_after = stats_after["by_source"]["KEY"]
     kb_irq_after = emu._kb_irq_count
 
-    assert key_after > key_before, "Keyboard interrupt counter did not increment"
-    assert kb_irq_after > kb_irq_before, "Emulator-level IRQ accounting did not advance"
+    assert key_after == key_before, "Masked KEYM must not be reported as delivered"
+    assert kb_irq_after > kb_irq_before, "Host keyboard scan bridge did not observe key"
     assert emu._kb_strobe_count > 0, "ROM never toggled keyboard columns"
     assert emu.memory.read_byte(0xBFD34) & 0x80, (
         "Keyboard scanner gate should stay enabled"
     )
 
 
-def test_keyboard_interrupt_blocked_when_masked():
-    """Ensure masking the KEY bit suppresses delivery even after bootstrap."""
+def test_rom_dispatcher_acknowledges_key_and_disables_key_mask_on_return():
+    """The ROM, rather than RETI, clears KEYI and disables its default vector."""
     rom_image = _rom_image()
-    emu = PCE500Emulator(save_lcd_on_exit=False, perfetto_trace=False)
-    emu.load_rom(rom_image[0xC0000:0x100000], start_address=0xC0000)
-    emu.bootstrap_from_rom_image(rom_image)
-    # This assertion does not depend on trace output; disabling per-instruction
-    # trace callbacks keeps the masked single-step loop within pytest-timeout.
-    emu._trace_execution = lambda *_args, **_kwargs: None
-    emu._emit_instruction_trace_event = lambda *_args, **_kwargs: None
-
-    imr_addr = 0x100000 + IMEMRegisters.IMR
-    emu.memory.write_byte(0xBFD1D, 0x02)
-    emu.memory.write_byte(0xBFD1E, 0x00)
-
-    # Mask out all sources and clear pending bits before any warm-up.
-    emu.memory.write_byte(imr_addr, 0x00)
-    isr_addr = 0x100000 + IMEMRegisters.ISR
-    emu.memory.write_byte(isr_addr, 0x00)
-
-    _run_with_mask_until(
-        emu,
-        imr_addr=imr_addr,
-        isr_addr=isr_addr,
-        target_strobes=emu._kb_strobe_count + 2,
-        max_steps=25_000,
+    emu, visited = _run_dispatcher(
+        rom_image,
+        active_imr=int(IMRFlag.KEYM),
+        saved_imr=int(IMRFlag.IRM | IMRFlag.KEYM),
+        isr=int(ISRFlag.KEYI),
     )
-    stats_before = emu.get_interrupt_stats()
-    key_before = stats_before["by_source"]["KEY"]
-    kb_irq_before = emu._kb_irq_count
+    imr_addr = 0x100000 + IMEMRegisters.IMR
+    isr_addr = 0x100000 + IMEMRegisters.ISR
+    assert KEY_HANDLER in visited
+    assert DISPATCHER_ACK in visited
+    assert emu.memory.read_byte(isr_addr) & int(ISRFlag.KEYI) == 0
+    assert emu.memory.read_byte(imr_addr) == int(IMRFlag.IRM)
+    assert emu.cpu.regs.get(RegisterName.S) == SYSTEM_FRAME + 5
+    assert emu.cpu.regs.get(RegisterName.U) == USER_STACK
 
-    emu.press_key("KEY_A")
-    _run_with_mask_steps(emu, imr_addr=imr_addr, isr_addr=isr_addr, steps=12_000)
-    emu.release_key("KEY_A")
-    _run_with_mask_steps(emu, imr_addr=imr_addr, isr_addr=isr_addr, steps=8_000)
 
-    stats_after = emu.get_interrupt_stats()
-    key_after = stats_after["by_source"]["KEY"]
-    kb_irq_after = emu._kb_irq_count
+def test_rom_dispatcher_leaves_masked_key_status_pending():
+    """A masked KEYI takes the no-dispatch RETI path and remains pending."""
+    rom_image = _rom_image()
+    emu, visited = _run_dispatcher(
+        rom_image,
+        active_imr=0,
+        saved_imr=int(IMRFlag.IRM),
+        isr=int(ISRFlag.KEYI),
+    )
+    isr_addr = 0x100000 + IMEMRegisters.ISR
+    assert KEY_HANDLER not in visited
+    assert DISPATCHER_ACK not in visited
+    assert emu.memory.read_byte(isr_addr) & int(ISRFlag.KEYI)
 
-    assert key_after == key_before, "All-masked IMR should block dispatcher delivery"
-    assert kb_irq_after == kb_irq_before, "Hardware IRQ count should remain unchanged"
+
+def test_rom_dispatcher_prioritizes_key_over_main_timer():
+    """KEYI wins over MTI, matching the stock RX→EX→TX→ON→KEY→ST→MT order."""
+    rom_image = _rom_image()
+    enabled = IMRFlag.IRM | IMRFlag.KEYM | IMRFlag.MTM
+    pending = ISRFlag.KEYI | ISRFlag.MTI
+    emu, visited = _run_dispatcher(
+        rom_image,
+        active_imr=int(enabled & ~IMRFlag.IRM),
+        saved_imr=int(enabled),
+        isr=int(pending),
+    )
+    imr_addr = 0x100000 + IMEMRegisters.IMR
+    isr_addr = 0x100000 + IMEMRegisters.ISR
+    assert KEY_HANDLER in visited
+    assert emu.memory.read_byte(isr_addr) == int(ISRFlag.MTI)
+    assert emu.memory.read_byte(imr_addr) == int(IMRFlag.IRM | IMRFlag.MTM)

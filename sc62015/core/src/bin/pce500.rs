@@ -1671,25 +1671,20 @@ impl StandaloneBus {
                 self.last_irq_src = Some("ONK".to_string());
             }
         }
-        // If we have a pending source but no latched irq_source, adopt one from ISR bits.
-        let pending_src = if (isr & ISR_KEYI) != 0 {
-            Some("KEY")
-        } else if (isr & ISR_ONKI) != 0 {
+        // Track the highest-priority pending low source in the ROM's order.
+        let pending_src = if (isr & ISR_ONKI) != 0 {
             Some("ONK")
-        } else if (isr & ISR_MTI) != 0 {
-            Some("MTI")
+        } else if (isr & ISR_KEYI) != 0 {
+            Some("KEY")
         } else if (isr & ISR_STI) != 0 {
             Some("STI")
+        } else if (isr & ISR_MTI) != 0 {
+            Some("MTI")
         } else {
             None
         };
         if let Some(src) = pending_src {
-            if self.last_irq_src.is_none()
-                || (matches!(src, "KEY" | "ONK")
-                    && !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK")))
-            {
-                self.last_irq_src = Some(src.to_string());
-            }
+            self.last_irq_src = Some(src.to_string());
         }
         if isr != 0 {
             self.irq_pending = true;
@@ -1758,10 +1753,10 @@ impl StandaloneBus {
             (Some("ONK"), ISR_ONKI)
         } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY) != 0 {
             (Some("KEY"), ISR_KEYI)
-        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI) != 0 {
-            (Some("MTI"), ISR_MTI)
         } else if (isr & ISR_STI != 0) && (imr & IMR_STI) != 0 {
             (Some("STI"), ISR_STI)
+        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI) != 0 {
+            (Some("MTI"), ISR_MTI)
         } else {
             // No deliverable IRQ because of masks; unwind stack effects to avoid corruption.
             let _ = self.memory.store(imr_addr, 8, imr as u32);
@@ -4565,10 +4560,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 bus.irq_pending = true;
                 bus.last_irq_src = None;
                 for (mask, src) in [
-                    (ISR_MTI, "MTI"),
-                    (ISR_STI, "STI"),
-                    (ISR_KEYI, "KEY"),
                     (ISR_ONKI, "ONK"),
+                    (ISR_KEYI, "KEY"),
+                    (ISR_STI, "STI"),
+                    (ISR_MTI, "MTI"),
                 ] {
                     if (isr & mask) != 0 {
                         bus.last_irq_src = Some(src.to_string());
@@ -5350,6 +5345,35 @@ mod tests {
             "masked ONK must not override the ROM-visible unmasked timer source"
         );
         assert_eq!(bus.last_irq_src.as_deref(), Some("MTI"));
+    }
+
+    #[test]
+    fn deliver_irq_prefers_sub_timer_over_main_timer() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x0200);
+        bus.memory.write_internal_byte(
+            super::IMEM_IMR_OFFSET,
+            super::IMR_MASTER | super::IMR_STI | super::IMR_MTI,
+        );
+        bus.memory
+            .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_STI | super::ISR_MTI);
+        bus.irq_pending = true;
+
+        bus.deliver_irq(&mut state);
+
+        assert_eq!(bus.active_irq_mask, super::ISR_STI);
+        assert_eq!(bus.last_irq_src.as_deref(), Some("STI"));
     }
 
     #[test]

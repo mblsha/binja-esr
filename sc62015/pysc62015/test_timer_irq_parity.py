@@ -1,11 +1,11 @@
-"""Parity tests for timer/IRQ events across Python and LLAMA backends."""
+"""CPU-store and shared Python scheduler contracts across CPU backends."""
 
 from __future__ import annotations
 
 import pytest
 from typing import Any, cast
 
-from sc62015.pysc62015 import CPU, RegisterName
+from sc62015.pysc62015 import CPU, RegisterName, available_backends
 from sc62015.pysc62015.constants import (
     ADDRESS_SPACE_SIZE,
     INTERNAL_MEMORY_START,
@@ -16,8 +16,10 @@ from pce500.emulator import PCE500Emulator
 
 
 @pytest.mark.parametrize("backend", ("python", "llama"))
-def test_timer_irq_sets_isr_and_traces(backend: str) -> None:
-    # Minimal memory; scheduler lives in Python emulator, but LLAMA backend should still mirror IRQ writes.
+def test_isr_immediate_store_is_visible_and_traced_by_backend(backend: str) -> None:
+    """Execute ``MV (ISR), #1``; this is an instruction test, not a timer test."""
+    if backend == "llama" and "llama" not in available_backends():
+        pytest.skip("LLAMA backend not available")
     raw = bytearray(ADDRESS_SPACE_SIZE)
     # Place a NOP so execute_instruction doesn't crash.
     raw[0] = 0x00
@@ -69,7 +71,10 @@ def test_timer_irq_sets_isr_and_traces(backend: str) -> None:
         assert mem.irq_traces != []
 
 
-def test_timer_irq_cadence_matches_between_backends(monkeypatch) -> None:
+def test_python_scheduler_irq_sequence_is_cpu_backend_independent(monkeypatch) -> None:
+    """The shared Python scheduler emits the same events around either CPU backend."""
+    if "llama" not in available_backends():
+        pytest.skip("LLAMA backend not available")
     backends = ("python", "llama")
     results = {}
 
@@ -107,7 +112,7 @@ def test_timer_irq_cadence_matches_between_backends(monkeypatch) -> None:
             isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
             results[backend] = {
                 "irq_events": captured.copy(),
-                "imr": emu.memory.read_byte(imr_addr - 1) & 0xFF,
+                "imr": emu.memory.read_byte(imr_addr) & 0xFF,
                 "isr": emu.memory.read_byte(isr_addr) & 0xFF,
             }
         finally:

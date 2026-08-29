@@ -1,3 +1,9 @@
+"""Synthetic SC62015 interrupt-model tests using generated handler programs.
+
+These pin emulator delivery, wake, and accounting behavior. They do not execute
+the stock ROM dispatcher or establish real-device peripheral timing.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
