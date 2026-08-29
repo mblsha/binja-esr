@@ -9,6 +9,12 @@ if TYPE_CHECKING:
     from .memory import PCE500Memory
 FIFO_SIZE = 8  # event queue depth
 COLUMN_COUNT = 16  # 8 KOL + 8 KOH bits (matches Rust keyboard scan width)
+PCE500_IOCS_WS_PTR = 0x00BFD17
+PCE500_IOCS_WS_PTR_MIRROR = 0x1000E6
+PCE500_KEY_FIFO_BASE_OFFSET = 0x02
+PCE500_KEY_FIFO_TAIL_OFFSET = 0x04
+PCE500_KEY_FIFO_HEAD_OFFSET = 0x05
+PCE500_KEY_FIFO_CAPACITY = 0x10
 
 # Debounce / repeat defaults derived from ROM behaviour (16 ms fast-timer cadence).
 DEFAULT_PRESS_TICKS = 6
@@ -375,6 +381,41 @@ class KeyboardMatrix:
         self._fifo = [0x00] * FIFO_SIZE
         self._head = 0
         self._tail = 0
+
+    def drain_fifo_to_pce500_iocs_workspace(self, kb_irq_enabled: bool) -> int:
+        """Move debounced events into the ROM-owned IOCS keyboard ring."""
+
+        if self._head == self._tail or self._memory is None:
+            return 0
+
+        base = self._memory.read_long(PCE500_IOCS_WS_PTR_MIRROR)
+        if base == 0:
+            base = self._memory.read_long(PCE500_IOCS_WS_PTR)
+        if base == 0:
+            return 0
+
+        buffer_offset = self._memory.read_byte(base + PCE500_KEY_FIFO_BASE_OFFSET)
+        tail = self._memory.read_byte(base + PCE500_KEY_FIFO_TAIL_OFFSET)
+        head = self._memory.read_byte(base + PCE500_KEY_FIFO_HEAD_OFFSET)
+        written = 0
+        for event in self.fifo_snapshot():
+            next_tail = (tail + 1) & (PCE500_KEY_FIFO_CAPACITY - 1)
+            if next_tail == (head & (PCE500_KEY_FIFO_CAPACITY - 1)):
+                break
+            slot = base + buffer_offset + (tail & (PCE500_KEY_FIFO_CAPACITY - 1))
+            self._memory.write_byte(slot, event)
+            tail = next_tail
+            written += 1
+
+        if written:
+            self._memory.write_byte(base + PCE500_KEY_FIFO_TAIL_OFFSET, tail)
+            if kb_irq_enabled:
+                isr_address = 0x1000FC
+                self._memory.write_byte(
+                    isr_address, self._memory.read_byte(isr_address) | 0x04
+                )
+            self.consume_pending_events()
+        return written
 
     def inject_event(self, key_code: str, *, release: bool = False) -> bool:
         """Inject a debounced keyboard event into the FIFO (for scripted tests)."""

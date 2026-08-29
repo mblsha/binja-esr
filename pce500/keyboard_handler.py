@@ -111,7 +111,12 @@ class PCE500KeyboardHandler:
         if reg == KIL:
             if not self._scan_enabled or self._ksd_masked():
                 return 0x00
-            self.scan_tick()
+            events = self.scan_tick()
+            if events:
+                # A KIL read may itself complete debounce. Preserve that event in
+                # the ROM-owned IOCS ring before the IMEM acknowledgement hook
+                # clears the matrix's private queue.
+                self.drain_fifo_to_pce500_iocs_workspace(False)
             self._last_kil = self._matrix.peek_kil()
             # Emit KIL read with a best-effort PC from CPU regs.
             pc = None
@@ -177,6 +182,9 @@ class PCE500KeyboardHandler:
             # Ensure KIL latch reflects the latest active rows after the tick.
             self._last_kil = self._matrix.peek_kil()
         return events
+
+    def drain_fifo_to_pce500_iocs_workspace(self, kb_irq_enabled: bool) -> int:
+        return self._matrix.drain_fifo_to_pce500_iocs_workspace(kb_irq_enabled)
 
     def set_scan_enabled(self, enabled: bool) -> None:
         self._scan_enabled = bool(enabled)
