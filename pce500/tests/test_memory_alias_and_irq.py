@@ -227,6 +227,23 @@ def test_timer_irq_arms_only_when_imr_allows(backend: str) -> None:
     assert emu._irq_pending or emu.cpu.regs.get(RegisterName.PC) != 0x0000
 
 
+def test_timer_advances_while_interrupt_handler_is_active() -> None:
+    emu = Emulator()
+    emu._timer_enabled = True
+    emu._timer_mti_period = 2
+    emu._timer_sti_period = 0
+    emu._in_interrupt = True
+    emu.cpu.regs.set(RegisterName.PC, 0x0000)
+    emu.cpu.regs.set(RegisterName.S, 0x0200)
+    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+    emu.memory.write_byte(isr_addr, 0)
+    emu.cycle_count = emu._scheduler.next_mti
+
+    emu.step()
+
+    assert emu.memory.read_byte(isr_addr) & int(ISRFlag.MTI)
+
+
 @pytest.mark.parametrize("backend", ["python", "llama"])
 def test_sti_irq_arms_when_imr_allows(backend: str) -> None:
     if backend == "llama" and "llama" not in available_backends():

@@ -66,6 +66,48 @@ class TestKeyboardHandler:
             0x80 | (KEY_LOCATIONS["KEY_A"].column << 3 | KEY_LOCATIONS["KEY_A"].row),
         ]
 
+    def test_fifo_drains_into_rom_iocs_workspace(self) -> None:
+        workspace = 0x0BFC80
+        self.memory.write_long(0x1000E6, workspace)
+        self.memory.write_byte(workspace + 0x02, 0x50)
+        self.memory.write_byte(workspace + 0x04, 0)
+        self.memory.write_byte(workspace + 0x05, 0)
+
+        _select_column(self.handler, "KEY_F1")
+        self.handler._matrix.press_threshold = 1
+        assert self.handler.press_key("KEY_F1")
+        assert self.handler.scan_tick()
+
+        assert self.handler.drain_fifo_to_pce500_iocs_workspace(True) == 1
+        assert self.memory.read_byte(workspace + 0x50) == (
+            KEY_LOCATIONS["KEY_F1"].column << 3 | KEY_LOCATIONS["KEY_F1"].row
+        )
+        assert self.memory.read_byte(workspace + 0x04) == 1
+        assert self.handler.fifo_snapshot() == []
+
+    def test_kil_read_preserves_debounced_event_in_rom_iocs_workspace(self) -> None:
+        workspace = 0x0BFC80
+        self.memory.write_long(0x1000E6, workspace)
+        self.memory.write_byte(workspace + 0x02, 0x50)
+        self.memory.write_byte(workspace + 0x04, 0)
+        self.memory.write_byte(workspace + 0x05, 0)
+
+        _select_column(self.handler, "KEY_F1")
+        self.handler._matrix.press_threshold = 1
+        self.handler._matrix.release_threshold = 1
+        assert self.handler.press_key("KEY_F1")
+        assert self.handler.scan_tick()
+        assert self.handler.drain_fifo_to_pce500_iocs_workspace(False) == 1
+
+        self.handler.handle_register_write(0xF0, 0)
+        self.handler.handle_register_write(0xF1, 0)
+        assert self.handler.handle_register_read(0xF2) == 0
+
+        matrix_code = KEY_LOCATIONS["KEY_F1"].column << 3 | KEY_LOCATIONS["KEY_F1"].row
+        assert self.memory.read_byte(workspace + 0x51) == (matrix_code | 0x80)
+        assert self.memory.read_byte(workspace + 0x04) == 2
+        assert self.handler.fifo_snapshot() == []
+
     def test_scan_respects_ksd_mask(self) -> None:
         # Assert initial read matches press
         _select_column(self.handler, "KEY_B")

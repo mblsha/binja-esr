@@ -1075,7 +1075,9 @@ class PCE500Emulator:
 
         # Tick rough timers after pending IRQ delivery check to match Rust ordering.
         try:
-            if self._timer_enabled and not getattr(self, "_in_interrupt", False):
+            if self._timer_enabled:
+                # Hardware timers continue advancing while an interrupt handler
+                # runs; delivery remains deferred by the interrupt-state checks.
                 self._tick_timers()
         except Exception:
             pass
@@ -2493,6 +2495,11 @@ class PCE500Emulator:
             fifo_pending = bool(self.keyboard.fifo_snapshot())
         except Exception:
             fifo_pending = False
+        if events or fifo_pending:
+            try:
+                self.keyboard.drain_fifo_to_pce500_iocs_workspace(self._kb_irq_enabled)
+            except Exception:
+                pass
         if events:
             self._kb_irq_count += len(events)
         if self._kb_irq_enabled and (events or fifo_pending):
