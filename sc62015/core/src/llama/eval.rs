@@ -3237,13 +3237,10 @@ impl LlamaExecutor {
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 // Two-operand compare/test; handle reg/mem/immediate combos
-                let lhs;
-                let rhs;
-                let bits: u8;
-                if entry.operands.len() == 2 {
+                let (lhs, rhs, bits) = if entry.operands.len() == 2 {
                     let op1 = &entry.operands[0];
                     let op2 = &entry.operands[1];
-                    bits = match (op1, op2) {
+                    let bits = match (op1, op2) {
                         (OperandKind::Reg(_, b1), _) => *b1,
                         (_, OperandKind::Reg(_, b2)) => *b2,
                         (OperandKind::IMemWidth(b), _) => b * 8,
@@ -3268,7 +3265,7 @@ impl LlamaExecutor {
                         matches!(op, OperandKind::Imm(_) | OperandKind::ImmOffset)
                     };
 
-                    lhs = if op_is_mem(op1) {
+                    let lhs = if op_is_mem(op1) {
                         let mem = decoded.mem.ok_or("missing mem operand")?;
                         bus.load(mem.addr, mem.bits)
                     } else if op_is_imm(op1) {
@@ -3279,7 +3276,7 @@ impl LlamaExecutor {
                         decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
 
-                    rhs = if op_is_mem(op2) {
+                    let rhs = if op_is_mem(op2) {
                         let mem = decoded.mem2.or(decoded.mem).ok_or("missing mem operand")?;
                         bus.load(mem.addr, mem.bits)
                     } else if op_is_imm(op2) {
@@ -3289,10 +3286,11 @@ impl LlamaExecutor {
                     } else {
                         decoded.imm.map(|v| v.0).unwrap_or(0)
                     };
+                    (lhs, rhs, bits)
                 } else {
                     // Parity: Python decode does not emit other CMP/TEST operand shapes.
                     return Err("unsupported operand pattern");
-                }
+                };
                 let mask = Self::mask_for_width(bits);
                 let lhs_m = lhs & mask;
                 let rhs_m = rhs & mask;

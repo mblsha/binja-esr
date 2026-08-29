@@ -219,17 +219,17 @@ impl CassettePulseStream {
     }
 
     pub fn decode_bytes(&self) -> Result<Vec<u8>, CassettePulseError> {
-        if self.pulses.len() % 2 != 0 {
+        if !self.pulses.len().is_multiple_of(2) {
             return Err(CassettePulseError::OddPhaseCount);
         }
         let bit_count = self.pulses.len() / 2;
-        if bit_count % 8 != 0 {
+        if !bit_count.is_multiple_of(8) {
             return Err(CassettePulseError::NotByteAligned);
         }
 
         let mut bytes = Vec::with_capacity(bit_count / 8);
         let mut current = 0u8;
-        for (idx, pair) in self.pulses.chunks_exact(2).enumerate() {
+        for (idx, pair) in self.pulses.as_chunks::<2>().0.iter().enumerate() {
             let average = (u32::from(pair[0].cycles) + u32::from(pair[1].cycles)) / 2;
             let one = average >= u32::from(self.timing.threshold);
             current = (current << 1) | u8::from(one);

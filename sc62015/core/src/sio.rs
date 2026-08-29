@@ -222,10 +222,11 @@ impl SioStub {
                     events.push(SioTimedEvent::HandshakeSettled(lines));
                 }
             }
-            if countdown_elapsed(&mut self.direct_input_timeout_countdown) {
-                if self.direct_input_timeout && self.rx_queue.is_empty() {
-                    events.push(SioTimedEvent::DirectInputTimeout);
-                }
+            if countdown_elapsed(&mut self.direct_input_timeout_countdown)
+                && self.direct_input_timeout
+                && self.rx_queue.is_empty()
+            {
+                events.push(SioTimedEvent::DirectInputTimeout);
             }
             events.extend(self.update_flow_control());
         }
