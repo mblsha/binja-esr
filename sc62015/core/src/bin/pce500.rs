@@ -22,7 +22,8 @@ use sc62015_core::{
     },
     memory::{
         MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET,
-        IMEM_KOL_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET, IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
+        IMEM_KOL_OFFSET, IMEM_LCC_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET, IMEM_UCR_OFFSET,
+        IMEM_USR_OFFSET,
     },
     pce500::{
         load_pce500_rom_window_into_memory, load_pce500_system_image_into_memory,
@@ -2322,6 +2323,16 @@ impl LlamaBus for StandaloneBus {
                     self.trace_imem_access("read", addr, bits, byte as u32);
                     self.trace_bus_access("read", addr, bits, byte as u32);
                     return byte as u32;
+                }
+            }
+            if offset == IMEM_KIL_OFFSET {
+                // The ROM quiescence loops at 0xF1CEF and 0xF1EDF set LCC.KSD,
+                // then poll KIL until it reads zero. Do not consume a queued
+                // synthetic key event while satisfying that hardware contract.
+                let lcc = self.memory.read_internal_byte(IMEM_LCC_OFFSET).unwrap_or(0);
+                if lcc & 0x04 != 0 {
+                    self.trace_kbd_access("read-ksd-masked", addr, offset, bits, 0);
+                    return 0;
                 }
             }
             let had_pending = offset == IMEM_KIL_OFFSET && self.keyboard.fifo_len() > 0;
@@ -5137,6 +5148,48 @@ mod tests {
         assert!(
             bus.keyboard.fifo_len() > 0,
             "scan tick should enqueue FIFO event"
+        );
+    }
+
+    #[test]
+    fn ksd_masks_kil_without_consuming_pending_key() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 1, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.timer.set_keyboard_irq_enabled(true);
+        bus.strobe_all_columns();
+        bus.press_key(super::PF1_CODE);
+        bus.advance_cycles(6);
+
+        let fifo_before = bus.keyboard.fifo_snapshot();
+        assert!(!fifo_before.is_empty(), "scan should queue the pressed key");
+        assert!(bus.timer.key_irq_latched);
+        assert!(bus.pending_kil);
+
+        bus.memory.write_internal_byte(IMEM_LCC_OFFSET, 0x04);
+        let kil_addr = INTERNAL_MEMORY_START + IMEM_KIL_OFFSET;
+        assert_eq!(bus.load(kil_addr, 8), 0, "LCC.KSD should mask KIL");
+        assert_eq!(
+            bus.keyboard.fifo_snapshot(),
+            fifo_before,
+            "a KSD-masked read must preserve the queued key"
+        );
+        assert!(bus.timer.key_irq_latched);
+        assert!(bus.pending_kil);
+
+        bus.memory.write_internal_byte(IMEM_LCC_OFFSET, 0);
+        assert_ne!(
+            bus.load(kil_addr, 8),
+            0,
+            "the selected pressed key should be visible after KSD clears"
         );
     }
 
