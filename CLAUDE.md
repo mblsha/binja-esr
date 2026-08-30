@@ -151,9 +151,10 @@ The PC-E500 emulator (`pce500/`) wraps the SC62015 emulator with Sharp PC-E500 s
 
 ### ROM Loading
 
-The `pc-e500-en.bin` file is a 1MB memory dump. When loading:
-- Extract bytes from offset 0xC0000 to 0x100000 (256KB) - this is the actual ROM
-- The ROM is loaded at address 0xC0000 in the emulator's memory space
+The `pc-e500-en.bin` file is a 1MB memory dump. When loading this English/S3
+variant, extract offsets `0xC0000..0xFFFFF` and map that 256 KiB image at
+`0xC0000`. A base-model 128 KiB ROM instead maps at `0xE0000..0xFFFFF`; the
+length-aware loaders handle both layouts.
 - Entry point 0xFFFFD typically contains 0xC2 0x10 0x0F (0x0F10C2 in little-endian)
 
 ## Performance Profiling

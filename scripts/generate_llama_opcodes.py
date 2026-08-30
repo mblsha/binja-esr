@@ -28,6 +28,13 @@ def _width_bytes(obj: Any) -> int | None:
     if width is not None:
         # width_bits is expressed in bits; convert to bytes.
         return int(width) // 8
+    # Composite operands such as EMemIMem inherit an Imm8.width() method for
+    # their encoding byte, but carry the transfer width in their explicit
+    # _width field. Prefer structural width metadata over inherited helpers.
+    for attr in ["_width", "width_bytes"]:
+        val = getattr(obj, attr, None)
+        if val is not None:
+            return int(val)
     width_attr = getattr(obj, "width", None)
     if callable(width_attr):
         try:
@@ -36,10 +43,6 @@ def _width_bytes(obj: Any) -> int | None:
             pass
     elif width_attr is not None:
         return int(width_attr)
-    for attr in ["_width", "width_bytes"]:
-        val = getattr(obj, attr, None)
-        if val is not None:
-            return int(val)
     return None
 
 
@@ -89,6 +92,8 @@ def _map_operand(op: Any) -> RustOperand:
         return RustOperand("Imm", ["16"])
     if name == "Imm20":
         return RustOperand("Imm", ["20"])
+    if name == "Imm24":
+        return RustOperand("Imm", ["24"])
     if name == "ImmOffset":
         return RustOperand("ImmOffset", [])
     if name == "IMem8":
@@ -96,7 +101,10 @@ def _map_operand(op: Any) -> RustOperand:
     if name == "IMem16":
         return RustOperand("IMem", ["16"])
     if name == "IMem20":
-        return RustOperand("IMem", ["20"])
+        # IMem20 is a historical pointer-oriented name for a physical
+        # three-byte operand. Address consumers mask to 20 bits; data-family
+        # instructions such as EXP/MVP/CMPP must preserve all 24 bits.
+        return RustOperand("IMem", ["24"])
     if name == "IMemWidth":
         return RustOperand("IMemWidth", [str(getattr(op, "width_bytes", 0))])
     if name == "EMemAddr":

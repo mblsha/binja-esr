@@ -21,6 +21,8 @@ class LCDChipSnapshot:
     vram: Tuple[Tuple[int, ...], ...]
     instruction_count: int
     data_write_count: int
+    data_read_count: int
+    on_off_count: int
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,8 @@ def _snapshot_from_chips(chips: Sequence[HD61202]) -> LCDSnapshot:
                 vram=tuple(tuple(row) for row in chip.vram),
                 instruction_count=chip.instruction_count,
                 data_write_count=chip.data_write_count,
+                data_read_count=chip.data_read_count,
+                on_off_count=chip.on_off_count,
             )
         )
     return LCDSnapshot(tuple(capture))

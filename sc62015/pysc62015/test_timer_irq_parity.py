@@ -38,6 +38,9 @@ def test_isr_immediate_store_is_visible_and_traced_by_backend(backend: str) -> N
         def read_byte(self, addr: int) -> int:
             return read(addr)
 
+        def peek_byte_for_preflight(self, addr: int, _pc: int | None = None) -> int:
+            return raw[addr & 0xFFFFFF]
+
         def write_byte(self, addr: int, value: int) -> None:
             write(addr, value)
 

@@ -11,11 +11,13 @@ state fixtures and assert the resulting deltas.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import operator
 from typing import Dict, Iterable, Mapping, MutableMapping, Tuple, List
 
 from binja_test_mocks.eval_llil import Memory
 
 from .emulator import NUM_TEMP_REGISTERS, RegisterName, Registers
+from .constants import validate_f_image
 
 
 _CORE_REGISTER_FIELDS: Tuple[str, ...] = (
@@ -68,20 +70,56 @@ class CPURegistersSnapshot:
         )
 
     def apply_to(self, regs: Registers) -> None:
-        regs.set(RegisterName.PC, self.pc)
-        regs.set(RegisterName.BA, self.ba)
-        regs.set(RegisterName.I, self.i)
-        regs.set(RegisterName.X, self.x)
-        regs.set(RegisterName.Y, self.y)
-        regs.set(RegisterName.U, self.u)
-        regs.set(RegisterName.S, self.s)
-        regs.set(RegisterName.F, self.f)
+        # Build the complete register image in isolation.  Dataclass type
+        # annotations are not runtime validation: a malformed later field must
+        # not leave earlier registers committed, and unknown temporaries must
+        # not disappear silently on one backend while Rust rejects them.
+        def snapshot_u32(field_name: str, value: object) -> int:
+            try:
+                result = operator.index(value)
+            except TypeError as exc:
+                raise TypeError(f"snapshot {field_name} must be an integer") from exc
+            if not 0 <= result <= 0xFFFF_FFFF:
+                raise ValueError(
+                    f"snapshot {field_name} must fit in an unsigned 32-bit value"
+                )
+            return result
 
+        core_values = {
+            field_name: snapshot_u32(field_name, getattr(self, field_name))
+            for field_name in _CORE_REGISTER_FIELDS
+        }
+        validate_f_image(core_values["f"])
+
+        if not isinstance(self.temps, Mapping):
+            raise TypeError("snapshot temps must be a mapping")
+        validated_temps: Dict[int, int] = {}
+        for raw_index, raw_value in self.temps.items():
+            index = snapshot_u32("temporary register index", raw_index)
+            if index >= NUM_TEMP_REGISTERS:
+                raise ValueError(
+                    f"snapshot contains unknown temporary register TEMP{index}"
+                )
+            validated_temps[index] = snapshot_u32(f"TEMP{index}", raw_value)
+
+        call_sub_level = snapshot_u32("call_sub_level", self.call_sub_level)
+        if call_sub_level > 0x7FFF_FFFF:
+            raise ValueError(
+                "snapshot call_sub_level must fit in a signed 32-bit value"
+            )
+
+        candidate = Registers()
+        for field_name in _CORE_REGISTER_FIELDS:
+            candidate.set(RegisterName[field_name.upper()], core_values[field_name])
         for index in range(NUM_TEMP_REGISTERS):
-            value = self.temps.get(index, 0)
-            regs.set(getattr(RegisterName, f"TEMP{index}"), value)
+            candidate.set(
+                getattr(RegisterName, f"TEMP{index}"), validated_temps.get(index, 0)
+            )
+        candidate.call_sub_level = call_sub_level
 
-        regs.call_sub_level = self.call_sub_level
+        regs._values.clear()
+        regs._values.update(candidate._values)
+        regs.call_sub_level = candidate.call_sub_level
 
     def to_dict(self) -> Dict[str, int]:
         values = {
@@ -137,9 +175,19 @@ class _SnapshotMemory(Memory):
         self._backing: MutableMapping[int, int] = dict(image)
         self._default = default_value & 0xFF
         self._writes: List[MemoryWrite] = []
+        self._wait_cycles: List[int] = []
         super().__init__(self._read_byte, self._write_byte)
 
+    def wait_cycles(self, cycles: int) -> None:
+        """Account for WAIT timing even though the pure stepper has no clock."""
+        self._wait_cycles.append(int(cycles))
+
     def _read_byte(self, address: int) -> int:
+        return self._backing.get(address, self._default)
+
+    def peek_byte_for_preflight(self, address: int, _pc: int | None = None) -> int:
+        """Read the immutable snapshot image without recording a bus access."""
+
         return self._backing.get(address, self._default)
 
     def _write_byte(self, address: int, value: int) -> None:

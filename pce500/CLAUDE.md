@@ -45,7 +45,7 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
 2. **PCE500Memory** (`memory.py`): Overlay-based memory system
    - Base 1MB writable external memory (0x00000-0xFFFFF) with 0x00 default for unmapped reads
    - Flexible overlay system for ROM, I/O, and special regions
-   - ROM at 0xC0000-0xFFFFF (256KB) as read-only overlay
+   - Read-only CE2 ROM overlay: 256KB images at 0xC0000-0xFFFFF; base 128KB images at 0xE0000-0xFFFFF
    - Memory card support (up to 64KB at 0x40000) as overlay
    - Memory-mapped I/O for LCD controllers at 0x2xxxx as I/O overlay
    - Perfetto tracing integration for memory access with Internal/External categorization
@@ -63,7 +63,7 @@ This is a PC-E500 emulator that provides a complete emulation of the Sharp PC-E5
 ### Memory Map
 
 - **Base External Memory**: 0x00000 - 0xFFFFF (1MB) - fully writable, defaults to 0x00
-- **Internal ROM Overlay**: 0xC0000 - 0xFFFFF (256KB) - read-only, mapped over base memory
+- **Internal ROM Overlay**: read-only 256KB image at 0xC0000-0xFFFFF, or base 128KB image at 0xE0000-0xFFFFF
 - **SC62015 Internal Memory**: 0x100000 - 0x1000FF (256B) - separate from external memory
 - **Memory Card Overlay**: 0x40000 - 0x4FFFF (up to 64KB) - read-only when inserted
 - **LCD Controllers Overlay**: 0x0A000 - 0x0AFFF (4KB) - I/O handlers for HD61202 chips

@@ -44,6 +44,7 @@ const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
 const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
 const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
 const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
+const IQ7000_NAMED_ANNUNCIATOR_MASK: u8 = IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -300,6 +301,28 @@ mod tests {
             format_iq7000_annunciator_status(&runtime),
             " lcd=SHIFT:on,CAPS:on"
         );
+
+        runtime
+            .memory
+            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8, 0x80)
+            .expect("store unmapped annunciator state");
+        assert_eq!(
+            format_iq7000_annunciator_status(&runtime),
+            " lcd=SHIFT:on,CAPS:on,UNMAPPED_SHADOW:0x80"
+        );
+
+        runtime
+            .memory
+            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8, 0)
+            .expect("clear unmapped annunciator shadow");
+        runtime
+            .memory
+            .store(IQ7000_KEY_STATE_ADDR, 8, 0x80)
+            .expect("store unmapped annunciator state");
+        assert_eq!(
+            format_iq7000_annunciator_status(&runtime),
+            " lcd=SHIFT:off,CAPS:off,UNMAPPED_STATE:0x80"
+        );
     }
 
     #[test]
@@ -411,31 +434,41 @@ fn format_status(
     )
 }
 
-fn iq7000_annunciator_raw(runtime: &CoreRuntime) -> u8 {
-    let shadow = runtime
+fn iq7000_annunciator_raw_sources(runtime: &CoreRuntime) -> (u8, u8) {
+    let shadow_raw = runtime
         .memory
         .load(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8)
         .unwrap_or(0) as u8;
-    let key_state = runtime.memory.load(IQ7000_KEY_STATE_ADDR, 8).unwrap_or(0) as u8;
-    shadow | key_state
+    let state_raw = runtime.memory.load(IQ7000_KEY_STATE_ADDR, 8).unwrap_or(0) as u8;
+    (state_raw, shadow_raw)
 }
 
 fn format_iq7000_annunciator_status(runtime: &CoreRuntime) -> String {
     if runtime.device_model() != DeviceModel::Iq7000 {
         return String::new();
     }
-    let raw = iq7000_annunciator_raw(runtime);
-    let shift = if raw & IQ7000_SHIFT_ANNUNCIATOR != 0 {
+    let (state_raw, shadow_raw) = iq7000_annunciator_raw_sources(runtime);
+    let raw_union = state_raw | shadow_raw;
+    let shift = if raw_union & IQ7000_SHIFT_ANNUNCIATOR != 0 {
         "on"
     } else {
         "off"
     };
-    let caps = if raw & IQ7000_CAPS_ANNUNCIATOR != 0 {
+    let caps = if raw_union & IQ7000_CAPS_ANNUNCIATOR != 0 {
         "on"
     } else {
         "off"
     };
-    format!(" lcd=SHIFT:{shift},CAPS:{caps}")
+    let mut status = format!(" lcd=SHIFT:{shift},CAPS:{caps}");
+    let unmapped_state = state_raw & !IQ7000_NAMED_ANNUNCIATOR_MASK;
+    let unmapped_shadow = shadow_raw & !IQ7000_NAMED_ANNUNCIATOR_MASK;
+    if unmapped_state != 0 {
+        status.push_str(&format!(",UNMAPPED_STATE:0x{unmapped_state:02X}"));
+    }
+    if unmapped_shadow != 0 {
+        status.push_str(&format!(",UNMAPPED_SHADOW:0x{unmapped_shadow:02X}"));
+    }
+    status
 }
 
 fn resolve_symbol(addr: u32, symbols: Option<&SymbolMap>) -> Option<(u32, String, u32)> {

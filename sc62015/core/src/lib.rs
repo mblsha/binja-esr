@@ -21,7 +21,7 @@ pub mod sio;
 pub mod snapshot;
 pub mod timer;
 
-use crate::llama::state::PowerState;
+use crate::llama::state::{validate_f_image, PowerState};
 use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
@@ -124,7 +124,7 @@ pub use timer::TimerContext;
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::{perfetto_last_pc, LlamaBus};
-use crate::llama::state::mask_for;
+use crate::llama::state::{mask_for, CallMetricsSnapshot};
 use crate::memory::{
     IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_RXD_OFFSET, IMEM_TXD_OFFSET,
     IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
@@ -148,19 +148,20 @@ pub enum CoreError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimerInfo {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub mti_period: i32,
-    #[serde(default)]
-    pub sti_period: i32,
-    #[serde(default)]
-    pub next_mti: i32,
-    #[serde(default)]
-    pub next_sti: i32,
-    #[serde(default = "default_true")]
+    pub mti_period: u64,
+    pub sti_period: u64,
+    pub next_mti: u64,
+    pub next_sti: u64,
     pub kb_irq_enabled: bool,
+    pub instruction_start_cycle: u64,
+    pub last_mti_fire_cycle: Option<u64>,
+    pub last_sti_fire_cycle: Option<u64>,
+    pub fired_mti_since_boundary: bool,
+    pub fired_sti_since_boundary: bool,
+    pub preserve_phase: bool,
 }
 
 impl Default for TimerInfo {
@@ -172,37 +173,36 @@ impl Default for TimerInfo {
             next_mti: 0,
             next_sti: 0,
             kb_irq_enabled: true,
+            instruction_start_cycle: 0,
+            last_mti_fire_cycle: None,
+            last_sti_fire_cycle: None,
+            fired_mti_since_boundary: false,
+            fired_sti_since_boundary: false,
+            preserve_phase: true,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct InterruptInfo {
-    #[serde(default)]
     pub pending: bool,
-    #[serde(default)]
     pub in_interrupt: bool,
-    #[serde(default)]
+    pub key_irq_latched: bool,
     pub source: Option<String>,
-    #[serde(default)]
+    pub last_fired: Option<String>,
     pub stack: Vec<u32>,
-    #[serde(default)]
     pub next_id: u32,
-    #[serde(default)]
     pub imr: u8,
-    #[serde(default)]
     pub isr: u8,
-    #[serde(default)]
     pub irq_counts: Option<serde_json::Value>,
-    #[serde(default)]
     pub last_irq: Option<serde_json::Value>,
-    #[serde(default)]
     pub irq_bit_watch: Option<serde_json::Value>,
-    #[serde(default)]
     pub delivered_masks: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotMetadata {
     pub magic: String,
     pub version: u32,
@@ -220,9 +220,14 @@ pub struct SnapshotMetadata {
     #[serde(default)]
     pub power_state: PowerState,
     #[serde(default)]
+    pub external_interrupt_level: bool,
+    #[serde(default)]
     pub call_depth: u32,
     #[serde(default)]
     pub call_sub_level: u32,
+    pub call_stack: Vec<u32>,
+    pub call_page_stack: Vec<u32>,
+    pub call_return_widths: Vec<u8>,
     #[serde(default)]
     pub temps: HashMap<String, u32>,
     pub timer: TimerInfo,
@@ -260,8 +265,12 @@ impl Default for SnapshotMetadata {
             memory_writes: 0,
             pc: 0,
             power_state: PowerState::Running,
+            external_interrupt_level: false,
             call_depth: 0,
             call_sub_level: 0,
+            call_stack: Vec::new(),
+            call_page_stack: Vec::new(),
+            call_return_widths: Vec::new(),
             temps: HashMap::new(),
             timer: TimerInfo::default(),
             interrupts: InterruptInfo::default(),
@@ -294,11 +303,9 @@ pub fn now_timestamp() -> String {
     }
 }
 
-fn default_true() -> bool {
-    true
-}
-
 pub const DEFAULT_REG_WIDTH: u8 = 24;
+/// Number of SC62015 temporary registers mirrored by the Python emulator.
+pub const NUM_TEMP_REGISTERS: u8 = 16;
 
 fn mask_for_width(bits: u8) -> u32 {
     if bits == 0 {
@@ -352,8 +359,8 @@ pub fn collect_registers(state: &LlamaState) -> HashMap<String, u32> {
             .unwrap_or(0);
         regs.insert((*name).to_string(), value);
     }
-    // Capture temp registers (TEMP0..TEMP13) to align with Python snapshots.
-    for idx in 0..14u8 {
+    // Capture temp registers (TEMP0..TEMP15) to align with Python snapshots.
+    for idx in 0..NUM_TEMP_REGISTERS {
         let name = format!("TEMP{idx}");
         let reg = RegName::Temp(idx);
         regs.insert(name, state.get_reg(reg) & mask_for_width(DEFAULT_REG_WIDTH));
@@ -361,14 +368,19 @@ pub fn collect_registers(state: &LlamaState) -> HashMap<String, u32> {
     regs
 }
 
-pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) {
+pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) -> Result<()> {
+    // Validate quarantined raw fields before changing any state so a rejected
+    // snapshot cannot be partially applied.
+    if let Some(value) = regs.get("F") {
+        validate_f_image(*value).map_err(|message| CoreError::InvalidSnapshot(message.into()))?;
+    }
     for (name, _) in snapshot::SNAPSHOT_REGISTER_LAYOUT.iter() {
         let value = *regs.get(*name).unwrap_or(&0);
         if let Some(reg) = reg_from_name(name) {
             state.set_reg(reg, value & mask_for_width(register_width(name)));
         }
     }
-    for idx in 0..14u8 {
+    for idx in 0..NUM_TEMP_REGISTERS {
         let key = format!("TEMP{idx}");
         if let Some(value) = regs.get(&key) {
             state.set_reg(
@@ -377,6 +389,7 @@ pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) {
             );
         }
     }
+    Ok(())
 }
 
 /// Extremely small placeholder runtime for LLAMA-only execution.
@@ -397,6 +410,7 @@ pub struct CoreRuntime {
     iq7000_clock_seed: Option<iq7000::Iq7000ClockSeed>,
     iq7000_rtc: Option<iq7000::Iq7000RtcPeripheral>,
     onk_level: bool,
+    external_interrupt_level: bool,
 }
 
 struct DeviceRuntimeSettings {
@@ -439,6 +453,7 @@ impl CoreRuntime {
             iq7000_clock_seed: None,
             iq7000_rtc: None,
             onk_level: false,
+            external_interrupt_level: false,
         };
         rt.set_device_model(DeviceModel::PcE500)
             .expect("device model settings missing");
@@ -593,6 +608,78 @@ impl CoreRuntime {
         self.assert_irq_source(ISR_TXI, "TX");
     }
 
+    /// Set a neutral external interrupt input level.
+    ///
+    /// While asserted, hardware re-latches `ISR.EXI` after firmware clears
+    /// it. No device, connector, or physical meaning is coupled to this input.
+    pub fn set_external_interrupt_level(&mut self, asserted: bool) {
+        self.external_interrupt_level = asserted;
+        if asserted {
+            self.refresh_external_interrupt_level();
+            return;
+        }
+
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        let new_isr = isr & !ISR_EXI;
+        if new_isr != isr {
+            self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+        }
+        self.timer.irq_isr = new_isr;
+        if !self.timer.in_interrupt && self.timer.irq_source.as_deref() == Some("EX") {
+            let next_source = if (new_isr & ISR_RXI) != 0 {
+                Some("RX")
+            } else if (new_isr & ISR_TXI) != 0 {
+                Some("TX")
+            } else if (new_isr & ISR_ONKI) != 0 {
+                Some("ONK")
+            } else if (new_isr & ISR_KEYI) != 0 {
+                Some("KEY")
+            } else if (new_isr & ISR_STI) != 0 {
+                Some("STI")
+            } else if (new_isr & ISR_MTI) != 0 {
+                Some("MTI")
+            } else {
+                None
+            };
+            self.timer.irq_source = next_source.map(str::to_string);
+            self.timer.irq_pending = next_source.is_some();
+        }
+    }
+
+    pub fn external_interrupt_level(&self) -> bool {
+        self.external_interrupt_level
+    }
+
+    fn refresh_external_interrupt_level(&mut self) {
+        if !self.external_interrupt_level {
+            return;
+        }
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if (isr & ISR_EXI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_EXI);
+        }
+        self.timer.irq_isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        if !self.timer.in_interrupt {
+            self.timer.irq_pending = true;
+            match self.timer.irq_source.as_deref() {
+                None => self.timer.irq_source = Some("EX".to_string()),
+                Some(current) if irq_source_priority("EX") < irq_source_priority(current) => {
+                    self.timer.irq_source = Some("EX".to_string());
+                }
+                _ => {}
+            }
+            self.timer.last_fired = self.timer.irq_source.clone();
+        }
+    }
+
     fn assert_irq_source(&mut self, mask: u8, source: &str) {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         if (isr & mask) == 0 {
@@ -736,15 +823,66 @@ impl CoreRuntime {
         });
     }
 
-    /// Clear the ON key level and deassert ONKI in ISR (firmware may also clear ONKI).
+    /// Clear the physical ON-key level without acknowledging latched ONKI.
+    ///
+    /// Both stock-ROM dispatchers explicitly clear the selected ISR bit after
+    /// service. Treating key release as that acknowledgement can lose an
+    /// interrupt before firmware observes it.
     pub fn release_on_key(&mut self) {
         self.onk_level = false;
-        if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-            let new_isr = isr & !ISR_ONKI;
-            self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
-            self.timer
-                .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
-            self.timer.irq_isr = new_isr;
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        self.timer.irq_isr = isr;
+        if !self.timer.in_interrupt
+            && self.timer.irq_source.as_deref() == Some("ONK")
+            && (isr & ISR_ONKI) == 0
+        {
+            let next_source = if (isr & ISR_RXI) != 0 {
+                Some("RX")
+            } else if (isr & ISR_EXI) != 0 {
+                Some("EX")
+            } else if (isr & ISR_TXI) != 0 {
+                Some("TX")
+            } else if (isr & ISR_KEYI) != 0 {
+                Some("KEY")
+            } else if (isr & ISR_STI) != 0 {
+                Some("STI")
+            } else if (isr & ISR_MTI) != 0 {
+                Some("MTI")
+            } else {
+                None
+            };
+            self.timer.irq_source = next_source.map(str::to_string);
+            self.timer.irq_pending = next_source.is_some();
+        }
+    }
+
+    fn refresh_on_key_interrupt_level(&mut self) {
+        if !self.onk_level {
+            return;
+        }
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if (isr & ISR_ONKI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+        }
+        self.timer.irq_isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        if !self.timer.in_interrupt {
+            self.timer.irq_pending = true;
+            match self.timer.irq_source.as_deref() {
+                None => self.timer.irq_source = Some("ONK".to_string()),
+                Some(current) if irq_source_priority("ONK") < irq_source_priority(current) => {
+                    self.timer.irq_source = Some("ONK".to_string());
+                }
+                _ => {}
+            }
+            self.timer.last_fired = self.timer.irq_source.clone();
         }
     }
 
@@ -948,6 +1086,28 @@ impl CoreRuntime {
 
     pub fn step(&mut self, instructions: usize) -> Result<()> {
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
+        struct PreflightBus<'a> {
+            mem: &'a MemoryImage,
+        }
+
+        impl LlamaBus for PreflightBus<'_> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.mem.load_silent(addr, bits).unwrap_or(0)
+            }
+
+            fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {
+                unreachable!("instruction preflight must never write memory")
+            }
+
+            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                self.mem.read_byte_silent(addr)
+            }
+
+            fn supports_wait_cycles(&self) -> bool {
+                true
+            }
+        }
+
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
             keyboard_ptr: *mut KeyboardMatrix,
@@ -1081,7 +1241,7 @@ impl CoreRuntime {
                         if offset == 0xFF {
                             let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
-                                val |= SSR_ONK_VISIBLE_MASK;
+                                val |= SSR_ONK;
                             }
                             return val as u32;
                         }
@@ -1221,31 +1381,31 @@ impl CoreRuntime {
             fn resolve_emem(&mut self, base: u32) -> u32 {
                 base
             }
+            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                self.mem.read_byte_silent(addr)
+            }
             fn peek_imem_silent(&mut self, offset: u32) -> u8 {
                 self.mem.read_internal_byte_silent(offset).unwrap_or(0)
             }
-            fn wait_cycles(&mut self, _cycles: u32) {}
+            fn supports_wait_cycles(&self) -> bool {
+                true
+            }
+            fn wait_cycles(&mut self, _cycles: u32) {
+                // CoreRuntime applies WAIT timing after execution so timer,
+                // keyboard, and metadata updates share one outer-step path.
+            }
         }
 
         for _ in 0..instructions {
             if self.state.is_off() {
                 if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                    // Assumption: OFF clears non-ONK IRQ state; verify on real hardware.
-                    let onk_only = isr & ISR_ONKI;
-                    if onk_only != isr {
-                        self.memory.write_internal_byte(IMEM_ISR_OFFSET, onk_only);
-                    }
-                    self.timer.irq_pending = false;
-                    self.timer.irq_source = None;
-                    self.timer.last_fired = None;
-                    self.timer.irq_isr = onk_only;
-                    if (isr & ISR_KEYI) != 0 {
-                        self.timer.key_irq_latched = false;
-                    }
-                    if onk_only != 0 {
+                    // Hardware wake filtering is not evidence that ignored
+                    // status bits are destroyed. Preserve the complete ISR
+                    // image and only gate the provisional OFF wake decision.
+                    self.timer.irq_isr = isr;
+                    if (isr & ISR_ONKI) != 0 {
                         self.state.set_power_state(PowerState::Running);
                         self.timer.irq_pending = true;
-                        self.timer.irq_isr = onk_only;
                         self.timer.irq_imr = self
                             .memory
                             .read_internal_byte(IMEM_IMR_OFFSET)
@@ -1259,6 +1419,43 @@ impl CoreRuntime {
                     return Ok(());
                 }
             }
+            // Reject quarantined/invalid encodings before level re-latching,
+            // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
+            // advancement. A halted core with no current wake source does not
+            // fetch an instruction at all.
+            let asserted_isr = self
+                .memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap_or(0);
+            let should_preflight = !self.state.is_halted()
+                || asserted_isr != 0
+                || self.onk_level
+                || self.external_interrupt_level;
+            if should_preflight {
+                let reads_before = self.memory.memory_read_count();
+                let writes_before = self.memory.memory_write_count();
+                let pc = self.state.pc() & ADDRESS_MASK;
+                let opcode = self.memory.read_byte_silent(pc).unwrap_or(0);
+                let result = {
+                    let mut bus = PreflightBus { mem: &self.memory };
+                    self.executor
+                        .validate_before_scheduling(opcode, &self.state, &mut bus)
+                };
+                // Preflight is an integrity guard, not an executed bus cycle.
+                self.memory.set_memory_counts(reads_before, writes_before);
+                result.map_err(|error| {
+                    CoreError::Other(format!(
+                        "preflight opcode 0x{opcode:02X} at 0x{pc:05X}: {error}"
+                    ))
+                })?;
+            }
+            // ONK and external interrupts are level-sensitive: firmware
+            // clears each ISR bit, waits one instruction, then retests the
+            // input. Re-latch once per runtime step while the corresponding
+            // neutral host level remains high, including before host-side
+            // instruction short-circuits.
+            self.refresh_on_key_interrupt_level();
+            self.refresh_external_interrupt_level();
             if let Some(sio) = self.sio.as_mut() {
                 if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
                     self.metadata.instruction_count =
@@ -1337,11 +1534,9 @@ impl CoreRuntime {
 
                 // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
                 if self.state.is_halted() {
-                    if let Some(mut isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                        // When keyboard IRQs are disabled, ignore KEYI for HALT wake to mirror Python gating.
-                        if !self.timer.kb_irq_enabled {
-                            isr &= !ISR_KEYI;
-                        }
+                    if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                        // kb_irq_enabled controls host generation, not the
+                        // meaning of an already asserted silicon status bit.
                         if isr != 0 {
                             self.state.set_halted(false);
                             self.timer.irq_pending = true;
@@ -1487,7 +1682,12 @@ impl CoreRuntime {
                     let opcode = bus.load(pc_before, 8) as u8;
                     // Capture WAIT loop count before execution (executor clears I).
                     let wait_loops = if opcode == 0xEF {
-                        self.state.get_reg(RegName::I) & mask_for(RegName::I)
+                        let raw_i = self.state.get_reg(RegName::I) & mask_for(RegName::I);
+                        if raw_i == 0 {
+                            mask_for(RegName::I) + 1
+                        } else {
+                            raw_i
+                        }
                     } else {
                         0
                     };
@@ -1665,7 +1865,36 @@ impl CoreRuntime {
     }
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+    fn reject_unrepresented_snapshot_runtime(&self) -> Result<()> {
+        let mut active = Vec::new();
+        if self.sio.is_some() {
+            active.push("SIO queues/line/timing state");
+        }
+        if self.pce500_peripherals.is_some() {
+            active.push("PCE peripheral/card/cassette state");
+        }
+        if self.host_read.is_some() || self.host_write.is_some() {
+            active.push("host overlay callbacks and external state");
+        }
+        if self.iq7000_clock_seed.is_some() || self.iq7000_rtc.is_some() {
+            active.push("IQ-7000 RTC protocol state");
+        }
+        if !self.memory.overlays().is_empty() {
+            active.push("memory-overlay definitions and payloads");
+        }
+        if active.is_empty() {
+            Ok(())
+        } else {
+            Err(CoreError::InvalidSnapshot(format!(
+                "snapshot v3 cannot exactly represent active {}",
+                active.join(", ")
+            )))
+        }
+    }
+
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     pub fn save_snapshot(&self, path: &std::path::Path) -> Result<()> {
+        self.reject_unrepresented_snapshot_runtime()?;
         let mut metadata = self.metadata.clone();
         metadata.instruction_count = self.metadata.instruction_count;
         metadata.cycle_count = self.metadata.cycle_count;
@@ -1674,10 +1903,19 @@ impl CoreRuntime {
         metadata.memory_writes = self.memory.memory_write_count();
         metadata.call_depth = self.state.call_depth();
         metadata.call_sub_level = self.state.call_sub_level();
+        let call_metrics = self.state.snapshot_call_metrics();
+        metadata.call_stack = call_metrics.call_stack;
+        metadata.call_page_stack = call_metrics.call_page_stack;
+        metadata.call_return_widths = call_metrics.call_return_widths;
         metadata.power_state = self.state.power_state();
-        metadata.temps = collect_registers(&self.state)
-            .into_iter()
-            .filter(|(k, _)| k.starts_with("TEMP"))
+        metadata.external_interrupt_level = self.external_interrupt_level;
+        metadata.temps = (0..NUM_TEMP_REGISTERS)
+            .map(|index| {
+                (
+                    index.to_string(),
+                    self.state.get_reg(RegName::Temp(index)) & 0xFF_FFFF,
+                )
+            })
             .collect();
         metadata.memory_dump_pc = 0;
         if let Some(kb) = self.keyboard.as_ref() {
@@ -1720,73 +1958,162 @@ impl CoreRuntime {
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     pub fn load_snapshot(&mut self, path: &std::path::Path) -> Result<()> {
-        let loaded = snapshot::load_snapshot(path, &mut self.memory)?;
-        self.metadata = loaded.metadata;
-        let model = self.metadata.device_model.unwrap_or(DeviceModel::PcE500);
-        self.set_device_model(model)?;
-        apply_registers(&mut self.state, &loaded.registers);
-        self.state.set_power_state(self.metadata.power_state);
-        self.fast_mode = self.metadata.fast_mode;
-        self.memory
-            .set_memory_counts(self.metadata.memory_reads, self.metadata.memory_writes);
-        self.timer.apply_snapshot_info(
-            &self.metadata.timer,
-            &self.metadata.interrupts,
-            self.metadata.cycle_count,
+        self.reject_unrepresented_snapshot_runtime()?;
+        let loaded = snapshot::load_snapshot(path)?;
+        let metadata = loaded.metadata.clone();
+        let model = metadata.device_model.unwrap_or(DeviceModel::PcE500);
+        let settings = device_runtime_settings(model).ok_or_else(|| {
+            CoreError::InvalidSnapshot(format!(
+                "snapshot device model {model:?} has no runtime settings"
+            ))
+        })?;
+        if model != self.device_model() {
+            return Err(CoreError::InvalidSnapshot(format!(
+                "snapshot device model {model:?} does not match active machine {:?}",
+                self.device_model()
+            )));
+        }
+
+        if !self.memory.readonly_ranges().is_empty() {
+            if self.memory.readonly_ranges() != metadata.readonly_ranges.as_slice() {
+                return Err(CoreError::InvalidSnapshot(
+                    "snapshot read-only ranges do not match the active machine".to_string(),
+                ));
+            }
+            for (start, end) in self.memory.readonly_ranges() {
+                let unchanged = if *end < crate::memory::EXTERNAL_SPACE as u32 {
+                    let start = *start as usize;
+                    let end = *end as usize + 1;
+                    self.memory.external_slice()[start..end] == loaded.external_memory[start..end]
+                } else if *start >= crate::memory::INTERNAL_MEMORY_START
+                    && *end
+                        < crate::memory::INTERNAL_MEMORY_START
+                            + crate::memory::INTERNAL_SPACE as u32
+                {
+                    let start = (*start - crate::memory::INTERNAL_MEMORY_START) as usize;
+                    let end = (*end - crate::memory::INTERNAL_MEMORY_START) as usize + 1;
+                    self.memory.internal_slice()[start..end] == loaded.imem[start..end]
+                } else {
+                    false
+                };
+                if !unchanged {
+                    return Err(CoreError::InvalidSnapshot(
+                        "snapshot attempts to replace active read-only memory".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let mut state_candidate = LlamaState::new();
+        apply_registers(&mut state_candidate, &loaded.registers)?;
+        for index in 0..NUM_TEMP_REGISTERS {
+            let value = metadata
+                .temps
+                .get(&index.to_string())
+                .copied()
+                .ok_or_else(|| {
+                    CoreError::InvalidSnapshot(format!(
+                        "snapshot is missing temporary register TEMP{index}"
+                    ))
+                })?;
+            state_candidate.set_reg(RegName::Temp(index), value);
+        }
+        state_candidate.restore_call_metrics(CallMetricsSnapshot {
+            call_stack: metadata.call_stack.clone(),
+            call_depth: metadata.call_depth,
+            call_sub_level: metadata.call_sub_level,
+            call_page_stack: metadata.call_page_stack.clone(),
+            call_return_widths: metadata.call_return_widths.clone(),
+        });
+        state_candidate.set_power_state(metadata.power_state);
+
+        let mut timer_candidate = (*self.timer).clone();
+        timer_candidate.apply_snapshot_info(
+            &metadata.timer,
+            &metadata.interrupts,
+            metadata.cycle_count,
         );
-        if let Some(watch) = self.metadata.interrupts.irq_bit_watch.as_ref() {
-            self.timer.irq_bit_watch = watch.as_object().cloned();
-        }
-        if self.keyboard.is_none() {
-            self.keyboard = Some(KeyboardMatrix::new());
-        }
-        if let (Some(kb_meta), Some(kb)) = (self.metadata.keyboard.clone(), self.keyboard.as_mut())
-        {
-            if let Ok(snapshot) = serde_json::from_value::<KeyboardSnapshot>(kb_meta) {
-                kb.load_snapshot_state(&snapshot);
+
+        let keyboard_candidate = match metadata.keyboard.as_ref() {
+            Some(value) => {
+                let snapshot: KeyboardSnapshot =
+                    serde_json::from_value(value.clone()).map_err(|error| {
+                        CoreError::InvalidSnapshot(format!(
+                            "invalid keyboard snapshot metadata: {error}"
+                        ))
+                    })?;
+                let mut keyboard = KeyboardMatrix::new();
+                keyboard.load_snapshot_state(&snapshot).map_err(|error| {
+                    CoreError::InvalidSnapshot(format!("invalid keyboard snapshot: {error}"))
+                })?;
+                let restored = serde_json::to_value(keyboard.snapshot_state())?;
+                if restored != *value {
+                    return Err(CoreError::InvalidSnapshot(
+                        "keyboard snapshot is not exactly representable".to_string(),
+                    ));
+                }
+                Some(keyboard)
             }
-        }
-        if let Some(lcd_meta) = self.metadata.lcd.as_ref() {
+            None if self.keyboard.is_none() => None,
+            None => {
+                return Err(CoreError::InvalidSnapshot(
+                    "snapshot is missing keyboard state".to_string(),
+                ));
+            }
+        };
+
+        let lcd_candidate = if let Some(lcd_meta) = metadata.lcd.as_ref() {
             let kind = crate::lcd::lcd_kind_from_snapshot_meta(lcd_meta, LcdKind::Hd61202);
-            if self.lcd.as_ref().map(|lcd| lcd.kind()) != Some(kind) {
-                self.lcd = Some(create_lcd(kind));
-            }
-            let model = self.metadata.device_model.unwrap_or(match kind {
+            let lcd_model = metadata.device_model.unwrap_or(match kind {
                 LcdKind::Iq7000Vram => DeviceModel::Iq7000,
                 _ => DeviceModel::PcE500,
             });
-            let rom = self.memory.external_slice();
-            if let Some(lcd) = self.lcd.as_deref_mut() {
-                crate::device::configure_lcd_char_tracing(lcd, model, rom);
+            let mut lcd = create_lcd(kind);
+            crate::device::configure_lcd_char_tracing(
+                lcd.as_mut(),
+                lcd_model,
+                &loaded.external_memory,
+            );
+            lcd.load_snapshot(lcd_meta, loaded.lcd_payload.as_deref().unwrap_or(&[]))
+                .map_err(|error| {
+                    CoreError::InvalidSnapshot(format!("invalid LCD snapshot: {error}"))
+                })?;
+            let (restored_meta, restored_payload) = lcd.export_snapshot();
+            if restored_meta != *lcd_meta
+                || restored_payload.as_slice() != loaded.lcd_payload.as_deref().unwrap_or(&[])
+            {
+                return Err(CoreError::InvalidSnapshot(
+                    "LCD snapshot is not exactly representable".to_string(),
+                ));
             }
-            if let Some(lcd) = self.lcd.as_mut() {
-                let payload = loaded.lcd_payload.as_deref();
-                let should_load = payload.is_some() || kind == LcdKind::Unknown;
-                if should_load {
-                    let _ = lcd.load_snapshot(lcd_meta, payload.unwrap_or(&[]));
-                }
-            }
-        } else if self.lcd.is_none() {
-            self.lcd = Some(create_lcd(LcdKind::Hd61202));
-        }
-        // Restore call depth/sub-level and temps from metadata if present.
-        if self.metadata.call_depth > 0 {
-            for _ in 0..self.metadata.call_depth {
-                self.state.call_depth_inc();
-            }
-        }
-        self.state.set_call_sub_level(self.metadata.call_sub_level);
-        for (name, value) in self.metadata.temps.iter() {
-            if let Some(idx_str) = name.strip_prefix("TEMP") {
-                if let Ok(idx) = idx_str.parse::<u8>() {
-                    self.state.set_reg(
-                        RegName::Temp(idx),
-                        *value & mask_for_width(DEFAULT_REG_WIDTH),
-                    );
-                }
-            }
-        }
-        self.fast_mode = self.metadata.fast_mode;
+            Some(lcd)
+        } else {
+            None
+        };
+
+        // Commit only after every archive member and candidate subsystem has
+        // been parsed and validated. No fallible operation follows this point.
+        self.memory
+            .copy_external_from(&loaded.external_memory)
+            .expect("validated exact external memory length");
+        self.memory.write_imem(&loaded.imem);
+        self.memory
+            .set_python_ranges(metadata.fallback_ranges.clone());
+        self.memory
+            .set_readonly_ranges(metadata.readonly_ranges.clone());
+        self.memory
+            .set_internal_ram_mirror(settings.internal_ram_mirror);
+        self.memory.clear_dirty();
+        self.memory
+            .set_memory_counts(metadata.memory_reads, metadata.memory_writes);
+        self.state = state_candidate;
+        *self.timer = timer_candidate;
+        self.keyboard = keyboard_candidate;
+        self.lcd = lcd_candidate;
+        self.fast_mode = metadata.fast_mode;
+        self.external_interrupt_level = metadata.external_interrupt_level;
+        self.onk_level = loaded.imem[crate::memory::IMEM_SSR_OFFSET as usize] & SSR_ONK != 0;
+        self.metadata = metadata;
         Ok(())
     }
 
@@ -1821,13 +2148,20 @@ impl CoreRuntime {
         let new_sp = sp.wrapping_sub(bytes as u32) & mask;
         for i in 0..bytes {
             let byte = (value >> (8 * i)) & 0xFF;
-            let _ = self.memory.store(new_sp + i as u32, 8, byte);
+            let address = new_sp.wrapping_add(i as u32) & mask;
+            let _ = self.memory.store(address, 8, byte);
         }
         self.state.set_reg(reg, new_sp);
     }
 
     fn deliver_pending_irq(&mut self) -> Result<()> {
         if !self.timer.irq_pending {
+            return Ok(());
+        }
+        // Nested hardware IRQ delivery is not established by ROM or hardware
+        // traces. Match the device runtimes and retain the pending source for
+        // delivery after RETI instead of manufacturing a nested frame.
+        if self.timer.in_interrupt {
             return Ok(());
         }
         let pc = self.state.pc() & ADDRESS_MASK;
@@ -1915,15 +2249,6 @@ impl CoreRuntime {
         let Some((mask, src_name)) = src else {
             return Ok(());
         };
-
-        // Match Python guard: defer delivery until firmware initializes the stack pointer.
-        let sp = self.state.get_reg(RegName::S) & ADDRESS_MASK;
-        if sp < 5 {
-            // Leave irq_pending intact and surface an error like Python does.
-            return Err(CoreError::Other(
-                "IRQ deferred: stack pointer not initialized".to_string(),
-            ));
-        }
 
         let pc = self.state.pc() & ADDRESS_MASK;
         let (op_idx, pc_trace, tag) = match crate::llama::eval::perfetto_instr_context() {
@@ -2139,9 +2464,9 @@ const ISR_RXI: u8 = 0x20;
 const ISR_EXI: u8 = 0x40;
 const ISR_KNOWN_MASK: u8 = ISR_MTI | ISR_STI | ISR_KEYI | ISR_ONKI | ISR_TXI | ISR_RXI | ISR_EXI;
 const USR_RX_READY: u8 = 0x20;
-const SSR_ONK_VISIBLE: u8 = 0x02;
-const SSR_ONK_LEGACY_VISIBLE: u8 = 0x08;
-const SSR_ONK_VISIBLE_MASK: u8 = SSR_ONK_VISIBLE | SSR_ONK_LEGACY_VISIBLE;
+#[cfg(test)]
+const SSR_CI: u8 = 0x02;
+const SSR_ONK: u8 = 0x08;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
 fn irq_source_priority(name: &str) -> u8 {
@@ -2163,6 +2488,40 @@ mod tests {
     use crate::llama::opcodes::RegName;
     use crate::perfetto::perfetto_test_guard;
     use std::fs;
+
+    #[test]
+    fn register_snapshots_round_trip_temp15() {
+        let mut source = LlamaState::new();
+        source.set_reg(RegName::Temp(15), 0x12_3456);
+
+        let registers = collect_registers(&source);
+        assert_eq!(registers.get("TEMP15"), Some(&0x12_3456));
+        assert!(!registers.contains_key("TEMP16"));
+
+        let mut restored = LlamaState::new();
+        apply_registers(&mut restored, &registers).expect("restore register snapshot");
+        assert_eq!(restored.get_reg(RegName::Temp(15)), 0x12_3456);
+    }
+
+    #[test]
+    fn register_snapshot_rejects_unverified_f_atomically() {
+        let mut state = LlamaState::new();
+        state.set_pc(0x12345);
+        state.set_reg(RegName::BA, 0x5678);
+        state.set_reg(RegName::F, 0x01);
+        let registers = HashMap::from([
+            ("PC".to_string(), 0xABCDE),
+            ("BA".to_string(), 0x9ABC),
+            ("F".to_string(), 0xA4),
+        ]);
+
+        let error = apply_registers(&mut state, &registers).unwrap_err();
+
+        assert!(error.to_string().contains("bits 2-7"));
+        assert_eq!(state.pc(), 0x12345);
+        assert_eq!(state.get_reg(RegName::BA), 0x5678);
+        assert_eq!(state.get_reg(RegName::F), 0x01);
+    }
 
     #[test]
     fn iq7000_runtime_model_can_be_configured() {
@@ -2265,11 +2624,13 @@ mod tests {
             200,  // next_mti
             300,  // next_sti
             Some("MTI".to_string()),
-            true,               // in_interrupt
-            Some(vec![0xDEAD]), // interrupt_stack (flow IDs)
-            5,                  // next_interrupt_id
-            None,               // irq_bit_watch
+            true,          // in_interrupt
+            Some(vec![3]), // interrupt_stack (flow IDs)
+            5,             // next_interrupt_id
+            None,          // irq_bit_watch
         );
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0xAA);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x55);
         rt.timer.delivered_masks = vec![ISR_MTI];
         rt.save_snapshot(&tmp).expect("save snapshot");
 
@@ -2286,7 +2647,7 @@ mod tests {
         assert_eq!(rt2.timer.irq_imr, 0xAA);
         assert_eq!(rt2.timer.irq_isr, 0x55);
         assert!(rt2.timer.in_interrupt);
-        assert_eq!(rt2.timer.interrupt_stack, vec![0xDEAD]);
+        assert_eq!(rt2.timer.interrupt_stack, vec![3]);
         assert_eq!(rt2.timer.delivered_masks, vec![ISR_MTI]);
         assert_eq!(rt2.timer.next_interrupt_id, 5);
         assert_eq!(rt2.timer.last_fired, None);
@@ -2315,6 +2676,128 @@ mod tests {
         rt4.load_snapshot(&tmp_halt).expect("load halt snapshot");
         assert!(rt4.state.is_halted(), "HALT state should round-trip");
         assert!(!rt4.state.is_off(), "HALT should not restore as OFF");
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_external_interrupt_level() {
+        let tmp = std::env::temp_dir().join("core_snapshot_external_level.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let mut rt = CoreRuntime::new();
+        rt.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        rt.set_external_interrupt_level(true);
+        rt.save_snapshot(&tmp).expect("save snapshot");
+
+        let mut restored = CoreRuntime::new();
+        restored
+            .set_device_model(DeviceModel::Iq7000)
+            .expect("set matching IQ-7000 model");
+        restored.load_snapshot(&tmp).expect("load snapshot");
+        assert_eq!(restored.device_model(), DeviceModel::Iq7000);
+        assert!(restored.external_interrupt_level());
+        assert_ne!(
+            restored
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & ISR_EXI,
+            0,
+            "restored asserted input must re-latch ISR.EXI"
+        );
+
+        restored.set_external_interrupt_level(false);
+        assert!(!restored.external_interrupt_level());
+        assert_eq!(
+            restored
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & ISR_EXI,
+            0
+        );
+        let _ = fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn snapshot_rejects_unrepresented_runtime_extensions() {
+        fn assert_rejected(rt: &CoreRuntime, path: &std::path::Path, label: &str) {
+            let error = rt
+                .save_snapshot(path)
+                .expect_err("unrepresented runtime state must fail closed");
+            assert!(
+                error.to_string().contains(label),
+                "unexpected error for {label}: {error}"
+            );
+            assert!(!path.exists(), "rejected save must not create a checkpoint");
+        }
+
+        let base = std::env::temp_dir();
+
+        let mut sio = CoreRuntime::new();
+        sio.enable_sio_stub();
+        let path = base.join("core_snapshot_reject_sio.pcsnap");
+        let _ = fs::remove_file(&path);
+        assert_rejected(&sio, &path, "SIO");
+
+        let mut peripherals = CoreRuntime::new();
+        peripherals.enable_pce500_peripheral_bridge(0x10000);
+        let path = base.join("core_snapshot_reject_peripherals.pcsnap");
+        let _ = fs::remove_file(&path);
+        assert_rejected(&peripherals, &path, "PCE peripheral");
+
+        let mut callbacks = CoreRuntime::new();
+        callbacks.set_host_read(|_| None);
+        let path = base.join("core_snapshot_reject_callbacks.pcsnap");
+        let _ = fs::remove_file(&path);
+        assert_rejected(&callbacks, &path, "host overlay callbacks");
+
+        let mut rtc = CoreRuntime::new();
+        rtc.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        rtc.set_iq7000_clock_seed_yyyymmddhhmm("202604252119")
+            .expect("install RTC seed");
+        let path = base.join("core_snapshot_reject_rtc.pcsnap");
+        let _ = fs::remove_file(&path);
+        assert_rejected(&rtc, &path, "RTC protocol");
+
+        let mut overlay = CoreRuntime::new();
+        overlay.add_ram_overlay(0x8000, 16, "snapshot-test");
+        let path = base.join("core_snapshot_reject_overlay.pcsnap");
+        let _ = fs::remove_file(&path);
+        assert_rejected(&overlay, &path, "memory-overlay");
+    }
+
+    #[test]
+    fn snapshot_load_rejects_active_extensions_and_model_mismatch() {
+        let pc_path = std::env::temp_dir().join("core_snapshot_model_pc.pcsnap");
+        let iq_path = std::env::temp_dir().join("core_snapshot_model_iq.pcsnap");
+        let _ = fs::remove_file(&pc_path);
+        let _ = fs::remove_file(&iq_path);
+
+        CoreRuntime::new()
+            .save_snapshot(&pc_path)
+            .expect("save clean PC snapshot");
+        let mut active = CoreRuntime::new();
+        active.enable_sio_stub();
+        let error = active
+            .load_snapshot(&pc_path)
+            .expect_err("active unrepresented state must reject load");
+        assert!(error.to_string().contains("SIO"));
+
+        let mut iq = CoreRuntime::new();
+        iq.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        iq.save_snapshot(&iq_path).expect("save IQ snapshot");
+        let mut pc = CoreRuntime::new();
+        let error = pc
+            .load_snapshot(&iq_path)
+            .expect_err("cross-model load must fail closed");
+        assert!(error.to_string().contains("does not match active machine"));
+        assert_eq!(pc.device_model(), DeviceModel::PcE500);
+
+        let _ = fs::remove_file(pc_path);
+        let _ = fs::remove_file(iq_path);
     }
 
     #[test]
@@ -2414,21 +2897,106 @@ mod tests {
             .memory
             .read_internal_byte(IMEM_ISR_OFFSET)
             .expect("isr present");
-        assert_eq!(cleared & ISR_ONKI, 0, "ONKI should clear on release");
+        assert_ne!(
+            cleared & ISR_ONKI,
+            0,
+            "ONKI must remain latched until firmware acknowledges it"
+        );
+    }
+
+    #[test]
+    fn held_external_level_relatched_after_firmware_clear() {
+        let mut rt = CoreRuntime::new();
+        rt.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        // AND (ISR),BF; NOP mirrors the clear/wait sequence at F527F.
+        rt.load_rom(&[0x30, 0x71, 0xFC, 0xBF, 0x00], 0);
+        rt.state.set_reg(RegName::PC, 0);
+        rt.timer.in_interrupt = true;
+        rt.set_external_interrupt_level(true);
+
+        rt.step(1).expect("execute ISR.EXI clear");
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_EXI,
+            0,
+            "firmware clear must take effect for the current instruction"
+        );
+        rt.step(1).expect("execute wait NOP");
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_EXI,
+            0,
+            "held external level must re-latch ISR.EXI before the retest"
+        );
+
+        rt.set_external_interrupt_level(false);
+        assert!(!rt.external_interrupt_level());
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_EXI,
+            0
+        );
+    }
+
+    #[test]
+    fn held_on_level_relatched_after_firmware_clear_without_changing_ci() {
+        let mut rt = CoreRuntime::new();
+        rt.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        // AND (ISR),F7; NOP mirrors the clear/wait sequence at F5247.
+        rt.load_rom(&[0x30, 0x71, 0xFC, 0xF7, 0x00], 0);
+        rt.state.set_reg(RegName::PC, 0);
+        rt.timer.in_interrupt = true;
+        rt.memory
+            .write_internal_byte(crate::memory::IMEM_SSR_OFFSET, SSR_CI);
+        rt.press_on_key();
+
+        rt.step(1).expect("execute ISR.ONKI clear");
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0,
+            "firmware clear must take effect for the current instruction"
+        );
+        rt.step(1).expect("execute wait NOP");
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0,
+            "held ON level must re-latch ISR.ONKI before the retest"
+        );
+        assert_eq!(
+            rt.memory
+                .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
+                .unwrap_or(0),
+            SSR_CI,
+            "ON-key level handling must not synthesize or clear SSR.CI"
+        );
+
+        rt.release_on_key();
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0,
+            "release must not acknowledge the re-latched ONKI"
+        );
+        assert_eq!(
+            rt.memory
+                .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
+                .unwrap_or(0),
+            SSR_CI
+        );
     }
 
     #[test]
     fn onk_press_sets_ssr_bit_on_read() {
         let mut rt = CoreRuntime::new();
-        // Ensure SSR is clear before ONK.
+        // CI is an independent external input and must survive ON-key changes.
+        rt.memory
+            .write_internal_byte(crate::memory::IMEM_SSR_OFFSET, SSR_CI);
         let ssr_before = rt
             .memory
             .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
             .unwrap_or(0);
         assert_eq!(
-            ssr_before & SSR_ONK_VISIBLE_MASK,
-            0,
-            "SSR ONK bits should start clear"
+            ssr_before & (SSR_CI | SSR_ONK),
+            SSR_CI,
+            "SSR.CI should be set independently while SSR.ONK starts clear"
         );
 
         rt.press_on_key();
@@ -2447,12 +3015,16 @@ mod tests {
                         if offset == crate::memory::IMEM_SSR_OFFSET {
                             let mut val = self.mem.read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
-                                val |= SSR_ONK_VISIBLE_MASK;
+                                val |= SSR_ONK;
                             }
                             return val as u32;
                         }
                     }
                     self.mem.load(addr, bits).unwrap_or(0)
+                }
+
+                fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                    let _ = self.mem.store(addr, bits, value);
                 }
             }
             let mut rt_bus = TestBus {
@@ -2465,14 +3037,14 @@ mod tests {
             ) as u8
         };
         assert_eq!(
-            ssr_after & SSR_ONK_VISIBLE,
-            SSR_ONK_VISIBLE,
-            "SSR bit 0x02 should reflect ONK level when pressed"
+            ssr_after & SSR_CI,
+            SSR_CI,
+            "SSR.CI should retain its independently supplied level"
         );
         assert_eq!(
-            ssr_after & SSR_ONK_LEGACY_VISIBLE,
-            SSR_ONK_LEGACY_VISIBLE,
-            "SSR bit 0x08 should remain visible for existing ONK users"
+            ssr_after & SSR_ONK,
+            SSR_ONK,
+            "SSR.ONK should reflect the pressed ON-key level"
         );
 
         rt.release_on_key();
@@ -2481,9 +3053,9 @@ mod tests {
             .read_internal_byte(crate::memory::IMEM_SSR_OFFSET)
             .unwrap_or(0);
         assert_eq!(
-            ssr_clear & SSR_ONK_VISIBLE_MASK,
-            0,
-            "SSR ONK bits should clear after release"
+            ssr_clear & (SSR_CI | SSR_ONK),
+            SSR_CI,
+            "releasing ON must not clear the independent SSR.CI input"
         );
     }
 
@@ -2515,6 +3087,10 @@ mod tests {
                     }
                 }
                 self.mem.load(addr, bits).unwrap_or(0)
+            }
+
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                let _ = self.mem.store(addr, bits, value);
             }
         }
 
@@ -2729,6 +3305,40 @@ mod tests {
         assert!(rt.timer.in_interrupt);
         assert_eq!(rt.timer.irq_source.as_deref(), Some("RX"));
         assert_eq!(rt.timer.delivered_masks, vec![ISR_RXI]);
+    }
+
+    #[test]
+    fn irq_frame_wraps_each_byte_on_the_20_bit_external_bus() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::PC, 0x034567);
+        rt.state.set_reg(RegName::S, 0x000002);
+        rt.state.set_reg(RegName::F, 0x03);
+        rt.memory.write_external_byte(0x0FFFFA, 0x78);
+        rt.memory.write_external_byte(0x0FFFFB, 0x56);
+        rt.memory.write_external_byte(0x0FFFFC, 0x02);
+        let imr = IMR_MASTER | IMR_ONK;
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, imr);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("ONK".to_string());
+
+        rt.deliver_pending_irq().expect("deliver wrapped IRQ frame");
+
+        assert_eq!(rt.state.get_reg(RegName::S), 0x0FFFFD);
+        assert_eq!(rt.state.get_reg(RegName::PC), 0x025678);
+        for (address, expected) in [
+            (0x0FFFFF, 0x67),
+            (0x000000, 0x45),
+            (0x000001, 0x03),
+            (0x0FFFFE, 0x03),
+            (0x0FFFFD, imr),
+        ] {
+            assert_eq!(
+                rt.memory.load(address, 8),
+                Some(u32::from(expected)),
+                "wrapped frame byte at 0x{address:05X}"
+            );
+        }
     }
 
     #[test]
@@ -3216,7 +3826,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_ignores_keyi_when_kb_irq_disabled() {
+    fn halt_wakes_on_asserted_keyi_even_when_host_generation_is_disabled() {
         let mut rt = CoreRuntime::new();
         rt.state.set_halted(true);
         rt.state.set_reg(RegName::S, 0x0200);
@@ -3227,14 +3837,12 @@ mod tests {
 
         let _ = rt.step(1);
 
-        // HALT should remain and no pending IRQ when kb IRQs are disabled.
+        // The host knob suppresses generation; it must not reinterpret an
+        // already asserted hardware status bit.
+        assert!(!rt.state.is_halted(), "asserted KEYI should wake HALT");
         assert!(
-            rt.state.is_halted(),
-            "HALT should not wake on KEYI when kb IRQs disabled"
-        );
-        assert!(
-            !rt.timer.irq_pending,
-            "pending IRQ should not arm for KEYI when kb IRQs disabled"
+            rt.timer.irq_pending,
+            "asserted KEYI wake should arm a pending IRQ"
         );
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "ISR bit should remain set but ignored");
@@ -3261,6 +3869,33 @@ mod tests {
     }
 
     #[test]
+    fn off_preserves_ignored_isr_bits_before_and_during_onk_wake() {
+        let mut rt = CoreRuntime::new();
+        rt.state.power_off();
+        rt.memory
+            .write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI | ISR_MTI);
+
+        rt.step(1).expect("ignored OFF status step");
+
+        assert!(rt.state.is_off());
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET),
+            Some(ISR_KEYI | ISR_MTI)
+        );
+
+        let combined = ISR_KEYI | ISR_MTI | ISR_ONKI;
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, combined);
+        rt.step(1).expect("ONKI OFF wake step");
+
+        assert!(!rt.state.is_off());
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET),
+            Some(combined)
+        );
+        assert_eq!(rt.timer.irq_isr, combined);
+    }
+
+    #[test]
     fn off_stops_timers() {
         let mut rt = CoreRuntime::new();
         rt.state.set_reg(RegName::S, 0x0200);
@@ -3282,7 +3917,7 @@ mod tests {
     }
 
     #[test]
-    fn off_clears_non_onk_isr_and_pending() {
+    fn off_preserves_non_onk_status_and_bookkeeping() {
         let mut rt = CoreRuntime::new();
         rt.state.set_reg(RegName::S, 0x0200);
         rt.state.power_off();
@@ -3297,13 +3932,13 @@ mod tests {
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert!(rt.state.is_off(), "OFF should remain until ONK");
-        assert_eq!(isr & (ISR_KEYI | ISR_MTI | ISR_STI), 0);
-        assert!(!rt.timer.irq_pending, "OFF should clear pending IRQs");
-        assert!(rt.timer.irq_source.is_none());
-        assert!(rt.timer.last_fired.is_none());
+        assert_eq!(isr, ISR_KEYI | ISR_MTI);
+        assert!(rt.timer.irq_pending, "OFF must not erase pending IRQ state");
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("MTI"));
+        assert_eq!(rt.timer.last_fired.as_deref(), Some("MTI"));
         assert!(
-            !rt.timer.key_irq_latched,
-            "OFF should clear key latch state"
+            rt.timer.key_irq_latched,
+            "OFF must not clear key latch state"
         );
     }
 
@@ -3337,6 +3972,28 @@ mod tests {
             0x001234,
             "PC should jump to interrupt vector when IMR master enabled"
         );
+    }
+
+    #[test]
+    fn pending_irq_is_retained_without_nested_delivery() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::PC, 0x012345);
+        rt.state.set_reg(RegName::S, 0x000200);
+        rt.timer.irq_pending = true;
+        rt.timer.in_interrupt = true;
+        rt.timer.irq_source = Some("MTI".to_string());
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_MTI);
+
+        rt.deliver_pending_irq()
+            .expect("nested delivery should be deferred");
+
+        assert_eq!(rt.state.get_reg(RegName::PC), 0x012345);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x000200);
+        assert!(rt.timer.in_interrupt);
+        assert!(rt.timer.irq_pending);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("MTI"));
     }
 
     #[test]
@@ -3975,6 +4632,213 @@ mod tests {
         );
         // Cycle counter should advance for opcode + I loops.
         assert_eq!(rt.metadata.cycle_count, 6);
+    }
+
+    #[test]
+    fn wait_with_zero_i_fails_before_runtime_mutation() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_slice(0, &[0xEF]);
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::I, 0);
+        rt.state.set_reg(RegName::FC, 1);
+        rt.state.set_reg(RegName::FZ, 1);
+
+        let err = rt.step(1).expect_err("WAIT I=0 must be quarantined");
+
+        assert!(err
+            .to_string()
+            .contains(crate::llama::eval::ZERO_I_COUNT_ERROR));
+        assert_eq!(rt.metadata.cycle_count, 0);
+        assert_eq!(rt.state.get_reg(RegName::I), 0);
+        assert_eq!(rt.state.get_reg(RegName::FC), 1);
+        assert_eq!(rt.state.get_reg(RegName::FZ), 1);
+        assert_eq!(rt.state.pc(), 0);
+    }
+
+    #[test]
+    fn quarantined_opcodes_fail_before_scheduler_or_level_mutation() {
+        for opcode in [0x20, 0xBF, 0xCE, 0xEF] {
+            let mut rt = CoreRuntime::new();
+            rt.memory.write_external_byte(0, opcode);
+            rt.state.set_pc(0);
+            rt.state.set_reg(RegName::I, 0);
+            *rt.timer = TimerContext::new(true, 1, 1);
+            rt.timer.next_mti = 0;
+            rt.timer.next_sti = 0;
+            rt.onk_level = true;
+            rt.external_interrupt_level = true;
+            let reads_before = rt.memory.memory_read_count();
+            let writes_before = rt.memory.memory_write_count();
+
+            rt.step(1)
+                .expect_err("quarantined opcode must fail in preflight");
+
+            assert_eq!(rt.metadata.cycle_count, 0, "opcode 0x{opcode:02X}");
+            assert_eq!(rt.metadata.instruction_count, 0, "opcode 0x{opcode:02X}");
+            assert_eq!(rt.state.pc(), 0, "opcode 0x{opcode:02X}");
+            assert_eq!(
+                rt.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
+                Some(0),
+                "opcode 0x{opcode:02X} must not re-latch IRQ levels"
+            );
+            assert_eq!(rt.timer.next_mti, 0, "opcode 0x{opcode:02X}");
+            assert_eq!(rt.timer.next_sti, 0, "opcode 0x{opcode:02X}");
+            assert_eq!(rt.memory.memory_read_count(), reads_before);
+            assert_eq!(rt.memory.memory_write_count(), writes_before);
+        }
+    }
+
+    #[test]
+    fn malformed_operands_fail_before_scheduler_or_level_mutation() {
+        let cases: &[(&str, &[u8])] = &[
+            ("JP narrow selector", &[0x11, 0x00]),
+            ("E3 invalid mode", &[0xE3, 0x10, 0x00]),
+            ("EB invalid mode", &[0xEB, 0x10, 0x00]),
+            ("ignored BP+PX selector", &[0x24, 0xA0, 0x01]),
+            (
+                "absolute external upper nibble",
+                &[0x62, 0x34, 0x12, 0xF0, 0x00],
+            ),
+        ];
+
+        for &(name, bytes) in cases {
+            let mut rt = CoreRuntime::new();
+            rt.memory.write_external_slice(0, bytes);
+            rt.state.set_pc(0);
+            rt.state.set_reg(RegName::I, 1);
+            rt.state.set_reg(RegName::S, 0x23456);
+            rt.state.set_reg(RegName::FC, 1);
+            rt.state.set_reg(RegName::FZ, 1);
+            *rt.timer = TimerContext::new(true, 1, 1);
+            rt.timer.next_mti = 0;
+            rt.timer.next_sti = 0;
+            rt.onk_level = true;
+            rt.external_interrupt_level = true;
+            let reads_before = rt.memory.memory_read_count();
+            let writes_before = rt.memory.memory_write_count();
+
+            let error = rt.step(1).expect_err(name);
+
+            assert!(
+                error.to_string().contains("preflight opcode"),
+                "{name}: {error}"
+            );
+            assert_eq!(rt.metadata.cycle_count, 0, "{name}");
+            assert_eq!(rt.metadata.instruction_count, 0, "{name}");
+            assert_eq!(rt.state.pc(), 0, "{name}");
+            assert_eq!(rt.state.get_reg(RegName::I), 1, "{name}");
+            assert_eq!(rt.state.get_reg(RegName::S), 0x23456, "{name}");
+            assert_eq!(rt.state.get_reg(RegName::FC), 1, "{name}");
+            assert_eq!(rt.state.get_reg(RegName::FZ), 1, "{name}");
+            assert_eq!(
+                rt.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
+                Some(0),
+                "{name} must not re-latch IRQ levels"
+            );
+            assert_eq!(rt.timer.next_mti, 0, "{name}");
+            assert_eq!(rt.timer.next_sti, 0, "{name}");
+            assert!(!rt.timer.irq_pending, "{name}");
+            assert_eq!(rt.memory.memory_read_count(), reads_before, "{name}");
+            assert_eq!(rt.memory.memory_write_count(), writes_before, "{name}");
+        }
+    }
+
+    #[test]
+    fn data_dependent_failures_preflight_before_scheduler_mutation() {
+        for opcode in [0xC2, 0x3E, 0x5F, 0x01] {
+            let mut rt = CoreRuntime::new();
+            rt.state.set_pc(0);
+            rt.state.set_reg(RegName::U, 0x00180);
+            rt.state.set_reg(RegName::S, 0x00190);
+            rt.state.set_reg(RegName::FC, 1);
+            rt.state.set_reg(RegName::FZ, 1);
+            rt.state.set_reg(RegName::IMR, 0x55);
+            rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x55);
+            match opcode {
+                0xC2 => {
+                    rt.memory.write_external_slice(0, &[0xC2, 0x20, 0x30]);
+                    rt.memory.write_internal_byte(0x20, 0x11);
+                    rt.memory.write_internal_byte(0x21, 0x22);
+                    rt.memory.write_internal_byte(0x22, 0xA3);
+                    rt.memory.write_internal_byte(0x30, 0x44);
+                    rt.memory.write_internal_byte(0x31, 0x55);
+                    rt.memory.write_internal_byte(0x32, 0x06);
+                }
+                0x3E => {
+                    rt.memory.write_external_byte(0, 0x3E);
+                    rt.memory.write_external_byte(0x00180, 0xFC);
+                }
+                0x5F => {
+                    rt.memory.write_external_byte(0, 0x5F);
+                    rt.memory.write_external_byte(0x00190, 0xFC);
+                }
+                0x01 => {
+                    rt.memory.write_external_byte(0, 0x01);
+                    rt.memory.write_external_byte(0x00190, 0xA5);
+                    rt.memory.write_external_byte(0x00191, 0xFC);
+                }
+                _ => unreachable!(),
+            }
+            *rt.timer = TimerContext::new(true, 1, 1);
+            rt.timer.next_mti = 0;
+            rt.timer.next_sti = 0;
+            rt.onk_level = true;
+            rt.external_interrupt_level = true;
+            let reads_before = rt.memory.memory_read_count();
+            let writes_before = rt.memory.memory_write_count();
+            let u_before = rt.state.get_reg(RegName::U);
+            let s_before = rt.state.get_reg(RegName::S);
+            let imr_before = rt
+                .memory
+                .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                .unwrap_or(0);
+            let isr_before = rt
+                .memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap_or(0);
+
+            let error = rt
+                .step(1)
+                .expect_err("invalid EXP/F image must fail in preflight");
+
+            if opcode == 0xC2 {
+                assert!(error
+                    .to_string()
+                    .contains(crate::llama::eval::EXP_UPPER_NIBBLE_ERROR));
+            } else {
+                assert!(error.to_string().contains("unsupported SC62015 F image"));
+            }
+            assert_eq!(rt.metadata.cycle_count, 0, "opcode {opcode:02X}");
+            assert_eq!(rt.metadata.instruction_count, 0, "opcode {opcode:02X}");
+            assert_eq!(rt.state.pc(), 0, "opcode {opcode:02X}");
+            assert_eq!(
+                rt.state.get_reg(RegName::U),
+                u_before,
+                "opcode {opcode:02X}"
+            );
+            assert_eq!(
+                rt.state.get_reg(RegName::S),
+                s_before,
+                "opcode {opcode:02X}"
+            );
+            assert_eq!(rt.state.get_reg(RegName::FC), 1, "opcode {opcode:02X}");
+            assert_eq!(rt.state.get_reg(RegName::FZ), 1, "opcode {opcode:02X}");
+            assert_eq!(
+                rt.memory.read_internal_byte_silent(IMEM_IMR_OFFSET),
+                Some(imr_before),
+                "opcode {opcode:02X}"
+            );
+            assert_eq!(
+                rt.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
+                Some(isr_before),
+                "opcode {opcode:02X}"
+            );
+            assert_eq!(rt.timer.next_mti, 0, "opcode {opcode:02X}");
+            assert_eq!(rt.timer.next_sti, 0, "opcode {opcode:02X}");
+            assert!(!rt.timer.irq_pending, "opcode {opcode:02X}");
+            assert_eq!(rt.memory.memory_read_count(), reads_before);
+            assert_eq!(rt.memory.memory_write_count(), writes_before);
+        }
     }
 
     #[test]

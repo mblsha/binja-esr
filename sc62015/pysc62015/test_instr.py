@@ -6,6 +6,7 @@ from .instr import (
     Instruction,
     JP_Abs,
     JP_Rel,
+    CALL,
     EMemIMem,
     EMemIMemMode,
     IMem8,
@@ -29,7 +30,7 @@ from .instr import (
     InvalidInstruction,
 )
 from .instr import decode as decode_instr
-from .constants import INTERNAL_MEMORY_START
+from .constants import INTERNAL_MEMORY_START, PC_MASK
 from binja_test_mocks.tokens import (
     Token,
     TInstr,
@@ -60,9 +61,10 @@ from binaryninja.enums import BranchType  # type: ignore
 from binaryninja import RegisterName  # type: ignore
 
 import os
+import pytest
 from pprint import pprint
 
-from typing import Generator, Tuple, List, Optional
+from typing import Generator, Tuple, List, Optional, cast
 
 
 def decode(data: bytearray, addr: int) -> Instruction:
@@ -71,6 +73,27 @@ def decode(data: bytearray, addr: int) -> Instruction:
     if instr is None:
         raise ValueError(f"Failed to decode {data.hex()} at {addr:#x}")
     return instr
+
+
+def _walk_mock_llil(value: object) -> Generator[MockLLIL, None, None]:
+    if not isinstance(value, MockLLIL):
+        return
+    node = cast(MockLLIL, value)
+    yield node
+    for operand in node.ops:
+        yield from _walk_mock_llil(operand)
+
+
+class _WidthStrictMockLLIL(MockLowLevelILFunction):
+    """Expose the resize constructors present in real Binary Ninja LLIL."""
+
+    _suffix = {1: "b", 2: "w", 3: "l"}
+
+    def zero_extend(self, width: int, value: MockLLIL) -> MockLLIL:
+        return mllil(f"ZX.{self._suffix[width]}", [value])
+
+    def low_part(self, width: int, value: MockLLIL) -> MockLLIL:
+        return mllil(f"LOW_PART.{self._suffix[width]}", [value])
 
 
 def _assert_conditional_jump_llil(
@@ -147,12 +170,12 @@ def test_jp_abs() -> None:
         "OR.l",
         [
             mllil("CONST.w", [0xBBAA]),
-            mllil("CONST.l", [0xCD0000]),
+            mllil("CONST.l", [0xD0000]),
         ],
     )
     info = MockAnalysisInfo()
     instr.analyze(info, 0xCD1234)
-    assert info.mybranches == [(BranchType.UnconditionalBranch, 0xCDBBAA)]
+    assert info.mybranches == [(BranchType.UnconditionalBranch, 0xDBBAA)]
 
     instr = decode(bytearray([0x03, 0xAA, 0xBB, 0x0C]), 0x1234)
     assert isinstance(instr, JP_Abs)
@@ -232,6 +255,47 @@ def test_jp_rel() -> None:
     assert info.mybranches == [(BranchType.UnconditionalBranch, 0x2007)]
     _assert_unconditional_jump_llil(instr, 0x2000, dest)
 
+
+def test_control_flow_targets_wrap_to_20_bits() -> None:
+    # At the final address, both conditional fallthrough and a positive
+    # relative destination cross the architectural PC boundary.
+    instr = decode(bytearray([0x18, 0x01]), 0xFFFFF)  # JRZ +1
+    assert isinstance(instr, JP_Rel)
+    il = MockLowLevelILFunction()
+    assert instr.lift_jump_addr(il, 0xFFFFF) == mllil("CONST.l", [0x00002])
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0xFFFFF)
+    assert info.mybranches == [
+        (BranchType.FalseBranch, 0x00001),
+        (BranchType.TrueBranch, 0x00002),
+    ]
+    _assert_conditional_jump_llil(
+        instr,
+        0xFFFFF,
+        mllil("CONST.l", [0x00002]),
+        expected_cond_flag="Z",
+        expected_cond_value=1,
+    )
+
+    # Binary Ninja can ask about an aliased host address.  Near targets use
+    # only the low architectural page nibble, never host bits 20..23.
+    near_jp = decode(bytearray([0x02, 0xAA, 0xBB]), 0x1D1234)
+    assert isinstance(near_jp, JP_Abs)
+    assert near_jp.lift_jump_addr(il, 0x1D1234) == mllil(
+        "OR.l",
+        [mllil("CONST.w", [0xBBAA]), mllil("CONST.l", [0xD0000])],
+    )
+    info = MockAnalysisInfo()
+    near_jp.analyze(info, 0x1D1234)
+    assert info.mybranches == [(BranchType.UnconditionalBranch, 0xDBBAA)]
+
+    near_call = decode(bytearray([0x04, 0x34, 0x12]), 0x1FFFFF)
+    assert isinstance(near_call, CALL)
+    assert near_call.dest_addr(0x1FFFFF) == 0xF1234
+    info = MockAnalysisInfo()
+    near_call.analyze(info, 0x1FFFFF)
+    assert info.mybranches == [(BranchType.CallDestination, 0xF1234)]
+
     instr = decode(bytearray([0x13, 0x05]), 0x2000)
     assert instr.name() == "JR"
     assert isinstance(instr, JP_Rel)
@@ -242,6 +306,70 @@ def test_jp_rel() -> None:
     instr.analyze(info, 0x2000)
     assert info.mybranches == [(BranchType.UnconditionalBranch, 0x1FFD)]
     _assert_unconditional_jump_llil(instr, 0x2000, dest)
+
+
+def test_control_flow_llil_uses_explicit_widths_and_20_bit_targets() -> None:
+    il = _WidthStrictMockLLIL()
+
+    near = decode(bytearray.fromhex("02AABB"), 0xD1234)
+    assert isinstance(near, JP_Abs)
+    assert near.lift_jump_addr(il, 0xD1234) == mllil(
+        "OR.l",
+        [
+            mllil("ZX.l", [mllil("CONST.w", [0xBBAA])]),
+            mllil("CONST.l", [0xD0000]),
+        ],
+    )
+
+    register_jump = decode(bytearray.fromhex("1104"), 0x1234)  # JP X
+    assert isinstance(register_jump, JP_Abs)
+    assert register_jump.lift_jump_addr(il, 0x1234) == mllil(
+        "AND.l",
+        [mllil("REG.l", [mreg("X")]), mllil("CONST.l", [PC_MASK])],
+    )
+
+    near_ret = decode(bytearray.fromhex("06"), 0xD1234)
+    near_ret.lift(il, 0xD1234)
+    ret = next(node for node in reversed(il.ils) if node.op == "RET")
+    ret_nodes = list(_walk_mock_llil(ret))
+    assert any(node.op == "ZX.l" for node in ret_nodes)
+    assert any(
+        node.op == "CONST.l" and node.ops == [PC_MASK & ~0xFFFF] for node in ret_nodes
+    )
+
+    far_il = _WidthStrictMockLLIL()
+    far_ret = decode(bytearray.fromhex("07"), 0x1234)
+    far_ret.lift(far_il, 0x1234)
+    far_target = next(node for node in reversed(far_il.ils) if node.op == "RET").ops[0]
+    assert isinstance(far_target, MockLLIL)
+    assert far_target.op == "AND.l"
+    assert far_target.ops[1] == mllil("CONST.l", [PC_MASK])
+
+
+@pytest.mark.parametrize(
+    ("raw", "address", "target", "frame_width"),
+    [
+        (bytes.fromhex("043412"), 0x10000, 0x11234, 2),
+        (bytes.fromhex("05785603"), 0x10000, 0x35678, 3),
+    ],
+)
+def test_call_lift_preserves_real_call_op_with_explicit_wrapped_frame(
+    raw: bytes, address: int, target: int, frame_width: int
+) -> None:
+    instr = decode(bytearray(raw), address)
+    assert isinstance(instr, CALL)
+    il = MockLowLevelILFunction()
+
+    instr.lift(il, address)
+
+    nodes = [node for node in il.ils if isinstance(node, MockLLIL)]
+    assert nodes[-1] == mllil("CALL", [mllil("CONST_PTR.l", [target])])
+    assert all(node.bare_op() != "JUMP" for node in nodes)
+    assert sum(node.bare_op() == "STORE" for node in nodes) == frame_width
+    assert any(
+        node.bare_op() == "SET_REG" and getattr(node.ops[0], "name", None) == "S"
+        for node in nodes
+    )
 
 
 def test_reset_analysis_is_unresolved_branch() -> None:
@@ -404,54 +532,16 @@ def test_emem_value_offset_helper_lifting() -> None:
     assert asm_str(h.render()) == "[(BP+AB)+CD]"
 
     il = MockLowLevelILFunction()
-    # With default BP_N addressing, imem uses BP+AB addressing
-    assert (
-        h.lift(il)
-        == mllil(
-            "LOAD.b",
-            [
-                mllil(
-                    "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
-                    [
-                        mllil(
-                            "LOAD.l",
-                            [  # For indirect addressing, we load 3 bytes (20-bit address)
-                                mllil(
-                                    "ADD.l",
-                                    [
-                                        mllil(
-                                            "ADD.b",
-                                            [
-                                                mllil(
-                                                    "LOAD.b",
-                                                    [
-                                                        mllil(
-                                                            "CONST_PTR.l",
-                                                            [
-                                                                INTERNAL_MEMORY_START
-                                                                + IMEMRegisters.BP
-                                                            ],
-                                                        )
-                                                    ],
-                                                ),  # BP value
-                                                mllil("CONST.b", [0xAB]),  # n
-                                            ],
-                                        ),
-                                        mllil(
-                                            "CONST.l", [INTERNAL_MEMORY_START]
-                                        ),  # Add base for internal memory
-                                    ],
-                                )
-                            ],
-                        ),
-                        mllil(
-                            "CONST.l", [0xCD]
-                        ),  # offset (now 3-byte for external addresses)
-                    ],
-                )
-            ],
-        )
-    )
+    lifted = h.lift(il)
+    nodes = list(_walk_mock_llil(lifted))
+    ops = [node.op for node in nodes]
+    assert lifted.op == "LOAD.b"
+    # The three-byte pointer itself must be composed from wrapped byte loads;
+    # a LOAD.l at IMEM FF would spill into the synthetic 0x100 window.
+    assert "LOAD.l" not in ops
+    assert ops.count("LOAD.b") >= 3
+    assert any(node.op == "CONST.l" and node.ops == [0xFF] for node in nodes)
+    assert any(node.op == "CONST.l" and node.ops == [PC_MASK] for node in nodes)
 
 
 def test_emem_value_offset_helper_widths() -> None:
@@ -464,54 +554,14 @@ def test_emem_value_offset_helper_widths() -> None:
     for width, suffix in [(2, "w"), (3, "l")]:
         h = EMemValueOffsetHelper(imem, offset, width=width)
         il = MockLowLevelILFunction()
-        # With default BP_N addressing, imem uses BP+10 addressing
-        assert (
-            h.lift(il)
-            == mllil(
-                f"LOAD.{suffix}",
-                [
-                    mllil(
-                        "ADD.l",  # Offset is now added with 3-byte width for external memory addresses
-                        [
-                            mllil(
-                                "LOAD.l",
-                                [  # For indirect addressing, we load 3 bytes (20-bit address)
-                                    mllil(
-                                        "ADD.l",
-                                        [
-                                            mllil(
-                                                "ADD.b",
-                                                [
-                                                    mllil(
-                                                        "LOAD.b",
-                                                        [
-                                                            mllil(
-                                                                "CONST_PTR.l",
-                                                                [
-                                                                    INTERNAL_MEMORY_START
-                                                                    + IMEMRegisters.BP
-                                                                ],
-                                                            )
-                                                        ],
-                                                    ),  # BP value
-                                                    mllil("CONST.b", [0x10]),  # n
-                                                ],
-                                            ),
-                                            mllil(
-                                                "CONST.l", [INTERNAL_MEMORY_START]
-                                            ),  # Add base for internal memory
-                                        ],
-                                    )
-                                ],
-                            ),
-                            mllil(
-                                "CONST.l", [1]
-                            ),  # offset (now 3-byte for external addresses)
-                        ],
-                    )
-                ],
-            )
-        )
+        lifted = h.lift(il)
+        nodes = list(_walk_mock_llil(lifted))
+        ops = [node.op for node in nodes]
+        assert lifted.op == f"OR.{suffix}"
+        assert f"LOAD.{suffix}" not in ops
+        assert ops.count("LOAD.b") >= width + 3
+        assert any(node.op == "CONST.l" and node.ops == [0xFF] for node in nodes)
+        assert any(node.op == "CONST.l" and node.ops == [PC_MASK] for node in nodes)
 
 
 def test_emem_reg_offset_helper_widths() -> None:
@@ -522,18 +572,27 @@ def test_emem_reg_offset_helper_widths() -> None:
         h = EMemRegOffsetHelper(width, reg, EMemRegMode.SIMPLE, offset=None)
         op = next(h.operands())
         il = MockLowLevelILFunction()
-        assert op.lift(il) == mllil(
-            f"LOAD.{suffix}",
-            [mllil("REG.l", [mreg("X")])],
+        lifted = op.lift(il)
+        load_nodes = list(_walk_mock_llil(lifted))
+        load_ops = [node.op for node in load_nodes]
+        assert lifted.op == f"OR.{suffix}"
+        assert f"LOAD.{suffix}" not in load_ops
+        assert load_ops.count("LOAD.b") == width
+        assert any(
+            node.op == "CONST.l" and node.ops == [PC_MASK] for node in load_nodes
         )
+
         il2 = MockLowLevelILFunction()
         op.lift_assign(il2, il2.const(width, 0x11))
-        assert il2.ils == [
-            mllil(
-                f"STORE.{suffix}",
-                [mllil("REG.l", [mreg("X")]), mllil(f"CONST.{suffix}", [0x11])],
-            )
-        ]
+        store_nodes = [node for root in il2.ils for node in _walk_mock_llil(root)]
+        store_ops = [node.op for node in store_nodes]
+        assert il2.ils[0].op == "SET_REG.l"  # snapshot the effective address
+        assert il2.ils[1].op == f"SET_REG.{suffix}"  # then snapshot the value
+        assert f"STORE.{suffix}" not in store_ops
+        assert store_ops.count("STORE.b") == width
+        assert any(
+            node.op == "CONST.l" and node.ops == [PC_MASK] for node in store_nodes
+        )
 
 
 class TestIMemHelperLifting:
@@ -560,6 +619,32 @@ class TestIMemHelperLifting:
         addr_llil = self._get_imem_addr_llil(helper, pre_mode=AddressingMode.N)
         expected_llil = mllil("CONST_PTR.l", [INTERNAL_MEMORY_START + 0x10])
         assert addr_llil == expected_llil
+
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            AddressingMode.BP_N,
+            AddressingMode.PX_N,
+            AddressingMode.PY_N,
+            AddressingMode.BP_PX,
+            AddressingMode.BP_PY,
+        ],
+    )
+    def test_dynamic_imem_offset_is_explicitly_extended_to_address_width(
+        self, mode: AddressingMode
+    ) -> None:
+        helper = IMemHelper(width=1, value=Imm8(0x05))
+        il = _WidthStrictMockLLIL()
+
+        address = helper.imem_addr(il, mode)
+
+        assert isinstance(address, MockLLIL)
+        assert address.op == "ADD.l"
+        widened_offset = address.ops[0]
+        assert isinstance(widened_offset, MockLLIL)
+        assert widened_offset.op == "ZX.l"
+        assert isinstance(widened_offset.ops[0], MockLLIL)
+        assert widened_offset.ops[0].op == "ADD.b"
 
     def test_imem_helper_direct_no_pre(self) -> None:
         # IMemHelper for (0x25) with pre=None (should default to BP_N mode behavior)
@@ -1048,6 +1133,81 @@ def test_lift_mv() -> None:
         )
     ]
 
+
+@pytest.mark.parametrize(
+    ("encoded", "destination", "resize_op", "source_op"),
+    [
+        ("097F", "I", "ZX.w", "CONST.b"),  # MV IL,7F clears IH
+        ("FD24", "BA", "LOW_PART.w", "AND.l"),  # ROM-valid MV BA,X
+        ("FD42", "X", "ZX.l", "REG.w"),  # ROM-valid MV X,BA
+    ],
+)
+def test_mv_llil_resizes_register_values_explicitly(
+    encoded: str, destination: str, resize_op: str, source_op: str
+) -> None:
+    instr = decode(bytearray.fromhex(encoded), 0x1234)
+    il = _WidthStrictMockLLIL()
+
+    instr.lift(il, 0x1234)
+
+    write = next(
+        node
+        for node in il.ils
+        if node.op.startswith("SET_REG")
+        and getattr(node.ops[0], "name", None) == destination
+    )
+    nodes = list(_walk_mock_llil(write.ops[1]))
+    assert any(node.op == resize_op for node in nodes)
+    assert any(node.op == source_op for node in nodes)
+    if destination == "X":
+        assert write.ops[1].op == "AND.l"
+        assert write.ops[1].ops[1] == mllil("CONST.l", [PC_MASK])
+
+
+@pytest.mark.parametrize("encoded", ["ED24", "ED42"])
+def test_ed_exchange_snapshots_and_resizes_both_directions(encoded: str) -> None:
+    instr = decode(bytearray.fromhex(encoded), 0x1234)
+    il = _WidthStrictMockLLIL()
+
+    instr.lift(il, 0x1234)
+
+    assert il.ils[0].op.startswith("SET_REG")
+    assert il.ils[1].op.startswith("SET_REG")
+    writes = il.ils[2:]
+    ba_write = next(
+        node for node in writes if getattr(node.ops[0], "name", None) == "BA"
+    )
+    x_write = next(node for node in writes if getattr(node.ops[0], "name", None) == "X")
+    assert any(node.op == "LOW_PART.w" for node in _walk_mock_llil(ba_write))
+    assert any(node.op == "ZX.l" for node in _walk_mock_llil(x_write))
+    assert x_write.ops[1].op == "AND.l"
+    assert x_write.ops[1].ops[1] == mllil("CONST.l", [PC_MASK])
+
+
+def test_external_register_address_is_masked_to_20_bits() -> None:
+    reg = Reg3()
+    reg.reg = RegisterName("X")
+    reg.reg_raw = 0x04
+    reg.high4 = 0
+    helper = EMemRegOffsetHelper(
+        1,
+        reg,
+        EMemRegMode.SIMPLE,
+        offset=None,
+    )
+    operand = next(helper.operands())
+    il = _WidthStrictMockLLIL()
+
+    lifted = operand.lift(il)
+
+    assert lifted.op == "LOAD.b"
+    address = lifted.ops[0]
+    assert isinstance(address, MockLLIL)
+    assert address.op == "AND.l"
+    assert address.ops[1] == mllil("CONST.l", [PC_MASK])
+
+
+def test_lift_mv_memory_to_memory() -> None:
     instr = decode(bytearray([0xC8, 0xAB, 0xCD]), 0x1234)
     # With no PRE, defaults to BP_N addressing for both operands
     assert asm_str(instr.render()) == "MV    (BP+AB), (BP+CD)"
@@ -1130,10 +1290,11 @@ def test_invalid_instruction() -> None:
 
 
 def test_pre_roundtrip() -> None:
-    # 3331307dec
-    data = bytearray([0x33, 0x7D, 0xEC])
+    # PRE30 is the canonical single-operand (n) prefix.  PRE33 has the same
+    # first latch but differs only in the unused second latch.
+    data = bytearray([0x30, 0x7D, 0xEC])
     instr = decode(data, 0x1234)
-    assert instr._pre == 0x33
+    assert instr._pre == 0x30
     assert asm_str(instr.render()) == "DEC   (BP)"
 
     encoder = Encoder()
@@ -1232,70 +1393,21 @@ def test_cmp_with_pre() -> None:
     ]
 
 
-def test_test_with_pre() -> None:
-    # PRE22 + TEST (n),00 => operand uses BP indexed addressing
-    instr = decode(bytearray([0x22, 0x65, 0x12, 0x07]), 0x2000)
-    assert asm_str(instr.render()) == "TEST  (BP+12), 07"
-    assert instr._pre == 0x22
+def test_redundant_pre_on_single_memory_operand_is_invalid() -> None:
+    # TEST's only PRE-sensitive operand already uses the no-prefix BP+n mode.
+    # PRE22 changes only the unused second latch and is therefore noncanonical.
+    with pytest.raises(InvalidInstruction, match="Noncanonical PRE22"):
+        decode(bytearray([0x22, 0x65, 0x12, 0x07]), 0x2000)
+    # PRE25's second BP+PY latch is irrelevant to this one-address form;
+    # canonical BP+PX uses PRE24, and its ignored selector must be zero.
+    with pytest.raises(InvalidInstruction, match="Noncanonical PRE25"):
+        decode(bytearray([0x25, 0xCC, 0x00, 0x00]), 0xF0102)
+    with pytest.raises(InvalidInstruction, match="Nonzero ignored selector"):
+        decode(bytearray([0x24, 0xCC, 0xFB, 0x00]), 0xF0102)
 
-    il = MockLowLevelILFunction()
-    instr.lift(il, 0x2000)
-    assert il.ils == [
-        mllil(
-            "SET_FLAG",
-            [
-                MockFlag("Z"),
-                mllil(
-                    "CMP_E.l",
-                    [
-                        mllil(
-                            "AND.l",
-                            [
-                                mllil(
-                                    "LOAD.b",
-                                    [
-                                        mllil(
-                                            "ADD.l",
-                                            [
-                                                mllil(
-                                                    "ADD.b",
-                                                    [
-                                                        mllil(
-                                                            "LOAD.b",
-                                                            [
-                                                                mllil(
-                                                                    "CONST_PTR.l",
-                                                                    [
-                                                                        INTERNAL_MEMORY_START
-                                                                        + IMEMRegisters.BP
-                                                                    ],
-                                                                )
-                                                            ],
-                                                        ),
-                                                        mllil("CONST.b", [0x12]),
-                                                    ],
-                                                ),
-                                                mllil(
-                                                    "CONST.l", [INTERNAL_MEMORY_START]
-                                                ),
-                                            ],
-                                        )
-                                    ],
-                                ),
-                                mllil("CONST.b", [0x07]),
-                            ],
-                        ),
-                        mllil("CONST.l", [0]),
-                    ],
-                ),
-            ],
-        )
-    ]
-
-    # PRE25 + MV IMem8, Imm8
-    instr = decode(bytearray([0x25, 0xCC, 0xFB, 0x00]), 0xF0102)
+    instr = decode(bytearray([0x24, 0xCC, 0x00, 0x00]), 0xF0102)
     assert asm_str(instr.render()) == "MV    (BP+PX), 00"
-    assert instr._pre == 0x25
+    assert instr._pre == 0x24
     assert instr.length() == 4
 
     il = MockLowLevelILFunction()
@@ -1337,6 +1449,119 @@ def test_test_with_pre() -> None:
             ],
         )
     ]
+
+
+def test_wait_lifts_to_timing_intrinsic() -> None:
+    instr = decode(bytearray([0xEF]), 0x1234)  # WAIT
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+
+    assert [getattr(node, "name", None) for node in il.ils] == [
+        "VALIDATE_I_COUNT",
+        "WAIT",
+    ]
+
+
+def test_mvl_predec_source_continuation_uses_unsigned_i() -> None:
+    # PRE34 is the canonical single-operand PX+n prefix here; the external
+    # source uses its own encoded pre-decrement mode.
+    instr = decode(bytearray.fromhex("34E33720"), 0x1234)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+
+    lifted = repr(il.ils)
+    assert "CMP_UGT.w" in lifted
+    assert "CMP_SGT" not in lifted
+
+
+def test_register_class_encodings_fail_closed() -> None:
+    invalid = (
+        "4407",  # ADD r2 with A/S mixed-class selector
+        "4500",  # ADD r3 with A/A selector
+        "4607",  # ADD r1 with A/S mixed-class selector
+        "4C07",  # SUB r2 with A/S mixed-class selector
+        "4D00",  # SUB r3 with A/A selector
+        "4E07",  # SUB r1 with A/S mixed-class selector
+        "4441",  # ADD r2 form with X destination
+        "1100",  # JP requires an exact X/Y/U/S selector
+        "11A4",  # JP selector upper bits are reserved, not an X alias
+        "6CA4",  # INC selector upper bits are reserved
+        "7CFF",  # DEC selector upper bits are reserved
+        "D60700",  # CMPW with S instead of BA/I
+        "D70000",  # CMPP with A instead of X/Y/U/S
+    )
+    for encoded in invalid:
+        assert decode_instr(bytearray.fromhex(encoded), 0x1234, OPCODES) is None
+
+
+def test_register_class_valid_boundaries_decode() -> None:
+    valid = {
+        "4600": "ADD   A, A",
+        "4611": "ADD   IL, IL",
+        "4422": "ADD   BA, BA",
+        "4433": "ADD   I, I",
+        "4544": "ADD   X, X",
+        "4577": "ADD   S, S",
+        "4552": "ADD   Y, BA",  # PC-E500 EN ROM at F2B62
+        "4430": "ADD   I, A",  # PC-E500 EN ROM at E400F and F47C8
+        "4C30": "SUB   I, A",  # matching ROM path at F47CC
+        "4540": "ADD   X, A",
+        "4D60": "SUB   U, A",
+        "4E01": "SUB   A, IL",
+        "1104": "JP    X",  # PC-E500 E2F5F; IQ-7000 E4766
+        "1105": "JP    Y",  # PC-E500 F2053; IQ-7000 F5230
+        "1106": "JP    U",
+        "1107": "JP    S",
+        "6C00": "INC   A",
+        "6C07": "INC   S",
+        "7C00": "DEC   A",
+        "7C07": "DEC   S",
+        "D60200": "CMPW  (BP+00), BA",
+        "D60300": "CMPW  (BP+00), I",
+        "D70400": "CMPP  (BP+00), X",
+        "D70700": "CMPP  (BP+00), S",
+    }
+    for encoded, expected_asm in valid.items():
+        instr = decode(bytearray.fromhex(encoded), 0x1234)
+        assert asm_str(instr.render()) == expected_asm
+
+
+@pytest.mark.parametrize(
+    ("encoded", "source_op", "target_op", "mask"),
+    [
+        ("4430", "REG.b", "AND.w", 0xFF),  # ADD I,A
+        ("4552", "REG.w", "AND.l", 0xFFFF),  # ADD Y,BA
+        ("4540", "REG.b", "AND.l", 0xFF),  # ADD X,A
+        ("4D60", "REG.b", "AND.l", 0xFF),  # SUB U,A
+    ],
+)
+def test_mixed_register_arithmetic_llil_resizes_source_to_destination_width(
+    encoded: str, source_op: str, target_op: str, mask: int
+) -> None:
+    instr = decode(bytearray.fromhex(encoded), 0x1234)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+    nodes = [node for root in il.ils for node in _walk_mock_llil(root)]
+
+    assert any(
+        node.op == target_op
+        and isinstance(node.ops[0], MockLLIL)
+        and node.ops[0].op == source_op
+        and isinstance(node.ops[1], MockLLIL)
+        and node.ops[1].op in {"CONST.w", "CONST.l"}
+        and node.ops[1].ops == [mask]
+        for node in nodes
+    )
+
+
+def test_same_width_register_arithmetic_llil_needs_no_resize() -> None:
+    instr = decode(bytearray.fromhex("4E01"), 0x1234)  # SUB A,IL
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x1234)
+    nodes = [node for root in il.ils for node in _walk_mock_llil(root)]
+
+    sub = next(node for node in nodes if node.op == "SUB.b{CZ}")
+    assert [operand.op for operand in sub.ops] == ["REG.b", "REG.b"]
 
 
 # Format:

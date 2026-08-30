@@ -22,6 +22,15 @@ impl AsyncLlamaExecutor {
     ) -> Result<u8, &'static str> {
         self.inner.execute(opcode, state, bus)
     }
+
+    pub fn validate_before_scheduling<B: LlamaBus>(
+        &self,
+        opcode: u8,
+        state: &LlamaState,
+        bus: &mut B,
+    ) -> Result<(), &'static str> {
+        self.inner.validate_before_scheduling(opcode, state, bus)
+    }
 }
 
 impl Default for AsyncLlamaExecutor {

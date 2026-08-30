@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from importlib import import_module
 from typing import List
 
 import pytest
@@ -18,6 +20,18 @@ except Exception as exc:  # pragma: no cover - handles optional deps (binja_test
     _IMPORT_ERROR = exc
 
 _VALID_BACKENDS = {"python", "llama"}
+
+
+def _native_module_is_absent() -> bool:
+    """Distinguish an optional missing extension from a broken present one."""
+
+    try:
+        import_module("_sc62015_rustcore")
+    except ModuleNotFoundError as exc:
+        if exc.name == "_sc62015_rustcore":
+            return True
+        raise
+    return False
 
 
 def _parse_backend_option(raw: str | None) -> List[str]:
@@ -49,7 +63,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 @pytest.fixture(scope="session")
 def available_cpu_backends() -> tuple[str, ...]:
     if _IMPORT_ERROR is not None:
-        pytest.skip(f"SC62015 backends unavailable: {_IMPORT_ERROR}")
+        pytest.fail(f"SC62015 test package failed to import: {_IMPORT_ERROR}")
     return available_backends()
 
 
@@ -64,8 +78,18 @@ def cpu_backend(
     request: pytest.FixtureRequest, available_cpu_backends: tuple[str, ...]
 ) -> str:
     if _IMPORT_ERROR is not None:
-        pytest.skip(f"SC62015 backends unavailable: {_IMPORT_ERROR}")
+        pytest.fail(f"SC62015 test package failed to import: {_IMPORT_ERROR}")
     backend = request.param
     if backend not in available_cpu_backends:
+        if backend != "llama":
+            pytest.fail(f"Selected CPU backend {backend!r} was not advertised")
+        if not _native_module_is_absent():
+            pytest.fail(
+                "LLAMA extension is present but does not advertise a usable backend"
+            )
+        if os.environ.get("CI"):
+            pytest.fail(
+                "CPU backend 'llama' is required for CI parity tests but is unavailable"
+            )
         pytest.skip(f"CPU backend '{backend}' not available in this runtime")
     return backend

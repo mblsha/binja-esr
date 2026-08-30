@@ -55,5 +55,8 @@ await e.call(0x00F1234, undefined, { maxInstructions: 5_000 });
 - WASM package output is generated into `src/lib/wasm/pce500_wasm` (ignored by git).
   - One-off rebuild: `npm run wasm:build`
   - Dev rebuild + watch: `npm run wasm:build:dev` and `npm run wasm:watch` (included in `npm run dev`)
-- ROM loading mirrors the native runner: the last `0x40000` bytes are mapped to `0xC0000..0xFFFFF` and `power_on_reset` uses the reset vector near `0xFFFFD`.
+- ROM loading mirrors the native runner: a 256 KiB image (or the top 256 KiB
+  of a full capture) maps to `0xC0000..0xFFFFF`, while an exact 128 KiB base
+  ROM maps to `0xE0000..0xFFFFF`; `power_on_reset` uses the vector at
+  `0xFFFFD` in either layout.
 - Keyboard mapping lives in `src/lib/keymap.ts` (currently `F1/F2` + arrow keys).

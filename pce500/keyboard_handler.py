@@ -22,6 +22,9 @@ from .tracing import trace_dispatcher
 KOL = 0xF0
 KOH = 0xF1
 KIL = 0xF2
+ISR = 0xFC
+SSR = 0xFF
+ONK_MASK = 0x08
 
 # Re-export historical debounce constants for callers that still import them.
 DEFAULT_DEBOUNCE_READS = DEFAULT_PRESS_TICKS
@@ -48,20 +51,25 @@ class PCE500KeyboardHandler:
         self._bridge_cpu = None
         self._bridge_enabled = False
         self._bridge_keys: set[str] = set()
-        self._bridge_cpu = None
-        self._bridge_enabled = False
+        self._on_key_pressed = False
 
     # ------------------------------------------------------------------ #
     # Public API used by emulator/tests
     # ------------------------------------------------------------------ #
 
     def press_key(self, key_code: str) -> bool:
-        # Special-case ON key: forward to bridge CPU when enabled so ONK parity holds.
-        if key_code == "KEY_ON" and self._bridge_enabled:
-            if not self._forward_bridge_event(key_code, release=False):
-                return False
-            self._bridge_keys.add(key_code)
-            return True
+        # ON is not part of the keyboard matrix.  The LLAMA backend must own
+        # this mutation so its native keyboard/timer state and host mirror are
+        # committed as one transaction.  Python applies the same SSR/ISR bits
+        # directly through the authoritative host memory.
+        if key_code == "KEY_ON":
+            if self._bridge_cpu is not None:
+                pressed = self._forward_bridge_event(key_code, release=False)
+            else:
+                pressed = self._set_python_on_key(release=False)
+            if pressed:
+                self._on_key_pressed = True
+            return pressed
         if self._bridge_enabled:
             if not self._forward_bridge_event(key_code, release=False):
                 return False
@@ -75,9 +83,13 @@ class PCE500KeyboardHandler:
         return True
 
     def release_key(self, key_code: str) -> None:
-        if key_code == "KEY_ON" and self._bridge_enabled:
-            if self._forward_bridge_event(key_code, release=True):
-                self._bridge_keys.discard(key_code)
+        if key_code == "KEY_ON":
+            if self._bridge_cpu is not None:
+                released = self._forward_bridge_event(key_code, release=True)
+            else:
+                released = self._set_python_on_key(release=True)
+            if released:
+                self._on_key_pressed = False
             return
         if self._bridge_enabled:
             if self._forward_bridge_event(key_code, release=True):
@@ -89,10 +101,12 @@ class PCE500KeyboardHandler:
         self._forward_bridge_event(key_code, release=True)
 
     def release_all_keys(self) -> None:
+        if self._on_key_pressed:
+            self.release_key("KEY_ON")
         if self._bridge_enabled:
             for key_code in list(self._bridge_keys):
                 self._forward_bridge_event(key_code, release=True)
-            self._bridge_keys.clear()
+                self._bridge_keys.discard(key_code)
             self._last_kil = self._read_kil_from_memory()
             return
         self._matrix.release_all_keys()
@@ -199,27 +213,39 @@ class PCE500KeyboardHandler:
             self._bridge_keys.clear()
 
     def _forward_bridge_event(self, key_code: str, *, release: bool) -> bool:
-        if not self._bridge_enabled or not self._bridge_cpu:
-            return False
         if key_code == "KEY_ON":
-            try:
-                if release:
-                    self._bridge_cpu.keyboard_release_on_key()
-                else:
-                    self._bridge_cpu.keyboard_press_on_key()
-                return True
-            except Exception:
+            if self._bridge_cpu is None:
                 return False
+            if release:
+                self._bridge_cpu.keyboard_release_on_key()
+                return True
+            return bool(self._bridge_cpu.keyboard_press_on_key())
+        if not self._bridge_enabled or self._bridge_cpu is None:
+            return False
         loc = KEY_LOCATIONS.get(key_code)
         if loc is None:
             return False
         matrix_code = ((loc.column & 0x0F) << 3) | (loc.row & 0x07)
-        try:
-            if release:
-                return bool(self._bridge_cpu.keyboard_release_matrix_code(matrix_code))
-            return bool(self._bridge_cpu.keyboard_press_matrix_code(matrix_code))
-        except Exception:
+        if release:
+            return bool(self._bridge_cpu.keyboard_release_matrix_code(matrix_code))
+        return bool(self._bridge_cpu.keyboard_press_matrix_code(matrix_code))
+
+    def _set_python_on_key(self, *, release: bool) -> bool:
+        if self._memory is None:
             return False
+        ssr_addr = INTERNAL_MEMORY_START + SSR
+        ssr = self._memory.read_byte(ssr_addr) & 0xFF
+        if release:
+            # SSR.ONK is the physical key level. ISR.ONKI is a latched service
+            # request: the ROM dispatcher acknowledges it explicitly after
+            # the handler returns, so a physical release must not clear it.
+            self._memory.write_byte(ssr_addr, ssr & ~ONK_MASK)
+        else:
+            isr_addr = INTERNAL_MEMORY_START + ISR
+            isr = self._memory.read_byte(isr_addr) & 0xFF
+            self._memory.write_byte(ssr_addr, ssr | ONK_MASK)
+            self._memory.write_byte(isr_addr, isr | ONK_MASK)
+        return True
 
     def _read_kil_from_memory(self) -> int:
         if not self._memory:
@@ -284,6 +310,7 @@ class PCE500KeyboardHandler:
             "last_koh": self._last_koh,
             "last_kil": self._last_kil,
             "scan_enabled": self._scan_enabled,
+            "on_key_pressed": self._on_key_pressed,
         }
 
     def load_state(self, state: dict[str, object]) -> None:
@@ -298,6 +325,7 @@ class PCE500KeyboardHandler:
         self._last_kil = int(state.get("last_kil", self._last_kil)) & 0xFF
         self._scan_enabled = bool(state.get("scan_enabled", self._scan_enabled))
         self._matrix.scan_enabled = self._scan_enabled
+        self._on_key_pressed = bool(state.get("on_key_pressed", self._on_key_pressed))
 
     # Metrics used by emulator instrumentation --------------------------------
 

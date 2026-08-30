@@ -181,6 +181,17 @@ pub struct MemoryImage {
     read_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_capture: Option<HashMap<u32, u8>>,
+    rollback_capture: Option<MemoryRollbackCapture>,
+}
+
+/// Sparse undo log for a speculative bridge operation.  Cloning the complete
+/// 1 MiB external image for every instruction is prohibitively expensive, so
+/// only slots actually changed while the capture is active are retained.
+struct MemoryRollbackCapture {
+    external_previous: HashMap<usize, u8>,
+    internal_previous: HashMap<usize, u8>,
+    dirty_before: Vec<(u32, u8)>,
+    dirty_internal_before: Vec<(u32, u8)>,
 }
 
 impl Default for MemoryImage {
@@ -214,6 +225,56 @@ impl MemoryImage {
             read_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_capture: None,
+            rollback_capture: None,
+        }
+    }
+
+    /// Begin a sparse rollback capture for speculative native execution.
+    ///
+    /// The Python bridge calls this before RESET or an instruction that may
+    /// mutate the local mirror before all host callbacks have succeeded.
+    pub fn begin_rollback_capture(&mut self) {
+        debug_assert!(self.rollback_capture.is_none());
+        self.rollback_capture = Some(MemoryRollbackCapture {
+            external_previous: HashMap::new(),
+            internal_previous: HashMap::new(),
+            dirty_before: self.dirty.clone(),
+            dirty_internal_before: self.dirty_internal.clone(),
+        });
+    }
+
+    /// Commit all writes made since `begin_rollback_capture`.
+    pub fn commit_rollback_capture(&mut self) {
+        self.rollback_capture = None;
+    }
+
+    /// Restore mirror bytes and pending host-write queues to their state at
+    /// `begin_rollback_capture`.
+    pub fn rollback_capture(&mut self) {
+        let Some(capture) = self.rollback_capture.take() else {
+            return;
+        };
+        for (index, previous) in capture.external_previous {
+            self.external[index] = previous;
+        }
+        for (index, previous) in capture.internal_previous {
+            self.internal[index] = previous;
+        }
+        self.dirty = capture.dirty_before;
+        self.dirty_internal = capture.dirty_internal_before;
+    }
+
+    fn capture_external_previous(&mut self, index: usize) {
+        let previous = self.external[index];
+        if let Some(capture) = self.rollback_capture.as_mut() {
+            capture.external_previous.entry(index).or_insert(previous);
+        }
+    }
+
+    fn capture_internal_previous(&mut self, index: usize) {
+        let previous = self.internal[index];
+        if let Some(capture) = self.rollback_capture.as_mut() {
+            capture.internal_previous.entry(index).or_insert(previous);
         }
     }
 
@@ -256,12 +317,26 @@ impl MemoryImage {
 
     pub fn load_external(&mut self, blob: &[u8]) {
         let limit = self.external.len().min(blob.len());
+        if self.rollback_capture.is_some() {
+            for (index, &value) in blob[..limit].iter().enumerate() {
+                if self.external[index] != value {
+                    self.capture_external_previous(index);
+                }
+            }
+        }
         self.external[..limit].copy_from_slice(&blob[..limit]);
         self.dirty.clear();
     }
 
     pub fn load_internal(&mut self, blob: &[u8]) {
         let limit = self.internal.len().min(blob.len());
+        if self.rollback_capture.is_some() {
+            for (index, &value) in blob[..limit].iter().enumerate() {
+                if self.internal[index] != value {
+                    self.capture_internal_previous(index);
+                }
+            }
+        }
         self.internal[..limit].copy_from_slice(&blob[..limit]);
     }
 
@@ -457,6 +532,33 @@ impl MemoryImage {
         self.external.get(idx).copied()
     }
 
+    /// Read the authoritative backing image without overlays, callbacks,
+    /// tracing, dirty queues, or memory-access counters. Instruction preflight
+    /// uses this path so rejection itself is not an observable bus operation.
+    pub fn read_byte_silent(&self, address: u32) -> Option<u8> {
+        let address = canonical_address(address);
+        if let Some(index) = Self::internal_index(address) {
+            return Some(self.internal[index]);
+        }
+        let external_addr = self.mirror_internal_ram_address(address);
+        let idx = (external_addr as usize) & (EXTERNAL_SPACE - 1);
+        self.external.get(idx).copied()
+    }
+
+    pub fn load_silent(&self, address: u32, bits: u8) -> Option<u32> {
+        let bytes = bits.div_ceil(8).max(1);
+        let mut value = 0u32;
+        for offset in 0..bytes {
+            value |= u32::from(self.read_byte_silent(address.wrapping_add(u32::from(offset)))?)
+                << (8 * offset);
+        }
+        if bits >= 32 {
+            Some(value)
+        } else {
+            Some(value & ((1u32 << bits) - 1))
+        }
+    }
+
     pub fn load(&self, address: u32, bits: u8) -> Option<u32> {
         self.load_with_pc(address, bits, None)
     }
@@ -511,9 +613,10 @@ impl MemoryImage {
             let logical_addr = address + offset as u32;
             let phys_addr = external_addr.wrapping_add(offset as u32);
             self.record_write_capture(logical_addr, byte);
-            let slot = &mut self.external[(phys_addr as usize) & (EXTERNAL_SPACE - 1)];
-            if *slot != byte {
-                *slot = byte;
+            let index = (phys_addr as usize) & (EXTERNAL_SPACE - 1);
+            if self.external[index] != byte {
+                self.capture_external_previous(index);
+                self.external[index] = byte;
                 self.dirty.push((logical_addr, byte));
             }
         }
@@ -522,6 +625,11 @@ impl MemoryImage {
 
     pub fn drain_dirty(&mut self) -> Vec<(u32, u8)> {
         std::mem::take(&mut self.dirty)
+    }
+
+    pub fn prepend_dirty(&mut self, mut entries: Vec<(u32, u8)>) {
+        entries.append(&mut self.dirty);
+        self.dirty = entries;
     }
 
     /// Apply a host-driven write (e.g., overlay/bridge) and optionally tag it with a manual-clock cycle for Perfetto.
@@ -568,6 +676,7 @@ impl MemoryImage {
         if let Some(index) = Self::internal_index(address) {
             let offset = address - INTERNAL_MEMORY_START;
             let prev = self.internal[index];
+            self.capture_internal_previous(index);
             self.internal[index] = value;
             self.dirty_internal.push((address, value));
             self.invoke_imr_isr_hook(offset, prev, value);
@@ -579,13 +688,12 @@ impl MemoryImage {
         }
         let physical = self.mirror_internal_ram_address(address);
         let addr = (physical as usize) & (EXTERNAL_SPACE - 1);
-        if let Some(slot) = self.external.get_mut(addr) {
-            if *slot != value {
-                *slot = value;
-                self.dirty.push((address, value));
-            }
-            record_perfetto("external");
+        if self.external[addr] != value {
+            self.capture_external_previous(addr);
+            self.external[addr] = value;
+            self.dirty.push((address, value));
         }
+        record_perfetto("external");
     }
 
     fn load_overlay_value(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
@@ -704,6 +812,28 @@ impl MemoryImage {
         self.apply_host_write_with_cycle(address, value, None, None);
     }
 
+    /// Update the local mirror after a byte write has already succeeded on the
+    /// host. Unlike `store`, this must not enqueue the same write for a second
+    /// host callback. Any older queued value for this address is superseded by
+    /// the committed host value; unrelated dirty entries remain queued.
+    pub fn sync_committed_host_write(&mut self, address: u32, value: u8) {
+        let address = canonical_address(address);
+        if let Some(index) = Self::internal_index(address) {
+            self.capture_internal_previous(index);
+            self.internal[index] = value;
+            self.dirty_internal
+                .retain(|(dirty_addr, _)| canonical_address(*dirty_addr) != address);
+            return;
+        }
+
+        let physical = self.mirror_internal_ram_address(address);
+        let index = (physical as usize) & (EXTERNAL_SPACE - 1);
+        self.capture_external_previous(index);
+        self.external[index] = value;
+        self.dirty
+            .retain(|(dirty_addr, _)| canonical_address(*dirty_addr) != address);
+    }
+
     pub fn write_external_byte(&mut self, address: u32, value: u8) {
         self.memory_writes
             .set(self.memory_writes.get().saturating_add(1));
@@ -712,6 +842,7 @@ impl MemoryImage {
         self.record_write_capture(address, value);
         let idx = (physical as usize) & (EXTERNAL_SPACE - 1);
         if self.external[idx] != value {
+            self.capture_external_previous(idx);
             self.external[idx] = value;
             self.dirty.push((address, value));
         }
@@ -723,6 +854,14 @@ impl MemoryImage {
         }
         let end = (start + data.len()).min(self.external.len());
         if end > start {
+            if self.rollback_capture.is_some() {
+                for (index, &value) in data[..(end - start)].iter().enumerate() {
+                    let external_index = start + index;
+                    if self.external[external_index] != value {
+                        self.capture_external_previous(external_index);
+                    }
+                }
+            }
             self.external[start..end].copy_from_slice(&data[..(end - start)]);
         }
     }
@@ -788,6 +927,7 @@ impl MemoryImage {
             self.memory_writes
                 .set(self.memory_writes.get().saturating_add(1));
             let prev = self.internal[index];
+            self.capture_internal_previous(index);
             self.internal[index] = value;
             self.record_write_capture(INTERNAL_MEMORY_START + offset, value);
             self.dirty_internal
@@ -912,23 +1052,29 @@ impl MemoryImage {
             return None;
         }
         let imem_offset = address - INTERNAL_MEMORY_START;
-        let prev = self.internal[index];
         for byte_offset in 0..bytes {
             let byte = ((value >> (byte_offset * 8)) & 0xFF) as u8;
             self.record_write_capture(address + byte_offset as u32, byte);
-            let slot = &mut self.internal[index + byte_offset];
-            if *slot != byte {
-                *slot = byte;
+            let internal_index = index + byte_offset;
+            let prev = self.internal[internal_index];
+            if self.internal[internal_index] != byte {
+                self.capture_internal_previous(internal_index);
+                self.internal[internal_index] = byte;
                 self.dirty_internal
                     .push((address + byte_offset as u32, byte));
             }
+            self.invoke_imr_isr_hook(imem_offset + byte_offset as u32, prev, byte);
         }
-        self.invoke_imr_isr_hook(imem_offset, prev, value as u8);
         Some(())
     }
 
     pub fn drain_dirty_internal(&mut self) -> Vec<(u32, u8)> {
         std::mem::take(&mut self.dirty_internal)
+    }
+
+    pub fn prepend_dirty_internal(&mut self, mut entries: Vec<(u32, u8)>) {
+        entries.append(&mut self.dirty_internal);
+        self.dirty_internal = entries;
     }
 
     pub fn clear_dirty(&mut self) {
@@ -1065,7 +1211,7 @@ mod tests {
     #[test]
     fn external_reset_vector_is_not_aliased() {
         let mut mem = MemoryImage::new();
-        // Populate the ROM reset vector region (0x0FFFFA-0x0FFFFC) in external space.
+        // Populate the interrupt-vector region (0x0FFFFA-0x0FFFFC) in external space.
         mem.write_external_byte(0x0FFFFA, 0x11);
         mem.write_external_byte(0x0FFFFB, 0x22);
         mem.write_external_byte(0x0FFFFC, 0x33);
@@ -1162,7 +1308,15 @@ mod tests {
         let mut state = LlamaState::new();
         state.set_pc(0x0123);
         struct NullBus;
-        impl LlamaBus for NullBus {}
+        impl LlamaBus for NullBus {
+            fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
+                0
+            }
+            fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {}
+            fn peek_byte_silent(&mut self, _addr: u32) -> Option<u8> {
+                Some(0)
+            }
+        }
         let mut bus = NullBus;
         let _ = exec.execute(0x00, &mut state, &mut bus);
 
@@ -1192,7 +1346,12 @@ mod tests {
         // Establish a last-PC hint by executing a simple instruction.
         crate::llama::eval::reset_perf_counters();
         struct NullBus;
-        impl crate::llama::eval::LlamaBus for NullBus {}
+        impl crate::llama::eval::LlamaBus for NullBus {
+            fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
+                0
+            }
+            fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {}
+        }
         let mut exec = crate::llama::eval::LlamaExecutor::new();
         let mut state = crate::llama::state::LlamaState::new();
         state.set_pc(0x123);
@@ -1342,5 +1501,92 @@ mod tests {
         mem.set_memory_card_slot_present(true);
         mem.store_with_pc(0x040000, 8, 0x9F, None);
         assert_eq!(mem.external_slice()[0x040000], 0x9F);
+    }
+
+    #[test]
+    fn failed_flush_entries_can_be_requeued_ahead_of_new_dirt() {
+        let mut mem = MemoryImage::new();
+        mem.prepend_dirty_internal(vec![(INTERNAL_MEMORY_START + 1, 0x11)]);
+        mem.write_internal_byte(2, 0x22);
+        assert_eq!(
+            mem.drain_dirty_internal(),
+            vec![
+                (INTERNAL_MEMORY_START + 1, 0x11),
+                (INTERNAL_MEMORY_START + 2, 0x22),
+            ]
+        );
+
+        mem.prepend_dirty(vec![(0x10, 0x33)]);
+        mem.write_external_byte(0x20, 0x44);
+        assert_eq!(mem.drain_dirty(), vec![(0x10, 0x33), (0x20, 0x44)]);
+    }
+
+    #[test]
+    fn committed_host_write_updates_mirror_without_requeueing_it() {
+        let mut mem = MemoryImage::new();
+        let internal = INTERNAL_MEMORY_START + 0x20;
+        let unrelated = INTERNAL_MEMORY_START + 0x21;
+        let _ = mem.store(internal, 8, 0x11);
+        let _ = mem.store(unrelated, 8, 0x22);
+
+        mem.sync_committed_host_write(internal, 0x33);
+
+        assert_eq!(mem.load(internal, 8), Some(0x33));
+        assert_eq!(mem.drain_dirty_internal(), vec![(unrelated, 0x22)]);
+    }
+
+    #[test]
+    fn wide_internal_store_invokes_irq_hooks_for_each_covered_register() {
+        let mut mem = MemoryImage::new();
+        let transitions = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&transitions);
+        mem.set_imr_isr_hook(Some(move |offset, previous, new| {
+            captured.borrow_mut().push((offset, previous, new));
+        }));
+
+        // TXD, IMR, and ISR are adjacent. A 24-bit store beginning at TXD
+        // must still notify the IMR and ISR hooks for the second and third
+        // bytes, in architectural byte order.
+        mem.store(INTERNAL_MEMORY_START + IMEM_TXD_OFFSET, 24, 0x33_22_11)
+            .expect("wide internal store");
+
+        assert_eq!(
+            transitions.borrow().as_slice(),
+            &[(IMEM_IMR_OFFSET, 0x00, 0x22), (IMEM_ISR_OFFSET, 0x00, 0x33),]
+        );
+        assert_eq!(mem.read_internal_byte_silent(IMEM_TXD_OFFSET), Some(0x11));
+        assert_eq!(mem.read_internal_byte_silent(IMEM_IMR_OFFSET), Some(0x22));
+        assert_eq!(mem.read_internal_byte_silent(IMEM_ISR_OFFSET), Some(0x33));
+    }
+
+    #[test]
+    fn rollback_capture_restores_sparse_bytes_and_dirty_queues() {
+        let mut mem = MemoryImage::new();
+        let internal = INTERNAL_MEMORY_START + 0x20;
+        let preexisting_internal = INTERNAL_MEMORY_START + 0x21;
+
+        mem.sync_committed_host_write(0x10, 0x11);
+        mem.sync_committed_host_write(internal, 0x22);
+        mem.write_external_byte(0x30, 0x33);
+        mem.write_internal_byte(0x21, 0x44);
+
+        mem.begin_rollback_capture();
+        mem.write_external_byte(0x10, 0xAA);
+        mem.write_internal_byte(0x20, 0xBB);
+        // A committed host write can remove an older queued entry; rollback
+        // must restore that queue as well as the bytes themselves.
+        mem.sync_committed_host_write(0x30, 0xCC);
+        mem.sync_committed_host_write(preexisting_internal, 0xDD);
+        mem.rollback_capture();
+
+        assert_eq!(mem.load(0x10, 8), Some(0x11));
+        assert_eq!(mem.load(internal, 8), Some(0x22));
+        assert_eq!(mem.load(0x30, 8), Some(0x33));
+        assert_eq!(mem.load(preexisting_internal, 8), Some(0x44));
+        assert_eq!(mem.drain_dirty(), vec![(0x30, 0x33)]);
+        assert_eq!(
+            mem.drain_dirty_internal(),
+            vec![(preexisting_internal, 0x44)]
+        );
     }
 }

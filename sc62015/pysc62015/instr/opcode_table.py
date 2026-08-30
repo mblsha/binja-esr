@@ -100,10 +100,7 @@ OPCODES = {
             ops=[
                 RegIMemOffset(
                     order=RegIMemOffsetOrder.DEST_IMEM,
-                    allowed_modes=[
-                        EMemRegMode.POSITIVE_OFFSET,
-                        EMemRegMode.NEGATIVE_OFFSET,
-                    ],
+                    allowed_modes=list(EMEM_REG_OFFSET_MODES),
                 )
             ]
         ),
@@ -121,10 +118,7 @@ OPCODES = {
             ops=[
                 RegIMemOffset(
                     order=RegIMemOffsetOrder.DEST_REG_OFFSET,
-                    allowed_modes=[
-                        EMemRegMode.POSITIVE_OFFSET,
-                        EMemRegMode.NEGATIVE_OFFSET,
-                    ],
+                    allowed_modes=list(EMEM_REG_OFFSET_MODES),
                 )
             ]
         ),
@@ -262,7 +256,7 @@ OPCODES = {
     0xD9: (MV, Opts(name="MVW", ops=[EMemAddr(width=2), IMem16()])),
     0xDA: (MV, Opts(name="MVP", ops=[EMemAddr(width=3), IMem20()])),
     0xDB: (MVL, Opts(ops=[EMemAddr(width=1), IMem8()])),
-    0xDC: (MV, Opts(name="MVP", ops=[IMem20(), Imm20()])),
+    0xDC: (MV, Opts(name="MVP", ops=[IMem20(), Imm24()])),
     0xDD: (EX, Opts(ops=[Reg("A"), RegB()])),
     0xDE: HALT,
     0xDF: OFF,
@@ -276,16 +270,14 @@ OPCODES = {
         MV,
         Opts(name="MVP", ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_IMEM)]),
     ),
-    # FIXME: verify width
+    # SC62015 TRM byte-string move: only post-increment and pre-decrement are legal.
     0xE3: (
         MVL,
         Opts(
             ops_reversed=True,
             ops=[
                 IMem8(),
-                EMemReg(
-                    width=1, allowed_modes=[EMemRegMode.POST_INC, EMemRegMode.PRE_DEC]
-                ),
+                EMemReg(width=1, allowed_modes=list(EMEM_REG_BLOCK_MODES)),
             ],
         ),
     ),
@@ -302,8 +294,16 @@ OPCODES = {
         MV,
         Opts(name="MVP", ops=[RegIMemOffset(order=RegIMemOffsetOrder.DEST_REG_OFFSET)]),
     ),
-    # FIXME: verify width
-    0xEB: (MVL, Opts(ops=[EMemReg(width=1), IMem8()])),
+    # SC62015 TRM byte-string move: only post-increment and pre-decrement are legal.
+    0xEB: (
+        MVL,
+        Opts(
+            ops=[
+                EMemReg(width=1, allowed_modes=list(EMEM_REG_BLOCK_MODES)),
+                IMem8(),
+            ]
+        ),
+    ),
     0xEC: (DSLL, Opts(ops=[IMem8()])),
     0xED: (EX, Opts(ops=[RegPair(size=2)])),
     0xEE: (SWAP, Opts(ops=[Reg("A")])),

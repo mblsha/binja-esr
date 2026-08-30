@@ -147,8 +147,8 @@ class PythonContractBackend:
             chip.reset()
         try:
             self._keyboard.release_all_keys()
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError("failed to reset contract keyboard state") from exc
         self._irq_pending = False
         self._irq_source = None
 
@@ -339,12 +339,18 @@ class RustContractBackend:
         if rustcore is None or not hasattr(rustcore, "LlamaContractBus"):
             raise RuntimeError("LlamaContractBus is unavailable (build rustcore first)")
         self._impl = rustcore.LlamaContractBus()  # type: ignore[attr-defined]
-        if host_memory is not None and hasattr(self._impl, "set_host_memory"):
+        if host_memory is not None:
+            set_host_memory = getattr(self._impl, "set_host_memory", None)
+            if set_host_memory is None:
+                raise RuntimeError(
+                    "LlamaContractBus does not support the requested host-memory bridge"
+                )
             try:
-                self._impl.set_host_memory(host_memory)
-            except Exception:
-                # Best-effort: if host memory fails, continue with local-only model.
-                pass
+                set_host_memory(host_memory)
+            except Exception as exc:
+                raise RuntimeError(
+                    "failed to attach the requested host-memory bridge"
+                ) from exc
 
     def load_memory(
         self, *, external: Optional[bytes] = None, internal: Optional[bytes] = None

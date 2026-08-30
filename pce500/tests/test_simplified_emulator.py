@@ -3,12 +3,62 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from pce500.emulator import PCE500Emulator
+from pce500.memory import PCE500Memory
 from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.instr.opcodes import INTERNAL_MEMORY_START
+
+
+def test_explicit_backend_failure_is_not_silently_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "llama")
+
+    def unavailable_cpu(*_args, **_kwargs):
+        raise RuntimeError("LLAMA unavailable")
+
+    monkeypatch.setattr("pce500.emulator.CPU", unavailable_cpu)
+
+    with pytest.raises(RuntimeError, match="LLAMA unavailable"):
+        PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+def test_step_fetches_opcode_once_without_observer_lookahead(
+    backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tracing/WAIT inspection must use the side-effect-free peek path."""
+
+    pc = 0x1000
+    normal_reads: list[int] = []
+    original_read = PCE500Memory.read_byte
+
+    def counted_read(
+        memory: PCE500Memory, address: int, cpu_pc: int | None = None
+    ) -> int:
+        if (address & 0xFFFFF) == pc:
+            normal_reads.append(address & 0xFFFFF)
+        return original_read(memory, address, cpu_pc)
+
+    monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
+    monkeypatch.setattr(PCE500Memory, "read_byte", counted_read)
+    emu = PCE500Emulator(
+        perfetto_trace=False,
+        enable_new_tracing=False,
+        save_lcd_on_exit=False,
+    )
+    emu._timer_enabled = False
+    emu.memory.write_byte(pc, 0x00)  # NOP
+    emu.cpu.regs.set(RegisterName.PC, pc)
+    normal_reads.clear()
+
+    assert emu.step() is True
+    assert normal_reads == [pc]
 
 
 class TestSimplifiedEmulator:
@@ -35,6 +85,34 @@ class TestSimplifiedEmulator:
         assert emu.memory.read_byte(0xC0001) == 0x01
         assert emu.memory.read_byte(0xC0002) == 0x02
         assert emu.memory.read_byte(0xC0003) == 0x03
+
+    def test_base_128k_rom_is_aligned_to_e0000(self):
+        """A base-model ROM must end at the architectural reset vector."""
+        emu = PCE500Emulator()
+        rom_data = bytearray(128 * 1024)
+        rom_data[0] = 0xA5
+        rom_data[-3:] = bytes([0x34, 0x12, 0x0E])
+
+        emu.load_rom(bytes(rom_data))
+        emu.reset()
+
+        assert emu.memory.read_byte(0xC0000) == 0x00
+        assert emu.memory.read_byte(0xE0000) == 0xA5
+        assert emu.cpu.regs.get(RegisterName.PC) == 0xE1234
+
+    def test_full_capture_selects_extended_rom_window(self):
+        """A full-memory capture contributes its C0000-FFFFF ROM slice."""
+        emu = PCE500Emulator()
+        system_image = bytearray(1024 * 1024)
+        system_image[0] = 0x11
+        system_image[0xC0000] = 0xA5
+        system_image[0xFFFFD:0x100000] = bytes([0x78, 0x56, 0x0F])
+
+        emu.load_rom(bytes(system_image))
+        emu.reset()
+
+        assert emu.memory.read_byte(0xC0000) == 0xA5
+        assert emu.cpu.regs.get(RegisterName.PC) == 0xF5678
 
     def test_memory_card_loading(self):
         """Test memory card loading."""

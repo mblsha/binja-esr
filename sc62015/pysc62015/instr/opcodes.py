@@ -18,7 +18,7 @@ from binja_test_mocks.coding import (
 )
 
 from binja_test_mocks.mock_llil import MockLLIL
-from ..constants import INTERNAL_MEMORY_START
+from ..constants import INTERNAL_MEMORY_START, PC_MASK
 from .traits import HasWidth
 
 import copy
@@ -166,22 +166,25 @@ def _build_pre_tables() -> Tuple[
 PRE_TABLE, REVERSE_PRE_TABLE = _build_pre_tables()
 
 
-# Lookup table for instructions that operate on a single internal memory operand
-# requiring a PRE prefix. `(n)` addressing does not require a prefix, so it is
-# omitted. These values mirror the hardware table documented in the PC‑E500
-# manual: for modes that only exist in the second slot (e.g., PY+n), we reuse
-# the corresponding prefix even though there is no “first slot” form.
+# Canonical PRE bytes for instructions with one internal-memory selector. Such
+# instructions consume PRE1; PRE2 remains at its default BP+n setting. Modes
+# that exist only in PRE2 (PY+n and BP+PY) therefore cannot be represented by a
+# single-selector instruction.
 SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
-    AddressingMode.BP_N: opcode_for_modes(AddressingMode.BP_N, AddressingMode.N)
-    or 0x22,
-    AddressingMode.PX_N: opcode_for_modes(AddressingMode.PX_N, AddressingMode.N)
-    or 0x36,
-    AddressingMode.PY_N: opcode_for_modes(AddressingMode.N, AddressingMode.PY_N)
-    or 0x33,
-    AddressingMode.BP_PX: opcode_for_modes(AddressingMode.BP_PX, AddressingMode.N)
-    or 0x26,
-    AddressingMode.BP_PY: opcode_for_modes(AddressingMode.N, AddressingMode.BP_PY)
-    or 0x31,
+    AddressingMode.N: opcode_for_modes(AddressingMode.N, AddressingMode.BP_N) or 0x30,
+    AddressingMode.PX_N: opcode_for_modes(AddressingMode.PX_N, AddressingMode.BP_N)
+    or 0x34,
+    AddressingMode.BP_PX: opcode_for_modes(AddressingMode.BP_PX, AddressingMode.BP_N)
+    or 0x24,
+}
+
+
+# The stock PC-E500 ROM deliberately enters a coherent function through this
+# otherwise PRE-insensitive byte pair.  Keep the boundary-backed exception
+# narrow; direct encoders must reject arbitrary PRE bytes on instructions that
+# do not consume either PRE latch.
+ROM_PROVEN_IGNORED_PRE_PAIRS = {
+    (0x23, 0x48),  # F0002: PRE23; SUB A,3F
 }
 
 
@@ -200,10 +203,14 @@ def get_addressing_mode(pre_value: Optional[int], operand_index: int) -> Address
         )
 
 
+WAITIntrinsic = IntrinsicName("WAIT")
 TCLIntrinsic = IntrinsicName("TCL")
 HALTIntrinsic = IntrinsicName("HALT")
 OFFIntrinsic = IntrinsicName("OFF")
 RESETIntrinsic = IntrinsicName("RESET")
+ValidateFIntrinsic = IntrinsicName("VALIDATE_F")
+ValidateICountIntrinsic = IntrinsicName("VALIDATE_I_COUNT")
+ValidateExpHighNibbleIntrinsic = IntrinsicName("VALIDATE_EXP_HIGH_NIBBLE")
 
 # Use distinct temporary registers for various operations in order to avoid
 # overlap in case of multiple operations being performed in the same instruction.
@@ -221,6 +228,8 @@ TempBcdHighNibbleProcessing = LLIL_TEMP(10)
 TempOverallZeroAcc = LLIL_TEMP(11)
 TempLoopByteResult = LLIL_TEMP(12)
 TempBcdDigitCarry = LLIL_TEMP(13)
+TempWideMemoryValue = LLIL_TEMP(14)
+TempWideMemoryAddress = LLIL_TEMP(15)
 
 # Single addressable operand opcodes - these should only use PRE1
 SINGLE_ADDRESSABLE_OPCODES = set(
@@ -780,6 +789,17 @@ def fusion(
     except StopIteration:
         return
     while True:
+        # Only PRE can fuse with the following instruction. Looking ahead for
+        # every ordinary opcode performs an architecturally spurious fetch of
+        # the next instruction and can consume a callback-backed bus value.
+        if instr1.opcode not in PRE_BY_OPCODE:
+            yield instr1, addr1
+            try:
+                instr1, addr1 = next(instr_iter)
+            except (StopIteration, NotImplementedError):
+                break
+            continue
+
         try:
             instr2, addr2 = next(instr_iter)
         except (StopIteration, NotImplementedError):
@@ -854,10 +874,7 @@ class Instruction:
         self.opcode = decoder.unsigned_byte()
         for op in self.operands_coding():
             # Some operands (e.g. RegPair) require instruction context while decoding.
-            try:
-                setattr(op, "_parent_instruction", self)
-            except Exception:
-                pass
+            setattr(op, "_parent_instruction", self)
             op.decode(decoder, addr)
             # Set width for operands that support it based on instruction name
             set_width_fn = getattr(op, "set_width_from_instruction", None)
@@ -869,11 +886,116 @@ class Instruction:
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.opcode is not None, "Opcode not set"
+        self._validate_pre_for_encode()
+        start_pos = len(encoder.buf)
         if self._pre is not None:
             encoder.unsigned_byte(self._pre)
         encoder.unsigned_byte(self.opcode)
         for op in self.operands_coding():
+            # Keep encode-time validation under the same instruction context as
+            # decode-time validation.  Composite encodings such as RegPair need
+            # the opcode to distinguish legal selector classes; without this,
+            # the assembler could emit bytes that this decoder immediately
+            # rejects (for example ``ADD BA, X`` -> ``44 24``).
+            setattr(op, "_parent_instruction", self)
             op.encode(encoder, addr)
+        encoded_length = len(encoder.buf) - start_pos
+        decoded_length = getattr(self, "_length", None)
+        if decoded_length is not None and encoded_length != decoded_length:
+            raise InvalidInstruction(
+                f"Encoded {self.name()} consumes {encoded_length} bytes, "
+                f"but its decoded length is {decoded_length}"
+            )
+
+    @staticmethod
+    def _declared_pre_mode(operand: Operand) -> Optional[AddressingMode]:
+        if isinstance(operand, IMemOperand):
+            return operand.mode
+        if isinstance(operand, IMem8):
+            mode = getattr(operand, "_asm_addressing_mode", None)
+            return mode if isinstance(mode, AddressingMode) else None
+        if isinstance(operand, EMemValueOffsetHelper):
+            return Instruction._declared_pre_mode(operand.value)
+        return None
+
+    @staticmethod
+    def _ignored_selector(operand: Operand) -> Optional[int]:
+        if isinstance(operand, IMemOperand):
+            # Logical BP+PX/BP+PY syntax has no selector expression; its
+            # encoder deliberately materializes the required canonical zero.
+            return 0 if operand.n_val is None else operand.n_val
+        if isinstance(operand, IMem8):
+            return operand.value
+        if isinstance(operand, EMemValueOffsetHelper):
+            return Instruction._ignored_selector(operand.value)
+        return None
+
+    def _validate_pre_for_encode(self) -> None:
+        """Require the one canonical PRE byte for the encoded semantics.
+
+        PRE fusion applies this rule while decoding.  Enforce the same contract
+        for callers that construct or mutate :class:`Instruction` objects
+        directly, otherwise encode() can manufacture bytes that decode() rejects.
+        """
+
+        if self._pre is not None and self._pre not in PRE_BY_OPCODE:
+            raise InvalidInstruction(
+                f"Unknown PRE value {self._pre!r} for {self.name()}"
+            )
+
+        operands = tuple(self.operands())
+        pre_operand_indexes = [
+            index
+            for index, operand in enumerate(operands)
+            if self._operand_uses_pre_mode(operand)
+        ]
+        if not pre_operand_indexes:
+            if self._pre is None:
+                return
+            if (self._pre, self.opcode) in ROM_PROVEN_IGNORED_PRE_PAIRS:
+                return
+            raise InvalidInstruction(
+                f"PRE{self._pre:02X} cannot prefix PRE-insensitive {self.name()}"
+            )
+
+        dst_mode, src_mode = self._addressing_modes()
+        modes = (dst_mode, src_mode)
+
+        for operand_index in pre_operand_indexes:
+            effective_mode = modes[0 if operand_index == 0 else 1]
+            declared_mode = self._declared_pre_mode(operands[operand_index])
+            if declared_mode is not None and declared_mode != effective_mode:
+                raise InvalidInstruction(
+                    f"{self.name()} operand {operand_index + 1} declares "
+                    f"{declared_mode.value}, but its PRE encoding selects "
+                    f"{effective_mode.value}"
+                )
+
+        if len(pre_operand_indexes) == 1:
+            operand_index = pre_operand_indexes[0]
+            effective_mode = modes[0 if operand_index == 0 else 1]
+            canonical_pre = SINGLE_OPERAND_PRE_LOOKUP.get(effective_mode)
+        else:
+            canonical_pre = REVERSE_PRE_TABLE.get((dst_mode, src_mode))
+
+        if canonical_pre != self._pre:
+            actual = "no prefix" if self._pre is None else f"PRE{self._pre:02X}"
+            expected = (
+                "no prefix" if canonical_pre is None else f"PRE{canonical_pre:02X}"
+            )
+            raise InvalidInstruction(
+                f"Noncanonical {actual} for {self.name()}; use {expected}"
+            )
+
+        for operand_index in pre_operand_indexes:
+            effective_mode = modes[0 if operand_index == 0 else 1]
+            if effective_mode not in (AddressingMode.BP_PX, AddressingMode.BP_PY):
+                continue
+            selector = self._ignored_selector(operands[operand_index])
+            if selector != 0:
+                raise InvalidInstruction(
+                    f"Nonzero ignored selector {selector!r} for {effective_mode.value}"
+                )
 
     def fuse(self, sister: "Instruction") -> Optional["Instruction"]:
         return None
@@ -1033,15 +1155,26 @@ class IMemOperand(Operand, HasWidth):
         return self.helper.render(pre=self.mode)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
-        # The 'n' value is encoded only if the mode requires it.
+        # The instruction format always carries the operand byte. BP+PX and
+        # BP+PY ignore it during address calculation, so emit a canonical zero.
         if self.mode in [
             AddressingMode.N,
             AddressingMode.BP_N,
             AddressingMode.PX_N,
             AddressingMode.PY_N,
         ]:
-            assert isinstance(self.n_val, int)
+            if not isinstance(self.n_val, int) or not 0 <= self.n_val <= 0xFF:
+                raise InvalidInstruction(
+                    f"Internal-memory selector out of range at {addr:04X}: "
+                    f"{self.n_val!r}"
+                )
             encoder.unsigned_byte(self.n_val)
+        else:
+            if self.n_val not in (None, 0):
+                raise InvalidInstruction(
+                    f"Nonzero ignored selector {self.n_val!r} for {self.mode.value}"
+                )
+            encoder.unsigned_byte(0)
 
     def lift(
         self,
@@ -1090,6 +1223,10 @@ class Imm8(ImmOperand):
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.value is not None, "Value not set"
+        if not 0 <= self.value <= 0xFF:
+            raise ValueError(
+                f"8-bit immediate out of range: {self.value:#x}; expected 0..0xff"
+            )
         encoder.unsigned_byte(self.value)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -1110,6 +1247,10 @@ class Imm16(ImmOperand):
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.value is not None, "Value not set"
+        if not 0 <= self.value <= 0xFFFF:
+            raise ValueError(
+                f"16-bit immediate out of range: {self.value:#x}; expected 0..0xffff"
+            )
         encoder.unsigned_word_le(self.value)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -1131,19 +1272,71 @@ class Imm20(ImmOperand):
     def decode(self, decoder: Decoder, addr: int) -> None:
         lo = decoder.unsigned_byte()
         mid = decoder.unsigned_byte()
-        self.extra_hi = decoder.unsigned_byte()
-        hi = self.extra_hi & 0x0F
-        self.value = lo | (mid << 8) | (hi << 16)
+        raw_hi = decoder.unsigned_byte()
+        if raw_hi & 0xF0:
+            raise InvalidInstruction(
+                f"20-bit immediate has reserved upper bits at {addr:04X}: "
+                f"0x{raw_hi:02X}"
+            )
+        self.extra_hi = raw_hi
+        self.value = lo | (mid << 8) | (raw_hi << 16)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.value is not None, "Value not set"
         assert self.extra_hi is not None, "Extra high byte not set"
+        if not 0 <= self.value <= PC_MASK:
+            raise ValueError(
+                f"20-bit immediate out of range: {self.value:#x}; "
+                f"expected 0..{PC_MASK:#x}"
+            )
+        if not 0 <= self.extra_hi <= 0x0F:
+            raise ValueError(
+                f"20-bit immediate high byte out of range: {self.extra_hi:#x}; "
+                "expected 0..0x0f"
+            )
+        expected_hi = (self.value >> 16) & 0x0F
+        if self.extra_hi != expected_hi:
+            raise InvalidInstruction(
+                f"20-bit immediate value {self.value:#x} disagrees with encoded "
+                f"high byte {self.extra_hi:#x}"
+            )
         encoder.unsigned_byte(self.value & 0xFF)
         encoder.unsigned_byte((self.value >> 8) & 0xFF)
         encoder.unsigned_byte(self.extra_hi)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
         return [TInt(f"{self.value:05X}")]
+
+
+# Raw three-byte immediate encoded as `n m l`.  Unlike Imm20, every bit is
+# data: opcode DC uses this operand to seed an internal-memory triple, and real
+# ROM/hardware examples rely on the upper nibble of `l` being preserved.
+class Imm24(ImmOperand):
+    def __init__(self) -> None:
+        super().__init__()
+        self.value = None
+
+    def width(self) -> int:
+        return 3
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        lo = decoder.unsigned_byte()
+        mid = decoder.unsigned_byte()
+        hi = decoder.unsigned_byte()
+        self.value = lo | (mid << 8) | (hi << 16)
+
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.value is not None, "Value not set"
+        if not 0 <= self.value <= 0xFFFFFF:
+            raise ValueError(
+                f"24-bit immediate out of range: {self.value:#x}; expected 0..0xffffff"
+            )
+        encoder.unsigned_byte(self.value & 0xFF)
+        encoder.unsigned_byte((self.value >> 8) & 0xFF)
+        encoder.unsigned_byte((self.value >> 16) & 0xFF)
+
+    def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
+        return [TInt(f"{self.value:06X}")]
 
 
 # Offset sign is encoded as part of the instruction opcode, and the actual
@@ -1185,6 +1378,7 @@ class OffsetOperandMixin:
     offset: Optional[ImmOffset] = None
 
     def _decode_offset(self, decoder: Decoder, addr: int) -> None:
+        self.offset = None
         mode = getattr(self, "mode", None)
         if mode is None:
             return
@@ -1196,9 +1390,189 @@ class OffsetOperandMixin:
             self.offset = ImmOffset(sign_lit)
             self.offset.decode(decoder, addr)
 
+    def _validate_offset_shape(self, addr: int) -> None:
+        mode = getattr(self, "mode", None)
+        if mode is None:
+            raise InvalidInstruction(f"Offset addressing mode is not set at {addr:04X}")
+        mode_enum = type(mode)
+        positive = getattr(mode_enum, "POSITIVE_OFFSET", None)
+        negative = getattr(mode_enum, "NEGATIVE_OFFSET", None)
+        expected_sign: Optional[Literal["+", "-"]] = None
+        if mode == positive:
+            expected_sign = "+"
+        elif mode == negative:
+            expected_sign = "-"
+
+        if expected_sign is None:
+            if self.offset is not None:
+                raise InvalidInstruction(
+                    f"External-memory mode {mode.name} must not encode an offset "
+                    f"at {addr:04X}"
+                )
+            return
+        if self.offset is None:
+            raise InvalidInstruction(
+                f"External-memory mode {mode.name} requires one offset byte "
+                f"at {addr:04X}"
+            )
+        if self.offset.sign != expected_sign:
+            raise InvalidInstruction(
+                f"External-memory mode {mode.name} requires a {expected_sign} offset, "
+                f"got {self.offset.sign} at {addr:04X}"
+            )
+
     def _encode_offset(self, encoder: Encoder, addr: int) -> None:
-        if self.offset:
-            self.offset.encode(encoder, addr)
+        self._validate_offset_shape(addr)
+        if self.offset is None:
+            return
+        self.offset.encode(encoder, addr)
+
+
+def _wrapped_memory_addr(
+    il: LowLevelILFunction,
+    base_addr: ExpressionIndex,
+    byte_offset: int,
+    *,
+    address_mask: int,
+    region_base: int = 0,
+) -> ExpressionIndex:
+    """Return one byte address wrapped inside an architectural memory region."""
+    relative = base_addr
+    if region_base:
+        relative = il.sub(3, relative, il.const(3, region_base))
+    relative = il.add(3, relative, il.const(3, byte_offset))
+    relative = il.and_expr(3, relative, il.const(3, address_mask))
+    if region_base:
+        relative = il.add(3, il.const(3, region_base), relative)
+    return relative
+
+
+def _zero_extend_byte(
+    il: LowLevelILFunction, width: int, value: ExpressionIndex
+) -> ExpressionIndex:
+    if width == 1:
+        return value
+    # Binary Ninja exposes ZERO_EXT, while the lightweight test LLIL currently
+    # does not.  Its width-selected AND has the same integer semantics here.
+    zero_extend = getattr(il, "zero_extend", None)
+    if callable(zero_extend):
+        return zero_extend(width, value)
+    return il.and_expr(width, value, il.const(width, 0xFF))
+
+
+def _resize_unsigned(
+    il: LowLevelILFunction,
+    value: ExpressionIndex,
+    source_width: int,
+    target_width: int,
+) -> ExpressionIndex:
+    """Resize an unsigned LLIL value without relying on implicit coercion.
+
+    Real Binary Ninja rejects arithmetic, register writes, and control-flow
+    expressions whose child widths do not match the parent operation.  The
+    lightweight evaluator is intentionally more permissive and does not expose
+    either constructor, so it retains the value expression while focused
+    width-strict tests provide those constructors and assert the real shape.
+    """
+
+    if source_width == target_width:
+        return value
+    if source_width < target_width:
+        zero_extend = getattr(il, "zero_extend", None)
+        if callable(zero_extend):
+            return zero_extend(target_width, value)
+        return value
+
+    low_part = getattr(il, "low_part", None)
+    if callable(low_part):
+        return low_part(target_width, value)
+    return value
+
+
+def _low_byte(
+    il: LowLevelILFunction, width: int, value: ExpressionIndex
+) -> ExpressionIndex:
+    if width == 1:
+        return value
+    # See _zero_extend_byte: LOW_PART is available in Binary Ninja but not in
+    # the mock LLIL used by the executor tests.
+    low_part = getattr(il, "low_part", None)
+    if callable(low_part):
+        return low_part(1, value)
+    return il.and_expr(1, value, il.const(1, 0xFF))
+
+
+def _lift_wrapped_memory_load(
+    il: LowLevelILFunction,
+    width: int,
+    base_addr: ExpressionIndex,
+    *,
+    address_mask: int,
+    region_base: int = 0,
+) -> ExpressionIndex:
+    """Load a little-endian value with per-byte address-bus wrapping."""
+    if width == 1:
+        return il.load(1, base_addr)
+
+    result = il.const(width, 0)
+    for byte_offset in range(width):
+        byte = il.load(
+            1,
+            _wrapped_memory_addr(
+                il,
+                base_addr,
+                byte_offset,
+                address_mask=address_mask,
+                region_base=region_base,
+            ),
+        )
+        part = _zero_extend_byte(il, width, byte)
+        if byte_offset:
+            part = il.shift_left(width, part, il.const(1, byte_offset * 8))
+        result = il.or_expr(width, result, part)
+    return result
+
+
+def _lift_wrapped_memory_store(
+    il: LowLevelILFunction,
+    width: int,
+    base_addr: ExpressionIndex,
+    value: ExpressionIndex,
+    *,
+    address_mask: int,
+    region_base: int = 0,
+) -> None:
+    """Store a little-endian value with per-byte address-bus wrapping."""
+    if width == 1:
+        il.append(il.store(1, base_addr, value))
+        return
+
+    # Snapshot both expressions before the first byte store.  A memory-backed
+    # source must not be re-evaluated after an overlapping destination changes
+    # it, and an IMEM destination can overwrite BP/PX/PY while those registers
+    # still participate in its effective-address expression.
+    address_snapshot = TempReg(TempWideMemoryAddress, width=3)
+    address_snapshot.lift_assign(il, base_addr)
+    value_snapshot = TempReg(TempWideMemoryValue, width=width)
+    value_snapshot.lift_assign(il, value)
+    for byte_offset in range(width):
+        part = value_snapshot.lift(il)
+        if byte_offset:
+            part = il.logical_shift_right(width, part, il.const(1, byte_offset * 8))
+        byte = _low_byte(il, width, part)
+        il.append(
+            il.store(
+                1,
+                _wrapped_memory_addr(
+                    il,
+                    address_snapshot.lift(il),
+                    byte_offset,
+                    address_mask=address_mask,
+                    region_base=region_base,
+                ),
+                byte,
+            )
+        )
 
 
 # Internal Memory Addressing Modes:
@@ -1318,7 +1692,14 @@ class IMemHelper(Operand):
         if isinstance(self.value, Reg):
             if pre == AddressingMode.N:
                 return il.add(
-                    3, self.value.lift(il), il.const(3, INTERNAL_MEMORY_START)
+                    3,
+                    _resize_unsigned(
+                        il,
+                        self.value.lift(il),
+                        self.value.width(),
+                        3,
+                    ),
+                    il.const(3, INTERNAL_MEMORY_START),
                 )
 
         if isinstance(self.value, ImmOperand) and pre == AddressingMode.N:
@@ -1326,7 +1707,12 @@ class IMemHelper(Operand):
             raw_addr = INTERNAL_MEMORY_START + self.value.value
             return il.const_pointer(3, raw_addr)
 
-        offset = self._imem_offset(il, pre)
+        # BP/PX/PY arithmetic wraps in the byte-wide IMEM offset space.  Lift
+        # that byte explicitly into the three-byte address space before adding
+        # the synthetic internal-memory base; mixed ADD.l(ADD.b, CONST.l) is
+        # rejected by real Binary Ninja even though the test evaluator accepts
+        # it.
+        offset = _resize_unsigned(il, self._imem_offset(il, pre), 1, 3)
         return il.add(3, offset, il.const(3, INTERNAL_MEMORY_START))
 
     def lift(
@@ -1335,7 +1721,13 @@ class IMemHelper(Operand):
         pre: Optional[AddressingMode] = None,
         side_effects: bool = True,
     ) -> ExpressionIndex:
-        return il.load(self.width(), self.imem_addr(il, pre))
+        return _lift_wrapped_memory_load(
+            il,
+            self.width(),
+            self.imem_addr(il, pre),
+            address_mask=0xFF,
+            region_base=INTERNAL_MEMORY_START,
+        )
 
     def lift_assign(
         self,
@@ -1346,7 +1738,14 @@ class IMemHelper(Operand):
         assert isinstance(value, (MockLLIL, int)), (
             f"Expected MockLLIL or int, got {type(value)}"
         )
-        il.append(il.store(self.width(), self.imem_addr(il, pre), value))
+        _lift_wrapped_memory_store(
+            il,
+            self.width(),
+            self.imem_addr(il, pre),
+            value,
+            address_mask=0xFF,
+            region_base=INTERNAL_MEMORY_START,
+        )
 
 
 class EMemHelper(Operand):
@@ -1370,7 +1769,15 @@ class EMemHelper(Operand):
             raw_addr = self.value.value
             return il.const_pointer(3, raw_addr)
 
-        return self.value.lift(il)
+        value = self.value.lift(il)
+        width_fn = getattr(self.value, "width", None)
+        if callable(width_fn):
+            value = _resize_unsigned(il, value, width_fn(), 3)
+        # X/Y/U/S are stored in three bytes but every external-memory consumer
+        # observes the documented 20-bit bus, matching the runtime register
+        # facade even if upstream dataflow has not yet proved the high nibble
+        # clear.
+        return il.and_expr(3, value, il.const(3, PC_MASK))
 
     def lift(
         self,
@@ -1378,9 +1785,11 @@ class EMemHelper(Operand):
         pre: Optional[AddressingMode] = None,
         side_effects: bool = True,
     ) -> ExpressionIndex:
-        return il.load(
+        return _lift_wrapped_memory_load(
+            il,
             self.width(),
             self.emem_addr(il),
+            address_mask=PC_MASK,
         )
 
     def lift_assign(
@@ -1392,7 +1801,13 @@ class EMemHelper(Operand):
         assert isinstance(value, (MockLLIL, int)), (
             f"Expected MockLLIL or int, got {type(value)}"
         )
-        il.append(il.store(self.width(), self.emem_addr(il), value))
+        _lift_wrapped_memory_store(
+            il,
+            self.width(),
+            self.emem_addr(il),
+            value,
+            address_mask=PC_MASK,
+        )
 
 
 class Pointer:
@@ -1461,7 +1876,9 @@ class IMem16(IMem8):
         return 2
 
 
-# Read 20 bits from internal memory based on Imm8 address.
+# Read the complete three-byte value from internal memory.  The historical
+# IMem20 name describes its common pointer use, not its transfer width: address
+# consumers mask to 20 bits, while EXP/MVP/CMPP operate on all 24 data bits.
 class IMem20(IMem8):
     def width(self) -> int:
         return 3
@@ -1538,9 +1955,7 @@ class RegIL(Reg):
     ) -> None:
         # When assigning to IL, clear the entire I register first, then set the low byte
         # This matches the hardware behavior where MV IL, XX clears IH
-        il.append(
-            il.set_reg(2, RegisterName("I"), il.and_expr(2, value, il.const(2, 0xFF)))
-        )
+        il.append(il.set_reg(2, RegisterName("I"), _resize_unsigned(il, value, 1, 2)))
 
 
 class RegIMR(Reg):
@@ -1613,8 +2028,25 @@ class RegF(Reg):
     ) -> None:
         tmp = TempReg(TempRegF, width=self.width())
         tmp.lift_assign(il, value)
-        il.append(il.set_flag(CFlag, il.and_expr(1, tmp.lift(il), il.const(1, 1))))
-        il.append(il.set_flag(ZFlag, il.and_expr(1, tmp.lift(il), il.const(1, 2))))
+        # Validate the raw byte before changing either modeled flag so a
+        # dubious stack frame cannot become a plausible-looking C/Z result.
+        il.append(il.intrinsic([], ValidateFIntrinsic, [tmp.lift(il)]))
+        self.lift_assign_validated(il, tmp.lift(il))
+
+    def lift_assign_validated(
+        self,
+        il: LowLevelILFunction,
+        value: ExpressionIndex,
+    ) -> None:
+        """Assign a byte already checked by ``VALIDATE_F``.
+
+        Stack pops need validation to occur before the stack pointer advances.
+        Keeping the flag writes separate avoids either validating twice or
+        moving the pointer update ahead of validation.
+        """
+
+        il.append(il.set_flag(CFlag, il.and_expr(1, value, il.const(1, 1))))
+        il.append(il.set_flag(ZFlag, il.and_expr(1, value, il.const(1, 2))))
 
 
 class Reg3(RegLiftMixin, Operand, HasWidth):
@@ -1645,6 +2077,30 @@ class Reg3(RegLiftMixin, Operand, HasWidth):
         except AssertionError as e:
             raise InvalidInstruction("Invalid register for r3 instruction") from e
 
+    @staticmethod
+    def _validate_selector(byte: int, parent_opcode: Optional[int], addr: int) -> None:
+        """Validate opcode-specific register classes on decode and encode."""
+
+        if parent_opcode == 0x11 and byte not in range(0x04, 0x08):
+            raise InvalidInstruction(
+                f"JP register selector must be X, Y, U, or S at {addr:04X}, "
+                f"got {byte:02X}"
+            )
+        if parent_opcode in (0x6C, 0x7C) and byte not in range(0x00, 0x08):
+            raise InvalidInstruction(
+                f"INC/DEC register selector has reserved upper bits at {addr:04X}, "
+                f"got {byte:02X}"
+            )
+        if parent_opcode == 0xD6 and byte not in (0x02, 0x03):
+            raise InvalidInstruction(
+                f"CMPW register selector must be BA or I at {addr:04X}, got {byte:02X}"
+            )
+        if parent_opcode == 0xD7 and byte not in range(0x04, 0x08):
+            raise InvalidInstruction(
+                f"CMPP register selector must be X, Y, U, or S at {addr:04X}, "
+                f"got {byte:02X}"
+            )
+
     def decode(self, decoder: Decoder, addr: int) -> None:
         byte = decoder.unsigned_byte()
         self.reg_raw = byte
@@ -1652,10 +2108,38 @@ class Reg3(RegLiftMixin, Operand, HasWidth):
         # store high 4 bits from byte for later reference
         self.high4 = (byte >> 4) & 0x0F
 
+        parent = getattr(self, "_parent_instruction", None)
+        parent_opcode = getattr(parent, "opcode", None)
+        self._validate_selector(byte, parent_opcode, addr)
+
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.reg_raw is not None, "Register raw value not set"
         assert self.high4 is not None, "High 4 bits not set"
-        byte = self.reg_raw | (self.high4 << 4)
+        if not 0 <= self.reg_raw <= 0xFF or not 0 <= self.high4 <= 0x0F:
+            raise InvalidInstruction(
+                f"Register selector fields out of range at {addr:04X}: "
+                f"raw={self.reg_raw!r}, high4={self.high4!r}"
+            )
+        raw_high4 = (self.reg_raw >> 4) & 0x0F
+        if raw_high4 not in (0, self.high4):
+            raise InvalidInstruction(
+                f"Register selector raw high nibble {raw_high4:X} disagrees with "
+                f"mode nibble {self.high4:X} at {addr:04X}"
+            )
+        if self.reg is None:
+            raise InvalidInstruction(
+                f"Register selector has no semantic register at {addr:04X}"
+            )
+        expected_selector = self.reg_idx(self.reg)
+        raw_selector = self.reg_raw & 0x0F
+        if raw_selector != expected_selector:
+            raise InvalidInstruction(
+                f"Register selector encodes {self.reg_name(self.reg_raw & 0x07)} "
+                f"but operand names {self.reg} at {addr:04X}"
+            )
+        byte = raw_selector | (self.high4 << 4)
+        parent = getattr(self, "_parent_instruction", None)
+        self._validate_selector(byte, getattr(parent, "opcode", None), addr)
         encoder.unsigned_byte(byte)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -1704,7 +2188,12 @@ class EMemAddr(Imm20, Pointer):
         side_effects: bool = True,
     ) -> ExpressionIndex:
         assert self.value is not None, "Value not set"
-        return il.load(self.width(), il.const_pointer(3, self.value))
+        return _lift_wrapped_memory_load(
+            il,
+            self.width(),
+            il.const_pointer(3, self.value),
+            address_mask=PC_MASK,
+        )
 
     def lift_assign(
         self,
@@ -1716,7 +2205,13 @@ class EMemAddr(Imm20, Pointer):
         assert isinstance(value, (MockLLIL, int)), (
             f"Expected MockLLIL or int, got {type(value)}"
         )
-        il.append(il.store(self.width(), il.const_pointer(3, self.value), value))
+        _lift_wrapped_memory_store(
+            il,
+            self.width(),
+            il.const_pointer(3, self.value),
+            value,
+            address_mask=PC_MASK,
+        )
 
 
 class EMemValueOffsetHelper(OperandHelper, Pointer):
@@ -1744,14 +2239,23 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
             # that contains a 20-bit external memory address. We need to read 3 bytes from there.
             # First get the internal memory address
             imem_addr = self.value._helper().imem_addr(il, pre)
-            # Now load 3 bytes (20-bit address) from that location
-            addr = il.load(3, imem_addr)
+            # Now load the three-byte pointer, wrapping FF -> 00 inside IMEM.
+            addr = _lift_wrapped_memory_load(
+                il,
+                3,
+                imem_addr,
+                address_mask=0xFF,
+                region_base=INTERNAL_MEMORY_START,
+            )
         else:
             addr = self.value.lift(il, pre=pre, side_effects=side_effects)
 
         if self.offset:
             addr = self.offset.lift_offset(il, addr)
-        return addr
+        # External addresses are carried in three-byte LLIL values but the
+        # SC62015 address bus is 20 bits.  Canonicalize both an indirect
+        # pointer's ignored upper nibble and +/- offset wraparound.
+        return il.and_expr(3, addr, il.const(3, PC_MASK))
 
     def memory_helper(self) -> Type[EMemHelper]:
         return EMemHelper
@@ -1773,8 +2277,11 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         side_effects: bool = True,
     ) -> ExpressionIndex:
         # width is determined by the context in which this helper is used
-        return il.load(
-            self.width(), self.lift_current_addr(il, pre=pre, side_effects=side_effects)
+        return _lift_wrapped_memory_load(
+            il,
+            self.width(),
+            self.lift_current_addr(il, pre=pre, side_effects=side_effects),
+            address_mask=PC_MASK,
         )
 
     def lift_assign(
@@ -1784,7 +2291,13 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
         pre: Optional[AddressingMode] = None,
     ) -> None:
         addr = self.lift_current_addr(il, pre=pre, side_effects=True)
-        il.append(il.store(self.width(), addr, value))
+        _lift_wrapped_memory_store(
+            il,
+            self.width(),
+            addr,
+            value,
+            address_mask=PC_MASK,
+        )
 
 
 # page 74 of the book
@@ -1802,12 +2315,71 @@ class EMemRegMode(enum.Enum):
     NEGATIVE_OFFSET = 0xC
 
 
+EMEM_REG_OFFSET_MODES = (
+    EMemRegMode.POSITIVE_OFFSET,
+    EMemRegMode.NEGATIVE_OFFSET,
+)
+EMEM_REG_BLOCK_MODES = (
+    EMemRegMode.POST_INC,
+    EMemRegMode.PRE_DEC,
+)
+
+
 def get_emem_reg_mode(val: Optional[int], addr: int) -> EMemRegMode:
     try:
         return EMemRegMode(val)
     except Exception:
         raise InvalidInstruction(
             f"Invalid EMemRegMode {val:02X} at address {addr:#06x}"
+        )
+
+
+def _validate_emem_reg_mode(
+    *,
+    reg: Reg3,
+    mode: Optional[EMemRegMode],
+    allowed_modes: Optional[Iterable[EMemRegMode]],
+    parent_opcode: Optional[int],
+    addr: int,
+) -> None:
+    """Keep external-register mode metadata, encoded bits, and opcode policy aligned."""
+
+    if mode is None:
+        raise InvalidInstruction(f"External-memory mode is not set at {addr:04X}")
+    assert reg.reg_raw is not None, "Register raw value not set"
+    assert reg.high4 is not None, "Register high nibble not set"
+
+    # Reg3 preserves the original raw byte for byte-exact ROM round trips, while
+    # assemblers normally keep only the low selector bits in ``reg_raw``.  Check
+    # the byte that encode() will actually emit, not either field in isolation.
+    encoded_byte = reg.reg_raw | (reg.high4 << 4)
+    encoded_mode = get_emem_reg_mode((encoded_byte >> 4) & 0x0F, addr)
+    if encoded_mode != mode:
+        raise InvalidInstruction(
+            f"External-memory mode metadata {mode.name} does not match encoded "
+            f"mode {encoded_mode.name} at {addr:04X}"
+        )
+
+    opcode_modes = {
+        0x56: EMEM_REG_OFFSET_MODES,
+        0x5E: EMEM_REG_OFFSET_MODES,
+        0xE3: EMEM_REG_BLOCK_MODES,
+        0xEB: EMEM_REG_BLOCK_MODES,
+    }.get(parent_opcode)
+    declared_modes = tuple(allowed_modes) if allowed_modes is not None else None
+    if opcode_modes is None:
+        effective_modes = declared_modes
+    elif declared_modes is None:
+        # Direct Instruction construction must not bypass opcode restrictions
+        # merely by omitting the table operand's allowed_modes metadata.
+        effective_modes = opcode_modes
+    else:
+        effective_modes = tuple(mode for mode in opcode_modes if mode in declared_modes)
+
+    if effective_modes is not None and mode not in effective_modes:
+        raise InvalidInstruction(
+            f"Invalid external-memory mode {mode.name} at {addr:04X}; "
+            f"allowed modes: {', '.join(item.name for item in effective_modes)}"
         )
 
 
@@ -1848,7 +2420,15 @@ class RegIncrementDecrementHelper(OperandHelper):
             tmp.lift_assign(il, value)
             self.reg.lift_assign(
                 il,
-                il.add(self.reg.width(), value, il.const(self.reg.width(), self.width)),
+                il.and_expr(
+                    self.reg.width(),
+                    il.add(
+                        self.reg.width(),
+                        value,
+                        il.const(self.reg.width(), self.width),
+                    ),
+                    il.const(self.reg.width(), PC_MASK),
+                ),
             )
             value = tmp.lift(il)
 
@@ -1860,8 +2440,10 @@ class RegIncrementDecrementHelper(OperandHelper):
             # 4. Return the temp register
 
             # Calculate the decremented value
-            new_value = il.sub(
-                self.reg.width(), value, il.const(self.reg.width(), self.width)
+            new_value = il.and_expr(
+                self.reg.width(),
+                il.sub(self.reg.width(), value, il.const(self.reg.width(), self.width)),
+                il.const(self.reg.width(), PC_MASK),
             )
 
             # Store the decremented value in a temp register
@@ -1876,8 +2458,10 @@ class RegIncrementDecrementHelper(OperandHelper):
             value = tmp.lift(il)
         elif self.mode == EMemRegMode.PRE_DEC:
             # No side effects - just return the decremented value expression
-            value = il.sub(
-                self.reg.width(), value, il.const(self.reg.width(), self.width)
+            value = il.and_expr(
+                self.reg.width(),
+                il.sub(self.reg.width(), value, il.const(self.reg.width(), self.width)),
+                il.const(self.reg.width(), PC_MASK),
             )
 
         return value
@@ -1972,6 +2556,10 @@ class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         else:
             imem_operand = self.imem
 
+        asm_mode = getattr(self.imem, "_asm_addressing_mode", None)
+        if asm_mode is not None:
+            setattr(imem_operand, "_asm_addressing_mode", asm_mode)
+
         op = EMemRegOffsetHelper(self.width, self.reg, self.mode, self.offset)
         if self.order == RegIMemOffsetOrder.DEST_REG_OFFSET:
             yield op
@@ -2000,13 +2588,33 @@ class RegIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         self.imem.decode(decoder, addr)
 
         self.mode = get_emem_reg_mode(self.reg.high4, addr)
-        if self.allowed_modes is not None:
-            assert self.mode in self.allowed_modes
+        parent = getattr(self, "_parent_instruction", None)
+        _validate_emem_reg_mode(
+            reg=self.reg,
+            mode=self.mode,
+            allowed_modes=self.allowed_modes,
+            parent_opcode=getattr(parent, "opcode", None),
+            addr=addr,
+        )
         self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
-        super().encode(encoder, addr)
         assert self.reg is not None, "Register not set"
+        self.reg.assert_r3()
+        parent = getattr(self, "_parent_instruction", None)
+        _validate_emem_reg_mode(
+            reg=self.reg,
+            mode=self.mode,
+            allowed_modes=self.allowed_modes,
+            parent_opcode=getattr(parent, "opcode", None),
+            addr=addr,
+        )
+        self._validate_offset_shape(addr)
+        setattr(
+            self.reg,
+            "_parent_instruction",
+            parent,
+        )
         self.reg.encode(encoder, addr)
         assert self.imem is not None, "IMem not set"
         self.imem.encode(encoder, addr)
@@ -2036,14 +2644,33 @@ class EMemReg(OffsetOperandMixin, HasOperands, Operand):
         self.reg.decode(decoder, addr)
         self.reg.assert_r3()
         self.mode = get_emem_reg_mode(self.reg.high4, addr)
-        if self.allowed_modes is not None:
-            assert self.mode in self.allowed_modes, (
-                f"Invalid mode: {self.mode}, allowed: {self.allowed_modes}"
-            )
+        parent = getattr(self, "_parent_instruction", None)
+        _validate_emem_reg_mode(
+            reg=self.reg,
+            mode=self.mode,
+            allowed_modes=self.allowed_modes,
+            parent_opcode=getattr(parent, "opcode", None),
+            addr=addr,
+        )
         self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         # super().encode(encoder, addr)
+        self.reg.assert_r3()
+        parent = getattr(self, "_parent_instruction", None)
+        _validate_emem_reg_mode(
+            reg=self.reg,
+            mode=self.mode,
+            allowed_modes=self.allowed_modes,
+            parent_opcode=getattr(parent, "opcode", None),
+            addr=addr,
+        )
+        self._validate_offset_shape(addr)
+        setattr(
+            self.reg,
+            "_parent_instruction",
+            parent,
+        )
         self.reg.encode(encoder, addr)
         self._encode_offset(encoder, addr)
 
@@ -2095,6 +2722,16 @@ class EMemIMem(OffsetOperandMixin, HasOperands, Imm8):
         self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
+        if self.mode is None:
+            raise InvalidInstruction(f"External-memory mode is not set at {addr:04X}")
+        if self.value != self.mode.value:
+            raise InvalidInstruction(
+                f"External-memory mode metadata {self.mode.name} does not match "
+                f"encoded mode byte {self.value!r} at {addr:04X}"
+            )
+        # Validate arity before writing the mode or selector bytes, so malformed
+        # direct operands cannot leave a plausibly truncated instruction behind.
+        self._validate_offset_shape(addr)
         super().encode(encoder, addr)
         self.imem.encode(encoder, addr)
 
@@ -2171,6 +2808,14 @@ class EMemIMemOffset(OffsetOperandMixin, HasOperands, Operand):
             imem1_operand = self.imem1
             imem2_operand = self.imem2
 
+        for source, expanded in (
+            (self.imem1, imem1_operand),
+            (self.imem2, imem2_operand),
+        ):
+            asm_mode = getattr(source, "_asm_addressing_mode", None)
+            if asm_mode is not None:
+                setattr(expanded, "_asm_addressing_mode", asm_mode)
+
         if self.order == EMemIMemOffsetOrder.DEST_INT_MEM:
             yield imem1_operand
             op = EMemValueOffsetHelper(imem2_operand, self.offset, width=self.width)
@@ -2204,7 +2849,14 @@ class EMemIMemOffset(OffsetOperandMixin, HasOperands, Operand):
         self._decode_offset(decoder, addr)
 
     def encode(self, encoder: Encoder, addr: int) -> None:
-        super().encode(encoder, addr)
+        if self.mode is None:
+            raise InvalidInstruction(f"External-memory mode is not set at {addr:04X}")
+        if self.mode_imm.value != self.mode.value:
+            raise InvalidInstruction(
+                f"External-memory mode metadata {self.mode.name} does not match "
+                f"encoded mode byte {self.mode_imm.value!r} at {addr:04X}"
+            )
+        self._validate_offset_shape(addr)
         self.mode_imm.encode(encoder, addr)
         self.imem1.encode(encoder, addr)
         self.imem2.encode(encoder, addr)
@@ -2290,23 +2942,80 @@ class RegPair(HasOperands, Reg3):
             return self.reg1.width() * 8
         return 8
 
-    def decode(self, decoder: Decoder, addr: int) -> None:
-        self.reg_raw = decoder.unsigned_byte()
-        parent = getattr(self, "_parent_instruction", None)
-        use_r2 = self._uses_r2_mapping(parent)
-        self.reg1 = Reg(self._regpair_name((self.reg_raw >> 4) & 7, use_r2))
-        self.reg2 = Reg(self._regpair_name(self.reg_raw & 7, use_r2))
+    @staticmethod
+    def _validate_selector(raw: int, parent_opcode: Optional[int], addr: int) -> None:
+        """Validate one physical register-pair selector.
 
-        try:
-            # high-bits of both halves must be zero: 0x80 and 0x08 must not be set
-            assert (self.reg_raw & 0x80) == 0, (
-                f"Invalid reg1 high bit: {self.reg_raw:02X}"
+        This is deliberately shared by decode and encode so the assembler
+        cannot manufacture an instruction that the architecture refuses to
+        decode.  Arithmetic opcodes use different destination/source register
+        classes; mixed-width forms remain legal where the ISA and stock ROM use
+        them (for example ``ADD Y, BA`` at PC-E500 ROM F2B62).
+        """
+
+        if raw & 0x80:
+            raise InvalidInstruction(
+                f"Invalid reg1 high bit in register pair {raw:02X} at {addr:04X}"
             )
-            assert (self.reg_raw & 0x08) == 0, (
-                f"Invalid reg2 high bit: {self.reg_raw:02X}"
+        if raw & 0x08:
+            raise InvalidInstruction(
+                f"Invalid reg2 high bit in register pair {raw:02X} at {addr:04X}"
             )
-        except AssertionError as e:
-            raise InvalidInstruction(f"Invalid reg pair at {addr:04X}") from e
+
+        reg1_code = (raw >> 4) & 7
+        reg2_code = raw & 7
+        arithmetic_classes = {
+            0x44: (range(2, 4), range(0, 4)),  # ADD r2,r1 or r2,r2
+            0x45: (range(4, 8), range(0, 8)),  # ADD r3,r
+            0x46: (range(0, 2), range(0, 2)),  # ADD r1,r1
+            0x4C: (range(2, 4), range(0, 4)),  # SUB r2,r1 or r2,r2
+            0x4D: (range(4, 8), range(0, 8)),  # SUB r3,r
+            0x4E: (range(0, 2), range(0, 2)),  # SUB r1,r1
+        }
+        allowed = arithmetic_classes.get(parent_opcode)
+        if allowed is None:
+            return
+        allowed_dest, allowed_src = allowed
+        if reg1_code not in allowed_dest or reg2_code not in allowed_src:
+            raise InvalidInstruction(
+                f"Invalid arithmetic register pair {raw:02X} "
+                f"for opcode {parent_opcode:02X} at {addr:04X}"
+            )
+
+    def _validate_encode_semantics(
+        self, parent_opcode: Optional[int], addr: int
+    ) -> None:
+        """Reject source operands that collapse through the ED/FD r2 aliases.
+
+        Decoder aliases remain byte-preserving: a decoded alias already carries
+        the architectural BA/I names even when its raw selector nibble is 0/1.
+        Fresh assembly using A/IL, however, must not silently change meaning.
+        """
+
+        if parent_opcode not in (0xED, 0xFD):
+            return
+        invalid = {RegisterName("A"), RegisterName("IL")}
+        semantic_regs = {
+            getattr(self.reg1, "reg", None),
+            getattr(self.reg2, "reg", None),
+        }
+        if semantic_regs & invalid:
+            raise InvalidInstruction(
+                f"{parent_opcode:02X} register pairs require BA, I, X, Y, U, or S; "
+                f"A/IL would change meaning at {addr:04X}"
+            )
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        reg_raw = decoder.unsigned_byte()
+        self.reg_raw = reg_raw
+        parent = getattr(self, "_parent_instruction", None)
+        parent_opcode = getattr(parent, "opcode", None)
+        self._validate_selector(reg_raw, parent_opcode, addr)
+        use_r2 = self._uses_r2_mapping(parent)
+        reg1_code = (reg_raw >> 4) & 7
+        reg2_code = reg_raw & 7
+        self.reg1 = Reg(self._regpair_name(reg1_code, use_r2))
+        self.reg2 = Reg(self._regpair_name(reg2_code, use_r2))
 
     def operands(self) -> Generator[Operand, None, None]:
         assert self.reg1 is not None, "Register 1 not set"
@@ -2316,6 +3025,21 @@ class RegPair(HasOperands, Reg3):
 
     def encode(self, encoder: Encoder, addr: int) -> None:
         assert self.reg_raw is not None, "Register raw value not set"
+        parent = getattr(self, "_parent_instruction", None)
+        parent_opcode = getattr(parent, "opcode", None)
+        self._validate_selector(self.reg_raw, parent_opcode, addr)
+        self._validate_encode_semantics(parent_opcode, addr)
+        if self.reg1 is None or self.reg2 is None:
+            raise InvalidInstruction(f"Register pair is incomplete at {addr:04X}")
+        use_r2 = self._uses_r2_mapping(parent)
+        encoded_reg1 = self._regpair_name((self.reg_raw >> 4) & 7, use_r2)
+        encoded_reg2 = self._regpair_name(self.reg_raw & 7, use_r2)
+        if self.reg1.reg != encoded_reg1 or self.reg2.reg != encoded_reg2:
+            raise InvalidInstruction(
+                f"Register pair selector {self.reg_raw:02X} encodes "
+                f"{encoded_reg1},{encoded_reg2} but operand names "
+                f"{self.reg1.reg},{self.reg2.reg} at {addr:04X}"
+            )
         encoder.unsigned_byte(self.reg_raw)
 
     def render(self, pre: Optional[AddressingMode] = None) -> List[Token]:
@@ -2348,7 +3072,7 @@ def lift_loop(il: LowLevelILFunction) -> Generator[None, None, None]:
     # loop iteration
     yield
 
-    loop_reg.lift_assign(il, il.sub(width, loop_reg.lift(il), il.const(1, 1)))
+    loop_reg.lift_assign(il, il.sub(width, loop_reg.lift(il), il.const(width, 1)))
     cond = il.compare_equal(width, loop_reg.lift(il), il.const(width, 0))
     il.append(il.if_expr(cond, if_true, if_false))
     il.mark_label(if_true)

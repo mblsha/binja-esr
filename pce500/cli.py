@@ -30,7 +30,7 @@ def _apply_llama_fast_defaults(ns: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="PC-E500 CLI (snapshot-friendly)")
     parser.add_argument(
-        "--rom", type=str, help="Optional ROM override (unused; kept for future)"
+        "--rom", type=str, help="Optional 128 KiB, 256 KiB, or full-memory ROM image"
     )
     parser.add_argument(
         "--steps", type=int, default=20000, help="Number of instructions to execute"
@@ -94,6 +94,7 @@ def main() -> None:
         save_snapshot=args.save_snapshot,
         save_lcd=not args.no_lcd,
         print_stats=True,
+        rom_path=args.rom,
     )
 
 

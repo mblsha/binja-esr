@@ -82,13 +82,22 @@ IQ-7000 app/editor work, the runner also accepts named event keys such as
 CAPS key once; the IQ-7000 ROM starts with CAPS enabled, so include it before
 lowercase/mixed-case text entry on a freshly booted image. `text:...` expands
 printable characters through the generated per-model input map; use `\\n` inside
-text to emit the MEMO newline key. IQ-7000 PNG/JSON captures also report the
-ROM's SHIFT/CAPS LCD annunciators.
+text to emit the MEMO newline key. IQ-7000 PNG/JSON captures draw only the
+confirmed SHIFT/CAPS LCD annunciators. JSON diagnostics preserve the two
+sources separately as `state_raw` (`0x1FDA3`) and `shadow_raw` (`0x006160`),
+name their OR explicitly as `raw_union`, and report unmapped bits numerically
+per source. In particular, raw bit `0x80` has no assigned icon or physical
+meaning.
 
 In the live terminal LCD (`sc62015-lcd --model iq-7000`), `F6` injects the
 IQ-7000 SHIFT event, `F7` injects CAPS, and `F8` injects the FUNCTION event;
 Caps Lock is also accepted when the terminal reports it. The status line shows
-`lcd=SHIFT:...,CAPS:...`.
+`lcd=SHIFT:...,CAPS:...`; unknown bits are appended numerically as
+`UNMAPPED_STATE:0xNN` and/or `UNMAPPED_SHADOW:0xNN` without drawing an icon.
+
+`CoreRuntime::set_external_interrupt_level` is currently a neutral API/test
+hook for level-sensitive EXI behavior. Neither command-line frontend exposes a
+host switch for that input yet.
 
 For repeatable captures, put the same settings in a scenario JSON file:
 

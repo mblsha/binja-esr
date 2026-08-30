@@ -12,7 +12,23 @@ tests.
 | Cross-backend parity | Shows that two implementations agree. Agreement alone does not prove either implementation matches hardware. | CPU backend and WAIT/Perfetto parity tests |
 | ROM-informed model | Pins a higher-level model whose addresses or data flow follow firmware, while timing or host-event policy remains emulated. | Keyboard handler/FIFO tests |
 | Emulator model contract | Protects intentionally synthetic scheduling, delivery, wake, peripheral, or host-bridge behaviour. | `test_interrupts.py`, `test_key_irq_latch.py`, and `test_peripherals.py` |
+| Implementation integrity | Proves that malformed input or a failed callback is rejected or contained visibly; it makes no silicon claim. | Snapshot candidate validation and atomic save, native-mirror rollback, poisoned-CPU recovery, and ON-key transaction tests |
 | Smoke/instrumentation | Establishes that a path runs or emits trace data, not that the represented device behaviour is correct. | IRQ and execution tracing tests |
+
+Assembler round trips and a full 256-opcode decode sweep are smoke/consistency
+checks.  They prove that tables agree and that canonical encodings are stable;
+they do not prove instruction semantics.  Cross-backend LLIL parity has the
+same limitation.  See `sc62015_asm_llil_audit.md` for the current fail-closed
+policy and the real-hardware trace queue.
+
+Snapshot round trips are implementation-integrity tests. They require an exact
+schema, reject duplicate or wrong-typed fields, validate every represented
+candidate before commit, preserve read-only ROM, and restore the represented
+scheduler/keyboard/LCD/runtime state. Core and standalone Rust reject active
+device or host state that v3 cannot encode. An unexpected late native bridge
+hook failure poisons execution instead of pretending that the partial commit
+was rolled back. These tests do not establish that saved timer cadence,
+interrupt policy, or peripheral state matches real hardware.
 
 ## Interrupt ground truth currently encoded
 

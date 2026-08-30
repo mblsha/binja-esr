@@ -352,6 +352,7 @@ def run_emulator(
     save_snapshots_prefix: str | Path = "snapshot",
     key_seq: str | None = None,
     key_seq_log: bool = False,
+    rom_path: str | Path | None = None,
 ):
     """Run PC-E500 emulator and return the instance.
 
@@ -364,6 +365,7 @@ def run_emulator(
         print_stats: Print statistics to stdout
         new_perfetto: Enable new Perfetto tracing system
         trace_file: Path for new trace file
+        rom_path: Optional 128 KiB, 256 KiB, or full-memory ROM image.
 
     Returns:
         PCE500Emulator: The emulator instance after running
@@ -429,13 +431,17 @@ def run_emulator(
             print(f"Internal memory dump will trigger at PC=0x{dump_pc:06X}")
 
     # Load ROM
-    rom_path = Path(__file__).parent.parent / "data" / "pc-e500-en.bin"
-    if rom_path.exists():
-        with open(rom_path, "rb") as f:
+    selected_rom_path = (
+        Path(rom_path)
+        if rom_path is not None
+        else Path(__file__).parent.parent / "data" / "pc-e500-en.bin"
+    )
+    if selected_rom_path.exists():
+        with open(selected_rom_path, "rb") as f:
             rom_data = f.read()
-            assert len(rom_data) >= 0x100000
-            rom_portion = rom_data[0xC0000:0x100000]
-            emu.load_rom(rom_portion)
+            emu.load_rom(rom_data)
+    elif rom_path is not None:
+        raise FileNotFoundError(selected_rom_path)
 
     # Reset and/or load snapshot then run
     emu.reset()
@@ -801,6 +807,7 @@ def main(
     save_snapshots_prefix: str | Path = "snapshot",
     key_seq: str | None = None,
     key_seq_log: bool = False,
+    rom_path: str | Path | None = None,
 ):
     """Example with Perfetto tracing enabled."""
     # Enable performance profiling if requested
@@ -855,6 +862,7 @@ def main(
         save_snapshots_prefix=save_snapshots_prefix,
         key_seq=key_seq,
         key_seq_log=key_seq_log,
+        rom_path=rom_path,
     ) as emu:
         if False:
             pass
@@ -888,6 +896,11 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="PC-E500 Emulator Example")
+    parser.add_argument(
+        "--rom",
+        type=str,
+        help="Optional 128 KiB, 256 KiB, or full-memory ROM image",
+    )
     parser.add_argument(
         "--dump-pc",
         type=lambda x: int(x, 0),
@@ -1068,4 +1081,5 @@ if __name__ == "__main__":
         save_snapshots_prefix=args.save_snapshots_prefix,
         key_seq=args.key_seq,
         key_seq_log=args.key_seq_log,
+        rom_path=args.rom,
     )

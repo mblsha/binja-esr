@@ -37,6 +37,21 @@ fn main() {
         ldlib
     );
 
+    // Homebrew's framework Python reports an LDLIBRARY path relative to the
+    // framework root rather than a libpython dylib inside LIBDIR.  Link the
+    // framework explicitly so `cargo test` binaries resolve the PyO3 symbols;
+    // extension-module builds still retain PyO3's dynamic-lookup arguments.
+    if cfg!(target_os = "macos") && ldlib.contains(".framework/") {
+        if let Some(python_binary) = lib_dir
+            .parent()
+            .map(|version_dir| version_dir.join("Python"))
+            .filter(|path| path.exists())
+        {
+            println!("cargo:rustc-link-arg={}", python_binary.display());
+            return;
+        }
+    }
+
     let mut link_name = ldlib.trim_start_matches("lib").to_string();
     // Prefer linking against the reported shared library; if it is missing (e.g., only .so.1.0
     // is available), create a local shim symlink to satisfy -lpythonX.Y.

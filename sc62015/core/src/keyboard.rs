@@ -141,7 +141,7 @@ const PCE500_KEY_FIFO_TAIL_OFFSET: u32 = 0x04;
 const PCE500_KEY_FIFO_HEAD_OFFSET: u32 = 0x05;
 const PCE500_KEY_FIFO_CAPACITY: u8 = 0x10;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct KeyboardMatrix {
     kol: u8,
     koh: u8,
@@ -178,6 +178,7 @@ pub struct KeyboardTelemetry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyboardSnapshot {
     pub kol: u8,
     pub koh: u8,
@@ -198,8 +199,12 @@ pub struct KeyboardSnapshot {
     pub repeat_interval: u8,
     pub columns_active_high: bool,
     pub scan_enabled: bool,
-    #[serde(default)]
     pub kil_read_count: u32,
+    pub keyi_on_any_press: bool,
+    pub raw_kil: bool,
+    pub emit_events: bool,
+    pub repeat_enabled: bool,
+    pub keyi_latch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -672,30 +677,64 @@ impl KeyboardMatrix {
             columns_active_high: self.columns_active_high,
             scan_enabled: self.scan_enabled,
             kil_read_count: self.kil_read_count,
+            keyi_on_any_press: self.keyi_on_any_press,
+            raw_kil: self.raw_kil,
+            emit_events: self.emit_events,
+            repeat_enabled: self.repeat_enabled,
+            keyi_latch: self.keyi_latch,
         }
     }
 
-    pub fn load_snapshot_state(&mut self, snapshot: &KeyboardSnapshot) {
+    pub fn load_snapshot_state(&mut self, snapshot: &KeyboardSnapshot) -> Result<(), String> {
+        if snapshot.fifo.len() != FIFO_SIZE
+            || snapshot.fifo_len > FIFO_SIZE
+            || snapshot.head >= FIFO_SIZE
+            || snapshot.tail >= FIFO_SIZE
+            || snapshot.tail != (snapshot.head + snapshot.fifo_len) % FIFO_SIZE
+            || snapshot.column_histogram.len() != COLUMN_COUNT
+            || snapshot.press_threshold == 0
+            || snapshot.release_threshold == 0
+        {
+            return Err("keyboard snapshot has an invalid FIFO, histogram, or threshold".into());
+        }
+        let expected_names: std::collections::HashSet<&str> =
+            KEY_NAMES.iter().flatten().copied().collect();
+        let pressed_names: std::collections::HashSet<&str> =
+            snapshot.pressed_keys.iter().map(String::as_str).collect();
+        if snapshot.key_states.len() != expected_names.len()
+            || pressed_names.len() != snapshot.pressed_keys.len()
+            || snapshot
+                .key_states
+                .keys()
+                .any(|name| !expected_names.contains(name.as_str()))
+            || snapshot.pressed_keys.iter().any(|name| {
+                !snapshot
+                    .key_states
+                    .get(name)
+                    .is_some_and(|state| state.pressed)
+            })
+            || snapshot
+                .key_states
+                .iter()
+                .any(|(name, state)| state.pressed != snapshot.pressed_keys.contains(name))
+        {
+            return Err("keyboard snapshot key map is inconsistent".into());
+        }
         self.kol = snapshot.kol;
         self.koh = snapshot.koh;
         self.kil_latch = snapshot.kil_latch;
         self.fifo_storage = [0; FIFO_SIZE];
-        for (idx, byte) in snapshot.fifo.iter().enumerate().take(FIFO_SIZE) {
+        for (idx, byte) in snapshot.fifo.iter().enumerate() {
             self.fifo_storage[idx] = *byte;
         }
-        self.fifo_head = snapshot.head.min(FIFO_SIZE.saturating_sub(1));
-        self.fifo_tail = snapshot.tail.min(FIFO_SIZE.saturating_sub(1));
-        self.fifo_count = snapshot.fifo_len.min(FIFO_SIZE);
+        self.fifo_head = snapshot.head;
+        self.fifo_tail = snapshot.tail;
+        self.fifo_count = snapshot.fifo_len;
         self.irq_count = snapshot.irq_count;
         self.strobe_count = snapshot.strobe_count;
         self.column_histogram = {
             let mut hist = [0u32; COLUMN_COUNT];
-            for (idx, val) in snapshot
-                .column_histogram
-                .iter()
-                .enumerate()
-                .take(COLUMN_COUNT)
-            {
+            for (idx, val) in snapshot.column_histogram.iter().enumerate() {
                 hist[idx] = *val;
             }
             hist
@@ -707,6 +746,10 @@ impl KeyboardMatrix {
         self.columns_active_high = snapshot.columns_active_high;
         self.scan_enabled = snapshot.scan_enabled;
         self.kil_read_count = snapshot.kil_read_count;
+        self.keyi_on_any_press = snapshot.keyi_on_any_press;
+        self.raw_kil = snapshot.raw_kil;
+        self.emit_events = snapshot.emit_events;
+        self.repeat_enabled = snapshot.repeat_enabled;
         // Reset per-key state and repopulate from snapshot where names match.
         for state in &mut self.states {
             state.pressed = false;
@@ -732,8 +775,8 @@ impl KeyboardMatrix {
                 }
             }
         }
-        self.keyi_latch = snapshot.fifo_len > 0;
-        self.kil_latch = self.compute_kil(false);
+        self.keyi_latch = snapshot.keyi_latch;
+        Ok(())
     }
 
     pub fn set_repeat_enabled(&mut self, enabled: bool) {

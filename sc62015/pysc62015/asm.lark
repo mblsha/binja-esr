@@ -259,7 +259,7 @@ _PX.2: "PX"i
 _PY.2: "PY"i
 
 // --- Common Terminals ---
-NUMBER: /0x[0-9a-fA-F]+/i | /[0-9]+/
+NUMBER: /-?0x[0-9a-fA-F]+/i | /-?[0-9]+/
 
 %import common.ESCAPED_STRING
 %import common.NEWLINE

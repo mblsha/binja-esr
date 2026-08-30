@@ -38,6 +38,11 @@ def _make_memory(
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
     return cast(MemoryWithRaw, memory)
 
 
@@ -48,7 +53,7 @@ def test_reti_restores_imr_exactly(backend: str) -> None:
 
     sp = 0x0100
     imr_saved = 0x00  # deliberately clear IRM bit to detect forced setting
-    f_saved = 0x7C
+    f_saved = 0x03
     ret_bytes = (0x12, 0x34, 0x05)  # little-endian PC
     memory = _make_memory(imr_saved, f_saved, ret_bytes, sp)
     cpu = CPU(memory, reset_on_init=False, backend=backend)
@@ -62,3 +67,142 @@ def test_reti_restores_imr_exactly(backend: str) -> None:
     assert memory._raw[imr_addr] == imr_saved
     assert cpu.regs.get(RegisterName.PC) == expected_pc
     assert cpu.regs.get(RegisterName.S) == (sp + 5)
+    assert cpu.regs.get(RegisterName.F) == f_saved
+    assert cpu.regs.get(RegisterName.FC) == (f_saved & 0x01)
+    assert cpu.regs.get(RegisterName.FZ) == ((f_saved >> 1) & 0x01)
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize("f_input", [0x00, 0x01, 0x02, 0x03])
+@pytest.mark.parametrize(
+    ("opcode", "stack_register"),
+    [
+        (0x2E, RegisterName.U),  # PUSHU F
+        (0x4F, RegisterName.S),  # PUSHS F
+    ],
+)
+def test_push_f_preserves_modeled_images(
+    backend: str, f_input: int, opcode: int, stack_register: RegisterName
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    memory = _make_memory(0, 0, (0, 0, 0), 0x100)
+    memory._raw[0] = opcode
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.F, f_input)
+    cpu.regs.set(stack_register, 0x100)
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.F) == f_input
+    assert cpu.regs.get(stack_register) == 0xFF
+    assert memory._raw[0xFF] == f_input
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize("f_input", [0x00, 0x01, 0x02, 0x03])
+@pytest.mark.parametrize(
+    ("opcode", "stack_register"),
+    [
+        (0x3E, RegisterName.U),  # POPU F
+        (0x5F, RegisterName.S),  # POPS F
+    ],
+)
+def test_pop_f_preserves_modeled_images(
+    backend: str, f_input: int, opcode: int, stack_register: RegisterName
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    memory = _make_memory(0, 0, (0, 0, 0), 0x100)
+    memory._raw[0] = opcode
+    memory._raw[0x100] = f_input
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(stack_register, 0x100)
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.F) == f_input
+    assert cpu.regs.get(RegisterName.FC) == (f_input & 0x01)
+    assert cpu.regs.get(RegisterName.FZ) == ((f_input >> 1) & 0x01)
+    assert cpu.regs.get(stack_register) == 0x101
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize("f_input", [0x00, 0x01, 0x02, 0x03])
+def test_ir_stacks_modeled_f_image(backend: str, f_input: int) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    memory = _make_memory(0, 0, (0, 0, 0), 0x100)
+    memory._raw[0] = 0xFE  # IR
+    memory._raw[0xFFFFA:0xFFFFD] = bytes.fromhex("452301")
+    imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+    memory._raw[imr_addr] = 0xA5
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.S, 0x105)
+    cpu.regs.set(RegisterName.F, f_input)
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.S) == 0x100
+    assert memory._raw[0x100:0x105] == bytes([0xA5, f_input, 0x00, 0x00, 0x00])
+    assert cpu.regs.get(RegisterName.PC) == 0x12345
+    assert memory._raw[imr_addr] == 0x25
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize("f_input", [0x04, 0x80, 0xA4, 0xFC, 0xFF])
+@pytest.mark.parametrize(
+    ("opcode", "stack_register"),
+    [
+        (0x3E, RegisterName.U),  # POPU F
+        (0x5F, RegisterName.S),  # POPS F
+    ],
+)
+def test_pop_f_rejects_unverified_image_before_advancing_stack(
+    backend: str, f_input: int, opcode: int, stack_register: RegisterName
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    memory = _make_memory(0, 0, (0, 0, 0), 0x100)
+    memory._raw[0] = opcode
+    memory._raw[0x100] = f_input
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(stack_register, 0x100)
+    cpu.regs.set(RegisterName.F, 0x01)
+
+    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(stack_register) == 0x100
+    assert cpu.regs.get(RegisterName.F) == 0x01
+    assert cpu.regs.get(RegisterName.PC) == 0
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize("f_input", [0x04, 0x80, 0xA4, 0xFC, 0xFF])
+def test_reti_rejects_unverified_f_before_any_architectural_write(
+    backend: str, f_input: int
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    sp = 0x100
+    memory = _make_memory(0xA5, f_input, (0x12, 0x34, 0x05), sp)
+    imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+    memory._raw[imr_addr] = 0x5A
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.PC, 0)
+    cpu.regs.set(RegisterName.S, sp)
+    cpu.regs.set(RegisterName.F, 0x02)
+
+    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert cpu.regs.get(RegisterName.S) == sp
+    assert cpu.regs.get(RegisterName.F) == 0x02
+    assert memory._raw[imr_addr] == 0x5A

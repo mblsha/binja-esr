@@ -173,6 +173,25 @@ impl TimerContext {
         elapsed
     }
 
+    /// Compare wrapping cycle counters using the conventional half-range
+    /// ordering. Timer periods are far below half the u64 range, so this keeps
+    /// a deadline that wrapped to zero in the future while the current cycle
+    /// is still near `u64::MAX`.
+    fn deadline_reached(cycle_count: u64, deadline: u64) -> bool {
+        cycle_count.wrapping_sub(deadline) < (1_u64 << 63)
+    }
+
+    /// Advance a due deadline to the first phase-aligned target after the
+    /// current cycle in constant time. The u128 intermediate preserves the
+    /// exact result before the u64 cycle clock wraps.
+    fn advance_deadline(deadline: u64, cycle_count: u64, period: u64) -> u64 {
+        debug_assert!(period > 0);
+        let elapsed = u128::from(cycle_count.wrapping_sub(deadline));
+        let period = u128::from(period);
+        let intervals = elapsed / period + 1;
+        (u128::from(deadline) + intervals * period) as u64
+    }
+
     pub fn reset(&mut self, current_cycle: u64) {
         self.irq_pending = false;
         self.irq_source = None;
@@ -245,11 +264,17 @@ impl TimerContext {
     pub fn snapshot_info(&self) -> (TimerInfo, InterruptInfo) {
         let timer = TimerInfo {
             enabled: self.enabled,
-            mti_period: self.mti_period.min(i32::MAX as u64) as i32,
-            sti_period: self.sti_period.min(i32::MAX as u64) as i32,
-            next_mti: self.next_mti.min(i32::MAX as u64) as i32,
-            next_sti: self.next_sti.min(i32::MAX as u64) as i32,
+            mti_period: self.mti_period,
+            sti_period: self.sti_period,
+            next_mti: self.next_mti,
+            next_sti: self.next_sti,
             kb_irq_enabled: self.kb_irq_enabled,
+            instruction_start_cycle: self.instruction_start_cycle,
+            last_mti_fire_cycle: self.last_mti_fire_cycle,
+            last_sti_fire_cycle: self.last_sti_fire_cycle,
+            fired_mti_since_boundary: self.fired_mti_since_boundary,
+            fired_sti_since_boundary: self.fired_sti_since_boundary,
+            preserve_phase: self.preserve_phase,
         };
         let mut watch = self
             .irq_bit_watch
@@ -259,7 +284,9 @@ impl TimerContext {
         let interrupts = InterruptInfo {
             pending: self.irq_pending,
             in_interrupt: self.in_interrupt,
+            key_irq_latched: self.key_irq_latched,
             source: self.irq_source.clone(),
+            last_fired: self.last_fired.clone(),
             stack: self.interrupt_stack.clone(),
             next_id: self.next_interrupt_id,
             imr: self.irq_imr,
@@ -288,41 +315,34 @@ impl TimerContext {
         _current_cycle: u64,
     ) {
         self.enabled = timer.enabled;
-        self.mti_period = timer.mti_period.max(0) as u64;
-        self.sti_period = timer.sti_period.max(0) as u64;
-        self.next_mti = timer.next_mti.max(0) as u64;
-        self.next_sti = timer.next_sti.max(0) as u64;
+        self.mti_period = timer.mti_period;
+        self.sti_period = timer.sti_period;
+        self.next_mti = timer.next_mti;
+        self.next_sti = timer.next_sti;
         // Python stores absolute targets; do not rebase forward. Allow immediate fire if targets are in the past.
         self.kb_irq_enabled = timer.kb_irq_enabled;
+        self.instruction_start_cycle = timer.instruction_start_cycle;
+        self.last_mti_fire_cycle = timer.last_mti_fire_cycle;
+        self.last_sti_fire_cycle = timer.last_sti_fire_cycle;
+        self.fired_mti_since_boundary = timer.fired_mti_since_boundary;
+        self.fired_sti_since_boundary = timer.fired_sti_since_boundary;
+        self.preserve_phase = timer.preserve_phase;
 
         self.irq_pending = interrupts.pending;
         self.in_interrupt = interrupts.in_interrupt;
+        self.key_irq_latched = interrupts.key_irq_latched;
         self.irq_source = interrupts.source.clone();
         self.interrupt_stack = interrupts.stack.clone();
         self.next_interrupt_id = interrupts.next_id;
         self.irq_imr = interrupts.imr;
         self.irq_isr = interrupts.isr;
-        if self.irq_isr == 0 {
-            self.irq_pending = false;
-            self.irq_source = None;
-        }
         self.irq_bit_watch = interrupts
             .irq_bit_watch
             .as_ref()
-            .and_then(|v| v.as_object())
-            .map(|obj| {
-                let mut map = obj.clone();
-                normalize_bit_watch(&mut map);
-                map
-            })
-            .or_else(|| {
-                let mut table = default_bit_watch_table();
-                normalize_bit_watch(&mut table);
-                Some(table)
-            });
+            .and_then(|value| value.as_object())
+            .cloned();
         self.delivered_masks = interrupts.delivered_masks.clone();
-        self.last_fired = None;
-        self.key_irq_latched = false;
+        self.last_fired = interrupts.last_fired.clone();
         // Restore IRQ counters/last info if present; otherwise zero them.
         self.irq_total = 0;
         self.irq_key = 0;
@@ -455,23 +475,19 @@ impl TimerContext {
         let mut fired_mti = false;
         let mut fired_sti = false;
 
-        if self.mti_period > 0 && cycle_count >= self.next_mti {
+        if self.mti_period > 0 && Self::deadline_reached(cycle_count, self.next_mti) {
             fired_mti = true;
             if self.preserve_phase {
-                while cycle_count >= self.next_mti {
-                    self.next_mti = self.next_mti.wrapping_add(self.mti_period);
-                }
+                self.next_mti = Self::advance_deadline(self.next_mti, cycle_count, self.mti_period);
             } else {
                 self.next_mti = cycle_count.wrapping_add(self.mti_period);
             }
             self.last_mti_fire_cycle = Some(cycle_count);
         }
-        if self.sti_period > 0 && cycle_count >= self.next_sti {
+        if self.sti_period > 0 && Self::deadline_reached(cycle_count, self.next_sti) {
             fired_sti = true;
             if self.preserve_phase {
-                while cycle_count >= self.next_sti {
-                    self.next_sti = self.next_sti.wrapping_add(self.sti_period);
-                }
+                self.next_sti = Self::advance_deadline(self.next_sti, cycle_count, self.sti_period);
             } else {
                 self.next_sti = cycle_count.wrapping_add(self.sti_period);
             }
@@ -845,6 +861,7 @@ mod tests {
                 next_mti: 150,
                 next_sti: 200,
                 kb_irq_enabled: true,
+                ..Default::default()
             },
             &InterruptInfo::default(),
             100,
@@ -868,7 +885,43 @@ mod tests {
     }
 
     #[test]
-    fn apply_snapshot_clears_pending_when_isr_empty() {
+    fn timer_catch_up_advances_far_stale_targets_in_constant_time() {
+        let mut timer = TimerContext::new(true, 1, 7);
+        timer.next_mti = 0;
+        timer.next_sti = 3;
+        let mut mem = MemoryImage::new();
+
+        let (mti, sti) = timer.tick_timers(&mut mem, 1_000_000_000, None);
+
+        assert!(mti);
+        assert!(sti);
+        assert_eq!(timer.next_mti, 1_000_000_001);
+        assert_eq!(timer.next_sti, 1_000_000_004);
+    }
+
+    #[test]
+    fn timer_deadline_wraps_at_u64_max_without_refiring_same_cycle() {
+        let mut timer = TimerContext::new(true, 1, 0);
+        timer.next_mti = u64::MAX;
+        let mut mem = MemoryImage::new();
+
+        let (first, _) = timer.tick_timers(&mut mem, u64::MAX, None);
+        assert!(first);
+        assert_eq!(timer.next_mti, 0, "next phase wraps with the cycle clock");
+
+        let (same_cycle, _) = timer.tick_timers(&mut mem, u64::MAX, None);
+        assert!(
+            !same_cycle,
+            "the wrapped deadline is in the future until the cycle clock wraps"
+        );
+
+        let (after_wrap, _) = timer.tick_timers(&mut mem, 0, None);
+        assert!(after_wrap);
+        assert_eq!(timer.next_mti, 1);
+    }
+
+    #[test]
+    fn apply_snapshot_does_not_silently_normalize_invalid_metadata() {
         let mut timer = TimerContext::new(true, 20, 30);
         let interrupts = InterruptInfo {
             pending: true,
@@ -885,16 +938,14 @@ mod tests {
                 next_mti: 150,
                 next_sti: 200,
                 kb_irq_enabled: true,
+                ..Default::default()
             },
             &interrupts,
             100,
         );
 
-        assert!(!timer.irq_pending, "pending should clear when ISR is empty");
-        assert!(
-            timer.irq_source.is_none(),
-            "source should clear when ISR is empty"
-        );
+        assert!(timer.irq_pending);
+        assert_eq!(timer.irq_source.as_deref(), Some("KEY"));
     }
 
     #[test]
@@ -1186,6 +1237,7 @@ mod tests {
                 next_mti: 75,
                 next_sti: 125,
                 kb_irq_enabled: true,
+                ..Default::default()
             },
             &InterruptInfo::default(),
             0,
@@ -1193,5 +1245,38 @@ mod tests {
 
         assert_eq!(timer.mti_period, 100);
         assert_eq!(timer.sti_period, 200);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_key_latch_and_timer_phase_exactly() {
+        let mut timer = TimerContext::new(true, 100, 200);
+        timer.next_mti = 1_000;
+        timer.next_sti = 2_000;
+        timer.instruction_start_cycle = 777;
+        timer.last_mti_fire_cycle = Some(790);
+        timer.last_sti_fire_cycle = Some(791);
+        timer.fired_mti_since_boundary = true;
+        timer.fired_sti_since_boundary = true;
+        timer.preserve_phase = false;
+        timer.key_irq_latched = true;
+        timer.irq_pending = true;
+        timer.irq_source = Some("KEY".to_string());
+        timer.irq_isr = 0x04;
+
+        let (timer_info, interrupt_info) = timer.snapshot_info();
+        let mut restored = TimerContext::new(false, 1, 1);
+        restored.apply_snapshot_info(&timer_info, &interrupt_info, 0);
+
+        assert_eq!(restored.next_mti, 1_000);
+        assert_eq!(restored.next_sti, 2_000);
+        assert_eq!(restored.instruction_start_cycle, 777);
+        assert_eq!(restored.last_mti_fire_cycle, Some(790));
+        assert_eq!(restored.last_sti_fire_cycle, Some(791));
+        assert!(restored.fired_mti_since_boundary);
+        assert!(restored.fired_sti_since_boundary);
+        assert!(!restored.preserve_phase);
+        assert!(restored.key_irq_latched);
+        assert!(restored.irq_pending);
+        assert_eq!(restored.irq_source.as_deref(), Some("KEY"));
     }
 }

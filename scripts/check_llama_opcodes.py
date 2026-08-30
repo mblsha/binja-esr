@@ -8,6 +8,7 @@ Run with: `uv run python scripts/check_llama_opcodes.py`
 from __future__ import annotations
 
 import difflib
+import re
 import sys
 from pathlib import Path
 
@@ -44,10 +45,19 @@ def extract_current() -> str:
     return body.strip() + "\n"
 
 
+def normalize_table(text: str) -> str:
+    """Discard rustfmt-only whitespace while retaining table tokens."""
+
+    compact = re.sub(r"\s+", "", text)
+    return compact.replace(",]", "]")
+
+
 def main() -> int:
     current = extract_current()
     expected = generate_expected()
-    if current == expected:
+    # rustfmt legitimately wraps long operand arrays differently from the
+    # Python generator.  This checker is about table semantics, not layout.
+    if normalize_table(current) == normalize_table(expected):
         print("Opcode table matches Python source.")
         return 0
 

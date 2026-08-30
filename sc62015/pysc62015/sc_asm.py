@@ -7,7 +7,7 @@ import bincopy  # type: ignore[import-untyped]
 from plumbum import cli  # type: ignore[import-untyped]
 
 # Assuming the provided library files are in a package named 'sc62015'
-from .asm import AsmTransformer, asm_parser, ParsedInstruction
+from .asm import AsmTransformer, QuotedString, asm_parser, ParsedInstruction
 from binja_test_mocks.coding import Encoder
 from .instr.opcode_table import OPCODES
 from .instr import (
@@ -22,6 +22,7 @@ from .instr import (
     EMemReg,
     RegIMemOffset,
     EMemIMemOffset,
+    EMemValueOffsetHelper,
     Reg3,
     RegPair,
     REVERSE_PRE_TABLE,
@@ -51,6 +52,7 @@ class Assembler:
     }
 
     DEFAULT_SECTION = "code"
+    MAX_ADDRESS = 0xFFFFF
 
     def __init__(self) -> None:
         self.symbols: Dict[str, int] = {}
@@ -87,6 +89,24 @@ class Assembler:
             return int(value, 0)
         except ValueError:
             raise AssemblerError(f"Undefined symbol or invalid number: {value}")
+
+    def _validate_address(self, address: int, context: str) -> None:
+        if not 0 <= address <= self.MAX_ADDRESS:
+            raise AssemblerError(
+                f"{context} address 0x{address:X} is outside the 20-bit "
+                f"range 0x00000..0x{self.MAX_ADDRESS:05X}"
+            )
+
+    def _validate_statement_range(self, address: int, size: int, context: str) -> None:
+        if size < 0:
+            raise AssemblerError(f"{context} has negative size {size}")
+        self._validate_address(address, context)
+        if size and size - 1 > self.MAX_ADDRESS - address:
+            end = address + size - 1
+            raise AssemblerError(
+                f"{context} at 0x{address:05X} crosses the 20-bit address-space "
+                f"boundary (ends at 0x{end:X})"
+            )
 
     def _apply_location(
         self,
@@ -127,6 +147,8 @@ class Assembler:
                 new_addr = self._evaluate_operand(str(stmt["args"]))
                 self.current_address = new_addr
 
+            self._validate_address(new_addr, ".ORG")
+
             pointers[current_section] = new_addr
             consumed = True
 
@@ -153,6 +175,62 @@ class Assembler:
                 raise AssemblerError(
                     f"Use IMEM register name {reg_name} instead of 0x{n_val:02X}"
                 )
+
+    @staticmethod
+    def _imem_addressing_mode(operand: Any) -> Optional[AddressingMode]:
+        """Return the assembler selector carried by a logical IMEM operand."""
+
+        if isinstance(operand, IMemOperand):
+            return operand.mode
+        if isinstance(operand, IMem8):
+            return cast(
+                Optional[AddressingMode],
+                getattr(operand, "_asm_addressing_mode", None),
+            )
+        if isinstance(operand, EMemValueOffsetHelper):
+            return Assembler._imem_addressing_mode(operand.value)
+        return None
+
+    def _canonical_pre_byte(
+        self, mnemonic: str, operands: Iterable[Any]
+    ) -> Optional[int]:
+        """Choose the exact PRE encoding for the logical IMEM selectors."""
+
+        modes = [
+            mode
+            for operand in operands
+            if (mode := self._imem_addressing_mode(operand)) is not None
+        ]
+        if not modes:
+            return None
+
+        if len(modes) == 1:
+            mode = modes[0]
+            if mode == AddressingMode.BP_N:
+                return None
+            pre_byte = SINGLE_OPERAND_PRE_LOOKUP.get(mode)
+            if pre_byte is None:
+                raise AssemblerError(
+                    f"Addressing mode {mode.value} cannot be encoded as the "
+                    f"single IMEM selector for {mnemonic}"
+                )
+            return pre_byte
+
+        if len(modes) == 2:
+            pair = (modes[0], modes[1])
+            if pair == (AddressingMode.BP_N, AddressingMode.BP_N):
+                return None
+            pre_byte = REVERSE_PRE_TABLE.get(pair)
+            if pre_byte is None:
+                raise AssemblerError(
+                    f"Invalid addressing mode combination for {mnemonic}: "
+                    f"{modes[0].value} and {modes[1].value}"
+                )
+            return pre_byte
+
+        raise AssemblerError(
+            f"Cannot encode {len(modes)} IMEM selectors for {mnemonic}"
+        )
 
     def _build_instruction(self, parsed_instr: ParsedInstruction) -> Instruction:
         """Builds an Instruction object from a parsed instruction node from the AST."""
@@ -254,33 +332,8 @@ class Assembler:
                     )
                     instr.opcode = template["opcode"]
 
-                    # Determine if a PRE prefix byte is required based on
-                    # internal memory operands.
                     operands_list = list(instr.operands())
-                    imem_ops = [
-                        op for op in operands_list if isinstance(op, IMemOperand)
-                    ]
-
-                    pre_byte: Optional[int] = None
-                    if len(imem_ops) == 2:
-                        pair = (imem_ops[0].mode, imem_ops[1].mode)
-                        if pair == (AddressingMode.BP_PX, AddressingMode.BP_PY):
-                            pre_byte = None
-                        else:
-                            pre_byte = REVERSE_PRE_TABLE.get(pair)
-                        if pre_byte is None:
-                            raise AssemblerError(
-                                f"Invalid addressing mode combination for {mnemonic}: "
-                                f"{imem_ops[0].mode.value} and {imem_ops[1].mode.value}"
-                            )
-                    elif len(imem_ops) == 1:
-                        mode = imem_ops[0].mode
-                        if mode != AddressingMode.N:
-                            pre_byte = SINGLE_OPERAND_PRE_LOOKUP.get(mode)
-                            if pre_byte is None:
-                                raise AssemblerError(
-                                    f"Unsupported addressing mode {mode.value} for {mnemonic}"
-                                )
+                    pre_byte = self._canonical_pre_byte(mnemonic, operands_list)
 
                     if pre_byte is not None:
                         instr._pre = pre_byte
@@ -311,10 +364,12 @@ class Assembler:
                             and getattr(op, "value", None) is not None
                         ):
                             setattr(
-                                op, "extra_hi", (int(getattr(op, "value")) >> 16) & 0xFF
+                                op,
+                                "extra_hi",
+                                (int(getattr(op, "value")) >> 16) & 0x0F,
                             )
                         if isinstance(op, Imm20) and isinstance(op.value, int):
-                            op.extra_hi = (op.value >> 16) & 0xFF
+                            op.extra_hi = (op.value >> 16) & 0x0F
 
                     encoder = Encoder()
                     try:
@@ -337,8 +392,7 @@ class Assembler:
             return int(str(args))
         elif stmt_type == "defb":
             return sum(
-                len(arg[1:-1]) if isinstance(arg, str) and arg.startswith('"') else 1
-                for arg in (args or [])
+                len(arg) if isinstance(arg, QuotedString) else 1 for arg in (args or [])
             )
         elif stmt_type == "defw":
             return len(args or []) * 2
@@ -391,6 +445,9 @@ class Assembler:
                 addr = self.section_pointers[current_section]
 
                 if "label" in line:
+                    self._validate_address(addr, f"label {line['label']}")
+
+                if "label" in line:
                     label_name = line["label"].upper()
                     if label_name in self.symbols:
                         raise AssemblerError(
@@ -401,6 +458,9 @@ class Assembler:
                 if "statement" in line and not consumed:
                     stmt = line["statement"]
                     size = self._get_statement_size(stmt, source_line_num)
+                    self._validate_statement_range(
+                        addr, size, f"statement on line {source_line_num}"
+                    )
                     self.section_pointers[current_section] += size
             except Exception as e:
                 raise AssemblerError(
@@ -437,6 +497,11 @@ class Assembler:
                 stmt = line["statement"]
                 try:
                     encoded_bytes = self._encode_statement(stmt, source_line_num)
+                    self._validate_statement_range(
+                        self.current_address,
+                        len(encoded_bytes),
+                        f"statement on line {source_line_num}",
+                    )
                     if encoded_bytes:
                         if current_section == "bss":
                             # .bss section only reserves space, no data in file
@@ -477,8 +542,8 @@ class Assembler:
                 pass
 
         target = dest.value
-        current_page = self.current_address & 0xFF0000
-        target_page = target & 0xFF0000
+        current_page = self.current_address & 0xF0000
+        target_page = target & 0xF0000
         if target_page != current_page:
             if instr.name() == "CALL":
                 hint = "use CALLF"
@@ -506,14 +571,14 @@ class Assembler:
                     val = self._evaluate_operand(raw_value)
                     setattr(op, "value", val)
                     if hasattr(op, "extra_hi"):
-                        setattr(op, "extra_hi", (val >> 16) & 0xFF)
+                        setattr(op, "extra_hi", (val >> 16) & 0x0F)
                 if hasattr(op, "value"):
                     val = getattr(op, "value")
                     if isinstance(val, str):
                         val = self._evaluate_operand(val)
                         setattr(op, "value", val)
                     if isinstance(op, Imm20) and isinstance(val, int):
-                        op.extra_hi = (val >> 16) & 0xFF
+                        op.extra_hi = (val >> 16) & 0x0F
                 offset = getattr(op, "offset", None)
                 if isinstance(offset, ImmOffset) and isinstance(offset.value, str):
                     offset.value = self._evaluate_operand(offset.value)
@@ -538,16 +603,31 @@ class Assembler:
             return bytearray()
 
         encoder = Encoder()
+        limits = {"defb": 0xFF, "defw": 0xFFFF, "defl": 0xFFFFFF}
         for arg in args:
-            if isinstance(arg, str) and arg.startswith('"') and arg.endswith('"'):
-                for char in arg[1:-1]:
+            if isinstance(arg, QuotedString):
+                if stmt_type != "defb":
+                    raise AssemblerError(
+                        f"Quoted strings are only supported by DEFB/DEFM, not {stmt_type.upper()}"
+                    )
+                for char in arg:
+                    if ord(char) > 0xFF:
+                        raise AssemblerError(
+                            f"DEFB character {char!r} is outside the 8-bit range"
+                        )
                     encoder.unsigned_byte(ord(char))
             else:
                 value = self._evaluate_operand(arg)
+                limit = limits[stmt_type]
+                if not 0 <= value <= limit:
+                    raise AssemblerError(
+                        f"{stmt_type.upper()} value {value} is outside the "
+                        f"unsigned {limit.bit_length()}-bit range 0..0x{limit:X}"
+                    )
                 if stmt_type == "defb":
-                    encoder.unsigned_byte(value & 0xFF)
+                    encoder.unsigned_byte(value)
                 elif stmt_type == "defw":
-                    encoder.unsigned_word_le(value & 0xFFFF)
+                    encoder.unsigned_word_le(value)
                 elif stmt_type == "defl":
                     encoder.unsigned_byte(value & 0xFF)
                     encoder.unsigned_byte((value >> 8) & 0xFF)

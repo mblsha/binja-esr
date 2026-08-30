@@ -25,8 +25,15 @@ def create_memory():
     return Memory(read_mem, write_mem), raw
 
 
-def test_halt_instruction():
-    """Test HALT instruction modifies registers correctly."""
+def test_reset_disabled_starts_in_running_power_state():
+    memory, _ = create_memory()
+    emu = Emulator(memory, reset_on_init=False)
+    assert emu.state.halted is False
+    assert getattr(emu.state, "power_state") == "running"
+
+
+def test_halt_model_contract():
+    """Pin the provisional HALT register model; this is not hardware proof."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -59,10 +66,11 @@ def test_halt_instruction():
 
     # Check halted state
     assert emu.state.halted is True
+    assert getattr(emu.state, "power_state") == "halted"
 
 
-def test_off_instruction():
-    """Test OFF instruction modifies registers correctly."""
+def test_off_model_contract():
+    """Pin the provisional OFF register model and keep it distinct from HALT."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -95,10 +103,11 @@ def test_off_instruction():
 
     # Check halted state
     assert emu.state.halted is True
+    assert getattr(emu.state, "power_state") == "off"
 
 
-def test_reset_instruction():
-    """Test RESET instruction modifies registers and jumps to reset vector."""
+def test_reset_model_contract_and_distinct_vector_slot():
+    """Pin the synthetic reset model and its distinct vector-slot contract."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -115,10 +124,14 @@ def test_reset_instruction():
         INTERNAL_MEMORY_START + IMEMRegisters.SSR, 0xFF
     )  # SSR with bit 2 set
 
-    # Set reset vector at 0xFFFFA to point to 0x12345
-    memory.write_byte(0xFFFFA, 0x45)  # Low byte
-    memory.write_byte(0xFFFFB, 0x23)  # Middle byte
-    memory.write_byte(0xFFFFC, 0x01)  # High byte
+    # Keep a distinct interrupt-vector decoy at FFFFA and place a synthetic
+    # reset target in the separate FFFFD vector slot.
+    memory.write_byte(0xFFFFA, 0xAA)
+    memory.write_byte(0xFFFFB, 0xBB)
+    memory.write_byte(0xFFFFC, 0x0C)
+    memory.write_byte(0xFFFFD, 0x45)  # Low byte
+    memory.write_byte(0xFFFFE, 0x23)  # Middle byte
+    memory.write_byte(0xFFFFF, 0x01)  # High byte
 
     # Write RESET instruction at address 0x1000
     assembler = Assembler()
@@ -167,10 +180,12 @@ def test_reset_instruction():
     assert emu.regs.get(RegisterName.B) == 0xAA
     assert emu.regs.get(RegisterName.FC) == 1
     assert emu.regs.get(RegisterName.FZ) == 1
+    assert emu.state.halted is False
+    assert getattr(emu.state, "power_state") == "running"
 
 
-def test_power_on_reset():
-    """Test power-on reset behavior."""
+def test_power_on_reset_model_contract():
+    """Pin the provisional power-on register model and reset-vector fetch."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -187,13 +202,19 @@ def test_power_on_reset():
         INTERNAL_MEMORY_START + IMEMRegisters.SSR, 0xFF
     )  # SSR with bit 2 set
 
-    # Set reset vector at 0xFFFFA to point to 0x54321
-    memory.write_byte(0xFFFFA, 0x21)  # Low byte
-    memory.write_byte(0xFFFFB, 0x43)  # Middle byte
-    memory.write_byte(0xFFFFC, 0x05)  # High byte
+    # FFFFA is the interrupt vector; power-on RESET reads FFFFD instead.
+    memory.write_byte(0xFFFFA, 0xAA)
+    memory.write_byte(0xFFFFB, 0xBB)
+    memory.write_byte(0xFFFFC, 0x0C)
+    memory.write_byte(0xFFFFD, 0x21)  # Low byte
+    memory.write_byte(0xFFFFE, 0x43)  # Middle byte
+    memory.write_byte(0xFFFFF, 0x05)  # High byte
 
     # Create emulator with reset
     emu = Emulator(memory, reset_on_init=True)
+
+    assert emu.state.halted is False
+    assert getattr(emu.state, "power_state") == "running"
 
     # Check register modifications
     assert (
@@ -220,6 +241,48 @@ def test_power_on_reset():
 
     # Check halted state is false
     assert emu.state.halted is False
+
+
+def test_failed_power_on_reset_restores_native_state_and_requires_complete_reset():
+    raw = bytearray([0x00] * ADDRESS_SPACE_SIZE)
+    raw[0] = 0x00  # NOP used to prove poisoned execution is blocked.
+    raw[0xFFFFD:0x100000] = bytes.fromhex("452301")
+    fail_reset_write = True
+
+    def read_mem(addr: int) -> int:
+        return raw[addr]
+
+    def write_mem(addr: int, value: int) -> None:
+        nonlocal fail_reset_write
+        if fail_reset_write and addr == INTERNAL_MEMORY_START + IMEMRegisters.UCR:
+            raise RuntimeError("reset write failed")
+        raw[addr] = value & 0xFF
+
+    emu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    emu.regs.set(RegisterName.PC, 0x22222)
+    emu.regs.set(RegisterName.A, 0x5A)
+    emu.regs.call_sub_level = 4
+    emu.state.halted = True
+    setattr(emu.state, "power_state", "halted")
+
+    with pytest.raises(RuntimeError, match="reset write failed"):
+        emu.power_on_reset()
+
+    assert emu.regs.get(RegisterName.PC) == 0x22222
+    assert emu.regs.get(RegisterName.A) == 0x5A
+    assert emu.regs.call_sub_level == 4
+    assert emu.state.halted is True
+    assert getattr(emu.state, "power_state") == "halted"
+    with pytest.raises(RuntimeError, match="poisoned.*reset required"):
+        emu.execute_instruction(0)
+
+    fail_reset_write = False
+    emu.power_on_reset()
+    assert emu.regs.get(RegisterName.PC) == 0x12345
+    assert emu.state.halted is False
+    assert getattr(emu.state, "power_state") == "running"
+    emu.execute_instruction(0)
+    assert emu.regs.get(RegisterName.PC) == 1
 
 
 if __name__ == "__main__":

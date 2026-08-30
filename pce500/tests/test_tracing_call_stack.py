@@ -255,6 +255,21 @@ class TestCallStackTracking:
         assert emulator.call_depth == 2
         assert len(emulator._interrupt_stack) == 1
 
+        # IR saves the address of its own FE opcode. The stock-ROM dispatcher
+        # validates that byte and advances the saved frame before RETI; this
+        # synthetic handler must model that dispatcher step explicitly.
+        frame_s = emulator.cpu.regs.get(RegisterName.S)
+        saved_pc = sum(
+            emulator.memory.read_byte(frame_s + 2 + index) << (8 * index)
+            for index in range(3)
+        )
+        assert saved_pc == 0xB8100
+        advanced_pc = 0xB8101
+        for index in range(3):
+            emulator.memory.write_byte(
+                frame_s + 2 + index, (advanced_pc >> (8 * index)) & 0xFF
+            )
+
         # Execute RETI
         emulator.step()
         assert emulator.call_depth == 1

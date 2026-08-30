@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections import deque
 from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any, Iterable, List
 
@@ -10,7 +11,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from .tracing import trace_dispatcher
 from .tracing.perfetto_tracing import perf_trace
 from .tracing.perfetto_tracing import tracer as perfetto_tracer
-from .memory_bus import MemoryBus, MemoryOverlay
+from .memory_bus import MemoryBus, MemoryOverlay, UnsafePreflightRead
 
 # Import constants for accessing internal memory registers
 # Define locally to avoid circular imports
@@ -24,6 +25,39 @@ IMEM_TRACE_REG = ""
 
 MEMORY_CARD_SLOT_START = 0x40000
 MEMORY_CARD_SLOT_END = 0x4FFFF
+PCE500_ROM_WINDOW_START = 0xC0000
+PCE500_ROM_WINDOW_SIZE = 0x40000
+PCE500_BASE_ROM_START = 0xE0000
+PCE500_BASE_ROM_SIZE = 0x20000
+
+
+def _keyboard_read_handler_arity(handler: Callable[..., int]) -> int:
+    """Select the supported positional callback shape without invoking it.
+
+    Legacy keyboard overlays may expose ``handler(address)`` while current
+    handlers accept ``handler(address, cpu_pc)``.  Inspecting the signature up
+    front keeps a ``TypeError`` raised by the handler body distinguishable from
+    an argument-binding error, so a failing callback is never invoked twice.
+    Callables without an inspectable signature follow the current two-argument
+    contract and are still invoked exactly once.
+    """
+
+    try:
+        signature = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return 2
+
+    try:
+        signature.bind(0, None)
+    except TypeError:
+        try:
+            signature.bind(0)
+        except TypeError as one_arg_error:
+            raise TypeError(
+                "keyboard read handler must accept (address) or (address, cpu_pc)"
+            ) from one_arg_error
+        return 1
+    return 2
 
 
 def _is_lcd_region(address: int) -> bool:
@@ -116,11 +150,13 @@ class PCE500Memory:
                 read_handler=_card_read,
                 write_handler=_card_write,
                 perfetto_thread="Memory_Card",
+                preflight_read_handler=_card_read,
             )
         )
 
         # Track keyboard overlay for optimization
         self._keyboard_overlay: Optional[MemoryOverlay] = None
+        self._keyboard_read_arity = 2
         self._emulator: Optional[Any] = None
 
         # Perfetto tracing
@@ -146,6 +182,8 @@ class PCE500Memory:
             None
         )
         self._suppress_llama_sync = 0
+        self._defer_llama_sync = 0
+        self._deferred_llama_writes: List[Tuple[int, int]] = []
         self._perf_tracer = None
         # IMR read diagnostics
         self._imr_read_zero_count = 0
@@ -333,27 +371,63 @@ class PCE500Memory:
     def _maybe_sync_llama_host_write(
         self, address: int, value: int, cpu_pc: Optional[int]
     ) -> None:
-        """Mirror host-initiated external writes into the LLAMA backend snapshot."""
+        """Mirror a committed host write into the active LLAMA backend.
+
+        CPU-originated writes carry ``cpu_pc`` and are already visible to the
+        native execution path. Host-originated writes do not, so silently
+        losing this notification would leave the Python and Rust memories
+        divergent.
+        """
 
         emulator = getattr(self, "_emulator", None)
         facade_cpu = getattr(emulator, "cpu", None) if emulator else None
         cpu = facade_cpu or getattr(self, "cpu", None)
         if cpu is None or getattr(cpu, "backend", None) != "llama":
             return
-        if self._suppress_llama_sync > 0:
-            return
         if cpu_pc is not None:
+            return
+        canonical_address = address & 0xFFFFFF
+        if canonical_address >= INTERNAL_MEMORY_START:
+            canonical_address = INTERNAL_MEMORY_START + (
+                (canonical_address - INTERNAL_MEMORY_START) & 0xFF
+            )
+        else:
+            canonical_address &= 0xFFFFF
+        if self._suppress_llama_sync > 0:
+            if self._defer_llama_sync > 0:
+                self._deferred_llama_writes.append((canonical_address, value & 0xFF))
             return
         backend_impl = cpu.unwrap() if hasattr(cpu, "unwrap") else cpu
         notifier = getattr(backend_impl, "notify_host_write", None) or getattr(
             cpu, "notify_host_write", None
         )
         if notifier is None:
-            return
-        try:
-            notifier(address & 0xFFFFFF, value & 0xFF)
-        except Exception:
-            pass
+            raise RuntimeError(
+                "LLAMA backend does not expose the required notify_host_write hook"
+            )
+        notifier(canonical_address, value & 0xFF)
+
+    def flush_deferred_llama_host_writes(self) -> None:
+        """Apply host writes deferred across a re-entrant LLAMA callback.
+
+        The caller must invoke this only after the native PyO3 CPU method has
+        returned and released its mutable borrow. Ordering is preserved because
+        device-register writes can be edge-sensitive.
+        """
+
+        pending = self._deferred_llama_writes
+        self._deferred_llama_writes = []
+        for index, (address, value) in enumerate(pending):
+            try:
+                self._maybe_sync_llama_host_write(address, value, None)
+            except Exception:
+                self._deferred_llama_writes[0:0] = pending[index:]
+                raise
+
+    def discard_deferred_llama_host_writes(self) -> None:
+        """Discard notifications superseded by a completed machine reset."""
+
+        self._deferred_llama_writes.clear()
 
     @perf_trace("Memory", sample_rate=100)
     def read_byte(self, address: int, cpu_pc: Optional[int] = None) -> int:
@@ -378,21 +452,11 @@ class PCE500Memory:
                 value: int = 0
                 effective_pc = cpu_pc if cpu_pc is not None else self._get_current_pc()
                 if self._keyboard_overlay.read_handler:
-                    try:
-                        value = (
-                            int(
-                                self._keyboard_overlay.read_handler(
-                                    address,
-                                    effective_pc
-                                    if effective_pc is not None
-                                    else cpu_pc,
-                                )
-                            )
-                            & 0xFF
-                        )
-                    except TypeError:
-                        # Some handlers only accept (address); retry without pc
-                        value = int(self._keyboard_overlay.read_handler(address)) & 0xFF
+                    handler = self._keyboard_overlay.read_handler
+                    if self._keyboard_read_arity == 1:
+                        value = int(handler(address)) & 0xFF
+                    else:
+                        value = int(handler(address, effective_pc)) & 0xFF
                     # Optional override for KIL to force a test value (diagnostic).
                     if offset == IMEMRegisters.KIL:
                         pass
@@ -547,6 +611,42 @@ class PCE500Memory:
         # Default to external memory
         return self.external_memory[address]
 
+    def peek_byte_for_preflight(
+        self, address: int, cpu_pc: Optional[int] = None
+    ) -> int:
+        """Read a byte without counters, tracing, or device side effects.
+
+        Scheduling preflight uses this path to validate an instruction before
+        timers or peripherals advance.  A dynamic overlay without an explicit
+        safe callback is rejected instead of being invoked twice or bypassed.
+        """
+
+        address &= 0xFFFFFF
+        if address >= INTERNAL_MEMORY_START:
+            offset = (address - INTERNAL_MEMORY_START) & 0xFF
+            if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                overlay = self._keyboard_overlay
+                if overlay.preflight_read_handler is not None:
+                    return int(overlay.preflight_read_handler(address, cpu_pc)) & 0xFF
+                if overlay.read_handler is not None:
+                    raise UnsafePreflightRead(
+                        "side-effect-free preflight read unavailable for overlay "
+                        f"{overlay.name!r} at 0x{address:06X}"
+                    )
+                if overlay.data is not None:
+                    overlay_offset = address - overlay.start
+                    if 0 <= overlay_offset < len(overlay.data):
+                        return int(overlay.data[overlay_offset]) & 0xFF
+                return 0
+
+            return int(self.external_memory[-256 + offset]) & 0xFF
+
+        address &= 0xFFFFF
+        result = self._bus.peek_for_preflight(address, cpu_pc)
+        if result is not None:
+            return result.value
+        return int(self.external_memory[address]) & 0xFF
+
     @perf_trace("Memory", sample_rate=100)
     def write_byte(
         self, address: int, value: int, cpu_pc: Optional[int] = None
@@ -611,6 +711,7 @@ class PCE500Memory:
                         space=self._keyboard_overlay.name or "keyboard_overlay",
                     )
                     _trace_lcd_write(self, address, value, effective_pc)
+                    self._maybe_sync_llama_host_write(address, value, cpu_pc)
                     return
                 elif self._keyboard_overlay.read_only:
                     # Silently ignore writes to read-only overlays
@@ -628,6 +729,7 @@ class PCE500Memory:
                             effective_pc=effective_pc,
                             space=self._keyboard_overlay.name or "keyboard_overlay",
                         )
+                        self._maybe_sync_llama_host_write(address, value, cpu_pc)
                         return
 
             # Normal internal memory write (most common case)
@@ -716,6 +818,15 @@ class PCE500Memory:
                 space=write_result.overlay.name,
             )
             _trace_stack_write(address, value, effective_pc)
+            # A handler returning normally or a writable data overlay is the
+            # bus contract's only success signal. Read-only overlays also
+            # return a WriteResult, but intentionally ignore the write and
+            # therefore must not alter the native mirror.
+            overlay = write_result.overlay
+            if overlay.write_handler is not None or (
+                overlay.data is not None and not overlay.read_only
+            ):
+                self._maybe_sync_llama_host_write(address, value, cpu_pc)
             return
 
         # Default to external memory
@@ -772,16 +883,24 @@ class PCE500Memory:
 
     def add_overlay(self, overlay: MemoryOverlay) -> None:
         """Add a memory overlay."""
+        is_keyboard_overlay = overlay.start >= 0x1000F0 and overlay.end <= 0x1000F2
+        keyboard_read_arity = (
+            _keyboard_read_handler_arity(overlay.read_handler)
+            if is_keyboard_overlay and overlay.read_handler is not None
+            else 2
+        )
         self._bus.add_overlay(overlay)
 
         # Track keyboard overlay for fast access
-        if overlay.start >= 0x1000F0 and overlay.end <= 0x1000F2:
+        if is_keyboard_overlay:
             self._keyboard_overlay = overlay
+            self._keyboard_read_arity = keyboard_read_arity
 
     def remove_overlay(self, name: str) -> None:
         """Remove overlay by name."""
         if self._keyboard_overlay and self._keyboard_overlay.name == name:
             self._keyboard_overlay = None
+            self._keyboard_read_arity = 2
 
         self._bus.remove_overlay(name)
 
@@ -847,18 +966,58 @@ class PCE500Memory:
         finally:
             self._suppress_llama_sync = max(0, self._suppress_llama_sync - 1)
 
-    def load_rom(self, rom_data: bytes) -> None:
-        """Load ROM as an overlay at 0xC0000."""
+    def load_rom(self, rom_data: bytes, *, start_address: Optional[int] = None) -> None:
+        """Load a PC-E500 ROM payload into the read-only CE2 window.
+
+        The original 128 KiB ROM occupies ``0xE0000..0xFFFFF``.  Extended
+        256 KiB images occupy the complete ``0xC0000..0xFFFFF`` CE2 window.
+        Full 1 MiB captures are accepted by selecting their top 256 KiB.
+
+        Smaller synthetic payloads retain the historical ``0xC0000`` default;
+        tests that need another placement can pass ``start_address``.
+        """
+        if not rom_data:
+            raise ValueError("ROM payload is empty")
+
+        payload = bytes(rom_data)
+        if len(payload) > PCE500_ROM_WINDOW_SIZE:
+            payload = payload[-PCE500_ROM_WINDOW_SIZE:]
+
+        if start_address is None:
+            start_address = (
+                PCE500_BASE_ROM_START
+                if len(payload) == PCE500_BASE_ROM_SIZE
+                else PCE500_ROM_WINDOW_START
+            )
+
+        end_address = start_address + len(payload)
+        rom_window_end = PCE500_ROM_WINDOW_START + PCE500_ROM_WINDOW_SIZE
+        if not (
+            PCE500_ROM_WINDOW_START <= start_address < rom_window_end
+            and end_address <= rom_window_end
+        ):
+            raise ValueError(
+                "ROM payload does not fit the PC-E500 CE2 window: "
+                f"start=0x{start_address:05X}, size=0x{len(payload):X}"
+            )
+
+        # Keep the complete CE2 select read-only while placing the actual ROM
+        # bytes at their variant-specific address.  Unpopulated bytes read as
+        # zero, matching the pre-existing flat-memory default.
+        window = bytearray(PCE500_ROM_WINDOW_SIZE)
+        window_offset = start_address - PCE500_ROM_WINDOW_START
+        window[window_offset : window_offset + len(payload)] = payload
+
         # Remove any existing ROM overlay
         self.remove_overlay("internal_rom")
 
         # Add new ROM overlay
         self.add_overlay(
             MemoryOverlay(
-                start=0xC0000,
+                start=PCE500_ROM_WINDOW_START,
                 end=0xFFFFF,
                 name="internal_rom",
-                data=bytearray(rom_data),
+                data=window,
                 read_only=True,
                 perfetto_thread="Memory_ROM",
             )
@@ -1007,19 +1166,33 @@ class PCE500Memory:
 
         The Rust LLAMA core can delegate WAIT-loop timing to the Python scheduler via this
         hook so that ISR bits and Perfetto traces stay aligned with the Python backend.
+        A present hook is part of the execution contract: configuration and scheduler
+        failures must propagate so the CPU cannot clear I and advance PC without time
+        actually passing.
         """
 
         emu = getattr(self, "_emulator", None)
         if emu is None:
-            return
+            raise RuntimeError("WAIT timing requires an attached emulator scheduler")
         try:
-            cycles_i = max(1, int(cycles))
-        except Exception:
-            return
+            cycles_i = int(cycles)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"invalid WAIT cycle count {cycles!r}") from exc
+        if cycles_i <= 0:
+            raise ValueError(f"WAIT cycle count must be positive, got {cycles_i}")
+        # LLAMA invokes this hook while its PyO3 CPU is already mutably
+        # borrowed. Timer/keyboard writes performed by the Python scheduler are
+        # therefore authoritative host-side writes for this callback; trying to
+        # notify the same native CPU re-entrantly raises ``Already borrowed``.
+        # Suppress only that recursive notification while preserving ordinary
+        # host-write synchronization before and after the callback.
+        self._suppress_llama_sync += 1
+        self._defer_llama_sync += 1
         try:
             emu._simulate_wait(cycles_i)
-        except Exception:
-            return
+        finally:
+            self._defer_llama_sync = max(0, self._defer_llama_sync - 1)
+            self._suppress_llama_sync = max(0, self._suppress_llama_sync - 1)
 
     def set_perfetto_enabled(self, enabled: bool) -> None:
         """Enable or disable Perfetto tracing for memory operations."""
@@ -1074,7 +1247,13 @@ class PCE500Memory:
         """
         result = 0
         for i in range(size):
-            byte_val = self.read_byte(address + i)
+            if address >= INTERNAL_MEMORY_START:
+                byte_address = INTERNAL_MEMORY_START + (
+                    (address - INTERNAL_MEMORY_START + i) & 0xFF
+                )
+            else:
+                byte_address = (address + i) & 0xFFFFF
+            byte_val = self.read_byte(byte_address)
             result |= byte_val << (i * 8)
         return result
 
@@ -1088,7 +1267,13 @@ class PCE500Memory:
         """
         for i in range(size):
             byte_value = (value >> (i * 8)) & 0xFF
-            self.write_byte(address + i, byte_value)
+            if address >= INTERNAL_MEMORY_START:
+                byte_address = INTERNAL_MEMORY_START + (
+                    (address - INTERNAL_MEMORY_START + i) & 0xFF
+                )
+            else:
+                byte_address = (address + i) & 0xFFFFF
+            self.write_byte(byte_address, byte_value)
 
     def set_context(self, context: dict) -> None:
         """Set context for memory operations (compatibility method)."""

@@ -10,13 +10,27 @@ use serde::{Deserialize, Serialize};
 
 use super::opcodes::RegName;
 
+pub const MODELED_F_MASK: u32 = 0x03;
+
+pub fn validate_f_image(value: u32) -> Result<u32, &'static str> {
+    if value & !MODELED_F_MASK != 0 {
+        Err("unsupported SC62015 F image: bits 2-7 require real-hardware tracing")
+    } else {
+        Ok(value & MODELED_F_MASK)
+    }
+}
+
 pub fn mask_for(name: RegName) -> u32 {
     match name {
         RegName::A | RegName::B | RegName::IL | RegName::IH => 0xFF,
         RegName::BA | RegName::I => 0xFFFF,
         RegName::X | RegName::Y | RegName::U | RegName::S => 0x0F_FFFF,
         RegName::PC => 0x0F_FFFF,
-        RegName::F | RegName::IMR => 0xFF,
+        // F is transferred as a byte by stack/interrupt instructions, but the
+        // available SC62015 evidence identifies only carry and zero. Do not
+        // preserve invented upper flag state pending a silicon round-trip.
+        RegName::F => MODELED_F_MASK,
+        RegName::IMR => 0xFF,
         RegName::FC | RegName::FZ => 0x1,
         RegName::Temp(_) => 0xFFFFFF,
         RegName::Unknown(_) => 0xFFFF_FFFF,
@@ -32,7 +46,7 @@ pub enum PowerState {
     Off,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct LlamaState {
     regs: HashMap<RegName, u32>,
     power_state: PowerState,
@@ -99,21 +113,22 @@ impl LlamaState {
                 self.regs.insert(RegName::I, i & mask_for(RegName::I));
             }
             RegName::F => {
-                // Preserve full F byte; sync FC/FZ aliases from bits 0/1.
-                self.regs.insert(RegName::F, masked & mask_for(RegName::F));
+                // Callers that ingest a raw byte must validate it first. State
+                // itself stores only the two modeled flag aliases.
+                self.regs.insert(RegName::F, masked);
                 self.regs.insert(RegName::FC, masked & 0x1);
                 self.regs.insert(RegName::FZ, (masked >> 1) & 0x1);
             }
             RegName::FC => {
                 let bit = masked & 0x1;
-                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & mask_for(RegName::F);
                 let new_f = (f & !0x1) | bit;
                 self.regs.insert(RegName::F, new_f);
                 self.regs.insert(RegName::FC, bit);
             }
             RegName::FZ => {
                 let bit = masked & 0x1;
-                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & mask_for(RegName::F);
                 let new_f = (f & !0x2) | (bit << 1);
                 self.regs.insert(RegName::F, new_f);
                 self.regs.insert(RegName::FZ, bit);
@@ -136,7 +151,7 @@ impl LlamaState {
             RegName::IL => self.get_reg(RegName::I) & 0xFF,
             RegName::IH => (self.get_reg(RegName::I) >> 8) & 0xFF,
             RegName::F => {
-                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
+                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & mask_for(RegName::F);
                 let fc = self.regs.get(&RegName::FC).copied().unwrap_or(raw & 0x1) & 0x1;
                 let fz = self
                     .regs
@@ -352,27 +367,37 @@ mod tests {
     #[test]
     fn f_facade_on_fc_fz() {
         let mut state = LlamaState::new();
-        state.set_reg(RegName::F, 0b1010_0011);
+        state.set_reg(RegName::F, 0b11);
 
         assert_eq!(state.get_reg(RegName::FC), 1);
         assert_eq!(state.get_reg(RegName::FZ), 1);
-        assert_eq!(state.get_reg(RegName::F), 0b1010_0011);
+        assert_eq!(state.get_reg(RegName::F), 0b11);
 
         state.set_reg(RegName::FC, 0);
         state.set_reg(RegName::FZ, 0);
-        assert_eq!(state.get_reg(RegName::F), 0b1010_0000);
+        assert_eq!(state.get_reg(RegName::F), 0);
     }
 
     #[test]
-    fn fc_fz_updates_preserve_upper_bits() {
+    fn fc_fz_updates_stay_within_modeled_image() {
         let mut state = LlamaState::new();
-        state.set_reg(RegName::F, 0b1111_1111);
+        state.set_reg(RegName::F, 0b11);
         state.set_reg(RegName::FC, 0);
         state.set_reg(RegName::FZ, 1);
 
-        assert_eq!(state.get_reg(RegName::F), 0b1111_1110);
+        assert_eq!(state.get_reg(RegName::F), 0b10);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 1);
+    }
+
+    #[test]
+    fn raw_f_validator_quarantines_unverified_upper_bits() {
+        for valid in 0..=MODELED_F_MASK {
+            assert_eq!(validate_f_image(valid), Ok(valid));
+        }
+        for invalid in [0x04, 0x80, 0xA4, 0xFC, 0xFF] {
+            assert!(validate_f_image(invalid).is_err());
+        }
     }
 
     #[test]
