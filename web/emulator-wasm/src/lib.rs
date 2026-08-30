@@ -407,7 +407,9 @@ impl Sc62015Emulator {
                 .set_iq7000_clock_seed_yyyymmddhhmm(seed)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
         }
-        self.runtime.power_on_reset();
+        self.runtime
+            .power_on_reset()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
             self.runtime
                 .set_iq7000_clock_seed_yyyymmddhhmm(seed)
@@ -1171,6 +1173,25 @@ mod tests {
         rom[ROM_WINDOW_LEN - 1] = 0x00;
         emulator.load_rom(&rom).expect("load rom");
         assert_eq!(emulator.get_reg("PC"), 0x001234);
+    }
+
+    #[wasm_bindgen_test]
+    fn reset_rejects_noncanonical_rom_vector() {
+        let mut emulator = Pce500Emulator::new();
+        let mut rom = vec![0u8; ROM_WINDOW_LEN];
+        rom[ROM_WINDOW_LEN - 3] = 0x34;
+        rom[ROM_WINDOW_LEN - 2] = 0x12;
+        rom[ROM_WINDOW_LEN - 1] = 0xF0;
+
+        let err = emulator
+            .load_rom(&rom)
+            .expect_err("noncanonical reset vector must fail closed");
+        assert!(
+            err.as_string()
+                .is_some_and(|message| message
+                    .contains("upper-nibble behavior requires real-hardware tracing")),
+            "unexpected reset error: {err:?}"
+        );
     }
 
     #[wasm_bindgen_test]
