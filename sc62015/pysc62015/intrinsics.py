@@ -316,9 +316,10 @@ def eval_intrinsic_reset(
     prepared_transfer = None
     if staged_transfer is not None:
         prepared_transfer = staged_transfer
-        reset_source = int(
-            getattr(state, "_sc62015_prepared_reset_source_pc", reset_source)
-        ) & 0xFFFFF
+        reset_source = (
+            int(getattr(state, "_sc62015_prepared_reset_source_pc", reset_source))
+            & 0xFFFFF
+        )
         # Remove the staged capability before consuming it.  An exception
         # cannot leave a retryable token attached to restored evaluator state.
         delattr(state, "_sc62015_prepared_reset_transfer")

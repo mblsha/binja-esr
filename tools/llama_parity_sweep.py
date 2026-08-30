@@ -83,6 +83,11 @@ class LoggingMemory(Memory):
 
         return self._backing[address & 0xFFFFFF]
 
+    def instruction_byte_is_callback_free(self, _address: int) -> bool:
+        """The sweep's flat bytearray has no callback-backed instruction bytes."""
+
+        return True
+
     def _write_byte(self, address: int, value: int) -> None:
         address &= 0xFFFFFF
         if address < 0 or address >= len(self._backing):
@@ -165,6 +170,14 @@ def _matching_expected_rejection(
     )
 
 
+def _execute_case_instruction(cpu: CPU, opcode: int, pc: int) -> None:
+    """Execute one case through the vector scheduler contract when required."""
+
+    if opcode in (0xFE, 0xFF):
+        cpu.prepare_instruction_before_scheduling(pc)
+    cpu.execute_instruction(pc)
+
+
 def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
     # X/Y/U/S are masked to the 20-bit external address space. Seeding them at
     # INTERNAL_MEMORY_START (0x100000) wraps to zero, so negative offsets and
@@ -178,13 +191,15 @@ def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
         s=STACK_SEED,
     )
 
+    opcode = instr_bytes[0]
+
     # Python backend
     mem_py = _make_memory(instr_bytes, pc)
     cpu_py = CPU(mem_py, reset_on_init=False, backend="python")
     cpu_py.apply_snapshot(reg_init)
     py_err = None
     try:
-        cpu_py.execute_instruction(pc)
+        _execute_case_instruction(cpu_py, opcode, pc)
         regs_py = _snapshot_registers(cpu_py)
     except Exception as exc:  # pragma: no cover - defensive
         py_err = f"{type(exc).__name__}: {exc}"
@@ -196,13 +211,12 @@ def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
     cpu_ll.apply_snapshot(reg_init)
     ll_err = None
     try:
-        cpu_ll.execute_instruction(pc)
+        _execute_case_instruction(cpu_ll, opcode, pc)
         regs_ll = _snapshot_registers(cpu_ll)
     except Exception as exc:  # pragma: no cover - defensive
         ll_err = f"{type(exc).__name__}: {exc}"
         regs_ll = {}
 
-    opcode = instr_bytes[0]
     if py_err or ll_err:
         return ParityResult(
             opcode=opcode,
