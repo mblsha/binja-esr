@@ -469,9 +469,7 @@ class CPU:
                     f"byte 0x{byte_address:05X}"
                 )
         try:
-            actual_opcode = _read_byte_with_pc(
-                self.memory, address & 0xFFFFF, address
-            )
+            actual_opcode = _read_byte_with_pc(self.memory, address & 0xFFFFF, address)
         except Exception as exc:
             self._contract_poisoned = (
                 "scheduled architectural opcode fetch failed: "

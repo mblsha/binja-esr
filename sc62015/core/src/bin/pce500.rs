@@ -3961,6 +3961,13 @@ enum OffWakeGate {
     WokeOnKey,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HaltWakeBoundary {
+    NotHalted,
+    WaitingForInterrupt,
+    WokeForInterrupt,
+}
+
 /// Apply the standalone loop's provisional OFF wake policy before generic IRQ
 /// delivery. Non-ONK status and pending bookkeeping are retained verbatim;
 /// only an asserted ONKI bit transitions the CPU back to running.
@@ -3982,6 +3989,70 @@ fn apply_off_wake_gate(state: &mut LlamaState, bus: &mut StandaloneBus) -> OffWa
     bus.timer.irq_source = Some("ONK".to_string());
     bus.timer.last_fired = Some("ONK".to_string());
     OffWakeGate::WokeOnKey
+}
+
+/// Model HALT wake as an idle scheduling boundary. A status bit may cancel
+/// HALT and arm delivery, but the interrupted PC is not delivered or executed
+/// until the following scheduling pass.
+fn apply_halt_wake_boundary(state: &mut LlamaState, bus: &mut StandaloneBus) -> HaltWakeBoundary {
+    if state.is_off() || !state.is_halted() {
+        return HaltWakeBoundary::NotHalted;
+    }
+
+    // Timers continue while HALTed and may provide the wake source for this
+    // idle boundary. Match the Python runtime's tick-before-wake ordering.
+    bus.tick_timers_only(bus.cycle_count);
+    let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+    bus.cycle_count = bus.cycle_count.wrapping_add(1);
+    if isr == 0 {
+        return HaltWakeBoundary::WaitingForInterrupt;
+    }
+
+    state.set_halted(false);
+    bus.irq_pending = true;
+    bus.timer.irq_pending = true;
+    bus.timer.irq_isr = isr;
+    bus.last_irq_src = None;
+    for (mask, src) in [
+        (ISR_ONKI, "ONK"),
+        (ISR_KEYI, "KEY"),
+        (ISR_STI, "STI"),
+        (ISR_MTI, "MTI"),
+    ] {
+        if (isr & mask) != 0 {
+            bus.last_irq_src = Some(src.to_string());
+            bus.timer.irq_source = Some(src.to_string());
+            break;
+        }
+    }
+    HaltWakeBoundary::WokeForInterrupt
+}
+
+/// Decide whether the current PC can execute on this scheduling pass using
+/// only callback-free state. A low-power wake is an idle boundary, while an
+/// already-unmasked interrupt replaces the dormant/current PC on the next
+/// running pass.
+fn current_instruction_requires_silent_preflight(state: &LlamaState, bus: &StandaloneBus) -> bool {
+    if state.is_halted() {
+        return false;
+    }
+
+    let imr = bus
+        .memory
+        .read_internal_byte_silent(IMEM_IMR_OFFSET)
+        .unwrap_or(0);
+    let mut isr = bus
+        .memory
+        .read_internal_byte_silent(IMEM_ISR_OFFSET)
+        .unwrap_or(0);
+    if bus.timer.key_irq_latched {
+        isr |= ISR_KEYI;
+    }
+    if bus.pending_onk {
+        isr |= ISR_ONKI;
+    }
+    let irq_replaces_pc = !bus.in_interrupt && (imr & IMR_MASTER) != 0 && (imr & isr) != 0;
+    !irq_replaces_pc
 }
 
 fn preflight_and_tick_instruction(
@@ -4784,7 +4855,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
 
         log_dbg(&format!("entering execute loop for {max_steps} steps"));
         while executed < max_steps {
-            let mut pre_tick_done = false;
+            let pre_tick_done = false;
             // Silent vector-target validation and stability classification use
             // the current instruction context. Establish it before IRQ
             // preflight, then refresh it below if delivery changes PC.
@@ -4801,15 +4872,8 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             // makes a malformed current instruction authoritative and leaves
             // trace-replay input untouched on rejection.
             let current_pc = state.pc() & ADDRESS_MASK;
-            let asserted_isr = bus
-                .memory
-                .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                .unwrap_or(0);
-            let should_preflight_current = if state.is_off() {
-                (asserted_isr & ISR_ONKI) != 0
-            } else {
-                !state.is_halted() || asserted_isr != 0
-            };
+            let should_preflight_current =
+                current_instruction_requires_silent_preflight(&state, &bus);
             let silent_current = if should_preflight_current {
                 match preflight_current_instruction_silently(&executor, &state, &mut bus) {
                     Ok(preflight) => Some(preflight),
@@ -4881,9 +4945,24 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             // OFF wake filtering must run before generic IRQ delivery.  A
             // pending KEYI/MTI is retained but cannot bypass the ONKI-only
             // wake gate.
-            if apply_off_wake_gate(&mut state, &mut bus) == OffWakeGate::WaitingForOnKey {
-                sleep_for_cycles(1).await;
-                continue;
+            match apply_off_wake_gate(&mut state, &mut bus) {
+                OffWakeGate::NotOff => {}
+                OffWakeGate::WaitingForOnKey | OffWakeGate::WokeOnKey => {
+                    // OFF consumes an idle boundary whether it remains stopped
+                    // or wakes. Delivery/execution starts on the next pass.
+                    bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                    sleep_for_cycles(1).await;
+                    continue;
+                }
+            }
+
+            match apply_halt_wake_boundary(&mut state, &mut bus) {
+                HaltWakeBoundary::NotHalted => {}
+                HaltWakeBoundary::WaitingForInterrupt
+                | HaltWakeBoundary::WokeForInterrupt => {
+                    sleep_for_cycles(1).await;
+                    continue;
+                }
             }
 
             if bus.irq_pending() {
@@ -4892,35 +4971,6 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 if let Err(error) = bus.deliver_irq(&mut state) {
                     eprintln!("error delivering IRQ at PC=0x{:05X}: {error}", state.pc());
                     break;
-                }
-            } else if state.is_halted() {
-                // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
-                // Mirror Python: tick timers before deciding whether to remain halted.
-                if !state.is_off() {
-                    bus.tick_timers_only(bus.cycle_count);
-                    pre_tick_done = true;
-                }
-                let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                if isr == 0 {
-                    if !state.is_off() {
-                        bus.cycle_count = bus.cycle_count.wrapping_add(1);
-                    }
-                    sleep_for_cycles(1).await;
-                    continue;
-                }
-                state.set_halted(false);
-                bus.irq_pending = true;
-                bus.last_irq_src = None;
-                for (mask, src) in [
-                    (ISR_ONKI, "ONK"),
-                    (ISR_KEYI, "KEY"),
-                    (ISR_STI, "STI"),
-                    (ISR_MTI, "MTI"),
-                ] {
-                    if (isr & mask) != 0 {
-                        bus.last_irq_src = Some(src.to_string());
-                        break;
-                    }
                 }
             }
             let pc = state.pc();
@@ -5737,6 +5787,50 @@ mod tests {
         assert_eq!(bus.timer.irq_source.as_deref(), Some("ONK"));
         assert_eq!(bus.timer.last_fired.as_deref(), Some("ONK"));
         assert!(bus.timer.key_irq_latched);
+    }
+
+    #[test]
+    fn halted_pending_irq_wakes_on_an_idle_boundary_before_delivery() {
+        let mut bus = test_standalone_bus();
+        bus.timer.enabled = false;
+        bus.cycle_count = 41;
+        bus.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        bus.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        bus.irq_pending = true;
+        bus.timer.irq_pending = true;
+
+        let mut state = LlamaState::new();
+        state.set_pc(0x12345);
+        state.set_reg(RegName::S, 0x23456);
+        state.set_halted(true);
+        let external_before = bus.memory.external_slice().to_vec();
+        assert!(
+            !current_instruction_requires_silent_preflight(&state, &bus),
+            "a dormant PC cannot execute on the HALT wake boundary"
+        );
+
+        let result = apply_halt_wake_boundary(&mut state, &mut bus);
+
+        assert_eq!(result, HaltWakeBoundary::WokeForInterrupt);
+        assert_eq!(state.power_state(), PowerState::Running);
+        assert_eq!(state.pc(), 0x12345, "wake must not deliver the vector");
+        assert_eq!(state.get_reg(RegName::S), 0x23456);
+        assert_eq!(bus.cycle_count, 42, "wake consumes one idle cycle");
+        assert_eq!(bus.delivered_irq_count, 0);
+        assert_eq!(bus.memory.external_slice(), external_before);
+        assert!(bus.irq_pending, "delivery remains armed for the next pass");
+        assert_eq!(bus.last_irq_src.as_deref(), Some("KEY"));
+        assert!(
+            !current_instruction_requires_silent_preflight(&state, &bus),
+            "the armed unmasked IRQ replaces the dormant PC on the next pass"
+        );
+
+        bus.memory.write_internal_byte(IMEM_IMR_OFFSET, 0);
+        assert!(
+            current_instruction_requires_silent_preflight(&state, &bus),
+            "a masked wake source leaves the resumed PC executable"
+        );
     }
 
     #[test]

@@ -76,6 +76,34 @@ def test_run_case_reports_backend_exceptions(monkeypatch) -> None:
     assert result.llama_error is None
 
 
+@pytest.mark.parametrize("opcode", (0xFE, 0xFF))
+def test_run_case_prepares_vector_opcode_once_before_execution(
+    monkeypatch, opcode: int
+) -> None:
+    calls: list[tuple[str, str, int]] = []
+
+    class TrackingCPU(_FakeCPU):
+        def prepare_instruction_before_scheduling(self, pc: int) -> None:
+            calls.append((self.backend, "prepare", pc))
+
+        def execute_instruction(self, pc: int) -> None:
+            calls.append((self.backend, "execute", pc))
+
+    monkeypatch.setattr(
+        llama_parity_sweep,
+        "CPU",
+        lambda _memory, *, reset_on_init, backend: TrackingCPU(backend),
+    )
+
+    llama_parity_sweep.run_case(bytes((opcode,)), pc=0)
+    assert calls == [
+        ("python", "prepare", 0),
+        ("python", "execute", 0),
+        ("llama", "prepare", 0),
+        ("llama", "execute", 0),
+    ]
+
+
 def test_run_case_seeds_stacks_in_valid_external_memory(monkeypatch) -> None:
     snapshots = []
 

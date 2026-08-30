@@ -1043,9 +1043,7 @@ class Emulator:
                     raise RuntimeError(
                         "prepared SC62015 vector transfer has the wrong scope"
                     )
-                if not pending_transfer.matches(
-                    self.memory, ENTRY_POINT_ADDR, address
-                ):
+                if not pending_transfer.matches(self.memory, ENTRY_POINT_ADDR, address):
                     pending_transfer.consume(self.memory, ENTRY_POINT_ADDR, address)
                 prepared_transfer = pending_transfer
         elif pending_transfer is not None:
