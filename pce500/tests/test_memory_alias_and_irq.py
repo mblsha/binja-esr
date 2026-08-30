@@ -14,6 +14,7 @@ import pytest
 from binja_test_mocks.eval_llil import Memory
 from pce500.emulator import IMRFlag, ISRFlag, IRQSource, PCE500Emulator as Emulator
 from pce500.memory import PCE500Memory as PyMemory
+from pce500.tests.vector_fixtures import install_static_machine_vectors
 from sc62015.pysc62015 import RegisterName, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
@@ -338,6 +339,9 @@ def test_key_on_irq_delivery_waits_for_irm(
     assert emu._in_interrupt is False
     assert emu.memory.read_byte(isr_addr) & int(status)
 
+    # The masked phase above must not need a vector. Install a truthful static
+    # vector only for the following pass, which actually unmasks and delivers.
+    install_static_machine_vectors(emu)
     emu.memory.write_byte(imr_addr, int(IMRFlag.IRM | mask))
     emu.step()
 

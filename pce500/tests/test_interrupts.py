@@ -20,6 +20,7 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters
 from pce500 import PCE500Emulator
 from pce500.emulator import IRQSource
 from pce500.keyboard_matrix import KEY_LOCATIONS
+from pce500.tests.vector_fixtures import install_static_machine_vectors
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 from sc62015.pysc62015 import available_backends
 
@@ -834,7 +835,11 @@ def test_low_power_host_failure_never_executes_next_opcode(
     assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
 
 
-def _arm_key_irq_for_delivery(emu: PCE500Emulator, *, stack: int = 0x0200) -> None:
+def _arm_key_irq_for_delivery(
+    emu: PCE500Emulator, *, stack: int = 0x0200, install_vectors: bool = True
+) -> None:
+    if install_vectors:
+        install_static_machine_vectors(emu)
     emu._timer_enabled = False  # type: ignore[attr-defined]
     emu._in_interrupt = False  # type: ignore[attr-defined]
     emu._irq_pending = True  # type: ignore[attr-defined]
@@ -920,21 +925,18 @@ def test_pending_irq_stack_underflow_wraps_in_20_bit_space(
 ) -> None:
     monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
-    _arm_key_irq_for_delivery(emu, stack=2)
+    _arm_key_irq_for_delivery(emu, stack=2, install_vectors=False)
     handler = 0x23456
     # Keep the wrapped frame bytes distinct from the PCE memory shim's compact
     # internal-register backing, and supply the vector independently.  A real
     # ROM overlay provides the same separation in full-machine runs.
     emu.memory.add_ram(0xFFFFD, 3, "wrapped_irq_frame")
-    original_read_long = emu.memory.read_long
-
-    def vector_read(address: int) -> int:
-        if address == 0xFFFFA:
-            return handler
-        return original_read_long(address)
-
-    monkeypatch.setattr(emu.memory, "read_long", vector_read)
-    emu.memory.write_byte(handler, 0x00)  # NOP at interrupt vector
+    emu.memory.add_rom(
+        0xFFFFA,
+        handler.to_bytes(3, "little"),
+        "wrapped_stack_irq_vector",
+    )
+    emu.memory.add_rom(handler, b"\x00", "wrapped_stack_irq_target")
     external_writes: list[int] = []
     original_write = emu.memory.write_byte
 
@@ -988,6 +990,7 @@ def test_pre_instruction_timer_failure_poisons_without_executing(
     with pytest.raises(RuntimeError, match="poisoned.*reset required"):
         emu.step()
 
+    install_static_machine_vectors(emu)
     emu.reset()
     emu._timer_enabled = False  # type: ignore[attr-defined]
     emu.cpu.regs.set(RegisterName.PC, 0x1000)
@@ -998,6 +1001,7 @@ def test_pre_instruction_timer_failure_poisons_without_executing(
 # Focused regression: ensure reset fully reinitializes timers and IRQ state
 def test_reset_reinitializes_timers_and_interrupt_state() -> None:
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    install_static_machine_vectors(emu)
 
     # Simulate in-flight timer and interrupt state before reset
     emu._timer_next_mti = 12345  # type: ignore[attr-defined]

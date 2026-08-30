@@ -724,6 +724,15 @@ def test_hardware_irq_callback_vector_rejects_before_mutation(
         )
         emu.memory.add_rom(target, b"\x00", "irq_target")
         emu.cpu.regs.set(RegisterName.PC, 0x1000)
+        emu.cpu.regs.set(RegisterName.S, 0x0400)
+        emu.memory.write_byte(
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR,
+            int(IMRFlag.IRM | IMRFlag.KEYM),
+        )
+        emu.memory.write_byte(
+            INTERNAL_MEMORY_START + IMEMRegisters.ISR,
+            int(ISRFlag.KEYI),
+        )
         emu._irq_pending = True
         before = (emu.cycle_count, emu.instruction_count, emu._poisoned)
 

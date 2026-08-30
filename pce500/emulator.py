@@ -1063,28 +1063,20 @@ class PCE500Emulator:
         if pc in self.breakpoints:
             return False
         was_halted = bool(getattr(self.cpu.state, "halted", False))
-        if (
-            was_halted
-            or self._timer_enabled
-            or self._irq_pending
-            or self._key_irq_latched
-            or bool(getattr(self, "_pending_onk", False))
-        ):
-            # Timer/key/wake work below may latch or relabel an IRQ. Prove the
-            # fixed vector and its callback-free destination before any such
-            # mutation; the one normal vector fetch remains deferred until
-            # delivery is actually selected.
-            self.cpu.preflight_vector_transfer_for_scheduling(
-                INTERRUPT_VECTOR_ADDR,
-                source_pc=pc,
-            )
+        in_interrupt = bool(getattr(self, "_in_interrupt", False))
+        key_will_reassert = bool(self._key_irq_latched) and not in_interrupt
+        onk_will_reassert = (
+            bool(getattr(self, "_pending_onk", False)) and not in_interrupt
+        )
+        potential_pending = (
+            bool(self._irq_pending) or key_will_reassert or onk_will_reassert
+        )
         pending_irq_replaces_pc = False
-        if self._irq_pending and not getattr(self, "_in_interrupt", False):
+        if not was_halted and not in_interrupt and potential_pending:
             # An interrupt is taken between instructions: the saved PC does
             # not need to decode when an already-unmasked IRQ will replace it.
-            # Decide this through the side-effect-free IMEM view so a masked
-            # IRQ still forces the current instruction to fail closed before
-            # keyboard/timer mutation.
+            # Include status bits that the host will reassert below, and decide
+            # entirely through the side-effect-free IMEM view.
             imr_silent = (
                 self.memory.peek_byte_for_preflight(
                     INTERNAL_MEMORY_START + IMEMRegisters.IMR, pc
@@ -1097,9 +1089,23 @@ class PCE500Emulator:
                 )
                 & 0xFF
             )
+            if key_will_reassert:
+                isr_silent |= int(ISRFlag.KEYI)
+            if onk_will_reassert:
+                isr_silent |= int(ISRFlag.ONKI)
             pending_irq_replaces_pc = (imr_silent & int(IMRFlag.IRM)) != 0 and (
                 imr_silent & isr_silent
             ) != 0
+            if pending_irq_replaces_pc:
+                # This pass will actually attempt delivery. Prove the fixed
+                # vector and callback-free destination before relatching any
+                # host status or changing interrupt metadata. HALT/OFF wake is
+                # an idle boundary, an active handler bars nested delivery, and
+                # a timer tick below can only arm an IRQ for the next pass.
+                self.cpu.preflight_vector_transfer_for_scheduling(
+                    INTERRUPT_VECTOR_ADDR,
+                    source_pc=pc,
+                )
         if not was_halted and not pending_irq_replaces_pc:
             # Validate the current PC before keyboard latches, IRQ sampling, or
             # timer state can change. Interrupt delivery may replace this PC,

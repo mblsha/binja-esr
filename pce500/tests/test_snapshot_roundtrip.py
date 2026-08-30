@@ -713,7 +713,7 @@ def test_llama_metadata_rewrite_failure_preserves_original_snapshot(
             json.dumps(
                 {
                     "magic": "native",
-                    "version": 3,
+                    "version": 4,
                     "instruction_count": 0,
                     "cycle_count": 0,
                     "memory_reads": 0,
@@ -721,6 +721,8 @@ def test_llama_metadata_rewrite_failure_preserves_original_snapshot(
                     "pc": 0,
                     "temps": {},
                     "power_state": "running",
+                    "external_interrupt_level": False,
+                    "onk_level": False,
                     "call_depth": 0,
                     "call_sub_level": 0,
                     "call_stack": [],
