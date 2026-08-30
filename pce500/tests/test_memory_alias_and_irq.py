@@ -81,7 +81,11 @@ def test_internal_memory_alias_writes(alias_base: int) -> None:
 def test_reti_restores_interrupt_frame_without_acknowledging_isr(
     backend: str,
 ) -> None:
-    """Match the ROM contract: firmware acknowledges ISR before executing RETI."""
+    """Pin the ROM-consistent model: RETI does not implicitly acknowledge ISR.
+
+    Both stock ROMs acknowledge before RETI, so this test is not direct silicon
+    evidence for the deliberately unacknowledged case.
+    """
     if backend == "llama" and "llama" not in available_backends():
         pytest.skip("LLAMA backend not available")
 

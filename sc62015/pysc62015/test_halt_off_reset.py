@@ -2,9 +2,10 @@
 
 import pytest
 from binja_test_mocks.eval_llil import Memory
-from .emulator import Emulator, RegisterName
+from .emulator import Emulator, RegisterName, validate_vector_transfer
 from .sc_asm import Assembler
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
+from .instr import InvalidInstruction
 from .instr.opcodes import IMEMRegisters
 
 
@@ -22,7 +23,15 @@ def create_memory():
             raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
 
-    return Memory(read_mem, write_mem), raw
+    memory = Memory(read_mem, write_mem)
+
+    def peek_byte_for_preflight(addr: int, _pc: int | None = None) -> int:
+        if addr < 0 or addr >= len(raw):
+            raise IndexError(f"Preflight address {addr:04x} out of bounds")
+        return raw[addr]
+
+    setattr(memory, "peek_byte_for_preflight", peek_byte_for_preflight)
+    return memory, raw
 
 
 def test_reset_disabled_starts_in_running_power_state():
@@ -258,7 +267,13 @@ def test_failed_power_on_reset_restores_native_state_and_requires_complete_reset
             raise RuntimeError("reset write failed")
         raw[addr] = value & 0xFF
 
-    emu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    memory = Memory(read_mem, write_mem)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda addr, _pc=None: raw[addr],
+    )
+    emu = Emulator(memory, reset_on_init=False)
     emu.regs.set(RegisterName.PC, 0x22222)
     emu.regs.set(RegisterName.A, 0x5A)
     emu.regs.call_sub_level = 4
@@ -283,6 +298,201 @@ def test_failed_power_on_reset_restores_native_state_and_requires_complete_reset
     assert getattr(emu.state, "power_state") == "running"
     emu.execute_instruction(0)
     assert emu.regs.get(RegisterName.PC) == 1
+
+
+def test_ir_noncanonical_vector_fails_atomically_via_safe_peek():
+    memory, raw = create_memory()
+    raw[0x1000] = 0xFE  # IR
+    raw[0xFFFFA:0xFFFFD] = bytes.fromhex("0001F0")  # raw F00100
+    raw[INTERNAL_MEMORY_START + IMEMRegisters.IMR] = 0xA5
+
+    emu = Emulator(memory, reset_on_init=False)
+    emu.regs.set(RegisterName.PC, 0x1000)
+    emu.regs.set(RegisterName.S, 0x00400)
+    emu.regs.set(RegisterName.F, 0x03)
+    emu.regs.call_sub_level = 7
+    before_regs = dict(emu.regs._values)
+    before_memory = bytes(raw)
+
+    with pytest.raises(NotImplementedError, match="noncanonical vector 0xF00100"):
+        emu.execute_instruction(0x1000)
+
+    assert dict(emu.regs._values) == before_regs
+    assert emu.regs.call_sub_level == 7
+    assert bytes(raw) == before_memory
+    assert emu._poisoned is None
+
+
+def test_reset_invalid_destination_fails_before_any_sfr_write():
+    memory, raw = create_memory()
+    raw[0x1000] = 0xFF  # RESET
+    raw[0xFFFFD:0x100000] = bytes.fromhex("000200")
+    raw[0x00200] = 0x20  # reserved opcode
+    for offset, value in (
+        (IMEMRegisters.LCC, 0xFF),
+        (IMEMRegisters.UCR, 0xA1),
+        (IMEMRegisters.USR, 0xB2),
+        (IMEMRegisters.ISR, 0xC3),
+        (IMEMRegisters.SCR, 0xD4),
+        (IMEMRegisters.SSR, 0xE5),
+    ):
+        raw[INTERNAL_MEMORY_START + offset] = value
+
+    emu = Emulator(memory, reset_on_init=False)
+    emu.regs.set(RegisterName.PC, 0x1000)
+    emu.regs.set(RegisterName.A, 0x5A)
+    emu.state.halted = True
+    setattr(emu.state, "power_state", "halted")
+    before_regs = dict(emu.regs._values)
+    before_state = dict(vars(emu.state))
+    before_memory = bytes(raw)
+
+    with pytest.raises(InvalidInstruction, match="opcode 0x20.*0x00200"):
+        emu.execute_instruction(0x1000)
+
+    assert dict(emu.regs._values) == before_regs
+    assert dict(vars(emu.state)) == before_state
+    assert bytes(raw) == before_memory
+    assert emu._poisoned is None
+
+
+def test_power_on_reset_requires_safe_peek_before_normal_bus_reads():
+    raw = bytearray([0x00] * ADDRESS_SPACE_SIZE)
+    raw[0xFFFFD:0x100000] = bytes.fromhex("000100")
+    normal_reads: list[int] = []
+    writes: list[tuple[int, int]] = []
+
+    def read_mem(addr: int) -> int:
+        normal_reads.append(addr)
+        return raw[addr]
+
+    def write_mem(addr: int, value: int) -> None:
+        writes.append((addr, value))
+        raw[addr] = value & 0xFF
+
+    emu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    before_regs = dict(emu.regs._values)
+
+    with pytest.raises(RuntimeError, match="peek_byte_for_preflight"):
+        emu.power_on_reset()
+
+    assert normal_reads == []
+    assert writes == []
+    assert dict(emu.regs._values) == before_regs
+    assert emu._poisoned is None
+
+
+@pytest.mark.parametrize("target_opcode", (0xFE, 0xFF, 0xEF))
+def test_vector_static_preflight_does_not_recurse_or_apply_i_dependent_checks(
+    target_opcode: int,
+):
+    memory, raw = create_memory()
+    target = 0x00200
+    raw[0xFFFFD:0x100000] = target.to_bytes(3, "little")
+    raw[target] = target_opcode  # IR, RESET, or I-counted WAIT
+    emu = Emulator(memory, reset_on_init=False)
+    emu.regs.set(RegisterName.I, 0)
+
+    assert validate_vector_transfer(memory, emu.regs, 0xFFFFD) == target
+
+
+@pytest.mark.parametrize(
+    ("target_bytes", "error_type", "error"),
+    (
+        (bytes.fromhex("20"), InvalidInstruction, "opcode 0x20"),
+        (bytes.fromhex("313100"), InvalidInstruction, "PRE"),
+        (bytes.fromhex("CE"), NotImplementedError, "TCL timer-clear"),
+    ),
+)
+def test_vector_static_preflight_rejects_invalid_pre_and_tcl_targets(
+    target_bytes: bytes,
+    error_type: type[Exception],
+    error: str,
+):
+    memory, raw = create_memory()
+    target = 0x00200
+    raw[0xFFFFD:0x100000] = target.to_bytes(3, "little")
+    raw[target : target + len(target_bytes)] = target_bytes
+    emu = Emulator(memory, reset_on_init=False)
+
+    with pytest.raises(error_type, match=error):
+        validate_vector_transfer(memory, emu.regs, 0xFFFFD)
+
+
+def test_ir_architectural_vector_mismatch_fails_before_frame_or_imr_write():
+    raw = bytearray([0x00] * ADDRESS_SPACE_SIZE)
+    source = 0x1000
+    target = 0x0200
+    raw[source] = 0xFE
+    raw[0xFFFFA:0xFFFFD] = target.to_bytes(3, "little")
+    raw[INTERNAL_MEMORY_START + IMEMRegisters.IMR] = 0xA5
+    normal_vector = (target + 1).to_bytes(3, "little")
+    writes: list[tuple[int, int]] = []
+
+    def read_mem(addr: int) -> int:
+        if 0xFFFFA <= addr <= 0xFFFFC:
+            return normal_vector[addr - 0xFFFFA]
+        return raw[addr]
+
+    def write_mem(addr: int, value: int) -> None:
+        writes.append((addr, value))
+        raw[addr] = value & 0xFF
+
+    memory = Memory(read_mem, write_mem)
+    setattr(memory, "peek_byte_for_preflight", lambda addr, _pc=None: raw[addr])
+    emu = Emulator(memory, reset_on_init=False)
+    emu.regs.set(RegisterName.PC, source)
+    emu.regs.set(RegisterName.S, 0x400)
+    before_regs = dict(emu.regs._values)
+    before_memory = bytes(raw)
+
+    with pytest.raises(RuntimeError, match="fetch disagrees with safe preflight"):
+        emu.execute_instruction(source)
+
+    assert dict(emu.regs._values) == before_regs
+    assert bytes(raw) == before_memory
+    assert writes == []
+    assert emu._poisoned is not None
+
+
+def test_power_on_reset_vector_read_failure_precedes_all_sfr_writes():
+    raw = bytearray([0x00] * ADDRESS_SPACE_SIZE)
+    target = 0x0200
+    raw[0xFFFFD:0x100000] = target.to_bytes(3, "little")
+    for offset in (
+        IMEMRegisters.LCC,
+        IMEMRegisters.UCR,
+        IMEMRegisters.USR,
+        IMEMRegisters.ISR,
+        IMEMRegisters.SCR,
+        IMEMRegisters.SSR,
+    ):
+        raw[INTERNAL_MEMORY_START + offset] = 0xA5
+    writes: list[tuple[int, int]] = []
+
+    def read_mem(addr: int) -> int:
+        if addr == 0xFFFFE:
+            raise RuntimeError("architectural reset-vector read failed")
+        return raw[addr]
+
+    def write_mem(addr: int, value: int) -> None:
+        writes.append((addr, value))
+        raw[addr] = value & 0xFF
+
+    memory = Memory(read_mem, write_mem)
+    setattr(memory, "peek_byte_for_preflight", lambda addr, _pc=None: raw[addr])
+    emu = Emulator(memory, reset_on_init=False)
+    emu.regs.set(RegisterName.PC, 0x12345)
+    before_regs = dict(emu.regs._values)
+    before_memory = bytes(raw)
+
+    with pytest.raises(RuntimeError, match="reset-vector read failed"):
+        emu.power_on_reset()
+
+    assert dict(emu.regs._values) == before_regs
+    assert bytes(raw) == before_memory
+    assert writes == []
+    assert emu._poisoned is not None
 
 
 if __name__ == "__main__":

@@ -1630,7 +1630,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ..Default::default()
     };
     runtime.enable_loop_detector(loop_config);
-    runtime.power_on_reset();
+    runtime.power_on_reset()?;
     apply_iq7000_rtc_arg(&mut runtime, args.model, &args.iq7000_rtc)?;
 
     let text_decoder = args.model.text_decoder(&rom_bytes);

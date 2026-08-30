@@ -36,11 +36,11 @@ An overview of the SC62015 CPU registers:
 | `IL`     | 8           | Index Register Low                        | Low byte of `I`.                                                      |
 | `IH`     | 8           | Index Register High                       | High byte of `I`.                                                     |
 | **`I`**  | **16**      | **Index Register (IH:IL)**                | Composite: `IH` (MSB), `IL` (LSB).                                    |
-| **`X`**  | **24**      | **Index Register X**                      | General purpose 24-bit register, often used for addressing.           |
-| **`Y`**  | **24**      | **Index Register Y**                      | General purpose 24-bit register, often used for addressing.           |
-| **`U`**  | **24**      | **User Stack Pointer**                    | Points to the top of the user stack in external RAM.                  |
-| **`S`**  | **24**      | **System Stack Pointer**                  | Points to the top of the system stack in external RAM. Used for `CALL`/`RET` and interrupts. |
-| **`PC`** | **20**      | **Program Counter**                       | Holds the 20-bit address of the next instruction. Stored in 3 bytes.  |
+| **`X`**  | **20**      | **Index Register X**                      | Transferred in three bytes; bits 23-20 are not retained.              |
+| **`Y`**  | **20**      | **Index Register Y**                      | Transferred in three bytes; bits 23-20 are not retained.              |
+| **`U`**  | **20**      | **User Stack Pointer**                    | Three-byte transfer container for an external-memory stack pointer.   |
+| **`S`**  | **20**      | **System Stack Pointer**                  | Three-byte transfer container for the system stack and call frames.   |
+| **`PC`** | **20**      | **Program Counter**                       | Holds the address of the next instruction and is transferred in three bytes. |
 | **`F`**  | **8**       | **Flags Register**                        | Contains status flags reflecting results of arithmetic/logic operations. |
 | ↳ `C`    | 1           | Carry Flag                                | Part of `F` (bit 0). Set on arithmetic carry-out or borrow-in.        |
 | ↳ `Z`    | 1           | Zero Flag                                 | Part of `F` (bit 1). Set if an operation result is zero.              |
@@ -136,9 +136,9 @@ instead of raw hex.
 | **CH** | 0xD7 | 1 | `(ch)` – high byte of `(cx)` |
 | **DL** | 0xD8 | 1 | `(dl)` – low byte of `(dx)` |
 | **DH** | 0xD9 | 1 | `(dh)` – high byte of `(dx)` |
-| **SI** | 0xDA | 3 | `(si)` – 24-bit pointer: `[SI]`, `[SI+1]`, `[SI+2]` |
-| **DI** | 0xDD | 3 | `(di)` – 24-bit pointer: `[DI]`, `[DI+1]`, `[DI+2]` |
-| **IOCS_WS** | 0xE6..0xE8 | 3 | IOCS workspace base pointer (24-bit). PC-E500 ROM convention treats this as `(E6)` and commonly indexes it as `[(E6)+offset]`. |
+| **SI** | 0xDA | 3 | `(si)` – three-byte pointer image: `[SI]`, `[SI+1]`, `[SI+2]`; external consumers use bits 19-0 |
+| **DI** | 0xDD | 3 | `(di)` – three-byte pointer image: `[DI]`, `[DI+1]`, `[DI+2]`; external consumers use bits 19-0 |
+| **IOCS_WS** | 0xE6..0xE8 | 3 | Three-byte IOCS workspace-base image. PC-E500 ROM convention treats this as `(E6)` and commonly indexes it as `[(E6)+offset]`; external consumers use bits 19-0. |
 
 Common composites (little-endian layout):
 
@@ -157,7 +157,17 @@ treats zero as an empty block, a wrapped count, or something else. Nonzero
 `WAIT` still consumes exactly `I` cycles, clears `I`, and fails closed without
 a callable `memory.wait_cycles` hook.
 
-### Three-byte addresses and raw data
+### Three-byte containers, 20-bit registers, and raw data
+
+`X`, `Y`, `U`, `S`, and `PC` are 20-bit architectural registers even though
+their instruction and stack representations occupy three bytes. The third
+byte contributes only its low nibble. Reported PC-E500 captures demonstrate this
+directly for the observable X/Y load-to-push path: after fetching
+`MV X/Y,0x3C5AA5`, a following push writes `A5 5A 0C`, not `A5 5A 3C`. The
+capture does not isolate whether silicon masks at load or push; the architectural
+emulator model normalizes at register write. The emulator applies the same
+register-class rule to U and S. Dedicated U/S and upper-bit-sensitive ALU probes
+remain useful confirmations, but neither register is modeled as 24-bit.
 
 For an encoded `lmn` **address**, the high byte must currently be `00..0F` and
 must match the target's high nibble. Text assembly accepts only address values
@@ -173,11 +183,17 @@ when it uses raw triples `54 59 50`, `4E 41 4D`, and `44 53 50` for the ASCII
 tags `TYP`, `NAM`, and `DSP`; a real-PC-E500 probe independently read back the
 full `A5 5A 3C` triple after `DC 20 A5 5A 3C`.
 
-Likewise, internal pointer/data operands occupy three physical bytes.
-`EXP`, `MVP`, and `CMPP` exchange, copy, or compare all 24 bits. A consumer
-that treats the triple as an external address (for example `JP (n)` or a load
-into `X/Y/U/S`) applies the 20-bit address mask at that boundary; the memory
-operand itself is never silently truncated.
+An internal-memory operand used by a three-byte instruction is a neutral
+three-byte container, not automatically a 20-bit register and not
+automatically a 24-bit address. `MVP` copies all three bytes; this is confirmed
+by ROM use and a real-device round trip. `C7 CMPP (m),(n)` compares all three
+bytes, while `D7 CMPP (m),r3` masks the memory image to the 20-bit register
+width. Neither upper-nibble flag result has been isolated on hardware; the
+split is independently corroborated only by the baseline emulator's best-guess.
+`EXP` is stricter: because no executed ROM site or hardware probe establishes
+bits 23-20, the emulator rejects a nonzero upper nibble before either write. A
+consumer that creates an external address or loads `X/Y/U/S` explicitly applies
+the 20-bit mask.
 
 ---
 
@@ -187,7 +203,7 @@ operand itself is never silently truncated.
 
 *   `r₁`, `r₂`, `r₃`, `r₄`: Represent registers of different sizes. `r` in opcode patterns is a placeholder.
 *   `rᵢₗ`, `rᵢₕ`, `rᵢₓ`: Subscripts denote Low, High, and Extension bytes of register `rᵢ`.
-*   `n`, `m`, `l`, `k`: Represent 8-bit immediate values or address bytes. `mn`, `lmn` form 16/20/24-bit values/addresses.
+*   `n`, `m`, `l`, `k`: Represent 8-bit immediate values or address bytes. `mn` forms a 16-bit value; `lmn` is a three-byte encoding whose effective width is instruction-specific (20-bit register/address or 24-bit raw data).
 *   `(addr)`: **Internal** Memory (Direct address `addr`, or PRE-modified).
 *   `[addr]`: **External** Memory (Direct address `addr`).
 *   `[r'₃]`: **External** Memory (Register Indirect: address is in `r'₃` (X,Y,U,S)).
@@ -205,7 +221,7 @@ operand itself is never silently truncated.
 | **MV r, immediate**  |                                                                                                              |             |       |              |                                                       |              |
 | `MV r₁, n`           | `r₁ ← n` (if `r₁=IL` then `IH←0`)                                                                            | `- -`       | 2     | A:2/IL:3     | `0000 1 r` / `0X` <br> `n`                            | `n`          |
 | `MV r₂, mn`          | `r₂ₗ ← n`, `r₂ₕ ← m`                                                                                         | `- -`       | 3     | 3            | `0000 1 r` / `0X` <br> `n` <br> `m`                   | `n,m`       |
-| `MV r₃, lmn`         | `r₃ₗ ← n`, `r₃ₕ ← m`, `r₃ₓ ← l` (24-bit for X,Y,U,S)                                                         | `- -`       | 4     | 4            | `0000 1 r` / `0X` <br> `n` <br> `m` <br> `l`          | `n,m,l`    |
+| `MV r₃, lmn`         | `r₃ ← (lmn & FFFFF)`; the high encoded nibble is fetched but not retained                                      | `- -`       | 4     | 4            | `0000 1 r` / `0X` <br> `n` <br> `m` <br> `l`          | `n,m,l`    |
 | **MV r, (n) (From Internal Memory)** |                                                                                              |             |       |              |                                                       |              |
 | `MV r₁, (n)`         | `r₁ ← (n)` (if `r₁=IL` then `IH←0`)                                                                          | `- -`       | 2     | A:3/IL:4     | `1000 0 r` / `8X` <br> `n`                            | `n`          |
 | `MV r₂, (n)`         | `r₂ₗ ← (n)`, `r₂ₕ ← (n+1)`                                                                                   | `- -`       | 2     | 4            | `1000 0 r` / `8X` <br> `n`                            | `n`          |
@@ -314,7 +330,7 @@ operand itself is never silently truncated.
 | :-------------- | :-------------------------------------------------------------------------------------------------- | :---------- | :---- | :------- | :----------------------------------------------- | :----------- |
 | `EX (m),(n)`    | `(m) ↔ (n)` (Internal memory byte exchange)                                                         | `- -`       | 3     | 7        | `1100 0000` / `C0` <br> `m` <br> `n`              | `m,n`        |
 | `EXW (m),(n)`   | `(m,m+1) ↔ (n,n+1)` (Word exchange)                                                                 | `- -`       | 3     | 10       | `1100 0001` / `C1` <br> `m` <br> `n`              | `m,n`        |
-| `EXP (m),(n)`   | `(m..m+2) ↔ (n..n+2)` (24-bit pointer/data exchange)                                                | `- -`       | 3     | 13       | `1100 0010` / `C2` <br> `m` <br> `n`              | `m,n`        |
+| `EXP (m),(n)`   | `(m..m+2) ↔ (n..n+2)` (three-byte exchange; upper-nibble behavior is quarantined)                    | `- -`       | 3     | 13       | `1100 0010` / `C2` <br> `m` <br> `n`              | `m,n`        |
 | `EXL (m),(n)`   | Loop `I` times: `(m++) ↔ (n++)` (Block exchange)                                                    | `- -`       | 3     | 5+3×I    | `1100 0011` / `C3` <br> `m` <br> `n`              | `m,n`        |
 | `EX A,B`        | `A ↔ B`                                                                                             | `- -`       | 1     | 3        | `1101 1101` / `DD`                               |              |
 | `EX r₂,r'₂`     | `r₂ ↔ r'₂`                                                                                          | `- -`       | 2     | 4        | `1110 1101` / `ED` <br> `0r 0r'` / `XX`          | `rr'`        |
@@ -398,8 +414,8 @@ operand itself is never silently truncated.
 | `CMP (m),(n)`   | `(m) - (n)`                                                           | `○ ○`       | 3     | 6        | `1011 0111` / `B7` <br> `m` <br> `n`              | `m,n`        |
 | `CMPW (m),(n)`  | `(m..m+1) - (n..n+1)` (Word compare)                                  | `○ ○`       | 3     | 8        | `1100 0110` / `C6` <br> `m` <br> `n`              | `m,n`        |
 | `CMPW (m),r2`   | `(m..m+1) - r2`                                                       | `○ ○`       | 3     | 7        | `1101 0110` / `D6` <br> `0r` <br> `m`             | `m` (r in op)|
-| `CMPP (m),(n)`  | `(m..m+2) - (n..n+2)` (24-bit compare)                                | `○ ○`       | 3     | 10       | `1100 0111` / `C7` <br> `m` <br> `n`              | `m,n`        |
-| `CMPP (m),r3`   | `(m..m+2) - r3`                                                       | `○ ○`       | 3     | 9        | `1101 0111` / `D7` <br> `0r` <br> `m`             | `m` (r in op)|
+| `CMPP (m),(n)`  | `(m..m+2) - (n..n+2)` (three-byte compare; upper-nibble flags need hardware confirmation) | `○ ○`       | 3     | 10       | `1100 0111` / `C7` <br> `m` <br> `n`              | `m,n`        |
+| `CMPP (m),r3`   | `((m..m+2) & FFFFF) - r3` (20-bit pointer comparison; upper-nibble flags need hardware confirmation) | `○ ○`       | 3     | 9        | `1101 0111` / `D7` <br> `0r` <br> `m`             | `m` (r in op)|
 
 ### Shift and Rotate Instructions
 

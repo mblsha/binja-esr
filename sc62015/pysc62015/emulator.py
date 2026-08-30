@@ -1,4 +1,5 @@
 from typing import Dict, Set, Optional, Any, cast, Tuple, Callable
+import inspect
 import enum
 from dataclasses import dataclass
 from binja_test_mocks.coding import FetchDecoder
@@ -18,7 +19,7 @@ from .constants import (
 )
 
 from .instr.opcode_table import OPCODES
-from .instr.opcodes import IMEMRegisters
+from .instr.opcodes import ENTRY_POINT_ADDR, IMEMRegisters, INTERRUPT_VECTOR_ADDR
 from .instr import (
     ADCL,
     DADL,
@@ -26,12 +27,15 @@ from .instr import (
     DSLL,
     DSRL,
     EXL,
+    IR,
     MVL,
     MVLD,
+    RESET,
     SBCL,
     decode,
     Instruction,
     InvalidInstruction,
+    PRE,
     TCL,
     UnknownInstruction,
     WAIT,
@@ -70,6 +74,362 @@ CALL_STACK_EFFECTS = {
 I_COUNTED_INSTRUCTIONS = (ADCL, SBCL, DADL, DSBL, MVL, MVLD, EXL, DSLL, DSRL, WAIT)
 
 
+def _decode_instruction_for_preflight(
+    address: int, read_byte: Callable[[int], int]
+) -> Instruction:
+    """Decode through an explicitly side-effect-free program-memory reader."""
+
+    fetched_opcode: int | None = None
+
+    def fetch(offset: int) -> int:
+        nonlocal fetched_opcode
+        value = int(read_byte((address + offset) & PC_MASK)) & 0xFF
+        if offset == 0:
+            fetched_opcode = value
+        return value
+
+    if USE_CACHED_DECODER:
+        decoder = CachedFetchDecoder(fetch, ADDRESS_SPACE_SIZE)
+    else:
+        decoder = FetchDecoder(fetch, ADDRESS_SPACE_SIZE)
+    instr = decode(decoder, address & PC_MASK, OPCODES)  # type: ignore
+    if instr is None or isinstance(instr, UnknownInstruction):
+        opcode = 0 if fetched_opcode is None else fetched_opcode
+        raise InvalidInstruction(
+            f"Invalid, reserved, or truncated opcode 0x{opcode:02X} "
+            f"at 0x{address & PC_MASK:05X}"
+        )
+    return cast(Instruction, instr)
+
+
+def _vector_transfer_provenance(memory: Memory) -> tuple[int, int]:
+    """Return the stable identity and mapping epoch for a prepared transfer."""
+
+    provider = getattr(memory, "vector_transfer_provenance", None)
+    if not callable(provider):
+        return id(memory), 0
+    provenance = provider()
+    if (
+        not isinstance(provenance, tuple)
+        or len(provenance) != 2
+        or isinstance(provenance[0], bool)
+        or isinstance(provenance[1], bool)
+        or not isinstance(provenance[0], int)
+        or not isinstance(provenance[1], int)
+    ):
+        raise RuntimeError(
+            "memory.vector_transfer_provenance() must return two integers"
+        )
+    return int(provenance[0]), int(provenance[1])
+
+
+def _read_byte_with_pc(memory: Memory, address: int, source_pc: int) -> int:
+    """Perform one architectural read using the strongest supported PC context.
+
+    Callback arity is inspected before invocation.  Retrying after a TypeError
+    would be unsafe because the callback body may already have consumed device
+    state before raising.
+    """
+
+    reader = memory.read_byte
+    try:
+        signature = inspect.signature(reader)
+    except (TypeError, ValueError):
+        # Opaque/native callables follow the modern two-argument contract.
+        return int(reader(address, source_pc)) & 0xFF  # type: ignore[call-arg]
+    try:
+        signature.bind(address, source_pc)
+    except TypeError:
+        try:
+            signature.bind(address)
+        except TypeError as exc:
+            raise TypeError(
+                "memory.read_byte must accept (address) or (address, cpu_pc)"
+            ) from exc
+        return int(reader(address)) & 0xFF
+    return int(reader(address, source_pc)) & 0xFF  # type: ignore[call-arg]
+
+
+def _write_byte_with_pc(
+    memory: Memory, address: int, value: int, source_pc: int
+) -> None:
+    """Perform one architectural write without retrying an invoked callback."""
+
+    writer = memory.write_byte
+    try:
+        signature = inspect.signature(writer)
+    except (TypeError, ValueError):
+        writer(address, value, source_pc)  # type: ignore[call-arg]
+        return
+    try:
+        signature.bind(address, value, source_pc)
+    except TypeError:
+        try:
+            signature.bind(address, value)
+        except TypeError as exc:
+            raise TypeError(
+                "memory.write_byte must accept (address, value) or "
+                "(address, value, cpu_pc)"
+            ) from exc
+        writer(address, value)
+        return
+    writer(address, value, source_pc)  # type: ignore[call-arg]
+
+
+class _ValidatedVectorTransfer:
+    """Private, one-shot proof binding a vector fetch to one memory mapping."""
+
+    __slots__ = (
+        "_memory",
+        "_provenance",
+        "_source_pc",
+        "_scope",
+        "_target",
+        "_used",
+        "_vector_address",
+    )
+
+    def __init__(
+        self,
+        memory: Memory,
+        vector_address: int,
+        source_pc: int,
+        target: int,
+        provenance: tuple[int, int],
+        scope: str = "instruction",
+    ) -> None:
+        self._memory = memory
+        self._provenance = provenance
+        self._vector_address = int(vector_address)
+        self._source_pc = int(source_pc) & PC_MASK
+        self._scope = scope
+        self._target = int(target) & PC_MASK
+        self._used = False
+
+    @property
+    def target(self) -> int:
+        return self._target
+
+    def _binding_matches(
+        self, memory: Memory, vector_address: int, source_pc: int
+    ) -> bool:
+        return (
+            memory is self._memory
+            and _vector_transfer_provenance(memory) == self._provenance
+            and int(vector_address) == self._vector_address
+            and (int(source_pc) & PC_MASK) == self._source_pc
+        )
+
+    def matches(self, memory: Memory, vector_address: int, source_pc: int) -> bool:
+        return not self._used and self._binding_matches(
+            memory, vector_address, source_pc
+        )
+
+    def invalidate(self) -> None:
+        self._used = True
+
+    def consume(
+        self,
+        memory: Memory,
+        vector_address: int,
+        source_pc: int,
+    ) -> int:
+        """Consume this proof before checking it, so failed reuse stays failed."""
+
+        if self._used:
+            raise RuntimeError("prepared SC62015 vector transfer was already consumed")
+        self._used = True
+        matches = self._binding_matches(memory, vector_address, source_pc)
+        if not matches:
+            raise RuntimeError(
+                "prepared SC62015 vector transfer does not match the current "
+                "instruction or memory mapping"
+            )
+        return self._target
+
+
+def validate_vector_transfer_stability(
+    memory: Memory,
+    vector_address: int,
+    target: int,
+    *,
+    require_immutable: bool = False,
+    require_metadata: bool = True,
+) -> None:
+    stability_name = (
+        "instruction_byte_is_immutable"
+        if require_immutable
+        else "instruction_byte_is_callback_free"
+    )
+    stability_check = getattr(memory, stability_name, None)
+    if not callable(stability_check):
+        if not require_immutable and not require_metadata:
+            return
+        requirement = "immutable" if require_immutable else "callback-free"
+        raise RuntimeError(
+            f"prepared SC62015 vector transfer requires {requirement} metadata"
+        )
+    vector_bytes = tuple((vector_address + index) & PC_MASK for index in range(3))
+
+    def target_peek(address: int) -> int:
+        peek_method = getattr(memory, "peek_byte_for_preflight")
+        return int(peek_method(address & PC_MASK, target)) & 0xFF
+
+    target_instruction = _decode_instruction_for_preflight(target, target_peek)
+    target_info = InstructionInfo()
+    target_instruction.analyze(target_info, target)
+    target_length = int(target_info.length or target_instruction.length())
+    target_bytes = tuple((target + index) & PC_MASK for index in range(target_length))
+    unstable = next(
+        (
+            address
+            for address in (*vector_bytes, *target_bytes)
+            if not bool(stability_check(address))
+        ),
+        None,
+    )
+    if unstable is not None:
+        requirement = "immutable" if require_immutable else "callback-free"
+        raise RuntimeError(
+            "SC62015 prepared vector transfer requires "
+            f"{requirement} instruction bytes; 0x{unstable:05X} is dynamic"
+        )
+
+
+def fetch_validated_vector_transfer(
+    memory: Memory,
+    regs: "Registers",
+    vector_address: int,
+    *,
+    source_pc: int | None = None,
+    require_immutable: bool = False,
+    scope: str = "instruction",
+    require_stability_metadata: bool = False,
+) -> _ValidatedVectorTransfer:
+    """Validate, architecturally fetch once, and return an opaque proof."""
+
+    if isinstance(vector_address, bool) or not 0 <= int(vector_address) <= PC_MASK:
+        raise ValueError("SC62015 vector address must be canonical 20-bit")
+    vector_address = int(vector_address)
+    vector_pc = (
+        regs.get(RegisterName.PC) if source_pc is None else int(source_pc)
+    ) & PC_MASK
+    provenance = _vector_transfer_provenance(memory)
+    target = validate_vector_transfer(
+        memory,
+        regs,
+        vector_address,
+        source_pc=vector_pc,
+    )
+    validate_vector_transfer_stability(
+        memory,
+        vector_address,
+        target,
+        require_immutable=require_immutable,
+        require_metadata=require_stability_metadata,
+    )
+    raw_vector = 0
+    for byte_index in range(3):
+        raw_vector |= _read_byte_with_pc(
+            memory,
+            (vector_address + byte_index) & PC_MASK,
+            vector_pc,
+        ) << (byte_index * 8)
+    if raw_vector & 0xF00000:
+        raise NotImplementedError(
+            "SC62015 vector upper-nibble behavior is unverified; refusing "
+            f"noncanonical architectural vector 0x{raw_vector:06X}"
+        )
+    if raw_vector != target:
+        raise RuntimeError(
+            "SC62015 architectural vector fetch disagrees with safe "
+            f"preflight at 0x{vector_address & PC_MASK:05X}: "
+            f"fetched 0x{raw_vector:06X}, preflight 0x{target:06X}"
+        )
+    if _vector_transfer_provenance(memory) != provenance:
+        raise RuntimeError("SC62015 vector mapping changed during architectural fetch")
+    return _ValidatedVectorTransfer(
+        memory,
+        vector_address,
+        vector_pc,
+        target,
+        provenance,
+        scope,
+    )
+
+
+def validate_vector_transfer(
+    memory: Memory,
+    regs: "Registers",
+    vector_address: int,
+    *,
+    source_pc: int | None = None,
+    actual_raw_vector: int | None = None,
+) -> int:
+    """Validate an indirect control transfer without observable bus reads.
+
+    SC62015 vector slots contain three bytes, but the program counter is
+    20-bit.  The behavior of a nonzero encoded upper nibble has not been
+    established on hardware, so the emulator quarantines it instead of
+    silently aliasing it.  The destination is also statically decoded before
+    the caller is allowed to mutate a stack, reset register, or scheduler.
+    """
+
+    if isinstance(vector_address, bool) or not 0 <= int(vector_address) <= PC_MASK:
+        raise ValueError("SC62015 vector address must be canonical 20-bit")
+    vector_address = int(vector_address)
+    peek_method = getattr(memory, "peek_byte_for_preflight", None)
+    if not callable(peek_method):
+        raise RuntimeError(
+            "SC62015 vector-transfer preflight requires memory.peek_byte_for_preflight"
+        )
+
+    vector_pc = (
+        regs.get(RegisterName.PC) if source_pc is None else int(source_pc)
+    ) & PC_MASK
+
+    def vector_peek(address: int) -> int:
+        return int(peek_method(address & 0xFFFFFF, vector_pc)) & 0xFF
+
+    raw_vector = 0
+    for byte_index in range(3):
+        raw_vector |= vector_peek((vector_address + byte_index) & PC_MASK) << (
+            byte_index * 8
+        )
+    if raw_vector & 0xF00000:
+        raise NotImplementedError(
+            "SC62015 vector upper-nibble behavior is unverified; refusing "
+            f"noncanonical vector 0x{raw_vector:06X} at "
+            f"0x{vector_address & PC_MASK:05X}"
+        )
+    if actual_raw_vector is not None:
+        if not 0 <= actual_raw_vector <= 0xFFFFFF:
+            raise RuntimeError("architectural SC62015 vector is not a 24-bit value")
+        if actual_raw_vector != raw_vector:
+            raise RuntimeError(
+                "SC62015 architectural vector fetch disagrees with safe "
+                f"preflight at 0x{vector_address & PC_MASK:05X}: "
+                f"fetched 0x{actual_raw_vector:06X}, "
+                f"preflight 0x{raw_vector:06X}"
+            )
+
+    target = raw_vector & PC_MASK
+
+    def target_peek(address: int) -> int:
+        return int(peek_method(address & PC_MASK, target)) & 0xFF
+
+    instr = _decode_instruction_for_preflight(target, target_peek)
+    if isinstance(instr, PRE):
+        raise InvalidInstruction(
+            f"Unfused or malformed PRE instruction at 0x{target:05X}"
+        )
+    if isinstance(instr, TCL):
+        raise NotImplementedError(
+            "TCL timer-clear side effects are not implemented; hardware trace required"
+        )
+    return target
+
+
 @dataclass
 class InstructionEvalInfo:
     instruction_info: InstructionInfo
@@ -89,7 +449,7 @@ class RegisterName(enum.Enum):
     # 16-bit
     I = "I"  # noqa: E741
     BA = "BA"
-    # 24-bit (3 bytes)
+    # 20-bit architectural registers (stored/transferred in 3 bytes)
     X = "X"
     Y = "Y"
     U = "U"
@@ -117,10 +477,10 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.IH: 1,  # 8-bit
     RegisterName.I: 2,  # 16-bit
     RegisterName.BA: 2,  # 16-bit
-    RegisterName.X: 3,  # 24-bit
-    RegisterName.Y: 3,  # 24-bit
-    RegisterName.U: 3,  # 24-bit
-    RegisterName.S: 3,  # 24-bit
+    RegisterName.X: 3,  # 3-byte storage, 20 significant bits
+    RegisterName.Y: 3,  # 3-byte storage, 20 significant bits
+    RegisterName.U: 3,  # 3-byte storage, 20 significant bits
+    RegisterName.S: 3,  # 3-byte storage, 20 significant bits
     RegisterName.PC: 3,  # 20-bit (stored in 3 bytes)
     RegisterName.FC: 1,  # 1-bit
     RegisterName.FZ: 1,  # 1-bit
@@ -358,6 +718,8 @@ class Emulator:
         setattr(self.state, "power_state", "running")
         self._poisoned: str | None = None
         self._execution_may_have_side_effects = False
+        self._pending_vector_transfer: _ValidatedVectorTransfer | None = None
+        self._pending_scheduled_opcode: tuple[int, int] | None = None
 
         # Track last PC for tracing
         self._last_pc: int = 0
@@ -410,7 +772,7 @@ class Emulator:
                             "KIO",
                             "read@KIL",
                             {
-                                "pc": pc_val & 0xFFFFFF
+                                "pc": pc_val & PC_MASK
                                 if isinstance(pc_val, int)
                                 else None,
                                 "offset": IMEMRegisters.KIL,
@@ -426,7 +788,7 @@ class Emulator:
                         "KIO",
                         "read@KIL",
                         {
-                            "pc": f"0x{pc_val & 0xFFFFFF:06X}"
+                            "pc": f"0x{pc_val & PC_MASK:06X}"
                             if isinstance(pc_val, int)
                             else "N/A",
                             "offset": f"0x{IMEMRegisters.KIL:02X}",
@@ -447,7 +809,7 @@ class Emulator:
                             "KIO",
                             f"read@0x{addr - INTERNAL_MEMORY_START:02X}",
                             {
-                                "pc": pc_val & 0xFFFFFF
+                                "pc": pc_val & PC_MASK
                                 if isinstance(pc_val, int)
                                 else None,
                                 "offset": addr - INTERNAL_MEMORY_START,
@@ -485,6 +847,59 @@ class Emulator:
             )
         return cast(Instruction, instr)
 
+    def prepare_vector_transfer(
+        self,
+        vector_address: int,
+        *,
+        source_pc: int,
+        require_immutable: bool = False,
+        scope: str = "instruction",
+    ) -> int:
+        """Architecturally fetch one vector for the next matching operation."""
+
+        if self._pending_vector_transfer is not None:
+            raise RuntimeError("an SC62015 vector transfer is already prepared")
+        transfer = fetch_validated_vector_transfer(
+            self.memory,
+            self.regs,
+            vector_address,
+            source_pc=source_pc,
+            require_immutable=require_immutable,
+            scope=scope,
+            require_stability_metadata=True,
+        )
+        self._pending_vector_transfer = transfer
+        return transfer.target
+
+    def _take_prepared_vector_transfer(
+        self, vector_address: int, source_pc: int, *, scope: str = "instruction"
+    ) -> _ValidatedVectorTransfer | None:
+        transfer = self._pending_vector_transfer
+        self._pending_vector_transfer = None
+        if transfer is None:
+            return None
+        if transfer._scope != scope:
+            transfer.invalidate()
+            return None
+        if not transfer.matches(self.memory, vector_address, source_pc):
+            transfer.consume(self.memory, vector_address, source_pc)
+        return transfer
+
+    def cancel_prepared_vector_transfer(self) -> None:
+        transfer = self._pending_vector_transfer
+        self._pending_vector_transfer = None
+        if transfer is not None:
+            transfer.invalidate()
+        self._pending_scheduled_opcode = None
+
+    def prepare_scheduled_opcode(self, address: int, opcode: int) -> None:
+        if self._pending_scheduled_opcode is not None:
+            raise RuntimeError("an SC62015 scheduled opcode is already prepared")
+        self._pending_scheduled_opcode = (
+            int(address) & PC_MASK,
+            int(opcode) & 0xFF,
+        )
+
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
         if self._poisoned is not None:
             raise RuntimeError(
@@ -498,6 +913,10 @@ class Emulator:
         last_pc_snapshot = self._last_pc
         current_pc_snapshot = self._current_pc
         self._execution_may_have_side_effects = False
+        pending_transfer = self._pending_vector_transfer
+        self._pending_vector_transfer = None
+        pending_opcode = self._pending_scheduled_opcode
+        self._pending_scheduled_opcode = None
 
         # Check if performance tracing is available through memory context
         tracer = getattr(self.memory, "_perf_tracer", None)
@@ -506,9 +925,17 @@ class Emulator:
                 with tracer.slice(
                     "Lifting", "execute_instruction", {"pc": f"0x{address:06X}"}
                 ):
-                    result = self._execute_instruction_impl(address)
+                    result = self._execute_instruction_impl(
+                        address,
+                        pending_transfer=pending_transfer,
+                        pending_opcode=pending_opcode,
+                    )
             else:
-                result = self._execute_instruction_impl(address)
+                result = self._execute_instruction_impl(
+                    address,
+                    pending_transfer=pending_transfer,
+                    pending_opcode=pending_opcode,
+                )
         except Exception as exc:
             may_have_external_side_effects = self._execution_may_have_side_effects
             self.regs._values.clear()
@@ -526,10 +953,17 @@ class Emulator:
             raise
         finally:
             self._execution_may_have_side_effects = False
+            if pending_transfer is not None:
+                pending_transfer.invalidate()
         return result
 
     def _execute_instruction_impl(
-        self, address: int, read_fn: Optional[Callable[[int], int]] = None
+        self,
+        address: int,
+        read_fn: Optional[Callable[[int], int]] = None,
+        *,
+        pending_transfer: _ValidatedVectorTransfer | None = None,
+        pending_opcode: tuple[int, int] | None = None,
     ) -> InstructionEvalInfo:
         # Track PC history for tracing
         pc_value = address & PC_MASK
@@ -542,7 +976,26 @@ class Emulator:
         self._current_pc = pc_value
 
         self.regs.set(RegisterName.PC, pc_value)
-        instr = self.decode_instruction(address, read_fn=read_fn)
+        if pending_opcode is not None:
+            prepared_pc, prepared_byte = pending_opcode
+            if prepared_pc != pc_value:
+                raise RuntimeError(
+                    "prepared SC62015 opcode does not match the current instruction"
+                )
+            opcode_requested = False
+
+            def prepared_read(byte_address: int) -> int:
+                nonlocal opcode_requested
+                if (byte_address & PC_MASK) == pc_value:
+                    opcode_requested = True
+                    return prepared_byte
+                return _read_byte_with_pc(self.memory, byte_address, pc_value)
+
+            instr = self.decode_instruction(address, read_fn=prepared_read)
+            if not opcode_requested:
+                raise RuntimeError("SC62015 decoder did not consume prepared opcode")
+        else:
+            instr = self.decode_instruction(address, read_fn=read_fn)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
 
         # Silicon behavior at I=0 is not established for any counted
@@ -568,6 +1021,39 @@ class Emulator:
             )
         opcode = instr.opcode
 
+        prepared_transfer: _ValidatedVectorTransfer | None = None
+        if isinstance(instr, IR):
+            if pending_transfer is not None:
+                if pending_transfer._scope != "instruction":
+                    pending_transfer.invalidate()
+                    raise RuntimeError(
+                        "prepared SC62015 vector transfer has the wrong scope"
+                    )
+                if not pending_transfer.matches(
+                    self.memory, INTERRUPT_VECTOR_ADDR, address
+                ):
+                    pending_transfer.consume(
+                        self.memory, INTERRUPT_VECTOR_ADDR, address
+                    )
+                prepared_transfer = pending_transfer
+        elif isinstance(instr, RESET):
+            if pending_transfer is not None:
+                if pending_transfer._scope != "instruction":
+                    pending_transfer.invalidate()
+                    raise RuntimeError(
+                        "prepared SC62015 vector transfer has the wrong scope"
+                    )
+                if not pending_transfer.matches(
+                    self.memory, ENTRY_POINT_ADDR, address
+                ):
+                    pending_transfer.consume(self.memory, ENTRY_POINT_ADDR, address)
+                prepared_transfer = pending_transfer
+        elif pending_transfer is not None:
+            pending_transfer.invalidate()
+            raise RuntimeError(
+                "prepared SC62015 vector transfer does not match the current instruction"
+            )
+
         # TCL has timer-phase side effects controlled by LCC.STCL/MTCL.  Until
         # the peripheral hook is implemented and hardware-traced, stop before
         # advancing PC rather than silently executing it as a NOP.
@@ -576,6 +1062,62 @@ class Emulator:
                 "TCL timer-clear side effects are not implemented; "
                 "hardware trace required"
             )
+
+        # Vector-bearing synchronous transfers must fail before the generic
+        # execution path is marked side-effecting.  Their lifted forms repeat
+        # this validation for direct LLIL evaluators.
+        if isinstance(instr, IR) and prepared_transfer is None:
+            validate_vector_transfer(
+                self.memory,
+                self.regs,
+                INTERRUPT_VECTOR_ADDR,
+                source_pc=address,
+            )
+        elif isinstance(instr, RESET) and prepared_transfer is None:
+            validate_vector_transfer(
+                self.memory,
+                self.regs,
+                ENTRY_POINT_ADDR,
+                source_pc=address,
+            )
+
+        # A prepared software IR must not execute the lifted architectural
+        # vector load after the wrapper's timer tick.  Consume the exact
+        # pre-tick fetch and perform the documented frame writes directly.
+        if isinstance(instr, IR) and prepared_transfer is not None:
+            target = prepared_transfer.consume(
+                self.memory, INTERRUPT_VECTOR_ADDR, address
+            )
+            info = InstructionInfo()
+            instr.analyze(info, address)
+            self._execution_may_have_side_effects = True
+            saved_pc = address & PC_MASK
+            s = (self.regs.get(RegisterName.S) - 3) & PC_MASK
+            self.regs.set(RegisterName.S, s)
+            for byte_index in range(3):
+                _write_byte_with_pc(
+                    self.memory,
+                    (s + byte_index) & PC_MASK,
+                    (saved_pc >> (8 * byte_index)) & 0xFF,
+                    saved_pc,
+                )
+            s = (self.regs.get(RegisterName.S) - 1) & PC_MASK
+            self.regs.set(RegisterName.S, s)
+            _write_byte_with_pc(
+                self.memory,
+                s,
+                self.regs.get(RegisterName.F),
+                saved_pc,
+            )
+            imr_address = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+            imr = _read_byte_with_pc(self.memory, imr_address, saved_pc)
+            s = (self.regs.get(RegisterName.S) - 1) & PC_MASK
+            self.regs.set(RegisterName.S, s)
+            _write_byte_with_pc(self.memory, s, imr, saved_pc)
+            _write_byte_with_pc(self.memory, imr_address, imr & 0x7F, saved_pc)
+            self.regs.set(RegisterName.PC, target)
+            self.regs.call_sub_level += 1
+            return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
         # Monitor specific opcodes for call stack tracking
         call_stack_delta = CALL_STACK_EFFECTS.get(opcode)
@@ -627,6 +1169,10 @@ class Emulator:
         self._execution_may_have_side_effects = True
         self.regs.set(RegisterName.PC, address + current_instr_length)
 
+        if isinstance(instr, RESET) and prepared_transfer is not None:
+            setattr(self.state, "_sc62015_prepared_reset_transfer", prepared_transfer)
+            setattr(self.state, "_sc62015_prepared_reset_source_pc", address & PC_MASK)
+
         label_to_index: Dict[Any, int] = {}
         for idx, node in enumerate(il.ils):
             if isinstance(node, MockLabel):
@@ -665,6 +1211,17 @@ class Emulator:
             self.evaluate(node)
             pc_llil += 1
 
+        if hasattr(self.state, "_sc62015_prepared_reset_transfer"):
+            # Successful RESET consumes and removes these in the intrinsic.
+            # Reaching here with them intact indicates the lift did not invoke
+            # RESET as promised; do not permit later reuse.
+            transfer = getattr(self.state, "_sc62015_prepared_reset_transfer")
+            delattr(self.state, "_sc62015_prepared_reset_transfer")
+            delattr(self.state, "_sc62015_prepared_reset_source_pc")
+            if isinstance(transfer, _ValidatedVectorTransfer):
+                transfer.consume(self.memory, ENTRY_POINT_ADDR, address)
+            raise RuntimeError("RESET lift did not consume its prepared vector")
+
         return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
     def evaluate(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
@@ -689,7 +1246,9 @@ class Emulator:
             self.regs.set_flag,
         )
 
-    def power_on_reset(self) -> None:
+    def power_on_reset(
+        self,
+    ) -> None:
         """Perform power-on reset per SC62015 spec.
 
         This method calls the RESET intrinsic evaluator directly to avoid duplicating
@@ -709,11 +1268,40 @@ class Emulator:
         # keep the CPU poisoned unless the entire reset completes.
         from .intrinsics import eval_intrinsic_reset
 
+        self._pending_scheduled_opcode = None
+
+        # Keep vector-policy failures outside the side-effecting recovery
+        # transaction.  They perform only explicit safe peeks and therefore do
+        # not poison an otherwise inspectable CPU.
+        prepared_transfer = self._take_prepared_vector_transfer(
+            ENTRY_POINT_ADDR,
+            self.regs.get(RegisterName.PC),
+            scope="machine_reset",
+        )
+        if prepared_transfer is None:
+            validate_vector_transfer(
+                self.memory,
+                self.regs,
+                ENTRY_POINT_ADDR,
+            )
+
         register_snapshot = dict(self.regs._values)
         call_sub_level_snapshot = self.regs.call_sub_level
         state_snapshot = dict(vars(self.state))
         original_poison = self._poisoned
         try:
+            if prepared_transfer is None:
+                prepared_transfer = fetch_validated_vector_transfer(
+                    self.memory,
+                    self.regs,
+                    ENTRY_POINT_ADDR,
+                )
+            setattr(self.state, "_sc62015_prepared_reset_transfer", prepared_transfer)
+            setattr(
+                self.state,
+                "_sc62015_prepared_reset_source_pc",
+                self.regs.get(RegisterName.PC),
+            )
             eval_intrinsic_reset(
                 None,  # llil not needed
                 None,  # size not needed

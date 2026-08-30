@@ -47,6 +47,59 @@ const MEMORY_CARD_RANGES: &[(usize, u32, u32, &str)] = &[
 const MEMORY_CARD_SLOT_START: u32 = 0x040000;
 const MEMORY_CARD_SLOT_END: u32 = 0x04FFFF;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryCardMode {
+    Absent,
+    Present,
+}
+
+/// Exact, process-independent memory-card state for snapshot v4 and later.
+///
+/// The invariants are intentionally validated by [`MemoryImage`] rather than
+/// by trusting an overlay name supplied by a caller. Present and absent cards
+/// both retain one hardware-supported capacity, writability policy, and an
+/// exact payload; the absent form preserves latent media for later reinsertion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryCardSnapshot {
+    pub mode: MemoryCardMode,
+    pub capacity: usize,
+    pub writable: bool,
+    pub payload: Vec<u8>,
+}
+
+/// Opaque, validated card restore plan.
+///
+/// Construction is restricted to [`MemoryImage::prepare_memory_card_restore`]
+/// so malformed metadata cannot reach the commit path. The overlay epoch also
+/// prevents a plan from being committed after an intervening overlay change.
+#[derive(Debug)]
+pub struct MemoryCardRestoreCandidate {
+    snapshot: Option<MemoryCardSnapshot>,
+    overlay_epoch: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RetainedMemoryCard {
+    capacity: usize,
+    writable: bool,
+    payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryCardState {
+    Unconfigured,
+    Invalidated,
+    Absent {
+        overlay_index: usize,
+    },
+    PresentExternal,
+    PresentOverlay {
+        overlay_index: usize,
+        capacity: usize,
+        writable: bool,
+    },
+}
+
 fn canonical_address(address: u32) -> u32 {
     address & ADDRESS_MASK
 }
@@ -114,6 +167,9 @@ pub struct MemoryOverlay {
     pub data: Option<Vec<u8>>,
     pub read_only: bool,
     pub read_handler: Option<OverlayReadHandler>,
+    /// Side-effect-free counterpart to `read_handler` for decode/vector
+    /// preflight. Handler-backed overlays without this callback fail closed.
+    pub preflight_read_handler: Option<OverlayReadHandler>,
     pub write_handler: Option<OverlayWriteHandler>,
     pub perfetto_thread: Option<String>,
 }
@@ -135,6 +191,23 @@ impl MemoryOverlay {
             if let Some(val) = handler(address, pc) {
                 return Some(val);
             }
+        }
+        if let (Some(data), Some(offset)) = (self.data.as_ref(), self.offset(address)) {
+            return data.get(offset).copied();
+        }
+        None
+    }
+
+    fn read_for_preflight(&self, address: u32, pc: Option<u32>) -> Option<u8> {
+        if let Some(handler) = self.preflight_read_handler.as_ref() {
+            if let Some(value) = handler(address, pc) {
+                return Some(value);
+            }
+        } else if self.read_handler.is_some() {
+            // Calling an ordinary device handler would make rejection itself
+            // observable, while falling through to backing data could validate
+            // different bytes than architectural execution.
+            return None;
         }
         if let (Some(data), Some(offset)) = (self.data.as_ref(), self.offset(address)) {
             return data.get(offset).copied();
@@ -178,6 +251,9 @@ pub struct MemoryImage {
     memory_writes: Cell<u64>,
     imr_isr_hook: Option<ImrIsrHook>,
     overlays: Vec<MemoryOverlay>,
+    memory_card_state: MemoryCardState,
+    retained_memory_card: Option<RetainedMemoryCard>,
+    overlay_epoch: u64,
     read_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_capture: Option<HashMap<u32, u8>>,
@@ -222,6 +298,9 @@ impl MemoryImage {
             memory_writes: Cell::new(0),
             imr_isr_hook: None,
             overlays: Vec::new(),
+            memory_card_state: MemoryCardState::Unconfigured,
+            retained_memory_card: None,
+            overlay_epoch: 0,
             read_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_capture: None,
@@ -364,18 +443,76 @@ impl MemoryImage {
         self.keyboard_bridge
     }
 
-    pub fn add_overlay(&mut self, overlay: MemoryOverlay) {
+    fn advance_overlay_epoch(&mut self) {
+        self.overlay_epoch = self
+            .overlay_epoch
+            .checked_add(1)
+            .expect("memory overlay epoch exhausted");
+    }
+
+    fn invalidate_memory_card_attestation(&mut self) {
+        self.advance_overlay_epoch();
+        self.memory_card_state = MemoryCardState::Invalidated;
+    }
+
+    fn add_overlay_internal(&mut self, overlay: MemoryOverlay) {
         self.overlays.push(overlay);
         self.overlays
             .sort_by(|a, b| (a.start, a.end, &a.name).cmp(&(b.start, b.end, &b.name)));
     }
 
-    pub fn remove_overlay(&mut self, name: &str) {
+    fn remove_overlay_internal(&mut self, name: &str) -> bool {
+        let previous_len = self.overlays.len();
         self.overlays.retain(|ov| ov.name != name);
+        self.overlays.len() != previous_len
+    }
+
+    pub fn add_overlay(&mut self, overlay: MemoryOverlay) {
+        self.invalidate_memory_card_attestation();
+        self.add_overlay_internal(overlay);
+    }
+
+    pub fn remove_overlay(&mut self, name: &str) {
+        if self.remove_overlay_internal(name) {
+            self.invalidate_memory_card_attestation();
+        }
     }
 
     pub fn overlays(&self) -> &[MemoryOverlay] {
         &self.overlays
+    }
+
+    /// Stable address-space identity and mapping epoch used to scope opaque
+    /// vector-transfer proofs. Ordinary byte writes do not change the mapping;
+    /// overlay/card reconfiguration does.
+    pub fn vector_transfer_provenance(&self) -> (usize, u64) {
+        (self as *const Self as usize, self.overlay_epoch)
+    }
+
+    /// Whether a scheduled instruction byte has one static, callback-free
+    /// view across a host timer/device tick.
+    pub fn instruction_byte_is_stable(&self, address: u32) -> bool {
+        let address = canonical_address(address);
+        if self.requires_python(address) {
+            return false;
+        }
+        for overlay in &self.overlays {
+            if !overlay.contains(address) {
+                continue;
+            }
+            if overlay.read_handler.is_some() || overlay.preflight_read_handler.is_some() {
+                return false;
+            }
+            if overlay
+                .data
+                .as_ref()
+                .and_then(|data| overlay.offset(address).and_then(|offset| data.get(offset)))
+                .is_some()
+            {
+                return true;
+            }
+        }
+        true
     }
 
     pub fn add_ram_overlay(&mut self, start: u32, size: usize, name: &str) {
@@ -391,6 +528,7 @@ impl MemoryImage {
             data: Some(vec![0u8; size]),
             read_only: false,
             read_handler: None,
+            preflight_read_handler: None,
             write_handler: None,
             perfetto_thread: Some("Memory_RAM".to_string()),
         });
@@ -409,12 +547,17 @@ impl MemoryImage {
             data: Some(data.to_vec()),
             read_only: true,
             read_handler: None,
+            preflight_read_handler: None,
             write_handler: None,
             perfetto_thread: Some("Memory_ROM".to_string()),
         });
     }
 
     pub fn load_memory_card(&mut self, data: &[u8]) -> Result<()> {
+        self.load_memory_card_with_writable(data, true)
+    }
+
+    pub fn load_memory_card_with_writable(&mut self, data: &[u8], writable: bool) -> Result<()> {
         if data.is_empty() {
             return Err(CoreError::Other("memory card data is empty".to_string()));
         }
@@ -427,37 +570,451 @@ impl MemoryImage {
                 "unsupported memory card size: {size} bytes"
             )));
         };
-        self.remove_overlay("memory_card");
-        self.add_overlay(MemoryOverlay {
+        self.advance_overlay_epoch();
+        self.retained_memory_card = None;
+        self.remove_overlay_internal("memory_card");
+        self.add_overlay_internal(MemoryOverlay {
             start: *start,
             end: *end,
             name: "memory_card".to_string(),
             data: Some(data.to_vec()),
-            read_only: false,
+            read_only: !writable,
             read_handler: None,
+            preflight_read_handler: None,
             write_handler: None,
             perfetto_thread: Some(thread.to_string()),
         });
+        self.attest_present_card(size, writable);
         Ok(())
     }
 
     pub fn set_memory_card_slot_present(&mut self, present: bool) {
-        self.remove_overlay("memory_card_slot");
+        let retained_before_removal = (!present)
+            .then(|| self.capture_active_or_retained_memory_card())
+            .flatten();
+        self.advance_overlay_epoch();
+        self.remove_overlay_internal("memory_card_slot");
         if present {
+            if let Some(retained) = self.retained_memory_card.take() {
+                self.install_present_card_without_epoch(retained.payload, retained.writable);
+            } else {
+                self.attest_present_external_or_existing_card();
+            }
             return;
         }
-        self.remove_overlay("memory_card");
+        self.retained_memory_card =
+            Some(
+                retained_before_removal.unwrap_or_else(|| RetainedMemoryCard {
+                    capacity: 65_536,
+                    writable: true,
+                    payload: vec![0; 65_536],
+                }),
+            );
+        self.remove_overlay_internal("memory_card");
         // Absent card: reads return 0 and writes are ignored but considered handled.
-        self.add_overlay(MemoryOverlay {
+        self.add_overlay_internal(MemoryOverlay {
             start: MEMORY_CARD_SLOT_START,
             end: MEMORY_CARD_SLOT_END,
             name: "memory_card_slot".to_string(),
             data: None,
             read_only: false,
             read_handler: Some(Box::new(|_addr, _pc| Some(0x00))),
+            preflight_read_handler: Some(Box::new(|_addr, _pc| Some(0x00))),
             write_handler: Some(Box::new(|_addr, _value, _pc| true)),
             perfetto_thread: Some("Memory_Card".to_string()),
         });
+        self.attest_absent_card();
+    }
+
+    /// Capture exact built-in card state without inferring trust from a public
+    /// overlay name. Generic overlay mutation invalidates this attestation.
+    /// A generic core which has never configured a card returns `None`.
+    pub fn memory_card_snapshot(&self) -> Result<Option<MemoryCardSnapshot>> {
+        self.validate_memory_card_attestation()?;
+        match self.memory_card_state {
+            MemoryCardState::Unconfigured => Ok(None),
+            MemoryCardState::Absent { .. } => {
+                let retained = self
+                    .retained_memory_card
+                    .as_ref()
+                    .expect("validated absent-card retained medium");
+                let snapshot = MemoryCardSnapshot {
+                    mode: MemoryCardMode::Absent,
+                    capacity: retained.capacity,
+                    writable: retained.writable,
+                    payload: retained.payload.clone(),
+                };
+                Ok(Some(snapshot))
+            }
+            MemoryCardState::PresentExternal => {
+                let start = MEMORY_CARD_SLOT_START as usize;
+                let end = MEMORY_CARD_SLOT_END as usize + 1;
+                Ok(Some(MemoryCardSnapshot {
+                    mode: MemoryCardMode::Present,
+                    capacity: end - start,
+                    writable: true,
+                    payload: self.external[start..end].to_vec(),
+                }))
+            }
+            MemoryCardState::PresentOverlay {
+                overlay_index,
+                capacity,
+                writable,
+            } => {
+                let payload = self.overlays[overlay_index]
+                    .data
+                    .as_ref()
+                    .expect("validated card overlay payload")
+                    .clone();
+                Ok(Some(MemoryCardSnapshot {
+                    mode: MemoryCardMode::Present,
+                    capacity,
+                    writable,
+                    payload,
+                }))
+            }
+            MemoryCardState::Invalidated => {
+                unreachable!("card attestation validation rejected this state")
+            }
+        }
+    }
+
+    /// Validate the complete overlay contract used by exact snapshots.
+    ///
+    /// Only the internally attested built-in card overlay may be present. This
+    /// separately rejects unrelated generic overlays which do not intersect
+    /// the card slot and therefore are outside `memory_card_snapshot()`'s
+    /// narrower responsibility.
+    pub fn validate_snapshot_overlay_contract(&self) -> Result<()> {
+        self.validate_memory_card_attestation()?;
+        let attested_index = match self.memory_card_state {
+            MemoryCardState::Absent { overlay_index }
+            | MemoryCardState::PresentOverlay { overlay_index, .. } => Some(overlay_index),
+            MemoryCardState::Unconfigured | MemoryCardState::PresentExternal => None,
+            MemoryCardState::Invalidated => {
+                unreachable!("card attestation validation rejected this state")
+            }
+        };
+        if self
+            .overlays
+            .iter()
+            .enumerate()
+            .any(|(index, _)| Some(index) != attested_index)
+        {
+            return Err(CoreError::InvalidSnapshot(
+                "snapshot cannot represent generic memory-overlay definitions or payloads"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate an archive-derived card image without changing live memory.
+    pub fn prepare_memory_card_restore(
+        &self,
+        snapshot: Option<MemoryCardSnapshot>,
+    ) -> Result<MemoryCardRestoreCandidate> {
+        if let Some(snapshot) = snapshot.as_ref() {
+            Self::validate_memory_card_snapshot(snapshot)?;
+        }
+        self.validate_memory_card_attestation()?;
+        Ok(MemoryCardRestoreCandidate {
+            snapshot,
+            overlay_epoch: self.overlay_epoch,
+        })
+    }
+
+    /// Commit a previously validated card candidate.
+    ///
+    /// The epoch check occurs before any mutation, so a stale candidate fails
+    /// atomically. Once it passes, installation uses only infallible operations.
+    pub fn commit_memory_card_restore(
+        &mut self,
+        candidate: MemoryCardRestoreCandidate,
+    ) -> Result<()> {
+        if self.overlay_epoch != candidate.overlay_epoch {
+            return Err(CoreError::InvalidSnapshot(
+                "memory overlays changed after card snapshot validation".to_string(),
+            ));
+        }
+        self.advance_overlay_epoch();
+        match candidate.snapshot {
+            None => self.install_unconfigured_card_without_epoch(),
+            Some(snapshot) => match snapshot.mode {
+                MemoryCardMode::Absent => self.install_absent_card_without_epoch(snapshot),
+                MemoryCardMode::Present => {
+                    self.install_present_card_without_epoch(snapshot.payload, snapshot.writable)
+                }
+            },
+        }
+        Ok(())
+    }
+
+    fn validate_memory_card_snapshot(snapshot: &MemoryCardSnapshot) -> Result<()> {
+        let supported_capacity = MEMORY_CARD_RANGES
+            .iter()
+            .any(|(capacity, _, _, _)| *capacity == snapshot.capacity);
+        match snapshot.mode {
+            MemoryCardMode::Absent | MemoryCardMode::Present => {
+                if !supported_capacity {
+                    return Err(CoreError::InvalidSnapshot(format!(
+                        "unsupported snapshot memory-card capacity: {} bytes",
+                        snapshot.capacity
+                    )));
+                }
+                if snapshot.payload.len() != snapshot.capacity {
+                    return Err(CoreError::InvalidSnapshot(format!(
+                        "memory-card payload length mismatch (capacity {}, payload {})",
+                        snapshot.capacity,
+                        snapshot.payload.len()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn capture_active_or_retained_memory_card(&self) -> Option<RetainedMemoryCard> {
+        if self.validate_memory_card_attestation().is_err() {
+            return None;
+        }
+        match self.memory_card_state {
+            MemoryCardState::Absent { .. } => self.retained_memory_card.clone(),
+            MemoryCardState::PresentExternal => {
+                let start = MEMORY_CARD_SLOT_START as usize;
+                let end = MEMORY_CARD_SLOT_END as usize + 1;
+                Some(RetainedMemoryCard {
+                    capacity: end - start,
+                    writable: true,
+                    payload: self.external[start..end].to_vec(),
+                })
+            }
+            MemoryCardState::PresentOverlay {
+                overlay_index,
+                capacity,
+                writable,
+            } => Some(RetainedMemoryCard {
+                capacity,
+                writable,
+                payload: self.overlays[overlay_index]
+                    .data
+                    .as_ref()
+                    .expect("validated card overlay payload")
+                    .clone(),
+            }),
+            MemoryCardState::Unconfigured | MemoryCardState::Invalidated => None,
+        }
+    }
+
+    fn overlay_intersects_memory_card_slot(overlay: &MemoryOverlay) -> bool {
+        overlay.start <= MEMORY_CARD_SLOT_END && overlay.end >= MEMORY_CARD_SLOT_START
+    }
+
+    fn validate_memory_card_attestation(&self) -> Result<()> {
+        let valid = match self.memory_card_state {
+            MemoryCardState::Unconfigured => {
+                self.retained_memory_card.is_none()
+                    && !self
+                        .overlays
+                        .iter()
+                        .any(Self::overlay_intersects_memory_card_slot)
+            }
+            MemoryCardState::Invalidated => false,
+            MemoryCardState::Absent { overlay_index } => {
+                self.overlays
+                    .get(overlay_index)
+                    .is_some_and(Self::is_builtin_absent_card_overlay)
+                    && self.only_attested_card_overlay_intersects(overlay_index)
+                    && self.retained_memory_card.as_ref().is_some_and(|retained| {
+                        Self::validate_memory_card_snapshot(&MemoryCardSnapshot {
+                            mode: MemoryCardMode::Absent,
+                            capacity: retained.capacity,
+                            writable: retained.writable,
+                            payload: retained.payload.clone(),
+                        })
+                        .is_ok()
+                    })
+            }
+            MemoryCardState::PresentExternal => {
+                self.retained_memory_card.is_none()
+                    && !self
+                        .overlays
+                        .iter()
+                        .any(Self::overlay_intersects_memory_card_slot)
+            }
+            MemoryCardState::PresentOverlay {
+                overlay_index,
+                capacity,
+                writable,
+            } => {
+                self.retained_memory_card.is_none()
+                    && self.overlays.get(overlay_index).is_some_and(|overlay| {
+                        Self::is_builtin_present_card_overlay(overlay, capacity, writable)
+                    })
+                    && self.only_attested_card_overlay_intersects(overlay_index)
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(CoreError::InvalidSnapshot(match self.memory_card_state {
+                MemoryCardState::Unconfigured => {
+                    "unattested overlay intersects an unconfigured memory-card slot".to_string()
+                }
+                MemoryCardState::Invalidated => {
+                    "memory-card attestation was invalidated by generic overlay mutation"
+                        .to_string()
+                }
+                _ => "memory-card overlay no longer matches its built-in attestation".to_string(),
+            }))
+        }
+    }
+
+    fn only_attested_card_overlay_intersects(&self, attested_index: usize) -> bool {
+        self.overlays.iter().enumerate().all(|(index, overlay)| {
+            index == attested_index || !Self::overlay_intersects_memory_card_slot(overlay)
+        })
+    }
+
+    fn is_builtin_absent_card_overlay(overlay: &MemoryOverlay) -> bool {
+        overlay.start == MEMORY_CARD_SLOT_START
+            && overlay.end == MEMORY_CARD_SLOT_END
+            && overlay.name == "memory_card_slot"
+            && overlay.data.is_none()
+            && !overlay.read_only
+            && overlay.read_handler.is_some()
+            && overlay.preflight_read_handler.is_some()
+            && overlay.write_handler.is_some()
+            && overlay.perfetto_thread.as_deref() == Some("Memory_Card")
+    }
+
+    fn is_builtin_present_card_overlay(
+        overlay: &MemoryOverlay,
+        capacity: usize,
+        writable: bool,
+    ) -> bool {
+        let Some((_, start, end, thread)) = MEMORY_CARD_RANGES
+            .iter()
+            .find(|(candidate, _, _, _)| *candidate == capacity)
+        else {
+            return false;
+        };
+        overlay.start == *start
+            && overlay.end == *end
+            && overlay.name == "memory_card"
+            && overlay
+                .data
+                .as_ref()
+                .is_some_and(|data| data.len() == capacity)
+            && overlay.read_only != writable
+            && overlay.read_handler.is_none()
+            && overlay.preflight_read_handler.is_none()
+            && overlay.write_handler.is_none()
+            && overlay.perfetto_thread.as_deref() == Some(*thread)
+    }
+
+    fn attest_absent_card(&mut self) {
+        let Some(index) = self
+            .overlays
+            .iter()
+            .position(Self::is_builtin_absent_card_overlay)
+        else {
+            self.memory_card_state = MemoryCardState::Invalidated;
+            return;
+        };
+        self.memory_card_state = MemoryCardState::Absent {
+            overlay_index: index,
+        };
+        if self.validate_memory_card_attestation().is_err() {
+            self.memory_card_state = MemoryCardState::Invalidated;
+        }
+    }
+
+    fn attest_present_card(&mut self, capacity: usize, writable: bool) {
+        let Some(index) = self
+            .overlays
+            .iter()
+            .position(|overlay| Self::is_builtin_present_card_overlay(overlay, capacity, writable))
+        else {
+            self.memory_card_state = MemoryCardState::Invalidated;
+            return;
+        };
+        self.memory_card_state = MemoryCardState::PresentOverlay {
+            overlay_index: index,
+            capacity,
+            writable,
+        };
+        if self.validate_memory_card_attestation().is_err() {
+            self.memory_card_state = MemoryCardState::Invalidated;
+        }
+    }
+
+    fn attest_present_external_or_existing_card(&mut self) {
+        match self.memory_card_state {
+            MemoryCardState::PresentOverlay {
+                capacity, writable, ..
+            } => self.attest_present_card(capacity, writable),
+            _ if self
+                .overlays
+                .iter()
+                .any(Self::overlay_intersects_memory_card_slot) =>
+            {
+                self.memory_card_state = MemoryCardState::Invalidated;
+            }
+            _ => self.memory_card_state = MemoryCardState::PresentExternal,
+        }
+    }
+
+    fn install_unconfigured_card_without_epoch(&mut self) {
+        self.remove_overlay_internal("memory_card");
+        self.remove_overlay_internal("memory_card_slot");
+        self.retained_memory_card = None;
+        self.memory_card_state = MemoryCardState::Unconfigured;
+    }
+
+    fn install_absent_card_without_epoch(&mut self, snapshot: MemoryCardSnapshot) {
+        self.remove_overlay_internal("memory_card");
+        self.remove_overlay_internal("memory_card_slot");
+        self.retained_memory_card = (snapshot.capacity != 0).then_some(RetainedMemoryCard {
+            capacity: snapshot.capacity,
+            writable: snapshot.writable,
+            payload: snapshot.payload,
+        });
+        self.add_overlay_internal(MemoryOverlay {
+            start: MEMORY_CARD_SLOT_START,
+            end: MEMORY_CARD_SLOT_END,
+            name: "memory_card_slot".to_string(),
+            data: None,
+            read_only: false,
+            read_handler: Some(Box::new(|_addr, _pc| Some(0x00))),
+            preflight_read_handler: Some(Box::new(|_addr, _pc| Some(0x00))),
+            write_handler: Some(Box::new(|_addr, _value, _pc| true)),
+            perfetto_thread: Some("Memory_Card".to_string()),
+        });
+        self.attest_absent_card();
+    }
+
+    fn install_present_card_without_epoch(&mut self, payload: Vec<u8>, writable: bool) {
+        let capacity = payload.len();
+        let (_, start, end, thread) = MEMORY_CARD_RANGES
+            .iter()
+            .find(|(candidate, _, _, _)| *candidate == capacity)
+            .expect("validated memory-card capacity");
+        self.remove_overlay_internal("memory_card");
+        self.remove_overlay_internal("memory_card_slot");
+        self.retained_memory_card = None;
+        self.add_overlay_internal(MemoryOverlay {
+            start: *start,
+            end: *end,
+            name: "memory_card".to_string(),
+            data: Some(payload),
+            read_only: !writable,
+            read_handler: None,
+            preflight_read_handler: None,
+            write_handler: None,
+            perfetto_thread: Some(thread.to_string()),
+        });
+        self.attest_present_card(capacity, writable);
     }
 
     pub fn clear_overlay_logs(&self) {
@@ -543,6 +1100,46 @@ impl MemoryImage {
         let external_addr = self.mirror_internal_ram_address(address);
         let idx = (external_addr as usize) & (EXTERNAL_SPACE - 1);
         self.external.get(idx).copied()
+    }
+
+    /// Read the same static byte image that architectural `load_with_pc`
+    /// would see, without counters, logs, or ordinary device callbacks.
+    /// Handler-backed overlays must provide an explicit safe counterpart;
+    /// otherwise preflight fails instead of validating stale backing bytes.
+    pub fn read_byte_for_preflight(&self, address: u32, pc: Option<u32>) -> Option<u8> {
+        let address = canonical_address(address);
+        if let Some(index) = Self::internal_index(address) {
+            return Some(self.internal[index]);
+        }
+        for overlay in &self.overlays {
+            if !overlay.contains(address) {
+                continue;
+            }
+            if overlay.read_handler.is_some() && overlay.preflight_read_handler.is_none() {
+                return None;
+            }
+            if let Some(value) = overlay.read_for_preflight(address, pc) {
+                return Some(value);
+            }
+        }
+        let external_addr = self.mirror_internal_ram_address(address);
+        let idx = (external_addr as usize) & (EXTERNAL_SPACE - 1);
+        self.external.get(idx).copied()
+    }
+
+    pub fn load_for_preflight(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
+        let bytes = bits.div_ceil(8).max(1);
+        let mut value = 0u32;
+        for offset in 0..bytes {
+            value |= u32::from(
+                self.read_byte_for_preflight(address.wrapping_add(u32::from(offset)), pc)?,
+            ) << (8 * offset);
+        }
+        if bits >= 32 {
+            Some(value)
+        } else {
+            Some(value & ((1u32 << bits) - 1))
+        }
     }
 
     pub fn load_silent(&self, address: u32, bits: u8) -> Option<u32> {
@@ -1380,6 +1977,7 @@ mod tests {
             data: None,
             read_only: true,
             read_handler: Some(Box::new(|_addr, _pc| Some(0xAB))),
+            preflight_read_handler: Some(Box::new(|_addr, _pc| Some(0xAB))),
             write_handler: None,
             perfetto_thread: None,
         });
@@ -1404,6 +2002,7 @@ mod tests {
             data: Some(vec![0u8; 4]),
             read_only: false,
             read_handler: None,
+            preflight_read_handler: None,
             write_handler: None,
             perfetto_thread: None,
         });
@@ -1429,6 +2028,7 @@ mod tests {
             data: None,
             read_only: false,
             read_handler: Some(Box::new(|_, _| None)),
+            preflight_read_handler: None,
             write_handler: None,
             perfetto_thread: None,
         });
@@ -1501,6 +2101,224 @@ mod tests {
         mem.set_memory_card_slot_present(true);
         mem.store_with_pc(0x040000, 8, 0x9F, None);
         assert_eq!(mem.external_slice()[0x040000], 0x9F);
+    }
+
+    #[test]
+    fn memory_card_snapshot_distinguishes_unconfigured_absent_and_present() {
+        let mut mem = MemoryImage::new();
+        assert_eq!(mem.memory_card_snapshot().unwrap(), None);
+
+        mem.set_memory_card_slot_present(false);
+        assert_eq!(
+            mem.memory_card_snapshot().unwrap(),
+            Some(MemoryCardSnapshot {
+                mode: MemoryCardMode::Absent,
+                capacity: 65_536,
+                writable: true,
+                payload: vec![0; 65_536],
+            })
+        );
+
+        mem.set_memory_card_slot_present(true);
+        let snapshot = mem
+            .memory_card_snapshot()
+            .unwrap()
+            .expect("present card snapshot");
+        assert_eq!(snapshot.mode, MemoryCardMode::Present);
+        assert_eq!(snapshot.capacity, 65_536);
+        assert!(snapshot.writable);
+        assert_eq!(snapshot.payload.len(), 65_536);
+    }
+
+    #[test]
+    fn memory_card_snapshot_roundtrips_every_capacity_and_write_mode() {
+        for (index, capacity) in [8192, 16384, 32768, 65536].into_iter().enumerate() {
+            let writable = index % 2 == 0;
+            let mut source = MemoryImage::new();
+            source.set_memory_card_slot_present(true);
+            source
+                .load_memory_card_with_writable(&vec![index as u8; capacity], writable)
+                .expect("install supported card");
+            if writable {
+                source.store_with_pc(MEMORY_CARD_SLOT_START, 8, 0xA5, None);
+            } else {
+                source.store_with_pc(MEMORY_CARD_SLOT_START, 8, 0xFF, None);
+            }
+
+            let snapshot = source
+                .memory_card_snapshot()
+                .unwrap()
+                .expect("configured card snapshot");
+            assert_eq!(snapshot.mode, MemoryCardMode::Present);
+            assert_eq!(snapshot.capacity, capacity);
+            assert_eq!(snapshot.writable, writable);
+            assert_eq!(
+                snapshot.payload[0],
+                if writable { 0xA5 } else { index as u8 }
+            );
+
+            let mut restored = MemoryImage::new();
+            let candidate = restored
+                .prepare_memory_card_restore(Some(snapshot.clone()))
+                .expect("prepare card restore");
+            restored
+                .commit_memory_card_restore(candidate)
+                .expect("commit card restore");
+            assert_eq!(restored.memory_card_snapshot().unwrap(), Some(snapshot));
+        }
+    }
+
+    #[test]
+    fn absent_card_restore_retains_media_for_reinsertion() {
+        let retained = MemoryCardSnapshot {
+            mode: MemoryCardMode::Absent,
+            capacity: 8192,
+            writable: false,
+            payload: vec![0xA5; 8192],
+        };
+        let mut mem = MemoryImage::new();
+        let candidate = mem
+            .prepare_memory_card_restore(Some(retained.clone()))
+            .expect("prepare absent card");
+        mem.commit_memory_card_restore(candidate)
+            .expect("commit absent card");
+        assert_eq!(mem.load_with_pc(MEMORY_CARD_SLOT_START, 8, None), Some(0));
+        assert_eq!(mem.memory_card_snapshot().unwrap(), Some(retained));
+
+        mem.set_memory_card_slot_present(true);
+        assert_eq!(
+            mem.load_with_pc(MEMORY_CARD_SLOT_START, 8, None),
+            Some(0xA5)
+        );
+        mem.store_with_pc(MEMORY_CARD_SLOT_START, 8, 0x5A, None);
+        assert_eq!(
+            mem.load_with_pc(MEMORY_CARD_SLOT_START, 8, None),
+            Some(0xA5),
+            "retained read-only configuration must survive reinsertion"
+        );
+        let present = mem.memory_card_snapshot().unwrap().unwrap();
+        assert_eq!(present.mode, MemoryCardMode::Present);
+        assert_eq!(present.capacity, 8192);
+        assert!(!present.writable);
+        assert_eq!(present.payload, vec![0xA5; 8192]);
+    }
+
+    #[test]
+    fn generic_overlay_mutation_invalidates_card_attestation() {
+        let mut mem = MemoryImage::new();
+        mem.set_memory_card_slot_present(false);
+        assert!(mem.memory_card_snapshot().is_ok());
+
+        mem.add_overlay(MemoryOverlay {
+            start: 0x7000,
+            end: 0x7000,
+            name: "unrelated_but_unattested".to_string(),
+            data: Some(vec![0]),
+            read_only: false,
+            read_handler: None,
+            preflight_read_handler: None,
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        let error = mem
+            .memory_card_snapshot()
+            .expect_err("generic mutation must invalidate card provenance");
+        assert!(error.to_string().contains("invalidated"));
+
+        mem.set_memory_card_slot_present(false);
+        mem.remove_overlay("memory_card_slot");
+        mem.add_overlay(MemoryOverlay {
+            start: MEMORY_CARD_SLOT_START,
+            end: MEMORY_CARD_SLOT_END,
+            name: "memory_card_slot".to_string(),
+            data: None,
+            read_only: false,
+            read_handler: Some(Box::new(|_, _| Some(0))),
+            preflight_read_handler: Some(Box::new(|_, _| Some(0))),
+            write_handler: Some(Box::new(|_, _, _| true)),
+            perfetto_thread: Some("Memory_Card".to_string()),
+        });
+        let error = mem
+            .memory_card_snapshot()
+            .expect_err("same-name handler spoof must not restore provenance");
+        assert!(error.to_string().contains("invalidated"));
+    }
+
+    #[test]
+    fn snapshot_overlay_contract_rejects_preexisting_generic_overlays() {
+        let mut mem = MemoryImage::new();
+        mem.add_ram_overlay(0x7000, 1, "generic_runtime_device");
+        mem.set_memory_card_slot_present(false);
+
+        assert!(
+            mem.memory_card_snapshot().is_ok(),
+            "the card itself was installed by the trusted built-in API"
+        );
+        let error = mem
+            .validate_snapshot_overlay_contract()
+            .expect_err("generic overlay must remain outside the exact snapshot contract");
+        assert!(error.to_string().contains("generic memory-overlay"));
+
+        let mut card_only = MemoryImage::new();
+        card_only.set_memory_card_slot_present(false);
+        card_only
+            .validate_snapshot_overlay_contract()
+            .expect("attested built-in card overlay is allowed");
+    }
+
+    #[test]
+    fn stale_card_restore_candidate_fails_before_mutation() {
+        let snapshot = MemoryCardSnapshot {
+            mode: MemoryCardMode::Present,
+            capacity: 8192,
+            writable: true,
+            payload: vec![0x5A; 8192],
+        };
+        let mut mem = MemoryImage::new();
+        let candidate = mem
+            .prepare_memory_card_restore(Some(snapshot))
+            .expect("prepare card restore");
+        mem.add_ram_overlay(0x7000, 1, "intervening_overlay");
+        let overlay_count = mem.overlays().len();
+
+        let error = mem
+            .commit_memory_card_restore(candidate)
+            .expect_err("stale candidate must fail");
+        assert!(error.to_string().contains("changed after"));
+        assert_eq!(mem.overlays().len(), overlay_count);
+        assert!(mem
+            .overlays()
+            .iter()
+            .all(|overlay| overlay.name != "memory_card"));
+    }
+
+    #[test]
+    fn malformed_card_restore_is_rejected_without_mutation() {
+        let mem = MemoryImage::new();
+        for snapshot in [
+            MemoryCardSnapshot {
+                mode: MemoryCardMode::Absent,
+                capacity: 0,
+                writable: false,
+                payload: Vec::new(),
+            },
+            MemoryCardSnapshot {
+                mode: MemoryCardMode::Absent,
+                capacity: 8192,
+                writable: true,
+                payload: vec![0; 1],
+            },
+            MemoryCardSnapshot {
+                mode: MemoryCardMode::Present,
+                capacity: 1024,
+                writable: true,
+                payload: vec![0; 1024],
+            },
+        ] {
+            assert!(mem.prepare_memory_card_restore(Some(snapshot)).is_err());
+            assert_eq!(mem.memory_card_snapshot().unwrap(), None);
+            assert!(mem.overlays().is_empty());
+        }
     }
 
     #[test]

@@ -25,6 +25,36 @@ def _execute_raw24_case(
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    ("opcode", "register"),
+    [
+        (0x0C, RegisterName.X),
+        (0x0D, RegisterName.Y),
+        (0x0E, RegisterName.U),
+        (0x0F, RegisterName.S),
+    ],
+)
+def test_three_byte_register_immediate_keeps_only_20_bits(
+    backend: str, opcode: int, register: RegisterName
+) -> None:
+    """Three fetched bytes are not a 24-bit architectural register.
+
+    The X/Y cases reproduce the real PC-E500 capture shape: encoded high byte
+    0x3C is observed as 0x0C when the register is subsequently transferred.
+    U/S share the same architectural register-immediate operand class.
+    """
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[:4] = bytes((opcode, 0xA5, 0x5A, 0x3C))
+    cpu = CPU(_make_memory(raw), reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.PC, 0)
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(register) == 0x0C_5AA5
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
 def test_exp_c2_exchanges_canonical_20_bit_pointer_images(backend: str) -> None:
     imem = INTERNAL_MEMORY_START
     raw = _execute_raw24_case(
@@ -63,6 +93,23 @@ def test_mvp_ca_copies_all_24_internal_memory_bits(backend: str) -> None:
     )
 
     assert raw[imem + 0x20 : imem + 0x23] == bytes.fromhex("3344B9")
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+def test_cmpp_c7_compares_all_24_internal_memory_bits(backend: str) -> None:
+    imem = INTERNAL_MEMORY_START
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[:4] = bytes.fromhex("32C71020")  # PRE (n),(n); CMPP (10),(20)
+    raw[imem + 0x10 : imem + 0x13] = bytes.fromhex("8000F0")
+    raw[imem + 0x20 : imem + 0x23] = bytes.fromhex("800000")
+
+    # C7 compares 0xF00080 with 0x000080 as raw three-byte images. If it
+    # accidentally inherited D7's 20-bit mask, Z would be set.
+    cpu = CPU(_make_memory(raw), reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.PC, 0)
+    cpu.execute_instruction(0)
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == 0
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])

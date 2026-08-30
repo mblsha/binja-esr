@@ -18,6 +18,7 @@ from .instr import (
     Imm16,
     ImmOperand,
     Imm20,
+    RegisterImm20,
     ImmOffset,
     EMemReg,
     RegIMemOffset,
@@ -307,7 +308,13 @@ class Assembler:
                         and isinstance(p_op, ImmOperand)
                         and not isinstance(t_op, ImmOffset)
                     ):
-                        if type(p_op) is type(t_op):
+                        # The grammar deliberately has one 20-bit immediate
+                        # syntax node. RegisterImm20 is an opcode-specific
+                        # decode policy for raw bytes, not a distinct source
+                        # language. Fresh text assembly remains canonical.
+                        if type(p_op) is type(t_op) or (
+                            isinstance(t_op, RegisterImm20) and type(p_op) is Imm20
+                        ):
                             continue
                     if isinstance(t_op, RegPair) and isinstance(p_op, RegPair):
                         if (

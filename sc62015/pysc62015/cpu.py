@@ -11,10 +11,31 @@ from .emulator import (
     Emulator,
     InstructionEvalInfo,
     RegisterName,
+    _read_byte_with_pc,
+    validate_vector_transfer,
+    validate_vector_transfer_stability,
 )
 from .constants import INTERNAL_MEMORY_START, validate_f_image
-from .instr import EX, POPS, POPU, RETI, Instruction, InvalidInstruction, PRE, TCL
-from .instr.opcodes import AddressingMode, IMem20, IMEMRegisters, RegF
+from .instr import (
+    EX,
+    IR,
+    RESET,
+    POPS,
+    POPU,
+    RETI,
+    Instruction,
+    InvalidInstruction,
+    PRE,
+    TCL,
+)
+from .instr.opcodes import (
+    AddressingMode,
+    ENTRY_POINT_ADDR,
+    IMem20,
+    IMEMRegisters,
+    INTERRUPT_VECTOR_ADDR,
+    RegF,
+)
 from .stepper import CPURegistersSnapshot, CPUStepResult, CPUStepper
 
 try:
@@ -257,6 +278,11 @@ class CPU:
                 "hardware trace required"
             )
 
+        if isinstance(instr, IR):
+            self.preflight_vector_transfer(INTERRUPT_VECTOR_ADDR, source_pc=address)
+        elif isinstance(instr, RESET):
+            self.preflight_vector_transfer(ENTRY_POINT_ADDR, source_pc=address)
+
         if not validate_data_dependent:
             return instr
 
@@ -322,6 +348,176 @@ class CPU:
         if isinstance(instr, RETI):
             stack_address = self.regs.get(RegisterName.S) & 0xFFFFF
             validate_f_image(peek((stack_address + 1) & 0xFFFFF))
+        return instr
+
+    def preflight_vector_transfer(
+        self, vector_address: int, *, source_pc: int | None = None
+    ) -> int:
+        """Resolve and statically validate a vector without observable reads.
+
+        This helper deliberately remains usable while a backend is poisoned:
+        a complete RESET is the recovery path, but it must still prove that its
+        own destination is safe before clearing any machine state.
+        """
+
+        return validate_vector_transfer(
+            self.memory,
+            self.regs,
+            vector_address,
+            source_pc=source_pc,
+        )
+
+    def preflight_vector_transfer_for_scheduling(
+        self, vector_address: int, *, source_pc: int
+    ) -> int:
+        target = self.preflight_vector_transfer(
+            vector_address,
+            source_pc=source_pc,
+        )
+        validate_vector_transfer_stability(
+            self.memory,
+            vector_address,
+            target,
+            require_metadata=True,
+        )
+        return target
+
+    def prepare_vector_transfer(
+        self,
+        vector_address: int,
+        *,
+        source_pc: int,
+        require_immutable: bool = False,
+        scope: str = "instruction",
+    ) -> int:
+        """Fetch and retain one unforgeable transfer in the active backend."""
+
+        if self.backend == "python":
+            return int(
+                self._impl.prepare_vector_transfer(
+                    vector_address,
+                    source_pc=source_pc,
+                    require_immutable=require_immutable,
+                    scope=scope,
+                )
+            )
+        return int(
+            self._impl.prepare_vector_transfer(
+                vector_address,
+                source_pc,
+                require_immutable=require_immutable,
+                scope=scope,
+            )
+        )
+
+    def cancel_prepared_vector_transfer(self) -> None:
+        cancel = getattr(self._impl, "cancel_prepared_vector_transfer", None)
+        if callable(cancel):
+            cancel()
+
+    def prepare_power_on_reset(self) -> int:
+        """Prepare the sole reset-vector fetch across machine reset mutation."""
+
+        self.cancel_prepared_vector_transfer()
+        source_pc = self.regs.get(RegisterName.PC)
+        target = self.preflight_vector_transfer(
+            ENTRY_POINT_ADDR,
+            source_pc=source_pc,
+        )
+        validate_vector_transfer_stability(
+            self.memory,
+            ENTRY_POINT_ADDR,
+            target,
+            require_immutable=True,
+            require_metadata=True,
+        )
+        try:
+            return self.prepare_vector_transfer(
+                ENTRY_POINT_ADDR,
+                source_pc=source_pc,
+                require_immutable=True,
+                scope="machine_reset",
+            )
+        except Exception as exc:
+            self._contract_poisoned = (
+                "machine RESET architectural vector preparation failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self.cancel_prepared_vector_transfer()
+            raise
+
+    def prepare_instruction_before_scheduling(self, address: int) -> Instruction:
+        """Stage a callback-free instruction and any vector before timer tick."""
+
+        self.cancel_prepared_vector_transfer()
+        instr = self.validate_before_scheduling(address)
+        info = InstructionInfo()
+        instr.analyze(info, address)
+        length = int(info.length or instr.length())
+        stability_check = getattr(
+            self.memory, "instruction_byte_is_callback_free", None
+        )
+        if not callable(stability_check):
+            raise RuntimeError(
+                "SC62015 scheduling requires executable-memory stability metadata"
+            )
+        for offset in range(length):
+            byte_address = (address + offset) & 0xFFFFF
+            if not bool(stability_check(byte_address)):
+                raise RuntimeError(
+                    "SC62015 scheduling refuses callback-backed instruction "
+                    f"byte 0x{byte_address:05X}"
+                )
+        try:
+            actual_opcode = _read_byte_with_pc(
+                self.memory, address & 0xFFFFF, address
+            )
+        except Exception as exc:
+            self._contract_poisoned = (
+                "scheduled architectural opcode fetch failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            raise
+        prefixed_opcode = getattr(instr, "_pre", None)
+        expected_opcode = (
+            int(prefixed_opcode)
+            if prefixed_opcode is not None
+            else int(instr.opcode)
+            if instr.opcode is not None
+            else -1
+        )
+        if actual_opcode != expected_opcode:
+            self._contract_poisoned = (
+                "scheduled architectural opcode disagrees with preflight"
+            )
+            raise RuntimeError(
+                "SC62015 architectural opcode fetch disagrees with safe preflight "
+                f"at 0x{address & 0xFFFFF:05X}: fetched 0x{actual_opcode:02X}, "
+                f"preflight 0x{expected_opcode & 0xFF:02X}"
+            )
+        prepare_opcode = getattr(self._impl, "prepare_scheduled_opcode", None)
+        if not callable(prepare_opcode):
+            self._contract_poisoned = "backend cannot retain prepared opcode"
+            raise RuntimeError(self._contract_poisoned)
+        try:
+            prepare_opcode(address, actual_opcode)
+            if isinstance(instr, IR):
+                self.prepare_vector_transfer(
+                    INTERRUPT_VECTOR_ADDR,
+                    source_pc=address,
+                )
+            elif isinstance(instr, RESET):
+                self.prepare_vector_transfer(
+                    ENTRY_POINT_ADDR,
+                    source_pc=address,
+                )
+        except Exception as exc:
+            self._contract_poisoned = (
+                "scheduled architectural preparation failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self.cancel_prepared_vector_transfer()
+            raise
         return instr
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:

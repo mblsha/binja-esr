@@ -14,13 +14,18 @@ from enum import Enum
 
 # Import the SC62015 emulator
 from sc62015.pysc62015 import CPU, RegisterName, Registers
+from sc62015.pysc62015.emulator import fetch_validated_vector_transfer
 from sc62015.pysc62015.instr.instructions import (
     CALL,
     RetInstruction,
     JumpInstruction,
     IR,
 )
-from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from sc62015.pysc62015.instr.opcodes import (
+    ENTRY_POINT_ADDR,
+    IMEMRegisters,
+    INTERRUPT_VECTOR_ADDR,
+)
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
 
@@ -28,6 +33,7 @@ from .memory import (
     PCE500Memory,
     MemoryOverlay,
     IMEM_ACCESS_HISTORY_LIMIT,
+    SUPPORTED_MEMORY_CARD_SIZES,
 )
 from .display import HD61202Controller
 from .keyboard_handler import PCE500KeyboardHandler as KeyboardHandler
@@ -43,7 +49,9 @@ MTI_PERIOD_CYCLES_DEFAULT = DEFAULT_CPU_HZ // 1000 * 2  # 2 ms tick
 STI_PERIOD_CYCLES_DEFAULT = DEFAULT_CPU_HZ // 2  # 0.5 s tick
 
 SNAPSHOT_MAGIC = "pc-e500.snapshot"
-SNAPSHOT_VERSION = 3
+SNAPSHOT_VERSION = 4
+_SNAPSHOT_JSON_MAX_BYTES = 4 * 1024 * 1024
+_SNAPSHOT_LCD_MAX_BYTES = 0x100000
 _SNAPSHOT_REGISTER_LAYOUT = (
     ("pc", 3),
     ("ba", 2),
@@ -166,6 +174,213 @@ def _snapshot_ranges(value: object, label: str) -> tuple[tuple[int, int], ...]:
             raise ValueError(f"snapshot {label}[{index}] has an inverted range")
         result.append((start, end))
     return tuple(result)
+
+
+_SNAPSHOT_BASE_ENTRY_SIZES = {
+    "registers.bin": sum(width for _, width in _SNAPSHOT_REGISTER_LAYOUT),
+    "external_ram.bin": 0x100000,
+    "internal_ram.bin": 0x8000,
+    "imem.bin": 0x100,
+}
+_SNAPSHOT_NATIVE_BASE_ENTRIES = frozenset(
+    {"snapshot.json", *_SNAPSHOT_BASE_ENTRY_SIZES}
+)
+_SNAPSHOT_V4_ENTRIES = frozenset(
+    {*_SNAPSHOT_NATIVE_BASE_ENTRIES, "lcd_vram.bin", "memory_card.bin"}
+)
+
+
+def _snapshot_archive_infos(
+    archive: zipfile.ZipFile,
+) -> dict[str, zipfile.ZipInfo]:
+    """Index archive members without quadratic duplicate-name checks."""
+
+    infos: dict[str, zipfile.ZipInfo] = {}
+    duplicates: list[str] = []
+    duplicate_names: set[str] = set()
+    for info in archive.infolist():
+        name = info.filename
+        if name in infos:
+            if name not in duplicate_names:
+                duplicate_names.add(name)
+                duplicates.append(name)
+        else:
+            infos[name] = info
+    if duplicates:
+        raise ValueError(f"snapshot archive contains duplicate entries: {duplicates}")
+    return infos
+
+
+def _read_snapshot_member(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    *,
+    exact_size: int | None = None,
+    maximum_size: int | None = None,
+) -> bytes:
+    """Read one member with both declared and actual decompressed-size bounds."""
+
+    if exact_size is not None:
+        if info.file_size != exact_size:
+            raise ValueError(
+                f"snapshot entry {info.filename!r} must contain exactly "
+                f"{exact_size} bytes (declared {info.file_size})"
+            )
+        limit = exact_size
+    elif maximum_size is not None:
+        if info.file_size > maximum_size:
+            raise ValueError(
+                f"snapshot entry {info.filename!r} exceeds the "
+                f"{maximum_size}-byte limit"
+            )
+        limit = maximum_size
+    else:
+        raise AssertionError("snapshot member read requires a size contract")
+
+    with archive.open(info, "r") as member:
+        payload = member.read(limit + 1)
+    if len(payload) > limit:
+        raise ValueError(
+            f"snapshot entry {info.filename!r} exceeds its decompressed-size limit"
+        )
+    if exact_size is not None and len(payload) != exact_size:
+        raise ValueError(
+            f"snapshot entry {info.filename!r} must contain exactly "
+            f"{exact_size} bytes (read {len(payload)})"
+        )
+    return payload
+
+
+def _read_snapshot_archive(
+    path: str | Path,
+    *,
+    native_for_patch: bool = False,
+) -> tuple[dict[str, object], dict[str, bytes]]:
+    """Strictly read a PCE v4 archive or a native v4 patch input.
+
+    Native LLAMA output uses v4 with the same fixed-size base
+    entries and an LCD member exactly when its metadata carries LCD state.  The
+    caller patches that already-strict native image into the PCE v4 envelope.
+    """
+
+    source = Path(path)
+    with zipfile.ZipFile(source, "r") as archive:
+        infos = _snapshot_archive_infos(archive)
+        names = set(infos)
+
+        allowed = (
+            _SNAPSHOT_NATIVE_BASE_ENTRIES | {"lcd_vram.bin"}
+            if native_for_patch
+            else _SNAPSHOT_V4_ENTRIES
+        )
+        unexpected = sorted(names - allowed)
+        if unexpected:
+            raise ValueError(
+                f"snapshot archive contains unexpected entries: {unexpected}"
+            )
+        if "snapshot.json" not in infos:
+            raise ValueError("snapshot archive is missing entries: ['snapshot.json']")
+
+        metadata_payload = _read_snapshot_member(
+            archive,
+            infos["snapshot.json"],
+            maximum_size=_SNAPSHOT_JSON_MAX_BYTES,
+        )
+        metadata = _snapshot_mapping(
+            json.loads(
+                metadata_payload,
+                object_pairs_hook=_snapshot_json_object_pairs,
+            ),
+            "metadata",
+        )
+
+        if not native_for_patch:
+            # Inspect the bounded, duplicate-free metadata before applying the
+            # v4 entry-set contract.  This preserves a clear compatibility
+            # error for genuine v3 archives, which legitimately lack the v4
+            # memory-card member and payload.
+            version = _snapshot_int(
+                metadata.get("version"),
+                "version",
+                maximum=(1 << 32) - 1,
+            )
+            if version != SNAPSHOT_VERSION:
+                raise ValueError("Unsupported snapshot version")
+            missing = sorted(_SNAPSHOT_V4_ENTRIES - names)
+            if missing:
+                raise ValueError(f"snapshot archive is missing entries: {missing}")
+        else:
+            expected = set(_SNAPSHOT_NATIVE_BASE_ENTRIES)
+            if metadata.get("lcd") is not None:
+                expected.add("lcd_vram.bin")
+            missing = sorted(expected - names)
+            if missing:
+                raise ValueError(f"snapshot archive is missing entries: {missing}")
+            unexpected_for_shape = sorted(names - expected)
+            if unexpected_for_shape:
+                raise ValueError(
+                    "snapshot archive contains unexpected entries: "
+                    f"{unexpected_for_shape}"
+                )
+
+        for name, exact_size in _SNAPSHOT_BASE_ENTRY_SIZES.items():
+            info = infos.get(name)
+            if info is None:
+                raise ValueError(f"snapshot archive is missing entries: [{name!r}]")
+            if info.file_size != exact_size:
+                raise ValueError(
+                    f"snapshot entry {name!r} must contain exactly {exact_size} "
+                    f"bytes (declared {info.file_size})"
+                )
+
+        lcd_payload_size = _snapshot_int(
+            metadata.get("lcd_payload_size", 0),
+            "lcd_payload_size",
+            maximum=_SNAPSHOT_LCD_MAX_BYTES,
+        )
+        if "lcd_vram.bin" in infos:
+            if infos["lcd_vram.bin"].file_size != lcd_payload_size:
+                raise ValueError(
+                    "snapshot entry 'lcd_vram.bin' size disagrees with lcd_payload_size"
+                )
+        elif lcd_payload_size != 0:
+            raise ValueError("snapshot LCD metadata requires lcd_vram.bin")
+
+        card_capacity: int | None = None
+        if not native_for_patch:
+            card_metadata = _snapshot_mapping(
+                metadata.get("memory_card"), "memory_card"
+            )
+            card_capacity = _snapshot_int(
+                card_metadata.get("capacity"),
+                "memory_card.capacity",
+                maximum=max(SUPPORTED_MEMORY_CARD_SIZES),
+            )
+            if card_capacity not in SUPPORTED_MEMORY_CARD_SIZES:
+                raise ValueError("snapshot memory_card.capacity is unsupported")
+            if infos["memory_card.bin"].file_size != card_capacity:
+                raise ValueError(
+                    "snapshot memory_card.bin size disagrees with memory_card.capacity"
+                )
+
+        entries = {"snapshot.json": metadata_payload}
+        for name, exact_size in _SNAPSHOT_BASE_ENTRY_SIZES.items():
+            entries[name] = _read_snapshot_member(
+                archive, infos[name], exact_size=exact_size
+            )
+        if "lcd_vram.bin" in infos:
+            entries["lcd_vram.bin"] = _read_snapshot_member(
+                archive,
+                infos["lcd_vram.bin"],
+                exact_size=lcd_payload_size,
+            )
+        if card_capacity is not None:
+            entries["memory_card.bin"] = _read_snapshot_member(
+                archive,
+                infos["memory_card.bin"],
+                exact_size=card_capacity,
+            )
+    return metadata, entries
 
 
 class IRQSource(Enum):
@@ -436,9 +651,6 @@ class PCE500Emulator:
             except Exception:
                 pass
 
-        if any(o.name == "internal_rom" for o in self.memory.overlays):
-            self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
-
         self.breakpoints: Set[int] = set()
         self.cycle_count = 0
         self.start_time = time.time()
@@ -536,6 +748,7 @@ class PCE500Emulator:
         self.peripherals = PeripheralManager(self.memory, self._scheduler)
         self._default_imem_access_callback = self._handle_imem_access
         self.memory.set_imem_access_callback(self._default_imem_access_callback)
+        self.memory._mark_snapshot_baseline()
         try:
             # Tap into keyboard scan events to surface KEYI progression in logs/perfetto.
             if hasattr(self.keyboard, "_matrix"):
@@ -702,8 +915,71 @@ class PCE500Emulator:
     def expand_ram(self, size: int, start_address: int) -> None:
         self.memory.add_ram(start_address, size, f"RAM Expansion ({size // 1024}KB)")
 
+    def _fetch_validated_vector(
+        self, vector_address: int, *, source_pc: int | None = None
+    ) -> int:
+        """Perform one architectural vector fetch matching a silent preflight."""
+
+        vector_pc = (
+            self.cpu.regs.get(RegisterName.PC) if source_pc is None else int(source_pc)
+        )
+        # Keep every predictable rejection in the silent phase.  Once the
+        # factory below starts, any failure is conservatively treated as a
+        # failed architectural read because a custom host reader may already
+        # have consumed external state.
+        self.cpu.preflight_vector_transfer_for_scheduling(
+            vector_address,
+            source_pc=vector_pc,
+        )
+        try:
+            transfer = fetch_validated_vector_transfer(
+                self.memory,
+                self.cpu.regs,
+                vector_address,
+                source_pc=vector_pc,
+                require_stability_metadata=True,
+            )
+            return transfer.consume(self.memory, vector_address, vector_pc)
+        except Exception as exc:
+            if self._poisoned is None:
+                self._poisoned = (
+                    "vector fetch may have consumed external state: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            raise
+
     @perf_trace("System")
     def reset(self) -> None:
+        # Prove RESET can complete before clearing RAM, LCD state, scheduler
+        # counters, or wrapper poison.  A noncanonical vector or quarantined
+        # target must leave the entire machine available for inspection.
+        try:
+            self.cpu.prepare_power_on_reset()
+        except Exception as exc:
+            contract_poison = getattr(self.cpu, "_contract_poisoned", None)
+            if contract_poison is not None and self._poisoned is None:
+                self._poisoned = (
+                    "machine reset vector preparation may have consumed "
+                    f"external state: {type(exc).__name__}: {exc}"
+                )
+            raise
+        previous_poison = self._poisoned
+        try:
+            self._commit_prepared_reset()
+        except Exception as exc:
+            self.cpu.cancel_prepared_vector_transfer()
+            if previous_poison is None:
+                self._poisoned = (
+                    "machine reset failed after mutation began: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            else:
+                self._poisoned = previous_poison
+            raise
+
+    def _commit_prepared_reset(self) -> None:
+        """Commit a machine reset after its immutable vector was prepared."""
+
         self.memory.reset()
         self.lcd.reset()
         # Optional debug: force display ON at reset
@@ -714,8 +990,6 @@ class PCE500Emulator:
         except Exception:
             pass
         self.cpu.power_on_reset()
-        if any(o.name == "internal_rom" for o in self.memory.overlays):
-            self.cpu.regs.set(RegisterName.PC, self.memory.read_long(0xFFFFD))
         self.cycle_count = 0
         self.start_time = time.time()
         if self.trace is not None:
@@ -783,8 +1057,50 @@ class PCE500Emulator:
 
         trace_snapshot: Optional[Dict[str, Any]] = None
         pc = self.cpu.regs.get(RegisterName.PC)
+        # A debugger breakpoint is an observational boundary. Do not sample
+        # IRQ state, relatch keys, advance low-power wake logic, preflight a
+        # vector, or touch timers until the caller elects to continue.
+        if pc in self.breakpoints:
+            return False
         was_halted = bool(getattr(self.cpu.state, "halted", False))
-        if not was_halted:
+        if (
+            was_halted
+            or self._timer_enabled
+            or self._irq_pending
+            or self._key_irq_latched
+            or bool(getattr(self, "_pending_onk", False))
+        ):
+            # Timer/key/wake work below may latch or relabel an IRQ. Prove the
+            # fixed vector and its callback-free destination before any such
+            # mutation; the one normal vector fetch remains deferred until
+            # delivery is actually selected.
+            self.cpu.preflight_vector_transfer_for_scheduling(
+                INTERRUPT_VECTOR_ADDR,
+                source_pc=pc,
+            )
+        pending_irq_replaces_pc = False
+        if self._irq_pending and not getattr(self, "_in_interrupt", False):
+            # An interrupt is taken between instructions: the saved PC does
+            # not need to decode when an already-unmasked IRQ will replace it.
+            # Decide this through the side-effect-free IMEM view so a masked
+            # IRQ still forces the current instruction to fail closed before
+            # keyboard/timer mutation.
+            imr_silent = (
+                self.memory.peek_byte_for_preflight(
+                    INTERNAL_MEMORY_START + IMEMRegisters.IMR, pc
+                )
+                & 0xFF
+            )
+            isr_silent = (
+                self.memory.peek_byte_for_preflight(
+                    INTERNAL_MEMORY_START + IMEMRegisters.ISR, pc
+                )
+                & 0xFF
+            )
+            pending_irq_replaces_pc = (imr_silent & int(IMRFlag.IRM)) != 0 and (
+                imr_silent & isr_silent
+            ) != 0
+        if not was_halted and not pending_irq_replaces_pc:
             # Validate the current PC before keyboard latches, IRQ sampling, or
             # timer state can change. Interrupt delivery may replace this PC,
             # so the selected handler is validated again below.
@@ -829,7 +1145,9 @@ class PCE500Emulator:
             isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
             wake_isr = isr_val_chk & int(ISRFlag.ONKI) if is_off else isr_val_chk
             if wake_isr != 0:
-                # Cancel the low-power state and arm a pending interrupt.
+                # Cancel the low-power state and arm a pending interrupt. Wake
+                # is an idle-step boundary: the dormant PC is saved as-is and
+                # is not fetched or decoded until the next scheduling pass.
                 self.cpu.state.halted = False
                 self.cpu.state.power_state = "running"
                 self._irq_source = _highest_pending_irq_source(wake_isr)
@@ -838,32 +1156,33 @@ class PCE500Emulator:
                     f"{power_state.upper()} wake IRQ pending "
                     f"(ISR=0x{isr_val_chk:02X}) source={self._irq_source}"
                 )
+                self.cycle_count += 1
+                return True
             else:
                 # Model one idle cycle while remaining stopped; no instruction
                 # was executed.
                 self.cycle_count += 1
                 return True
-            # Waking only changes the power/IRQ state; the pending instruction
-            # has not yet been scheduled. Validate it before proceeding into
-            # IRQ sampling or delivery.
-            pc = self.cpu.regs.get(RegisterName.PC)
-            self.cpu.validate_before_scheduling(pc)
         # Emit a focused diagnostic instant around the IRQ stub split to understand
         # branch/return flow differences (e.g., PC≈0xF205C → 0xF1769 vs 0xF1FB5).
-        if new_tracer.enabled and (
-            0x0F205C <= pc <= 0x0F2064
-            or 0x0F1760 <= pc <= 0x0F2070
-            or 0x0F1FB0 <= pc <= 0x0F1FC0
+        if (
+            new_tracer.enabled
+            and pc not in self.breakpoints
+            and (
+                0x0F205C <= pc <= 0x0F2064
+                or 0x0F1760 <= pc <= 0x0F2070
+                or 0x0F1FB0 <= pc <= 0x0F1FC0
+            )
         ):
             try:
                 imr_probe_diag = (
-                    self.memory.read_byte(
+                    self.memory.peek_byte_for_preflight(
                         INTERNAL_MEMORY_START + IMEMRegisters.IMR, cpu_pc=pc
                     )
                     & 0xFF
                 )
                 isr_probe_diag = (
-                    self.memory.read_byte(
+                    self.memory.peek_byte_for_preflight(
                         INTERNAL_MEMORY_START + IMEMRegisters.ISR, cpu_pc=pc
                     )
                     & 0xFF
@@ -872,7 +1191,9 @@ class PCE500Emulator:
                 imr_probe_diag = None
                 isr_probe_diag = None
             try:
-                opcode_diag = self.memory.read_byte(pc & 0xFFFFF, cpu_pc=pc) & 0xFF
+                opcode_diag = (
+                    self.memory.peek_byte_for_preflight(pc & 0xFFFFF, cpu_pc=pc) & 0xFF
+                )
             except Exception:
                 opcode_diag = None
             try:
@@ -888,7 +1209,10 @@ class PCE500Emulator:
                 try:
                     base = s_reg & 0xFFFFF
                     stack_bytes = [
-                        self.memory.read_byte(base + idx, cpu_pc=pc) & 0xFF
+                        self.memory.peek_byte_for_preflight(
+                            (base + idx) & 0xFFFFF, cpu_pc=pc
+                        )
+                        & 0xFF
                         for idx in range(5)
                     ]
                 except Exception:
@@ -1035,9 +1359,6 @@ class PCE500Emulator:
                     )
                 except Exception:
                     pass
-                # Label delivery with the highest-priority enabled source selected by ROM.
-                if pending_src is not None:
-                    self._irq_source = pending_src
                 # Trace unexpected IMR=0 reads to spot masking.
                 if imr_val_chk == 0:
                     try:
@@ -1066,19 +1387,18 @@ class PCE500Emulator:
                     # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
                     cur_pc = self.cpu.regs.get(RegisterName.PC)
                     s = self.cpu.regs.get(RegisterName.S)
-                    # Resolve and statically preflight the handler before the
-                    # interrupt frame changes architectural state. Data-backed
-                    # checks (for example POPS F) are repeated after delivery,
-                    # against the post-frame stack pointer.
-                    vector_addr = self.memory.read_long(0xFFFFA)
-                    if vector_addr & 0xF00000:
-                        raise NotImplementedError(
-                            "SC62015 interrupt-vector high-nibble behavior "
-                            "requires real-hardware tracing"
-                        )
-                    self.cpu.validate_before_scheduling(
-                        vector_addr, validate_data_dependent=False
+                    # Resolve and statically preflight the handler silently,
+                    # then perform exactly one architectural vector fetch and
+                    # require it to match before the frame changes.  This
+                    # catches a failing/volatile bus without leaving a partial
+                    # stack frame or cleared IMR.
+                    vector_addr = self._fetch_validated_vector(
+                        INTERRUPT_VECTOR_ADDR, source_pc=cur_pc
                     )
+                    # Commit wrapper metadata only after the vector read has
+                    # proved that delivery can begin atomically.
+                    if pending_src is not None:
+                        self._irq_source = pending_src
                     _log_irq_debug(
                         f"Delivering IRQ src={self._irq_source} pc=0x{cur_pc:06X} s=0x{s:06X}"
                     )
@@ -1231,7 +1551,17 @@ class PCE500Emulator:
         # example counted instructions with I=0 or TCL) must fail before the
         # per-instruction timer tick mutates scheduler/ISR state.
         scheduled_pc = self.cpu.regs.get(RegisterName.PC)
-        self.cpu.validate_before_scheduling(scheduled_pc)
+        if scheduled_pc in self.breakpoints:
+            return False
+        try:
+            self.cpu.prepare_instruction_before_scheduling(scheduled_pc)
+        except Exception as exc:
+            if getattr(self.cpu, "_contract_poisoned", None) is not None:
+                self._poisoned = (
+                    "instruction preparation may have performed an architectural "
+                    f"read: {type(exc).__name__}: {exc}"
+                )
+            raise
 
         # Tick rough timers after pending IRQ delivery check to match Rust ordering.
         if self._timer_enabled:
@@ -1244,6 +1574,7 @@ class PCE500Emulator:
                 # ISR before a later host operation fails.  Require reset rather
                 # than retrying a partially completed tick and then executing.
                 self._poisoned = f"timer tick failed: {type(exc).__name__}: {exc}"
+                self.cpu.cancel_prepared_vector_transfer()
                 raise
 
         pc = self.cpu.regs.get(RegisterName.PC)
@@ -1261,21 +1592,32 @@ class PCE500Emulator:
             )
 
         if self._new_trace_enabled and new_tracer.enabled:
-            trace_snapshot = self._snapshot_instruction_trace(
-                pc, self.instruction_count
-            )
-            if trace_snapshot is not None:
-                self._active_trace_instruction = self.instruction_count
-                self._trace_substep = 0
-
-        if pc in self.breakpoints:
-            return False
+            try:
+                trace_snapshot = self._snapshot_instruction_trace(
+                    pc, self.instruction_count
+                )
+                if trace_snapshot is not None:
+                    self._active_trace_instruction = self.instruction_count
+                    self._trace_substep = 0
+            except Exception as exc:
+                self.cpu.cancel_prepared_vector_transfer()
+                self._poisoned = (
+                    f"post-prepare trace setup failed: {type(exc).__name__}: {exc}"
+                )
+                raise
 
         if self.trace is not None:
             self.trace.append(("exec", pc, self.cycle_count))
 
         if pc == self.MEMORY_DUMP_PC and self.perfetto_enabled:
-            self._dump_internal_memory(pc)
+            try:
+                self._dump_internal_memory(pc)
+            except Exception as exc:
+                self.cpu.cancel_prepared_vector_transfer()
+                self._poisoned = (
+                    f"post-prepare memory dump failed: {type(exc).__name__}: {exc}"
+                )
+                raise
 
         opcode = None
         try:
@@ -1427,6 +1769,11 @@ class PCE500Emulator:
                         self.control_flow_edges[pc_after].add(pc_before)
 
         except Exception as e:
+            self.cpu.cancel_prepared_vector_transfer()
+            if self._poisoned is None:
+                self._poisoned = (
+                    f"post-prepare instruction path failed: {type(e).__name__}: {e}"
+                )
             if self.trace is not None:
                 self.trace.append(("error", pc, str(e)))
             if self.perfetto_enabled:
@@ -1737,20 +2084,19 @@ class PCE500Emulator:
         """Add Python-only metadata fields to a LLAMA-authored snapshot."""
 
         try:
-            with zipfile.ZipFile(target, "r") as zf:
-                entries = {name: zf.read(name) for name in zf.namelist()}
+            metadata, entries = _read_snapshot_archive(target, native_for_patch=True)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("failed to parse LLAMA snapshot metadata") from exc
+        except ValueError as exc:
+            if "snapshot JSON contains duplicate member" in str(exc):
+                raise RuntimeError("failed to parse LLAMA snapshot metadata") from exc
+            raise RuntimeError(
+                f"unable to read LLAMA snapshot for metadata patch: {target}"
+            ) from exc
         except Exception as exc:
             raise RuntimeError(
                 f"unable to read LLAMA snapshot for metadata patch: {target}"
             ) from exc
-
-        try:
-            raw_meta = entries.get("snapshot.json", b"{}")
-            metadata = json.loads(raw_meta.decode("utf-8"))
-        except Exception as exc:
-            raise RuntimeError("failed to parse LLAMA snapshot metadata") from exc
-        if not isinstance(metadata, dict):
-            raise RuntimeError("LLAMA snapshot metadata must be a JSON object")
 
         imem_bytes = entries.get("imem.bin")
         if imem_bytes is None:
@@ -1831,6 +2177,19 @@ class PCE500Emulator:
         for field in ("call_stack", "call_page_stack", "call_return_widths"):
             if not isinstance(metadata.get(field), list):
                 raise RuntimeError(f"LLAMA snapshot metadata is missing {field!r}")
+        for field, label in (
+            ("external_interrupt_level", "external IRQ"),
+            ("onk_level", "native ON-key"),
+        ):
+            level = metadata.get(field)
+            if not isinstance(level, bool):
+                raise RuntimeError(
+                    f"LLAMA snapshot metadata is missing boolean {field!r}"
+                )
+            if level:
+                raise RuntimeError(
+                    f"PCE host cannot exactly represent asserted {label} level"
+                )
         metadata.update(
             {
                 "backend": getattr(self.cpu, "backend", "llama"),
@@ -1846,6 +2205,7 @@ class PCE500Emulator:
                 "fast_mode": bool(getattr(self, "fast_mode", False)),
                 "power_state": str(getattr(self.cpu.state, "power_state", "running")),
                 "external_interrupt_level": False,
+                "onk_level": False,
                 "timer": timer_info,
                 "interrupts": interrupts,
             }
@@ -1883,6 +2243,11 @@ class PCE500Emulator:
             "kb_irq_enabled": bool(getattr(self, "_kb_irq_enabled", True)),
         }
         metadata["kb_metrics"] = kb_metrics
+
+        card_metadata, card_payload = self.memory.export_memory_card_snapshot()
+        metadata["version"] = SNAPSHOT_VERSION
+        metadata["memory_card"] = card_metadata
+        entries["memory_card.bin"] = card_payload
 
         entries["snapshot.json"] = json.dumps(
             metadata, indent=2, sort_keys=True
@@ -1926,10 +2291,29 @@ class PCE500Emulator:
                     f"reset required: {reason}"
                 )
 
+    def _reject_unrepresented_snapshot_state(self, action: str) -> None:
+        """Refuse a v4 operation that would silently lose host device state."""
+
+        active: list[str] = []
+        memory = getattr(self, "memory", None)
+        memory_check = getattr(memory, "unrepresented_snapshot_state", None)
+        if callable(memory_check):
+            active.extend(str(item) for item in memory_check())
+        peripherals = getattr(self, "peripherals", None)
+        peripheral_check = getattr(peripherals, "unrepresented_snapshot_state", None)
+        if callable(peripheral_check):
+            active.extend(str(item) for item in peripheral_check())
+        if active:
+            raise RuntimeError(
+                f"cannot {action} snapshot v4 while unrepresented state is active: "
+                + ", ".join(active)
+            )
+
     def save_snapshot(self, path: str | Path) -> Path:
-        """Persist CPU/memory/peripheral state to a .pcsnap bundle."""
+        """Persist exactly represented CPU, memory, display, and input state."""
 
         self._reject_poisoned_snapshot_save()
+        self._reject_unrepresented_snapshot_state("save")
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1975,6 +2359,7 @@ class PCE500Emulator:
         imem_bytes = self.memory.get_internal_memory_bytes()
         lcd_meta, lcd_payload = self._capture_lcd_snapshot()
         keyboard_state = self._capture_keyboard_snapshot_metadata()
+        card_metadata, card_payload = self.memory.export_memory_card_snapshot()
 
         timer_info, interrupts = self._capture_scheduler_snapshot_metadata(imem_bytes)
 
@@ -2002,6 +2387,7 @@ class PCE500Emulator:
             "pc": int(cpu_snapshot.pc),
             "power_state": str(getattr(self.cpu.state, "power_state", "running")),
             "external_interrupt_level": False,
+            "onk_level": False,
             "call_depth": int(self.call_depth),
             "call_sub_level": int(cpu_snapshot.call_sub_level),
             "call_stack": [],
@@ -2013,6 +2399,7 @@ class PCE500Emulator:
             "timer": timer_info,
             "interrupts": interrupts,
             "keyboard": keyboard_state,
+            "memory_card": card_metadata,
             "lcd": lcd_meta,
             "fallback_ranges": [
                 [int(start), int(end)] for start, end in fallback_ranges
@@ -2051,6 +2438,7 @@ class PCE500Emulator:
                 zf.writestr("internal_ram.bin", bytes(internal_slice))
                 zf.writestr("imem.bin", imem_bytes)
                 zf.writestr("lcd_vram.bin", lcd_payload)
+                zf.writestr("memory_card.bin", card_payload)
             self._validate_snapshot_archive(temp_path)
             self._reject_poisoned_snapshot_save()
             os.replace(temp_path, target)
@@ -2079,6 +2467,8 @@ class PCE500Emulator:
     ) -> None:
         """Parse and validate a snapshot, optionally committing its candidates."""
 
+        self._reject_unrepresented_snapshot_state("load")
+
         def required(mapping: dict[str, object], key: str, label: str) -> object:
             if key not in mapping:
                 raise ValueError(f"snapshot {label} is missing required member {key!r}")
@@ -2088,38 +2478,13 @@ class PCE500Emulator:
         if not source.exists():
             raise FileNotFoundError(source)
 
-        required_entries = {
-            "snapshot.json",
-            "registers.bin",
-            "external_ram.bin",
-            "internal_ram.bin",
-            "imem.bin",
-            "lcd_vram.bin",
-        }
-        with zipfile.ZipFile(source, "r") as zf:
-            names = zf.namelist()
-            duplicates = sorted({name for name in names if names.count(name) > 1})
-            if duplicates:
-                raise ValueError(
-                    f"snapshot archive contains duplicate entries: {duplicates}"
-                )
-            missing = sorted(required_entries - set(names))
-            if missing:
-                raise ValueError(f"snapshot archive is missing entries: {missing}")
-            unexpected = sorted(set(names) - required_entries)
-            if unexpected:
-                raise ValueError(
-                    f"snapshot archive contains unexpected entries: {unexpected}"
-                )
-            metadata = json.loads(
-                zf.read("snapshot.json"),
-                object_pairs_hook=_snapshot_json_object_pairs,
-            )
-            registers_blob = zf.read("registers.bin")
-            flat_memory = zf.read("external_ram.bin")
-            internal_ram = zf.read("internal_ram.bin")
-            imem_bytes = zf.read("imem.bin")
-            lcd_payload = zf.read("lcd_vram.bin")
+        metadata, entries = _read_snapshot_archive(source)
+        registers_blob = entries["registers.bin"]
+        flat_memory = entries["external_ram.bin"]
+        internal_ram = entries["internal_ram.bin"]
+        imem_bytes = entries["imem.bin"]
+        lcd_payload = entries["lcd_vram.bin"]
+        card_payload = entries["memory_card.bin"]
 
         metadata = _snapshot_mapping(metadata, "metadata")
         required_metadata_fields = {
@@ -2134,6 +2499,7 @@ class PCE500Emulator:
             "pc",
             "power_state",
             "external_interrupt_level",
+            "onk_level",
             "call_depth",
             "call_sub_level",
             "call_stack",
@@ -2143,6 +2509,7 @@ class PCE500Emulator:
             "timer",
             "interrupts",
             "keyboard",
+            "memory_card",
             "kb_metrics",
             "fallback_ranges",
             "readonly_ranges",
@@ -2178,6 +2545,46 @@ class PCE500Emulator:
             raise ValueError(f"snapshot backend is unsupported: {snapshot_backend!r}")
         if not isinstance(required(metadata, "created", "metadata"), str):
             raise TypeError("snapshot created must be a string")
+
+        card_metadata = _snapshot_mapping(
+            required(metadata, "memory_card", "metadata"), "memory_card"
+        )
+        if set(card_metadata) != {"mode", "capacity", "writable", "payload_size"}:
+            raise ValueError(
+                "snapshot memory_card must contain exactly mode, capacity, "
+                "writable, and payload_size"
+            )
+        card_mode = required(card_metadata, "mode", "memory_card")
+        if card_mode not in ("present", "absent"):
+            raise ValueError("snapshot memory_card.mode must be 'present' or 'absent'")
+        card_capacity = _snapshot_int(
+            required(card_metadata, "capacity", "memory_card"),
+            "memory_card.capacity",
+            maximum=max(SUPPORTED_MEMORY_CARD_SIZES),
+        )
+        if card_capacity not in SUPPORTED_MEMORY_CARD_SIZES:
+            raise ValueError("snapshot memory_card.capacity is unsupported")
+        card_writable = _snapshot_bool(
+            required(card_metadata, "writable", "memory_card"),
+            "memory_card.writable",
+        )
+        card_payload_size = _snapshot_int(
+            required(card_metadata, "payload_size", "memory_card"),
+            "memory_card.payload_size",
+            maximum=max(SUPPORTED_MEMORY_CARD_SIZES),
+        )
+        if card_payload_size != card_capacity:
+            raise ValueError(
+                "snapshot memory_card.payload_size must equal its capacity"
+            )
+        if len(card_payload) != card_capacity:
+            raise ValueError("memory_card.bin size does not match card capacity")
+        card_candidate = (
+            card_mode == "present",
+            card_writable,
+            card_capacity,
+            bytearray(card_payload),
+        )
 
         memory_size = len(self.memory.external_memory)
         if len(flat_memory) != memory_size:
@@ -2358,6 +2765,13 @@ class PCE500Emulator:
         ):
             raise ValueError(
                 "PCE500Emulator cannot exactly restore an asserted external IRQ level"
+            )
+        if _snapshot_bool(
+            required(metadata, "onk_level", "metadata"),
+            "onk_level",
+        ):
+            raise ValueError(
+                "PCE500Emulator cannot exactly restore an asserted native ON-key level"
             )
 
         timer_raw = _snapshot_mapping(required(metadata, "timer", "metadata"), "timer")
@@ -2858,6 +3272,16 @@ class PCE500Emulator:
             raise ValueError("snapshot keyboard KIL latch is not exactly representable")
 
         lcd_metadata = _snapshot_mapping(required(metadata, "lcd", "metadata"), "lcd")
+        if set(lcd_metadata) != {
+            "chip_count",
+            "pages",
+            "width",
+            "chips",
+            "cs_both_count",
+            "cs_left_count",
+            "cs_right_count",
+        }:
+            raise ValueError("snapshot LCD metadata has an unexpected shape")
         chips = _snapshot_list(required(lcd_metadata, "chips", "lcd"), "lcd.chips")
         if len(chips) != len(self.lcd.chips):
             raise ValueError("snapshot LCD chip count does not match this machine")
@@ -2887,6 +3311,19 @@ class PCE500Emulator:
             raise ValueError("snapshot lcd_payload_size mismatch")
         for index, raw_chip in enumerate(chips):
             chip = _snapshot_mapping(raw_chip, f"lcd.chips[{index}]")
+            if set(chip) != {
+                "on",
+                "start_line",
+                "page",
+                "y_address",
+                "instruction_count",
+                "data_write_count",
+                "data_read_count",
+                "on_off_count",
+            }:
+                raise ValueError(
+                    f"snapshot LCD chip {index} metadata has an unexpected shape"
+                )
             _snapshot_bool(required(chip, "on", "LCD chip"), f"lcd.chips[{index}].on")
             for key, maximum in (
                 ("start_line", 0x3F),
@@ -2914,6 +3351,17 @@ class PCE500Emulator:
         kb_metrics_raw = _snapshot_mapping(
             required(metadata, "kb_metrics", "metadata"), "kb_metrics"
         )
+        if set(kb_metrics_raw) != {
+            "irq_count",
+            "strobe_count",
+            "column_hist",
+            "last_cols",
+            "last_kol",
+            "last_koh",
+            "kil_reads",
+            "kb_irq_enabled",
+        }:
+            raise ValueError("snapshot kb_metrics has an unexpected shape")
         kb_irq_count = _snapshot_int(
             required(kb_metrics_raw, "irq_count", "kb_metrics"),
             "kb_metrics.irq_count",
@@ -3034,6 +3482,12 @@ class PCE500Emulator:
             self.memory.external_memory[-len(imem_bytes) :] = imem_bytes
             for overlay_data, payload in overlay_updates:
                 overlay_data[: len(payload)] = payload
+            (
+                self.memory._card_present,
+                self.memory._card_writable,
+                self.memory._card_len,
+                self.memory._card_data,
+            ) = card_candidate
             self.lcd.load_snapshot(lcd_metadata, lcd_payload)
             self.keyboard.load_state(keyboard_state)
             self.cpu.apply_snapshot(snapshot)
@@ -3452,7 +3906,10 @@ class PCE500Emulator:
             self._pop_display_trace(ret_depth)
 
         elif isinstance(instr, IR):
-            vector_addr = self.memory.read_long(0xFFFFA)
+            # Software IR execution already installed the one architectural
+            # vector fetch as PC. Tracing must not read a callback-backed bus a
+            # second time.
+            vector_addr = pc_after
             interrupt_id = self._next_interrupt_id
             self._next_interrupt_id += 1
             self._interrupt_stack.append(interrupt_id)
@@ -4158,6 +4615,13 @@ class PCE500Emulator:
 
         if reset:
             self.reset()
+            # reset() already validated and installed the current vector.
+            entry_target = self.cpu.regs.get(RegisterName.PC)
+        else:
+            # This method used to mask and silently swallow a bad reset vector
+            # after changing RAM/IMEM. Resolve it first through the same
+            # safe-peek contract used by RESET so failure is atomic.
+            entry_target = self._fetch_validated_vector(ENTRY_POINT_ADDR)
 
         if restore_internal_ram:
             ram_start = self.INTERNAL_RAM_START
@@ -4173,13 +4637,9 @@ class PCE500Emulator:
             self.memory.write_byte(imr_addr, imr_value & 0xFF)
             self.memory.write_byte(isr_addr, isr_value & 0xFF)
 
-        # Ensure PC points to the ROM entry vector in case callers expect to
-        # execute instructions immediately after bootstrapping.
-        try:
-            entry_vector = self.memory.read_long(0xFFFFD)
-            self.cpu.regs.set(RegisterName.PC, entry_vector)
-        except Exception:
-            pass
+        # Ensure PC points to the already-validated ROM entry vector in case
+        # callers expect to execute instructions immediately after bootstrapping.
+        self.cpu.regs.set(RegisterName.PC, entry_target)
 
     def _record_irq_bit_watch(
         self, reg_name: str, prev_val: int, new_val: int, pc: int

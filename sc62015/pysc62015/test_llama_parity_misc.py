@@ -116,8 +116,8 @@ def test_dsll_shifts_left_digits(backend: str) -> None:
     assert cpu.regs.get(RegisterName.FZ) == 0
 
 
-def test_cmpp_imem_reg_matches_between_backends() -> None:
-    """Ensure LLAMA matches Python for CMPP (m),r3 borrow/operand ordering."""
+def test_cmpp_imem_reg_uses_20_bit_width_between_backends() -> None:
+    """Distinguish D7's 20-bit comparison from C7's raw three-byte form."""
 
     assert "llama" in available_backends(), "LLAMA backend not available"
 
@@ -125,9 +125,10 @@ def test_cmpp_imem_reg_matches_between_backends() -> None:
         raw = bytearray(ADDRESS_SPACE_SIZE)
         # D7 04 10: CMPP (BP+10), X (no PRE byte; IMem defaults to BP+N).
         raw[0:3] = bytes([0xD7, 0x04, 0x10])
-        # (m..m+2) = 0xFFFFFF (little-endian), so lhs >= rhs for X=0x000080.
+        # The raw memory image is 0xF00080. D7 masks it to 0x00080 before
+        # comparing with the 20-bit X register, so the operands are equal.
         raw[INTERNAL_MEMORY_START + 0x10 : INTERNAL_MEMORY_START + 0x13] = (
-            b"\xff\xff\xff"
+            b"\x80\x00\xf0"
         )
 
         memory = _make_memory(raw)
@@ -146,7 +147,7 @@ def test_cmpp_imem_reg_matches_between_backends() -> None:
     llama_state = run_case("llama")
 
     assert llama_state == python_state
-    assert python_state == (3, 0, 0)
+    assert python_state == (3, 0, 1)
 
 
 def test_wait_invokes_wait_cycles_llama() -> None:

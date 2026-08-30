@@ -1462,6 +1462,25 @@ def test_wait_lifts_to_timing_intrinsic() -> None:
     ]
 
 
+def test_ir_lifts_vector_validation_before_stack_mutation() -> None:
+    instr = decode(bytearray([0xFE]), 0x12345)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0x12345)
+
+    fetch, validation = il.ils[:2]
+    assert fetch.bare_op() == "SET_REG"
+    assert "TEMP6" in repr(fetch)
+    assert "1048570" in repr(fetch)  # architectural read at 0xFFFFA
+    assert getattr(validation, "name", None) == "VALIDATE_VECTOR_TRANSFER"
+    assert "1048570" in repr(validation)
+    assert "74565" in repr(validation)  # source PC at 0x12345
+    assert "TEMP6" in repr(validation)
+    assert all(node.bare_op() != "STORE" for node in il.ils[:2])
+    assert il.ils[-1].bare_op() == "JUMP"
+    assert "TEMP6" in repr(il.ils[-1])
+    assert "LOAD" not in repr(il.ils[-1])
+
+
 def test_mvl_predec_source_continuation_uses_unsigned_i() -> None:
     # PRE34 is the canonical single-operand PX+n prefix here; the external
     # source uses its own encoded pre-decrement mode.

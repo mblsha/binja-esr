@@ -131,6 +131,25 @@ def test_imm20_assembler_and_decoder_require_canonical_high_nibble() -> None:
 
 
 @pytest.mark.parametrize(
+    ("opcode", "register"),
+    [(0x0C, "X"), (0x0D, "Y"), (0x0E, "U"), (0x0F, "S")],
+)
+def test_register_immediate_decoder_normalizes_to_architectural_20_bits(
+    opcode: int, register: str
+) -> None:
+    raw = bytearray((opcode, 0xA5, 0x5A, 0x3C))
+    decoded = decode_instr(Decoder(raw), 0, OPCODES)
+    assert decoded is not None
+    assert asm_str(decoded.render()) == f"MV    {register}, C5AA5"
+
+    # Text assembly expresses the effective register value and emits the
+    # canonical high byte. It must not manufacture ignored upper bits.
+    assert Assembler().assemble(f"MV {register}, 0xC5AA5").as_binary() == bytearray(
+        (opcode, 0xA5, 0x5A, 0x0C)
+    )
+
+
+@pytest.mark.parametrize(
     ("source", "expected_hex"),
     [
         ("MVP (0x20), 0x112233", "30dc20332211"),

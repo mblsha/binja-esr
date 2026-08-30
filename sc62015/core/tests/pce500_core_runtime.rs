@@ -35,7 +35,7 @@ fn pce500_boots_and_decodes_lcd_text_via_core_runtime() {
     rt.timer.sti_period = DEFAULT_STI_PERIOD;
     rt.timer.reset(rt.cycle_count());
     load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
-    rt.power_on_reset();
+    rt.power_on_reset().expect("valid ROM reset vector");
 
     rt.step(20_000).expect("execute boot instructions");
 
@@ -78,7 +78,7 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
     rt.timer.sti_period = DEFAULT_STI_PERIOD;
     rt.timer.reset(rt.cycle_count());
     load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
-    rt.power_on_reset();
+    rt.power_on_reset().expect("valid ROM reset vector");
 
     rt.step(15_000).expect("boot before key press");
     if let Some(kb) = rt.keyboard.as_mut() {
@@ -118,7 +118,7 @@ fn pce500_pf1_reaches_next_screen_via_core_runtime() {
     rt.timer.sti_period = DEFAULT_STI_PERIOD;
     rt.timer.reset(rt.cycle_count());
     load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
-    rt.power_on_reset();
+    rt.power_on_reset().expect("valid ROM reset vector");
 
     const BOOT_STEPS: usize = 20_000;
     const PF1_HOLD_STEPS: usize = 40_000;

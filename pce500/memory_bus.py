@@ -80,6 +80,40 @@ class MemoryBus:
     def overlay_count(self) -> int:
         return len(self._overlays)
 
+    def instruction_byte_is_callback_free(self, address: int) -> bool:
+        """Return whether normal instruction fetch avoids a read callback."""
+
+        for overlay in self._overlays:
+            if not overlay.contains(address):
+                continue
+            if (
+                overlay.read_handler is not None
+                or overlay.preflight_read_handler is not None
+            ):
+                return False
+            if overlay.data is not None:
+                offset = address - overlay.start
+                if 0 <= offset < len(overlay.data):
+                    return True
+        return True
+
+    def instruction_byte_is_immutable(self, address: int) -> bool:
+        """Return whether a byte comes from static read-only overlay data."""
+
+        for overlay in self._overlays:
+            if not overlay.contains(address):
+                continue
+            if (
+                overlay.read_handler is not None
+                or overlay.preflight_read_handler is not None
+            ):
+                return False
+            if overlay.data is not None:
+                offset = address - overlay.start
+                if 0 <= offset < len(overlay.data):
+                    return overlay.read_only
+        return False
+
     def read_log(self) -> Tuple[MemoryAccessLog, ...]:
         return tuple(self._read_log)
 

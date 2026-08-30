@@ -179,13 +179,13 @@ SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
 }
 
 
-# The stock PC-E500 ROM deliberately enters a coherent function through this
-# otherwise PRE-insensitive byte pair.  Keep the boundary-backed exception
-# narrow; direct encoders must reject arbitrary PRE bytes on instructions that
-# do not consume either PRE latch.
-ROM_PROVEN_IGNORED_PRE_PAIRS = {
-    (0x23, 0x48),  # F0002: PRE23; SUB A,3F
-}
+# No ignored-PRE pair currently has a proved executable boundary. PC-E500
+# 0xF0002 was previously accepted as PRE23; SUB A,3F, but fresh decoding from
+# the real 0xF0000 memory-card entry shows that 0x23 is the second byte of
+# ``FD 23`` (MV BA,I) and 0x48 starts the following instruction at 0xF0003.
+# Keep the registry so a future silicon- or boundary-proved pair can be added
+# explicitly; all present PRE-insensitive combinations fail closed.
+ROM_PROVEN_IGNORED_PRE_PAIRS: frozenset[tuple[int, int]] = frozenset()
 
 
 def get_addressing_mode(pre_value: Optional[int], operand_index: int) -> AddressingMode:
@@ -211,6 +211,7 @@ RESETIntrinsic = IntrinsicName("RESET")
 ValidateFIntrinsic = IntrinsicName("VALIDATE_F")
 ValidateICountIntrinsic = IntrinsicName("VALIDATE_I_COUNT")
 ValidateExpHighNibbleIntrinsic = IntrinsicName("VALIDATE_EXP_HIGH_NIBBLE")
+ValidateVectorTransferIntrinsic = IntrinsicName("VALIDATE_VECTOR_TRANSFER")
 
 # Use distinct temporary registers for various operations in order to avoid
 # overlap in case of multiple operations being performed in the same instruction.
@@ -230,6 +231,9 @@ TempLoopByteResult = LLIL_TEMP(12)
 TempBcdDigitCarry = LLIL_TEMP(13)
 TempWideMemoryValue = LLIL_TEMP(14)
 TempWideMemoryAddress = LLIL_TEMP(15)
+# IR does not execute exchange logic, so this per-instruction temporary can be
+# safely reused without expanding the public snapshot/native-register layout.
+TempVectorTarget = TempExchange
 
 # Single addressable operand opcodes - these should only use PRE1
 SINGLE_ADDRESSABLE_OPCODES = set(
@@ -398,8 +402,8 @@ class IMEMRegisters(IntEnum):
     #   (bx) = [BH:BL] at 0xD5:0xD4
     #   (cx) = [CH:CL] at 0xD7:0xD6
     #   (dx) = [DH:DL] at 0xD9:0xD8
-    #   (si) = 24-bit at 0xDA..0xDC
-    #   (di) = 24-bit at 0xDD..0xDF
+    #   (si) = raw three-byte image at 0xDA..0xDC
+    #   (di) = raw three-byte image at 0xDD..0xDF
     # ---------------------------------------------------------------------
     BL = 0xD4
     BH = 0xD5
@@ -417,8 +421,9 @@ class IMEMRegisters(IntEnum):
     # ---------------------------------------------------------------------
     # IOCS workspace base pointer (TRM "(E6)" style parameter).
     #
-    # PC-E500 ROM code keeps a 24-bit pointer here and indexes IOCS state as
-    # `[(E6)+offset]`. The bytes are little-endian: LO/MID/HI.
+    # PC-E500 ROM code keeps a three-byte pointer image here and indexes IOCS
+    # state as `[(E6)+offset]`. External consumers use bits 19-0. The bytes are
+    # little-endian: LO/MID/HI.
     # ---------------------------------------------------------------------
     IOCS_WS = 0xE6
     IOCS_WS1 = 0xE7
@@ -1308,6 +1313,41 @@ class Imm20(ImmOperand):
         return [TInt(f"{self.value:05X}")]
 
 
+class RegisterImm20(Imm20):
+    """Three-byte immediate loaded into X/Y/U/S as a 20-bit value.
+
+    The instruction fetch still consumes all three encoded bytes, but the
+    register keeps only bits 19-0. PC-E500 capture reports show that
+    ``MV X/Y, 0x3C5AA5`` subsequently pushes ``A5 5A 0C``. The report does not
+    isolate whether hardware masks at load or push; normalization at register
+    write is the architectural emulator model. This is not the same contract
+    as an address/control-flow operand, whose nonzero encoded upper nibble
+    remains unverified and is rejected by :class:`Imm20`.
+
+    Fresh assembly stays canonical: source values must fit in 20 bits and the
+    encoder writes a zero upper nibble.  Decoding a hardware-accepted alias
+    normalizes it to that effective value instead of preserving ignored bits.
+    """
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        lo = decoder.unsigned_byte()
+        mid = decoder.unsigned_byte()
+        raw_hi = decoder.unsigned_byte()
+        self.extra_hi = raw_hi
+        self.value = lo | (mid << 8) | ((raw_hi & 0x0F) << 16)
+
+    def encode(self, encoder: Encoder, addr: int) -> None:
+        assert self.value is not None, "Value not set"
+        if not 0 <= self.value <= PC_MASK:
+            raise ValueError(
+                f"20-bit register immediate out of range: {self.value:#x}; "
+                f"expected 0..{PC_MASK:#x}"
+            )
+        encoder.unsigned_byte(self.value & 0xFF)
+        encoder.unsigned_byte((self.value >> 8) & 0xFF)
+        encoder.unsigned_byte((self.value >> 16) & 0x0F)
+
+
 # Raw three-byte immediate encoded as `n m l`.  Unlike Imm20, every bit is
 # data: opcode DC uses this operand to seed an internal-memory triple, and real
 # ROM/hardware examples rely on the upper nibble of `l` being preserved.
@@ -1876,9 +1916,11 @@ class IMem16(IMem8):
         return 2
 
 
-# Read the complete three-byte value from internal memory.  The historical
-# IMem20 name describes its common pointer use, not its transfer width: address
-# consumers mask to 20 bits, while EXP/MVP/CMPP operate on all 24 data bits.
+# Read three bytes from internal memory. ``IMem20`` is a historical name, not
+# a declaration that every consumer truncates the loaded bytes. A register or
+# external-address consumer explicitly keeps bits 19-0; MVP copies all three
+# bytes; CMPP currently performs the documented three-byte comparison; and EXP
+# rejects nonzero bits 23-20 pending a dedicated hardware trace.
 class IMem20(IMem8):
     def width(self) -> int:
         return 3

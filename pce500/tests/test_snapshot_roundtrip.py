@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 import zipfile
 from copy import deepcopy
 from pathlib import Path
@@ -9,7 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from pce500.emulator import IRQSource, PCE500Emulator
+from pce500.emulator import (
+    IRQSource,
+    PCE500Emulator,
+    _SNAPSHOT_JSON_MAX_BYTES,
+)
+from pce500.memory_bus import MemoryOverlay
 from sc62015.pysc62015.cpu import available_backends
 from sc62015.pysc62015.emulator import RegisterName
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
@@ -83,6 +89,19 @@ def _assert_state(emu: PCE500Emulator) -> None:
     assert any(0xAB in row for chip in snap.chips for row in chip.vram)
 
 
+def _assert_memory_card_state(
+    emu: PCE500Emulator,
+    *,
+    present: bool,
+    writable: bool,
+    payload: bytes,
+) -> None:
+    assert emu.memory._card_present is present
+    assert emu.memory._card_writable is writable
+    assert emu.memory._card_len == len(payload)
+    assert bytes(emu.memory._card_data) == payload
+
+
 def _has_llama_backend() -> bool:
     return "llama" in available_backends()
 
@@ -97,6 +116,15 @@ def _rewrite_snapshot_metadata(
     metadata = json.loads(entries["snapshot.json"])
     mutate(metadata)
     entries["snapshot.json"] = json.dumps(metadata).encode()
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, payload in entries.items():
+            zf.writestr(name, payload)
+
+
+def _rewrite_snapshot_entries(source: Path, target: Path, mutate) -> None:
+    with zipfile.ZipFile(source, "r") as zf:
+        entries = {name: zf.read(name) for name in zf.namelist()}
+    mutate(entries)
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name, payload in entries.items():
             zf.writestr(name, payload)
@@ -119,6 +147,12 @@ def _state_fingerprint(emu: PCE500Emulator) -> dict[str, object]:
         "registers": emu.cpu.snapshot_registers(),
         "lcd": emu.lcd.get_snapshot(),
         "keyboard": deepcopy(emu.keyboard.snapshot_state()),
+        "memory_card": (
+            emu.memory._card_present,
+            emu.memory._card_writable,
+            emu.memory._card_len,
+            bytes(emu.memory._card_data),
+        ),
         "counts": (
             emu.instruction_count,
             emu.cycle_count,
@@ -218,6 +252,403 @@ def test_snapshot_save_rejects_poisoned_state_and_preserves_target(
     assert list(tmp_path.iterdir()) == [target]
 
 
+@pytest.mark.parametrize(
+    ("state_name", "expected"),
+    [
+        ("serial-rx", "serial receive queue"),
+        ("serial-tx", "serial transmit queue"),
+        ("cassette", "cassette tape blocks/cursor"),
+        ("custom-overlay", "custom memory-overlay definitions/callbacks"),
+        ("replaced-handler", "custom memory-overlay definitions/callbacks"),
+        ("custom-imem-callback", "custom IMEM access callback"),
+    ],
+)
+def test_snapshot_rejects_unrepresented_host_device_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state_name: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    target = tmp_path / f"unrepresented-{state_name}.pcsnap"
+    emu.save_snapshot(target)
+    original = target.read_bytes()
+
+    if state_name == "serial-rx":
+        emu.peripherals.serial.queue_receive(0x41)
+    elif state_name == "serial-tx":
+        emu.peripherals.serial.handle_imem_access(0, "TXD", "write", 0x42)
+    elif state_name == "cassette":
+        emu.peripherals.cassette.tape.append_data(b"snapshot gap")
+    elif state_name == "custom-overlay":
+        emu.memory.add_overlay(
+            MemoryOverlay(
+                start=0x50000,
+                end=0x50000,
+                name="unserialized_test_device",
+                data=bytearray([0xA5]),
+                read_only=False,
+            )
+        )
+    elif state_name == "replaced-handler":
+        emu.memory.overlays[0].read_handler = lambda *_args: 0xA5
+    else:
+        emu.memory.set_imem_access_callback(lambda *_args: None)
+
+    before = (
+        emu.memory.unrepresented_snapshot_state(),
+        emu.peripherals.unrepresented_snapshot_state(),
+    )
+    with pytest.raises(RuntimeError, match=rf"cannot save.*{expected}"):
+        emu.save_snapshot(target)
+    with pytest.raises(RuntimeError, match=rf"cannot load.*{expected}"):
+        emu.load_snapshot(target)
+
+    assert target.read_bytes() == original
+    assert (
+        emu.memory.unrepresented_snapshot_state(),
+        emu.peripherals.unrepresented_snapshot_state(),
+    ) == before
+
+
+def test_snapshot_overlay_baseline_cannot_be_reblessed_after_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    emu.memory.add_overlay(
+        MemoryOverlay(
+            start=0x50000,
+            end=0x50000,
+            name="late_unserialized_device",
+            read_handler=lambda _address, _pc: 0xA5,
+            preflight_read_handler=lambda _address, _pc: 0xA5,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="baseline is already finalized"):
+        emu.memory._mark_snapshot_baseline()
+    with pytest.raises(RuntimeError, match="custom memory-overlay"):
+        emu.save_snapshot(tmp_path / "must-reject-reblessed-overlay.pcsnap")
+
+
+def test_snapshot_v4_roundtrips_present_memory_card_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    payload = bytes((index * 17 + 3) & 0xFF for index in range(8192))
+    emu.memory.load_memory_card(payload, 8192, writable=False)
+    target = tmp_path / "present-card.pcsnap"
+    emu.save_snapshot(target)
+
+    with zipfile.ZipFile(target, "r") as zf:
+        metadata = json.loads(zf.read("snapshot.json"))
+        assert metadata["version"] == 4
+        assert metadata["memory_card"] == {
+            "mode": "present",
+            "capacity": 8192,
+            "writable": False,
+            "payload_size": 8192,
+        }
+        assert zf.read("memory_card.bin") == payload
+
+    emu.memory.load_memory_card(b"\xee" * 32768, 32768, writable=True)
+    emu.load_snapshot(target)
+    assert emu.memory._card_present is True
+    assert emu.memory._card_writable is False
+    assert emu.memory._card_len == 8192
+    assert bytes(emu.memory._card_data) == payload
+
+
+def test_snapshot_v4_roundtrips_absent_card_latent_payload_and_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    payload = bytes(range(256)) * 64
+    emu.memory.load_memory_card(payload, 16384, writable=False)
+    emu.memory.set_memory_card_present(False)
+    target = tmp_path / "absent-card.pcsnap"
+    emu.save_snapshot(target)
+
+    with zipfile.ZipFile(target, "r") as zf:
+        metadata = json.loads(zf.read("snapshot.json"))
+        assert metadata["memory_card"] == {
+            "mode": "absent",
+            "capacity": 16384,
+            "writable": False,
+            "payload_size": 16384,
+        }
+        assert zf.read("memory_card.bin") == payload
+
+    emu.memory.load_memory_card(b"\x7c" * 65536, 65536, writable=True)
+    emu.load_snapshot(target)
+    assert emu.memory._card_present is False
+    assert emu.memory._card_writable is False
+    assert emu.memory._card_len == 16384
+    assert bytes(emu.memory._card_data) == payload
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda metadata: metadata.__setitem__("memory_card", None),
+        lambda metadata: metadata["memory_card"].__setitem__("extra", 0),
+        lambda metadata: metadata["memory_card"].pop("mode"),
+        lambda metadata: metadata["memory_card"].__setitem__("mode", "ejected"),
+        lambda metadata: metadata["memory_card"].__setitem__("capacity", 12345),
+        lambda metadata: metadata["memory_card"].__setitem__("writable", 1),
+        lambda metadata: metadata["memory_card"].__setitem__("payload_size", 8191),
+    ],
+)
+def test_snapshot_v4_rejects_tampered_card_metadata_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutate,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    emu.memory.load_memory_card(b"\xa5" * 8192, 8192, writable=False)
+    source = tmp_path / "valid-card.pcsnap"
+    emu.save_snapshot(source)
+    emu.memory.load_memory_card(b"\x5a" * 32768, 32768, writable=True)
+    before = _state_fingerprint(emu)
+
+    target = tmp_path / "tampered-card-metadata.pcsnap"
+    _rewrite_snapshot_metadata(source, target, mutate)
+    with pytest.raises((TypeError, ValueError), match="memory_card"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+@pytest.mark.parametrize("size_delta", [-1, 1])
+def test_snapshot_v4_rejects_tampered_card_blob_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size_delta: int,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    emu.memory.load_memory_card(b"\xa5" * 8192, 8192)
+    source = tmp_path / "valid-card.pcsnap"
+    emu.save_snapshot(source)
+    emu.memory.load_memory_card(b"\x5a" * 32768, 32768)
+    before = _state_fingerprint(emu)
+
+    target = tmp_path / f"tampered-card-blob-{size_delta}.pcsnap"
+
+    def mutate(entries: dict[str, bytes]) -> None:
+        payload = entries["memory_card.bin"]
+        entries["memory_card.bin"] = (
+            payload[:-1] if size_delta < 0 else payload + b"\x00"
+        )
+
+    _rewrite_snapshot_entries(source, target, mutate)
+    with pytest.raises(ValueError, match="memory_card.bin size"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_v4_rejects_missing_card_entry_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "valid-card.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "missing-card-entry.pcsnap"
+    _rewrite_snapshot_entries(
+        source, target, lambda entries: entries.pop("memory_card.bin")
+    )
+
+    with pytest.raises(ValueError, match="missing entries.*memory_card.bin"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_v4_rejects_v3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "v4.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "v3.pcsnap"
+    _rewrite_snapshot_metadata(
+        source, target, lambda metadata: metadata.__setitem__("version", 3)
+    )
+
+    with pytest.raises(ValueError, match="Unsupported snapshot version"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_v4_rejects_genuine_v3_before_v4_entry_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "v4-source.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "genuine-v3.pcsnap"
+
+    def convert_to_v3(entries: dict[str, bytes]) -> None:
+        metadata = json.loads(entries["snapshot.json"])
+        metadata["version"] = 3
+        metadata.pop("memory_card")
+        entries["snapshot.json"] = json.dumps(metadata).encode()
+        entries.pop("memory_card.bin")
+
+    _rewrite_snapshot_entries(source, target, convert_to_v3)
+    with pytest.raises(ValueError, match="Unsupported snapshot version"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_rejects_duplicate_zip_entries_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "duplicate-entry-source.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "duplicate-entry.pcsnap"
+    _rewrite_snapshot_entries(source, target, lambda _entries: None)
+    with zipfile.ZipFile(target, "r") as zf:
+        duplicate_payload = zf.read("snapshot.json")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(target, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("snapshot.json", duplicate_payload)
+
+    with pytest.raises(ValueError, match="duplicate entries.*snapshot.json"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_rejects_duplicate_json_members_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "duplicate-json-source.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "duplicate-json.pcsnap"
+
+    def duplicate_version(entries: dict[str, bytes]) -> None:
+        payload = entries["snapshot.json"]
+        assert payload.startswith(b"{")
+        entries["snapshot.json"] = b'{"version": 4,' + payload[1:]
+
+    _rewrite_snapshot_entries(source, target, duplicate_version)
+    with pytest.raises(ValueError, match="duplicate member 'version'"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_rejects_oversize_json_before_parsing_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "oversize-json-source.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "oversize-json.pcsnap"
+    _rewrite_snapshot_entries(
+        source,
+        target,
+        lambda entries: entries.__setitem__(
+            "snapshot.json", b" " * (_SNAPSHOT_JSON_MAX_BYTES + 1)
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"snapshot\.json.*byte limit"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_rejects_inexact_fixed_entry_size_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "inexact-entry-source.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / "inexact-entry.pcsnap"
+    _rewrite_snapshot_entries(
+        source,
+        target,
+        lambda entries: entries.__setitem__(
+            "registers.bin", entries["registers.bin"] + b"\x00"
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"registers\.bin.*exactly"):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
+
+
 @pytest.mark.parametrize("cpu_backend", ["python", "llama"])
 def test_snapshot_save_validation_preserves_target_on_inexact_live_state(
     tmp_path: Path,
@@ -282,6 +713,7 @@ def test_llama_metadata_rewrite_failure_preserves_original_snapshot(
             json.dumps(
                 {
                     "magic": "native",
+                    "version": 3,
                     "instruction_count": 0,
                     "cycle_count": 0,
                     "memory_reads": 0,
@@ -299,7 +731,9 @@ def test_llama_metadata_rewrite_failure_preserves_original_snapshot(
                 }
             ),
         )
-        zf.writestr("registers.bin", b"registers")
+        zf.writestr("registers.bin", bytes(20))
+        zf.writestr("external_ram.bin", bytes(0x100000))
+        zf.writestr("internal_ram.bin", bytes(0x8000))
         zf.writestr("imem.bin", bytes(0x100))
     original = target.read_bytes()
 
@@ -308,6 +742,17 @@ def test_llama_metadata_rewrite_failure_preserves_original_snapshot(
         backend="llama",
         snapshot_registers=lambda: CPURegistersSnapshot(pc=0),
         state=SimpleNamespace(power_state="running"),
+    )
+    emulator.memory = SimpleNamespace(
+        export_memory_card_snapshot=lambda: (
+            {
+                "mode": "present",
+                "capacity": 8192,
+                "writable": True,
+                "payload_size": 8192,
+            },
+            bytes(8192),
+        )
     )
     emulator._capture_scheduler_snapshot_metadata = lambda *_args, **_kwargs: (
         {},
@@ -338,6 +783,60 @@ def test_llama_metadata_parse_failure_is_not_silently_accepted(
 
     emulator = object.__new__(PCE500Emulator)
     with pytest.raises(RuntimeError, match="parse LLAMA snapshot metadata"):
+        emulator._patch_llama_snapshot_metadata(target)
+
+    assert target.read_bytes() == original
+
+
+def test_llama_metadata_patch_rejects_duplicate_json_members(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "duplicate-json-native.pcsnap"
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "snapshot.json",
+            b'{"timer":{"next_mti":1,"next_mti":2}}',
+        )
+    original = target.read_bytes()
+
+    emulator = object.__new__(PCE500Emulator)
+    with pytest.raises(RuntimeError, match="parse LLAMA snapshot metadata"):
+        emulator._patch_llama_snapshot_metadata(target)
+
+    assert target.read_bytes() == original
+
+
+def test_llama_metadata_patch_rejects_duplicate_zip_entries(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "duplicate-entry-native.pcsnap"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("snapshot.json", b"{}")
+            zf.writestr("snapshot.json", b"{}")
+    original = target.read_bytes()
+
+    emulator = object.__new__(PCE500Emulator)
+    with pytest.raises(RuntimeError, match="unable to read LLAMA snapshot"):
+        emulator._patch_llama_snapshot_metadata(target)
+
+    assert target.read_bytes() == original
+
+
+def test_llama_metadata_patch_rejects_oversize_json(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "oversize-json-native.pcsnap"
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "snapshot.json",
+            b" " * (_SNAPSHOT_JSON_MAX_BYTES + 1),
+        )
+    original = target.read_bytes()
+
+    emulator = object.__new__(PCE500Emulator)
+    with pytest.raises(RuntimeError, match="unable to read LLAMA snapshot"):
         emulator._patch_llama_snapshot_metadata(target)
 
     assert target.read_bytes() == original
@@ -376,6 +875,77 @@ def test_snapshot_rejects_late_malformed_fields_before_any_mutation(
         with pytest.raises((TypeError, ValueError)):
             emu.load_snapshot(malformed)
         assert _state_fingerprint(emu) == before
+
+
+def test_pce_snapshot_requires_unasserted_native_pin_levels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PCE host archives must not erase native-only held input levels."""
+
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "unasserted-native-pins.pcsnap"
+    emu.save_snapshot(source)
+    metadata = _read_snapshot_metadata(source)
+    assert metadata["external_interrupt_level"] is False
+    assert metadata["onk_level"] is False
+    before = _state_fingerprint(emu)
+
+    mutations = (
+        lambda value: value.pop("onk_level"),
+        lambda value: value.__setitem__("onk_level", 1),
+        lambda value: value.__setitem__("onk_level", True),
+        lambda value: value.__setitem__("external_interrupt_level", True),
+    )
+    for index, mutate in enumerate(mutations):
+        malformed = tmp_path / f"asserted-native-pin-{index}.pcsnap"
+        _rewrite_snapshot_metadata(source, malformed, mutate)
+        with pytest.raises((TypeError, ValueError)):
+            emu.load_snapshot(malformed)
+        assert _state_fingerprint(emu) == before
+
+
+@pytest.mark.parametrize(
+    ("component", "expected"),
+    [
+        ("lcd", "LCD metadata"),
+        ("lcd-chip", "LCD chip 0 metadata"),
+        ("kb-metrics", "kb_metrics"),
+    ],
+)
+def test_snapshot_rejects_extra_nested_schema_members_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    component: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "exact-nested-schema-source.pcsnap"
+    emu.save_snapshot(source)
+    before = _state_fingerprint(emu)
+    target = tmp_path / f"extra-{component}.pcsnap"
+
+    def add_extra_member(metadata: dict[str, object]) -> None:
+        if component == "lcd":
+            metadata["lcd"]["ignored"] = 1
+        elif component == "lcd-chip":
+            metadata["lcd"]["chips"][0]["ignored"] = 1
+        else:
+            metadata["kb_metrics"]["ignored"] = 1
+
+    _rewrite_snapshot_metadata(source, target, add_extra_member)
+    with pytest.raises(ValueError, match=expected):
+        emu.load_snapshot(target)
+    assert _state_fingerprint(emu) == before
 
 
 def test_python_destination_rejects_llama_only_state_without_mutation(
@@ -485,6 +1055,37 @@ def test_snapshot_rejects_read_only_overlay_replacement_without_mutation(
     with pytest.raises(ValueError, match="read-only overlay"):
         emu.load_snapshot(target)
     assert _state_fingerprint(emu) == before
+
+
+def test_snapshot_rejects_overlapping_static_overlay_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    emu.memory.add_rom(0x40000, b"SHADOW", "aaa_card_shadow")
+
+    with pytest.raises(RuntimeError, match="overlapping read-only memory-overlay"):
+        emu.save_snapshot(tmp_path / "ambiguous-overlay-priority.pcsnap")
+
+
+@pytest.mark.parametrize("start", [0xFFFFE, 0x100000])
+def test_snapshot_rejects_static_overlay_outside_flattened_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start: int
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    emu.memory.add_rom(start, b"BOUNDARY", "out_of_image_rom")
+
+    with pytest.raises(RuntimeError, match="out-of-image read-only memory-overlay"):
+        emu.save_snapshot(tmp_path / f"out-of-image-{start:x}.pcsnap")
 
 
 def test_snapshot_rejects_unexpected_archive_entry_without_mutation(
@@ -711,3 +1312,95 @@ def test_snapshot_roundtrip_python_to_llama(
     )
     emu_llama.load_snapshot(snap_path, backend="llama")
     _assert_state(emu_llama)
+
+
+@pytest.mark.skipif(not _has_llama_backend(), reason="LLAMA backend unavailable")
+@pytest.mark.parametrize(
+    ("capacity", "present", "writable"),
+    [
+        (8192, True, True),
+        (16384, True, False),
+        (32768, False, True),
+        (65536, False, False),
+    ],
+)
+def test_snapshot_v4_memory_card_cross_facade_roundtrip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capacity: int,
+    present: bool,
+    writable: bool,
+) -> None:
+    payload = bytes((index * 29 + capacity // 8192) & 0xFF for index in range(capacity))
+
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    python_source = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    python_source.memory.load_memory_card(payload, capacity, writable=writable)
+    python_source.memory.set_memory_card_present(present)
+    python_path = tmp_path / f"python-card-{capacity}-{present}-{writable}.pcsnap"
+    python_source.save_snapshot(python_path)
+
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "llama")
+    llama = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    llama.load_snapshot(python_path, backend="llama")
+    _assert_memory_card_state(
+        llama, present=present, writable=writable, payload=payload
+    )
+    llama_path = tmp_path / f"llama-card-{capacity}-{present}-{writable}.pcsnap"
+    llama.save_snapshot(llama_path)
+
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    python_destination = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    python_destination.load_snapshot(llama_path, backend="python")
+    _assert_memory_card_state(
+        python_destination,
+        present=present,
+        writable=writable,
+        payload=payload,
+    )
+
+
+@pytest.mark.skipif(not _has_llama_backend(), reason="LLAMA backend unavailable")
+def test_llama_snapshot_late_commit_failure_poison_is_fail_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "llama")
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    source = tmp_path / "late-native-hook-source.pcsnap"
+    emu.save_snapshot(source)
+    native = emu.cpu.unwrap()
+
+    class FailingReinitialiseProxy:
+        def __getattr__(self, name: str):
+            if name == "_initialise_rust_memory":
+
+                def fail() -> None:
+                    raise RuntimeError("injected native mirror failure")
+
+                return fail
+            return getattr(native, name)
+
+    monkeypatch.setattr(emu.cpu, "unwrap", lambda: FailingReinitialiseProxy())
+
+    with pytest.raises(RuntimeError, match="injected native mirror failure"):
+        emu.load_snapshot(source)
+    assert emu._poisoned is not None
+    assert "snapshot commit failed after validation" in emu._poisoned
+    with pytest.raises(RuntimeError, match="poisoned"):
+        emu.step()

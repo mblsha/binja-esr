@@ -11,19 +11,22 @@ use sc62015_core::{
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     llama::{
         eval::{
-            perfetto_last_instr_index, perfetto_last_pc, power_on_reset, reset_perf_counters,
-            set_perf_instr_counter, LlamaBus, LlamaExecutor,
+            fetch_validated_vector, perfetto_last_instr_index, perfetto_last_pc,
+            power_on_reset_with_transfer, reset_perf_counters, set_perf_instr_counter,
+            validate_vector_transfer_with_length, LlamaBus, LlamaExecutor, ValidatedVectorTransfer,
         },
         opcodes::RegName as LlamaRegName,
         state::{validate_f_image, CallMetricsSnapshot, LlamaState, PowerState},
     },
     memory::MemoryImage,
+    pce500::ROM_RESET_VECTOR_ADDR,
     snapshot::save_snapshot,
     timer::TimerContext,
     InterruptInfo, PerfettoTracer, SnapshotMetadata, TimerInfo, ADDRESS_MASK, EXTERNAL_SPACE,
     INTERNAL_MEMORY_START, INTERNAL_SPACE, NUM_TEMP_REGISTERS, PERFETTO_TRACER,
 };
 use serde_json::{json, to_value, Value as JsonValue};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -993,6 +996,8 @@ struct LlamaPyBus {
     mirror: *mut MemoryImage,
     cycles_ptr: *mut u64,
     callback_error: Option<PyErr>,
+    provenance_error: RefCell<Option<PyErr>>,
+    provenance_failure_nonce: Cell<u64>,
     write_attempts: Vec<u32>,
 }
 
@@ -1013,6 +1018,39 @@ fn optional_callable_attr(
         Err(err) if err.is_instance_of::<PyAttributeError>(py) => Ok(None),
         Err(err) => Err(err),
     }
+}
+
+fn python_vector_provenance(py: Python<'_>, memory: &Py<PyAny>) -> PyResult<(usize, u64)> {
+    match optional_callable_attr(py, memory, "vector_transfer_provenance")? {
+        Some(provider) => provider.bind(py).call0()?.extract::<(usize, u64)>(),
+        None => Ok((memory.as_ptr() as usize, 0)),
+    }
+}
+
+fn require_python_instruction_stability(
+    py: Python<'_>,
+    memory: &Py<PyAny>,
+    method_name: &str,
+    addresses: impl IntoIterator<Item = u32>,
+) -> PyResult<()> {
+    let checker = optional_callable_attr(py, memory, method_name)?.ok_or_else(|| {
+        PyRuntimeError::new_err(format!(
+            "prepared SC62015 vector transfer requires memory.{method_name}"
+        ))
+    })?;
+    for address in addresses {
+        let stable = checker
+            .bind(py)
+            .call1((address & ADDRESS_MASK,))?
+            .extract::<bool>()?;
+        if !stable {
+            return Err(PyRuntimeError::new_err(format!(
+                "prepared SC62015 vector transfer rejects dynamic byte 0x{:05X}",
+                address & ADDRESS_MASK
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn callback_accepts_positional(
@@ -1132,6 +1170,7 @@ impl LlamaPyBus {
         let lcd_hook = optional_callable_attr(py, memory, "_llama_lcd_write")?;
         let kio_trace_hook = optional_callable_attr(py, memory, "trace_kio_from_rust")?;
         let irq_trace_hook = optional_callable_attr(py, memory, "trace_irq_from_rust")?;
+        let _ = python_vector_provenance(py, memory)?;
         Ok(Self {
             memory: memory.clone_ref(py),
             read_callback,
@@ -1152,6 +1191,8 @@ impl LlamaPyBus {
             mirror,
             cycles_ptr,
             callback_error: None,
+            provenance_error: RefCell::new(None),
+            provenance_failure_nonce: Cell::new(0),
             write_attempts: Vec::new(),
         })
     }
@@ -1163,7 +1204,9 @@ impl LlamaPyBus {
     }
 
     fn take_callback_error(&mut self) -> Option<PyErr> {
-        self.callback_error.take()
+        self.callback_error
+            .take()
+            .or_else(|| self.provenance_error.borrow_mut().take())
     }
 
     fn take_write_attempts(&mut self) -> Vec<u32> {
@@ -1207,7 +1250,7 @@ impl LlamaPyBus {
         value
     }
 
-    fn peek_byte_for_preflight(&mut self, addr: u32) -> Option<u8> {
+    fn peek_byte_for_preflight_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
         if self.callback_error.is_some() {
             return None;
         }
@@ -1215,7 +1258,7 @@ impl LlamaPyBus {
         let result = Python::with_gil(|py| {
             let callback = self.preflight_read_callback.bind(py);
             let value = if self.preflight_read_with_pc {
-                callback.call1((addr, self.pc))
+                callback.call1((addr, context_pc & ADDRESS_MASK))
             } else {
                 callback.call1((addr,))
             }?;
@@ -1228,6 +1271,10 @@ impl LlamaPyBus {
                 None
             }
         }
+    }
+
+    fn peek_byte_for_preflight(&mut self, addr: u32) -> Option<u8> {
+        self.peek_byte_for_preflight_at(addr, self.pc)
     }
 
     fn write_byte(&mut self, addr: u32, value: u8) {
@@ -1393,6 +1440,24 @@ impl LlamaBus for LlamaPyBus {
 
     fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
         self.peek_byte_for_preflight(addr)
+    }
+
+    fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+        self.peek_byte_for_preflight_at(addr, context_pc)
+    }
+
+    fn vector_transfer_provenance(&self) -> (usize, u64) {
+        Python::with_gil(|py| match python_vector_provenance(py, &self.memory) {
+            Ok(provenance) => provenance,
+            Err(error) => {
+                if self.provenance_error.borrow().is_none() {
+                    *self.provenance_error.borrow_mut() = Some(error);
+                }
+                let nonce = self.provenance_failure_nonce.get().wrapping_add(1);
+                self.provenance_failure_nonce.set(nonce);
+                (usize::MAX, nonce)
+            }
+        })
     }
 
     fn peek_imem_silent(&mut self, offset: u32) -> u8 {
@@ -1578,6 +1643,8 @@ struct LlamaCpu {
     cycles: u64,
     poisoned: Option<String>,
     uncertain_host_writes: Vec<u32>,
+    pending_vector_transfer: Option<(ValidatedVectorTransfer, String)>,
+    pending_scheduled_opcode: Option<(u32, u8)>,
 }
 
 struct CallbackRollbackState {
@@ -2174,12 +2241,62 @@ impl LlamaCpu {
             cycles: 0,
             poisoned: None,
             uncertain_host_writes: Vec::new(),
+            pending_vector_transfer: None,
+            pending_scheduled_opcode: None,
         };
         cpu.timer.set_timer_scale(timer_scale);
         if reset_on_init {
+            Python::with_gil(|py| cpu.prepare_immediate_machine_reset_transfer(py))?;
             cpu.power_on_reset()?;
         }
         Ok(cpu)
+    }
+
+    /// Prepare RESET during construction with no scheduler gap. The generic
+    /// public preparation API additionally requires callback-stability metadata
+    /// because its proof may be retained across host work; construction fetches
+    /// and consumes this proof immediately.
+    fn prepare_immediate_machine_reset_transfer(&mut self, py: Python<'_>) -> PyResult<()> {
+        if self.pending_vector_transfer.is_some() {
+            return Err(PyRuntimeError::new_err(
+                "an SC62015 vector transfer is already prepared",
+            ));
+        }
+        let has_wait_cycles = self.memory.bind(py).hasattr("wait_cycles")?;
+        let source_pc = self.state.pc() & ADDRESS_MASK;
+        let mut bus = LlamaPyBus::new(
+            py,
+            &self.memory,
+            self.read_callback.clone_ref(py),
+            self.write_callback.clone_ref(py),
+            self.read_with_pc,
+            self.write_with_pc,
+            source_pc,
+            has_wait_cycles,
+            &mut self.timer,
+            &mut self.keyboard,
+            &mut self.mirror,
+            &mut self.cycles,
+        )?;
+        let transfer_result = fetch_validated_vector(ROM_RESET_VECTOR_ADDR, &self.state, &mut bus);
+        self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
+        let callback_error = bus.take_callback_error();
+        drop(bus);
+        if let Some(error) = callback_error {
+            return self.poison_callback_error(error);
+        }
+        let transfer = match transfer_result {
+            Ok(transfer) => transfer,
+            Err(error) => {
+                let reason = format!("prepare SC62015 machine reset: {error}");
+                if self.poisoned.is_none() {
+                    self.poisoned = Some(reason.clone());
+                }
+                return Err(PyRuntimeError::new_err(reason));
+            }
+        };
+        self.pending_vector_transfer = Some((transfer, "machine_reset".to_string()));
+        Ok(())
     }
 
     fn sync_temps_from_state(&mut self) {
@@ -2198,7 +2315,163 @@ impl LlamaCpu {
         }
     }
 
+    #[pyo3(signature = (vector_address, source_pc, *, require_immutable = false, scope = "instruction"))]
+    fn prepare_vector_transfer(
+        &mut self,
+        py: Python<'_>,
+        vector_address: u32,
+        source_pc: u32,
+        require_immutable: bool,
+        scope: &str,
+    ) -> PyResult<u32> {
+        if vector_address > ADDRESS_MASK {
+            return Err(PyValueError::new_err(
+                "SC62015 vector address must be canonical 20-bit",
+            ));
+        }
+        if !matches!(scope, "instruction" | "machine_reset") {
+            return Err(PyValueError::new_err(
+                "SC62015 prepared vector scope must be instruction or machine_reset",
+            ));
+        }
+        if self.pending_vector_transfer.is_some() {
+            return Err(PyRuntimeError::new_err(
+                "an SC62015 vector transfer is already prepared",
+            ));
+        }
+        let stability_method = if require_immutable {
+            "instruction_byte_is_immutable"
+        } else {
+            "instruction_byte_is_callback_free"
+        };
+        require_python_instruction_stability(
+            py,
+            &self.memory,
+            stability_method,
+            (0..3).map(|index| vector_address.wrapping_add(index) & ADDRESS_MASK),
+        )?;
+
+        let has_wait_cycles = self.memory.bind(py).hasattr("wait_cycles")?;
+        let mut bus = LlamaPyBus::new(
+            py,
+            &self.memory,
+            self.read_callback.clone_ref(py),
+            self.write_callback.clone_ref(py),
+            self.read_with_pc,
+            self.write_with_pc,
+            source_pc & ADDRESS_MASK,
+            has_wait_cycles,
+            &mut self.timer,
+            &mut self.keyboard,
+            &mut self.mirror,
+            &mut self.cycles,
+        )?;
+        let mut source_state = self.state.clone();
+        source_state.set_pc(source_pc & ADDRESS_MASK);
+        let silent_result =
+            validate_vector_transfer_with_length(vector_address, &source_state, &mut bus);
+        let callback_error = bus.take_callback_error();
+        drop(bus);
+        if let Some(error) = callback_error {
+            return Err(error);
+        }
+        let (target, target_len) = silent_result.map_err(|error| {
+            PyRuntimeError::new_err(format!("prepare SC62015 vector transfer: {error}"))
+        })?;
+        require_python_instruction_stability(
+            py,
+            &self.memory,
+            stability_method,
+            (0..u32::from(target_len)).map(|index| target.wrapping_add(index) & ADDRESS_MASK),
+        )?;
+
+        // Re-certify both ranges immediately before the sole architectural
+        // vector read, then let the core repeat silent validation and bind the
+        // resulting proof to the live provenance epoch.
+        require_python_instruction_stability(
+            py,
+            &self.memory,
+            stability_method,
+            (0..3)
+                .map(|index| vector_address.wrapping_add(index) & ADDRESS_MASK)
+                .chain(
+                    (0..u32::from(target_len))
+                        .map(|index| target.wrapping_add(index) & ADDRESS_MASK),
+                ),
+        )?;
+        let mut bus = LlamaPyBus::new(
+            py,
+            &self.memory,
+            self.read_callback.clone_ref(py),
+            self.write_callback.clone_ref(py),
+            self.read_with_pc,
+            self.write_with_pc,
+            source_pc & ADDRESS_MASK,
+            has_wait_cycles,
+            &mut self.timer,
+            &mut self.keyboard,
+            &mut self.mirror,
+            &mut self.cycles,
+        )?;
+        let transfer_result = fetch_validated_vector(vector_address, &source_state, &mut bus);
+        self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
+        let callback_error = bus.take_callback_error();
+        drop(bus);
+        if let Some(error) = callback_error {
+            return self.poison_callback_error(error);
+        }
+        let transfer = match transfer_result {
+            Ok(transfer) => transfer,
+            Err(error) => {
+                let reason = format!("prepare SC62015 vector transfer: {error}");
+                if self.poisoned.is_none() {
+                    self.poisoned = Some(reason.clone());
+                }
+                return Err(PyRuntimeError::new_err(reason));
+            }
+        };
+        if transfer.target() != target || transfer.target_len() != target_len {
+            let reason = "SC62015 vector target changed after stability certification".to_string();
+            if self.poisoned.is_none() {
+                self.poisoned = Some(reason.clone());
+            }
+            return Err(PyRuntimeError::new_err(reason));
+        }
+        let prepared_target = transfer.target();
+        self.pending_vector_transfer = Some((transfer, scope.to_string()));
+        Ok(prepared_target)
+    }
+
+    fn cancel_prepared_vector_transfer(&mut self) {
+        self.pending_vector_transfer = None;
+        self.pending_scheduled_opcode = None;
+    }
+
+    fn prepare_scheduled_opcode(&mut self, address: u32, opcode: u8) -> PyResult<()> {
+        if self.pending_scheduled_opcode.is_some() {
+            return Err(PyRuntimeError::new_err(
+                "an SC62015 scheduled opcode is already prepared",
+            ));
+        }
+        self.pending_scheduled_opcode = Some((address & ADDRESS_MASK, opcode));
+        Ok(())
+    }
+
     fn power_on_reset(&mut self) -> PyResult<()> {
+        let prepared_transfer = match self.pending_vector_transfer.take() {
+            Some((transfer, scope)) if scope == "machine_reset" => transfer,
+            Some((_transfer, _scope)) => {
+                return Err(PyRuntimeError::new_err(
+                    "prepared SC62015 vector transfer has the wrong scope for machine reset",
+                ));
+            }
+            None => {
+                return Err(PyRuntimeError::new_err(
+                    "power-on reset requires a prepared SC62015 machine_reset vector transfer",
+                ));
+            }
+        };
+        self.pending_scheduled_opcode = None;
         let rollback_before = self.capture_callback_rollback_state();
         self.mirror.begin_rollback_capture();
         // Apply RESET intrinsic semantics using Python memory for reads/writes so the
@@ -2207,13 +2480,18 @@ impl LlamaCpu {
         let reset_result = Python::with_gil(|py| {
             struct ResetBus<'py, 'a> {
                 py: Python<'py>,
+                memory: Py<PyAny>,
                 read_callback: Py<PyAny>,
                 write_callback: Py<PyAny>,
+                preflight_read_callback: Option<Py<PyAny>>,
                 read_with_pc: bool,
                 write_with_pc: bool,
+                preflight_read_with_pc: bool,
                 pc: u32,
                 mirror: &'a mut MemoryImage,
                 callback_error: Option<PyErr>,
+                provenance_error: RefCell<Option<PyErr>>,
+                provenance_failure_nonce: Cell<u64>,
                 write_attempts: Vec<u32>,
             }
 
@@ -2263,6 +2541,32 @@ impl LlamaCpu {
                         Err(err) => self.record_callback_error(err),
                     }
                 }
+
+                fn peek_byte_for_preflight_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+                    if self.callback_error.is_some() {
+                        return None;
+                    }
+                    let addr = addr & ADDRESS_MASK;
+                    let callback = self.preflight_read_callback.as_ref()?;
+                    let callback = callback.bind(self.py);
+                    let result = if self.preflight_read_with_pc {
+                        callback.call1((addr, context_pc & ADDRESS_MASK))
+                    } else {
+                        callback.call1((addr,))
+                    }
+                    .and_then(|value| value.extract::<u8>());
+                    match result {
+                        Ok(value) => Some(value),
+                        Err(err) => {
+                            self.record_callback_error(err);
+                            None
+                        }
+                    }
+                }
+
+                fn peek_byte_for_preflight(&mut self, addr: u32) -> Option<u8> {
+                    self.peek_byte_for_preflight_at(addr, self.pc)
+                }
             }
 
             impl<'py, 'a> LlamaBus for ResetBus<'py, 'a> {
@@ -2292,37 +2596,81 @@ impl LlamaCpu {
                     base
                 }
 
+                fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                    self.peek_byte_for_preflight(addr)
+                }
+
+                fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+                    self.peek_byte_for_preflight_at(addr, context_pc)
+                }
+
+                fn vector_transfer_provenance(&self) -> (usize, u64) {
+                    match python_vector_provenance(self.py, &self.memory) {
+                        Ok(provenance) => provenance,
+                        Err(error) => {
+                            if self.provenance_error.borrow().is_none() {
+                                *self.provenance_error.borrow_mut() = Some(error);
+                            }
+                            let nonce = self.provenance_failure_nonce.get().wrapping_add(1);
+                            self.provenance_failure_nonce.set(nonce);
+                            (usize::MAX, nonce)
+                        }
+                    }
+                }
+
                 fn peek_imem(&mut self, offset: u32) -> u8 {
                     self.read_byte(INTERNAL_MEMORY_START + offset)
                 }
 
                 fn peek_imem_silent(&mut self, offset: u32) -> u8 {
-                    self.read_byte(INTERNAL_MEMORY_START + offset)
+                    self.peek_byte_for_preflight(INTERNAL_MEMORY_START + offset)
+                        .unwrap_or(0)
                 }
             }
 
             let mut bus = ResetBus {
                 py,
+                memory: self.memory.clone_ref(py),
                 read_callback: self.read_callback.clone_ref(py),
                 write_callback: self.write_callback.clone_ref(py),
+                preflight_read_callback: None,
                 read_with_pc: self.read_with_pc,
                 write_with_pc: self.write_with_pc,
+                preflight_read_with_pc: false,
                 pc: self.state.pc() & ADDRESS_MASK,
                 mirror: &mut self.mirror,
                 callback_error: None,
+                provenance_error: RefCell::new(None),
+                provenance_failure_nonce: Cell::new(0),
                 write_attempts: Vec::new(),
             };
-            power_on_reset(&mut bus, &mut self.state);
-            let result = match bus.callback_error {
-                Some(err) => Err(err),
-                None => Ok(()),
+            let semantic_result =
+                power_on_reset_with_transfer(&mut bus, &mut self.state, prepared_transfer);
+            let callback_error = bus
+                .callback_error
+                .take()
+                .or_else(|| bus.provenance_error.borrow_mut().take());
+            let (result, semantic_failure) = match callback_error {
+                Some(err) => (Err(err), false),
+                None => match semantic_result {
+                    Ok(()) => (Ok(()), false),
+                    Err(error) => (
+                        Err(PyRuntimeError::new_err(format!(
+                            "power-on reset vector transfer: {error}"
+                        ))),
+                        true,
+                    ),
+                },
             };
-            (result, bus.write_attempts)
+            (result, bus.write_attempts, semantic_failure)
         });
-        let (reset_result, reset_write_attempts) = reset_result;
+        let (reset_result, reset_write_attempts, semantic_failure) = reset_result;
         if let Err(err) = reset_result {
-            self.record_uncertain_host_writes(reset_write_attempts.iter().copied());
             self.restore_after_callback_failure(rollback_before);
+            if semantic_failure {
+                return Err(err);
+            }
+            self.record_uncertain_host_writes(reset_write_attempts.iter().copied());
             return self.poison_callback_error(err);
         }
 
@@ -2372,6 +2720,19 @@ impl LlamaCpu {
                 "LLAMA CPU is poisoned after a Python callback failure; reset required: {reason}"
             )));
         }
+        // Detach before any fallible callback/decode. Every return path then
+        // burns the one-shot proof instead of leaving a stale capability in
+        // the CPU for a later instruction or recovery RESET.
+        let pending_transfer = self.pending_vector_transfer.take();
+        let pending_opcode = self.pending_scheduled_opcode.take();
+        if pending_transfer
+            .as_ref()
+            .is_some_and(|(_, scope)| scope != "instruction")
+        {
+            return Err(PyRuntimeError::new_err(
+                "prepared SC62015 vector transfer has the wrong scope",
+            ));
+        }
         let rollback_before = self.capture_callback_rollback_state();
         self.mirror.begin_rollback_capture();
         let entry_pc = address & ADDRESS_MASK;
@@ -2408,7 +2769,49 @@ impl LlamaCpu {
             }
         };
         self.state.set_pc(entry_pc);
-        let opcode = bus.read_byte(entry_pc & ADDRESS_MASK);
+        // A raw/direct caller has no one-shot scheduling proof. Classify the
+        // opcode through the explicitly side-effect-free reader before the
+        // sole architectural fetch, so FE/FF cannot consume a callback read
+        // and then return a retryable "missing prepared transfer" error.
+        let direct_preflight_opcode = if pending_opcode.is_none() && pending_transfer.is_none() {
+            let opcode = bus.peek_byte_silent_at(entry_pc, entry_pc);
+            if let Some(err) = bus.take_callback_error() {
+                drop(bus);
+                self.restore_after_callback_failure(rollback_before);
+                return Err(err);
+            }
+            let opcode = match opcode {
+                Some(opcode) => opcode,
+                None => {
+                    drop(bus);
+                    self.restore_after_callback_failure(rollback_before);
+                    return Err(PyRuntimeError::new_err(
+                        "direct SC62015 execution requires side-effect-free opcode preflight",
+                    ));
+                }
+            };
+            if matches!(opcode, 0xFE | 0xFF) {
+                drop(bus);
+                self.restore_after_callback_failure(rollback_before);
+                return Err(PyRuntimeError::new_err(
+                    "SC62015 vector opcode requires a prepared instruction vector transfer",
+                ));
+            }
+            Some(opcode)
+        } else {
+            None
+        };
+        let opcode = match pending_opcode {
+            Some((prepared_pc, opcode)) if prepared_pc == entry_pc => opcode,
+            Some((_prepared_pc, _opcode)) => {
+                drop(bus);
+                self.restore_after_callback_failure(rollback_before);
+                return Err(PyRuntimeError::new_err(
+                    "prepared SC62015 opcode does not match the current instruction",
+                ));
+            }
+            None => bus.read_byte(entry_pc & ADDRESS_MASK),
+        };
         if let Some(err) = bus.take_callback_error() {
             self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
             let write_attempts = bus.take_write_attempts();
@@ -2417,7 +2820,38 @@ impl LlamaCpu {
             self.restore_after_callback_failure(rollback_before);
             return self.poison_callback_error(err);
         }
-        let execute_result = self.executor.execute(opcode, &mut self.state, &mut bus);
+        if let Some(preflight_opcode) = direct_preflight_opcode {
+            if opcode != preflight_opcode {
+                self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
+                drop(bus);
+                self.restore_after_callback_failure(rollback_before);
+                let error = PyRuntimeError::new_err(format!(
+                    "architectural opcode changed after silent preflight at 0x{entry_pc:05X}: \
+                     fetched 0x{opcode:02X}, preflight 0x{preflight_opcode:02X}"
+                ));
+                return self.poison_callback_error(error);
+            }
+        }
+        if pending_transfer.is_some() && !matches!(opcode, 0xFE | 0xFF) {
+            drop(bus);
+            self.restore_after_callback_failure(rollback_before);
+            return Err(PyRuntimeError::new_err(
+                "prepared SC62015 vector transfer does not match the current instruction",
+            ));
+        }
+        if pending_transfer.is_none() && matches!(opcode, 0xFE | 0xFF) {
+            drop(bus);
+            self.restore_after_callback_failure(rollback_before);
+            return Err(PyRuntimeError::new_err(
+                "SC62015 vector opcode requires a prepared instruction vector transfer",
+            ));
+        }
+        let execute_result = self.executor.execute_with_vector_transfer(
+            opcode,
+            &mut self.state,
+            &mut bus,
+            pending_transfer.map(|(transfer, _scope)| transfer),
+        );
         self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
         self.memory_writes = self.memory_writes.saturating_add(bus.memory_writes);
         if let Some(err) = bus.take_callback_error() {
@@ -2854,6 +3288,9 @@ impl LlamaCpu {
             ..SnapshotMetadata::default()
         };
         metadata.power_state = self.state.power_state();
+        metadata.onk_level = image
+            .read_internal_byte(IMEM_SSR_OFFSET)
+            .is_some_and(|ssr| ssr & 0x08 != 0);
         // Capture the complete live timer/interrupt scheduler state. IMR/ISR
         // come from the host-authored image because it is the persisted memory
         // authority; all remaining scheduler fields stay exactly as reported
@@ -4190,6 +4627,8 @@ class Mem:
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
             let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
             cpu.mirror.write_external_byte(0x1234, 0xAA);
+            cpu.prepare_immediate_machine_reset_transfer(py)
+                .expect("prepare recovery reset");
             set_perf_instr_counter(0x1234_5678);
 
             let err = cpu.power_on_reset().unwrap_err();
@@ -4201,6 +4640,319 @@ class Mem:
                 "a failed recovery must not reset process-global trace ordering"
             );
             reset_perf_counters();
+        });
+    }
+
+    #[test]
+    fn reset_vector_rejection_is_atomic_and_does_not_poison_native_cpu() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self):
+        self.data = bytearray(0x100100)
+        self.data[0xFFFFD:0x100000] = bytes([0x78, 0x56, 0xF4])
+        self.reads = []
+        self.peeks = []
+        self.writes = []
+    def read_byte(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        self.reads.append(addr)
+        return self.data[addr]
+    def peek_byte_for_preflight(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        self.peeks.append(addr)
+        return self.data[addr]
+    def instruction_byte_is_callback_free(self, addr):
+        return True
+    def write_byte(self, addr, val, pc=None):
+        addr &= 0xFFFFFF
+        val &= 0xFF
+        self.writes.append((addr, val))
+        self.data[addr] = val
+    def make_vector_valid(self):
+        self.data[0xFFFFD:0x100000] = bytes([0x00, 0x00, 0x00])
+"#;
+            let module = PyModule::from_code_bound(
+                py,
+                code,
+                "reset_vector_atomic.py",
+                "reset_vector_atomic",
+            )
+            .unwrap();
+            let mem = module.getattr("Mem").unwrap().call0().unwrap();
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            cpu.state.set_pc(0x012345);
+            cpu.state.set_reg(LlamaRegName::S, 0x000240);
+            cpu.state.set_reg(LlamaRegName::F, 0x03);
+            cpu.state.set_reg(LlamaRegName::IMR, 0xA5);
+            cpu.state.halt();
+            cpu.cycles = 123;
+
+            let err = cpu.power_on_reset().unwrap_err();
+
+            assert_python_error_contains(err, "requires a prepared SC62015 machine_reset");
+            assert_eq!(cpu.state.pc(), 0x012345);
+            assert_eq!(cpu.state.get_reg(LlamaRegName::S), 0x000240);
+            assert_eq!(cpu.state.get_reg(LlamaRegName::F), 0x03);
+            assert_eq!(cpu.state.get_reg(LlamaRegName::IMR), 0xA5);
+            assert!(cpu.state.is_halted());
+            assert_eq!(cpu.cycles, 123);
+            assert!(cpu.poisoned.is_none());
+            assert!(cpu.uncertain_host_writes.is_empty());
+            assert_eq!(
+                mem.getattr("reads").unwrap().extract::<Vec<u32>>().unwrap(),
+                Vec::<u32>::new(),
+                "rejected vector must not reach architectural reads"
+            );
+            assert_eq!(
+                mem.getattr("peeks").unwrap().extract::<Vec<u32>>().unwrap(),
+                Vec::<u32>::new(),
+                "unprepared reset must not even enter vector preflight"
+            );
+            assert_eq!(
+                mem.getattr("writes")
+                    .unwrap()
+                    .extract::<Vec<(u32, u8)>>()
+                    .unwrap(),
+                Vec::<(u32, u8)>::new()
+            );
+
+            let invalid = cpu
+                .prepare_vector_transfer(
+                    py,
+                    ROM_RESET_VECTOR_ADDR,
+                    0x012345,
+                    false,
+                    "machine_reset",
+                )
+                .unwrap_err();
+            assert_python_error_contains(
+                invalid,
+                sc62015_core::llama::eval::VECTOR_UPPER_NIBBLE_ERROR,
+            );
+            assert!(cpu.poisoned.is_none());
+            assert_eq!(
+                mem.getattr("reads").unwrap().extract::<Vec<u32>>().unwrap(),
+                Vec::<u32>::new(),
+                "safe-peek rejection remains unpoisoned and non-architectural"
+            );
+            assert_eq!(
+                mem.getattr("peeks").unwrap().extract::<Vec<u32>>().unwrap(),
+                vec![0xFFFFD, 0xFFFFE, 0xFFFFF]
+            );
+
+            mem.call_method0("make_vector_valid").unwrap();
+            cpu.prepare_vector_transfer(
+                py,
+                ROM_RESET_VECTOR_ADDR,
+                0x012345,
+                false,
+                "machine_reset",
+            )
+            .expect("prepare valid recovery reset");
+            cpu.power_on_reset()
+                .expect("semantic rejection must not poison recovery reset");
+            assert!(cpu.poisoned.is_none());
+        });
+    }
+
+    #[test]
+    fn direct_vector_opcodes_require_a_prepared_transfer_before_vector_reads() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self, opcode):
+        self.data = bytearray(0x100100)
+        self.data[0] = opcode
+        self.data[0xFFFFA:0x100000] = bytes([0x00, 0x02, 0x00, 0x00, 0x02, 0x00])
+        self.reads = []
+        self.peeks = []
+        self.writes = []
+    def read_byte(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        self.reads.append(addr)
+        return self.data[addr]
+    def peek_byte_for_preflight(self, addr, pc=None):
+        self.peeks.append(addr & 0xFFFFFF)
+        return self.data[addr & 0xFFFFFF]
+    def write_byte(self, addr, val, pc=None):
+        self.writes.append((addr & 0xFFFFFF, val & 0xFF))
+        self.data[addr & 0xFFFFFF] = val & 0xFF
+"#;
+            let module = PyModule::from_code_bound(
+                py,
+                code,
+                "unprepared_vector_opcode.py",
+                "unprepared_vector_opcode",
+            )
+            .unwrap();
+
+            for opcode in [0xFEu8, 0xFFu8] {
+                let mem = module.getattr("Mem").unwrap().call1((opcode,)).unwrap();
+                let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+
+                for expected_peeks in [vec![0u32], vec![0u32, 0u32]] {
+                    let err = cpu.execute_instruction(py, 0).unwrap_err();
+                    assert_python_error_contains(err, "requires a prepared instruction vector");
+                    assert_eq!(
+                        mem.getattr("reads").unwrap().extract::<Vec<u32>>().unwrap(),
+                        Vec::<u32>::new(),
+                        "an unprepared vector opcode must fail before its architectural fetch"
+                    );
+                    assert_eq!(
+                        mem.getattr("peeks").unwrap().extract::<Vec<u32>>().unwrap(),
+                        expected_peeks,
+                        "each retry may use only the declared side-effect-free reader"
+                    );
+                    assert!(cpu.poisoned.is_none());
+                    assert!(mem
+                        .getattr("writes")
+                        .unwrap()
+                        .extract::<Vec<(u32, u8)>>()
+                        .unwrap()
+                        .is_empty());
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn direct_opcode_change_after_silent_preflight_poisoned_after_one_read() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self):
+        self.reads = []
+        self.peeks = []
+        self.writes = []
+    def read_byte(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        self.reads.append(addr)
+        return 0xFE if addr == 0 else 0
+    def peek_byte_for_preflight(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        self.peeks.append(addr)
+        return 0x00
+    def write_byte(self, addr, val, pc=None):
+        self.writes.append((addr & 0xFFFFFF, val & 0xFF))
+"#;
+            let module = PyModule::from_code_bound(
+                py,
+                code,
+                "direct_opcode_change.py",
+                "direct_opcode_change",
+            )
+            .unwrap();
+            let mem = module.getattr("Mem").unwrap().call0().unwrap();
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+
+            let first = cpu.execute_instruction(py, 0).unwrap_err();
+            assert_python_error_contains(first, "changed after silent preflight");
+            assert!(cpu.poisoned.is_some());
+            assert_eq!(
+                mem.getattr("peeks").unwrap().extract::<Vec<u32>>().unwrap(),
+                vec![0]
+            );
+            assert_eq!(
+                mem.getattr("reads").unwrap().extract::<Vec<u32>>().unwrap(),
+                vec![0],
+                "the uncertain architectural opcode fetch occurs exactly once"
+            );
+
+            let retry = cpu.execute_instruction(py, 0).unwrap_err();
+            assert_python_error_contains(retry, "LLAMA CPU is poisoned");
+            assert_eq!(
+                mem.getattr("peeks").unwrap().extract::<Vec<u32>>().unwrap(),
+                vec![0]
+            );
+            assert_eq!(
+                mem.getattr("reads").unwrap().extract::<Vec<u32>>().unwrap(),
+                vec![0],
+                "poisoning must block a second observable fetch"
+            );
+            assert!(mem
+                .getattr("writes")
+                .unwrap()
+                .extract::<Vec<(u32, u8)>>()
+                .unwrap()
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn prefetched_native_reset_does_not_read_vector_or_target_again() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let code = r#"
+class Mem:
+    def __init__(self):
+        self.data = bytearray(0x100100)
+        self.data[0xFFFFD:0x100000] = bytes((0x00, 0x02, 0x00))
+        self.reads = []
+        self.peeks = []
+        self.writes = []
+        self.forbidden = False
+    def vector_transfer_provenance(self):
+        return (id(self), 0)
+    def instruction_byte_is_callback_free(self, addr):
+        return True
+    def forbid_vector_access(self):
+        self.forbidden = True
+        self.reads.clear()
+        self.peeks.clear()
+    def read_byte(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        if self.forbidden and (0xFFFFD <= addr <= 0xFFFFF or addr == 0x200):
+            raise RuntimeError("prefetched reset performed a forbidden read")
+        self.reads.append(addr)
+        return self.data[addr]
+    def peek_byte_for_preflight(self, addr, pc=None):
+        addr &= 0xFFFFFF
+        self.peeks.append(addr)
+        if self.forbidden:
+            raise RuntimeError("prefetched reset performed a forbidden peek")
+        return self.data[addr]
+    def write_byte(self, addr, val, pc=None):
+        addr &= 0xFFFFFF
+        val &= 0xFF
+        self.writes.append((addr, val))
+        self.data[addr] = val
+"#;
+            let module =
+                PyModule::from_code_bound(py, code, "prefetched_reset.py", "prefetched_reset")
+                    .unwrap();
+            let mem = module.getattr("Mem").unwrap().call0().unwrap();
+            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            cpu.state.set_pc(0x12345);
+            cpu.state.halt();
+
+            cpu.prepare_vector_transfer(py, 0xFFFFD, 0x12345, false, "machine_reset")
+                .expect("prepare native RESET");
+            mem.call_method0("forbid_vector_access").unwrap();
+            cpu.power_on_reset().expect("prepared native RESET");
+
+            assert_eq!(cpu.state.pc(), 0x00200);
+            assert!(!cpu.state.is_halted());
+            assert!(mem
+                .getattr("peeks")
+                .unwrap()
+                .extract::<Vec<u32>>()
+                .unwrap()
+                .is_empty());
+            let reads = mem.getattr("reads").unwrap().extract::<Vec<u32>>().unwrap();
+            assert!(!reads.contains(&0xFFFFD));
+            assert!(!reads.contains(&0xFFFFE));
+            assert!(!reads.contains(&0xFFFFF));
+            assert!(!reads.contains(&0x00200));
+            assert!(!mem
+                .getattr("writes")
+                .unwrap()
+                .extract::<Vec<(u32, u8)>>()
+                .unwrap()
+                .is_empty());
         });
     }
 
@@ -4296,6 +5048,8 @@ class Mem:
             // while native rollback correctly restored 0x77. A successful
             // RESET must read the uncertain byte back before clearing poison.
             mem.setattr("fail", false).unwrap();
+            cpu.prepare_immediate_machine_reset_transfer(py)
+                .expect("prepare recovery reset");
             cpu.power_on_reset().expect("recovery reset");
             assert!(cpu.poisoned.is_none());
             assert!(cpu.uncertain_host_writes.is_empty());
@@ -4318,6 +5072,8 @@ class Mem:
         self.data = bytearray(0x100100)
         self.writes = []
     def read_byte(self, addr, pc=None):
+        return self.data[addr & 0xFFFFFF]
+    def peek_byte_for_preflight(self, addr, pc=None):
         return self.data[addr & 0xFFFFFF]
     def write_byte(self, addr, val, pc=None):
         addr &= 0xFFFFFF
@@ -4374,6 +5130,8 @@ class Mem:
             assert!(cpu.keyboard.snapshot_state().pressed_keys.is_empty());
             assert_eq!(cpu.mirror.read_internal_byte_silent(0xF2), Some(0));
 
+            cpu.prepare_immediate_machine_reset_transfer(py)
+                .expect("prepare recovery reset");
             let reset_err = cpu.power_on_reset().unwrap_err();
             assert_python_error_contains(reset_err, "later reset callback failed");
             assert_eq!(
@@ -4526,6 +5284,8 @@ class Mem:
             mem.setattr("fail", false).unwrap();
             mem.setattr("writes", pyo3::types::PyList::empty_bound(py))
                 .unwrap();
+            cpu.prepare_immediate_machine_reset_transfer(py)
+                .expect("prepare recovery reset");
             cpu.power_on_reset().unwrap();
             let writes = mem
                 .getattr("writes")

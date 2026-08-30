@@ -1,4 +1,4 @@
-use super::eval::{LlamaBus, LlamaExecutor};
+use super::eval::{LlamaBus, LlamaExecutor, ValidatedVectorTransfer};
 use super::state::LlamaState;
 use crate::async_driver::sleep_cycles;
 
@@ -23,6 +23,18 @@ impl AsyncLlamaExecutor {
         self.inner.execute(opcode, state, bus)
     }
 
+    pub async fn execute_with_vector_transfer<B: LlamaBus>(
+        &mut self,
+        opcode: u8,
+        state: &mut LlamaState,
+        bus: &mut B,
+        _ticker: &mut TickHelper<'_>,
+        transfer: Option<ValidatedVectorTransfer>,
+    ) -> Result<u8, &'static str> {
+        self.inner
+            .execute_with_vector_transfer(opcode, state, bus, transfer)
+    }
+
     pub fn validate_before_scheduling<B: LlamaBus>(
         &self,
         opcode: u8,
@@ -30,6 +42,16 @@ impl AsyncLlamaExecutor {
         bus: &mut B,
     ) -> Result<(), &'static str> {
         self.inner.validate_before_scheduling(opcode, state, bus)
+    }
+
+    pub fn validate_before_scheduling_with_length<B: LlamaBus>(
+        &self,
+        opcode: u8,
+        state: &LlamaState,
+        bus: &mut B,
+    ) -> Result<u8, &'static str> {
+        self.inner
+            .validate_before_scheduling_with_length(opcode, state, bus)
     }
 }
 

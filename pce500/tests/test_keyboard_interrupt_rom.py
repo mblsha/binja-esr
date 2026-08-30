@@ -73,7 +73,8 @@ def _run_dispatcher(
     emu.memory.write_byte(imr_addr, active_imr)
     emu.memory.write_byte(isr_addr, isr)
 
-    # Hardware frame at S: saved IMR, saved F, saved 24-bit return PC.
+    # Hardware frame at S: saved IMR, saved F, saved return PC in a
+    # three-byte 20-bit image.
     emu.memory.write_byte(SYSTEM_FRAME, saved_imr)
     emu.memory.write_byte(SYSTEM_FRAME + 1, 0)
     emu.memory.write_bytes(3, SYSTEM_FRAME + 2, RETURN_PC)

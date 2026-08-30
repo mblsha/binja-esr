@@ -1066,7 +1066,7 @@ def lift_multi_byte(
             ptr_temp_reg_const = TempMultiByte1 if is_dest_op else TempMultiByte2
             ptr = TempReg(
                 ptr_temp_reg_const, width=3
-            )  # Addresses are 3 bytes (20/24 bit)
+            )  # Three-byte LLIL container; address consumers retain 20 bits.
 
             # Initialize the pointer temp reg with the initial address from the operand
             # side_effects=False for source, potentially True for dest if pre/post inc/dec
@@ -1093,7 +1093,7 @@ def lift_multi_byte(
                 if isinstance(op, IMem8):
                     # The encoded internal-memory address is eight bits.  Keep
                     # block iteration inside the 0x00..0xff internal window
-                    # instead of spilling a 24-bit temporary into external
+                    # instead of spilling a three-byte LLIL temporary into external
                     # memory at either boundary.
                     offset = il.sub(3, next_addr, il.const(3, INTERNAL_MEMORY_START))
                     wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
@@ -1319,6 +1319,25 @@ class CMPW(CMP):
 class CMPP(CMP):
     def width(self) -> int:
         return 3
+
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        if self.opcode != 0xD7:
+            # C7 compares two raw three-byte internal-memory images.
+            super().lift(il, addr)
+            return
+
+        # D7 compares an internal-memory pointer image with X/Y/U/S. The
+        # register class is 20-bit, and the baseline emulator independently
+        # models this form with its 20-bit IMEM reader/flag width. Mask both
+        # operands explicitly while retaining a three-byte LLIL container.
+        # This remains a best-guess pending an upper-nibble hardware probe.
+        dst_mode = get_addressing_mode(self._pre, 1)
+        src_mode = get_addressing_mode(self._pre, 2)
+        first, second = self.operands()
+        mask = il.const(3, PC_MASK)
+        lhs = il.and_expr(3, first.lift(il, dst_mode), mask)
+        rhs = il.and_expr(3, second.lift(il, src_mode), mask)
+        il.append(il.sub(3, lhs, rhs, CZFlag))
 
 
 # Shift and rotate instructions operate on one bit
@@ -1734,6 +1753,25 @@ class OFF(MiscInstruction):
 # 3. After pushing IMR, bit 7 (IRM) of IMR is forcibly cleared to 0.
 class IR(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        # Fetch the architectural vector into a dedicated temporary before
+        # any S-stack/IMR mutation. The validation intrinsic compares this
+        # value with a side-effect-free peek and statically checks its target;
+        # the final jump reuses it rather than reading a volatile bus twice.
+        mem = EMemAddr(width=3)
+        mem.value = INTERRUPT_VECTOR_ADDR
+        vector_target = TempReg(TempVectorTarget, width=3)
+        vector_target.lift_assign(il, mem.lift(il))
+        il.append(
+            il.intrinsic(
+                [],
+                ValidateVectorTransferIntrinsic,
+                [
+                    il.const(3, INTERRUPT_VECTOR_ADDR),
+                    il.const(3, addr & PC_MASK),
+                    vector_target.lift(il),
+                ],
+            )
+        )
         imr, *_rest = RegIMR().operands()
         imr_value = imr.lift(il)
         # Software IR saves the address of the IR opcode itself.  The ROM
@@ -1745,9 +1783,7 @@ class IR(MiscInstruction):
         _lift_s_push(il, 1, imr_value)
         imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
 
-        mem = EMemAddr(width=3)
-        mem.value = INTERRUPT_VECTOR_ADDR
-        il.append(il.jump(mem.lift(il)))
+        il.append(il.jump(vector_target.lift(il)))
 
 
 # RESET vector selection is ROM-grounded.  The register mutations performed by

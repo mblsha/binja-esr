@@ -110,7 +110,13 @@ def _make_cpu_and_mem(
             raise IndexError(f"Write address {addr:04x} out of bounds")
         raw[addr] = value & 0xFF
 
-    cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    memory = Memory(read_mem, write_mem)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda addr, _pc=None: raw[addr],
+    )
+    cpu = Emulator(memory, reset_on_init=False)
     return cpu, raw, reads, writes
 
 
@@ -1868,6 +1874,7 @@ def test_tcl_quarantine_uses_decoded_instruction(instr_bytes: bytes) -> None:
         bytes.fromhex("211100"),  # PRE followed by reserved JP selector
         bytes.fromhex("21E31000"),  # PRE followed by malformed E3 mode
         bytes.fromhex("257C01"),  # EFE2B is mid-instruction, not a code entry
+        bytes.fromhex("23483F"),  # F0002 is the operand byte of FD 23, not an entry
     ],
 )
 def test_noncanonical_and_malformed_pre_prefixes_fail_closed(
@@ -1879,32 +1886,6 @@ def test_noncanonical_and_malformed_pre_prefixes_fail_closed(
         cpu.execute_instruction(0)
 
     assert cpu.regs.get(RegisterName.PC) == 0
-    assert writes == []
-
-
-@pytest.mark.parametrize(
-    ("instr_bytes", "register", "initial", "expected", "rendered"),
-    [
-        (bytes.fromhex("23483F"), RegisterName.A, 0x50, 0x11, "SUB   A, 3F"),
-    ],
-)
-def test_boundary_backed_irrelevant_pre_alias_remains_executable(
-    instr_bytes: bytes,
-    register: RegisterName,
-    initial: int,
-    expected: int,
-    rendered: str,
-) -> None:
-    cpu, _raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
-    cpu.regs.set(register, initial)
-
-    info = cpu.execute_instruction(0)
-
-    assert asm_str(info.instruction.render()) == rendered
-    assert info.instruction._pre == instr_bytes[0]
-    assert info.instruction.length() == len(instr_bytes)
-    assert cpu.regs.get(register) == expected
-    assert cpu.regs.get(RegisterName.PC) == len(instr_bytes)
     assert writes == []
 
 
@@ -1922,7 +1903,13 @@ def test_host_write_failure_rolls_back_registers_and_poison_requires_reset() -> 
             raise RuntimeError("host write failed")
         raw[address] = value & 0xFF
 
-    cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    memory = Memory(read_mem, write_mem)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda addr, _pc=None: raw[addr],
+    )
+    cpu = Emulator(memory, reset_on_init=False)
     cpu.regs.set(RegisterName.PC, 0)
     cpu.regs.set(RegisterName.A, 0x5A)
     cpu.regs.set(RegisterName.FC, 1)
@@ -1963,7 +1950,13 @@ def test_failed_recovery_reset_preserves_first_poison_reason() -> None:
             raise RuntimeError("later reset fault")
         raw[address] = value & 0xFF
 
-    cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    memory = Memory(read_mem, write_mem)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda addr, _pc=None: raw[addr],
+    )
+    cpu = Emulator(memory, reset_on_init=False)
     with pytest.raises(RuntimeError, match="first host-write fault"):
         cpu.execute_instruction(0)
 
@@ -4000,7 +3993,14 @@ def test_decode_all_opcodes() -> None:
 
         memory = Memory(read_mem, write_mem)
         setattr(memory, "wait_cycles", lambda _cycles: None)
-        cpu = Emulator(memory)
+        setattr(
+            memory,
+            "peek_byte_for_preflight",
+            lambda addr, _pc=None: raw_memory[addr],
+        )
+        # Opcode enumeration is decoder/executor coverage, not a power-on
+        # model test; avoid applying RESET to its synthetic memory image.
+        cpu = Emulator(memory, reset_on_init=False)
 
         address = 0x00
         cpu.regs.set(RegisterName.S, 0x1000)  # Set stack pointer to a valid location

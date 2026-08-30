@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections import deque
+from dataclasses import dataclass
 from typing import Optional, Callable, Dict, Tuple, Literal, Deque, Any, Iterable, List
 
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
@@ -25,10 +26,123 @@ IMEM_TRACE_REG = ""
 
 MEMORY_CARD_SLOT_START = 0x40000
 MEMORY_CARD_SLOT_END = 0x4FFFF
+SUPPORTED_MEMORY_CARD_SIZES = (8192, 16384, 32768, 65536)
 PCE500_ROM_WINDOW_START = 0xC0000
 PCE500_ROM_WINDOW_SIZE = 0x40000
 PCE500_BASE_ROM_START = 0xE0000
 PCE500_BASE_ROM_SIZE = 0x20000
+
+
+@dataclass(frozen=True)
+class _SnapshotOverlayContract:
+    """Strongly retain the exact live objects behind an unserialized overlay."""
+
+    start: int
+    end: int
+    name: str
+    data: object
+    read_only: bool
+    read_handler: object
+    write_handler: object
+    perfetto_thread: str
+    preflight_read_handler: object
+
+    @classmethod
+    def capture(cls, overlay: MemoryOverlay) -> "_SnapshotOverlayContract":
+        return cls(
+            start=overlay.start,
+            end=overlay.end,
+            name=overlay.name,
+            data=overlay.data,
+            read_only=overlay.read_only,
+            read_handler=overlay.read_handler,
+            write_handler=overlay.write_handler,
+            perfetto_thread=overlay.perfetto_thread,
+            preflight_read_handler=overlay.preflight_read_handler,
+        )
+
+    def matches(self, overlay: MemoryOverlay) -> bool:
+        return (
+            overlay.start == self.start
+            and overlay.end == self.end
+            and overlay.name == self.name
+            and overlay.data is self.data
+            and overlay.read_only is self.read_only
+            and overlay.read_handler is self.read_handler
+            and overlay.write_handler is self.write_handler
+            and overlay.perfetto_thread == self.perfetto_thread
+            and overlay.preflight_read_handler is self.preflight_read_handler
+        )
+
+
+def _snapshot_overlay_requires_identity(overlay: MemoryOverlay) -> bool:
+    """Return whether snapshot v4 cannot reconstruct this overlay contract.
+
+    A read-only, data-backed overlay is represented by its flattened bytes and
+    read-only range, both of which the loader validates exactly.  Handler-backed
+    overlays and writable overlay definitions are not serialized, so their
+    live identities must match the sanctioned machine baseline.
+    """
+
+    return (
+        not overlay.read_only
+        or overlay.data is None
+        or overlay.read_handler is not None
+        or overlay.write_handler is not None
+        or overlay.preflight_read_handler is not None
+    )
+
+
+def _snapshot_identity_overlay_signatures(
+    overlays: Iterable[MemoryOverlay],
+) -> Tuple[_SnapshotOverlayContract, ...]:
+    return tuple(
+        _SnapshotOverlayContract.capture(overlay)
+        for overlay in overlays
+        if _snapshot_overlay_requires_identity(overlay)
+    )
+
+
+def _has_overlapping_snapshot_static_overlay(
+    overlays: Iterable[MemoryOverlay],
+) -> bool:
+    """Reject ambiguous priority omitted from the v4 snapshot contract.
+
+    MemoryBus resolves overlays in sorted order, so the name and placement of
+    an overlapping static overlay can change which byte or handler wins.  V4
+    intentionally represents a static read-only overlay only through the
+    flattened bytes and read-only ranges.  That is exact only while such an
+    overlay is disjoint from every other overlay.
+    """
+
+    ordered = tuple(overlays)
+    for index, overlay in enumerate(ordered):
+        if _snapshot_overlay_requires_identity(overlay):
+            continue
+        for other in ordered[index + 1 :]:
+            if overlay.start <= other.end and other.start <= overlay.end:
+                return True
+    return False
+
+
+def _has_out_of_image_snapshot_static_overlay(
+    overlays: Iterable[MemoryOverlay], image_size: int
+) -> bool:
+    """Return whether flattening would omit any static overlay semantics."""
+
+    for overlay in overlays:
+        if _snapshot_overlay_requires_identity(overlay):
+            continue
+        span = overlay.end - overlay.start + 1
+        if (
+            overlay.start < 0
+            or overlay.end < overlay.start
+            or overlay.end >= image_size
+            or overlay.data is None
+            or len(overlay.data) != span
+        ):
+            return True
+    return False
 
 
 def _keyboard_read_handler_arity(handler: Callable[..., int]) -> int:
@@ -111,6 +225,7 @@ class PCE500Memory:
 
         # Overlay manager
         self._bus = MemoryBus()
+        self._address_space_epoch = 0
 
         # Memory card slot (0x40000..). The ROM probes this window to decide
         # whether the card path is available (e.g. toggling 0x40005).
@@ -153,6 +268,16 @@ class PCE500Memory:
                 preflight_read_handler=_card_read,
             )
         )
+        # Snapshot v4 serializes selected device payloads, not arbitrary
+        # callback/overlay definitions. The machine wrapper refreshes this
+        # baseline after installing its built-in LCD and keyboard overlays.
+        self._snapshot_baseline_overlays = _snapshot_identity_overlay_signatures(
+            self._bus.iter_overlays()
+        )
+        self._snapshot_baseline_imem_callback: Optional[
+            Callable[[int, str, str, int], None]
+        ] = None
+        self._snapshot_baseline_finalized = False
 
         # Track keyboard overlay for optimization
         self._keyboard_overlay: Optional[MemoryOverlay] = None
@@ -207,22 +332,83 @@ class PCE500Memory:
     ) -> None:
         """Load a memory card (8KB, 16KB, 32KB, or 64KB) into the card slot."""
 
-        size_map = {
-            8192: 8192,
-            16384: 16384,
-            32768: 32768,
-            65536: 65536,
-        }
-        if card_size not in size_map:
+        if card_size not in SUPPORTED_MEMORY_CARD_SIZES:
             raise ValueError(f"Invalid memory card size: {card_size}")
 
-        self._card_len = size_map[card_size]
+        self._card_len = card_size
         self._card_data = bytearray(self._card_len)
         self._card_data[: min(len(card_data), self._card_len)] = card_data[
             : min(len(card_data), self._card_len)
         ]
         self._card_present = True
         self._card_writable = bool(writable)
+
+    def unrepresented_snapshot_state(self) -> Tuple[str, ...]:
+        """Return handler-backed state which snapshot v4 cannot encode."""
+
+        active: list[str] = []
+        overlays = tuple(self._bus.iter_overlays())
+        identity_overlays = tuple(
+            overlay
+            for overlay in overlays
+            if _snapshot_overlay_requires_identity(overlay)
+        )
+        if len(identity_overlays) != len(self._snapshot_baseline_overlays) or any(
+            not contract.matches(overlay)
+            for contract, overlay in zip(
+                self._snapshot_baseline_overlays, identity_overlays
+            )
+        ):
+            active.append("custom memory-overlay definitions/callbacks")
+        if _has_overlapping_snapshot_static_overlay(overlays):
+            active.append("overlapping read-only memory-overlay definitions")
+        if _has_out_of_image_snapshot_static_overlay(
+            overlays, len(self.external_memory)
+        ):
+            active.append("out-of-image read-only memory-overlay definitions")
+        if self._imem_access_callback is not self._snapshot_baseline_imem_callback:
+            active.append("custom IMEM access callback")
+        return tuple(active)
+
+    def export_memory_card_snapshot(self) -> Tuple[dict[str, object], bytes]:
+        """Return a validated, exact snapshot of the card slot state."""
+
+        if not isinstance(self._card_present, bool):
+            raise RuntimeError("memory-card presence state is not boolean")
+        if not isinstance(self._card_writable, bool):
+            raise RuntimeError("memory-card writable state is not boolean")
+        if (
+            isinstance(self._card_len, bool)
+            or not isinstance(self._card_len, int)
+            or self._card_len not in SUPPORTED_MEMORY_CARD_SIZES
+        ):
+            raise RuntimeError("memory-card capacity is unsupported")
+        try:
+            payload = bytes(self._card_data)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("memory-card payload is not byte-addressable") from exc
+        if len(payload) != self._card_len:
+            raise RuntimeError(
+                "memory-card payload size does not match its configured capacity"
+            )
+        metadata = {
+            "mode": "present" if self._card_present else "absent",
+            "capacity": self._card_len,
+            "writable": self._card_writable,
+            "payload_size": len(payload),
+        }
+        return metadata, payload
+
+    def _mark_snapshot_baseline(self) -> None:
+        """Record the reconstructible built-in callback/overlay configuration."""
+
+        if self._snapshot_baseline_finalized:
+            raise RuntimeError("snapshot overlay baseline is already finalized")
+        self._snapshot_baseline_overlays = _snapshot_identity_overlay_signatures(
+            self._bus.iter_overlays()
+        )
+        self._snapshot_baseline_imem_callback = self._imem_access_callback
+        self._snapshot_baseline_finalized = True
 
     def set_imem_access_callback(
         self, callback: Callable[[int, str, str, int], None]
@@ -647,6 +833,57 @@ class PCE500Memory:
             return result.value
         return int(self.external_memory[address]) & 0xFF
 
+    def vector_transfer_provenance(self) -> tuple[int, int]:
+        """Identify this address space and its current overlay mapping."""
+
+        overlay_fingerprint = []
+        for overlay in self._bus.iter_overlays():
+            static_payload = None
+            if overlay.read_only and overlay.data is not None:
+                # read_only is a bus policy; callers can still hold the live
+                # bytearray. Include its content so direct mutation invalidates
+                # an outstanding transfer proof.
+                static_payload = hash(bytes(overlay.data))
+            overlay_fingerprint.append(
+                (
+                    overlay.start,
+                    overlay.end,
+                    overlay.name,
+                    overlay.read_only,
+                    id(overlay.data),
+                    static_payload,
+                    id(overlay.read_handler),
+                    id(overlay.write_handler),
+                    id(overlay.preflight_read_handler),
+                )
+            )
+        epoch = hash((self._address_space_epoch, tuple(overlay_fingerprint))) & (
+            (1 << 64) - 1
+        )
+        return id(self), epoch
+
+    def instruction_byte_is_callback_free(self, address: int) -> bool:
+        """Return whether repeated normal fetches cannot invoke a callback."""
+
+        address &= 0xFFFFFF
+        if address >= INTERNAL_MEMORY_START:
+            offset = (address - INTERNAL_MEMORY_START) & 0xFF
+            if self._keyboard_overlay and 0xF0 <= offset <= 0xF2:
+                return (
+                    self._keyboard_overlay.read_handler is None
+                    and self._keyboard_overlay.preflight_read_handler is None
+                )
+            return True
+        return self._bus.instruction_byte_is_callback_free(address & 0xFFFFF)
+
+    def instruction_byte_is_immutable(self, address: int) -> bool:
+        """Return whether a byte survives reset and cannot change by writes."""
+
+        address &= 0xFFFFFF
+        if address >= INTERNAL_MEMORY_START:
+            return False
+        return self._bus.instruction_byte_is_immutable(address & 0xFFFFF)
+
     @perf_trace("Memory", sample_rate=100)
     def write_byte(
         self, address: int, value: int, cpu_pc: Optional[int] = None
@@ -890,6 +1127,7 @@ class PCE500Memory:
             else 2
         )
         self._bus.add_overlay(overlay)
+        self._address_space_epoch += 1
 
         # Track keyboard overlay for fast access
         if is_keyboard_overlay:
@@ -898,11 +1136,14 @@ class PCE500Memory:
 
     def remove_overlay(self, name: str) -> None:
         """Remove overlay by name."""
+        previous_count = self._bus.overlay_count()
         if self._keyboard_overlay and self._keyboard_overlay.name == name:
             self._keyboard_overlay = None
             self._keyboard_read_arity = 2
 
         self._bus.remove_overlay(name)
+        if self._bus.overlay_count() != previous_count:
+            self._address_space_epoch += 1
 
     @property
     def overlays(self) -> Tuple[MemoryOverlay, ...]:
