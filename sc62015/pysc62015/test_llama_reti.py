@@ -43,6 +43,8 @@ def _make_memory(
         "peek_byte_for_preflight",
         lambda address, _pc=None: raw[address & 0xFFFFFF],
     )
+    setattr(memory, "instruction_byte_is_callback_free", lambda _address: True)
+    setattr(memory, "vector_transfer_provenance", lambda: (id(memory), 0))
     return cast(MemoryWithRaw, memory)
 
 
@@ -144,6 +146,7 @@ def test_ir_stacks_modeled_f_image(backend: str, f_input: int) -> None:
     cpu.regs.set(RegisterName.S, 0x105)
     cpu.regs.set(RegisterName.F, f_input)
 
+    cpu.prepare_instruction_before_scheduling(0)
     cpu.execute_instruction(0)
 
     assert cpu.regs.get(RegisterName.S) == 0x100

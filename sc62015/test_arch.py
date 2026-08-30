@@ -56,13 +56,10 @@ def test_register_pair_alias_remains_disassemblable() -> None:
     assert text
 
 
-def test_boundary_backed_pre_alias_remains_disassemblable() -> None:
+def test_disproved_overlapping_pre_alias_is_not_disassemblable() -> None:
     arch = object.__new__(SC62015)
 
-    text, length = arch.get_instruction_text(bytes.fromhex("23483f"), 0xF0002)
-
-    assert text
-    assert length == 3
+    assert arch.get_instruction_info(bytes.fromhex("23483f"), 0xF0002) is None
 
 
 def test_table_or_misaligned_aliases_are_not_disassemblable() -> None:

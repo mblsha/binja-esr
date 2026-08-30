@@ -76,6 +76,14 @@ class SC62015(Architecture):
             inputs=[Type.int(3, False), Type.int(3, False)], outputs=[]
         ),
         "VALIDATE_I_COUNT": IntrinsicInfo(inputs=[Type.int(2, False)], outputs=[]),
+        "VALIDATE_VECTOR_TRANSFER": IntrinsicInfo(
+            inputs=[
+                Type.int(3, False),
+                Type.int(3, False),
+                Type.int(3, False),
+            ],
+            outputs=[],
+        ),
     }
 
     @staticmethod
@@ -90,10 +98,9 @@ class SC62015(Architecture):
         recoded = bytes(encode(decoded, addr))
         if encoded != recoded:
             # Every accepted raw alias (currently the documented ED/FD selector
-            # aliases and the exact boundary-backed PRE23/SUB pair) is preserved
-            # by the decoder's operand objects. Any mismatch here is therefore
-            # a malformed form or an implementation defect, not permission to
-            # broaden an alias.
+            # aliases) is preserved by the decoder's operand objects. Any
+            # mismatch here is therefore a malformed form or an implementation
+            # defect, not permission to broaden an alias.
             return None
         return decoded
 

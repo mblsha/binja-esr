@@ -24,12 +24,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 static PERF_INSTR_COUNTER: AtomicU64 = AtomicU64::new(0);
-static PERF_CURRENT_PC: AtomicU32 = AtomicU32::new(u32::MAX);
-static PERF_CURRENT_OP: AtomicU64 = AtomicU64::new(u64::MAX);
-static PERF_SUBSTEP: AtomicU32 = AtomicU32::new(0);
 
 pub const PERFETTO_CALL_STACK_MAX_FRAMES: usize = 8;
 
@@ -40,23 +37,45 @@ pub struct PerfettoCallStack {
 }
 
 thread_local! {
+    // Current execution context belongs to one machine on one executor thread.
+    // Keeping it process-global allowed unrelated parallel tests/machines to
+    // publish a false context into each other's memory and trace callbacks.
+    static PERF_CURRENT_PC: Cell<u32> = const { Cell::new(u32::MAX) };
+    static PERF_CURRENT_OP: Cell<u64> = const { Cell::new(u64::MAX) };
+    static PERF_SUBSTEP: Cell<u32> = const { Cell::new(0) };
     static PERF_LAST_PC: Cell<u32> = const { Cell::new(0) };
     static PERF_LAST_CALL_STACK: Cell<PerfettoCallStack> = const { Cell::new(PerfettoCallStack { len: 0, frames: [0; PERFETTO_CALL_STACK_MAX_FRAMES] }) };
+    static PREFLIGHT_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+struct PreflightGuard;
+
+impl PreflightGuard {
+    fn enter() -> Self {
+        PREFLIGHT_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self
+    }
+}
+
+impl Drop for PreflightGuard {
+    fn drop(&mut self) {
+        PREFLIGHT_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
 }
 
 struct PerfettoContextGuard;
 impl Drop for PerfettoContextGuard {
     fn drop(&mut self) {
-        PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
-        PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
-        PERF_SUBSTEP.store(0, Ordering::Relaxed);
+        PERF_CURRENT_OP.with(|value| value.set(u64::MAX));
+        PERF_CURRENT_PC.with(|value| value.set(u32::MAX));
+        PERF_SUBSTEP.with(|value| value.set(0));
     }
 }
 
 /// Expose current instruction context for Perfetto correlation outside the executor.
 pub fn perfetto_instr_context() -> Option<(u64, u32)> {
-    let op = PERF_CURRENT_OP.load(Ordering::Relaxed);
-    let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+    let op = PERF_CURRENT_OP.with(|value| value.get());
+    let pc = PERF_CURRENT_PC.with(|value| value.get());
     if op == u64::MAX || pc == u32::MAX {
         None
     } else {
@@ -82,11 +101,11 @@ pub fn perfetto_last_call_stack() -> PerfettoCallStack {
 pub fn reset_perf_counters() {
     let _guard = PERFETTO_TRACER.enter();
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
-    PERF_CURRENT_PC.store(u32::MAX, Ordering::Relaxed);
-    PERF_CURRENT_OP.store(u64::MAX, Ordering::Relaxed);
+    PERF_CURRENT_PC.with(|value| value.set(u32::MAX));
+    PERF_CURRENT_OP.with(|value| value.set(u64::MAX));
     PERF_LAST_PC.with(|value| value.set(0));
     PERF_LAST_CALL_STACK.with(|value| value.set(PerfettoCallStack::default()));
-    PERF_SUBSTEP.store(0, Ordering::Relaxed);
+    PERF_SUBSTEP.with(|value| value.set(0));
 }
 
 /// Set the global instruction index used for Perfetto `op_index` annotations.
@@ -99,11 +118,15 @@ pub fn set_perf_instr_counter(value: u64) {
 
 /// Next per-instruction substep for Perfetto manual clock parity.
 pub fn perfetto_next_substep() -> u64 {
-    PERF_SUBSTEP.fetch_add(1, Ordering::Relaxed) as u64 + 1
+    PERF_SUBSTEP.with(|value| {
+        let next = value.get().wrapping_add(1);
+        value.set(next);
+        next as u64
+    })
 }
 
 fn perfetto_reset_substep() {
-    PERF_SUBSTEP.store(0, Ordering::Relaxed);
+    PERF_SUBSTEP.with(|value| value.set(0));
 }
 
 fn reject_unknown() -> Result<u8, &'static str> {
@@ -118,6 +141,52 @@ pub const ENCODED_20BIT_UPPER_NIBBLE_ERROR: &str =
 pub const EXP_UPPER_NIBBLE_ERROR: &str = "EXP upper-nibble behavior requires real-hardware tracing";
 pub const SILENT_PEEK_UNAVAILABLE_ERROR: &str =
     "side-effect-free instruction preflight memory is unavailable";
+pub const VECTOR_UPPER_NIBBLE_ERROR: &str =
+    "SC62015 vector upper-nibble behavior requires real-hardware tracing";
+pub const VECTOR_CHANGED_DURING_PREFLIGHT_ERROR: &str =
+    "SC62015 vector changed between silent preflight and architectural fetch";
+pub const PREPARED_VECTOR_MISMATCH_ERROR: &str =
+    "prepared SC62015 vector transfer does not match the current instruction";
+
+/// Opaque proof that one fixed vector was silently validated, fetched once
+/// through the architectural bus, and found to match that silent view.
+///
+/// Private fields prevent wrappers from manufacturing a target scalar and
+/// bypassing the destination checks. A machine may hold this value across its
+/// pre-execution timer/device tick, then consume it exactly once when the
+/// corresponding IR/RESET operation commits.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ValidatedVectorTransfer {
+    vector_addr: u32,
+    source_pc: u32,
+    target: u32,
+    target_len: u8,
+    provenance: (usize, u64),
+}
+
+impl ValidatedVectorTransfer {
+    pub fn target(&self) -> u32 {
+        self.target
+    }
+
+    pub fn vector_address(&self) -> u32 {
+        self.vector_addr
+    }
+
+    pub fn source_pc(&self) -> u32 {
+        self.source_pc
+    }
+
+    pub fn target_len(&self) -> u8 {
+        self.target_len
+    }
+
+    fn matches<B: LlamaBus>(&self, vector_addr: u32, state: &LlamaState, bus: &B) -> bool {
+        self.vector_addr == vector_addr
+            && self.source_pc == state.pc() & mask_for(RegName::PC)
+            && self.provenance == bus.vector_transfer_provenance()
+    }
+}
 
 fn is_i_counted_entry(entry: &OpcodeEntry) -> bool {
     matches!(
@@ -198,6 +267,23 @@ pub trait LlamaBus {
     fn peek_byte_silent(&mut self, _addr: u32) -> Option<u8> {
         None
     }
+    /// Context-aware safe peek for PC-sensitive overlays. The context is the
+    /// instruction whose bytes/operands are being validated (the vector
+    /// destination while decoding a handler), not necessarily the caller PC.
+    fn peek_byte_silent_at(&mut self, addr: u32, _context_pc: u32) -> Option<u8> {
+        self.peek_byte_silent(addr)
+    }
+    /// Stable identity plus mapping epoch for opaque vector-transfer proofs.
+    /// Wrappers recreated around the same address space must override this and
+    /// forward the underlying memory identity/epoch.
+    fn vector_transfer_provenance(&self) -> (usize, u64) {
+        (self as *const Self as *const () as usize, 0)
+    }
+    /// Whether normal and preflight instruction fetch have one static view
+    /// for this byte across the wrapper's pre-execution timer/device tick.
+    fn instruction_byte_is_stable(&self, _addr: u32) -> bool {
+        false
+    }
     fn resolve_emem(&mut self, base: u32) -> u32 {
         base
     }
@@ -231,6 +317,7 @@ pub trait LlamaBus {
 struct SilentPreflightBus<'a, B: LlamaBus> {
     inner: &'a mut B,
     unavailable: bool,
+    context_pc: u32,
 }
 
 impl<B: LlamaBus> LlamaBus for SilentPreflightBus<'_, B> {
@@ -240,7 +327,7 @@ impl<B: LlamaBus> LlamaBus for SilentPreflightBus<'_, B> {
         for index in 0..bytes {
             let byte = self
                 .inner
-                .peek_byte_silent(addr.wrapping_add(u32::from(index)));
+                .peek_byte_silent_at(addr.wrapping_add(u32::from(index)), self.context_pc);
             match byte {
                 Some(byte) => value |= u32::from(byte) << (8 * index),
                 None => self.unavailable = true,
@@ -258,7 +345,23 @@ impl<B: LlamaBus> LlamaBus for SilentPreflightBus<'_, B> {
     }
 
     fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
-        let value = self.inner.peek_byte_silent(addr);
+        let value = self.inner.peek_byte_silent_at(addr, self.context_pc);
+        if value.is_none() {
+            self.unavailable = true;
+        }
+        value
+    }
+
+    fn vector_transfer_provenance(&self) -> (usize, u64) {
+        self.inner.vector_transfer_provenance()
+    }
+
+    fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+        self.inner.instruction_byte_is_stable(addr)
+    }
+
+    fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+        let value = self.inner.peek_byte_silent_at(addr, context_pc);
         if value.is_none() {
             self.unavailable = true;
         }
@@ -373,16 +476,7 @@ fn validate_canonical_pre(
     entry: &OpcodeEntry,
 ) -> Result<(), &'static str> {
     match pre_selector_count(entry) {
-        0 => {
-            // Preserve only the exact irrelevant PRE encoding whose decoded
-            // boundary is a named PC-E500 ROM function entry. The apparent
-            // 25 7C stream begins at another instruction's operand byte.
-            if matches!((prefix_opcode, entry.opcode), (0x23, 0x48)) {
-                Ok(())
-            } else {
-                Err("PRE prefix has no addressable internal-memory operand")
-            }
-        }
+        0 => Err("PRE prefix has no addressable internal-memory operand"),
         1 => {
             let canonical = match modes.first {
                 AddressingMode::N => 0x30,
@@ -430,11 +524,14 @@ fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8)
 /// Emit the effective IMEM address and the raw registers used for BpPx/BpPy modes.
 /// Fires when perfetto is active or TRACE_IMEM_ADDR=1 is set.
 fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
+    if PREFLIGHT_DEPTH.with(|depth| depth.get() != 0) {
+        return;
+    }
     // Optional perfetto emit when the builder is available (llama-tests builds).
     let mut guard = crate::PERFETTO_TRACER.enter();
     guard.with_some(|tracer| {
-        let op_idx = PERF_CURRENT_OP.load(Ordering::Relaxed);
-        let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+        let op_idx = PERF_CURRENT_OP.with(|value| value.get());
+        let pc = PERF_CURRENT_PC.with(|value| value.get());
         let op = if op_idx == u64::MAX {
             None
         } else {
@@ -479,7 +576,36 @@ fn enter_low_power_state<B: LlamaBus>(
 }
 
 /// Apply power-on reset side effects (IMEM init, PC jump to reset vector).
-pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
+pub fn power_on_reset<B: LlamaBus>(
+    bus: &mut B,
+    state: &mut LlamaState,
+) -> Result<(), &'static str> {
+    // Resolve and validate the complete transfer before RESET changes any SFR,
+    // call-page, power, or PC state. The fixed vector remains an architectural
+    // read, but even a volatile mismatch is rejected before the first write.
+    let transfer = fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?;
+    apply_power_on_reset(bus, state, transfer.target());
+    Ok(())
+}
+
+/// Commit RESET using a vector that the caller already silently validated and
+/// architecturally fetched before entering this layer. This path deliberately
+/// performs no vector or destination read: machine wrappers may have reset
+/// RAM/LCD state after the fetch, so any later rejectable bus access would make
+/// the wrapper-level operation non-atomic.
+pub fn power_on_reset_with_transfer<B: LlamaBus>(
+    bus: &mut B,
+    state: &mut LlamaState,
+    transfer: ValidatedVectorTransfer,
+) -> Result<(), &'static str> {
+    if !transfer.matches(ROM_RESET_VECTOR_ADDR, state, bus) {
+        return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+    }
+    apply_power_on_reset(bus, state, transfer.target());
+    Ok(())
+}
+
+fn apply_power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState, reset_vector: u32) {
     // RESET intrinsic side-effects (see pysc62015.intrinsics.eval_intrinsic_reset)
     // Parity: IMR is intentionally left unchanged.
     let mut lcc = read_imem_byte(bus, IMEM_LCC_OFFSET);
@@ -499,22 +625,85 @@ pub fn power_on_reset<B: LlamaBus>(bus: &mut B, state: &mut LlamaState) {
     ssr &= !0x04;
     write_imem_byte(bus, IMEM_SSR_OFFSET, ssr);
 
-    // Use the ROM reset vector at 0xFFFFD (interrupt vector remains at 0xFFFFA).
-    let reset_vector = bus.load(ROM_RESET_VECTOR_ADDR, 8)
-        | (bus.load(ROM_RESET_VECTOR_ADDR + 1, 8) << 8)
-        | (bus.load(ROM_RESET_VECTOR_ADDR + 2, 8) << 16);
     // Parity: keep register/flag values intact; only adjust IMEM/PC. Drop any saved
     // call-page context so near returns fall back to the current page like Python.
     state.clear_call_page_stack();
-    state.set_pc(reset_vector & mask_for(RegName::PC));
+    state.set_pc(reset_vector);
     state.set_halted(false);
+}
+
+/// Validate a fixed three-byte vector and its destination using only silent
+/// memory peeks. This is an emulator-integrity quarantine for unverified upper
+/// bits, not a claim that silicon traps on the encoding.
+pub fn validate_vector_transfer<B: LlamaBus>(
+    vector_addr: u32,
+    state: &LlamaState,
+    bus: &mut B,
+) -> Result<u32, &'static str> {
+    LlamaExecutor
+        .validate_vector_transfer_inner(vector_addr, state, bus)
+        .map(|(target, _length)| target)
+}
+
+pub fn validate_vector_transfer_with_length<B: LlamaBus>(
+    vector_addr: u32,
+    state: &LlamaState,
+    bus: &mut B,
+) -> Result<(u32, u8), &'static str> {
+    LlamaExecutor.validate_vector_transfer_inner(vector_addr, state, bus)
+}
+
+/// Perform the one architectural vector fetch after silent validation and
+/// validate the fetched value again if a volatile bus disagrees with the peek.
+/// All rejection points occur before the caller mutates architectural state.
+pub fn fetch_validated_vector<B: LlamaBus>(
+    vector_addr: u32,
+    state: &LlamaState,
+    bus: &mut B,
+) -> Result<ValidatedVectorTransfer, &'static str> {
+    let provenance = bus.vector_transfer_provenance();
+    let (silent_vector, target_len) =
+        LlamaExecutor.validate_vector_transfer_inner(vector_addr, state, bus)?;
+    let fetched_vector = bus.load(vector_addr, 8)
+        | (bus.load(vector_addr.wrapping_add(1), 8) << 8)
+        | (bus.load(vector_addr.wrapping_add(2), 8) << 16);
+    if bus.vector_transfer_provenance() != provenance {
+        return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+    }
+    if fetched_vector == silent_vector {
+        return Ok(ValidatedVectorTransfer {
+            vector_addr,
+            source_pc: state.pc() & mask_for(RegName::PC),
+            target: fetched_vector,
+            target_len,
+            provenance,
+        });
+    }
+    if fetched_vector & 0xF0_0000 != 0 {
+        return Err(VECTOR_UPPER_NIBBLE_ERROR);
+    }
+
+    // A volatile but canonical vector still needs the same static destination
+    // validation as the silently observed value.
+    let opcode = bus
+        .peek_byte_silent_at(fetched_vector, fetched_vector)
+        .ok_or(SILENT_PEEK_UNAVAILABLE_ERROR)?;
+    let mut target_state = state.clone();
+    target_state.set_pc(fetched_vector);
+    LlamaExecutor.validate_before_scheduling_with_options(
+        opcode,
+        &target_state,
+        bus,
+        false,
+        false,
+    )?;
+    Err(VECTOR_CHANGED_DURING_PREFLIGHT_ERROR)
 }
 
 pub struct LlamaExecutor;
 
 impl LlamaExecutor {
     pub fn new() -> Self {
-        reset_perf_counters();
         Self
     }
 
@@ -534,10 +723,50 @@ impl LlamaExecutor {
         state: &LlamaState,
         bus: &mut B,
     ) -> Result<(), &'static str> {
+        self.validate_before_scheduling_with_options(opcode, state, bus, true, true)
+            .map(|_| ())
+    }
+
+    pub fn validate_before_scheduling_with_length<B: LlamaBus>(
+        &self,
+        opcode: u8,
+        state: &LlamaState,
+        bus: &mut B,
+    ) -> Result<u8, &'static str> {
+        self.validate_before_scheduling_with_options(opcode, state, bus, true, true)
+    }
+
+    fn validate_before_scheduling_with_options<B: LlamaBus>(
+        &self,
+        opcode: u8,
+        state: &LlamaState,
+        bus: &mut B,
+        validate_data_dependent: bool,
+        validate_vector_target: bool,
+    ) -> Result<u8, &'static str> {
+        let _preflight_guard = PreflightGuard::enter();
         let mut bus = SilentPreflightBus {
             inner: bus,
             unavailable: false,
+            context_pc: state.pc() & mask_for(RegName::PC),
         };
+        self.validate_before_scheduling_silent(
+            opcode,
+            state,
+            &mut bus,
+            validate_data_dependent,
+            validate_vector_target,
+        )
+    }
+
+    fn validate_before_scheduling_silent<B: LlamaBus>(
+        &self,
+        opcode: u8,
+        state: &LlamaState,
+        bus: &mut SilentPreflightBus<'_, B>,
+        validate_data_dependent: bool,
+        validate_vector_target: bool,
+    ) -> Result<u8, &'static str> {
         let mut exec_pc = state.pc() & mask_for(RegName::PC);
         let mut entry = self.lookup(opcode);
         let mut prefix_len = 0u8;
@@ -552,7 +781,7 @@ impl LlamaExecutor {
             }
             let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
             exec_pc = exec_pc.wrapping_add(1) & mask_for(RegName::PC);
-            let next_opcode = Self::fetch_byte(&mut bus, exec_pc);
+            let next_opcode = Self::fetch_byte(bus, exec_pc);
             if bus.unavailable {
                 return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
             }
@@ -571,7 +800,7 @@ impl LlamaExecutor {
         if resolved.kind == InstrKind::Tcl {
             return Err(TCL_UNIMPLEMENTED_ERROR);
         }
-        if is_i_counted_entry(resolved) {
+        if validate_data_dependent && is_i_counted_entry(resolved) {
             validated_i_count(state)?;
         }
         if resolved.kind == InstrKind::Wait && !bus.supports_wait_cycles() {
@@ -585,7 +814,7 @@ impl LlamaExecutor {
         let decoded_result = self.decode_operands(
             resolved,
             &mut state_candidate,
-            &mut bus,
+            bus,
             pre_modes_opt.as_ref(),
             Some(exec_pc),
         );
@@ -593,14 +822,33 @@ impl LlamaExecutor {
             return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
         }
         let decoded = decoded_result?;
+        let instruction_len = decoded.len.saturating_add(prefix_len);
+
+        if validate_vector_target {
+            let vector_addr = match resolved.kind {
+                InstrKind::Ir => Some(INTERRUPT_VECTOR_ADDR),
+                InstrKind::Reset => Some(ROM_RESET_VECTOR_ADDR),
+                _ => None,
+            };
+            if let Some(vector_addr) = vector_addr {
+                self.validate_vector_transfer_silent(vector_addr, state, bus)?;
+            }
+        }
+
+        // A vector destination is checked only for instruction forms that can
+        // be rejected without reading mutable architectural data. EXP and
+        // stack-image checks remain the destination instruction's job.
+        if !validate_data_dependent {
+            return Ok(instruction_len);
+        }
 
         if resolved.opcode == 0xC2 {
             let (first, second) = decoded
                 .mem
                 .zip(decoded.mem2)
                 .ok_or("EXP requires two internal-memory operands")?;
-            let first_value = Self::load_wrapped_silent(&mut bus, first.addr, first.bits);
-            let second_value = Self::load_wrapped_silent(&mut bus, second.addr, second.bits);
+            let first_value = Self::load_wrapped_silent(bus, first.addr, first.bits);
+            let second_value = Self::load_wrapped_silent(bus, second.addr, second.bits);
             if bus.unavailable {
                 return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
             }
@@ -634,7 +882,62 @@ impl LlamaExecutor {
             }
             validate_f_image(u32::from(f))?;
         }
-        Ok(())
+        Ok(instruction_len)
+    }
+
+    fn validate_vector_transfer_inner<B: LlamaBus>(
+        &self,
+        vector_addr: u32,
+        state: &LlamaState,
+        bus: &mut B,
+    ) -> Result<(u32, u8), &'static str> {
+        if vector_addr > mask_for(RegName::PC) {
+            return Err("SC62015 vector address must be canonical 20-bit");
+        }
+        let _preflight_guard = PreflightGuard::enter();
+        let mut bus = SilentPreflightBus {
+            inner: bus,
+            unavailable: false,
+            context_pc: state.pc() & mask_for(RegName::PC),
+        };
+        self.validate_vector_transfer_silent(vector_addr, state, &mut bus)
+    }
+
+    fn validate_vector_transfer_silent<B: LlamaBus>(
+        &self,
+        vector_addr: u32,
+        state: &LlamaState,
+        bus: &mut SilentPreflightBus<'_, B>,
+    ) -> Result<(u32, u8), &'static str> {
+        let b0 = bus.peek_byte_silent(vector_addr).unwrap_or(0);
+        let b1 = bus
+            .peek_byte_silent(vector_addr.wrapping_add(1))
+            .unwrap_or(0);
+        let b2 = bus
+            .peek_byte_silent(vector_addr.wrapping_add(2))
+            .unwrap_or(0);
+        if bus.unavailable {
+            return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
+        }
+        let target = u32::from(b0) | (u32::from(b1) << 8) | (u32::from(b2) << 16);
+        if target & 0xF0_0000 != 0 {
+            return Err(VECTOR_UPPER_NIBBLE_ERROR);
+        }
+
+        let previous_context = bus.context_pc;
+        bus.context_pc = target;
+        let target_result = (|| {
+            let opcode = bus.peek_byte_silent(target).unwrap_or(0);
+            if bus.unavailable {
+                return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
+            }
+            let mut target_state = state.clone();
+            target_state.set_pc(target);
+            self.validate_before_scheduling_silent(opcode, &target_state, bus, false, false)
+        })();
+        bus.context_pc = previous_context;
+        let target_len = target_result?;
+        Ok((target, target_len))
     }
 
     fn push_stack<B: LlamaBus>(
@@ -810,8 +1113,8 @@ impl LlamaExecutor {
     fn trace_mem_write(addr: u32, bits: u8, value: u32) {
         let mut guard = PERFETTO_TRACER.enter();
         guard.with_some(|tracer| {
-            let op_index = PERF_CURRENT_OP.load(Ordering::Relaxed);
-            let pc = PERF_CURRENT_PC.load(Ordering::Relaxed);
+            let op_index = PERF_CURRENT_OP.with(|value| value.get());
+            let pc = PERF_CURRENT_PC.with(|value| value.get());
             let substep = perfetto_next_substep();
             let masked = if bits == 0 || bits >= 32 {
                 value
@@ -912,6 +1215,14 @@ impl LlamaExecutor {
             return Err(ENCODED_20BIT_UPPER_NIBBLE_ERROR);
         }
         Ok(lo | (mid << 8) | (high << 16))
+    }
+
+    fn fetch_register_20bit<B: LlamaBus>(bus: &mut B, addr: u32) -> u32 {
+        // X/Y hardware captures execute a high byte of 0x3C and subsequently
+        // push 0x0C. The register-load opcodes consume three bytes but retain
+        // bits 19-0. Do not generalize this silicon result to JPF/CALLF or an
+        // external address operand, which still use fetch_encoded_20bit.
+        Self::fetch_imm(bus, addr, 24) & mask_for(RegName::X)
     }
 
     fn read_imm<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
@@ -1284,7 +1595,11 @@ impl LlamaExecutor {
             match op {
                 OperandKind::Imm(bits) => {
                     let val = if *bits == 20 {
-                        Self::fetch_encoded_20bit(bus, pc + offset)?
+                        if matches!(entry.opcode, 0x0C..=0x0F) {
+                            Self::fetch_register_20bit(bus, pc + offset)
+                        } else {
+                            Self::fetch_encoded_20bit(bus, pc + offset)?
+                        }
                     } else {
                         Self::fetch_imm(bus, pc + offset, *bits)
                     };
@@ -1737,9 +2052,11 @@ impl LlamaExecutor {
         // Special-case RegPair-only move (e.g., opcode 0xFD)
         if entry.operands.len() == 1 {
             if let Some((dst, src, bits)) = decoded.reg_pair {
-                // Parity: Python treats `MV` reg-pair as a full register move for the selected
-                // registers (e.g. `MV Y, X` copies all 24 bits). Do not mask to the operand-width
-                // annotation because opcode 0xFD uses the same encoding for 8/16/24-bit regs.
+                // Copy the complete selected architectural register. X/Y/U/S
+                // occupy three transfer bytes but contain only 20 significant
+                // bits; state.set_reg applies that register-specific mask.
+                // Do not use the generic operand annotation because opcode FD
+                // shares one encoding across 8-, 16-, and three-byte classes.
                 let _ = bits;
                 let val = state.get_reg(src);
                 state.set_reg(dst, val);
@@ -2344,25 +2661,41 @@ impl LlamaExecutor {
         state: &mut LlamaState,
         bus: &mut B,
     ) -> Result<u8, &'static str> {
+        self.execute_with_vector_transfer(opcode, state, bus, None)
+    }
+
+    /// Execute one instruction, consuming an optional vector-transfer proof
+    /// prepared by a machine wrapper before it advanced timers or devices.
+    pub fn execute_with_vector_transfer<B: LlamaBus>(
+        &mut self,
+        opcode: u8,
+        state: &mut LlamaState,
+        bus: &mut B,
+        prepared_transfer: Option<ValidatedVectorTransfer>,
+    ) -> Result<u8, &'static str> {
+        if let Some(transfer) = prepared_transfer.as_ref() {
+            let expected_vector = match self.lookup(opcode).map(|entry| entry.kind) {
+                Some(InstrKind::Ir) => INTERRUPT_VECTOR_ADDR,
+                Some(InstrKind::Reset) => ROM_RESET_VECTOR_ADDR,
+                _ => return Err(PREPARED_VECTOR_MISMATCH_ERROR),
+            };
+            if !transfer.matches(expected_vector, state, bus) {
+                return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+            }
+        }
         // Complete every rejection-capable decode/data check before reserving
         // a trace index or publishing last-PC/call-stack context.
-        self.validate_before_scheduling(opcode, state, bus)?;
-        let instr_index = PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        self.validate_before_scheduling_with_options(
+            opcode,
+            state,
+            bus,
+            true,
+            prepared_transfer.is_none(),
+        )?;
         let start_pc = state.pc() & mask_for(RegName::PC);
         // For perfetto parity with Python, keep tracing anchored to the prefix byte/PC.
         let trace_pc_snapshot = start_pc;
         let trace_opcode_snapshot = opcode;
-        PERF_LAST_PC.with(|value| value.set(trace_pc_snapshot));
-        PERF_LAST_CALL_STACK.with(|value| {
-            let mut snapshot = PerfettoCallStack::default();
-            let frames = state.call_stack();
-            let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
-            snapshot.len = take as u8;
-            for (dst, src) in snapshot.frames.iter_mut().take(take).zip(frames.iter()) {
-                *dst = *src & mask_for(RegName::PC);
-            }
-            value.set(snapshot);
-        });
         // Execute using the resolved opcode after any PRE bytes.
         let mut exec_pc = start_pc;
         let mut exec_opcode = opcode;
@@ -2370,7 +2703,6 @@ impl LlamaExecutor {
         let mut pre_modes_opt: Option<PreModes> = None;
         let mut pc_override = None;
         let mut entry = self.lookup(exec_opcode);
-        perfetto_reset_substep();
 
         while let Some(e) = entry {
             if e.kind != InstrKind::Pre {
@@ -2408,12 +2740,57 @@ impl LlamaExecutor {
             validated_i_count(state)?;
         }
 
-        // Keep IMR in sync with memory regardless of tracing so state is architecture-accurate.
-        let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
-        state.set_reg(RegName::IMR, mem_imr as u32);
+        // Finish the architectural vector fetch before reserving trace state
+        // or synchronizing register mirrors. execute_with receives the exact
+        // validated value so IR/RESET cannot re-read a volatile bus later.
+        let prefetched_vector = match (resolved_entry.kind, prepared_transfer) {
+            (InstrKind::Ir, Some(transfer)) | (InstrKind::Reset, Some(transfer)) => {
+                Some(transfer.target())
+            }
+            (InstrKind::Ir, None) => {
+                Some(fetch_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?.target())
+            }
+            (InstrKind::Reset, None) => {
+                Some(fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?.target())
+            }
+            (_, Some(_)) => return Err(PREPARED_VECTOR_MISMATCH_ERROR),
+            (_, None) => None,
+        };
 
-        PERF_CURRENT_OP.store(instr_index, Ordering::Relaxed);
-        PERF_CURRENT_PC.store(trace_pc_snapshot, Ordering::Relaxed);
+        // Only a fully validated instruction may reserve or publish trace
+        // state. In particular, a volatile IR/RESET vector mismatch must not
+        // consume an instruction index or replace the last successful PC.
+        // The trace clock belongs to an active trace, not to executor object
+        // construction or untraced execution. This also prevents unrelated
+        // parallel runtimes from perturbing a trace-state atomicity proof.
+        let tracing_active = PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some();
+        let instr_index = if tracing_active {
+            PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed)
+        } else {
+            PERF_INSTR_COUNTER.load(Ordering::Relaxed)
+        };
+        PERF_LAST_PC.with(|value| value.set(trace_pc_snapshot));
+        PERF_LAST_CALL_STACK.with(|value| {
+            let mut snapshot = PerfettoCallStack::default();
+            let frames = state.call_stack();
+            let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
+            snapshot.len = take as u8;
+            for (dst, src) in snapshot.frames.iter_mut().take(take).zip(frames.iter()) {
+                *dst = *src & mask_for(RegName::PC);
+            }
+            value.set(snapshot);
+        });
+        perfetto_reset_substep();
+
+        // Defer even the IMR mirror update until the vector's architectural
+        // fetch agrees with preflight so a volatile mismatch remains atomic.
+        if !matches!(resolved_entry.kind, InstrKind::Ir | InstrKind::Reset) {
+            let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
+            state.set_reg(RegName::IMR, mem_imr as u32);
+        }
+
+        PERF_CURRENT_OP.with(|value| value.set(instr_index));
+        PERF_CURRENT_PC.with(|value| value.set(trace_pc_snapshot));
         let _ctx_guard = PerfettoContextGuard;
         let trace_regs = {
             let mut guard = PERFETTO_TRACER.enter();
@@ -2457,6 +2834,7 @@ impl LlamaExecutor {
                 pc_override,
                 prefix_len,
                 instr_index,
+                prefetched_vector,
             ),
             None => reject_unknown(),
         };
@@ -2551,6 +2929,7 @@ impl LlamaExecutor {
         pc_override: Option<u32>,
         prefix_len: u8,
         instr_index: u64,
+        prefetched_vector: Option<u32>,
     ) -> Result<u8, &'static str> {
         match entry.kind {
             InstrKind::Nop => {
@@ -2981,7 +3360,10 @@ impl LlamaExecutor {
                 Ok(len)
             }
             InstrKind::Reset => {
-                power_on_reset(bus, state);
+                let reset_vector = prefetched_vector.ok_or("RESET vector was not prefetched")?;
+                apply_power_on_reset(bus, state, reset_vector);
+                let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
+                state.set_reg(RegName::IMR, mem_imr as u32);
                 Ok(1 + prefix_len)
             }
             InstrKind::Pre => unreachable!("PRE should be handled before dispatch"),
@@ -3012,6 +3394,7 @@ impl LlamaExecutor {
                 // fallthrough here would make the software-interrupt slot unreachable.
                 let saved_pc = pc_before;
                 let fallthrough = pc_before.wrapping_add(instr_len as u32) & mask_for(RegName::PC);
+                let vec = prefetched_vector.ok_or("IR vector was not prefetched")?;
                 Self::push_stack(state, bus, RegName::S, saved_pc, 24, false);
                 let f = state.get_reg(RegName::F) & 0xFF;
                 Self::push_stack(state, bus, RegName::S, f, 8, false);
@@ -3023,10 +3406,7 @@ impl LlamaExecutor {
                 Self::store_traced(bus, imr_addr, 8, cleared_imr);
                 state.set_reg(RegName::IMR, cleared_imr);
                 state.call_depth_inc();
-                let vec = bus.load(INTERRUPT_VECTOR_ADDR, 8)
-                    | (bus.load(INTERRUPT_VECTOR_ADDR + 1, 8) << 8)
-                    | (bus.load(INTERRUPT_VECTOR_ADDR + 2, 8) << 16);
-                state.set_pc(vec & mask_for(RegName::PC));
+                state.set_pc(vec);
                 // Parity: emit perfetto IRQ entry like Python IR intrinsic.
                 let mut guard = crate::PERFETTO_TRACER.enter();
                 guard.with_some(|tracer| {
@@ -3384,7 +3764,7 @@ impl LlamaExecutor {
                 Ok(1)
             }
             InstrKind::RetI => {
-                // Stack layout: IMR (1), F(1), 24-bit PC (little-endian).
+                // Stack layout: IMR (1), F(1), three-byte 20-bit PC (little-endian).
                 let pc_mask = mask_for(RegName::PC);
                 let pc_before = state.pc() & pc_mask;
                 let mask_s = mask_for(RegName::S);
@@ -3398,7 +3778,7 @@ impl LlamaExecutor {
                 let pc_lo = bus.load(sp, 8) & 0xFF;
                 let pc_mid = bus.load(sp.wrapping_add(1) & mask_s, 8) & 0xFF;
                 let pc_hi = bus.load(sp.wrapping_add(2) & mask_s, 8) & 0xFF;
-                let ret = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
+                let ret = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & pc_mask;
                 sp = sp.wrapping_add(3) & mask_s;
                 state.set_reg(RegName::S, sp);
                 let imr_restored = imr;
@@ -3410,7 +3790,7 @@ impl LlamaExecutor {
                 );
                 state.set_reg(RegName::IMR, imr_restored);
                 state.set_reg(RegName::F, f);
-                state.set_pc(ret & 0xFFFFF);
+                state.set_pc(ret);
                 state.call_depth_dec();
                 let instr_len = 1 + prefix_len;
                 let mut payload = HashMap::new();
@@ -3605,11 +3985,17 @@ impl LlamaExecutor {
                 Ok(decoded.len)
             }
             InstrKind::Cmpw | InstrKind::Cmpp => {
-                // Compare wider operands (16/24 bits depending on mnemonic)
+                // C6/D6 compare 16-bit words. C7 compares two raw three-byte
+                // images, while D7 compares a 20-bit pointer image with the
+                // 20-bit X/Y/U/S register class. The C7/D7 split matches their
+                // distinct baseline-emulator accessors; D7 upper-nibble
+                // behavior still needs a dedicated hardware probe.
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let bits = if entry.kind == InstrKind::Cmpw {
                     16
+                } else if entry.opcode == 0xD7 {
+                    20
                 } else {
                     24
                 };
@@ -3957,6 +4343,7 @@ mod tests {
             &[0x36, 0x01],             // redundant PRE+RETI
             &[0x23, 0x84, 0x00],       // unrelated PRE+MV form
             &[0x25, 0x7C, 0x01],       // 25 is an operand byte at the alleged ROM site
+            &[0x23, 0x48, 0x3F],       // F0002 is the operand byte of FD 23, not an entry
         ];
 
         for bytes in cases {
@@ -3976,24 +4363,6 @@ mod tests {
             assert_eq!(state.pc(), 0, "failure must not advance PC");
             assert!(bus.writes.is_empty(), "failure must not write memory");
         }
-    }
-
-    #[test]
-    fn boundary_grounded_irrelevant_pre_alias_executes_with_prefix_length() {
-        let bytes = [0x23, 0x48, 0x3F];
-        let mut exec = LlamaExecutor::new();
-        let mut state = LlamaState::new();
-        let mut bus = MemBus::with_size(16);
-        bus.mem[..bytes.len()].copy_from_slice(&bytes);
-        state.set_reg(RegName::A, 0x80);
-
-        let len = exec
-            .execute(bytes[0], &mut state, &mut bus)
-            .expect("boundary-grounded PRE alias must execute");
-
-        assert_eq!(len, 3, "prefix must contribute to instruction length");
-        assert_eq!(state.pc(), 3, "prefix and operands must be consumed");
-        assert_eq!(state.get_reg(RegName::A), 0x41);
     }
 
     #[test]
@@ -4038,9 +4407,169 @@ mod tests {
     fn reset_vector_matches_python_reset_vector() {
         let mut state = LlamaState::new();
         let mut bus = ResetBus::new([0xAA, 0xBB, 0x0C]);
-        power_on_reset(&mut bus, &mut state);
+        power_on_reset(&mut bus, &mut state).expect("valid reset vector");
         // Expected little-endian vector at 0xFFFFD.
         assert_eq!(state.pc(), 0x0C_BB_AA & mask_for(RegName::PC));
+    }
+
+    #[test]
+    fn reset_rejects_noncanonical_vector_before_any_mutation() {
+        let mut bus = MemBus::with_size((ROM_RESET_VECTOR_ADDR + 3) as usize);
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x56;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x34;
+        bus.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0xF2;
+        for (offset, value) in [
+            (IMEM_LCC_OFFSET, 0xA5),
+            (IMEM_UCR_OFFSET, 0x5A),
+            (IMEM_ISR_OFFSET, 0x3C),
+            (IMEM_SCR_OFFSET, 0xC3),
+            (IMEM_USR_OFFSET, 0xE7),
+            (IMEM_SSR_OFFSET, 0x19),
+        ] {
+            bus.mem[MemBus::translate(INTERNAL_MEMORY_START + offset)] = value;
+        }
+        let memory_before = bus.mem.clone();
+        let mut state = LlamaState::new();
+        state.set_pc(0x45678);
+        state.set_reg(RegName::S, 0x23456);
+        state.set_reg(RegName::F, 0x03);
+        state.set_reg(RegName::IMR, 0xA5);
+        state.halt();
+
+        let err = power_on_reset(&mut bus, &mut state)
+            .expect_err("reserved reset-vector upper bits must be quarantined");
+
+        assert_eq!(err, VECTOR_UPPER_NIBBLE_ERROR);
+        assert_eq!(state.pc(), 0x45678);
+        assert_eq!(state.get_reg(RegName::S), 0x23456);
+        assert_eq!(state.get_reg(RegName::F), 0x03);
+        assert_eq!(state.get_reg(RegName::IMR), 0xA5);
+        assert!(state.is_halted());
+        assert_eq!(bus.mem, memory_before);
+        assert!(bus.writes.is_empty());
+    }
+
+    #[test]
+    fn prefetched_reset_path_never_reads_vector_or_destination_again() {
+        struct NoVectorReadBus {
+            inner: MemBus,
+        }
+
+        impl LlamaBus for NoVectorReadBus {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                assert!(
+                    !(ROM_RESET_VECTOR_ADDR..=ROM_RESET_VECTOR_ADDR + 2).contains(&addr),
+                    "prefetched RESET must not re-read its vector"
+                );
+                assert_ne!(
+                    addr, 0x00200,
+                    "prefetched RESET must not re-read its target"
+                );
+                self.inner.load(addr, bits)
+            }
+
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                self.inner.store(addr, bits, value);
+            }
+
+            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                assert!(
+                    !(ROM_RESET_VECTOR_ADDR..=ROM_RESET_VECTOR_ADDR + 2).contains(&addr),
+                    "prefetched RESET must not silently re-read its vector"
+                );
+                assert_ne!(
+                    addr, 0x00200,
+                    "prefetched RESET must not silently re-read its target"
+                );
+                self.inner.peek_byte_silent(addr)
+            }
+
+            fn vector_transfer_provenance(&self) -> (usize, u64) {
+                (self.inner.mem.as_ptr() as usize, 0)
+            }
+        }
+
+        let mut state = LlamaState::new();
+        state.set_pc(0x12345);
+        state.halt();
+        let mut inner = MemBus::with_size((ROM_RESET_VECTOR_ADDR + 3) as usize);
+        inner.mem[ROM_RESET_VECTOR_ADDR as usize] = 0x00;
+        inner.mem[ROM_RESET_VECTOR_ADDR as usize + 1] = 0x02;
+        inner.mem[ROM_RESET_VECTOR_ADDR as usize + 2] = 0x00;
+        inner.mem[0x00200] = 0x00;
+        let transfer = fetch_validated_vector(ROM_RESET_VECTOR_ADDR, &state, &mut inner)
+            .expect("prepare validated RESET transfer");
+        let mut bus = NoVectorReadBus { inner };
+
+        power_on_reset_with_transfer(&mut bus, &mut state, transfer)
+            .expect("opaque validated RESET transfer");
+
+        assert_eq!(state.pc(), 0x00200);
+        assert!(!state.is_halted());
+        assert!(!bus.inner.writes.is_empty());
+    }
+
+    #[test]
+    fn synchronous_ir_rejects_bad_vector_or_target_before_frame_mutation() {
+        for (vector_high, target_opcode, expected_error) in [
+            (0xF0, 0x00, VECTOR_UPPER_NIBBLE_ERROR),
+            (0x00, 0x20, "invalid or reserved opcode"),
+        ] {
+            let mut bus = MemBus::with_size((INTERRUPT_VECTOR_ADDR + 3) as usize);
+            let pc = 0x00100usize;
+            let target = 0x00300usize;
+            bus.mem[pc] = 0xFE;
+            bus.mem[target] = target_opcode;
+            bus.mem[INTERRUPT_VECTOR_ADDR as usize] = target as u8;
+            bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = (target >> 8) as u8;
+            bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = vector_high;
+            let imr_index = MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+            bus.mem[imr_index] = 0xA5;
+            let memory_before = bus.mem.clone();
+
+            let mut state = LlamaState::new();
+            state.set_pc(pc as u32);
+            state.set_reg(RegName::S, 0x00400);
+            state.set_reg(RegName::F, 0x03);
+            state.set_reg(RegName::IMR, 0xA5);
+            let mut exec = LlamaExecutor::new();
+
+            let err = exec
+                .execute(0xFE, &mut state, &mut bus)
+                .expect_err("invalid IR transfer must fail atomically");
+
+            assert_eq!(err, expected_error);
+            assert_eq!(state.pc(), pc as u32);
+            assert_eq!(state.get_reg(RegName::S), 0x00400);
+            assert_eq!(state.get_reg(RegName::F), 0x03);
+            assert_eq!(state.get_reg(RegName::IMR), 0xA5);
+            assert_eq!(state.call_depth(), 0);
+            assert_eq!(bus.mem, memory_before);
+            assert!(bus.writes.is_empty());
+        }
+    }
+
+    #[test]
+    fn vector_destination_validation_does_not_recurse_or_read_stack_images() {
+        for opcode in [0xFE, 0xFF, 0x01, 0xEF] {
+            let target = 0x00300u32;
+            let mut bus = MemBus::with_size((INTERRUPT_VECTOR_ADDR + 3) as usize);
+            bus.mem[target as usize] = opcode;
+            bus.mem[INTERRUPT_VECTOR_ADDR as usize] = target as u8;
+            bus.mem[INTERRUPT_VECTOR_ADDR as usize + 1] = (target >> 8) as u8;
+            bus.mem[INTERRUPT_VECTOR_ADDR as usize + 2] = (target >> 16) as u8;
+            let mut state = LlamaState::new();
+            state.set_reg(RegName::S, 0x00400);
+            // RETI's eventual F image is deliberately unsupported. Static
+            // vector validation must leave that data-dependent check to RETI.
+            bus.mem[0x401] = 0xFC;
+
+            assert_eq!(
+                validate_vector_transfer(INTERRUPT_VECTOR_ADDR, &state, &mut bus),
+                Ok(target),
+                "target opcode 0x{opcode:02X} must not recursively follow vectors"
+            );
+        }
     }
 
     #[test]
@@ -4585,6 +5114,10 @@ mod tests {
             Some(self.mem.get(Self::translate(addr)).copied().unwrap_or(0))
         }
 
+        fn vector_transfer_provenance(&self) -> (usize, u64) {
+            (self.mem.as_ptr() as usize, 0)
+        }
+
         fn store(&mut self, addr: u32, bits: u8, value: u32) {
             self.writes.push((addr, bits, value));
             let bytes = bits.div_ceil(8);
@@ -4601,6 +5134,107 @@ mod tests {
         }
 
         fn wait_cycles(&mut self, _cycles: u32) {}
+    }
+
+    struct VolatileVectorBus {
+        silent: Vec<u8>,
+        fetched: [u8; 3],
+        vector_reads: Vec<u32>,
+        writes: Vec<(u32, u8, u32)>,
+    }
+
+    impl LlamaBus for VolatileVectorBus {
+        fn load(&mut self, addr: u32, bits: u8) -> u32 {
+            if bits == 8 && (INTERRUPT_VECTOR_ADDR..=INTERRUPT_VECTOR_ADDR + 2).contains(&addr) {
+                self.vector_reads.push(addr);
+                return u32::from(self.fetched[(addr - INTERRUPT_VECTOR_ADDR) as usize]);
+            }
+            u32::from(self.silent.get(addr as usize).copied().unwrap_or(0))
+        }
+
+        fn store(&mut self, addr: u32, bits: u8, value: u32) {
+            self.writes.push((addr, bits, value));
+        }
+
+        fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+            Some(self.silent.get(addr as usize).copied().unwrap_or(0))
+        }
+
+        fn supports_wait_cycles(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn synchronous_ir_rejects_vector_changed_after_preflight_before_frame_mutation() {
+        let _perfetto_lock = crate::perfetto::perfetto_test_guard();
+        let mut exec = LlamaExecutor::new();
+        reset_perf_counters();
+        set_perf_instr_counter(17);
+        let mut silent = vec![0; (INTERRUPT_VECTOR_ADDR + 3) as usize];
+        let pc = 0x00100usize;
+        let silent_target = 0x00300usize;
+        let fetched_target = 0x00400u32;
+        silent[pc] = 0xFE;
+        silent[INTERRUPT_VECTOR_ADDR as usize] = silent_target as u8;
+        silent[INTERRUPT_VECTOR_ADDR as usize + 1] = (silent_target >> 8) as u8;
+        silent[INTERRUPT_VECTOR_ADDR as usize + 2] = (silent_target >> 16) as u8;
+        let mut bus = VolatileVectorBus {
+            silent,
+            fetched: [
+                fetched_target as u8,
+                (fetched_target >> 8) as u8,
+                (fetched_target >> 16) as u8,
+            ],
+            vector_reads: Vec::new(),
+            writes: Vec::new(),
+        };
+        let mut state = LlamaState::new();
+        state.set_pc(pc as u32);
+        state.set_reg(RegName::S, 0x00400);
+        state.set_reg(RegName::F, 0x03);
+        state.set_reg(RegName::IMR, 0xA5);
+
+        let err = exec
+            .execute(0xFE, &mut state, &mut bus)
+            .expect_err("volatile vector mismatch must fail atomically");
+
+        assert_eq!(err, VECTOR_CHANGED_DURING_PREFLIGHT_ERROR);
+        assert_eq!(state.pc(), pc as u32);
+        assert_eq!(state.get_reg(RegName::S), 0x00400);
+        assert_eq!(state.get_reg(RegName::F), 0x03);
+        assert_eq!(state.get_reg(RegName::IMR), 0xA5);
+        assert_eq!(state.call_depth(), 0);
+        assert_eq!(perfetto_last_instr_index(), 17);
+        assert_eq!(perfetto_last_pc(), 0);
+        assert_eq!(perfetto_instr_context(), None);
+        assert!(bus.writes.is_empty());
+        assert_eq!(
+            bus.vector_reads,
+            vec![
+                INTERRUPT_VECTOR_ADDR,
+                INTERRUPT_VECTOR_ADDR + 1,
+                INTERRUPT_VECTOR_ADDR + 2
+            ],
+            "vector must have exactly one architectural byte fetch"
+        );
+        reset_perf_counters();
+    }
+
+    #[test]
+    fn untraced_executor_construction_and_execution_preserve_trace_clock() {
+        let _perfetto_lock = crate::perfetto::perfetto_test_guard();
+        reset_perf_counters();
+        set_perf_instr_counter(17);
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size(1);
+
+        exec.execute(0x00, &mut state, &mut bus)
+            .expect("untraced NOP");
+
+        assert_eq!(perfetto_last_instr_index(), 17);
+        reset_perf_counters();
     }
 
     #[test]
@@ -4798,17 +5432,16 @@ mod tests {
     }
 
     #[test]
-    fn cmpp_imem_reg_uses_mem_as_lhs_and_resets_carry_when_mem_ge_reg() {
-        // Program bytes (little-endian 20-bit IMEM):
-        //   D7           CMPP (IMem20), Reg3 (ops_reversed encoding order)
-        //   04           Reg3 selector: X
-        //   10 00 00     IMem addr = 0x000010
+    fn cmpp_imem_reg_masks_the_memory_image_to_20_bits() {
+        // D7 04 10: CMPP (BP+10), X. The memory image is 0xF00080,
+        // while X is 0x000080. A 20-bit comparison is equal; the previous
+        // self-confirming 24-bit model incorrectly left Z clear.
         let mut bus = MemBus {
             mem: vec![0xFF; 0x40],
             writes: Vec::new(),
         };
-        bus.mem[..5].copy_from_slice(&[0xD7, 0x04, 0x10, 0x00, 0x00]);
-        // IMem bytes remain 0xFF → lhs is maximal; X = 0x000080 (rhs) → borrow should be clear.
+        bus.mem[..3].copy_from_slice(&[0xD7, 0x04, 0x10]);
+        bus.mem[0x10..0x13].copy_from_slice(&[0x80, 0x00, 0xF0]);
 
         let mut state = LlamaState::new();
         state.set_reg(RegName::X, 0x000080);
@@ -4823,9 +5456,31 @@ mod tests {
         assert_eq!(
             state.get_reg(RegName::FC) & 1,
             0,
-            "carry/borrow should clear when lhs >= rhs"
+            "equal operands must not borrow"
         );
-        assert_eq!(state.get_reg(RegName::FZ) & 1, 0, "result is non-zero");
+        assert_eq!(state.get_reg(RegName::FZ) & 1, 1, "20-bit values are equal");
+    }
+
+    #[test]
+    fn cmpp_imem_imem_keeps_all_24_bits() {
+        // C7 10 20: CMPP (BP+10), (BP+20). Unlike D7, C7 compares raw
+        // three-byte images, so 0xF00080 is not equal to 0x000080.
+        let mut bus = MemBus {
+            mem: vec![0; 0x40],
+            writes: Vec::new(),
+        };
+        bus.mem[..3].copy_from_slice(&[0xC7, 0x10, 0x20]);
+        bus.mem[0x10..0x13].copy_from_slice(&[0x80, 0x00, 0xF0]);
+        bus.mem[0x20..0x23].copy_from_slice(&[0x80, 0x00, 0x00]);
+
+        let mut state = LlamaState::new();
+        let mut exec = LlamaExecutor::new();
+        let len = exec.execute(0xC7, &mut state, &mut bus).unwrap();
+
+        assert_eq!(len, 3);
+        assert_eq!(state.pc(), 3);
+        assert_eq!(state.get_reg(RegName::FC) & 1, 0);
+        assert_eq!(state.get_reg(RegName::FZ) & 1, 0, "24-bit values differ");
     }
 
     #[test]
@@ -5278,7 +5933,7 @@ mod tests {
             operands: &[OperandKind::EMemRegWidth(1), OperandKind::EMemRegWidth(1)],
         };
         let len = exec
-            .execute_with(0x54, &entry, &mut state, &mut bus, None, None, 0, 0)
+            .execute_with(0x54, &entry, &mut state, &mut bus, None, None, 0, 0, None)
             .unwrap();
         assert_eq!(len, 3);
         // Post-inc X advances by length, pre-dec Y decrements by length.
@@ -5340,7 +5995,8 @@ mod tests {
 
         let sp = state.get_reg(RegName::S) as usize;
         assert_eq!(sp, 0x20 - 5);
-        // Layout from low to high addresses after pushes: IMR, F, PC[23:16], PC[15:8], PC[7:0]
+        // Layout from low to high addresses after pushes: IMR, F,
+        // PC[19:16] (in a byte), PC[15:8], PC[7:0].
         assert_eq!(bus.mem[sp], 0xC3); // IMR
         assert_eq!(bus.mem[sp + 1], 0x03); // modeled F image
         assert_eq!(bus.mem[sp + 2], 0x0A);
@@ -5356,12 +6012,12 @@ mod tests {
         let pc_hi = bus.load(sp_iter, 8) & 0xFF;
         let pc_mid = bus.load(sp_iter + 1, 8) & 0xFF;
         let pc_lo = bus.load(sp_iter + 2, 8) & 0xFF;
-        let ret_pc = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & 0xFF_FFFF;
+        let ret_pc = ((pc_hi << 16) | (pc_mid << 8) | pc_lo) & mask_for(RegName::PC);
         sp_iter = sp_iter.wrapping_add(3);
 
         assert_eq!(imr, 0xC3);
         assert_eq!(f, 0x03);
-        assert_eq!(ret_pc, pc & 0xFF_FFFF);
+        assert_eq!(ret_pc, pc & mask_for(RegName::PC));
         assert_eq!(sp_iter as usize, 0x20);
     }
 
@@ -5386,8 +6042,8 @@ mod tests {
     }
 
     #[test]
-    fn immediate_20bit_opcodes_reject_reserved_upper_nibble_before_mutation() {
-        for opcode in [0x03, 0x05, 0x0C, 0x0D, 0x0E, 0x0F] {
+    fn control_flow_20bit_immediates_reject_reserved_upper_nibble_before_mutation() {
+        for opcode in [0x03, 0x05] {
             let mut bus = MemBus::with_size(0x200);
             bus.mem[..4].copy_from_slice(&[opcode, 0x3A, 0x07, 0x7C]);
             let mut state = LlamaState::new();
@@ -5421,6 +6077,30 @@ mod tests {
             );
             assert_eq!(state.call_depth(), 0, "opcode {opcode:02X}");
             assert!(bus.writes.is_empty(), "opcode {opcode:02X}");
+        }
+    }
+
+    #[test]
+    fn register_immediates_discard_the_encoded_upper_nibble() {
+        for (opcode, register) in [
+            (0x0C, RegName::X),
+            (0x0D, RegName::Y),
+            (0x0E, RegName::U),
+            (0x0F, RegName::S),
+        ] {
+            let mut bus = MemBus::with_size(0x200);
+            bus.mem[..4].copy_from_slice(&[opcode, 0xA5, 0x5A, 0x3C]);
+            let mut state = LlamaState::new();
+            state.set_reg(RegName::S, 0x00190);
+            let mut exec = LlamaExecutor::new();
+
+            let len = exec
+                .execute(opcode, &mut state, &mut bus)
+                .expect("architectural 20-bit register immediate must execute");
+
+            assert_eq!(len, 4, "opcode {opcode:02X}");
+            assert_eq!(state.get_reg(register), 0x0C_5AA5, "opcode {opcode:02X}");
+            assert_eq!(state.pc(), 4, "opcode {opcode:02X}");
         }
     }
 
@@ -5770,7 +6450,7 @@ mod tests {
         state.set_reg(RegName::IMR, 0xCC);
         state.halt();
 
-        power_on_reset(&mut bus, &mut state);
+        power_on_reset(&mut bus, &mut state).expect("valid reset vector");
 
         assert_eq!(state.pc(), 0x054321);
         assert_eq!(
@@ -6313,6 +6993,29 @@ mod tests {
             .expect_err("POPU F upper bits");
         assert_eq!(perfetto_last_pc(), pc_before);
         assert_eq!(perfetto_last_call_stack(), stack_before);
+        assert_eq!(perfetto_instr_context(), None);
+    }
+
+    #[test]
+    fn perfetto_instruction_context_is_thread_local() {
+        let _perfetto_lock = crate::perfetto::perfetto_test_guard();
+        reset_perf_counters();
+        PERF_CURRENT_OP.with(|value| value.set(7));
+        PERF_CURRENT_PC.with(|value| value.set(0x12345));
+
+        std::thread::spawn(|| {
+            assert_eq!(perfetto_instr_context(), None);
+            PERF_CURRENT_OP.with(|value| value.set(9));
+            PERF_CURRENT_PC.with(|value| value.set(0x54321));
+            assert_eq!(perfetto_instr_context(), Some((9, 0x54321)));
+            drop(PerfettoContextGuard);
+            assert_eq!(perfetto_instr_context(), None);
+        })
+        .join()
+        .expect("context isolation thread");
+
+        assert_eq!(perfetto_instr_context(), Some((7, 0x12345)));
+        drop(PerfettoContextGuard);
         assert_eq!(perfetto_instr_context(), None);
     }
 

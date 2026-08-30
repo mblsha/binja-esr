@@ -107,6 +107,52 @@ def eval_intrinsic_validate_i_count(
     return None, None
 
 
+def eval_intrinsic_validate_vector_transfer(
+    llil: MockLLIL,
+    size: Optional[int],
+    regs: RegistersLike,
+    memory: Memory,
+    state: State,
+    get_flag: FlagGetter,
+    set_flag: FlagSetter,
+) -> Tuple[None, Optional[ResultFlags]]:
+    """Reject an unverified vector or invalid target before any mutation."""
+
+    from binja_test_mocks.eval_llil import evaluate_llil
+
+    params = getattr(llil, "params", ())
+    if len(params) != 3:
+        raise RuntimeError(
+            "VALIDATE_VECTOR_TRANSFER requires vector address, source PC, "
+            "and the architectural vector fetch"
+        )
+    values: list[int] = []
+    for param in params:
+        value, _flags = evaluate_llil(
+            param,
+            regs,
+            memory,
+            state,
+            get_flag=get_flag,
+            set_flag=set_flag,
+        )
+        if value is None:
+            raise RuntimeError("VALIDATE_VECTOR_TRANSFER input produced no value")
+        values.append(int(value))
+
+    # Runtime import avoids an instruction-module cycle during decoder setup.
+    from .emulator import validate_vector_transfer
+
+    validate_vector_transfer(
+        memory,
+        regs,  # type: ignore[arg-type]
+        values[0],
+        source_pc=values[1],
+        actual_raw_vector=values[2],
+    )
+    return None, None
+
+
 def eval_intrinsic_wait(
     llil: MockLLIL,
     size: Optional[int],
@@ -253,6 +299,42 @@ def eval_intrinsic_reset(
     - Other registers retain their values
     - Flags (C/Z) are retained
     """
+    # Validate the complete transfer before the first SFR write.  RESET can be
+    # invoked either through lifted opcode FF or directly by power_on_reset(),
+    # so this guard belongs in the evaluator itself.
+    from .emulator import (
+        _ValidatedVectorTransfer,
+        fetch_validated_vector_transfer,
+    )
+
+    # Perform the architectural vector read before the first SFR mutation and
+    # require it to match the side-effect-free preflight.  Reuse this value for
+    # PC so a volatile or failing bus cannot change the destination after RESET
+    # has partially committed.
+    reset_source = regs.get_by_name("PC") & 0xFFFFF
+    staged_transfer = getattr(state, "_sc62015_prepared_reset_transfer", None)
+    prepared_transfer = None
+    if staged_transfer is not None:
+        prepared_transfer = staged_transfer
+        reset_source = int(
+            getattr(state, "_sc62015_prepared_reset_source_pc", reset_source)
+        ) & 0xFFFFF
+        # Remove the staged capability before consuming it.  An exception
+        # cannot leave a retryable token attached to restored evaluator state.
+        delattr(state, "_sc62015_prepared_reset_transfer")
+        if hasattr(state, "_sc62015_prepared_reset_source_pc"):
+            delattr(state, "_sc62015_prepared_reset_source_pc")
+    if prepared_transfer is None:
+        prepared_transfer = fetch_validated_vector_transfer(
+            memory,
+            regs,  # type: ignore[arg-type]
+            0xFFFFD,
+            source_pc=reset_source,
+        )
+    if not isinstance(prepared_transfer, _ValidatedVectorTransfer):
+        raise RuntimeError("RESET requires an opaque validated vector transfer")
+    target = prepared_transfer.consume(memory, 0xFFFFD, reset_source)
+
     # Reset LCC bit 7 (documented as ACM bit 7 in RESET spec)
     lcc = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC)
     lcc &= ~0x80  # Clear bit 7
@@ -276,16 +358,7 @@ def eval_intrinsic_reset(
     ssr &= ~0x04  # Clear bit 2
     memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.SSR, ssr)
 
-    # FFFFA is the interrupt vector. RESET fetches the distinct three-byte
-    # little-endian reset vector at FFFFD, as exercised by both stock ROMs.
-    reset_vector = memory.read_byte(0xFFFFD)
-    reset_vector |= memory.read_byte(0xFFFFE) << 8
-    reset_vector |= memory.read_byte(0xFFFFF) << 16
-
-    # Set PC to reset vector (masked to 20 bits)
-    from .constants import PC_MASK
-
-    regs.set_by_name("PC", reset_vector & PC_MASK)
+    regs.set_by_name("PC", target)
     state.halted = False
     setattr(state, "power_state", "running")
 
@@ -307,3 +380,6 @@ def register_sc62015_intrinsics() -> None:
         "VALIDATE_EXP_HIGH_NIBBLE", eval_intrinsic_validate_exp_high_nibble
     )
     register_intrinsic("VALIDATE_I_COUNT", eval_intrinsic_validate_i_count)
+    register_intrinsic(
+        "VALIDATE_VECTOR_TRANSFER", eval_intrinsic_validate_vector_transfer
+    )

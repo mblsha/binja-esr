@@ -88,9 +88,9 @@ This is a Binary Ninja plugin for the SC62015 (ESR-L) processor, used in Sharp P
 
 ### SC62015 Processor Details
 
-- 8-bit processor with 24-bit addressing
+- 8-bit processor with a 20-bit external address space and three-byte address/register encodings
 - Little-endian byte order
-- Registers: A, B, BA (16-bit A+B), I (index), X/Y (24-bit pointers), U/S (stack pointers), PC
+- Registers: A, B, BA (16-bit A+B), I (index), X/Y/U/S/PC (20-bit, transferred in three-byte containers)
 - Flags: Zero (Z) and Carry (C)
 - Memory regions: internal (0x000-0x1FF), external, and chip select areas
 

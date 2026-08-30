@@ -126,8 +126,8 @@ use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::{mask_for, CallMetricsSnapshot};
 use crate::memory::{
-    IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_RXD_OFFSET, IMEM_TXD_OFFSET,
-    IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
+    IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
+    IMEM_RXD_OFFSET, IMEM_SSR_OFFSET, IMEM_TXD_OFFSET, IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
 };
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -222,6 +222,8 @@ pub struct SnapshotMetadata {
     #[serde(default)]
     pub external_interrupt_level: bool,
     #[serde(default)]
+    pub onk_level: bool,
+    #[serde(default)]
     pub call_depth: u32,
     #[serde(default)]
     pub call_sub_level: u32,
@@ -266,6 +268,7 @@ impl Default for SnapshotMetadata {
             pc: 0,
             power_state: PowerState::Running,
             external_interrupt_level: false,
+            onk_level: false,
             call_depth: 0,
             call_sub_level: 0,
             call_stack: Vec::new(),
@@ -359,12 +362,9 @@ pub fn collect_registers(state: &LlamaState) -> HashMap<String, u32> {
             .unwrap_or(0);
         regs.insert((*name).to_string(), value);
     }
-    // Capture temp registers (TEMP0..TEMP15) to align with Python snapshots.
-    for idx in 0..NUM_TEMP_REGISTERS {
-        let name = format!("TEMP{idx}");
-        let reg = RegName::Temp(idx);
-        regs.insert(name, state.get_reg(reg) & mask_for_width(DEFAULT_REG_WIDTH));
-    }
+    // TEMP0..TEMP15 are persisted in SnapshotMetadata::temps. Keeping the
+    // fixed binary register file to these eight keys prevents the serializer
+    // from silently inventing, dropping, or truncating fields.
     regs
 }
 
@@ -406,6 +406,7 @@ pub struct CoreRuntime {
     pub pce500_peripherals: Option<Pce500PeripheralBridge>,
     pub timer: Box<TimerContext>,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
+    host_peek: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     iq7000_clock_seed: Option<iq7000::Iq7000ClockSeed>,
     iq7000_rtc: Option<iq7000::Iq7000RtcPeripheral>,
@@ -449,6 +450,7 @@ impl CoreRuntime {
             pce500_peripherals: None,
             timer: Box::new(TimerContext::new(false, 0, 0)),
             host_read: None,
+            host_peek: None,
             host_write: None,
             iq7000_clock_seed: None,
             iq7000_rtc: None,
@@ -485,25 +487,108 @@ impl CoreRuntime {
         self.metadata.cycle_count
     }
 
-    pub fn power_on_reset(&mut self) {
+    pub fn power_on_reset(&mut self) -> Result<()> {
         struct ResetBus<'a> {
             mem: &'a mut MemoryImage,
+            host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+            host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+            lcd_ptr: Option<*mut dyn LcdHal>,
+            keyboard_active: bool,
+            sio_active: bool,
+            rtc_active: bool,
+            pc: u32,
         }
 
         impl LlamaBus for ResetBus<'_> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
-                self.mem.load(addr, bits).unwrap_or(0)
+                let addr = addr & ADDRESS_MASK;
+                if self.mem.requires_python(addr) {
+                    if let Some(read) = self.host_read {
+                        // SAFETY: the reset bus exclusively owns the callback
+                        // pointer for the duration of this synchronous call.
+                        if let Some(value) = unsafe { (*read)(addr) } {
+                            self.mem.bump_read_count();
+                            return u32::from(value);
+                        }
+                    }
+                }
+                self.mem
+                    .load_with_pc(addr, bits, Some(self.pc))
+                    .unwrap_or(0)
             }
 
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
                 let _ = self.mem.store(addr, bits, value);
             }
+
+            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                self.peek_byte_silent_at(addr, self.pc)
+            }
+
+            fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+                let addr = addr & ADDRESS_MASK;
+                if let Some(offset) = MemoryImage::internal_offset(addr) {
+                    if (self.keyboard_active
+                        && matches!(offset, IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET))
+                        || (self.rtc_active && offset == iq7000::IMEM_EIL_OFFSET)
+                        || (self.sio_active
+                            && matches!(
+                                offset,
+                                IMEM_UCR_OFFSET
+                                    | IMEM_USR_OFFSET
+                                    | IMEM_RXD_OFFSET
+                                    | IMEM_TXD_OFFSET
+                            ))
+                    {
+                        return None;
+                    }
+                }
+                if let Some(lcd_ptr) = self.lcd_ptr {
+                    // SAFETY: read-only address classification; ResetBus owns
+                    // the machine borrow while this pointer is live.
+                    if unsafe { (&*lcd_ptr).handles(addr) } {
+                        return None;
+                    }
+                }
+                if self.mem.requires_python(addr) {
+                    return self.host_peek.and_then(|peek| {
+                        // SAFETY: see the corresponding architectural reader.
+                        unsafe { (*peek)(addr) }
+                    });
+                }
+                self.mem.read_byte_for_preflight(addr, Some(context_pc))
+            }
+
+            fn vector_transfer_provenance(&self) -> (usize, u64) {
+                self.mem.vector_transfer_provenance()
+            }
+
+            fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+                self.mem.instruction_byte_is_stable(addr)
+            }
         }
 
+        let host_read = self
+            .host_read
+            .as_mut()
+            .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+        let host_peek = self
+            .host_peek
+            .as_mut()
+            .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+        let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
         let mut bus = ResetBus {
             mem: &mut self.memory,
+            host_read,
+            host_peek,
+            lcd_ptr,
+            keyboard_active: self.keyboard.is_some(),
+            sio_active: self.sio.is_some(),
+            rtc_active: self.iq7000_rtc.is_some(),
+            pc: self.state.pc() & ADDRESS_MASK,
         };
-        crate::llama::eval::power_on_reset(&mut bus, &mut self.state);
+        crate::llama::eval::power_on_reset(&mut bus, &mut self.state)
+            .map_err(|error| CoreError::Other(format!("power-on reset: {error}")))
     }
 
     /// Provide an optional host overlay reader for IMEM regions that require Python/device handling
@@ -513,6 +598,16 @@ impl CoreRuntime {
         F: FnMut(u32) -> Option<u8> + Send + 'static,
     {
         self.host_read = Some(Box::new(f));
+    }
+
+    /// Provide the explicitly side-effect-free counterpart to `set_host_read`.
+    /// Decode/vector preflight refuses host-routed addresses when this is not
+    /// installed; it never falls back to the observable reader.
+    pub fn set_host_peek<F>(&mut self, f: F)
+    where
+        F: FnMut(u32) -> Option<u8> + Send + 'static,
+    {
+        self.host_peek = Some(Box::new(f));
     }
 
     /// Provide an optional host overlay writer for IMEM regions that require Python/device handling.
@@ -526,6 +621,7 @@ impl CoreRuntime {
     /// Clear any host overlay handlers.
     pub fn clear_host_overlays(&mut self) {
         self.host_read = None;
+        self.host_peek = None;
         self.host_write = None;
     }
 
@@ -1086,34 +1182,13 @@ impl CoreRuntime {
 
     pub fn step(&mut self, instructions: usize) -> Result<()> {
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
-        struct PreflightBus<'a> {
-            mem: &'a MemoryImage,
-        }
-
-        impl LlamaBus for PreflightBus<'_> {
-            fn load(&mut self, addr: u32, bits: u8) -> u32 {
-                self.mem.load_silent(addr, bits).unwrap_or(0)
-            }
-
-            fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {
-                unreachable!("instruction preflight must never write memory")
-            }
-
-            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
-                self.mem.read_byte_silent(addr)
-            }
-
-            fn supports_wait_cycles(&self) -> bool {
-                true
-            }
-        }
-
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
             keyboard_ptr: *mut KeyboardMatrix,
             lcd_ptr: Option<*mut dyn LcdHal>,
             sio_ptr: *mut SioStub,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+            host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             iq7000_clock_seed: Option<*const iq7000::Iq7000ClockSeed>,
             iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
@@ -1382,7 +1457,58 @@ impl CoreRuntime {
                 base
             }
             fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
-                self.mem.read_byte_silent(addr)
+                self.peek_byte_silent_at(addr, self.pc)
+            }
+            fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+                let addr = addr & ADDRESS_MASK;
+                unsafe {
+                    if let Some(seed_ptr) = self.iq7000_clock_seed {
+                        if let Some(value) = (*seed_ptr).read(addr, 8) {
+                            return Some(value as u8);
+                        }
+                    }
+                    if MemoryImage::is_internal(addr) {
+                        let offset = MemoryImage::internal_offset(addr)?;
+                        if offset == iq7000::IMEM_EIL_OFFSET && !self.iq7000_rtc.is_null() {
+                            return None;
+                        }
+                        if matches!(offset, IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET)
+                            && !self.keyboard_ptr.is_null()
+                        {
+                            return None;
+                        }
+                        if matches!(
+                            offset,
+                            IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
+                        ) && !self.sio_ptr.is_null()
+                        {
+                            return None;
+                        }
+                        if offset == IMEM_SSR_OFFSET {
+                            let mut value = (*self.mem).read_internal_byte_silent(offset)?;
+                            if self.onk_level {
+                                value |= SSR_ONK;
+                            }
+                            return Some(value);
+                        }
+                    }
+                    if let Some(lcd_ptr) = self.lcd_ptr {
+                        if (&*lcd_ptr).handles(addr) {
+                            return None;
+                        }
+                    }
+                    if (*self.mem).requires_python(addr) {
+                        return self.host_peek.and_then(|peek| (*peek)(addr));
+                    }
+                    (*self.mem).read_byte_for_preflight(addr, Some(context_pc))
+                }
+            }
+            fn vector_transfer_provenance(&self) -> (usize, u64) {
+                self.mem.vector_transfer_provenance()
+            }
+
+            fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+                self.mem.instruction_byte_is_stable(addr)
             }
             fn peek_imem_silent(&mut self, offset: u32) -> u8 {
                 self.mem.read_internal_byte_silent(offset).unwrap_or(0)
@@ -1397,6 +1523,192 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            // Reject quarantined/invalid encodings before level re-latching,
+            // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
+            // advancement. A halted core with no current wake source does not
+            // fetch an instruction at all.
+            let asserted_isr = self
+                .memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap_or(0);
+            let should_preflight = if self.state.is_off() {
+                // OFF ignores every status source except ONKI.  In
+                // particular, do not perform an architectural opcode fetch
+                // merely because an unrelated ISR bit is set.
+                (asserted_isr & ISR_ONKI) != 0
+            } else {
+                !self.state.is_halted()
+                    || asserted_isr != 0
+                    || self.onk_level
+                    || self.external_interrupt_level
+            };
+            let prepared_instruction = {
+                let pc = self.state.pc() & ADDRESS_MASK;
+                let keyboard_ptr = self
+                    .keyboard
+                    .as_mut()
+                    .map(|kb| kb as *mut KeyboardMatrix)
+                    .unwrap_or(std::ptr::null_mut());
+                let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
+                let host_read = self
+                    .host_read
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                let host_peek = self
+                    .host_peek
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                let host_write = self
+                    .host_write
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
+                let sio_ptr = self
+                    .sio
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
+                let iq7000_rtc = self
+                    .iq7000_rtc
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |rtc| {
+                        rtc as *mut iq7000::Iq7000RtcPeripheral
+                    });
+                let mut bus = RuntimeBus {
+                    mem: &mut self.memory,
+                    keyboard_ptr,
+                    lcd_ptr,
+                    sio_ptr,
+                    host_read,
+                    host_peek,
+                    host_write,
+                    iq7000_clock_seed: self
+                        .iq7000_clock_seed
+                        .as_ref()
+                        .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
+                    iq7000_rtc,
+                    onk_level: self.onk_level,
+                    cycle: self.metadata.cycle_count,
+                    pc,
+                    meta_ptr: &self.metadata as *const SnapshotMetadata,
+                    state_ptr: &self.state as *const LlamaState,
+                };
+                // Fully validate the current instruction through the silent
+                // bus first. A malformed current encoding takes precedence
+                // even when the IRQ destination aliases it, and must consume
+                // zero architectural reads.
+                let silent_prepared_opcode = if should_preflight {
+                    let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
+                        CoreError::Other(format!(
+                        "preflight opcode at 0x{pc:05X}: side-effect-free memory is unavailable"
+                    ))
+                    })?;
+                    let instruction_len = self
+                        .executor
+                        .validate_before_scheduling_with_length(
+                            silent_opcode,
+                            &self.state,
+                            &mut bus,
+                        )
+                        .map_err(|error| {
+                            CoreError::Other(format!(
+                                "preflight opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
+                            ))
+                        })?;
+                    if (0..u32::from(instruction_len)).any(|offset| {
+                        !bus.instruction_byte_is_stable(pc.wrapping_add(offset) & ADDRESS_MASK)
+                    }) {
+                        return Err(CoreError::Other(format!(
+                            "preflight opcode 0x{silent_opcode:02X} at 0x{pc:05X}: \
+                         callback-backed instruction bytes cannot cross scheduler tick"
+                        )));
+                    }
+                    if silent_opcode == 0xFF {
+                        let (reset_target, reset_target_len) =
+                            crate::llama::eval::validate_vector_transfer_with_length(
+                                crate::pce500::ROM_RESET_VECTOR_ADDR,
+                                &self.state,
+                                &mut bus,
+                            )
+                            .map_err(|error| {
+                                CoreError::Other(format!("RESET vector preflight: {error}"))
+                            })?;
+                        if (0..3).any(|offset| {
+                            !bus.instruction_byte_is_stable(
+                                crate::pce500::ROM_RESET_VECTOR_ADDR.wrapping_add(offset)
+                                    & ADDRESS_MASK,
+                            )
+                        }) || (0..u32::from(reset_target_len)).any(|offset| {
+                            !bus.instruction_byte_is_stable(
+                                reset_target.wrapping_add(offset) & ADDRESS_MASK,
+                            )
+                        }) {
+                            return Err(CoreError::Other(
+                                "RESET vector preflight: callback-backed vector/target".to_string(),
+                            ));
+                        }
+                    }
+                    Some(silent_opcode)
+                } else {
+                    None
+                };
+
+                // Next prove the asynchronous IRQ vector and destination using
+                // only silent reads. Neither proof may be masked by the one
+                // architectural opcode fetch below.
+                let (irq_target, irq_target_len) =
+                    crate::llama::eval::validate_vector_transfer_with_length(
+                        INTERRUPT_VECTOR_ADDR,
+                        &self.state,
+                        &mut bus,
+                    )
+                    .map_err(|error| CoreError::Other(format!("IRQ vector preflight: {error}")))?;
+                if (0..3).any(|offset| {
+                    !bus.instruction_byte_is_stable(
+                        INTERRUPT_VECTOR_ADDR.wrapping_add(offset) & ADDRESS_MASK,
+                    )
+                }) || (0..u32::from(irq_target_len)).any(|offset| {
+                    !bus.instruction_byte_is_stable(irq_target.wrapping_add(offset) & ADDRESS_MASK)
+                }) {
+                    return Err(CoreError::Other(
+                        "IRQ vector preflight: callback-backed vector/target".to_string(),
+                    ));
+                }
+
+                if let Some(silent_opcode) = silent_prepared_opcode {
+                    let opcode = bus.load(pc, 8) as u8;
+                    if opcode != silent_opcode {
+                        return Err(CoreError::Other(format!(
+                            "architectural opcode fetch at 0x{pc:05X} disagrees with preflight: \
+                         fetched 0x{opcode:02X}, preflight 0x{silent_opcode:02X}"
+                        )));
+                    }
+                    let transfer = match opcode {
+                        0xFE => Some(
+                            crate::llama::eval::fetch_validated_vector(
+                                INTERRUPT_VECTOR_ADDR,
+                                &self.state,
+                                &mut bus,
+                            )
+                            .map_err(|error| {
+                                CoreError::Other(format!("IR vector transfer: {error}"))
+                            })?,
+                        ),
+                        0xFF => Some(
+                            crate::llama::eval::fetch_validated_vector(
+                                crate::pce500::ROM_RESET_VECTOR_ADDR,
+                                &self.state,
+                                &mut bus,
+                            )
+                            .map_err(|error| {
+                                CoreError::Other(format!("RESET vector transfer: {error}"))
+                            })?,
+                        ),
+                        _ => None,
+                    };
+                    Some((opcode, transfer))
+                } else {
+                    None
+                }
+            };
             if self.state.is_off() {
                 if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
                     // Hardware wake filtering is not evidence that ignored
@@ -1418,36 +1730,6 @@ impl CoreRuntime {
                 } else {
                     return Ok(());
                 }
-            }
-            // Reject quarantined/invalid encodings before level re-latching,
-            // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
-            // advancement. A halted core with no current wake source does not
-            // fetch an instruction at all.
-            let asserted_isr = self
-                .memory
-                .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                .unwrap_or(0);
-            let should_preflight = !self.state.is_halted()
-                || asserted_isr != 0
-                || self.onk_level
-                || self.external_interrupt_level;
-            if should_preflight {
-                let reads_before = self.memory.memory_read_count();
-                let writes_before = self.memory.memory_write_count();
-                let pc = self.state.pc() & ADDRESS_MASK;
-                let opcode = self.memory.read_byte_silent(pc).unwrap_or(0);
-                let result = {
-                    let mut bus = PreflightBus { mem: &self.memory };
-                    self.executor
-                        .validate_before_scheduling(opcode, &self.state, &mut bus)
-                };
-                // Preflight is an integrity guard, not an executed bus cycle.
-                self.memory.set_memory_counts(reads_before, writes_before);
-                result.map_err(|error| {
-                    CoreError::Other(format!(
-                        "preflight opcode 0x{opcode:02X} at 0x{pc:05X}: {error}"
-                    ))
-                })?;
             }
             // ONK and external interrupts are level-sensitive: firmware
             // clears each ISR bit, waits one instruction, then retests the
@@ -1636,6 +1918,12 @@ impl CoreRuntime {
                     .map(LoopIrqSource::from_name);
 
                 let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                let (prepared_opcode, prepared_transfer) =
+                    prepared_instruction.ok_or_else(|| {
+                        CoreError::Other(
+                            "running CPU reached execution without a prepared opcode".to_string(),
+                        )
+                    })?;
                 let (opcode, instr_len, pc_after, wait_loops) = {
                     let keyboard_ptr = self
                         .keyboard
@@ -1645,6 +1933,10 @@ impl CoreRuntime {
                     let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
                     let host_read = self
                         .host_read
+                        .as_mut()
+                        .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                    let host_peek = self
+                        .host_peek
                         .as_mut()
                         .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
                     let host_write = self
@@ -1667,6 +1959,7 @@ impl CoreRuntime {
                         lcd_ptr,
                         sio_ptr,
                         host_read,
+                        host_peek,
                         host_write,
                         iq7000_clock_seed: self
                             .iq7000_clock_seed
@@ -1679,7 +1972,7 @@ impl CoreRuntime {
                         meta_ptr: &self.metadata as *const SnapshotMetadata,
                         state_ptr: &self.state as *const LlamaState,
                     };
-                    let opcode = bus.load(pc_before, 8) as u8;
+                    let opcode = prepared_opcode;
                     // Capture WAIT loop count before execution (executor clears I).
                     let wait_loops = if opcode == 0xEF {
                         let raw_i = self.state.get_reg(RegName::I) & mask_for(RegName::I);
@@ -1691,7 +1984,12 @@ impl CoreRuntime {
                     } else {
                         0
                     };
-                    let instr_len = match self.executor.execute(opcode, &mut self.state, &mut bus) {
+                    let instr_len = match self.executor.execute_with_vector_transfer(
+                        opcode,
+                        &mut self.state,
+                        &mut bus,
+                        prepared_transfer,
+                    ) {
                         Ok(len) => len,
                         Err(e) => {
                             return Err(CoreError::Other(format!(
@@ -1734,10 +2032,11 @@ impl CoreRuntime {
                         .unwrap_or(self.timer.irq_imr);
                     self.timer.last_irq_src = Some("IR".to_string());
                     self.timer.last_irq_pc = Some(pc_before & ADDRESS_MASK);
-                    let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
-                        | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
-                        | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
-                    self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
+                    // The executor consumed the one prepared architectural
+                    // vector fetch and set PC from that exact proof. Re-reading
+                    // a volatile vector here could make metadata disagree with
+                    // the actual destination after the frame already committed.
+                    self.timer.last_irq_vector = Some(pc_after & ADDRESS_MASK);
                 }
                 self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
@@ -1793,8 +2092,10 @@ impl CoreRuntime {
                 self.metadata.cycle_count = new_cycle;
                 if opcode == 0x01 {
                     let irq_src = self.timer.irq_source.clone();
-                    // RETI restores the hardware interrupt frame but does not acknowledge ISR.
-                    // The ROM dispatcher explicitly clears the selected ISR bit before RETI.
+                    // ROM-consistent model: RETI restores the interrupt frame without an
+                    // implicit ISR acknowledgement. Both stock dispatchers explicitly clear
+                    // the selected ISR bit first, so direct unacknowledged silicon behavior
+                    // remains a hardware-trace question.
                     let delivered_mask = self.timer.delivered_masks.pop();
                     self.timer.in_interrupt = false;
                     if irq_src.as_deref().is_some_and(|source| source == "KEY") {
@@ -1866,6 +2167,13 @@ impl CoreRuntime {
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     fn reject_unrepresented_snapshot_runtime(&self) -> Result<()> {
+        // Perfetto is process-global. Serialize snapshot checks with tests
+        // that temporarily install a tracer so an unrelated parallel test is
+        // not mistaken for state owned by this CoreRuntime instance.
+        #[cfg(test)]
+        let _perfetto_test_lock = crate::perfetto::perfetto_test_guard();
+
+        self.memory.validate_snapshot_overlay_contract()?;
         let mut active = Vec::new();
         if self.sio.is_some() {
             active.push("SIO queues/line/timing state");
@@ -1873,20 +2181,20 @@ impl CoreRuntime {
         if self.pce500_peripherals.is_some() {
             active.push("PCE peripheral/card/cassette state");
         }
-        if self.host_read.is_some() || self.host_write.is_some() {
+        if self.host_read.is_some() || self.host_peek.is_some() || self.host_write.is_some() {
             active.push("host overlay callbacks and external state");
         }
         if self.iq7000_clock_seed.is_some() || self.iq7000_rtc.is_some() {
             active.push("IQ-7000 RTC protocol state");
         }
-        if !self.memory.overlays().is_empty() {
-            active.push("memory-overlay definitions and payloads");
+        if PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some() {
+            active.push("active Perfetto trace state");
         }
         if active.is_empty() {
             Ok(())
         } else {
             Err(CoreError::InvalidSnapshot(format!(
-                "snapshot v3 cannot exactly represent active {}",
+                "snapshot v4 cannot exactly represent active {}",
                 active.join(", ")
             )))
         }
@@ -1901,6 +2209,9 @@ impl CoreRuntime {
         metadata.pc = self.get_reg("PC");
         metadata.memory_reads = self.memory.memory_read_count();
         metadata.memory_writes = self.memory.memory_write_count();
+        metadata.fast_mode = self.fast_mode;
+        metadata.fallback_ranges = self.memory.python_ranges().to_vec();
+        metadata.readonly_ranges = self.memory.readonly_ranges().to_vec();
         metadata.call_depth = self.state.call_depth();
         metadata.call_sub_level = self.state.call_sub_level();
         let call_metrics = self.state.snapshot_call_metrics();
@@ -1909,6 +2220,7 @@ impl CoreRuntime {
         metadata.call_return_widths = call_metrics.call_return_widths;
         metadata.power_state = self.state.power_state();
         metadata.external_interrupt_level = self.external_interrupt_level;
+        metadata.onk_level = self.onk_level;
         metadata.temps = (0..NUM_TEMP_REGISTERS)
             .map(|index| {
                 (
@@ -1974,35 +2286,48 @@ impl CoreRuntime {
             )));
         }
 
-        if !self.memory.readonly_ranges().is_empty() {
-            if self.memory.readonly_ranges() != metadata.readonly_ranges.as_slice() {
+        let active_fallback_ranges =
+            snapshot::canonical_snapshot_ranges("active fallback", self.memory.python_ranges())?;
+        if active_fallback_ranges != metadata.fallback_ranges {
+            return Err(CoreError::InvalidSnapshot(
+                "snapshot fallback ranges do not match the active machine".to_string(),
+            ));
+        }
+        let active_readonly_ranges =
+            snapshot::canonical_snapshot_ranges("active readonly", self.memory.readonly_ranges())?;
+        if active_readonly_ranges != metadata.readonly_ranges {
+            return Err(CoreError::InvalidSnapshot(
+                "snapshot read-only ranges do not match the active machine".to_string(),
+            ));
+        }
+        for (start, end) in &active_readonly_ranges {
+            let unchanged = if *end < crate::memory::EXTERNAL_SPACE as u32 {
+                let start = *start as usize;
+                let end = *end as usize + 1;
+                self.memory.external_slice()[start..end] == loaded.external_memory[start..end]
+            } else if *start >= crate::memory::INTERNAL_MEMORY_START
+                && *end
+                    < crate::memory::INTERNAL_MEMORY_START + crate::memory::INTERNAL_SPACE as u32
+            {
+                let start = (*start - crate::memory::INTERNAL_MEMORY_START) as usize;
+                let end = (*end - crate::memory::INTERNAL_MEMORY_START) as usize + 1;
+                self.memory.internal_slice()[start..end] == loaded.imem[start..end]
+            } else {
+                false
+            };
+            if !unchanged {
                 return Err(CoreError::InvalidSnapshot(
-                    "snapshot read-only ranges do not match the active machine".to_string(),
+                    "snapshot attempts to replace active read-only memory".to_string(),
                 ));
             }
-            for (start, end) in self.memory.readonly_ranges() {
-                let unchanged = if *end < crate::memory::EXTERNAL_SPACE as u32 {
-                    let start = *start as usize;
-                    let end = *end as usize + 1;
-                    self.memory.external_slice()[start..end] == loaded.external_memory[start..end]
-                } else if *start >= crate::memory::INTERNAL_MEMORY_START
-                    && *end
-                        < crate::memory::INTERNAL_MEMORY_START
-                            + crate::memory::INTERNAL_SPACE as u32
-                {
-                    let start = (*start - crate::memory::INTERNAL_MEMORY_START) as usize;
-                    let end = (*end - crate::memory::INTERNAL_MEMORY_START) as usize + 1;
-                    self.memory.internal_slice()[start..end] == loaded.imem[start..end]
-                } else {
-                    false
-                };
-                if !unchanged {
-                    return Err(CoreError::InvalidSnapshot(
-                        "snapshot attempts to replace active read-only memory".to_string(),
-                    ));
-                }
-            }
         }
+
+        // Validate the typed card candidate against the complete current
+        // overlay attestation before constructing any other replacement state.
+        // The epoch-bound plan is committed first at the mutation boundary.
+        let memory_card_candidate = self
+            .memory
+            .prepare_memory_card_restore(loaded.memory_card.clone())?;
 
         let mut state_candidate = LlamaState::new();
         apply_registers(&mut state_candidate, &loaded.registers)?;
@@ -2094,6 +2419,8 @@ impl CoreRuntime {
         // Commit only after every archive member and candidate subsystem has
         // been parsed and validated. No fallible operation follows this point.
         self.memory
+            .commit_memory_card_restore(memory_card_candidate)?;
+        self.memory
             .copy_external_from(&loaded.external_memory)
             .expect("validated exact external memory length");
         self.memory.write_imem(&loaded.imem);
@@ -2112,7 +2439,7 @@ impl CoreRuntime {
         self.lcd = lcd_candidate;
         self.fast_mode = metadata.fast_mode;
         self.external_interrupt_level = metadata.external_interrupt_level;
-        self.onk_level = loaded.imem[crate::memory::IMEM_SSR_OFFSET as usize] & SSR_ONK != 0;
+        self.onk_level = metadata.onk_level;
         self.metadata = metadata;
         Ok(())
     }
@@ -2250,6 +2577,121 @@ impl CoreRuntime {
             return Ok(());
         };
 
+        // Resolve the vector and statically validate its destination before
+        // constructing the interrupt frame or changing IMR/runtime metadata.
+        // The three vector bytes are still fetched architecturally exactly
+        // once after a side-effect-free preflight.
+        let vec = {
+            struct VectorBus<'a> {
+                mem: &'a mut MemoryImage,
+                host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+                host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+                lcd_ptr: Option<*mut dyn LcdHal>,
+                keyboard_active: bool,
+                sio_active: bool,
+                rtc_active: bool,
+                pc: u32,
+            }
+
+            impl LlamaBus for VectorBus<'_> {
+                fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                    let addr = addr & ADDRESS_MASK;
+                    if self.mem.requires_python(addr) {
+                        if let Some(read) = self.host_read {
+                            // SAFETY: this synchronous bus exclusively owns
+                            // the callback pointer while delivering the IRQ.
+                            if let Some(value) = unsafe { (*read)(addr) } {
+                                self.mem.bump_read_count();
+                                return u32::from(value);
+                            }
+                        }
+                    }
+                    self.mem
+                        .load_with_pc(addr, bits, Some(self.pc))
+                        .unwrap_or(0)
+                }
+
+                fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {
+                    unreachable!("IRQ vector validation must never write memory")
+                }
+
+                fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                    self.peek_byte_silent_at(addr, self.pc)
+                }
+
+                fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+                    let addr = addr & ADDRESS_MASK;
+                    if let Some(offset) = MemoryImage::internal_offset(addr) {
+                        if (self.keyboard_active
+                            && matches!(
+                                offset,
+                                IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET
+                            ))
+                            || (self.rtc_active && offset == iq7000::IMEM_EIL_OFFSET)
+                            || (self.sio_active
+                                && matches!(
+                                    offset,
+                                    IMEM_UCR_OFFSET
+                                        | IMEM_USR_OFFSET
+                                        | IMEM_RXD_OFFSET
+                                        | IMEM_TXD_OFFSET
+                                ))
+                        {
+                            return None;
+                        }
+                    }
+                    if let Some(lcd_ptr) = self.lcd_ptr {
+                        // SAFETY: address classification is read-only.
+                        if unsafe { (&*lcd_ptr).handles(addr) } {
+                            return None;
+                        }
+                    }
+                    if self.mem.requires_python(addr) {
+                        return self.host_peek.and_then(|peek| {
+                            // SAFETY: this is the explicit safe callback.
+                            unsafe { (*peek)(addr) }
+                        });
+                    }
+                    self.mem.read_byte_for_preflight(addr, Some(context_pc))
+                }
+
+                fn vector_transfer_provenance(&self) -> (usize, u64) {
+                    self.mem.vector_transfer_provenance()
+                }
+
+                fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+                    self.mem.instruction_byte_is_stable(addr)
+                }
+
+                fn supports_wait_cycles(&self) -> bool {
+                    true
+                }
+            }
+
+            let host_read = self
+                .host_read
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+            let host_peek = self
+                .host_peek
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+            let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
+            let mut bus = VectorBus {
+                mem: &mut self.memory,
+                host_read,
+                host_peek,
+                lcd_ptr,
+                keyboard_active: self.keyboard.is_some(),
+                sio_active: self.sio.is_some(),
+                rtc_active: self.iq7000_rtc.is_some(),
+                pc: self.state.pc() & ADDRESS_MASK,
+            };
+            crate::llama::eval::fetch_validated_vector(INTERRUPT_VECTOR_ADDR, &self.state, &mut bus)
+                .map_err(|error| CoreError::Other(format!("IRQ vector transfer: {error}")))?
+                .target()
+        };
+
         let pc = self.state.pc() & ADDRESS_MASK;
         let (op_idx, pc_trace, tag) = match crate::llama::eval::perfetto_instr_context() {
             Some((idx, ctx_pc)) => (idx, ctx_pc, None),
@@ -2291,10 +2733,6 @@ impl CoreRuntime {
         self.state.set_reg(RegName::IMR, cleared_imr as u32);
         record_stack_write(imr_addr, 8, cleared_imr as u32);
 
-        // Jump to vector.
-        let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
-            | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
-            | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
         // Emit a single delivery marker (matches Python tracer).
         if src_name == "KEY" {
             let mut guard = PERFETTO_TRACER.enter();
@@ -2327,7 +2765,7 @@ impl CoreRuntime {
                 tracer.record_irq_event("KeyDeliver", payload);
             });
         }
-        self.state.set_pc(vec & ADDRESS_MASK);
+        self.state.set_pc(vec);
         self.state.set_halted(false);
         // Track interrupt entry in call-depth metrics for parity with Python trace counters.
         self.state.call_depth_inc();
@@ -2354,7 +2792,7 @@ impl CoreRuntime {
         // Track last IRQ metadata with the resolved vector and increment counters.
         self.timer.last_irq_src = Some(src_name.to_string());
         self.timer.last_irq_pc = Some(pc);
-        self.timer.last_irq_vector = Some(vec & ADDRESS_MASK);
+        self.timer.last_irq_vector = Some(vec);
         self.timer.irq_total = self.timer.irq_total.saturating_add(1);
         match src_name {
             "KEY" => self.timer.irq_key = self.timer.irq_key.saturating_add(1),
@@ -2490,17 +2928,18 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn register_snapshots_round_trip_temp15() {
+    fn binary_snapshot_registers_are_exactly_the_eight_core_fields() {
         let mut source = LlamaState::new();
+        source.set_pc(0x12345);
         source.set_reg(RegName::Temp(15), 0x12_3456);
 
         let registers = collect_registers(&source);
-        assert_eq!(registers.get("TEMP15"), Some(&0x12_3456));
-        assert!(!registers.contains_key("TEMP16"));
-
-        let mut restored = LlamaState::new();
-        apply_registers(&mut restored, &registers).expect("restore register snapshot");
-        assert_eq!(restored.get_reg(RegName::Temp(15)), 0x12_3456);
+        assert_eq!(registers.len(), snapshot::SNAPSHOT_REGISTER_LAYOUT.len());
+        assert_eq!(registers.get("PC"), Some(&0x12345));
+        assert!(!registers.contains_key("TEMP15"));
+        assert!(snapshot::SNAPSHOT_REGISTER_LAYOUT
+            .iter()
+            .all(|(name, _)| registers.contains_key(*name)));
     }
 
     #[test]
@@ -2610,7 +3049,6 @@ mod tests {
 
         let mut rt = CoreRuntime::new();
         rt.fast_mode = true;
-        rt.metadata.fast_mode = true;
         rt.timer.enabled = true;
         rt.timer.mti_period = 7;
         rt.timer.sti_period = 11;
@@ -2651,6 +3089,129 @@ mod tests {
         assert_eq!(rt2.timer.delivered_masks, vec![ISR_MTI]);
         assert_eq!(rt2.timer.next_interrupt_id, 5);
         assert_eq!(rt2.timer.last_fired, None);
+    }
+
+    #[test]
+    fn snapshot_uses_live_memory_ranges_and_rejects_a_different_machine() {
+        let tmp = std::env::temp_dir().join("core_snapshot_live_ranges.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let fallback = vec![(0x3000, 0x300F), (0x2000, 0x200F)];
+        let readonly = vec![(0xD0000, 0xFFFFF), (0xC0000, 0xCFFFF)];
+        let canonical_fallback =
+            snapshot::canonical_snapshot_ranges("test fallback", &fallback).unwrap();
+        let canonical_readonly =
+            snapshot::canonical_snapshot_ranges("test readonly", &readonly).unwrap();
+        let mut rt = CoreRuntime::new();
+        rt.memory.set_python_ranges(fallback.clone());
+        rt.memory.set_readonly_ranges(readonly.clone());
+        rt.metadata.fallback_ranges = vec![(0x1111, 0x1111)];
+        rt.metadata.readonly_ranges = vec![(0x2222, 0x2222)];
+        rt.save_snapshot(&tmp).expect("save snapshot");
+
+        let loaded = snapshot::load_snapshot(&tmp).expect("load raw snapshot");
+        assert_eq!(loaded.metadata.fallback_ranges, canonical_fallback);
+        assert_eq!(loaded.metadata.readonly_ranges, canonical_readonly);
+
+        let mut equivalent = CoreRuntime::new();
+        equivalent.memory.set_python_ranges(fallback);
+        equivalent.memory.set_readonly_ranges(readonly);
+        equivalent
+            .load_snapshot(&tmp)
+            .expect("unsorted but equivalent active ranges must match");
+        assert_eq!(
+            equivalent.memory.python_ranges(),
+            canonical_fallback.as_slice()
+        );
+        assert_eq!(
+            equivalent.memory.readonly_ranges(),
+            canonical_readonly.as_slice()
+        );
+
+        let mut incompatible = CoreRuntime::new();
+        let error = incompatible
+            .load_snapshot(&tmp)
+            .expect_err("different active range configuration must be rejected");
+        assert!(error.to_string().contains("fallback ranges"));
+        assert!(incompatible.memory.python_ranges().is_empty());
+        assert!(incompatible.memory.readonly_ranges().is_empty());
+
+        let _ = fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn snapshot_v4_card_state_overrides_the_active_machine() {
+        use crate::memory::{MemoryCardMode, MemoryCardSnapshot};
+
+        let base = std::env::temp_dir();
+        let present_path = base.join("core_snapshot_v4_card_present.pcsnap");
+        let absent_path = base.join("core_snapshot_v4_card_absent.pcsnap");
+        let none_path = base.join("core_snapshot_v4_card_none.pcsnap");
+        for path in [&present_path, &absent_path, &none_path] {
+            let _ = fs::remove_file(path);
+        }
+
+        let present_payload = vec![0xA5; 8192];
+        let mut present_source = CoreRuntime::new();
+        present_source
+            .memory
+            .load_memory_card_with_writable(&present_payload, false)
+            .unwrap();
+        present_source.save_snapshot(&present_path).unwrap();
+
+        let mut present_target = CoreRuntime::new();
+        present_target
+            .memory
+            .load_memory_card_with_writable(&vec![0x3C; 65536], true)
+            .unwrap();
+        present_target.load_snapshot(&present_path).unwrap();
+        assert_eq!(
+            present_target.memory.memory_card_snapshot().unwrap(),
+            Some(MemoryCardSnapshot {
+                mode: MemoryCardMode::Present,
+                capacity: 8192,
+                writable: false,
+                payload: present_payload,
+            })
+        );
+
+        let absent_payload = vec![0x5A; 16384];
+        let mut absent_source = CoreRuntime::new();
+        absent_source
+            .memory
+            .load_memory_card_with_writable(&absent_payload, true)
+            .unwrap();
+        absent_source.memory.set_memory_card_slot_present(false);
+        absent_source.save_snapshot(&absent_path).unwrap();
+
+        let mut absent_target = CoreRuntime::new();
+        absent_target
+            .memory
+            .load_memory_card_with_writable(&vec![0xC3; 32768], false)
+            .unwrap();
+        absent_target.load_snapshot(&absent_path).unwrap();
+        assert_eq!(
+            absent_target.memory.memory_card_snapshot().unwrap(),
+            Some(MemoryCardSnapshot {
+                mode: MemoryCardMode::Absent,
+                capacity: 16384,
+                writable: true,
+                payload: absent_payload,
+            })
+        );
+
+        CoreRuntime::new().save_snapshot(&none_path).unwrap();
+        let mut none_target = CoreRuntime::new();
+        none_target
+            .memory
+            .load_memory_card_with_writable(&vec![0x7E; 8192], true)
+            .unwrap();
+        none_target.load_snapshot(&none_path).unwrap();
+        assert_eq!(none_target.memory.memory_card_snapshot().unwrap(), None);
+
+        for path in [present_path, absent_path, none_path] {
+            let _ = fs::remove_file(path);
+        }
     }
 
     #[test]
@@ -2720,6 +3281,64 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_roundtrip_preserves_held_on_level_outside_ssr_storage() {
+        let tmp = std::env::temp_dir().join("core_snapshot_held_on_level.pcsnap");
+        let _ = fs::remove_file(&tmp);
+
+        let mut rt = CoreRuntime::new();
+        // AND (ISR),F7; NOP mirrors the clear/wait sequence at F5247.
+        rt.load_rom(&[0x30, 0x71, 0xFC, 0xF7, 0x00], 0);
+        rt.state.set_reg(RegName::PC, 0);
+        rt.timer.in_interrupt = true;
+        rt.memory
+            .write_internal_byte(crate::memory::IMEM_SSR_OFFSET, SSR_CI);
+        rt.press_on_key();
+        assert_eq!(
+            rt.memory
+                .read_internal_byte_silent(crate::memory::IMEM_SSR_OFFSET)
+                .unwrap_or(0),
+            SSR_CI,
+            "the physical ON-key level must not be stored in the SSR image"
+        );
+        rt.save_snapshot(&tmp).expect("save held-ON snapshot");
+
+        let mut restored = CoreRuntime::new();
+        restored.load_snapshot(&tmp).expect("load held-ON snapshot");
+        assert!(restored.onk_level, "held ON-key level must round-trip");
+        assert_eq!(
+            restored
+                .memory
+                .read_internal_byte_silent(crate::memory::IMEM_SSR_OFFSET)
+                .unwrap_or(0),
+            SSR_CI,
+            "restoring the physical level must leave raw SSR storage unchanged"
+        );
+
+        restored.step(1).expect("execute ISR.ONKI clear");
+        assert_eq!(
+            restored
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & ISR_ONKI,
+            0,
+            "firmware clear must take effect for the current instruction"
+        );
+        restored.step(1).expect("execute wait NOP");
+        assert_ne!(
+            restored
+                .memory
+                .read_internal_byte(IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & ISR_ONKI,
+            0,
+            "restored held level must re-latch ISR.ONKI"
+        );
+
+        let _ = fs::remove_file(tmp);
+    }
+
+    #[test]
     fn snapshot_rejects_unrepresented_runtime_extensions() {
         fn assert_rejected(rt: &CoreRuntime, path: &std::path::Path, label: &str) {
             let error = rt
@@ -2765,7 +3384,7 @@ mod tests {
         overlay.add_ram_overlay(0x8000, 16, "snapshot-test");
         let path = base.join("core_snapshot_reject_overlay.pcsnap");
         let _ = fs::remove_file(&path);
-        assert_rejected(&overlay, &path, "memory-overlay");
+        assert_rejected(&overlay, &path, "attestation");
     }
 
     #[test]
@@ -3308,6 +3927,84 @@ mod tests {
     }
 
     #[test]
+    fn async_irq_rejects_noncanonical_vector_before_frame_or_metadata_mutation() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::PC, 0x012345);
+        rt.state.set_reg(RegName::S, 0x000240);
+        rt.state.set_reg(RegName::F, 0x03);
+        rt.state
+            .set_reg(RegName::IMR, u32::from(IMR_MASTER | IMR_ONK));
+        rt.memory.write_external_byte(0x0FFFFA, 0x78);
+        rt.memory.write_external_byte(0x0FFFFB, 0x56);
+        rt.memory.write_external_byte(0x0FFFFC, 0xF4);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_ONK);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_ONKI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("ONK".to_string());
+        rt.timer.last_fired = Some("ONK".to_string());
+
+        let external_before = rt.memory.external_slice().to_vec();
+        let internal_before = rt.memory.internal_slice().to_vec();
+        let writes_before = rt.memory.memory_write_count();
+        let err = rt
+            .deliver_pending_irq()
+            .expect_err("noncanonical IRQ vector must be quarantined");
+
+        assert!(err
+            .to_string()
+            .contains(crate::llama::eval::VECTOR_UPPER_NIBBLE_ERROR));
+        assert_eq!(rt.state.get_reg(RegName::PC), 0x012345);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x000240);
+        assert_eq!(rt.state.get_reg(RegName::F), 0x03);
+        assert_eq!(
+            rt.state.get_reg(RegName::IMR),
+            u32::from(IMR_MASTER | IMR_ONK)
+        );
+        assert_eq!(rt.state.call_depth(), 0);
+        assert_eq!(rt.memory.external_slice(), external_before);
+        assert_eq!(rt.memory.internal_slice(), internal_before);
+        assert_eq!(rt.memory.memory_write_count(), writes_before);
+        assert!(rt.timer.irq_pending);
+        assert!(!rt.timer.in_interrupt);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("ONK"));
+        assert_eq!(rt.timer.last_fired.as_deref(), Some("ONK"));
+        assert!(rt.timer.delivered_masks.is_empty());
+        assert_eq!(rt.timer.irq_total, 0);
+    }
+
+    #[test]
+    fn core_power_on_reset_rejects_bad_vector_without_mutation() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_reg(RegName::PC, 0x012345);
+        rt.state.set_reg(RegName::S, 0x000240);
+        rt.state.set_reg(RegName::F, 0x03);
+        rt.state.halt();
+        rt.memory.write_external_byte(0x0FFFFD, 0x78);
+        rt.memory.write_external_byte(0x0FFFFE, 0x56);
+        rt.memory.write_external_byte(0x0FFFFF, 0xF4);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0xA5);
+
+        let external_before = rt.memory.external_slice().to_vec();
+        let internal_before = rt.memory.internal_slice().to_vec();
+        let writes_before = rt.memory.memory_write_count();
+        let err = rt
+            .power_on_reset()
+            .expect_err("noncanonical reset vector must be quarantined");
+
+        assert!(err
+            .to_string()
+            .contains(crate::llama::eval::VECTOR_UPPER_NIBBLE_ERROR));
+        assert_eq!(rt.state.get_reg(RegName::PC), 0x012345);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x000240);
+        assert_eq!(rt.state.get_reg(RegName::F), 0x03);
+        assert!(rt.state.is_halted());
+        assert_eq!(rt.memory.external_slice(), external_before);
+        assert_eq!(rt.memory.internal_slice(), internal_before);
+        assert_eq!(rt.memory.memory_write_count(), writes_before);
+    }
+
+    #[test]
     fn irq_frame_wraps_each_byte_on_the_20_bit_external_bus() {
         let mut rt = CoreRuntime::new();
         rt.state.set_reg(RegName::PC, 0x034567);
@@ -3710,6 +4407,42 @@ mod tests {
     }
 
     #[test]
+    fn halted_irq_vector_rejects_before_latch_or_idle_tick_mutation() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_halted(true);
+        rt.state.set_pc(0x01234);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x78);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x56);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0xF4);
+        rt.timer.key_irq_latched = true;
+        let pc_before = rt.state.pc();
+        let halted_before = rt.state.is_halted();
+        let irq_pending_before = rt.timer.irq_pending;
+        let irq_source_before = rt.timer.irq_source.clone();
+        let key_latched_before = rt.timer.key_irq_latched;
+        let internal_before = rt.memory.internal_slice().to_vec();
+        let cycle_before = rt.metadata.cycle_count;
+
+        let error = rt
+            .step(1)
+            .expect_err("malformed IRQ vector must reject before HALT wake work");
+
+        assert!(error
+            .to_string()
+            .contains(crate::llama::eval::VECTOR_UPPER_NIBBLE_ERROR));
+        assert_eq!(rt.state.pc(), pc_before);
+        assert_eq!(rt.state.is_halted(), halted_before);
+        assert_eq!(rt.timer.irq_pending, irq_pending_before);
+        assert_eq!(rt.timer.irq_source, irq_source_before);
+        assert_eq!(rt.timer.key_irq_latched, key_latched_before);
+        assert_eq!(rt.memory.internal_slice(), internal_before);
+        assert_eq!(rt.metadata.cycle_count, cycle_before);
+    }
+
+    #[test]
     fn halt_does_not_execute_instructions() {
         let mut rt = CoreRuntime::new();
         rt.memory.write_external_slice(0, &[0x00, 0x00]); // NOPs.
@@ -3866,6 +4599,37 @@ mod tests {
         let _ = rt.step(1);
         assert!(!rt.state.is_off(), "OFF should wake on ONKI");
         assert!(rt.timer.irq_pending, "ONKI wake should arm pending IRQ");
+    }
+
+    #[test]
+    fn off_with_non_onk_isr_does_not_fetch_opcode() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let mut rt = CoreRuntime::new();
+        let host_reads = Arc::new(AtomicUsize::new(0));
+        let host_peeks = Arc::new(AtomicUsize::new(0));
+        let read_count = Arc::clone(&host_reads);
+        let peek_count = Arc::clone(&host_peeks);
+        rt.set_host_read(move |_addr| {
+            read_count.fetch_add(1, Ordering::Relaxed);
+            Some(0x00)
+        });
+        rt.set_host_peek(move |_addr| {
+            peek_count.fetch_add(1, Ordering::Relaxed);
+            Some(0x00)
+        });
+        rt.memory.set_python_ranges(vec![(0x02000, 0x02000)]);
+        rt.state.set_pc(0x02000);
+        rt.state.power_off();
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+
+        rt.step(1).expect("OFF ignores non-ONKI status");
+
+        assert!(rt.state.is_off());
+        assert_eq!(rt.state.pc(), 0x02000);
+        assert_eq!(host_reads.load(Ordering::Relaxed), 0);
+        assert_eq!(host_peeks.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -4057,7 +4821,7 @@ mod tests {
         assert_eq!(
             isr & ISR_KEYI,
             ISR_KEYI,
-            "firmware, not RETI, must acknowledge the delivered ISR bit"
+            "ROM-consistent model leaves ISR acknowledgement to firmware"
         );
     }
 
@@ -4085,7 +4849,11 @@ mod tests {
         rt.step(1).expect("execute reti without source");
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(isr & ISR_ONKI, ISR_ONKI, "RETI must not acknowledge ISR");
+        assert_eq!(
+            isr & ISR_ONKI,
+            ISR_ONKI,
+            "ROM-consistent model does not implicitly acknowledge ISR"
+        );
         assert!(rt.timer.interrupt_stack.is_empty());
         assert!(rt.timer.delivered_masks.is_empty());
     }
@@ -4689,6 +5457,32 @@ mod tests {
     }
 
     #[test]
+    fn malformed_current_opcode_precedes_an_aliased_irq_target() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0);
+        rt.memory.write_external_byte(0, 0x20);
+        rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x00);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
+        let reads_before = rt.memory.memory_read_count();
+        let writes_before = rt.memory.memory_write_count();
+
+        let error = rt
+            .step(1)
+            .expect_err("malformed current opcode must not be masked by IRQ target validation");
+
+        assert!(error.to_string().contains("preflight opcode 0x20"));
+        assert!(!error.to_string().contains("IRQ vector preflight"));
+        assert_eq!(rt.state.pc(), 0);
+        assert_eq!(rt.metadata.instruction_count, 0);
+        assert_eq!(rt.metadata.cycle_count, 0);
+        assert_eq!(rt.memory.memory_read_count(), reads_before);
+        assert_eq!(rt.memory.memory_write_count(), writes_before);
+    }
+
+    #[test]
     fn malformed_operands_fail_before_scheduler_or_level_mutation() {
         let cases: &[(&str, &[u8])] = &[
             ("JP narrow selector", &[0x11, 0x00]),
@@ -4740,6 +5534,125 @@ mod tests {
             assert!(!rt.timer.irq_pending, "{name}");
             assert_eq!(rt.memory.memory_read_count(), reads_before, "{name}");
             assert_eq!(rt.memory.memory_write_count(), writes_before, "{name}");
+        }
+    }
+
+    #[test]
+    fn software_reset_rejects_dynamic_vector_or_target_before_runtime_mutation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let _perfetto_lock = perfetto_test_guard();
+        for dynamic_vector in [true, false] {
+            let mut rt = CoreRuntime::new();
+            let target = 0x00200;
+            rt.state.set_pc(0);
+            rt.state.set_reg(RegName::S, 0x00300);
+            rt.memory.write_external_byte(0, 0xFF);
+            rt.memory
+                .write_external_byte(crate::pce500::ROM_RESET_VECTOR_ADDR, (target & 0xFF) as u8);
+            rt.memory.write_external_byte(
+                crate::pce500::ROM_RESET_VECTOR_ADDR + 1,
+                ((target >> 8) & 0xFF) as u8,
+            );
+            rt.memory.write_external_byte(
+                crate::pce500::ROM_RESET_VECTOR_ADDR + 2,
+                ((target >> 16) & 0x0F) as u8,
+            );
+            rt.memory.write_external_byte(target, 0x00);
+            // Keep the always-validated asynchronous IRQ destination stable
+            // and distinct from both the RESET source and destination.
+            rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
+            rt.memory
+                .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x01);
+            rt.memory
+                .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
+            rt.memory.write_external_byte(0x00100, 0x00);
+            if dynamic_vector {
+                rt.memory.set_python_ranges(vec![(
+                    crate::pce500::ROM_RESET_VECTOR_ADDR,
+                    crate::pce500::ROM_RESET_VECTOR_ADDR + 2,
+                )]);
+            } else {
+                rt.memory.set_python_ranges(vec![(target, target)]);
+            }
+            rt.set_host_peek(move |addr| {
+                Some(match addr & ADDRESS_MASK {
+                    addr if addr == crate::pce500::ROM_RESET_VECTOR_ADDR => (target & 0xFF) as u8,
+                    addr if addr == crate::pce500::ROM_RESET_VECTOR_ADDR + 1 => {
+                        ((target >> 8) & 0xFF) as u8
+                    }
+                    addr if addr == crate::pce500::ROM_RESET_VECTOR_ADDR + 2 => {
+                        ((target >> 16) & 0x0F) as u8
+                    }
+                    addr if addr == target => 0x00,
+                    _ => 0x00,
+                })
+            });
+            let architectural_reads = Arc::new(AtomicUsize::new(0));
+            let read_count = Arc::clone(&architectural_reads);
+            rt.set_host_read(move |_addr| {
+                read_count.fetch_add(1, Ordering::Relaxed);
+                Some(0)
+            });
+            *rt.timer = TimerContext::new(true, 1, 1);
+            rt.timer.next_mti = 0;
+            rt.timer.next_sti = 0;
+            rt.onk_level = true;
+            rt.external_interrupt_level = true;
+            let reads_before = rt.memory.memory_read_count();
+            let writes_before = rt.memory.memory_write_count();
+            let register_names = [
+                RegName::PC,
+                RegName::BA,
+                RegName::I,
+                RegName::X,
+                RegName::Y,
+                RegName::U,
+                RegName::S,
+                RegName::F,
+            ];
+            let registers_before = register_names.map(|name| rt.state.get_reg(name));
+            let power_before = rt.state.power_state();
+            let calls_before = rt.state.snapshot_call_metrics();
+
+            let error = rt
+                .step(1)
+                .expect_err("dynamic RESET vector state must fail before runtime mutation");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("RESET vector preflight: callback-backed vector/target"),
+                "dynamic_vector={dynamic_vector}: {error}"
+            );
+            assert_eq!(
+                register_names.map(|name| rt.state.get_reg(name)),
+                registers_before,
+                "dynamic_vector={dynamic_vector}"
+            );
+            assert_eq!(rt.state.power_state(), power_before);
+            let calls_after = rt.state.snapshot_call_metrics();
+            assert_eq!(calls_after.call_stack, calls_before.call_stack);
+            assert_eq!(calls_after.call_depth, calls_before.call_depth);
+            assert_eq!(calls_after.call_sub_level, calls_before.call_sub_level);
+            assert_eq!(calls_after.call_page_stack, calls_before.call_page_stack);
+            assert_eq!(
+                calls_after.call_return_widths,
+                calls_before.call_return_widths
+            );
+            assert_eq!(rt.metadata.cycle_count, 0);
+            assert_eq!(rt.metadata.instruction_count, 0);
+            assert_eq!(rt.timer.next_mti, 0);
+            assert_eq!(rt.timer.next_sti, 0);
+            assert!(!rt.timer.irq_pending);
+            assert_eq!(
+                rt.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
+                Some(0)
+            );
+            assert_eq!(architectural_reads.load(Ordering::Relaxed), 0);
+            assert_eq!(rt.memory.memory_read_count(), reads_before);
+            assert_eq!(rt.memory.memory_write_count(), writes_before);
         }
     }
 
@@ -4842,28 +5755,31 @@ mod tests {
     }
 
     #[test]
-    fn requires_python_without_host_falls_back() {
+    fn requires_python_without_safe_host_peek_rejects_before_execution() {
         let mut rt = CoreRuntime::new();
         // Mark an external range as Python-only and point PC at it.
         rt.memory
             .set_python_ranges(vec![(0x0000_2000, 0x0000_2000)]);
         rt.state.set_reg(RegName::PC, 0x0000_2000);
-        // Seed a NOP opcode so the fetch path is taken.
         rt.memory.write_external_byte(0x0000_2000, 0x00);
-        let res = rt.step(1);
-        assert!(
-            res.is_ok(),
-            "step should execute without host overlays: {res:?}"
-        );
+        let pc_before = rt.state.pc();
+        let instructions_before = rt.metadata.instruction_count;
+        let cycles_before = rt.metadata.cycle_count;
+
+        let error = rt
+            .step(1)
+            .expect_err("host-routed code needs an explicit side-effect-free peek");
+
+        assert!(error
+            .to_string()
+            .contains("side-effect-free memory is unavailable"));
         assert_eq!(
             rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
-            0x0000_2001,
-            "PC should advance on NOP even without overlays"
+            pc_before,
+            "PC must not advance on rejected preflight"
         );
-        assert_eq!(
-            rt.metadata.instruction_count, 1,
-            "instruction counter should increment on NOP"
-        );
+        assert_eq!(rt.metadata.instruction_count, instructions_before);
+        assert_eq!(rt.metadata.cycle_count, cycles_before);
     }
 
     #[test]

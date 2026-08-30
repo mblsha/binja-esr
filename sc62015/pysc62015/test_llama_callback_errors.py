@@ -162,6 +162,9 @@ def test_llama_reset_writes_each_reset_field_once() -> None:
             self.callback_pcs.append(pc)
             return self.raw[address & 0xFFFFFF]
 
+        def peek_byte_for_preflight(self, address: int, _pc: int | None = None) -> int:
+            return self.raw[address & 0xFFFFFF]
+
         def write_byte(self, address: int, value: int, pc: int) -> None:
             self.callback_pcs.append(pc)
             address &= 0xFFFFFF
@@ -501,6 +504,12 @@ def test_llama_reset_stops_after_first_mutating_callback_error() -> None:
             self.reads.append(address)
             return self.raw[address]
 
+        def peek_byte_for_preflight(self, address: int, _pc: int | None = None) -> int:
+            return self.raw[address & 0xFFFFFF]
+
+        def instruction_byte_is_callback_free(self, _address: int) -> bool:
+            return True
+
         def write_byte(self, address: int, value: int, _pc: int | None = None) -> None:
             address &= 0xFFFFFF
             value &= 0xFF
@@ -511,16 +520,32 @@ def test_llama_reset_stops_after_first_mutating_callback_error() -> None:
     memory = MutatingFailMemory()
     raw_cpu = RawLlamaCPU(memory=memory, reset_on_init=False)
     raw_cpu.write_register("PC", 0x12345)
+    raw_cpu.prepare_vector_transfer(
+        0xFFFFD,
+        0x12345,
+        require_immutable=False,
+        scope="machine_reset",
+    )
 
     with pytest.raises(RuntimeError, match="reset first field committed then failed"):
         raw_cpu.power_on_reset()
 
-    assert memory.reads == [INTERNAL_MEMORY_START + 0xFE]
+    assert memory.reads == [
+        0xFFFFD,
+        0xFFFFE,
+        0xFFFFF,
+        INTERNAL_MEMORY_START + 0xFE,
+    ]
     assert memory.writes == [(INTERNAL_MEMORY_START + 0xFE, 0)]
     assert raw_cpu.read_register("PC") == 0x12345
     with pytest.raises(RuntimeError, match="CPU is poisoned"):
         raw_cpu.execute_instruction(0)
-    assert memory.reads == [INTERNAL_MEMORY_START + 0xFE]
+    assert memory.reads == [
+        0xFFFFD,
+        0xFFFFE,
+        0xFFFFF,
+        INTERNAL_MEMORY_START + 0xFE,
+    ]
     assert memory.writes == [(INTERNAL_MEMORY_START + 0xFE, 0)]
 
 

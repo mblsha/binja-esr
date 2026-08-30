@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from sc62015.pysc62015.cpu import CPU
+from sc62015.pysc62015.emulator import Registers
 
 
 class _DecodedOneByteInstruction:
@@ -33,6 +34,7 @@ class _SideEffectingNative:
     def __init__(self) -> None:
         self.execution_count = 0
         self.reset_error: Exception | None = None
+        self.reset_kwargs: dict[str, int | None] = {}
 
     def execute_instruction(self, _address: int) -> tuple[int, int]:
         self.execution_count += 1
@@ -40,7 +42,8 @@ class _SideEffectingNative:
         # before returning a length that violates the decoder/runtime contract.
         return 0x00, 2
 
-    def power_on_reset(self) -> None:
+    def power_on_reset(self, **kwargs: int | None) -> None:
+        self.reset_kwargs = kwargs
         if self.reset_error is not None:
             raise self.reset_error
 
@@ -50,6 +53,7 @@ def _facade_with_fake_native(native: _SideEffectingNative) -> CPU:
     cpu._impl = native
     setattr(cpu, "_legacy_decoder", _LegacyDecoder())
     cpu.memory = _PreflightMemory()
+    cpu.regs = Registers()
     cpu.backend = "llama"
     cpu._contract_poisoned = None
     return cpu
@@ -86,3 +90,14 @@ def test_failed_reset_preserves_facade_contract_poison() -> None:
     with pytest.raises(RuntimeError, match="Decoded length .* disagrees"):
         cpu.execute_instruction(0)
     assert native.execution_count == 2
+
+
+def test_native_reset_facade_exposes_no_prefetched_scalar_bypass() -> None:
+    native = _SideEffectingNative()
+    cpu = _facade_with_fake_native(native)
+
+    cpu.power_on_reset()
+
+    assert native.reset_kwargs == {}
+    with pytest.raises(TypeError):
+        cpu.power_on_reset(prefetched_vector=0x00200)  # type: ignore[call-arg]

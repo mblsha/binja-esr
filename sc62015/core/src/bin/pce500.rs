@@ -15,7 +15,8 @@ use sc62015_core::{
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
         eval::{
-            perfetto_next_substep, power_on_reset, set_perf_instr_counter, LlamaBus, TimerTrace,
+            fetch_validated_vector, perfetto_next_substep, power_on_reset, set_perf_instr_counter,
+            validate_vector_transfer_with_length, LlamaBus, TimerTrace, ValidatedVectorTransfer,
         },
         opcodes::RegName,
         state::{mask_for, validate_f_image, CallMetricsSnapshot, LlamaState, PowerState},
@@ -28,7 +29,7 @@ use sc62015_core::{
     pce500::{
         load_pce500_rom_window_into_memory, load_pce500_system_image_into_memory,
         seed_pce500_bootstrap_imem, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD, NO_RAM_WINDOW_END,
-        NO_RAM_WINDOW_START, ROM_WINDOW_LEN, ROM_WINDOW_START,
+        NO_RAM_WINDOW_START, ROM_RESET_VECTOR_ADDR, ROM_WINDOW_LEN, ROM_WINDOW_START,
     },
     perfetto::set_call_ui_function_names,
     sleep_cycles, snapshot,
@@ -754,6 +755,7 @@ struct StandaloneBus {
     #[allow(dead_code)]
     perfetto_enabled: bool,
     host_read: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
+    host_peek: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     bus_trace: Option<BufWriter<fs::File>>,
     bus_trace_index: u64,
@@ -1141,6 +1143,7 @@ impl StandaloneBus {
             active_irq_mask: 0,
             perfetto_enabled: false,
             host_read,
+            host_peek: None,
             host_write,
             bus_trace: None,
             bus_trace_index: 0,
@@ -1309,6 +1312,36 @@ impl StandaloneBus {
         self.trace_resume_ssr_onk = false;
         self.trace_resume_onk_release_cycle = None;
         self.trace_resume_onk_release_instr = None;
+    }
+
+    /// Classify one instruction byte using the same PC-sensitive replay
+    /// context as the preceding silent peek. A vector destination is decoded
+    /// in its own context, which may differ from `last_pc` at the source.
+    fn instruction_byte_is_stable_for_context(&self, addr: u32, context_pc: u32) -> bool {
+        let addr = addr & ADDRESS_MASK;
+        let context_pc = context_pc & ADDRESS_MASK;
+        let trace_resume_active =
+            self.trace_resume_read_enabled || self.trace_resume_read_anchor_pc == Some(context_pc);
+        let trace_resume_overrides_addr = trace_resume_active
+            && self
+                .trace_resume_reads
+                .get(
+                    self.trace_resume_read_index
+                        ..self
+                            .trace_resume_reads
+                            .len()
+                            .min(self.trace_resume_read_index.saturating_add(128)),
+                )
+                .is_some_and(|bytes| bytes.iter().any(|byte| byte.addr == addr));
+        if self.iq7000_clock_workspace_read(addr, 8).is_some()
+            || self.lcd.handles(addr)
+            || (self.trace_reset_ce6_shadow_enabled && (0x010000..=0x01FFFF).contains(&addr))
+            || (self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr))
+            || trace_resume_overrides_addr
+        {
+            return false;
+        }
+        self.memory.instruction_byte_is_stable(addr)
     }
 
     fn bus_trace_region(addr: u32) -> Option<&'static str> {
@@ -1716,7 +1749,7 @@ impl StandaloneBus {
 
     fn log_irq_delivery(&mut self, _src: Option<&str>, _vec: u32, _imr: u8, _isr: u8, _pc: u32) {}
 
-    fn deliver_irq(&mut self, state: &mut LlamaState) {
+    fn deliver_irq(&mut self, state: &mut LlamaState) -> Result<(), &'static str> {
         // Mirror the IR intrinsic: push PC, F, IMR, clear IRM, jump to vector.
         fn push_stack(
             memory: &mut MemoryImage,
@@ -1738,23 +1771,9 @@ impl StandaloneBus {
         }
 
         let pc = state.pc() & ADDRESS_MASK;
-        push_stack(&mut self.memory, state, RegName::S, pc, 24);
-        let f = state.get_reg(RegName::F) & 0xFF;
-        push_stack(&mut self.memory, state, RegName::S, f, 8);
         let imr_addr = INTERNAL_MEMORY_START + IMEM_IMR_OFFSET;
         let imr = (self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF) as u8;
-        push_stack(&mut self.memory, state, RegName::S, imr as u32, 8);
-        // Clear IRM (bit7) on entry to match Python/IR semantics.
-        let cleared_imr = imr & 0x7F;
-        let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
-        state.set_reg(RegName::IMR, u32::from(cleared_imr));
-
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        // Ensure the vector table is patched before reading the vector.
-        self.maybe_patch_vectors();
-        let vec = (self.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap_or(0))
-            | (self.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap_or(0) << 8)
-            | (self.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap_or(0) << 16);
         // Deliver highest-priority pending respecting masks.
         let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
             (Some("ONK"), ISR_ONKI)
@@ -1765,18 +1784,23 @@ impl StandaloneBus {
         } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI) != 0 {
             (Some("MTI"), ISR_MTI)
         } else {
-            // No deliverable IRQ because of masks; unwind stack effects to avoid corruption.
-            let _ = self.memory.store(imr_addr, 8, imr as u32);
-            state.set_reg(RegName::IMR, u32::from(imr));
-            let mut sp = state.get_reg(RegName::S);
-            sp = sp.wrapping_add(1); // IMR
-            sp = sp.wrapping_add(1); // F
-            sp = sp.wrapping_add(3); // PC (24-bit)
-            state.set_reg(RegName::S, sp);
-            state.set_pc(pc);
-            return;
+            return Ok(());
         };
-        state.set_pc(vec & ADDRESS_MASK);
+
+        let vec = fetch_validated_vector(INTERRUPT_VECTOR_ADDR, state, self)?.target();
+        self.maybe_patch_vectors();
+
+        // Only now is the vector transfer committed: construct the frame and
+        // clear IRM after every rejectable condition has passed.
+        push_stack(&mut self.memory, state, RegName::S, pc, 24);
+        let f = state.get_reg(RegName::F) & 0xFF;
+        push_stack(&mut self.memory, state, RegName::S, f, 8);
+        push_stack(&mut self.memory, state, RegName::S, imr as u32, 8);
+        let cleared_imr = imr & 0x7F;
+        let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
+        state.set_reg(RegName::IMR, u32::from(cleared_imr));
+
+        state.set_pc(vec);
         state.set_halted(false);
         self.in_interrupt = true;
         self.irq_pending = false;
@@ -1807,6 +1831,7 @@ impl StandaloneBus {
                 pc = pc
             );
         }
+        Ok(())
     }
 
     fn handle_irq_return(&mut self, opcode: u8, state: &LlamaState) {
@@ -1974,8 +1999,9 @@ fn mask_bits(bits: u8) -> u32 {
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 fn reject_unrepresented_snapshot_runtime(bus: &StandaloneBus) -> Result<(), Box<dyn Error>> {
+    bus.memory.validate_snapshot_overlay_contract()?;
     let mut active = Vec::new();
-    if bus.host_read.is_some() || bus.host_write.is_some() {
+    if bus.host_read.is_some() || bus.host_peek.is_some() || bus.host_write.is_some() {
         active.push("host callbacks and their external state");
     }
     if bus.iq7000_clock_seed.is_some() || bus.iq7000_rtc.is_some() {
@@ -1995,19 +2021,14 @@ fn reject_unrepresented_snapshot_runtime(bus: &StandaloneBus) -> Result<(), Box<
     {
         active.push("trace-resume device state");
     }
-    if bus
-        .memory
-        .overlays()
-        .iter()
-        .any(|overlay| overlay.name != "memory_card_slot")
-    {
-        active.push("memory-card/overlay definitions and payloads");
+    if bus.perfetto.is_some() || bus.bus_trace.is_some() {
+        active.push("active trace output state");
     }
     if active.is_empty() {
         Ok(())
     } else {
         Err(format!(
-            "snapshot v3 cannot exactly represent active {}",
+            "snapshot v4 cannot exactly represent active {}",
             active.join(", ")
         )
         .into())
@@ -2029,29 +2050,38 @@ fn load_snapshot_state(
         return Err("snapshot device model does not match the requested machine".into());
     }
 
-    if !bus.memory.readonly_ranges().is_empty() {
-        if bus.memory.readonly_ranges() != metadata.readonly_ranges.as_slice() {
-            return Err("snapshot read-only ranges do not match the active machine".into());
-        }
-        for (start, end) in bus.memory.readonly_ranges() {
-            let unchanged = if *end < sc62015_core::EXTERNAL_SPACE as u32 {
-                let start = *start as usize;
-                let end = *end as usize + 1;
-                bus.memory.external_slice()[start..end] == loaded.external_memory[start..end]
-            } else if *start >= INTERNAL_MEMORY_START
-                && *end < INTERNAL_MEMORY_START + sc62015_core::INTERNAL_SPACE as u32
-            {
-                let start = (*start - INTERNAL_MEMORY_START) as usize;
-                let end = (*end - INTERNAL_MEMORY_START) as usize + 1;
-                bus.memory.internal_slice()[start..end] == loaded.imem[start..end]
-            } else {
-                false
-            };
-            if !unchanged {
-                return Err("snapshot attempts to replace active read-only memory".into());
-            }
+    let active_fallback_ranges =
+        snapshot::canonical_snapshot_ranges("active fallback", bus.memory.python_ranges())?;
+    if active_fallback_ranges != metadata.fallback_ranges {
+        return Err("snapshot fallback ranges do not match the active machine".into());
+    }
+    let active_readonly_ranges =
+        snapshot::canonical_snapshot_ranges("active readonly", bus.memory.readonly_ranges())?;
+    if active_readonly_ranges != metadata.readonly_ranges {
+        return Err("snapshot read-only ranges do not match the active machine".into());
+    }
+    for (start, end) in &active_readonly_ranges {
+        let unchanged = if *end < sc62015_core::EXTERNAL_SPACE as u32 {
+            let start = *start as usize;
+            let end = *end as usize + 1;
+            bus.memory.external_slice()[start..end] == loaded.external_memory[start..end]
+        } else if *start >= INTERNAL_MEMORY_START
+            && *end < INTERNAL_MEMORY_START + sc62015_core::INTERNAL_SPACE as u32
+        {
+            let start = (*start - INTERNAL_MEMORY_START) as usize;
+            let end = (*end - INTERNAL_MEMORY_START) as usize + 1;
+            bus.memory.internal_slice()[start..end] == loaded.imem[start..end]
+        } else {
+            false
+        };
+        if !unchanged {
+            return Err("snapshot attempts to replace active read-only memory".into());
         }
     }
+
+    let memory_card_candidate = bus
+        .memory
+        .prepare_memory_card_restore(loaded.memory_card.clone())?;
 
     let mut state_candidate = LlamaState::new();
     apply_registers(&mut state_candidate, &loaded.registers)?;
@@ -2109,28 +2139,18 @@ fn load_snapshot_state(
         return Err("LCD snapshot is not exactly representable".into());
     }
 
-    let mut readonly = metadata.readonly_ranges.clone();
-    let no_ram_range = (NO_RAM_WINDOW_START as u32, NO_RAM_WINDOW_END as u32);
-    if !readonly.contains(&no_ram_range) {
-        readonly.push(no_ram_range);
-    }
-    let rom_range = (
-        ROM_WINDOW_START as u32,
-        (ROM_WINDOW_START + ROM_WINDOW_LEN - 1) as u32,
-    );
-    if !readonly.contains(&rom_range) {
-        readonly.push(rom_range);
-    }
-
     // All parsing and candidate construction is complete. Commit the exact
     // machine image without fallible best-effort restoration.
+    bus.memory
+        .commit_memory_card_restore(memory_card_candidate)?;
     bus.memory
         .copy_external_from(&loaded.external_memory)
         .expect("validated exact external memory length");
     bus.memory.write_imem(&loaded.imem);
     bus.memory
         .set_python_ranges(metadata.fallback_ranges.clone());
-    bus.memory.set_readonly_ranges(readonly);
+    bus.memory
+        .set_readonly_ranges(metadata.readonly_ranges.clone());
     bus.memory.clear_dirty();
     bus.memory
         .set_memory_counts(metadata.memory_reads, metadata.memory_writes);
@@ -2150,7 +2170,7 @@ fn load_snapshot_state(
         .last()
         .copied()
         .unwrap_or(0);
-    bus.pending_onk = loaded.imem[IMEM_SSR_OFFSET as usize] & SSR_ONK != 0;
+    bus.pending_onk = metadata.onk_level;
     bus.pending_kil = kb_snapshot.fifo_len > 0;
     bus.deferred_key_irq = false;
     bus.deferred_pending_kil = false;
@@ -2333,6 +2353,7 @@ fn save_snapshot_state(
     metadata.call_page_stack = call_metrics.call_page_stack;
     metadata.call_return_widths = call_metrics.call_return_widths;
     metadata.power_state = state.power_state();
+    metadata.onk_level = bus.pending_onk;
     metadata.temps = (0..NUM_TEMP_REGISTERS)
         .map(|index| {
             (
@@ -2582,7 +2603,71 @@ impl LlamaBus for StandaloneBus {
     }
 
     fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
-        self.memory.read_byte_silent(addr)
+        self.peek_byte_silent_at(addr, self.last_pc)
+    }
+
+    fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+        let addr = addr & ADDRESS_MASK;
+        if let Some(value) = self.iq7000_clock_workspace_read(addr, 8) {
+            return Some(value as u8);
+        }
+        if let Some(offset) = MemoryImage::internal_offset(addr) {
+            if offset == iq7000::IMEM_EIL_OFFSET && self.iq7000_rtc.is_some() {
+                return None;
+            }
+            if matches!(offset, IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET) {
+                return None;
+            }
+            if offset == IMEM_SSR_OFFSET {
+                let mut value = self.memory.read_internal_byte_silent(offset)?;
+                if self.ssr_onk_visible() {
+                    value |= SSR_ONK;
+                }
+                return Some(value);
+            }
+        }
+        if self.memory.requires_python(addr) {
+            return self.host_peek.as_mut().and_then(|peek| peek(addr));
+        }
+        if self.trace_reset_ce6_shadow_enabled && (0x010000..=0x01FFFF).contains(&addr) {
+            return self
+                .trace_reset_ce6_shadow
+                .get((addr - 0x010000) as usize)
+                .copied();
+        }
+        if self.trace_resume_ce1_shadow_enabled && (0x040000..=0x04FFFF).contains(&addr) {
+            return self
+                .trace_resume_ce1_shadow
+                .get((addr - 0x040000) as usize)
+                .copied();
+        }
+        let trace_resume_active =
+            self.trace_resume_read_enabled || self.trace_resume_read_anchor_pc == Some(context_pc);
+        if trace_resume_active {
+            let search_end = self
+                .trace_resume_reads
+                .len()
+                .min(self.trace_resume_read_index.saturating_add(128));
+            if let Some(byte) = self
+                .trace_resume_reads
+                .get(self.trace_resume_read_index..search_end)
+                .and_then(|bytes| bytes.iter().find(|byte| byte.addr == addr))
+            {
+                return Some(byte.value);
+            }
+        }
+        if self.lcd.handles(addr) {
+            return None;
+        }
+        self.memory.read_byte_for_preflight(addr, Some(context_pc))
+    }
+
+    fn vector_transfer_provenance(&self) -> (usize, u64) {
+        self.memory.vector_transfer_provenance()
+    }
+
+    fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+        self.instruction_byte_is_stable_for_context(addr, self.last_pc)
     }
 
     fn store(&mut self, addr: u32, bits: u8, value: u32) {
@@ -3906,12 +3991,92 @@ fn preflight_and_tick_instruction(
     bus: &mut StandaloneBus,
     run_timer_cycles: bool,
     pre_tick_done: bool,
-) -> Result<(), &'static str> {
-    executor.validate_before_scheduling(opcode, state, bus)?;
+) -> Result<Option<ValidatedVectorTransfer>, &'static str> {
+    let instruction_len = executor.validate_before_scheduling_with_length(opcode, state, bus)?;
+    let source_pc = state.pc() & ADDRESS_MASK;
+    if (0..u32::from(instruction_len)).any(|offset| {
+        !bus.instruction_byte_is_stable_for_context(
+            source_pc.wrapping_add(offset) & ADDRESS_MASK,
+            source_pc,
+        )
+    }) {
+        return Err("callback-backed instruction bytes cannot cross scheduler tick");
+    }
+    let transfer = match opcode {
+        0xFE => {
+            validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, state, bus)?;
+            Some(fetch_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?)
+        }
+        0xFF => {
+            validate_stable_vector_transfer(ROM_RESET_VECTOR_ADDR, state, bus)?;
+            Some(fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?)
+        }
+        _ => None,
+    };
     if run_timer_cycles && !pre_tick_done {
         bus.tick_timers_only(bus.cycle_count);
     }
-    Ok(())
+    Ok(transfer)
+}
+
+/// Decode and validate the instruction at the state's current PC without
+/// consuming an architectural read or advancing trace-replay input.
+fn preflight_current_instruction_silently(
+    executor: &AsyncLlamaExecutor,
+    state: &LlamaState,
+    bus: &mut StandaloneBus,
+) -> Result<(u8, u8), &'static str> {
+    let source_pc = state.pc() & ADDRESS_MASK;
+    let opcode = bus
+        .peek_byte_silent_at(source_pc, source_pc)
+        .ok_or(sc62015_core::llama::eval::SILENT_PEEK_UNAVAILABLE_ERROR)?;
+    let instruction_len = executor.validate_before_scheduling_with_length(opcode, state, bus)?;
+    if (0..u32::from(instruction_len)).any(|offset| {
+        !bus.instruction_byte_is_stable_for_context(
+            source_pc.wrapping_add(offset) & ADDRESS_MASK,
+            source_pc,
+        )
+    }) {
+        return Err("callback-backed instruction bytes cannot cross scheduler tick");
+    }
+    match opcode {
+        0xFE => {
+            validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, state, bus)?;
+        }
+        0xFF => {
+            validate_stable_vector_transfer(ROM_RESET_VECTOR_ADDR, state, bus)?;
+        }
+        _ => {}
+    }
+    Ok((opcode, instruction_len))
+}
+
+/// Validate a vector and every decoded destination byte with the exact
+/// PC-sensitive context used by silent decode. No architectural vector read is
+/// performed here.
+fn validate_stable_vector_transfer(
+    vector_addr: u32,
+    state: &LlamaState,
+    bus: &mut StandaloneBus,
+) -> Result<(u32, u8), &'static str> {
+    let (target, target_len) = validate_vector_transfer_with_length(vector_addr, state, bus)?;
+    let source_pc = state.pc() & ADDRESS_MASK;
+    let vector_unstable = (0..3).any(|offset| {
+        !bus.instruction_byte_is_stable_for_context(
+            vector_addr.wrapping_add(offset) & ADDRESS_MASK,
+            source_pc,
+        )
+    });
+    let target_unstable = (0..u32::from(target_len)).any(|offset| {
+        !bus.instruction_byte_is_stable_for_context(
+            target.wrapping_add(offset) & ADDRESS_MASK,
+            target,
+        )
+    });
+    if vector_unstable || target_unstable {
+        return Err("callback-backed vector/target cannot cross scheduler tick");
+    }
+    Ok((target, target_len))
 }
 
 fn runtime_inject_matrix_event(runtime: &mut CoreRuntime, code: u8, release: bool) {
@@ -4202,7 +4367,7 @@ fn run_iq7000_pclink_ui_path(
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
-    runtime.power_on_reset();
+    runtime.power_on_reset()?;
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
@@ -4557,7 +4722,8 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         if args.model.is_pce500_family() && !use_full_system_image {
             bus.strobe_all_columns();
         }
-        power_on_reset(&mut bus, &mut state);
+        power_on_reset(&mut bus, &mut state)
+            .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))?;
         // power_on_reset seeds PC from the ROM reset vector at 0xFFFFD.
         if use_full_system_image {
             seed_pce500_bootstrap_imem(&mut bus.memory);
@@ -4587,6 +4753,8 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
 
     let summary_slot: Rc<RefCell<Option<RunSummary>>> = Rc::new(RefCell::new(None));
     let summary_slot_run = summary_slot.clone();
+    let run_error_slot: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let run_error_slot_run = run_error_slot.clone();
     let mut driver = AsyncDriver::new();
     let snapshot_out = args.snapshot_out.clone();
     let base_instruction_count = base_instruction_count;
@@ -4617,10 +4785,55 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         log_dbg(&format!("entering execute loop for {max_steps} steps"));
         while executed < max_steps {
             let mut pre_tick_done = false;
+            // Silent vector-target validation and stability classification use
+            // the current instruction context. Establish it before IRQ
+            // preflight, then refresh it below if delivery changes PC.
+            bus.set_pc(state.pc());
+            bus.set_instr_index(executed);
             // Ensure vector table is patched once before executing instructions.
             if !bus.vec_patched {
                 bus.maybe_patch_vectors();
             }
+
+            // Validate the current instruction, including operand- and
+            // stack-dependent fail-closed checks, entirely through the silent
+            // peek path before validating any asynchronous transfer. This
+            // makes a malformed current instruction authoritative and leaves
+            // trace-replay input untouched on rejection.
+            let current_pc = state.pc() & ADDRESS_MASK;
+            let asserted_isr = bus
+                .memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap_or(0);
+            let should_preflight_current = if state.is_off() {
+                (asserted_isr & ISR_ONKI) != 0
+            } else {
+                !state.is_halted() || asserted_isr != 0
+            };
+            let silent_current = if should_preflight_current {
+                match preflight_current_instruction_silently(&executor, &state, &mut bus) {
+                    Ok(preflight) => Some(preflight),
+                    Err(error) => {
+                        eprintln!(
+                            "error preflighting current instruction at PC=0x{current_pc:05X}: {error}"
+                        );
+                        break;
+                    }
+                }
+            } else {
+                None
+            };
+            let (_irq_target, _irq_target_len) =
+                match validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, &state, &mut bus) {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        eprintln!(
+                            "error preflighting IRQ vector at PC=0x{:05X}: {error}",
+                            state.pc()
+                        );
+                        break;
+                    }
+                };
             if use_key_seq {
                 let screen_state = if needs_screen_state || needs_screen_text {
                     capture_screen_state(bus.lcd(), text_decoder.as_ref(), needs_screen_text)
@@ -4676,7 +4889,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             if bus.irq_pending() {
                 // S is a 20-bit external pointer. Interrupt-frame bytes wrap
                 // independently at FFFFF -> 00000 even when S starts below 5.
-                bus.deliver_irq(&mut state);
+                if let Err(error) = bus.deliver_irq(&mut state) {
+                    eprintln!("error delivering IRQ at PC=0x{:05X}: {error}", state.pc());
+                    break;
+                }
             } else if state.is_halted() {
                 // Parity: any latched ISR bit cancels HALT, even if IRQ delivery is masked.
                 // Mirror Python: tick timers before deciding whether to remain halted.
@@ -4722,8 +4938,8 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     if trace_regs {
                         let a = state.get_reg(RegName::A) & 0xFF;
                         let f = state.get_reg(RegName::F) & 0xFF;
-                        let s = state.get_reg(RegName::S) & 0xFFFFFF;
-                        let y = state.get_reg(RegName::Y) & 0xFFFFFF;
+                        let s = state.get_reg(RegName::S) & 0x0F_FFFF;
+                        let y = state.get_reg(RegName::Y) & 0x0F_FFFF;
                         let ssr = bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0);
                         println!(
                             "[pc-trace] pc=0x{pc:05X} hits={hits} imr=0x{imr:02X} isr=0x{isr:02X} ssr=0x{ssr:02X} onk={onk} a=0x{a:02X} f=0x{f:02X} sp=0x{s:06X} y=0x{y:06X}",
@@ -4761,8 +4977,8 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 if trace_regs {
                     let a = state.get_reg(RegName::A) & 0xFF;
                     let f = state.get_reg(RegName::F) & 0xFF;
-                    let s = state.get_reg(RegName::S) & 0xFFFFFF;
-                    let y = state.get_reg(RegName::Y) & 0xFFFFFF;
+                    let s = state.get_reg(RegName::S) & 0x0F_FFFF;
+                    let y = state.get_reg(RegName::Y) & 0x0F_FFFF;
                     let ssr = bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0);
                     println!(
                         "[pc-trace-window] anchor={anchor} pc=0x{pc:05X} remaining={} imr=0x{imr:02X} isr=0x{isr:02X} ssr=0x{ssr:02X} onk={onk} a=0x{a:02X} f=0x{f:02X} sp=0x{s:06X} y=0x{y:06X}",
@@ -4799,8 +5015,19 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 );
             }
             let opcode = bus.load(pc, 8) as u8;
+            if pc == current_pc {
+                if let Some((silent_opcode, _)) = silent_current {
+                    if opcode != silent_opcode {
+                        eprintln!(
+                            "error fetching opcode at PC=0x{pc:05X}: architectural fetch \
+                             0x{opcode:02X} disagrees with silent preflight 0x{silent_opcode:02X}"
+                        );
+                        break;
+                    }
+                }
+            }
             let run_timer_cycles = !state.is_off();
-            if let Err(err) = preflight_and_tick_instruction(
+            let prepared_transfer = match preflight_and_tick_instruction(
                 &executor,
                 opcode,
                 &state,
@@ -4808,9 +5035,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 run_timer_cycles,
                 pre_tick_done,
             ) {
-                eprintln!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
-                break;
-            }
+                Ok(transfer) => transfer,
+                Err(err) => {
+                    eprintln!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
+                    break;
+                }
+            };
             if perfetto_dbg {
                 eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
             }
@@ -4825,7 +5055,13 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 Some(&mut tick_cb),
             );
             match executor
-                .execute(opcode, &mut state, &mut bus, &mut ticker)
+                .execute_with_vector_transfer(
+                    opcode,
+                    &mut state,
+                    &mut bus,
+                    &mut ticker,
+                    prepared_transfer,
+                )
                 .await
             {
                 Ok(_instr_len) => {
@@ -4927,7 +5163,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             if let Err(err) =
                 save_snapshot_state(snapshot_path, &bus, &state, executed, args.model)
             {
-                eprintln!("Failed to save snapshot: {err}");
+                *run_error_slot_run.borrow_mut() = Some(format!(
+                    "failed to save snapshot to {}: {err}",
+                    snapshot_path.display()
+                ));
             } else {
                 println!("Saved snapshot to {}", snapshot_path.display());
             }
@@ -5005,6 +5244,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         if matches!(result.event, DriverEvent::User(CPU_DONE_EVENT)) {
             break;
         }
+    }
+
+    if let Some(error) = run_error_slot.borrow_mut().take() {
+        return Err(error.into());
     }
 
     let elapsed = start.elapsed();
@@ -5241,6 +5484,77 @@ mod tests {
     }
 
     #[test]
+    fn trace_resume_irq_target_stability_uses_the_target_context() {
+        let mut bus = test_standalone_bus();
+        let mut state = LlamaState::new();
+        let source_pc = 0x012345;
+        let target_pc = 0x023456;
+        state.set_pc(source_pc);
+        bus.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR, (target_pc & 0xFF) as u8);
+        bus.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, ((target_pc >> 8) & 0xFF) as u8);
+        bus.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, ((target_pc >> 16) & 0x0F) as u8);
+        bus.install_trace_resume_reads(
+            target_pc,
+            vec![TurnonResumeByte {
+                addr: target_pc,
+                value: 0x00,
+            }],
+        );
+
+        // This is the context setup performed at the top of the standalone
+        // loop, before its early asynchronous-IRQ preflight.
+        bus.set_pc(state.pc());
+        bus.set_instr_index(17);
+        let (target, target_len) =
+            validate_vector_transfer_with_length(INTERRUPT_VECTOR_ADDR, &state, &mut bus)
+                .expect("silent IRQ target validation");
+
+        assert_eq!(target, target_pc);
+        assert_eq!(target_len, 1);
+        assert!(
+            bus.instruction_byte_is_stable(target),
+            "the source context alone does not activate target-anchored replay"
+        );
+        assert!(
+            !bus.instruction_byte_is_stable_for_context(target, target),
+            "the exact target context must quarantine the replay-provided byte"
+        );
+        assert_eq!(
+            validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, &state, &mut bus),
+            Err("callback-backed vector/target cannot cross scheduler tick")
+        );
+    }
+
+    #[test]
+    fn trace_resume_malformed_current_preflight_consumes_no_replay_or_bus_read() {
+        let mut bus = test_standalone_bus();
+        let mut state = LlamaState::new();
+        state.set_pc(0x012345);
+        bus.install_trace_resume_reads(
+            state.pc(),
+            vec![TurnonResumeByte {
+                addr: state.pc(),
+                value: 0x20,
+            }],
+        );
+        bus.set_pc(state.pc());
+        bus.set_instr_index(23);
+        let executor = AsyncLlamaExecutor::new();
+        let reads_before = bus.memory.memory_read_count();
+
+        let error = preflight_current_instruction_silently(&executor, &state, &mut bus)
+            .expect_err("reserved replay opcode must fail silently");
+
+        assert_eq!(error, "invalid or reserved opcode");
+        assert_eq!(bus.trace_resume_read_index, 0);
+        assert!(!bus.trace_resume_read_enabled);
+        assert_eq!(bus.memory.memory_read_count(), reads_before);
+    }
+
+    #[test]
     fn operand_and_stack_preflight_reject_before_timer_tick() {
         for opcode in [0x11, 0xE3, 0xEB, 0xC2, 0x3E, 0x5F, 0x01] {
             let mut bus = test_standalone_bus();
@@ -5300,6 +5614,71 @@ mod tests {
             assert!(!bus.timer.irq_pending, "opcode {opcode:02X}");
             assert_eq!(bus.memory.memory_read_count(), reads_before);
             assert_eq!(bus.memory.memory_write_count(), writes_before);
+        }
+    }
+
+    #[test]
+    fn software_reset_rejects_dynamic_vector_or_target_before_timer_tick() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        for dynamic_vector in [true, false] {
+            let mut bus = test_standalone_bus();
+            bus.cycle_count = 19;
+            bus.timer.enabled = true;
+            bus.timer.next_mti = 0;
+            bus.timer.next_sti = 0;
+            let mut state = LlamaState::new();
+            state.set_pc(0);
+            let target = 0x00200;
+            bus.memory.write_external_byte(0, 0xFF);
+            bus.memory
+                .write_external_byte(ROM_RESET_VECTOR_ADDR, (target & 0xFF) as u8);
+            bus.memory
+                .write_external_byte(ROM_RESET_VECTOR_ADDR + 1, ((target >> 8) & 0xFF) as u8);
+            bus.memory
+                .write_external_byte(ROM_RESET_VECTOR_ADDR + 2, ((target >> 16) & 0x0F) as u8);
+            bus.memory.write_external_byte(target, 0x00);
+            if dynamic_vector {
+                bus.memory
+                    .set_python_ranges(vec![(ROM_RESET_VECTOR_ADDR, ROM_RESET_VECTOR_ADDR + 2)]);
+            } else {
+                bus.memory.set_python_ranges(vec![(target, target)]);
+            }
+            bus.host_peek = Some(Box::new(move |addr| {
+                Some(match addr & ADDRESS_MASK {
+                    ROM_RESET_VECTOR_ADDR => (target & 0xFF) as u8,
+                    addr if addr == ROM_RESET_VECTOR_ADDR + 1 => ((target >> 8) & 0xFF) as u8,
+                    addr if addr == ROM_RESET_VECTOR_ADDR + 2 => ((target >> 16) & 0x0F) as u8,
+                    addr if addr == target => 0x00,
+                    _ => 0x00,
+                })
+            }));
+            let architectural_reads = Arc::new(AtomicUsize::new(0));
+            let read_count = Arc::clone(&architectural_reads);
+            bus.host_read = Some(Box::new(move |_addr| {
+                read_count.fetch_add(1, Ordering::Relaxed);
+                Some(0)
+            }));
+            let executor = AsyncLlamaExecutor::new();
+            let memory_reads_before = bus.memory.memory_read_count();
+            let memory_writes_before = bus.memory.memory_write_count();
+
+            let error =
+                preflight_and_tick_instruction(&executor, 0xFF, &state, &mut bus, true, false)
+                    .expect_err("dynamic RESET vector state must fail before scheduler work");
+
+            assert_eq!(
+                error, "callback-backed vector/target cannot cross scheduler tick",
+                "dynamic_vector={dynamic_vector}"
+            );
+            assert_eq!(bus.cycle_count, 19);
+            assert_eq!(bus.timer.next_mti, 0);
+            assert_eq!(bus.timer.next_sti, 0);
+            assert_eq!(state.pc(), 0);
+            assert_eq!(architectural_reads.load(Ordering::Relaxed), 0);
+            assert_eq!(bus.memory.memory_read_count(), memory_reads_before);
+            assert_eq!(bus.memory.memory_write_count(), memory_writes_before);
         }
     }
 
@@ -5665,7 +6044,7 @@ mod tests {
         bus.pending_onk = true;
         bus.irq_pending = true;
         assert!(bus.irq_pending(), "ONK pending should signal irq_pending");
-        bus.deliver_irq(&mut state);
+        bus.deliver_irq(&mut state).expect("deliver ONK IRQ");
         assert_eq!(
             bus.active_irq_mask,
             super::ISR_ONKI,
@@ -5673,6 +6052,62 @@ mod tests {
         );
         assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));
         assert!(bus.in_interrupt);
+    }
+
+    #[test]
+    fn deliver_irq_rejects_noncanonical_vector_before_frame_or_metadata_mutation() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut state = LlamaState::new();
+        state.set_pc(0x012345);
+        state.set_reg(RegName::S, 0x000240);
+        state.set_reg(RegName::F, 0x03);
+        state.set_reg(RegName::IMR, u32::from(super::IMR_MASTER | super::IMR_ONK));
+        bus.memory.write_external_byte(0x0FFFFA, 0x78);
+        bus.memory.write_external_byte(0x0FFFFB, 0x56);
+        bus.memory.write_external_byte(0x0FFFFC, 0xF4);
+        bus.memory
+            .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_ONK);
+        bus.memory
+            .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_ONKI);
+        bus.pending_onk = true;
+        bus.irq_pending = true;
+        bus.last_irq_src = Some("ONK".to_string());
+
+        let external_before = bus.memory.external_slice().to_vec();
+        let internal_before = bus.memory.internal_slice().to_vec();
+        let writes_before = bus.memory.memory_write_count();
+        let err = bus
+            .deliver_irq(&mut state)
+            .expect_err("noncanonical IRQ vector must be quarantined");
+
+        assert_eq!(err, sc62015_core::llama::eval::VECTOR_UPPER_NIBBLE_ERROR);
+        assert_eq!(state.pc(), 0x012345);
+        assert_eq!(state.get_reg(RegName::S), 0x000240);
+        assert_eq!(state.get_reg(RegName::F), 0x03);
+        assert_eq!(
+            state.get_reg(RegName::IMR),
+            u32::from(super::IMR_MASTER | super::IMR_ONK)
+        );
+        assert_eq!(bus.memory.external_slice(), external_before);
+        assert_eq!(bus.memory.internal_slice(), internal_before);
+        assert_eq!(bus.memory.memory_write_count(), writes_before);
+        assert!(bus.pending_onk);
+        assert!(bus.irq_pending);
+        assert!(!bus.in_interrupt);
+        assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));
+        assert_eq!(bus.active_irq_mask, 0);
+        assert_eq!(bus.delivered_irq_count, 0);
+        assert!(!bus.vec_patched);
     }
 
     #[test]
@@ -5702,7 +6137,7 @@ mod tests {
         bus.pending_onk = true;
         bus.irq_pending = true;
 
-        bus.deliver_irq(&mut state);
+        bus.deliver_irq(&mut state).expect("deliver wrapped IRQ");
 
         assert_eq!(state.get_reg(RegName::S), 0x0FFFFD);
         assert_eq!(state.get_reg(RegName::PC), 0x025678);
@@ -5743,7 +6178,7 @@ mod tests {
         bus.pending_onk = true;
         bus.irq_pending = true;
 
-        bus.deliver_irq(&mut state);
+        bus.deliver_irq(&mut state).expect("deliver timer IRQ");
 
         assert_eq!(
             bus.active_irq_mask,
@@ -5776,7 +6211,7 @@ mod tests {
             .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_STI | super::ISR_MTI);
         bus.irq_pending = true;
 
-        bus.deliver_irq(&mut state);
+        bus.deliver_irq(&mut state).expect("deliver sub-timer IRQ");
 
         assert_eq!(bus.active_irq_mask, super::ISR_STI);
         assert_eq!(bus.last_irq_src.as_deref(), Some("STI"));
@@ -5835,7 +6270,7 @@ mod tests {
             None,
         );
         let mut state = LlamaState::new();
-        power_on_reset(&mut bus, &mut state);
+        power_on_reset(&mut bus, &mut state).expect("valid ROM reset vector");
         let pc_mask = 0x0F_FFFFu32;
         assert_eq!(
             state.pc(),
@@ -6318,6 +6753,9 @@ mod tests {
         let mut memory = MemoryImage::new();
         let _ = memory.store(0x2000, 8, 0x12);
         memory.write_internal_byte(0x10, 0x34);
+        memory
+            .load_memory_card_with_writable(&vec![0xA5; 8192], false)
+            .unwrap();
 
         let mut bus = StandaloneBus::new(
             memory,
@@ -6333,6 +6771,15 @@ mod tests {
         bus.cycle_count = 1234;
         bus.timer.next_mti = 111;
         bus.timer.next_sti = 222;
+        bus.pending_onk = true;
+        assert_eq!(
+            bus.memory
+                .read_internal_byte(super::IMEM_SSR_OFFSET)
+                .unwrap_or(0)
+                & super::SSR_ONK,
+            0,
+            "standalone physical ON-key level must remain outside raw SSR storage"
+        );
 
         let mut state = LlamaState::new();
         state.set_reg(RegName::PC, 0x12345);
@@ -6349,8 +6796,10 @@ mod tests {
         save_snapshot_state(&snapshot_path, &bus, &state, 42, DeviceModel::PcE500)
             .expect("save snapshot");
 
+        let mut target_memory = MemoryImage::new();
+        target_memory.set_memory_card_slot_present(false);
         let mut bus2 = StandaloneBus::new(
-            MemoryImage::new(),
+            target_memory,
             create_lcd(sc62015_core::LcdKind::Hd61202),
             TimerContext::new(true, 0, 0),
             false,
@@ -6377,8 +6826,26 @@ mod tests {
         assert_eq!(state2.power_state(), PowerState::Halted);
         assert_eq!(state2.call_sub_level(), 2);
         assert_eq!(bus2.cycle_count, 1234);
+        assert!(bus2.pending_onk, "held ON-key level must round-trip");
+        assert_eq!(
+            bus2.memory
+                .read_internal_byte(super::IMEM_SSR_OFFSET)
+                .unwrap_or(0)
+                & super::SSR_ONK,
+            0,
+            "restoring the physical level must leave raw SSR storage unchanged"
+        );
         assert_eq!(bus2.memory.load(0x2000, 8).unwrap_or(0), 0x12);
         assert_eq!(bus2.memory.read_internal_byte(0x10).unwrap_or(0), 0x34);
+        let card = bus2
+            .memory
+            .memory_card_snapshot()
+            .unwrap()
+            .expect("snapshot present card overrides active absent slot");
+        assert_eq!(card.mode, sc62015_core::memory::MemoryCardMode::Present);
+        assert_eq!(card.capacity, 8192);
+        assert!(!card.writable);
+        assert_eq!(card.payload, vec![0xA5; 8192]);
 
         let _ = std::fs::remove_file(snapshot_path);
     }
@@ -6424,7 +6891,7 @@ mod tests {
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
     #[test]
-    fn snapshot_rejects_unrepresented_standalone_device_state() {
+    fn snapshot_v4_serializes_cards_and_rejects_unrepresented_device_state() {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let stamp = SystemTime::now()
@@ -6450,16 +6917,116 @@ mod tests {
             None,
             None,
         );
-        let error = save_snapshot_state(
+        save_snapshot_state(
             &snapshot_path,
             &bus,
             &LlamaState::new(),
             0,
             DeviceModel::PcE500,
         )
-        .expect_err("unserialized card state must fail closed");
-        assert!(error.to_string().contains("memory-card/overlay"));
-        assert!(!snapshot_path.exists());
+        .expect("present card is represented by snapshot v4");
+        let loaded = snapshot::load_snapshot(&snapshot_path).unwrap();
+        let card = loaded.memory_card.expect("typed present card");
+        assert_eq!(card.mode, sc62015_core::memory::MemoryCardMode::Present);
+        assert_eq!(card.capacity, 0x1_0000);
+        assert!(card.writable);
+        assert_eq!(card.payload, vec![0xA5; 0x1_0000]);
+
+        let mut absent_card_memory = MemoryImage::new();
+        absent_card_memory
+            .load_memory_card_with_writable(&vec![0x5A; 0x4000], false)
+            .unwrap();
+        absent_card_memory.set_memory_card_slot_present(false);
+        let absent_card_bus = StandaloneBus::new(
+            absent_card_memory,
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        save_snapshot_state(
+            &snapshot_path,
+            &absent_card_bus,
+            &LlamaState::new(),
+            0,
+            DeviceModel::PcE500,
+        )
+        .expect("absent card and retained medium are represented by snapshot v4");
+        let loaded = snapshot::load_snapshot(&snapshot_path).unwrap();
+        let card = loaded.memory_card.expect("typed absent card");
+        assert_eq!(card.mode, sc62015_core::memory::MemoryCardMode::Absent);
+        assert_eq!(card.capacity, 0x4000);
+        assert!(!card.writable);
+        assert_eq!(card.payload, vec![0x5A; 0x4000]);
+
+        let mut active_present_memory = MemoryImage::new();
+        active_present_memory
+            .load_memory_card_with_writable(&vec![0xC3; 0x8000], true)
+            .unwrap();
+        let mut active_present_bus = StandaloneBus::new(
+            active_present_memory,
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        load_snapshot_state(
+            &snapshot_path,
+            &mut active_present_bus,
+            &mut LlamaState::new(),
+            DeviceModel::PcE500,
+            &vec![0; sc62015_core::EXTERNAL_SPACE],
+        )
+        .expect("snapshot absent card overrides active present card");
+        let restored = active_present_bus
+            .memory
+            .memory_card_snapshot()
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.mode, sc62015_core::memory::MemoryCardMode::Absent);
+        assert_eq!(restored.capacity, 0x4000);
+        assert!(!restored.writable);
+        assert_eq!(restored.payload, vec![0x5A; 0x4000]);
+        let valid_archive = std::fs::read(&snapshot_path).expect("read valid destination archive");
+
+        let mut generic_overlay_memory = MemoryImage::new();
+        generic_overlay_memory.add_ram_overlay(0x8000, 16, "snapshot-test");
+        let generic_overlay_bus = StandaloneBus::new(
+            generic_overlay_memory,
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let error = save_snapshot_state(
+            &snapshot_path,
+            &generic_overlay_bus,
+            &LlamaState::new(),
+            0,
+            DeviceModel::PcE500,
+        )
+        .expect_err("generic overlays remain outside snapshot v4");
+        assert!(
+            error.to_string().contains("generic memory-overlay")
+                || error.to_string().contains("attestation")
+        );
+        assert_eq!(
+            std::fs::read(&snapshot_path).unwrap(),
+            valid_archive,
+            "failed save must preserve the previous destination"
+        );
 
         let mut rtc_bus = StandaloneBus::new(
             MemoryImage::new(),
@@ -6486,7 +7053,83 @@ mod tests {
         )
         .expect_err("unserialized RTC protocol state must fail closed");
         assert!(error.to_string().contains("RTC protocol"));
-        assert!(!snapshot_path.exists());
+        assert_eq!(
+            std::fs::read(&snapshot_path).unwrap(),
+            valid_archive,
+            "a second failed save must still preserve the previous destination"
+        );
+        let _ = std::fs::remove_file(snapshot_path);
+    }
+
+    #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+    #[test]
+    fn iq7000_snapshot_load_preserves_exact_model_ranges() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let ranges = vec![(0x90000, 0x9FFFF), (0x80000, 0x8FFFF)];
+        let canonical_ranges =
+            snapshot::canonical_snapshot_ranges("test readonly", &ranges).unwrap();
+        let mut source_memory = MemoryImage::new();
+        source_memory.set_readonly_ranges(ranges.clone());
+        let source_bus = StandaloneBus::new(
+            source_memory,
+            create_lcd(sc62015_core::LcdKind::Iq7000Vram),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let snapshot_path =
+            std::env::temp_dir().join(format!("iq7000_snapshot_ranges_{stamp}.pcsnap"));
+        save_snapshot_state(
+            &snapshot_path,
+            &source_bus,
+            &LlamaState::new(),
+            0,
+            DeviceModel::Iq7000,
+        )
+        .expect("save IQ-7000 snapshot");
+
+        let mut target_memory = MemoryImage::new();
+        target_memory.set_readonly_ranges(ranges.clone());
+        let mut target_bus = StandaloneBus::new(
+            target_memory,
+            create_lcd(sc62015_core::LcdKind::Iq7000Vram),
+            TimerContext::new(true, 10, 20),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let mut target_state = LlamaState::new();
+        load_snapshot_state(
+            &snapshot_path,
+            &mut target_bus,
+            &mut target_state,
+            DeviceModel::Iq7000,
+            &[],
+        )
+        .expect("load IQ-7000 snapshot");
+
+        assert_eq!(
+            target_bus.memory.readonly_ranges(),
+            canonical_ranges.as_slice()
+        );
+        target_bus
+            .memory
+            .store(0x00100, 8, 0xA5)
+            .expect("IQ-7000 low RAM remains writable");
+        assert_eq!(target_bus.memory.load(0x00100, 8), Some(0xA5));
+        let _ = std::fs::remove_file(snapshot_path);
     }
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]

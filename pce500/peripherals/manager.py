@@ -30,3 +30,15 @@ class PeripheralManager:
         if not reg_name:
             return
         self.serial.handle_imem_access(pc, reg_name, access_type, value)
+
+    def unrepresented_snapshot_state(self) -> tuple[str, ...]:
+        """Return live adapter state which snapshot v4 cannot encode."""
+
+        active: list[str] = []
+        if self.serial.pending_receive():
+            active.append("serial receive queue")
+        if self.serial.pending_transmit():
+            active.append("serial transmit queue")
+        if self.cassette.tape.blocks or self.cassette.tape.cursor:
+            active.append("cassette tape blocks/cursor")
+        return tuple(active)

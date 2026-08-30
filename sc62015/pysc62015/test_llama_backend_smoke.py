@@ -311,6 +311,9 @@ class _MemoryWithKioTrace:
     def peek_byte_for_preflight(self, addr: int, _pc: int | None = None) -> int:
         return self._raw[addr & 0xFFFFFF]
 
+    def instruction_byte_is_callback_free(self, _addr: int) -> bool:
+        return True
+
     def write_byte(self, addr: int, value: int, cpu_pc: int | None = None) -> None:
         self._raw[addr & 0xFFFFFF] = value & 0xFF
 
@@ -372,6 +375,7 @@ def test_llama_ir_traces_irq_enter() -> None:
     cpu.regs.set(RegisterName.S, 0x0020)  # scratch stack space
     cpu.regs.set(RegisterName.F, 0x00)
 
+    cpu.prepare_instruction_before_scheduling(0x0000)
     cpu.execute_instruction(0x0000)
 
     assert any(name == "IRQ_Enter" for name, _ in mem.irq_traces)

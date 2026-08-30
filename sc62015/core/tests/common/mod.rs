@@ -36,7 +36,7 @@ pub fn boot_pce500() -> Option<CoreRuntime> {
     rt.timer.sti_period = DEFAULT_STI_PERIOD;
     rt.timer.reset(rt.cycle_count());
     load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
-    rt.power_on_reset();
+    rt.power_on_reset().expect("valid ROM reset vector");
     rt.step(20_000).expect("boot");
     Some(rt)
 }
