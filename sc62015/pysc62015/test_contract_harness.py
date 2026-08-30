@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from importlib import import_module
+
 import pytest
 
+from sc62015.pysc62015 import contract_harness
 from sc62015.pysc62015.contract_harness import (
     AccessVector,
     PythonContractBackend,
@@ -10,14 +13,144 @@ from sc62015.pysc62015.contract_harness import (
 )
 
 
+def test_rust_contract_backend_fails_closed_when_host_memory_bridge_rejects(
+    monkeypatch,
+):
+    class RejectingContractBus:
+        def set_host_memory(self, _host_memory):
+            raise ValueError("bridge rejected")
+
+    class FakeRustcore:
+        LlamaContractBus = RejectingContractBus
+
+    monkeypatch.setattr(contract_harness, "rustcore", FakeRustcore)
+
+    with pytest.raises(
+        RuntimeError, match="failed to attach the requested host-memory bridge"
+    ) as exc_info:
+        RustContractBackend(host_memory=object())  # type: ignore[arg-type]
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_rust_contract_backend_fails_closed_without_host_memory_bridge(monkeypatch):
+    class LocalOnlyContractBus:
+        pass
+
+    class FakeRustcore:
+        LlamaContractBus = LocalOnlyContractBus
+
+    monkeypatch.setattr(contract_harness, "rustcore", FakeRustcore)
+
+    with pytest.raises(
+        RuntimeError, match="does not support the requested host-memory bridge"
+    ):
+        RustContractBackend(host_memory=object())  # type: ignore[arg-type]
+
+
+def test_contract_parity_does_not_skip_present_broken_native_backend(
+    monkeypatch,
+) -> None:
+    class BrokenContractBus:
+        def __init__(self) -> None:
+            raise RuntimeError("native contract constructor broken")
+
+    class FakeRustcore:
+        LlamaContractBus = BrokenContractBus
+
+    monkeypatch.setattr(contract_harness, "rustcore", FakeRustcore)
+
+    with pytest.raises(RuntimeError, match="native contract constructor broken"):
+        _init_backends()
+
+
+def _require_native_contract_backend() -> None:
+    if contract_harness.rustcore is not None:
+        return
+    try:
+        import_module("_sc62015_rustcore")
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional local build
+        if exc.name == "_sc62015_rustcore":
+            pytest.skip("LlamaContractBus is unavailable (build rustcore first)")
+        raise
+    pytest.fail("_sc62015_rustcore imported but the contract harness did not expose it")
+
+
+def _rust_contract_backend_for_callback_test(host_memory) -> RustContractBackend:
+    _require_native_contract_backend()
+    return RustContractBackend(host_memory=host_memory)
+
+
+def test_rust_contract_host_read_body_type_error_is_called_once() -> None:
+    class HostMemory:
+        def __init__(self) -> None:
+            self.read_calls = 0
+
+        def read_byte(self, _address: int, _pc: int | None = None) -> int:
+            self.read_calls += 1
+            raise TypeError("contract read body boom")
+
+        def write_byte(
+            self, _address: int, _value: int, _pc: int | None = None
+        ) -> None:
+            return None
+
+    host = HostMemory()
+    backend = _rust_contract_backend_for_callback_test(host)
+    backend.set_python_ranges([(0x4000, 0x4000)])
+
+    with pytest.raises(TypeError, match="contract read body boom"):
+        backend.read(0x4000, pc=0x12345)
+
+    assert host.read_calls == 1
+
+
+def test_rust_contract_host_write_body_type_error_is_called_once() -> None:
+    class HostMemory:
+        def __init__(self) -> None:
+            self.write_calls = 0
+
+        def read_byte(self, _address: int, _pc: int | None = None) -> int:
+            return 0
+
+        def write_byte(
+            self, _address: int, _value: int, _pc: int | None = None
+        ) -> None:
+            self.write_calls += 1
+            raise TypeError("contract write body boom")
+
+    host = HostMemory()
+    backend = _rust_contract_backend_for_callback_test(host)
+    backend.set_python_ranges([(0x4000, 0x4000)])
+
+    with pytest.raises(TypeError, match="contract write body boom"):
+        backend.write(0x4000, 0x42, pc=0x12345)
+
+    assert host.write_calls == 1
+
+
+def test_python_contract_backend_fails_closed_when_keyboard_reset_fails(
+    monkeypatch,
+):
+    backend = PythonContractBackend()
+
+    def reject_release():
+        raise ValueError("keyboard reset rejected")
+
+    monkeypatch.setattr(backend._keyboard, "release_all_keys", reject_release)
+
+    with pytest.raises(
+        RuntimeError, match="failed to reset contract keyboard state"
+    ) as exc:
+        backend.load_memory()
+
+    assert isinstance(exc.value.__cause__, ValueError)
+
+
 def _init_backends():
     py_backend = PythonContractBackend()
-    try:
-        rust_backend = RustContractBackend(host_memory=py_backend.memory)
-    except (
-        RuntimeError
-    ) as exc:  # pragma: no cover - exercised in CI when rustcore exists
-        pytest.skip(str(exc))
+    _require_native_contract_backend()
+    rust_backend = RustContractBackend(host_memory=py_backend.memory)
 
     # Preload external/internal blobs so reads have deterministic seeds.
     external = bytes(range(0x30)) * 0x100  # at least 0x3000 bytes

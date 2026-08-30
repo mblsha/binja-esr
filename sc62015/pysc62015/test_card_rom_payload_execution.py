@@ -88,6 +88,11 @@ def _make_memory(program: bytes) -> tuple[Memory, list[int]]:
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
     return memory, output_writes
 
 
@@ -103,7 +108,7 @@ def test_card_rom_payload_assembles_and_executes(backend: str) -> None:
     cpu.regs.set(RegisterName.U, INITIAL_USER_SP)
     cpu.regs.set(RegisterName.A, 0x5A)
     cpu.regs.set(RegisterName.X, 0x123456)
-    cpu.regs.set(RegisterName.F, 0xA4)
+    cpu.regs.set(RegisterName.F, 0x03)
     initial_a = cpu.regs.get(RegisterName.A)
     initial_x = cpu.regs.get(RegisterName.X)
     initial_f = cpu.regs.get(RegisterName.F)

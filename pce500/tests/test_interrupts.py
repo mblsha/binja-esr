@@ -21,6 +21,7 @@ from pce500 import PCE500Emulator
 from pce500.emulator import IRQSource
 from pce500.keyboard_matrix import KEY_LOCATIONS
 from sc62015.pysc62015.constants import IMRFlag, ISRFlag
+from sc62015.pysc62015 import available_backends
 
 
 # ----------------------------- Types & constants -----------------------------
@@ -716,6 +717,282 @@ SPECS: tuple[InterruptSpec, ...] = (
         ),
     ),
 )
+
+
+@pytest.mark.parametrize("backend", available_backends())
+def test_off_wake_source_model_is_distinct_and_non_destructive(
+    monkeypatch: pytest.MonkeyPatch, backend: str
+) -> None:
+    """OFF ignores non-ONKI status; this provisional policy needs hardware trace."""
+    monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = False  # type: ignore[attr-defined]
+    emu._irq_pending = False  # type: ignore[attr-defined]
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.memory.write_byte(0x1000, 0x00)  # NOP, executed only after a wake
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0)
+    emu.cpu.state.halted = True
+    emu.cpu.state.power_state = "off"
+
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, int(ISRFlag.KEYI))
+    emu.step()
+    assert emu.cpu.state.halted is True
+    assert emu.cpu.state.power_state == "off"
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+    assert emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) == int(
+        ISRFlag.KEYI
+    )
+
+    combined = int(ISRFlag.KEYI | ISRFlag.ONKI)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, combined)
+    emu.step()
+    assert emu.cpu.state.halted is False
+    assert emu.cpu.state.power_state == "running"
+    assert emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) == combined
+
+
+def test_wait_scheduler_failure_does_not_advance_pc_or_i(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken host timing hook must stop WAIT before architectural mutation."""
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = False  # type: ignore[attr-defined]
+    emu.load_rom(bytes([0xEF]), start_address=0x1000)
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.cpu.regs.set(RegisterName.I, 3)
+
+    def fail_wait(_cycles: int) -> None:
+        raise RuntimeError("scheduler failed")
+
+    monkeypatch.setattr(emu, "_simulate_wait", fail_wait)
+
+    with pytest.raises(RuntimeError, match="scheduler failed"):
+        emu.step()
+
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+    assert emu.cpu.regs.get(RegisterName.I) == 3
+
+
+def test_wait_timer_failure_does_not_advance_pc_or_i(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failures inside the real WAIT scheduler are not converted into success."""
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu.load_rom(bytes([0xEF]), start_address=0x1000)
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.cpu.regs.set(RegisterName.I, 3)
+    monkeypatch.setattr(
+        emu,
+        "_tick_timers",
+        lambda: (_ for _ in ()).throw(RuntimeError("timer failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="timer failed"):
+        emu.step()
+
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+    assert emu.cpu.regs.get(RegisterName.I) == 3
+
+
+@pytest.mark.parametrize("failure_site", ["scan", "isr"])
+def test_low_power_host_failure_never_executes_next_opcode(
+    monkeypatch: pytest.MonkeyPatch, failure_site: str
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = False  # type: ignore[attr-defined]
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.memory.write_byte(0x1000, 0x00)
+    emu.cpu.state.halted = True
+    emu.cpu.state.power_state = "halted"
+
+    if failure_site == "scan":
+        monkeypatch.setattr(
+            emu,
+            "_scan_keyboard_per_instruction",
+            lambda: (_ for _ in ()).throw(RuntimeError("scan failed")),
+        )
+    else:
+        original_read = emu.memory.read_byte
+        isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+
+        def fail_isr_read(address: int, *args, **kwargs):
+            if address == isr_addr:
+                raise RuntimeError("ISR read failed")
+            return original_read(address, *args, **kwargs)
+
+        monkeypatch.setattr(emu.memory, "read_byte", fail_isr_read)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        emu.step()
+
+    assert emu.cpu.state.halted is True
+    assert emu.cpu.state.power_state == "halted"
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+
+
+def _arm_key_irq_for_delivery(emu: PCE500Emulator, *, stack: int = 0x0200) -> None:
+    emu._timer_enabled = False  # type: ignore[attr-defined]
+    emu._in_interrupt = False  # type: ignore[attr-defined]
+    emu._irq_pending = True  # type: ignore[attr-defined]
+    emu._irq_source = IRQSource.KEY  # type: ignore[attr-defined]
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.cpu.regs.set(RegisterName.S, stack)
+    emu.memory.write_byte(0x1000, 0x00)  # NOP
+    emu.memory.write_byte(
+        INTERNAL_MEMORY_START + IMEMRegisters.IMR,
+        int(IMRFlag.IRM | IMRFlag.KEYM),
+    )
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, int(ISRFlag.KEYI))
+
+
+def test_pending_irq_functional_read_failure_never_executes_opcode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    _arm_key_irq_for_delivery(emu)
+
+    original_read = emu.memory.read_byte
+    imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+    imr_reads = 0
+
+    def fail_delivery_imr_read(address: int, *args, **kwargs):
+        nonlocal imr_reads
+        if address == imr_addr:
+            imr_reads += 1
+            if imr_reads == 2:
+                raise RuntimeError("delivery IMR read failed")
+        return original_read(address, *args, **kwargs)
+
+    monkeypatch.setattr(emu.memory, "read_byte", fail_delivery_imr_read)
+
+    with pytest.raises(RuntimeError, match="delivery IMR read failed"):
+        emu.step()
+
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+    assert emu.cpu.regs.get(RegisterName.S) == 0x0200
+    assert emu.instruction_count == 0
+    assert emu._irq_pending is True  # type: ignore[attr-defined]
+    assert emu._poisoned is None  # type: ignore[attr-defined]
+
+
+def test_partial_irq_frame_failure_poisons_until_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    _arm_key_irq_for_delivery(emu)
+
+    original_write_bytes = emu.memory.write_bytes
+    writes = 0
+
+    def fail_second_frame_write(length: int, address: int, value: int) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise RuntimeError("interrupt frame write failed")
+        original_write_bytes(length, address, value)
+
+    monkeypatch.setattr(emu.memory, "write_bytes", fail_second_frame_write)
+
+    with pytest.raises(RuntimeError, match="interrupt frame write failed"):
+        emu.step()
+
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+    assert emu.cpu.regs.get(RegisterName.S) == 0x01FD
+    assert emu.instruction_count == 0
+    assert "IRQ delivery failed" in str(emu._poisoned)  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(emu.memory, "write_bytes", original_write_bytes)
+    with pytest.raises(RuntimeError, match="poisoned.*reset required"):
+        emu.step()
+
+    emu.reset()
+    assert emu._poisoned is None  # type: ignore[attr-defined]
+
+
+def test_pending_irq_stack_underflow_wraps_in_20_bit_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    _arm_key_irq_for_delivery(emu, stack=2)
+    handler = 0x23456
+    # Keep the wrapped frame bytes distinct from the PCE memory shim's compact
+    # internal-register backing, and supply the vector independently.  A real
+    # ROM overlay provides the same separation in full-machine runs.
+    emu.memory.add_ram(0xFFFFD, 3, "wrapped_irq_frame")
+    original_read_long = emu.memory.read_long
+
+    def vector_read(address: int) -> int:
+        if address == 0xFFFFA:
+            return handler
+        return original_read_long(address)
+
+    monkeypatch.setattr(emu.memory, "read_long", vector_read)
+    emu.memory.write_byte(handler, 0x00)  # NOP at interrupt vector
+    external_writes: list[int] = []
+    original_write = emu.memory.write_byte
+
+    def record_write(address: int, value: int, *args, **kwargs) -> None:
+        canonical = address & 0xFFFFFF
+        if canonical < 0x100000:
+            external_writes.append(canonical & 0xFFFFF)
+        original_write(address, value, *args, **kwargs)
+
+    monkeypatch.setattr(emu.memory, "write_byte", record_write)
+
+    emu.step()
+
+    assert external_writes[:5] == [0xFFFFF, 0x00000, 0x00001, 0xFFFFE, 0xFFFFD]
+    assert emu.memory.read_byte(0xFFFFF) == 0x00  # saved PC low
+    assert emu.memory.read_byte(0x00000) == 0x10  # saved PC middle
+    assert emu.memory.read_byte(0x00001) == 0x00  # saved PC high
+    assert emu.memory.read_byte(0xFFFFE) == 0x00  # saved modeled F
+    assert emu.memory.read_byte(0xFFFFD) == int(IMRFlag.IRM | IMRFlag.KEYM)
+    assert emu.cpu.regs.get(RegisterName.PC) == handler + 1
+    assert emu.cpu.regs.get(RegisterName.S) == 0xFFFFD
+    assert emu.instruction_count == 1
+    assert emu._irq_pending is False  # type: ignore[attr-defined]
+    assert emu._in_interrupt is True  # type: ignore[attr-defined]
+    assert emu._poisoned is None  # type: ignore[attr-defined]
+
+
+def test_pre_instruction_timer_failure_poisons_without_executing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = True  # type: ignore[attr-defined]
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.memory.write_byte(0x1000, 0x00)  # NOP
+    original_tick = emu._tick_timers  # type: ignore[attr-defined]
+
+    def fail_timer_tick() -> None:
+        raise RuntimeError("pre-instruction timer failed")
+
+    monkeypatch.setattr(emu, "_tick_timers", fail_timer_tick)
+
+    with pytest.raises(RuntimeError, match="pre-instruction timer failed"):
+        emu.step()
+
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+    assert emu.instruction_count == 0
+    assert "timer tick failed" in str(emu._poisoned)  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(emu, "_tick_timers", original_tick)
+    with pytest.raises(RuntimeError, match="poisoned.*reset required"):
+        emu.step()
+
+    emu.reset()
+    emu._timer_enabled = False  # type: ignore[attr-defined]
+    emu.cpu.regs.set(RegisterName.PC, 0x1000)
+    emu.step()
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x1001
 
 
 # Focused regression: ensure reset fully reinitializes timers and IRQ state

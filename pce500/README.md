@@ -6,7 +6,9 @@ The PC-E500 uses a 20-bit address space (1MB total) with the following memory re
 
 ### Memory Region Details
 
-- **Internal ROM** (0xC0000 - 0xFFFFF): 256KB, contains system firmware
+- **CE2 ROM window** (0xC0000 - 0xFFFFF): the checked-in English/S3 image is
+  256KB and fills this window; a base 128KB PC-E500 ROM belongs at
+  0xE0000 - 0xFFFFF instead. Both variants are read-only.
 - **Internal RAM** (0xB8000 - 0xBFFFF): 32KB, user and system memory
 - **Memory Card Slot** (0x40000 - 0x4FFFF): Starting at 0x40000, supports up to 64KB
 - **LCD Controllers** (0x2xxxx): Memory-mapped I/O for display control

@@ -22,5 +22,5 @@ def test_mv_a_imem_symbol_kil_ok() -> None:
     """Using the symbolic KIL name should assemble successfully."""
     assembler = Assembler()
     bin_file = assembler.assemble("MV A, (KIL)")
-    # Opcode for MV A, (n) is 0x80 followed by the byte.
-    assert bin_file.as_ti_txt().strip() == "@0000\n80 F2\nq"
+    # Direct (n) consumes PRE1=N; without PRE30 this would mean BP+n.
+    assert bin_file.as_ti_txt().strip() == "@0000\n30 80 F2\nq"

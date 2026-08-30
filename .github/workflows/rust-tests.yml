@@ -26,7 +26,10 @@ jobs:
           cache-dependency-glob: "pyproject.toml"
 
       - name: Install Python dependencies
-        run: uv sync --extra dev
+        # The non-ignored Rust/Python parity subprocess smoke decodes the
+        # generated Perfetto traces, so install the same trace tooling used by
+        # the Python parity workflow.
+        run: uv sync --extra dev --extra pce500
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,6 +43,7 @@ jobs:
       - name: Cargo test (rustcore)
         working-directory: sc62015/rustcore
         env:
-          PYO3_PYTHON: python3
+          PYO3_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/.venv/lib/python3.11/site-packages
           FORCE_BINJA_MOCK: 1
         run: cargo test --all-targets --all-features

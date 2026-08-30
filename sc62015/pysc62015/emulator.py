@@ -9,13 +9,32 @@ try:
     USE_CACHED_DECODER = True
 except ImportError:
     USE_CACHED_DECODER = False
-from .constants import PC_MASK, ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
+from .constants import (
+    PC_MASK,
+    ADDRESS_SPACE_SIZE,
+    INTERNAL_MEMORY_START,
+    MODELED_F_MASK,
+    validate_f_image,
+)
 
 from .instr.opcode_table import OPCODES
 from .instr.opcodes import IMEMRegisters
 from .instr import (
+    ADCL,
+    DADL,
+    DSBL,
+    DSLL,
+    DSRL,
+    EXL,
+    MVL,
+    MVLD,
+    SBCL,
     decode,
     Instruction,
+    InvalidInstruction,
+    TCL,
+    UnknownInstruction,
+    WAIT,
 )
 from binja_test_mocks.mock_llil import (
     MockLowLevelILFunction,
@@ -36,7 +55,7 @@ from binaryninja import (  # type: ignore
 from .intrinsics import register_sc62015_intrinsics
 
 
-NUM_TEMP_REGISTERS = 14
+NUM_TEMP_REGISTERS = 16
 
 
 CALL_STACK_EFFECTS = {
@@ -48,38 +67,13 @@ CALL_STACK_EFFECTS = {
     0x01: -1,  # RETI - Return from interrupt
 }
 
+I_COUNTED_INSTRUCTIONS = (ADCL, SBCL, DADL, DSBL, MVL, MVLD, EXL, DSLL, DSRL, WAIT)
+
 
 @dataclass
 class InstructionEvalInfo:
     instruction_info: InstructionInfo
     instruction: Instruction
-
-
-class _FallbackInstruction:
-    """Minimal stand-in when decode fails so execution can continue."""
-
-    def __init__(self, opcode: int, length: int = 1) -> None:
-        self._opcode = opcode & 0xFF
-        self._length = max(1, length)
-
-    def name(self) -> str:
-        return f"UNK_{self._opcode:02X}"
-
-    def length(self) -> int:
-        return self._length
-
-    def analyze(
-        self, info: InstructionInfo, addr: int
-    ) -> None:  # pragma: no cover - defensive
-        info.length += self._length
-
-    def lift(
-        self, il: MockLowLevelILFunction, addr: int
-    ) -> None:  # pragma: no cover - defensive
-        il.append(il.nop())
-
-    def render(self):
-        return []
 
 
 class RegisterName(enum.Enum):
@@ -105,7 +99,7 @@ class RegisterName(enum.Enum):
     # Flags
     FC = "FC"  # Carry
     FZ = "FZ"  # Zero
-    F = "F"
+    F = "F"  # byte-wide stack image; only C/Z bits are currently modeled
     # Temp registers
     #
     # These are generated dynamically so new temporary registers can
@@ -130,7 +124,7 @@ REGISTER_SIZE: Dict[RegisterName, int] = {
     RegisterName.PC: 3,  # 20-bit (stored in 3 bytes)
     RegisterName.FC: 1,  # 1-bit
     RegisterName.FZ: 1,  # 1-bit
-    RegisterName.F: 1,  # 8-bit (general flags register)
+    RegisterName.F: 1,  # byte-wide stack image; modeled mask is C/Z (0x03)
     **{getattr(RegisterName, f"TEMP{i}"): 3 for i in range(NUM_TEMP_REGISTERS)},
 }
 
@@ -282,6 +276,8 @@ class Registers:
     def get(self, reg: RegisterName) -> int:
         if reg in self.BASE:
             val = self._values[reg]
+            if reg is RegisterName.F:
+                return val & MODELED_F_MASK
             if reg in (
                 RegisterName.PC,
                 RegisterName.X,
@@ -302,6 +298,9 @@ class Registers:
     def set(self, reg: RegisterName, value: int) -> None:
         if reg in self.BASE:
             mask = (1 << (REGISTER_SIZE[reg] * 8)) - 1
+            if reg is RegisterName.F:
+                value = validate_f_image(value)
+                mask = MODELED_F_MASK
             if reg in (
                 RegisterName.PC,
                 RegisterName.X,
@@ -356,6 +355,9 @@ class Emulator:
         self.regs = Registers()
         self.memory = memory
         self.state = State()
+        setattr(self.state, "power_state", "running")
+        self._poisoned: str | None = None
+        self._execution_may_have_side_effects = False
 
         # Track last PC for tracing
         self._last_pc: int = 0
@@ -390,8 +392,14 @@ class Emulator:
 
     def decode_instruction(self, address: int, read_fn=None) -> Instruction:
         # Allow an override fetch function (used for KIO tracing); default to memory.read_byte.
+        fetched_opcode: int | None = None
+
         def fecher(offset: int) -> int:
-            addr = address + offset
+            nonlocal fetched_opcode
+            # Instruction fetch uses the same 20-bit program address bus as PC.
+            # In particular, operands after an opcode at FFFFF continue at
+            # 00000 rather than spilling into the synthetic IMEM window.
+            addr = (address + offset) & PC_MASK
             if addr == INTERNAL_MEMORY_START + IMEMRegisters.KIL:
                 pc_val = self.regs.get(RegisterName.PC)
                 val = self.memory.read_byte(addr)
@@ -450,8 +458,12 @@ class Emulator:
                     pass
                 return val
             if read_fn is not None:
-                return read_fn(addr)
-            return self.memory.read_byte(addr)
+                value = read_fn(addr)
+            else:
+                value = self.memory.read_byte(addr)
+            if offset == 0:
+                fetched_opcode = int(value) & 0xFF
+            return value
 
         # Use cached decoder if available for better performance
         if USE_CACHED_DECODER:
@@ -459,21 +471,62 @@ class Emulator:
         else:
             decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
         instr = decode(decoder, address, OPCODES)  # type: ignore
-        if instr is None:
-            opcode = self.memory.read_byte(address) & 0xFF
-            instr = _FallbackInstruction(opcode)
+        if instr is None or isinstance(instr, UnknownInstruction):
+            opcode = fetched_opcode
+            if opcode is None:
+                opcode = (
+                    read_fn(address & PC_MASK)
+                    if read_fn is not None
+                    else self.memory.read_byte(address & PC_MASK)
+                ) & 0xFF
+            raise InvalidInstruction(
+                f"Invalid, reserved, or truncated opcode 0x{opcode:02X} "
+                f"at 0x{address & PC_MASK:05X}"
+            )
         return cast(Instruction, instr)
 
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
+        if self._poisoned is not None:
+            raise RuntimeError(
+                "SC62015 CPU is poisoned after a failed side-effecting "
+                f"instruction; reset required: {self._poisoned}"
+            )
+
+        register_snapshot = dict(self.regs._values)
+        call_sub_level_snapshot = self.regs.call_sub_level
+        state_snapshot = dict(vars(self.state))
+        last_pc_snapshot = self._last_pc
+        current_pc_snapshot = self._current_pc
+        self._execution_may_have_side_effects = False
+
         # Check if performance tracing is available through memory context
         tracer = getattr(self.memory, "_perf_tracer", None)
-        if tracer and hasattr(tracer, "slice"):
-            with tracer.slice(
-                "Lifting", "execute_instruction", {"pc": f"0x{address:06X}"}
-            ):
-                return self._execute_instruction_impl(address)
-        else:
-            return self._execute_instruction_impl(address)
+        try:
+            if tracer and hasattr(tracer, "slice"):
+                with tracer.slice(
+                    "Lifting", "execute_instruction", {"pc": f"0x{address:06X}"}
+                ):
+                    result = self._execute_instruction_impl(address)
+            else:
+                result = self._execute_instruction_impl(address)
+        except Exception as exc:
+            may_have_external_side_effects = self._execution_may_have_side_effects
+            self.regs._values.clear()
+            self.regs._values.update(register_snapshot)
+            self.regs.call_sub_level = call_sub_level_snapshot
+            vars(self.state).clear()
+            vars(self.state).update(state_snapshot)
+            self._last_pc = last_pc_snapshot
+            self._current_pc = current_pc_snapshot
+            if may_have_external_side_effects:
+                # Host memory/timer callbacks are not transactionally reversible.
+                # Restore native CPU state, then require RESET before retrying so
+                # a partially completed instruction cannot run twice.
+                self._poisoned = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            self._execution_may_have_side_effects = False
+        return result
 
     def _execute_instruction_impl(
         self, address: int, read_fn: Optional[Callable[[int], int]] = None
@@ -489,17 +542,40 @@ class Emulator:
         self._current_pc = pc_value
 
         self.regs.set(RegisterName.PC, pc_value)
-        instr = self.decode_instruction(address)
+        instr = self.decode_instruction(address, read_fn=read_fn)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
 
-        # Provide a unified byte reader to honor any injected read_fn.
-        def _read_byte_fn(addr: int) -> int:
-            if read_fn is not None:
-                return read_fn(addr)
-            return self.memory.read_byte(addr)
+        # Silicon behavior at I=0 is not established for any counted
+        # instruction (including WAIT).  Reject it before call-stack,
+        # pointer, flag, memory, or timing side effects.  The lifted forms
+        # carry the same validation intrinsic so direct LLIL evaluation
+        # cannot bypass this dispatch guard.
+        if (
+            isinstance(instr, I_COUNTED_INSTRUCTIONS)
+            and (self.regs.get(RegisterName.I) & 0xFFFF) == 0
+        ):
+            raise NotImplementedError(
+                "SC62015 I=0 counted-instruction semantics require "
+                "real-hardware tracing"
+            )
 
-        # Track call stack depth based on opcode
-        opcode = _read_byte_fn(address)
+        # The decoder already fetched and cached the instruction bytes. Re-read
+        # of the opcode is observable on callback-backed buses and can consume
+        # a device value twice, so use the decoded opcode identity directly.
+        if instr.opcode is None:
+            raise InvalidInstruction(
+                f"Decoded instruction at 0x{address & PC_MASK:05X} has no opcode"
+            )
+        opcode = instr.opcode
+
+        # TCL has timer-phase side effects controlled by LCC.STCL/MTCL.  Until
+        # the peripheral hook is implemented and hardware-traced, stop before
+        # advancing PC rather than silently executing it as a NOP.
+        if isinstance(instr, TCL):
+            raise NotImplementedError(
+                "TCL timer-clear side effects are not implemented; "
+                "hardware trace required"
+            )
 
         # Monitor specific opcodes for call stack tracking
         call_stack_delta = CALL_STACK_EFFECTS.get(opcode)
@@ -509,8 +585,14 @@ class Emulator:
 
         # Fast-path: optimize WAIT (opcode 0xEF) to avoid long LLIL loops.
         # Semantics: WAIT performs an idle loop, decrementing I until zero.
-        # If I is zero, hardware waits a full 16-bit span.
-        if opcode == 0xEF:  # WAIT
+        if isinstance(instr, WAIT):
+            wait_hook = getattr(self.memory, "wait_cycles", None)
+            if not callable(wait_hook):
+                raise NotImplementedError(
+                    "WAIT requires a memory.wait_cycles timing hook; refusing "
+                    "to advance PC or clear I without accounting for elapsed cycles"
+                )
+
             # Build minimal instruction info/length via analyze, and set I to 0.
             il = MockLowLevelILFunction()
             info = InstructionInfo()
@@ -519,14 +601,12 @@ class Emulator:
             assert current_instr_length is not None, (
                 "InstructionInfo.length was not set by analyze()"
             )
-            # Advance PC (we return early and skip common PC update)
-            self.regs.set(RegisterName.PC, address + current_instr_length)
             wait_cycles = self.regs.get(RegisterName.I) & 0xFFFF
-            if wait_cycles == 0:
-                wait_cycles = 0x10000
-            wait_hook = getattr(self.memory, "wait_cycles", None)
-            if callable(wait_hook):
-                wait_hook(int(wait_cycles))
+            self._execution_may_have_side_effects = True
+            wait_hook(int(wait_cycles))
+            # Advance PC only after timing has been accounted for (we return
+            # early and skip the common PC update).
+            self.regs.set(RegisterName.PC, address + current_instr_length)
             # Emulate loop effect: I decremented to 0 (flags unchanged).
             self.regs.set(RegisterName.I, 0)
             # Return without evaluating any LLIL
@@ -544,6 +624,7 @@ class Emulator:
         assert current_instr_length is not None, (
             "InstructionInfo.length was not set by analyze()"
         )
+        self._execution_may_have_side_effects = True
         self.regs.set(RegisterName.PC, address + current_instr_length)
 
         label_to_index: Dict[Any, int] = {}
@@ -587,6 +668,18 @@ class Emulator:
         return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
     def evaluate(self, llil: MockLLIL) -> Tuple[Optional[int], Optional[ResultFlags]]:
+        if llil.bare_op() == "CALL":
+            # CALL/CALLF lifters emit the exact wrapped SC62015 stack writes
+            # explicitly, followed by LLIL_CALL so real Binary Ninja analysis
+            # retains call/return semantics.  binja-test-mocks historically
+            # gives LLIL_CALL an SC62015-specific implicit push; bypass that
+            # test-only behavior here or the explicit frame would be written
+            # twice.
+            assert len(llil.ops) == 1 and isinstance(llil.ops[0], MockLLIL)
+            target, _ = self.evaluate(llil.ops[0])
+            assert isinstance(target, int)
+            self.regs.set(RegisterName.PC, target)
+            return None, None
         return evaluate_llil(
             llil,
             self.regs,
@@ -607,22 +700,43 @@ class Emulator:
         - ISR (FCH) is reset to 0 (clears interrupt status)
         - SCR (FDH) is reset to 0
         - SSR (FFH) bit 2 is reset to 0
-        - PC reads the reset vector at 0xFFFFA (3 bytes, little-endian)
+        - PC reads the reset vector at 0xFFFFD (3 bytes, little-endian)
         - Other registers retain their values (initialized to 0)
         - Flags (C/Z) are retained (initialized to 0)
         """
-        # Directly call the RESET intrinsic evaluator
+        # Directly call the RESET intrinsic evaluator. Host writes are not
+        # transactionally reversible, so retain a native-state snapshot and
+        # keep the CPU poisoned unless the entire reset completes.
         from .intrinsics import eval_intrinsic_reset
 
-        eval_intrinsic_reset(
-            None,  # llil not needed
-            None,  # size not needed
-            self.regs,
-            self.memory,
-            self.state,
-            self.regs.get_flag,
-            self.regs.set_flag,
-        )
+        register_snapshot = dict(self.regs._values)
+        call_sub_level_snapshot = self.regs.call_sub_level
+        state_snapshot = dict(vars(self.state))
+        original_poison = self._poisoned
+        try:
+            eval_intrinsic_reset(
+                None,  # llil not needed
+                None,  # size not needed
+                self.regs,
+                self.memory,
+                self.state,
+                self.regs.get_flag,
+                self.regs.set_flag,
+            )
+        except Exception as exc:
+            self.regs._values.clear()
+            self.regs._values.update(register_snapshot)
+            self.regs.call_sub_level = call_sub_level_snapshot
+            vars(self.state).clear()
+            vars(self.state).update(state_snapshot)
+            # A recovery attempt must not erase the first side-effecting fault:
+            # that is the only reliable description of what may already have
+            # committed to the host. Record RESET itself only when it created
+            # the poisoned state.
+            if original_poison is None:
+                self._poisoned = f"RESET failed: {type(exc).__name__}: {exc}"
+            raise
+        self._poisoned = None
 
         # Clear halted state (RESET doesn't set this, but power-on should clear it)
         self.state.halted = False

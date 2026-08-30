@@ -80,11 +80,14 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 
 ### System Initialization and Data Retainment for HALT/OFF/RESET
 
+This table is the current manual-derived emulator contract; exact retention,
+clock, and wake behavior remains pending hardware trace validation.
+
 | | HALT | OFF | RESET |
 | :--- | :--- | :--- | :--- |
 | **Registers** | All retained. | All retained. | The PC read the reset vector.<br>Others than the PC are all retained. |
 | **Flag (C/Z)** | Undefined. | Undefined. | Retained. |
-| **Internal memory** | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | ACM (FEH) bit 7, UCR (F7H), USR (F8H) bits 0 to 2/5, IMR (FCH), and SCR (FDH), are all reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. |
+| **Internal memory** | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | ACM (FEH) bit 7, UCR (F7H), USR (F8H) bits 0 to 2/5, ISR (FCH), SCR (FDH), and SSR (FFH) bit 2 are reset (to "0").<br>USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. |
 
 ### Internal Memory Map (IMEMRegisters, defined in opcodes.py)
 
@@ -143,6 +146,38 @@ Common composites (little-endian layout):
 - `(cx)` is the 16-bit value at `CH:CL` (`0xD7:0xD6`)
 - `(dx)` is the 16-bit value at `DH:DL` (`0xD9:0xD8`)
 - IOCS workspace base pointer (PC-E500 ROM convention): `(E6)` → `IOCS_WS` (aliases `E6`/`E7`/`E8`) at `0xE6..0xE8`, typically used as `[(E6)+offset]`
+
+### Zero-count quarantine
+
+The emulator rejects `I=0` for every `I`-counted instruction: `ADCL`, `SBCL`,
+`DADL`, `DSBL`, `MVL`, `MVLD`, `EXL`, `DSLL`, `DSRL`, and `WAIT`. The error is
+raised before PC, `I`, pointers, flags, memory, or timing callbacks can change.
+Neither the stock ROMs nor existing hardware traces establish whether silicon
+treats zero as an empty block, a wrapped count, or something else. Nonzero
+`WAIT` still consumes exactly `I` cycles, clears `I`, and fails closed without
+a callable `memory.wait_cycles` hook.
+
+### Three-byte addresses and raw data
+
+For an encoded `lmn` **address**, the high byte must currently be `00..0F` and
+must match the target's high nibble. Text assembly accepts only address values
+`0..FFFFF` and emits that canonical byte; executable decode rejects bits 7-4
+until a dedicated hardware trace establishes their behavior. The PC-E500 bytes
+`05 3A 07 7C` at `F003A` are dispatch-table data with no analyzed code entry,
+so they are not evidence that silicon executes an upper-nibble `CALLF` alias.
+
+Opcode `DC`, `MVP (k),lmn`, is deliberately different: its `lmn` operand is a
+raw three-byte value, not an external address. It accepts `0..FFFFFF` and
+stores all eight bits of each byte. IQ-7000 ROM code relies on this distinction
+when it uses raw triples `54 59 50`, `4E 41 4D`, and `44 53 50` for the ASCII
+tags `TYP`, `NAM`, and `DSP`; a real-PC-E500 probe independently read back the
+full `A5 5A 3C` triple after `DC 20 A5 5A 3C`.
+
+Likewise, internal pointer/data operands occupy three physical bytes.
+`EXP`, `MVP`, and `CMPP` exchange, copy, or compare all 24 bits. A consumer
+that treats the triple as an external address (for example `JP (n)` or a load
+into `X/Y/U/S`) applies the 20-bit address mask at that boundary; the memory
+operand itself is never silently truncated.
 
 ---
 
@@ -321,8 +356,8 @@ Common composites (little-endian layout):
 | `DADL (n),A`    | BCD add with carry: `(n) ← (n)+A+C` (multi-byte, (n) addr dec.)                                      | `○ ○`       | 2     | 4+1×I    | `1100 0101` / `C5` <br> `n`                       | `n`          |
 | `DSBL (m),(n)`  | BCD sub with borrow: `(m) ← (m)-(n)-C` (multi-byte, addresses dec.)                                  | `○ ○`       | 3     | 5+2×I    | `1101 0100` / `D4` <br> `m` <br> `n`              | `m,n`        |
 | `DSBL (n),A`    | BCD sub with borrow: `(n) ← (n)-A-C` (multi-byte, (n) addr dec.)                                     | `○ ○`       | 2     | 4+1×I    | `1101 0101` / `D5` <br> `n`                       | `n`          |
-| `PMDF (m),n`    | Packed BCD Modify: `(m) ← (m)+n` (special BCD operation)                                             | `- -`       | 3     | 4        | `0100 0111` / `47` <br> `m` <br> `n`              | `m,n`        |
-| `PMDF (n),A`    | Packed BCD Modify: `(n) ← (n)+A`                                                                     | `- -`       | 2     | 4        | `0101 0111` / `57` <br> `n`                       | `n`          |
+| `PMDF (m),n`    | Pointer modify: `(m) ← (m)+n` (8-bit wrapping binary add)                                            | `- -`       | 3     | 4        | `0100 0111` / `47` <br> `m` <br> `n`              | `m,n`        |
+| `PMDF (n),A`    | Pointer modify: `(n) ← (n)+A` (8-bit wrapping binary add)                                            | `- -`       | 2     | 4        | `0101 0111` / `57` <br> `n`                       | `n`          |
 
 ### Logical Instructions (AND, OR, XOR, TEST, SWAP)
 
@@ -350,7 +385,7 @@ Common composites (little-endian layout):
 | `TEST (m),n`    | `(m) & n`                                                              | `- ○`       | 3     | 4        | `0110 0101` / `65` <br> `m` <br> `n`              | `m,n`        |
 | `TEST [lmn],n`  | `[lmn] & n`                                                            | `- ○`       | 5     | 6        | `0110 0110` / `66` <br> `lmn` <br> `n`           | `lmn,n`      |
 | `TEST (n),A`    | `(n) & A`                                                              | `- ○`       | 2     | 4        | `0110 0111` / `67` <br> `n`                       | `n`          |
-| `SWAP A`        | `A₀₋₃ ↔ A₄₋₇` (Swap nibbles of A)                                      | `○ ○`       | 1     | 3        | `1110 1110` / `EE`                               |              |
+| `SWAP A`        | `A₀₋₃ ↔ A₄₋₇` (Swap nibbles of A)                                      | `- ○`       | 1     | 3        | `1110 1110` / `EE`                               |              |
 
 ### Compare Instructions (CMP, CMPW, CMPP)
 
@@ -378,8 +413,8 @@ Common composites (little-endian layout):
 | `SHR (n)`       | Shift (n) Right through Carry                                         | `○ ○`       | 2     | 3        | `1111 0101` / `F5` <br> `n`                       | `n`          |
 | `SHL A`         | Shift A Left through Carry (C ← A₇, A₇ ← A₆, ..., A₀ ← C)             | `○ ○`       | 1     | 2        | `1111 0110` / `F6`                               |              |
 | `SHL (n)`       | Shift (n) Left through Carry                                          | `○ ○`       | 2     | 3        | `1111 0111` / `F7` <br> `n`                       | `n`          |
-| `DSRL (n)`      | Decimal Shift Right Logical (multi-byte, (n) is LSB addr, addrs inc.) | `- ○`       | 2     | 4+1×I    | `1111 1100` / `FC` <br> `n`                       | `n`          |
-| `DSLL (n)`      | Decimal Shift Left Logical (multi-byte, (n) is MSB addr, addrs dec.)  | `- ○`       | 2     | 4+1×I    | `1110 1100` / `EC` <br> `n`                       | `n`          |
+| `DSRL (n)`      | Decimal Shift Right Logical (multi-byte, (n) is MSB addr, addrs inc.) | `- ○`       | 2     | 4+1×I    | `1111 1100` / `FC` <br> `n`                       | `n`          |
+| `DSLL (n)`      | Decimal Shift Left Logical (multi-byte, (n) is LSB addr, addrs dec.)  | `- ○`       | 2     | 4+1×I    | `1110 1100` / `EC` <br> `n`                       | `n`          |
 
 ### Increment and Decrement Instructions
 
@@ -446,4 +481,7 @@ Common composites (little-endian layout):
 | `RESET`         | Software Reset                                                             | `- -`       | 1     | Note 2   | `1111 1111` / `FF`                               |              |
 
 *Note 1: HALT/OFF cycle count is effectively "until interrupt/resume".*
-*Note 2: IR/RESET involve stack operations and vector fetches, cycles are complex.*
+*Note 2: IR creates a system frame and fetches the interrupt vector. RESET
+fetches the distinct reset vector and applies provisional register/SFR model
+side effects; no RESET stack operation is asserted here. Exact cycles and
+silicon RESET side effects require hardware tracing.*

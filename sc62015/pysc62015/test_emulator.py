@@ -3,10 +3,11 @@ from .emulator import (
     Registers,
     RegisterName,
     Emulator,
-    Memory,
 )
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START, PC_MASK
 from .instr.opcodes import IMEMRegisters
+from .instr import InvalidInstruction
+from binja_test_mocks.eval_llil import Memory
 from binja_test_mocks.mock_llil import MockLowLevelILFunction
 from .test_instr import opcode_generator
 from typing import Dict, Tuple, List, NamedTuple, Optional
@@ -129,6 +130,39 @@ def debug_instruction(cpu: Emulator, address: int) -> None:
     print(f"Decoded instruction at {address:04x}: {rendered}")
     for llil in il.ils:
         print(f"  {llil}")
+
+
+@pytest.mark.parametrize("opcode", [0x20, 0xBF])
+def test_reserved_opcodes_fail_closed(opcode: int) -> None:
+    cpu, _raw, reads, writes = _make_cpu_and_mem(0x100, {}, bytes([opcode]))
+    cpu.regs.set(RegisterName.PC, 0)
+
+    with pytest.raises(InvalidInstruction, match=f"0x{opcode:02X}"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert reads == [0]
+    assert writes == []
+
+
+def test_instruction_opcode_is_fetched_once() -> None:
+    cpu, _raw, reads, writes = _make_cpu_and_mem(0x100, {}, bytes([0x00]))
+
+    cpu.execute_instruction(0)
+
+    assert reads == [0]
+    assert writes == []
+
+
+def test_tcl_fails_closed_until_timer_clear_is_modeled() -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(0x100, {}, bytes([0xCE]))
+    cpu.regs.set(RegisterName.PC, 0)
+
+    with pytest.raises(NotImplementedError, match="timer-clear side effects"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert writes == []
 
 
 @dataclass
@@ -314,6 +348,37 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="PUSHU F",
     ),
+    InstructionTestCase(
+        test_id="IR_saves_opcode_address_for_ROM_software_dispatch",
+        instr_bytes=bytes.fromhex("FE"),
+        init_regs={
+            RegisterName.S: 0x3000,
+            RegisterName.FC: 1,
+            RegisterName.FZ: 1,
+        },
+        init_mem={
+            imem(IMEMRegisters.IMR): 0xA5,
+            0xFFFFA: 0x78,
+            0xFFFFB: 0x56,
+            0xFFFFC: 0x04,
+        },
+        expected_regs={
+            RegisterName.S: 0x2FFB,
+            RegisterName.PC: 0x45678,
+            RegisterName.FC: 1,
+            RegisterName.FZ: 1,
+        },
+        expected_mem_state={
+            0x2FFB: 0xA5,  # saved IMR
+            0x2FFC: 0x03,  # saved F (C | Z)
+            0x2FFD: 0x45,  # saved IR opcode address, little-endian
+            0x2FFE: 0x23,
+            0x2FFF: 0x01,
+            imem(IMEMRegisters.IMR): 0x25,  # IRM cleared on entry
+        },
+        initial_pc=0x12345,
+        expected_asm_str="IR",
+    ),
     # Test MV IL instruction - verify high byte is cleared
     InstructionTestCase(
         test_id="MV_IL_clears_high_byte",
@@ -338,6 +403,40 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_asm_str="MV    I, 1234",
     ),
+    InstructionTestCase(
+        test_id="MV_external_negative_offset_wraps_on_20bit_bus",
+        instr_bytes=bytes.fromhex("90C4AB"),  # MV A,[X-AB]
+        init_regs={RegisterName.X: 0},
+        init_mem={0xFFF55: 0x5A},
+        expected_regs={RegisterName.A: 0x5A, RegisterName.X: 0},
+        expected_asm_str="MV    A, [X-AB]",
+    ),
+    InstructionTestCase(
+        test_id="MV_indirect_pointer_ignores_loaded_upper_nibble",
+        instr_bytes=bytes.fromhex("30980000"),  # PRE (n), MV A,[(00)]
+        init_mem={
+            imem(0x00): 0x23,
+            imem(0x01): 0x01,
+            imem(0x02): 0xF8,  # raw pointer F80123 -> 20-bit 80123
+            0x80123: 0x6B,
+        },
+        expected_regs={RegisterName.A: 0x6B},
+        expected_asm_str="MV    A, [(00)]",
+    ),
+    InstructionTestCase(
+        test_id="MVL_external_postincrement_wraps_at_20bit_boundary",
+        instr_bytes=bytes.fromhex("E32420"),  # MVL (20),[X++]
+        init_regs={RegisterName.I: 2, RegisterName.X: 0xFFFFF},
+        init_mem={
+            0xFFFFF: 0x11,
+            0x00000: 0x22,
+            imem(0x00): 0x99,  # catches an unmasked spill into synthetic IMEM
+        },
+        expected_regs={RegisterName.I: 0, RegisterName.X: 0x00001},
+        expected_mem_state={imem(0x20): 0x11, imem(0x21): 0x22},
+        initial_pc=0x100,
+        expected_asm_str="MVL   (BP+20), [X++]",
+    ),
     # --- ADD Instructions ---
     InstructionTestCase(
         test_id="ADD_A_imm_simple",
@@ -361,6 +460,27 @@ instruction_test_cases: List[InstructionTestCase] = [
         initial_pc=0x1000,
         expected_asm_str="ADD   A, 01",
     ),
+    InstructionTestCase(
+        test_id="ADD_I_A_zero_extends_ROM_mixed_width_source",
+        instr_bytes=bytes.fromhex("4430"),
+        init_regs={RegisterName.I: 0xFFFE, RegisterName.A: 0x03},
+        expected_regs={RegisterName.I: 0x0001, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="ADD   I, A",
+    ),
+    InstructionTestCase(
+        test_id="ADD_Y_BA_zero_extends_ROM_mixed_width_source",
+        instr_bytes=bytes.fromhex("4552"),
+        init_regs={RegisterName.Y: 0xFFFF0, RegisterName.BA: 0x0020},
+        expected_regs={RegisterName.Y: 0x00010, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="ADD   Y, BA",
+    ),
+    InstructionTestCase(
+        test_id="ADD_X_A_zero_extends_byte_source_and_sets_zero",
+        instr_bytes=bytes.fromhex("4540"),
+        init_regs={RegisterName.X: 0xFFFFF, RegisterName.A: 0x01},
+        expected_regs={RegisterName.X: 0x00000, RegisterName.FZ: 1, RegisterName.FC: 1},
+        expected_asm_str="ADD   X, A",
+    ),
     # --- SUB Instructions ---
     InstructionTestCase(
         test_id="SUB_A_imm_simple",
@@ -382,6 +502,50 @@ instruction_test_cases: List[InstructionTestCase] = [
         init_regs={RegisterName.A: 0x01},
         expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 0},
         expected_asm_str="SUB   A, 01",
+    ),
+    InstructionTestCase(
+        test_id="SUB_I_A_zero_extends_ROM_mixed_width_source",
+        instr_bytes=bytes.fromhex("4C30"),
+        init_regs={RegisterName.I: 0x0100, RegisterName.A: 0x01},
+        expected_regs={RegisterName.I: 0x00FF, RegisterName.FZ: 0, RegisterName.FC: 0},
+        expected_asm_str="SUB   I, A",
+    ),
+    InstructionTestCase(
+        test_id="SUB_U_A_zero_extends_byte_source",
+        instr_bytes=bytes.fromhex("4D60"),
+        init_regs={RegisterName.U: 0x00000, RegisterName.A: 0x01},
+        expected_regs={RegisterName.U: 0xFFFFF, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="SUB   U, A",
+    ),
+    InstructionTestCase(
+        test_id="SUB_A_IL_same_width_register_pair",
+        instr_bytes=bytes.fromhex("4E01"),
+        init_regs={RegisterName.A: 0x00, RegisterName.IL: 0x01},
+        expected_regs={RegisterName.A: 0xFF, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="SUB   A, IL",
+    ),
+    InstructionTestCase(
+        test_id="ADC_rhs_plus_carry_wrap_preserves_carry_out",
+        instr_bytes=bytes.fromhex("50FF"),
+        init_regs={RegisterName.A: 0x00, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0x00, RegisterName.FZ: 1, RegisterName.FC: 1},
+        expected_asm_str="ADC   A, FF",
+    ),
+    InstructionTestCase(
+        test_id="SBC_rhs_plus_borrow_wrap_preserves_borrow_out",
+        instr_bytes=bytes.fromhex("58FF"),
+        init_regs={RegisterName.A: 0x80, RegisterName.FC: 1},
+        expected_regs={RegisterName.A: 0x80, RegisterName.FZ: 0, RegisterName.FC: 1},
+        expected_asm_str="SBC   A, FF",
+    ),
+    InstructionTestCase(
+        test_id="PMDF_ROM_style_binary_adjust_with_model_flag_preservation",
+        instr_bytes=bytes.fromhex("3047ECF5"),  # PMDF (BP), -0x0B
+        init_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
+        init_mem={imem(IMEMRegisters.BP): 0x20},
+        expected_regs={RegisterName.FC: 1, RegisterName.FZ: 1},
+        expected_mem_state={imem(IMEMRegisters.BP): 0x15},
+        expected_asm_str="PMDF  (BP), F5",
     ),
     # --- SWAP Instructions ---
     InstructionTestCase(
@@ -428,19 +592,50 @@ instruction_test_cases: List[InstructionTestCase] = [
     ),
     # --- MVL/MVLD Edge Cases ---
     InstructionTestCase(
-        test_id="MVL_(m)_(n)_I_is_zero",
-        instr_bytes=bytes.fromhex("CB50A0"),  # MVL (50), (A0)
-        init_regs={RegisterName.I: 0},
+        test_id="EXL_exchanges_entire_I_byte_blocks",
+        instr_bytes=bytes.fromhex("C31020"),  # EXL (10), (20)
+        init_regs={RegisterName.I: 3},
         init_mem={
-            imem(0xA0): 0xDE,  # Source
-            imem(0x50): 0xAD,  # Destination
+            imem(0x10): 0x11,
+            imem(0x11): 0x22,
+            imem(0x12): 0x33,
+            imem(0x20): 0xAA,
+            imem(0x21): 0xBB,
+            imem(0x22): 0xCC,
         },
         expected_regs={RegisterName.I: 0},
         expected_mem_state={
-            imem(0xA0): 0xDE,
-            imem(0x50): 0xAD,  # Should remain unchanged
+            imem(0x10): 0xAA,
+            imem(0x11): 0xBB,
+            imem(0x12): 0xCC,
+            imem(0x20): 0x11,
+            imem(0x21): 0x22,
+            imem(0x22): 0x33,
         },
-        expected_asm_str="MVL   (BP+50), (BP+A0)",
+        expected_asm_str="EXL   (BP+10), (BP+20)",
+    ),
+    InstructionTestCase(
+        test_id="EXL_internal_addresses_wrap_at_FF",
+        instr_bytes=bytes.fromhex("C3FE20"),  # EXL (FE), (20)
+        init_regs={RegisterName.I: 3},
+        init_mem={
+            imem(0xFE): 0x11,
+            imem(0xFF): 0x22,
+            imem(0x00): 0x33,
+            imem(0x20): 0xAA,
+            imem(0x21): 0xBB,
+            imem(0x22): 0xCC,
+        },
+        expected_regs={RegisterName.I: 0},
+        expected_mem_state={
+            imem(0xFE): 0xAA,
+            imem(0xFF): 0xBB,
+            imem(0x00): 0xCC,
+            imem(0x20): 0x11,
+            imem(0x21): 0x22,
+            imem(0x22): 0x33,
+        },
+        expected_asm_str="EXL   (BP+FE), (BP+20)",
     ),
     InstructionTestCase(
         test_id="MVL_imem_overlap_fwd_clobber",
@@ -517,8 +712,9 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.X: 0x2000,
         },
         expected_mem_state={
+            # The source pre-decrements, but the internal destination advances.
             imem(0x52): 0xEF,
-            imem(0x51): 0xBE,
+            imem(0x53): 0xBE,
         },
         expected_asm_str="MVL   (BP+52), [--X]",
     ),
@@ -542,13 +738,13 @@ instruction_test_cases: List[InstructionTestCase] = [
             RegisterName.X: 0x1FFB,  # X decremented by 5
         },
         expected_mem_state={
-            # MVL with pre-decrement source causes destination to decrement too
-            # Writes go to: 0x02, 0x01, 0x00, 0xFF, 0xFE (wrapped)
+            # Only the external source pre-decrements; the internal destination
+            # still advances as documented for MVL (n),[--r3].
             imem(0x02): 0x44,  # First byte from 0x1FFF
-            imem(0x01): 0x33,  # Second byte from 0x1FFE
-            imem(0x00): 0x22,  # Third byte from 0x1FFD
-            imem(0xFF): 0x11,  # Fourth byte from 0x1FFC (wrapped from -1)
-            imem(0xFE): 0x55,  # Fifth byte from 0x1FFB (wrapped from -2)
+            imem(0x03): 0x33,  # Second byte from 0x1FFE
+            imem(0x04): 0x22,  # Third byte from 0x1FFD
+            imem(0x05): 0x11,  # Fourth byte from 0x1FFC
+            imem(0x06): 0x55,  # Fifth byte from 0x1FFB
         },
         expected_asm_str="MVL   (BP+02), [--X]",
     ),
@@ -611,17 +807,39 @@ instruction_test_cases: List[InstructionTestCase] = [
         },
         expected_mem_state={
             # BP=2, so (BP+00) = address 0x02
-            # MVL with pre-decrement source causes destination to decrement too
-            # Writes go to: 0x02, 0x01, 0x00, 0xFF (wrapped), 0xFE (wrapped)
+            # Only the external source pre-decrements; the internal destination
+            # advances from BP+00.
             imem(0x02): 0x11,  # From 0x1FFF
-            imem(0x01): 0x22,  # From 0x1FFE
-            imem(0x00): 0x33,  # From 0x1FFD
-            imem(0xFF): 0x44,  # From 0x1FFC (wrapped from -1)
-            imem(0xFE): 0x55,  # From 0x1FFB (wrapped from -2)
+            imem(0x03): 0x22,  # From 0x1FFE
+            imem(0x04): 0x33,  # From 0x1FFD
+            imem(0x05): 0x44,  # From 0x1FFC
+            imem(0x06): 0x55,  # From 0x1FFB
             # BP remains unchanged
             imem(IMEMRegisters.BP): 0x02,
         },
         expected_asm_str="MVL   (BP+00), [--X]",
+    ),
+    InstructionTestCase(
+        test_id="MVL_predec_destination_moves_downward_only",
+        instr_bytes=bytes.fromhex("EB3720"),  # MVL [--S], (20)
+        init_regs={RegisterName.I: 3, RegisterName.S: 0x1003},
+        init_mem={
+            imem(0x20): 0x11,
+            imem(0x21): 0x22,
+            imem(0x22): 0x33,
+        },
+        expected_regs={RegisterName.I: 0, RegisterName.S: 0x1000},
+        expected_mem_writes=[
+            (0x1002, 0x11),
+            (0x1001, 0x22),
+            (0x1000, 0x33),
+        ],
+        expected_mem_state={
+            0x1002: 0x11,
+            0x1001: 0x22,
+            0x1000: 0x33,
+        },
+        expected_asm_str="MVL   [--S], (BP+20)",
     ),
     InstructionTestCase(
         test_id="MVL_(00)_(50)_BP_FE_I3",
@@ -656,6 +874,57 @@ instruction_test_cases: List[InstructionTestCase] = [
             imem(IMEMRegisters.BP): 0xFE,
         },
         expected_asm_str="MVL   (BP+00), (BP+50)",
+    ),
+    InstructionTestCase(
+        test_id="ADCL_internal_addresses_wrap_at_FF",
+        instr_bytes=bytes.fromhex("54FF10"),
+        init_regs={RegisterName.I: 2, RegisterName.FC: 0},
+        init_mem={
+            imem(0xFF): 0x01,
+            imem(0x00): 0x02,
+            imem(0x10): 0x10,
+            imem(0x11): 0x20,
+        },
+        expected_regs={RegisterName.I: 0, RegisterName.FC: 0, RegisterName.FZ: 0},
+        expected_mem_writes=[
+            (imem(0xFF), 0x11),
+            (imem(0x00), 0x22),
+        ],
+        expected_mem_state={imem(0xFF): 0x11, imem(0x00): 0x22},
+        expected_asm_str="ADCL  (BP+FF), (BP+10)",
+    ),
+    InstructionTestCase(
+        test_id="DADL_internal_addresses_wrap_below_00",
+        instr_bytes=bytes.fromhex("C40010"),
+        init_regs={RegisterName.I: 2, RegisterName.FC: 0},
+        init_mem={
+            imem(0x00): 0x99,
+            imem(0xFF): 0x00,
+            imem(0x10): 0x01,
+            imem(0x0F): 0x00,
+        },
+        expected_regs={RegisterName.I: 0, RegisterName.FC: 0, RegisterName.FZ: 0},
+        expected_mem_writes=[
+            (imem(0x00), 0x00),
+            (imem(0xFF), 0x01),
+        ],
+        expected_mem_state={imem(0x00): 0x00, imem(0xFF): 0x01},
+        expected_asm_str="DADL  (BP+00), (BP+10)",
+    ),
+    InstructionTestCase(
+        test_id="DSLL_internal_address_wraps_below_00",
+        instr_bytes=bytes.fromhex("EC00"),
+        init_regs={RegisterName.I: 2, RegisterName.FC: 1},
+        # DSLL starts at the least-significant byte and walks downward.
+        # The wrapped field is BCD 1234: MSB at FF, LSB at 00.
+        init_mem={imem(0x00): 0x34, imem(0xFF): 0x12},
+        expected_regs={RegisterName.I: 0, RegisterName.FC: 1, RegisterName.FZ: 0},
+        expected_mem_writes=[
+            (imem(0x00), 0x40),
+            (imem(0xFF), 0x23),
+        ],
+        expected_mem_state={imem(0x00): 0x40, imem(0xFF): 0x23},
+        expected_asm_str="DSLL  (BP+00)",
     ),
     # --- SHL/SHR Instructions ---
     # SHL A (0xF6)
@@ -1098,13 +1367,13 @@ instruction_test_cases: List[InstructionTestCase] = [
             INTERNAL_MEMORY_START + 0xE8: 0xFF,
         },
         expected_mem_state={
-            # MVP writes 20-bit value 0x0BFCDE in little-endian order to internal memory offset 0xE6
+            # MVP writes raw 24-bit value 0x0BFCDE in little-endian order to internal memory offset 0xE6
             INTERNAL_MEMORY_START + 0xE6: 0xDE,  # Low byte
             INTERNAL_MEMORY_START + 0xE7: 0xFC,  # Mid byte
             INTERNAL_MEMORY_START
             + 0xE8: 0x0B,  # High byte (only low 4 bits used for 20-bit)
         },
-        expected_asm_str="MVP   (IOCS_WS), BFCDE",
+        expected_asm_str="MVP   (IOCS_WS), 0BFCDE",
     ),
     InstructionTestCase(
         test_id="MV_A_from_indirect_ext_mem_with_offset",
@@ -1347,6 +1616,600 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("mnemonic", "instr_bytes"),
+    [
+        ("ADCL", bytes.fromhex("541020")),
+        ("ADCL", bytes.fromhex("5510")),
+        ("SBCL", bytes.fromhex("5C1020")),
+        ("SBCL", bytes.fromhex("5D10")),
+        ("DADL", bytes.fromhex("C41020")),
+        ("DADL", bytes.fromhex("C510")),
+        ("DSBL", bytes.fromhex("D41020")),
+        ("DSBL", bytes.fromhex("D510")),
+        ("MVL", bytes.fromhex("56841234")),
+        ("MVL", bytes.fromhex("5E84ABCD")),
+        ("MVL", bytes.fromhex("CB1020")),
+        ("MVL", bytes.fromhex("D300000000")),
+        ("MVL", bytes.fromhex("DB00000000")),
+        ("MVL", bytes.fromhex("E33720")),
+        ("MVL", bytes.fromhex("EB3720")),
+        ("MVL", bytes.fromhex("F300ABCD")),
+        ("MVL", bytes.fromhex("FB00ABCD")),
+        ("MVLD", bytes.fromhex("CF1020")),
+        ("EXL", bytes.fromhex("C31020")),
+        ("DSLL", bytes.fromhex("EC10")),
+        ("DSRL", bytes.fromhex("FC10")),
+        ("WAIT", bytes.fromhex("EF")),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+@pytest.mark.parametrize(("initial_fc", "initial_fz"), [(0, 1), (1, 0)])
+def test_zero_counted_instruction_fails_atomically(
+    mnemonic: str,
+    instr_bytes: bytes,
+    initial_fc: int,
+    initial_fz: int,
+) -> None:
+    """Every hardware-unverified I=0 counted form is quarantined."""
+    initial_memory = {
+        imem(0x10): 0x12,
+        imem(0x20): 0x34,
+        imem(IMEMRegisters.BP): 0x40,
+        imem(IMEMRegisters.PX): 0x50,
+        imem(IMEMRegisters.PY): 0x60,
+    }
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, initial_memory, instr_bytes
+    )
+    initial_pc = 0x34567
+    initial_pointers = {
+        RegisterName.X: 0x12345,
+        RegisterName.Y: 0x23456,
+        RegisterName.U: 0x34567,
+        RegisterName.S: 0x45678,
+    }
+    cpu.regs.set(RegisterName.PC, initial_pc)
+    cpu.regs.set(RegisterName.I, 0)
+    cpu.regs.set(RegisterName.FC, initial_fc)
+    cpu.regs.set(RegisterName.FZ, initial_fz)
+    for register, value in initial_pointers.items():
+        cpu.regs.set(register, value)
+    wait_calls: List[int] = []
+    setattr(cpu.memory, "wait_cycles", wait_calls.append)
+
+    decoded = cpu.decode_instruction(0)
+    assert decoded is not None
+    assert asm_str(decoded.render()).split()[0] == mnemonic
+
+    with pytest.raises(NotImplementedError, match=r"I=0.*real-hardware"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.I) == 0
+    assert cpu.regs.get(RegisterName.FC) == initial_fc
+    assert cpu.regs.get(RegisterName.FZ) == initial_fz
+    assert cpu.regs.get(RegisterName.PC) == initial_pc
+    for register, value in initial_pointers.items():
+        assert cpu.regs.get(register) == value
+    assert writes == []
+    assert wait_calls == []
+    for address, value in initial_memory.items():
+        assert raw[address] == value
+
+
+def test_wait_dispatch_uses_decoded_instruction_and_exact_cycle_count() -> None:
+    instr_bytes = bytes.fromhex("EF")
+    initial_i = 3
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
+    cpu.regs.set(RegisterName.I, initial_i)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 0)
+    wait_calls: List[int] = []
+    setattr(cpu.memory, "wait_cycles", wait_calls.append)
+
+    info = cpu.execute_instruction(0)
+
+    assert asm_str(info.instruction.render()) == "WAIT"
+    assert wait_calls == [initial_i]
+    assert cpu.regs.get(RegisterName.I) == 0
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert cpu.regs.get(RegisterName.PC) == len(instr_bytes)
+    assert writes == []
+
+
+def test_wait_direct_llil_intrinsic_accounts_cycles() -> None:
+    initial_i = 3
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, {}, bytes.fromhex("EF")
+    )
+    cpu.regs.set(RegisterName.I, initial_i)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.regs.set(RegisterName.FZ, 1)
+    wait_calls: List[int] = []
+    setattr(cpu.memory, "wait_cycles", wait_calls.append)
+    instr = cpu.decode_instruction(0)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0)
+
+    assert [getattr(node, "name", None) for node in il.ils] == [
+        "VALIDATE_I_COUNT",
+        "WAIT",
+    ]
+    for node in il.ils:
+        cpu.evaluate(node)
+
+    assert wait_calls == [initial_i]
+    assert cpu.regs.get(RegisterName.I) == 0
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert writes == []
+
+
+def test_wait_without_timing_hook_fails_before_state_mutation() -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, {}, bytes.fromhex("EF")
+    )
+    cpu.regs.set(RegisterName.I, 0x1234)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 0)
+
+    with pytest.raises(NotImplementedError, match=r"memory\.wait_cycles"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert cpu.regs.get(RegisterName.I) == 0x1234
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert writes == []
+
+
+def test_wait_direct_intrinsic_without_timing_hook_preserves_i_and_flags() -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, {}, bytes.fromhex("EF")
+    )
+    cpu.regs.set(RegisterName.I, 7)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.regs.set(RegisterName.FZ, 1)
+    instr = cpu.decode_instruction(0)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0)
+
+    cpu.evaluate(il.ils[0])
+    with pytest.raises(NotImplementedError, match=r"memory\.wait_cycles"):
+        cpu.evaluate(il.ils[1])
+
+    assert cpu.regs.get(RegisterName.I) == 7
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert writes == []
+
+
+@pytest.mark.parametrize(
+    "instr_bytes",
+    [
+        bytes.fromhex("541020"),  # ADCL
+        bytes.fromhex("5C1020"),  # SBCL
+        bytes.fromhex("C41020"),  # DADL
+        bytes.fromhex("D41020"),  # DSBL
+        bytes.fromhex("E33720"),  # MVL, pre-decrement source
+        bytes.fromhex("CF1020"),  # MVLD
+        bytes.fromhex("C31020"),  # EXL
+        bytes.fromhex("EC10"),  # DSLL
+        bytes.fromhex("FC10"),  # DSRL
+        bytes.fromhex("EF"),  # WAIT
+    ],
+)
+def test_zero_count_direct_llil_validation_fails_before_mutation(
+    instr_bytes: bytes,
+) -> None:
+    initial_memory = {imem(0x10): 0x12, imem(0x20): 0x34}
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, initial_memory, instr_bytes
+    )
+    cpu.regs.set(RegisterName.I, 0)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 0)
+    cpu.regs.set(RegisterName.S, 0x45678)
+    wait_calls: List[int] = []
+    setattr(cpu.memory, "wait_cycles", wait_calls.append)
+    instr = cpu.decode_instruction(0)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0)
+
+    assert getattr(il.ils[0], "name", None) == "VALIDATE_I_COUNT"
+    with pytest.raises(NotImplementedError, match=r"I=0.*real-hardware"):
+        cpu.evaluate(il.ils[0])
+
+    assert cpu.regs.get(RegisterName.I) == 0
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert cpu.regs.get(RegisterName.S) == 0x45678
+    assert writes == []
+    assert wait_calls == []
+    for address, value in initial_memory.items():
+        assert raw[address] == value
+
+
+@pytest.mark.parametrize("instr_bytes", [bytes.fromhex("CE")])
+def test_tcl_quarantine_uses_decoded_instruction(instr_bytes: bytes) -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 0)
+
+    with pytest.raises(NotImplementedError, match="hardware trace required"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 0
+    assert writes == []
+
+
+@pytest.mark.parametrize(
+    "instr_bytes",
+    [
+        bytes.fromhex("3000"),  # PRE + NOP
+        bytes.fromhex("30EF"),  # PRE + WAIT
+        bytes.fromhex("30CE"),  # PRE + TCL
+        bytes.fromhex("30DE"),  # PRE + HALT
+        bytes.fromhex("30DF"),  # PRE + OFF
+        bytes.fromhex("30FF"),  # PRE + RESET
+        bytes.fromhex("22651207"),  # PRE22 default mode on lone TEST memory operand
+        bytes.fromhex("32A005"),  # PRE32 alias for canonical PRE30 single (n)
+        bytes.fromhex("22A005"),  # redundant PRE22 for default single (BP+n)
+        bytes.fromhex("36A005"),  # PRE36 alias for canonical PRE34 single (PX+n)
+        bytes.fromhex("26A000"),  # PRE26 alias for canonical PRE24 single (BP+PX)
+        bytes.fromhex("26A005"),  # same alias with a nonzero ignored selector
+        bytes.fromhex("328005"),  # PRE32 alias for canonical PRE30 single (n)
+        bytes.fromhex("338005"),  # PRE33 alias for canonical PRE30 single (n)
+        bytes.fromhex("318005"),  # PRE31 alias for canonical PRE30 single (n)
+        bytes.fromhex("303100"),  # consecutive PRE bytes
+        bytes.fromhex("211100"),  # PRE followed by reserved JP selector
+        bytes.fromhex("21E31000"),  # PRE followed by malformed E3 mode
+        bytes.fromhex("257C01"),  # EFE2B is mid-instruction, not a code entry
+    ],
+)
+def test_noncanonical_and_malformed_pre_prefixes_fail_closed(
+    instr_bytes: bytes,
+) -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
+
+    with pytest.raises(InvalidInstruction, match="PRE"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert writes == []
+
+
+@pytest.mark.parametrize(
+    ("instr_bytes", "register", "initial", "expected", "rendered"),
+    [
+        (bytes.fromhex("23483F"), RegisterName.A, 0x50, 0x11, "SUB   A, 3F"),
+    ],
+)
+def test_boundary_backed_irrelevant_pre_alias_remains_executable(
+    instr_bytes: bytes,
+    register: RegisterName,
+    initial: int,
+    expected: int,
+    rendered: str,
+) -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
+    cpu.regs.set(register, initial)
+
+    info = cpu.execute_instruction(0)
+
+    assert asm_str(info.instruction.render()) == rendered
+    assert info.instruction._pre == instr_bytes[0]
+    assert info.instruction.length() == len(instr_bytes)
+    assert cpu.regs.get(register) == expected
+    assert cpu.regs.get(RegisterName.PC) == len(instr_bytes)
+    assert writes == []
+
+
+def test_host_write_failure_rolls_back_registers_and_poison_requires_reset() -> None:
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[0:3] = bytes.fromhex("CC1042")  # MV (BP+10), 42
+    fail_target_write = True
+
+    def read_mem(address: int) -> int:
+        return raw[address]
+
+    def write_mem(address: int, value: int) -> None:
+        nonlocal fail_target_write
+        if fail_target_write and address == imem(0x10):
+            raise RuntimeError("host write failed")
+        raw[address] = value & 0xFF
+
+    cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    cpu.regs.set(RegisterName.PC, 0)
+    cpu.regs.set(RegisterName.A, 0x5A)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.call_sub_level = 7
+
+    with pytest.raises(RuntimeError, match="host write failed"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert cpu.regs.get(RegisterName.A) == 0x5A
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.call_sub_level == 7
+    assert raw[imem(0x10)] == 0
+
+    fail_target_write = False
+    with pytest.raises(RuntimeError, match="poisoned.*reset required"):
+        cpu.execute_instruction(0)
+
+    cpu.power_on_reset()
+    cpu.execute_instruction(0)
+    assert raw[imem(0x10)] == 0x42
+    assert cpu.regs.get(RegisterName.PC) == 3
+
+
+def test_failed_recovery_reset_preserves_first_poison_reason() -> None:
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[0:3] = bytes.fromhex("CC1042")  # MV (BP+10), 42
+    raw[0xFFFFD:0x100000] = bytes.fromhex("452301")
+    failure = "instruction"
+
+    def read_mem(address: int) -> int:
+        return raw[address]
+
+    def write_mem(address: int, value: int) -> None:
+        if failure == "instruction" and address == imem(0x10):
+            raise RuntimeError("first host-write fault")
+        if failure == "reset" and address == imem(IMEMRegisters.UCR):
+            raise RuntimeError("later reset fault")
+        raw[address] = value & 0xFF
+
+    cpu = Emulator(Memory(read_mem, write_mem), reset_on_init=False)
+    with pytest.raises(RuntimeError, match="first host-write fault"):
+        cpu.execute_instruction(0)
+
+    failure = "reset"
+    with pytest.raises(RuntimeError, match="later reset fault"):
+        cpu.power_on_reset()
+
+    with pytest.raises(RuntimeError, match="first host-write fault") as poisoned:
+        cpu.execute_instruction(0)
+    assert "later reset fault" not in str(poisoned.value)
+
+
+def test_unproven_imm20_upper_nibble_alias_fails_closed() -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {},
+        bytes.fromhex("053A077C"),  # PC-E500 F003A is dispatch-table data
+    )
+    cpu.regs.set(RegisterName.S, 0x100)
+
+    with pytest.raises(InvalidInstruction, match="Invalid, reserved"):
+        cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert cpu.regs.get(RegisterName.S) == 0x100
+    assert writes == []
+
+
+def test_wide_imem_access_wraps_each_byte_at_ff() -> None:
+    initial_memory = {
+        imem(0xFE): 0x56,
+        imem(0xFF): 0x34,
+        imem(0x00): 0x02,
+    }
+    cpu, _raw, reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        initial_memory,
+        bytes.fromhex("3084FE"),  # PRE (n); MV X,(LCC)
+    )
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.X) == 0x23456
+    assert writes == []
+    assert imem(0xFE) in reads
+    assert imem(0xFF) in reads
+    assert imem(0x00) in reads
+    assert INTERNAL_MEMORY_START + 0x100 not in reads
+
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {},
+        bytes.fromhex("30A4FE"),  # PRE (n); MV (LCC),X
+    )
+    cpu.regs.set(RegisterName.X, 0x23456)
+
+    cpu.execute_instruction(0)
+
+    assert writes == [
+        (imem(0xFE), 0x56),
+        (imem(0xFF), 0x34),
+        (imem(0x00), 0x02),
+    ]
+    assert raw[imem(0xFE)] == 0x56
+    assert raw[imem(0xFF)] == 0x34
+    assert raw[imem(0x00)] == 0x02
+
+
+def test_wide_emem_access_wraps_each_byte_at_fffff() -> None:
+    instr_addr = 0x100
+    initial_memory = {
+        0xFFFFE: 0x56,
+        0xFFFFF: 0x34,
+        0x00000: 0x02,
+        imem(0x00): 0x99,  # catches a spill into the synthetic IMEM window
+    }
+    cpu, _raw, reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        initial_memory,
+        bytes.fromhex("8CFEFF0F"),  # MV X,[FFFFE]
+        instr_addr,
+    )
+
+    cpu.execute_instruction(instr_addr)
+
+    assert cpu.regs.get(RegisterName.X) == 0x23456
+    assert writes == []
+    for address in (0xFFFFE, 0xFFFFF, 0x00000):
+        assert address in reads
+    assert imem(0x00) not in reads
+
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {imem(0x00): 0x99},
+        bytes.fromhex("ACFEFF0F"),  # MV [FFFFE],X
+        instr_addr,
+    )
+    cpu.regs.set(RegisterName.X, 0x23456)
+
+    cpu.execute_instruction(instr_addr)
+
+    assert writes == [(0xFFFFE, 0x56), (0xFFFFF, 0x34), (0x00000, 0x02)]
+    assert raw[0xFFFFE] == 0x56
+    assert raw[0xFFFFF] == 0x34
+    assert raw[0x00000] == 0x02
+    assert raw[imem(0x00)] == 0x99
+
+
+def test_indirect_external_pointer_load_wraps_inside_imem_at_ff() -> None:
+    instr_addr = 0x100
+    cpu, _raw, reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {
+            imem(0xFF): 0x23,
+            imem(0x00): 0x01,
+            imem(0x01): 0xF8,  # raw F80123; upper nibble is ignored
+            0x80123: 0x6B,
+        },
+        bytes.fromhex("309800FF"),  # PRE (n); MV A,[(SSR)]
+        instr_addr,
+    )
+
+    cpu.execute_instruction(instr_addr)
+
+    assert cpu.regs.get(RegisterName.A) == 0x6B
+    assert writes == []
+    for address in (imem(0xFF), imem(0x00), imem(0x01)):
+        assert address in reads
+    assert INTERNAL_MEMORY_START + 0x100 not in reads
+    assert INTERNAL_MEMORY_START + 0x101 not in reads
+
+
+def test_instruction_fetch_wraps_at_20bit_pc_boundary() -> None:
+    cpu, _raw, reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {
+            0xFFFFF: 0x0A,  # MV BA,1234
+            0x00000: 0x34,
+            0x00001: 0x12,
+            imem(0x00): 0x99,
+            imem(0x01): 0x88,
+        },
+        b"",
+    )
+
+    info = cpu.execute_instruction(0xFFFFF)
+
+    assert asm_str(info.instruction.render()) == "MV    BA, 1234"
+    assert cpu.regs.get(RegisterName.BA) == 0x1234
+    assert cpu.regs.get(RegisterName.PC) == 0x00002
+    assert 0xFFFFF in reads
+    assert 0x00000 in reads
+    assert 0x00001 in reads
+    assert imem(0x00) not in reads
+    assert imem(0x01) not in reads
+    assert writes == []
+
+
+def test_wrapped_wide_store_snapshots_overlapping_source() -> None:
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {imem(0xFE): 0xAA, imem(0xFF): 0xBB, imem(0x00): 0xCC},
+        bytes.fromhex("32C9FFFE"),  # PRE (n),(n); MVW (SSR),(LCC)
+    )
+
+    cpu.execute_instruction(0)
+
+    assert writes == [(imem(0xFF), 0xAA), (imem(0x00), 0xBB)]
+    assert raw[imem(0xFE)] == 0xAA
+    assert raw[imem(0xFF)] == 0xAA
+    assert raw[imem(0x00)] == 0xBB
+
+
+def test_wrapped_wide_store_snapshots_bp_destination_before_self_overlap() -> None:
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {
+            imem(IMEMRegisters.BP): 0xEC,
+            imem(IMEMRegisters.PX): 0xA5,
+            imem(0xFC): 0x34,
+            imem(0xFD): 0x12,
+        },
+        bytes.fromhex("C90010"),  # MVW (BP+00),(BP+10)
+    )
+
+    cpu.execute_instruction(0)
+
+    # The first byte overwrites BP itself.  The second destination must still
+    # use the effective address captured before that write, so it lands on PX.
+    assert writes == [
+        (imem(IMEMRegisters.BP), 0x34),
+        (imem(IMEMRegisters.PX), 0x12),
+    ]
+    assert raw[imem(IMEMRegisters.BP)] == 0x34
+    assert raw[imem(IMEMRegisters.PX)] == 0x12
+    assert raw[imem(0x35)] == 0x00
+
+
+def test_wrapped_pointer_store_snapshots_bp_destination_across_bp_px_py() -> None:
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {
+            imem(IMEMRegisters.BP): 0xEC,
+            imem(IMEMRegisters.PX): 0xA5,
+            imem(IMEMRegisters.PY): 0x5A,
+            imem(0xFC): 0x56,
+            imem(0xFD): 0x34,
+            imem(0xFE): 0x02,
+        },
+        bytes.fromhex("CA0010"),  # MVP (BP+00),(BP+10)
+    )
+
+    cpu.execute_instruction(0)
+
+    assert writes == [
+        (imem(IMEMRegisters.BP), 0x56),
+        (imem(IMEMRegisters.PX), 0x34),
+        (imem(IMEMRegisters.PY), 0x02),
+    ]
+    assert raw[imem(IMEMRegisters.BP)] == 0x56
+    assert raw[imem(IMEMRegisters.PX)] == 0x34
+    assert raw[imem(IMEMRegisters.PY)] == 0x02
+    assert raw[imem(0x57)] == 0x00
+    assert raw[imem(0x58)] == 0x00
+
+
+def test_wide_register_indirect_store_snapshots_address_across_20bit_wrap() -> None:
+    instr_addr = 0x100
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {imem(0x00): 0x99},
+        bytes.fromhex("B404"),  # MV [X],X
+        instr_addr,
+    )
+    cpu.regs.set(RegisterName.X, 0xFFFFF)
+
+    cpu.execute_instruction(instr_addr)
+
+    assert cpu.regs.get(RegisterName.X) == 0xFFFFF
+    assert writes == [(0xFFFFF, 0xFF), (0x00000, 0xFF), (0x00001, 0x0F)]
+    assert raw[0xFFFFF] == 0xFF
+    assert raw[0x00000] == 0xFF
+    assert raw[0x00001] == 0x0F
+    assert raw[imem(0x00)] == 0x99
+
+
 def test_pushs_pops() -> None:
     # Test PUSHS F and POPS F instructions
     # Note: PUSHS IMR and POPS IMR do not exist in the SC62015 instruction set
@@ -1402,6 +2265,70 @@ def test_pushs_pops() -> None:
     assert cpu.regs.get(RegisterName.S) == 0x7000
     assert cpu.regs.get(RegisterName.FZ) == 0
     assert cpu.regs.get(RegisterName.FC) == 0
+
+
+def test_pops_f_direct_llil_validates_before_stack_or_flag_mutation() -> None:
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {0x100: 0x80},
+        bytes.fromhex("5F"),
+    )
+    cpu.regs.set(RegisterName.S, 0x100)
+    cpu.regs.set(RegisterName.F, 0x01)
+    cpu.regs.set(RegisterName.PC, 0)
+    instr = cpu.decode_instruction(0)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0)
+
+    validate_index = next(
+        index
+        for index, node in enumerate(il.ils)
+        if getattr(node, "name", None) == "VALIDATE_F"
+    )
+    s_write_index = next(
+        index
+        for index, node in enumerate(il.ils)
+        if node.op == "SET_REG.l" and getattr(node.ops[0], "name", None) == "S"
+    )
+    assert validate_index < s_write_index
+
+    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
+        for node in il.ils:
+            cpu.evaluate(node)
+
+    assert cpu.regs.get(RegisterName.S) == 0x100
+    assert cpu.regs.get(RegisterName.F) == 0x01
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert raw[0x100] == 0x80
+    assert writes == []
+
+
+def test_exp_high_nibble_direct_llil_fails_before_memory_mutation() -> None:
+    initial = {
+        imem(0x20): 0x11,
+        imem(0x21): 0x22,
+        imem(0x22): 0xA8,
+        imem(0x30): 0x33,
+        imem(0x31): 0x44,
+        imem(0x32): 0x09,
+    }
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        initial,
+        bytes.fromhex("32C22030"),
+    )
+    instr = cpu.decode_instruction(0)
+    il = MockLowLevelILFunction()
+    instr.lift(il, 0)
+
+    with pytest.raises(NotImplementedError, match="EXP high-nibble behavior"):
+        for node in il.ils:
+            cpu.evaluate(node)
+
+    assert cpu.regs.get(RegisterName.PC) == 0
+    assert writes == []
+    for address, value in initial.items():
+        assert raw[address] == value
 
 
 def test_pushu_popu() -> None:
@@ -1471,6 +2398,43 @@ def test_pushu_popu_r2() -> None:
     assert cpu.regs.get(RegisterName.BA) == 0x1234
 
 
+def test_pushu_popu_wide_access_wraps_at_20bit_boundary() -> None:
+    instr_addr = 0x100
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {imem(0x00): 0x99},
+        bytes.fromhex("2A"),  # PUSHU BA
+        instr_addr,
+    )
+    cpu.regs.set(RegisterName.BA, 0x1234)
+    cpu.regs.set(RegisterName.U, 0x00001)
+
+    cpu.execute_instruction(instr_addr)
+
+    assert cpu.regs.get(RegisterName.U) == 0xFFFFF
+    assert writes == [(0xFFFFF, 0x34), (0x00000, 0x12)]
+    assert raw[0xFFFFF] == 0x34
+    assert raw[0x00000] == 0x12
+    assert raw[imem(0x00)] == 0x99
+
+    cpu, _raw, reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {0xFFFFF: 0x78, 0x00000: 0x56, imem(0x00): 0x99},
+        bytes.fromhex("3A"),  # POPU BA
+        instr_addr,
+    )
+    cpu.regs.set(RegisterName.U, 0xFFFFF)
+
+    cpu.execute_instruction(instr_addr)
+
+    assert cpu.regs.get(RegisterName.BA) == 0x5678
+    assert cpu.regs.get(RegisterName.U) == 0x00001
+    assert 0xFFFFF in reads
+    assert 0x00000 in reads
+    assert imem(0x00) not in reads
+    assert writes == []
+
+
 def test_call_ret() -> None:
     cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("042000"))
     raw[0x20] = 0x06
@@ -1487,6 +2451,65 @@ def test_call_ret() -> None:
     _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
     assert cpu.regs.get(RegisterName.PC) == 0x03
     assert cpu.regs.get(RegisterName.S) == 0x7000
+    assert writes == []
+
+
+@pytest.mark.parametrize(
+    ("program", "instruction_address", "target", "frame"),
+    [
+        (bytes.fromhex("042000"), 0x30000, 0x30020, bytes.fromhex("0300")),
+        (bytes.fromhex("05200004"), 0x30000, 0x40020, bytes.fromhex("040003")),
+    ],
+)
+def test_call_llil_call_writes_exactly_one_architectural_frame(
+    program: bytes, instruction_address: int, target: int, frame: bytes
+) -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {},
+        program,
+        instr_addr=instruction_address,
+    )
+    initial_s = 0x0100
+    cpu.regs.set(RegisterName.S, initial_s)
+
+    cpu.execute_instruction(instruction_address)
+
+    expected_s = initial_s - len(frame)
+    assert cpu.regs.get(RegisterName.PC) == target
+    assert cpu.regs.get(RegisterName.S) == expected_s
+    assert writes == [
+        (expected_s + offset, value) for offset, value in enumerate(frame)
+    ]
+
+
+def test_callf_retf_stack_wraps_at_20bit_boundary() -> None:
+    instr_addr = 0x100
+    target_addr = 0x200
+    cpu, raw, reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE,
+        {target_addr: 0x07, imem(0x00): 0x99},  # RETF at target
+        bytes.fromhex("05000200"),  # CALLF 00200
+        instr_addr,
+    )
+    cpu.regs.set(RegisterName.S, 0x00002)
+
+    cpu.execute_instruction(instr_addr)
+
+    assert cpu.regs.get(RegisterName.PC) == target_addr
+    assert cpu.regs.get(RegisterName.S) == 0xFFFFF
+    assert writes == [(0xFFFFF, 0x04), (0x00000, 0x01), (0x00001, 0x00)]
+    assert raw[imem(0x00)] == 0x99
+    writes.clear()
+
+    cpu.execute_instruction(target_addr)
+
+    assert cpu.regs.get(RegisterName.PC) == instr_addr + 4
+    assert cpu.regs.get(RegisterName.S) == 0x00002
+    assert 0xFFFFF in reads
+    assert 0x00000 in reads
+    assert 0x00001 in reads
+    assert imem(0x00) not in reads
     assert writes == []
 
 
@@ -1727,7 +2750,12 @@ def get_pre_test_cases() -> List[PreTestCase]:
             expected_A_val_after=OPERAND_MEM_VAL,
         ),
     ]
-    return STATIC_PRE_TEST_CASES
+    # Only PRE30 is the canonical encoding among these historical fixtures.
+    # The seven aliases are now explicit fail-closed cases above instead of
+    # executable success oracles.
+    return [
+        case for case in STATIC_PRE_TEST_CASES if case.expected_pre_val_in_instr == 0x30
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1836,6 +2864,24 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         expected_m_values_after=[0x47],  # 0x12 + 0x34 + 1 = 0x47
+        expected_I_after=0,
+        expected_FC_after=0,
+        expected_FZ_after=0,
+    ),
+    AdclDadlTestCase(
+        test_id="ADCL_(m)_(n)_I2_RhsPlusCarryWrapPropagates",
+        instr_bytes=bytes([0x54, 0x10, 0x20]),
+        init_memory_state={
+            INTERNAL_MEMORY_START + 0x10: 0x00,
+            INTERNAL_MEMORY_START + 0x11: 0x00,
+            INTERNAL_MEMORY_START + 0x20: 0xFF,
+            INTERNAL_MEMORY_START + 0x21: 0x00,
+        },
+        init_register_state={RegisterName.I: 2, RegisterName.FC: 1},
+        expected_asm_str="ADCL  (BP+10), (BP+20)",
+        expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
+        # 00 + FF + 1 -> 00/C=1, then 00 + 00 + 1 -> 01/C=0.
+        expected_m_values_after=[0x00, 0x01],
         expected_I_after=0,
         expected_FC_after=0,
         expected_FZ_after=0,
@@ -2643,8 +3689,9 @@ class DsrlDsllTestCase(NamedTuple):
     is_dsll: bool  # True for DSLL, False for DSRL
     instr_operand_n_val: int  # The 8-bit value for (n) in the instruction
     loop_count_I: int
-    # For DSLL: [MSB_val, MSB-1_val, ..., LSB_val] e.g. BCD 1234 -> [0x12, 0x34]
-    # For DSRL: [LSB_val, LSB+1_val, ..., MSB_val] e.g. BCD 1234 -> [0x34, 0x12]
+    # Logical byte order is always most-significant to least-significant.
+    # DSLL's operand points at the LSB and walks down; DSRL's operand points
+    # at the MSB and walks up.
     initial_bcd_logical_bytes: List[int]
     expected_final_bcd_logical_bytes: List[
         int
@@ -2664,62 +3711,38 @@ def compute_expected_dsll(logical_bcd_bytes: List[int]) -> List[int]:
     if not logical_bcd_bytes:
         return []
 
-    count = len(logical_bcd_bytes)
-    shifted_bytes = [0] * count
-
-    # u carries the LOW nibble of the previous (more significant) byte
-    # to become the low nibble of the current (less significant) byte.
-    # For the most significant byte, there's no "previous" byte, so u starts as 0.
-    u_carry_from_prev_low_nibble = 0
-
-    # Iterate from MSB to LSB (index 0 to count-1)
-    for i in range(count):
-        old_current_byte_val = logical_bcd_bytes[i]
-        old_current_low_nibble = old_current_byte_val & 0x0F
-
-        # New byte's high nibble is the old_current_byte's low nibble.
-        # New byte's low nibble is u (which was the LOW nibble of the previous byte).
-        shifted_bytes[i] = (old_current_low_nibble << 4) | u_carry_from_prev_low_nibble
-
-        # Update u for the next iteration using the low nibble of the current byte
-        u_carry_from_prev_low_nibble = old_current_low_nibble
-
-    return shifted_bytes
+    digits = [
+        nibble
+        for byte in logical_bcd_bytes
+        for nibble in ((byte >> 4) & 0x0F, byte & 0x0F)
+    ]
+    shifted_digits = digits[1:] + [0]
+    return [
+        (shifted_digits[i] << 4) | shifted_digits[i + 1]
+        for i in range(0, len(shifted_digits), 2)
+    ]
 
 
 def compute_expected_dsrl(logical_bcd_bytes: List[int]) -> List[int]:
     """
     Computes the result of DSRL operation on BCD bytes.
-    logical_bcd_bytes is [LSB_val, LSB+1_val, ..., MSB_val].
-    e.g., for BCD 123456, input is [0x56, 0x34, 0x12].
-    Result for 123456 -> 012345 is [0x45, 0x23, 0x01].
+    logical_bcd_bytes is [MSB_val, ..., LSB_val].
+    e.g., for BCD 123456, input is [0x12, 0x34, 0x56].
+    Result for 123456 -> 012345 is [0x01, 0x23, 0x45].
     """
     if not logical_bcd_bytes:
         return []
 
-    count = len(logical_bcd_bytes)
-    shifted_bytes = [0] * count
-
-    # u carries the HIGH nibble of the previous (less significant) byte
-    # to become the high nibble of the current (more significant) byte.
-    # For the least significant byte, there's no "previous" byte, so u starts as 0.
-    u_carry_from_prev_high_nibble = 0
-
-    # Iterate from LSB to MSB (index 0 to count-1)
-    for i in range(count):
-        old_current_byte_val = logical_bcd_bytes[i]
-        old_current_high_nibble = (old_current_byte_val >> 4) & 0x0F
-
-        # New byte's low nibble is the old_current_byte's high nibble.
-        # New byte's high nibble is u (which was the HIGH nibble of the previous byte).
-        shifted_bytes[i] = old_current_high_nibble | (
-            u_carry_from_prev_high_nibble << 4
-        )
-
-        # Update u for the next iteration using the high nibble of the current byte
-        u_carry_from_prev_high_nibble = old_current_high_nibble
-
-    return shifted_bytes
+    digits = [
+        nibble
+        for byte in logical_bcd_bytes
+        for nibble in ((byte >> 4) & 0x0F, byte & 0x0F)
+    ]
+    shifted_digits = [0] + digits[:-1]
+    return [
+        (shifted_digits[i] << 4) | shifted_digits[i + 1]
+        for i in range(0, len(shifted_digits), 2)
+    ]
 
 
 dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
@@ -2792,10 +3815,10 @@ dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
         is_dsll=False,
         instr_operand_n_val=0x10,
         loop_count_I=2,
-        initial_bcd_logical_bytes=[0x34, 0x12],  # [LSB, MSB]
+        initial_bcd_logical_bytes=[0x12, 0x34],  # [MSB, LSB]
         expected_final_bcd_logical_bytes=compute_expected_dsrl(
-            [0x34, 0x12]
-        ),  # [0x23, 0x01] (means LSB=23, MSB=01)
+            [0x12, 0x34]
+        ),  # [0x01, 0x23]
         expected_FZ_after=0,
     ),
     DsrlDsllTestCase(
@@ -2803,10 +3826,10 @@ dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
         is_dsll=False,
         instr_operand_n_val=0x10,
         loop_count_I=3,
-        initial_bcd_logical_bytes=[0x56, 0x34, 0x12],  # [LSB, Mid, MSB]
+        initial_bcd_logical_bytes=[0x12, 0x34, 0x56],  # [MSB, Mid, LSB]
         expected_final_bcd_logical_bytes=compute_expected_dsrl(
-            [0x56, 0x34, 0x12]
-        ),  # [0x45, 0x23, 0x01]
+            [0x12, 0x34, 0x56]
+        ),  # [0x01, 0x23, 0x45]
         expected_FZ_after=0,
     ),
     DsrlDsllTestCase(
@@ -2814,10 +3837,10 @@ dsrl_dsll_test_cases: List[DsrlDsllTestCase] = [
         is_dsll=False,
         instr_operand_n_val=0x10,
         loop_count_I=2,
-        initial_bcd_logical_bytes=[0x00, 0x90],  # LSB=0x00, MSB=0x90
+        initial_bcd_logical_bytes=[0x90, 0x00],  # [MSB, LSB]
         expected_final_bcd_logical_bytes=compute_expected_dsrl(
-            [0x00, 0x90]
-        ),  # [0x00, 0x09] (LSB=00, MSB=09)
+            [0x90, 0x00]
+        ),  # [0x09, 0x00]
         expected_FZ_after=0,
     ),
     DsrlDsllTestCase(
@@ -2843,17 +3866,13 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
 
     init_memory_state: Dict[int, int] = {}
     # Determine memory addresses for initial setup
-    # For DSLL, n is MSB addr, mem is populated from n downwards (n, n-1, ..., n-I+1)
-    # initial_bcd_logical_bytes is [MSB_val, MSB-1_val, ..., LSB_val]
-    # So, initial_bcd_logical_bytes[i] goes to mem[INTERNAL_MEMORY_START + tc.instr_operand_n_val - i]
+    # DSLL starts at the LSB address and walks toward the MSB by decrementing.
     if tc.is_dsll:
         for i in range(tc.loop_count_I):
             addr = INTERNAL_MEMORY_START + tc.instr_operand_n_val - i
-            init_memory_state[addr] = tc.initial_bcd_logical_bytes[i]
+            init_memory_state[addr] = tc.initial_bcd_logical_bytes[-1 - i]
     else:  # DSRL
-        # For DSRL, n is LSB addr, mem is populated from n upwards (n, n+1, ..., n+I-1)
-        # initial_bcd_logical_bytes is [LSB_val, LSB+1_val, ..., MSB_val]
-        # So, initial_bcd_logical_bytes[i] goes to mem[INTERNAL_MEMORY_START + tc.instr_operand_n_val + i]
+        # DSRL starts at the MSB address and walks toward the LSB by incrementing.
         for i in range(tc.loop_count_I):
             addr = INTERNAL_MEMORY_START + tc.instr_operand_n_val + i
             init_memory_state[addr] = tc.initial_bcd_logical_bytes[i]
@@ -2903,19 +3922,15 @@ def test_dsrl_dsll_instruction(tc: DsrlDsllTestCase) -> None:
     )
 
     # --- Verify Memory ---
-    # For DSLL, tc.expected_final_bcd_logical_bytes is [MSB_val, MSB-1_val, ..., LSB_val]
-    # Check mem[n], mem[n-1], ...
     if tc.is_dsll:
         for i in range(tc.loop_count_I):
             addr_in_mem = INTERNAL_MEMORY_START + tc.instr_operand_n_val - i
             actual_val = raw_memory_array[addr_in_mem]
-            expected_val = tc.expected_final_bcd_logical_bytes[i]
+            expected_val = tc.expected_final_bcd_logical_bytes[-1 - i]
             assert actual_val == expected_val, (
                 f"Test '{tc.test_id}': Memory mismatch at addr 0x{addr_in_mem:X} (logical byte {i}). Expected 0x{expected_val:02X}, Got 0x{actual_val:02X}"
             )
     else:  # DSRL
-        # For DSRL, tc.expected_final_bcd_logical_bytes is [LSB_val, LSB+1_val, ..., MSB_val]
-        # Check mem[n], mem[n+1], ...
         for i in range(tc.loop_count_I):
             addr_in_mem = INTERNAL_MEMORY_START + tc.instr_operand_n_val + i
             actual_val = raw_memory_array[addr_in_mem]
@@ -2932,6 +3947,11 @@ def test_decode_all_opcodes() -> None:
     for i, (b, s) in enumerate(opcode_generator()):
         if b is None:
             continue
+
+        # Do not let operand bytes from the prior sample become an accidental
+        # suffix for a standalone PRE byte (historically PRE21 fused with the
+        # stale RETF opcode here).
+        raw_memory[:8] = bytes(8)
 
         for j, byte in enumerate(b):
             raw_memory[j] = byte
@@ -2959,8 +3979,12 @@ def test_decode_all_opcodes() -> None:
             "DADL",
             "SBCL",
             "DSBL",
+            "EXL",
             "DSRL",
             "DSLL",
+            "WAIT",
+            "TCL",  # quarantined until LCC timer-clear side effects are modeled
+            "PRE",  # standalone prefixes are deliberately not executable
             # Skip indirect addressing instructions that require proper memory setup
             "[(",  # Indirect addressing through internal memory
         ]
@@ -2975,6 +3999,7 @@ def test_decode_all_opcodes() -> None:
             continue
 
         memory = Memory(read_mem, write_mem)
+        setattr(memory, "wait_cycles", lambda _cycles: None)
         cpu = Emulator(memory)
 
         address = 0x00

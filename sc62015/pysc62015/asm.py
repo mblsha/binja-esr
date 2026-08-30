@@ -54,6 +54,7 @@ from .instr import (
     JP_Rel,
     Imm16,
     Imm20,
+    Imm24,
     ImmOffset,
     IMem20,
     IMem16,
@@ -108,6 +109,10 @@ class SectionNode(TypedDict):
 class DataDirectiveNode(TypedDict):
     type: str  # "defb", "defw", "defl", "defs", "defm"
     args: Union[List[str], int, str]
+
+
+class QuotedString(str):
+    """A parsed string literal kept distinct from symbol-name text."""
 
 
 class ParsedInstruction(TypedDict):
@@ -358,8 +363,7 @@ class AsmTransformer(Transformer):
 
     def jp_imem(self, items: List[Any]) -> InstructionNode:
         op = cast(IMemOperand, items[0])
-        imm = IMem20()
-        imm.value = cast(int, op.n_val)
+        imm = self._encoded_imem(op, IMem20)
         return self._instr_node(JP_Abs, imm)
 
     def jr_plus(self, items: List[Any]) -> InstructionNode:
@@ -480,6 +484,24 @@ class AsmTransformer(Transformer):
         imm.value = value
         return imm
 
+    @staticmethod
+    def _encoded_imem(
+        source: Union[IMemOperand, IMem8],
+        operand_type: Type[IMem8] = IMem8,
+    ) -> IMem8:
+        """Convert a parsed IMEM operand without discarding its PRE selector."""
+
+        operand = operand_type()
+        if isinstance(source, IMemOperand):
+            operand.value = source.n_val if source.n_val is not None else 0
+            mode = source.mode
+        else:
+            operand.value = source.value
+            mode = getattr(source, "_asm_addressing_mode", None)
+        if mode is not None:
+            setattr(operand, "_asm_addressing_mode", mode)
+        return operand
+
     def _op_imm(
         self,
         instr_cls: type[Instruction],
@@ -512,8 +534,9 @@ class AsmTransformer(Transformer):
     ) -> InstructionNode:
         """Build instructions using ``RegIMemOffset`` operands."""
         op = RegIMemOffset(order=order)
-        im = IMem8()
-        im.value = int(imem.n_val, 0) if isinstance(imem.n_val, str) else imem.n_val
+        im = self._encoded_imem(imem)
+        if isinstance(im.value, str):
+            im.value = int(im.value, 0)
         op.imem = im
         op.reg = regop.reg
         op.mode = regop.mode
@@ -668,11 +691,10 @@ class AsmTransformer(Transformer):
         self,
         op1: IMemOperand,
         reg: Reg,
-        mem_cls: Type[IMemOperand],
+        mem_cls: Type[IMem8],
         instr: Type[Instruction],
     ) -> InstructionNode:
-        mem = cast(Any, mem_cls())
-        mem.value = op1.n_val
+        mem = cast(Any, self._encoded_imem(op1, mem_cls))
         r = Reg3()
         r.reg = reg.reg
         r.reg_raw = Reg3.reg_idx(cast(RegisterName, r.reg))
@@ -854,17 +876,8 @@ class AsmTransformer(Transformer):
         src = cast(EMemIMem, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        im1.value = imem.n_val
-        op.imem1 = im1
-        im2 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im2.value = src_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(imem)
+        op.imem2 = self._encoded_imem(src.imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MV, op)
@@ -874,57 +887,41 @@ class AsmTransformer(Transformer):
         imem = cast(IMemOperand, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im1.value = src_val
-        op.imem1 = im1
-        im2 = IMem8()
-        im2.value = imem.n_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(src.imem)
+        op.imem2 = self._encoded_imem(imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MV, op)
 
     def mvw_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
-        m1 = IMem16()
-        m1.value = op1.n_val
-        m2 = IMem16()
-        m2.value = op2.n_val
+        m1 = self._encoded_imem(op1, IMem16)
+        m2 = self._encoded_imem(op2, IMem16)
         return self._instr_node(MV, m1, m2, name="MVW")
 
     def mvw_imem_imm(self, items: List[Any]) -> InstructionNode:
         mem, val = items
-        dst = IMem16()
-        dst.value = mem.n_val
+        dst = self._encoded_imem(mem, IMem16)
         imm = Imm16()
         imm.value = val
         return self._instr_node(MV, dst, imm, name="MVW")
 
     def mvp_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
-        m1 = IMem20()
-        m1.value = op1.n_val
-        m2 = IMem20()
-        m2.value = op2.n_val
+        m1 = self._encoded_imem(op1, IMem20)
+        m2 = self._encoded_imem(op2, IMem20)
         return self._instr_node(MV, m1, m2, name="MVP")
 
     def mvp_imem_imm(self, items: List[Any]) -> InstructionNode:
         mem, val = items
-        dst = IMem20()
-        dst.value = mem.n_val
-        imm = Imm20()
+        dst = self._encoded_imem(mem, IMem20)
+        imm = Imm24()
         imm.value = val
         return self._instr_node(MV, dst, imm, name="MVP")
 
     def mvw_imem_emem(self, items: List[Any]) -> InstructionNode:
         imem, emem_src = items
-        dst = IMem16()
-        dst.value = imem.n_val
+        dst = self._encoded_imem(imem, IMem16)
         src = EMemAddr(width=2)
         src.value = emem_src.value
         return self._instr_node(MV, dst, src, name="MVW")
@@ -933,8 +930,7 @@ class AsmTransformer(Transformer):
         emem_src, imem = items
         src = EMemAddr(width=2)
         src.value = emem_src.value
-        dst = IMem16()
-        dst.value = imem.n_val
+        dst = self._encoded_imem(imem, IMem16)
         return self._instr_node(MV, src, dst, name="MVW")
 
     def mvw_imem_ememreg(self, items: List[Any]) -> InstructionNode:
@@ -956,17 +952,8 @@ class AsmTransformer(Transformer):
         src = cast(EMemIMem, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM, width=2)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        im1.value = imem.n_val
-        op.imem1 = im1
-        im2 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im2.value = src_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(imem)
+        op.imem2 = self._encoded_imem(src.imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MV, op, name="MVW")
@@ -976,25 +963,15 @@ class AsmTransformer(Transformer):
         imem = cast(IMemOperand, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM, width=2)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im1.value = src_val
-        op.imem1 = im1
-        im2 = IMem8()
-        im2.value = imem.n_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(src.imem)
+        op.imem2 = self._encoded_imem(imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MV, op, name="MVW")
 
     def mvp_imem_emem(self, items: List[Any]) -> InstructionNode:
         imem, emem_src = items
-        dst = IMem20()
-        dst.value = imem.n_val
+        dst = self._encoded_imem(imem, IMem20)
         src = EMemAddr(width=3)
         src.value = emem_src.value
         return self._instr_node(MV, dst, src, name="MVP")
@@ -1003,8 +980,7 @@ class AsmTransformer(Transformer):
         emem_src, imem = items
         src = EMemAddr(width=3)
         src.value = emem_src.value
-        dst = IMem20()
-        dst.value = imem.n_val
+        dst = self._encoded_imem(imem, IMem20)
         return self._instr_node(MV, src, dst, name="MVP")
 
     def mvp_imem_ememreg(self, items: List[Any]) -> InstructionNode:
@@ -1026,17 +1002,8 @@ class AsmTransformer(Transformer):
         src = cast(EMemIMem, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        im1.value = imem.n_val
-        op.imem1 = im1
-        im2 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im2.value = src_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(imem)
+        op.imem2 = self._encoded_imem(src.imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MV, op, name="MVP")
@@ -1046,17 +1013,8 @@ class AsmTransformer(Transformer):
         imem = cast(IMemOperand, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im1.value = src_val
-        op.imem1 = im1
-        im2 = IMem8()
-        im2.value = imem.n_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(src.imem)
+        op.imem2 = self._encoded_imem(imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MV, op, name="MVP")
@@ -1087,8 +1045,7 @@ class AsmTransformer(Transformer):
                     EMemRegMode.NEGATIVE_OFFSET,
                 ],
             )
-            im = IMem8()
-            im.value = imem.n_val
+            im = self._encoded_imem(imem)
             op.imem = im
             op.reg = regop.reg
             op.mode = regop.mode
@@ -1116,8 +1073,7 @@ class AsmTransformer(Transformer):
                     EMemRegMode.NEGATIVE_OFFSET,
                 ],
             )
-            im = IMem8()
-            im.value = imem.n_val
+            im = self._encoded_imem(imem)
             op.imem = im
             op.reg = regop.reg
             op.mode = regop.mode
@@ -1137,17 +1093,8 @@ class AsmTransformer(Transformer):
         src = cast(EMemIMem, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_INT_MEM)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        im1.value = imem.n_val
-        op.imem1 = im1
-        im2 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im2.value = src_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(imem)
+        op.imem2 = self._encoded_imem(src.imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MVL, op)
@@ -1157,17 +1104,8 @@ class AsmTransformer(Transformer):
         imem = cast(IMemOperand, items[1])
         op = EMemIMemOffset(EMemIMemOffsetOrder.DEST_EXT_MEM)
         op.mode_imm.value = src.value
-        im1 = IMem8()
-        src_val = (
-            cast(IMemOperand, src.imem).n_val
-            if isinstance(src.imem, IMemOperand)
-            else src.imem.value
-        )
-        im1.value = src_val
-        op.imem1 = im1
-        im2 = IMem8()
-        im2.value = imem.n_val
-        op.imem2 = im2
+        op.imem1 = self._encoded_imem(src.imem)
+        op.imem2 = self._encoded_imem(imem)
         op.mode = src.mode
         op.offset = src.offset
         return self._instr_node(MVL, op)
@@ -1423,18 +1361,14 @@ class AsmTransformer(Transformer):
 
     def cmpw_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
-        m1 = IMem16()
-        m1.value = op1.n_val
-        m2 = IMem16()
-        m2.value = op2.n_val
+        m1 = self._encoded_imem(op1, IMem16)
+        m2 = self._encoded_imem(op2, IMem16)
         return self._instr_node(CMPW, m1, m2)
 
     def cmpp_imem_imem(self, items: List[Any]) -> InstructionNode:
         op1, op2 = items
-        m1 = IMem20()
-        m1.value = op1.n_val
-        m2 = IMem20()
-        m2.value = op2.n_val
+        m1 = self._encoded_imem(op1, IMem20)
+        m2 = self._encoded_imem(op2, IMem20)
         return self._instr_node(CMPP, m1, m2)
 
     def cmpw_imem_reg(self, items: List[Any]) -> InstructionNode:
@@ -1461,13 +1395,14 @@ class AsmTransformer(Transformer):
         return self._instr_node(TEST, op1, Reg("A"))
 
     def def_arg(self, items: List[Any]) -> str:
-        return str(items[0])
+        item = items[0]
+        return item if isinstance(item, QuotedString) else str(item)
 
     def NUMBER(self, token: Token) -> str:
         return str(token)
 
-    def string_literal(self, items: List[Token]) -> str:
-        return str(items[0])[1:-1]  # Remove quotes
+    def string_literal(self, items: List[Token]) -> QuotedString:
+        return QuotedString(str(items[0])[1:-1])  # Remove quotes, retain provenance
 
     def CNAME(self, token: Token) -> str:
         return str(token)

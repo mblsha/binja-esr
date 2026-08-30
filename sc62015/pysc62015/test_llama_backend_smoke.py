@@ -14,6 +14,7 @@ import pytest
 from sc62015.pysc62015 import CPU, RegisterName, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
 from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+from sc62015.pysc62015.stepper import CPURegistersSnapshot
 from binja_test_mocks.eval_llil import Memory
 
 
@@ -37,6 +38,11 @@ def _make_memory(*bytes_seq: int) -> Memory:
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
     return memory
 
 
@@ -102,6 +108,7 @@ def test_llama_add_sets_flags() -> None:
 def test_llama_wait_clears_i_only() -> None:
     # WAIT (0xEF) should clear I, preserve flags, and advance PC by 1
     memory = _make_memory(0xEF)
+    setattr(memory, "wait_cycles", lambda _cycles: None)
     cpu = CPU(memory, reset_on_init=False, backend="llama")
     cpu.regs.set(RegisterName.PC, 0x0000)
     cpu.regs.set(RegisterName.I, 0x1234)
@@ -117,26 +124,88 @@ def test_llama_wait_clears_i_only() -> None:
 
 
 @pytest.mark.parametrize("backend", ("python", "llama"))
-def test_f_register_preserves_upper_bits(backend: str) -> None:
+@pytest.mark.parametrize("f_image", (0x04, 0x80, 0xA4, 0xFC, 0xFF))
+def test_f_register_rejects_unverified_upper_bits(backend: str, f_image: int) -> None:
     memory = _make_memory(0x00)  # no opcode needed
     cpu = CPU(memory, reset_on_init=False, backend=backend)
-    cpu.regs.set(RegisterName.F, 0xAA)
 
-    assert cpu.regs.get(RegisterName.F) == 0xAA
-    assert cpu.regs.get(RegisterName.FC) == 0x00
-    assert cpu.regs.get(RegisterName.FZ) == 0x01
+    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
+        cpu.regs.set(RegisterName.F, f_image)
+
+    assert cpu.regs.get(RegisterName.F) == 0
 
 
 @pytest.mark.parametrize("backend", ("python", "llama"))
-def test_fc_fz_updates_do_not_clobber_f_upper_bits(backend: str) -> None:
+def test_fc_fz_updates_remain_within_modeled_f_bits(backend: str) -> None:
     memory = _make_memory(0x00)  # no opcode needed
     cpu = CPU(memory, reset_on_init=False, backend=backend)
-    cpu.regs.set(RegisterName.F, 0xAA)  # 0b1010_1010
+    cpu.regs.set(RegisterName.F, 0x02)
 
     cpu.regs.set(RegisterName.FC, 0)  # lower bit -> 0
     cpu.regs.set(RegisterName.FZ, 1)  # bit1 -> 1
 
-    assert cpu.regs.get(RegisterName.F) == 0xAA  # upper bits unchanged
+    assert cpu.regs.get(RegisterName.F) == 0x02
+
+
+@pytest.mark.parametrize("backend", ("python", "llama"))
+def test_unverified_f_snapshot_is_rejected_atomically(backend: str) -> None:
+    memory = _make_memory(0x00)
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.PC, 0x12345)
+    cpu.regs.set(RegisterName.BA, 0x5678)
+    cpu.regs.set(RegisterName.F, 0x01)
+    snapshot = CPURegistersSnapshot(pc=0xABCDE, ba=0x9ABC, f=0xA4)
+
+    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
+        cpu.apply_snapshot(snapshot)
+
+    assert cpu.regs.get(RegisterName.PC) == 0x12345
+    assert cpu.regs.get(RegisterName.BA) == 0x5678
+    assert cpu.regs.get(RegisterName.F) == 0x01
+
+
+@pytest.mark.parametrize("backend", ("python", "llama"))
+@pytest.mark.parametrize(
+    ("field", "malformed", "error_type"),
+    [
+        ("s", "not-an-integer", TypeError),
+        ("temps", [], TypeError),
+        ("temps", {16: 1}, ValueError),
+        ("call_sub_level", -1, ValueError),
+        ("call_sub_level", 0x8000_0000, ValueError),
+    ],
+)
+def test_malformed_complete_snapshot_is_rejected_atomically_on_both_backends(
+    backend: str,
+    field: str,
+    malformed: object,
+    error_type: type[Exception],
+) -> None:
+    cpu = CPU(_make_memory(0x00), reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.PC, 0x12345)
+    cpu.regs.set(RegisterName.BA, 0x5678)
+    cpu.regs.set(RegisterName.F, 0x03)
+    cpu.regs.set(RegisterName("TEMP15"), 0x654321)
+    cpu.regs.call_sub_level = 4
+    before = cpu.snapshot_registers()
+    candidate = CPURegistersSnapshot(
+        pc=0xAAAAA,
+        ba=0xBBBB,
+        i=0xCCCC,
+        x=0xDDDDD,
+        y=0xEEEEE,
+        u=0x33333,
+        s=0x44444,
+        f=0x01,
+        temps={15: 0x123456},
+        call_sub_level=2,
+    )
+    setattr(candidate, field, malformed)
+
+    with pytest.raises(error_type):
+        cpu.apply_snapshot(candidate)
+
+    assert cpu.snapshot_registers() == before
 
 
 def test_llama_keyboard_bridge_updates_kil() -> None:
@@ -162,6 +231,9 @@ class _MemoryWithLcdHook:
         self.calls.append((addr & 0xFFFFFF, val & 0xFF, pc & 0xFFFFFF))
 
     def read_byte(self, addr: int) -> int:
+        return self._raw[addr & 0xFFFFFF]
+
+    def peek_byte_for_preflight(self, addr: int, _pc: int | None = None) -> int:
         return self._raw[addr & 0xFFFFFF]
 
     def write_byte(self, addr: int, value: int) -> None:
@@ -191,6 +263,9 @@ class _MemoryRecordingPc:
 
     def read_byte(self, addr: int, cpu_pc: int | None = None) -> int:
         self.calls.append(("read", addr & 0xFFFFFF, cpu_pc))
+        return self._raw[addr & 0xFFFFFF]
+
+    def peek_byte_for_preflight(self, addr: int, _pc: int | None = None) -> int:
         return self._raw[addr & 0xFFFFFF]
 
     def write_byte(self, addr: int, value: int, cpu_pc: int | None = None) -> None:
@@ -231,6 +306,9 @@ class _MemoryWithKioTrace:
         self.irq_traces.append((name, dict(payload)))
 
     def read_byte(self, addr: int, cpu_pc: int | None = None) -> int:
+        return self._raw[addr & 0xFFFFFF]
+
+    def peek_byte_for_preflight(self, addr: int, _pc: int | None = None) -> int:
         return self._raw[addr & 0xFFFFFF]
 
     def write_byte(self, addr: int, value: int, cpu_pc: int | None = None) -> None:
@@ -292,7 +370,7 @@ def test_llama_ir_traces_irq_enter() -> None:
     cpu = CPU(mem, reset_on_init=False, backend="llama")
     cpu.regs.set(RegisterName.PC, 0x0000)
     cpu.regs.set(RegisterName.S, 0x0020)  # scratch stack space
-    cpu.regs.set(RegisterName.F, 0x10)
+    cpu.regs.set(RegisterName.F, 0x00)
 
     cpu.execute_instruction(0x0000)
 
@@ -308,7 +386,7 @@ def test_llama_reti_traces_irq_return() -> None:
     mem._raw[0] = 0x01
     # stack frame at 0x30
     mem._raw[0x30] = 0xAA  # IMR
-    mem._raw[0x31] = 0xBB  # F
+    mem._raw[0x31] = 0x03  # modeled F image (C|Z)
     mem._raw[0x32] = 0x11
     mem._raw[0x33] = 0x22
     mem._raw[0x34] = 0x33

@@ -8,6 +8,8 @@ use crate::{CoreRuntime, Result};
 pub const SYSTEM_IMAGE_LEN: usize = 0x100000;
 pub const ROM_WINDOW_START: usize = 0x0C0000;
 pub const ROM_WINDOW_LEN: usize = 0x40000;
+pub const BASE_ROM_START: usize = 0x0E0000;
+pub const BASE_ROM_LEN: usize = 0x20000;
 pub const ROM_RESET_VECTOR_ADDR: u32 = 0x0FFFFD;
 pub const ROM_ENGLISH_FONT_BASE_ADDR: u32 = 0x00F_2215;
 pub const ROM_JP_FONT_ATLAS_BASE_ADDR: u32 = 0x00F_21A5;
@@ -46,8 +48,13 @@ pub fn load_pce500_rom_window_into_memory(memory: &mut MemoryImage, rom: &[u8]) 
     let slice = &rom[src_start..];
     let copy_len = slice.len().min(ROM_WINDOW_LEN);
     let start_in_slice = slice.len().saturating_sub(copy_len);
+    let target_start = if copy_len == BASE_ROM_LEN {
+        BASE_ROM_START
+    } else {
+        ROM_WINDOW_START
+    };
     memory.write_external_slice(
-        ROM_WINDOW_START,
+        target_start,
         &slice[start_in_slice..start_in_slice + copy_len],
     );
 }
@@ -76,7 +83,13 @@ pub fn seed_pce500_bootstrap_imem(memory: &mut MemoryImage) {
 }
 
 pub fn pce500_font_map_from_rom(rom: &[u8]) -> Option<Pce500FontMap> {
-    let font = Pce500FontMap::from_pce500_rom(rom, ROM_WINDOW_START as u32);
+    let raw_window_len = rom.len().min(ROM_WINDOW_LEN);
+    let rom_window_start = if raw_window_len == BASE_ROM_LEN {
+        BASE_ROM_START
+    } else {
+        ROM_WINDOW_START
+    };
+    let font = Pce500FontMap::from_pce500_rom(rom, rom_window_start as u32);
     if font.is_empty() {
         None
     } else {
@@ -87,8 +100,10 @@ pub fn pce500_font_map_from_rom(rom: &[u8]) -> Option<Pce500FontMap> {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_pce500_system_image_into_memory, seed_pce500_bootstrap_imem, BOOTSTRAP_IMR_VALUE,
-        BOOTSTRAP_ISR_VALUE, SYSTEM_IMAGE_LEN,
+        load_pce500_rom_window_into_memory, load_pce500_system_image_into_memory,
+        pce500_font_map_from_rom, seed_pce500_bootstrap_imem, BASE_ROM_LEN, BASE_ROM_START,
+        BOOTSTRAP_IMR_VALUE, BOOTSTRAP_ISR_VALUE, ROM_WINDOW_LEN, ROM_WINDOW_START,
+        SYSTEM_IMAGE_LEN,
     };
     use crate::memory::{MemoryImage, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 
@@ -103,6 +118,38 @@ mod tests {
 
         assert_eq!(memory.load(0x010012, 8), Some(0xE2));
         assert_eq!(memory.load(0x0E02ED, 8), Some(0x0B));
+    }
+
+    #[test]
+    fn base_rom_is_aligned_to_e0000_and_reaches_reset_vector() {
+        let mut rom = vec![0u8; BASE_ROM_LEN];
+        rom[0] = 0xA5;
+        rom[BASE_ROM_LEN - 3..].copy_from_slice(&[0x34, 0x12, 0x0E]);
+
+        let mut memory = MemoryImage::new();
+        load_pce500_rom_window_into_memory(&mut memory, &rom);
+
+        assert_eq!(memory.load(ROM_WINDOW_START as u32, 8), Some(0));
+        assert_eq!(memory.load(BASE_ROM_START as u32, 8), Some(0xA5));
+        assert_eq!(memory.load(0x0F_FFFD, 24), Some(0x0E_1234));
+    }
+
+    #[test]
+    fn extended_rom_still_starts_at_c0000() {
+        let mut rom = vec![0u8; ROM_WINDOW_LEN];
+        rom[0] = 0x5A;
+
+        let mut memory = MemoryImage::new();
+        load_pce500_rom_window_into_memory(&mut memory, &rom);
+
+        assert_eq!(memory.load(ROM_WINDOW_START as u32, 8), Some(0x5A));
+    }
+
+    #[test]
+    fn base_rom_font_addresses_are_relative_to_e0000() {
+        let rom = vec![0u8; BASE_ROM_LEN];
+
+        assert!(pce500_font_map_from_rom(&rom).is_some());
     }
 
     #[test]

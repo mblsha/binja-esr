@@ -10,6 +10,10 @@ ReadHandler = Callable[[int, Optional[int]], int]
 WriteHandler = Callable[[int, int, Optional[int]], None]
 
 
+class UnsafePreflightRead(RuntimeError):
+    """Raised when a side-effect-free overlay read is unavailable."""
+
+
 @dataclass
 class MemoryOverlay:
     """Descriptor for a memory-mapped overlay."""
@@ -22,6 +26,11 @@ class MemoryOverlay:
     read_handler: Optional[ReadHandler] = None
     write_handler: Optional[WriteHandler] = None
     perfetto_thread: str = "Memory"
+    # Instruction scheduling preflight must not invoke a normal device read:
+    # doing so would either consume a side effect or read a volatile value
+    # twice.  Handlers may opt in only by providing a separately audited,
+    # side-effect-free callback.
+    preflight_read_handler: Optional[ReadHandler] = None
 
     def contains(self, address: int) -> bool:
         return self.start <= address <= self.end
@@ -101,6 +110,40 @@ class MemoryBus:
                 )
             )
             return ReadResult(value=value, overlay=overlay)
+
+        return None
+
+    def peek_for_preflight(
+        self, address: int, cpu_pc: Optional[int] = None
+    ) -> Optional[ReadResult]:
+        """Resolve a byte without logging or invoking a normal read handler.
+
+        A dynamic overlay is rejected unless it explicitly supplies a
+        side-effect-free preflight callback.  Falling through to its backing
+        data would disagree with the normal bus, which always gives the read
+        handler first refusal.
+        """
+
+        for overlay in self._overlays:
+            if not overlay.contains(address):
+                continue
+
+            if overlay.preflight_read_handler is not None:
+                value = overlay.preflight_read_handler(address, cpu_pc)
+                if value is None:
+                    continue
+                return ReadResult(value=int(value) & 0xFF, overlay=overlay)
+
+            if overlay.read_handler is not None:
+                raise UnsafePreflightRead(
+                    "side-effect-free preflight read unavailable for overlay "
+                    f"{overlay.name!r} at 0x{address:06X}"
+                )
+
+            if overlay.data is not None:
+                offset = address - overlay.start
+                if 0 <= offset < len(overlay.data):
+                    return ReadResult(value=overlay.data[offset], overlay=overlay)
 
         return None
 
@@ -184,4 +227,5 @@ __all__ = [
     "MemoryAccessLog",
     "ReadResult",
     "WriteResult",
+    "UnsafePreflightRead",
 ]

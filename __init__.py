@@ -23,7 +23,11 @@ def module_exists(module_name):
 # and expect __package__ to be set by Binary Ninja.
 if module_exists("binaryninja") and __package__:
     from .sc62015.arch import SC62015, SC62015CallingConvention
-    from .sc62015.view import SC62015RomView, SC62015FullView
+    from .sc62015.view import (
+        SC62015FullView,
+        SC62015Iq7000FullView,
+        SC62015RomView,
+    )
 
     arch = SC62015.register()
     arch.register_calling_convention(
@@ -33,6 +37,7 @@ if module_exists("binaryninja") and __package__:
 
     SC62015RomView.register()
     SC62015FullView.register()
+    SC62015Iq7000FullView.register()
 
 
 # from .Z80Arch import Z80

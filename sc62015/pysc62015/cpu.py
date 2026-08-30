@@ -6,23 +6,21 @@ import os
 from importlib import import_module
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Tuple, cast
 
-from binja_test_mocks.coding import FetchDecoder
-
-from .constants import ADDRESS_SPACE_SIZE
-from .emulator import Emulator, InstructionEvalInfo, RegisterName, USE_CACHED_DECODER
-from .instr import Instruction, decode
-from .instr.opcode_table import OPCODES
+from .emulator import (
+    I_COUNTED_INSTRUCTIONS,
+    Emulator,
+    InstructionEvalInfo,
+    RegisterName,
+)
+from .constants import INTERNAL_MEMORY_START, validate_f_image
+from .instr import EX, POPS, POPU, RETI, Instruction, InvalidInstruction, PRE, TCL
+from .instr.opcodes import AddressingMode, IMem20, IMEMRegisters, RegF
 from .stepper import CPURegistersSnapshot, CPUStepResult, CPUStepper
 
 try:
     from binaryninja import InstructionInfo  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover
     from binja_test_mocks.binja_api import InstructionInfo  # type: ignore
-
-try:
-    from .cached_decoder import CachedFetchDecoder  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    CachedFetchDecoder = None  # type: ignore
 
 CPUBackendName = Literal["python", "llama"]
 
@@ -110,7 +108,14 @@ class CPU:
     ) -> None:
         backend_name, rust_module = select_backend(backend)
 
-        legacy = Emulator(memory, reset_on_init=reset_on_init)
+        # LLAMA still uses the Python object as a decoder/rendering facade, but
+        # it must not execute RESET against the shared host memory.  The native
+        # backend owns initialization in that mode; running both used to apply
+        # reset callbacks twice before the first instruction.
+        legacy = Emulator(
+            memory,
+            reset_on_init=reset_on_init if backend_name == "python" else False,
+        )
         self._impl: Any
         if backend_name == "python":
             self._impl = legacy
@@ -130,6 +135,11 @@ class CPU:
 
         self.memory = memory
         self.backend: CPUBackendName = backend_name
+        # A backend contract mismatch is detected only after the native core
+        # has executed.  Retrying could therefore apply the same instruction's
+        # side effects twice.  Preserve the first mismatch until a complete
+        # reset succeeds.
+        self._contract_poisoned: str | None = None
 
     def __getattr__(self, name: str):
         return getattr(self._impl, name)
@@ -176,52 +186,186 @@ class CPU:
     def export_lcd_snapshot(self):
         return None, None
 
-    def decode_instruction(self, address: int) -> Instruction:
+    def decode_instruction(
+        self, address: int, read_fn: Callable[[int], int] | None = None
+    ) -> Instruction:
         if self.backend == "python":
-            instr = self._impl.decode_instruction(address)
-            if instr is None:
-                opcode = self.memory.read_byte(address) & 0xFF
-                instr = _PlaceholderInstruction(opcode)
-            return cast(Instruction, instr)
+            if read_fn is None:
+                return cast(Instruction, self._impl.decode_instruction(address))
+            return cast(
+                Instruction, self._impl.decode_instruction(address, read_fn=read_fn)
+            )
 
         prev_cpu = getattr(self.memory, "cpu", None)
         can_switch = hasattr(self.memory, "set_cpu")
         if can_switch and prev_cpu is not self._legacy_decoder:
             self.memory.set_cpu(self._legacy_decoder)
         try:
-            instr = self._legacy_decoder.decode_instruction(address)
+            if read_fn is None:
+                instr = self._legacy_decoder.decode_instruction(address)
+            else:
+                instr = self._legacy_decoder.decode_instruction(
+                    address, read_fn=read_fn
+                )
         finally:
             if can_switch and prev_cpu is not self._legacy_decoder:
                 self.memory.set_cpu(prev_cpu)
-        if instr is None:
-            opcode = self.memory.read_byte(address) & 0xFF
-            instr = _PlaceholderInstruction(opcode)
         return cast(Instruction, instr)
 
+    def validate_before_scheduling(
+        self, address: int, *, validate_data_dependent: bool = True
+    ) -> Instruction:
+        """Reject quarantined opcodes before per-instruction time advances.
+
+        The backend dispatchers repeat these checks at execution time.  This
+        earlier facade check exists for machine wrappers which account for
+        peripheral time before calling :meth:`execute_instruction`.  Interrupt
+        delivery may still replace ``address`` before this preflight is called.
+        """
+
+        if self._contract_poisoned is not None:
+            raise RuntimeError(
+                "SC62015 CPU facade is poisoned after a backend contract "
+                f"violation; reset required: {self._contract_poisoned}"
+            )
+        peek_method = getattr(self.memory, "peek_byte_for_preflight", None)
+        if not callable(peek_method):
+            raise RuntimeError(
+                "SC62015 scheduling preflight requires a side-effect-free "
+                "memory peek implementation"
+            )
+
+        def peek(byte_address: int) -> int:
+            return int(peek_method(byte_address, address & 0xFFFFF)) & 0xFF
+
+        instr = self.decode_instruction(address, read_fn=peek)
+        if isinstance(instr, PRE):
+            raise InvalidInstruction(
+                f"Unfused or malformed PRE instruction at 0x{address & 0xFFFFF:05X}"
+            )
+        if (
+            isinstance(instr, I_COUNTED_INSTRUCTIONS)
+            and (self.regs.get(RegisterName.I) & 0xFFFF) == 0
+        ):
+            raise NotImplementedError(
+                "SC62015 I=0 counted-instruction semantics require "
+                "real-hardware tracing"
+            )
+        if isinstance(instr, TCL):
+            raise NotImplementedError(
+                "TCL timer-clear side effects are not implemented; "
+                "hardware trace required"
+            )
+
+        if not validate_data_dependent:
+            return instr
+
+        if isinstance(instr, EX) and instr.name() == "EXP":
+            operands = tuple(instr.operands())
+            modes = instr._addressing_modes()
+            if len(operands) != 2 or not all(
+                isinstance(operand, IMem20) for operand in operands
+            ):
+                raise RuntimeError("malformed EXP operand contract")
+
+            def imem_offset(operand: IMem20, mode: AddressingMode) -> int:
+                if operand.value is None:
+                    raise RuntimeError("decoded EXP selector is missing")
+                selector = int(operand.value) & 0xFF
+
+                def imem_register(register: IMEMRegisters) -> int:
+                    return peek(INTERNAL_MEMORY_START + int(register))
+
+                if mode == AddressingMode.N:
+                    return selector
+                if mode == AddressingMode.BP_N:
+                    return (imem_register(IMEMRegisters.BP) + selector) & 0xFF
+                if mode == AddressingMode.PX_N:
+                    return (imem_register(IMEMRegisters.PX) + selector) & 0xFF
+                if mode == AddressingMode.PY_N:
+                    return (imem_register(IMEMRegisters.PY) + selector) & 0xFF
+                if mode == AddressingMode.BP_PX:
+                    return (
+                        imem_register(IMEMRegisters.BP)
+                        + imem_register(IMEMRegisters.PX)
+                    ) & 0xFF
+                if mode == AddressingMode.BP_PY:
+                    return (
+                        imem_register(IMEMRegisters.BP)
+                        + imem_register(IMEMRegisters.PY)
+                    ) & 0xFF
+                raise RuntimeError(f"unsupported EXP addressing mode {mode!r}")
+
+            values = []
+            for operand, mode in zip(operands, modes):
+                assert isinstance(operand, IMem20)
+                offset = imem_offset(operand, mode)
+                value = 0
+                for byte_index in range(3):
+                    byte_offset = (offset + byte_index) & 0xFF
+                    value |= peek(INTERNAL_MEMORY_START + byte_offset) << (
+                        byte_index * 8
+                    )
+                values.append(value)
+            if any(value & 0xF00000 for value in values):
+                raise NotImplementedError(
+                    "SC62015 EXP high-nibble behavior requires real-hardware tracing"
+                )
+
+        if isinstance(instr, (POPU, POPS)) and isinstance(instr.reg(), RegF):
+            stack_register = (
+                RegisterName.U if isinstance(instr, POPU) else RegisterName.S
+            )
+            stack_address = self.regs.get(stack_register) & 0xFFFFF
+            validate_f_image(peek(stack_address))
+
+        if isinstance(instr, RETI):
+            stack_address = self.regs.get(RegisterName.S) & 0xFFFFF
+            validate_f_image(peek((stack_address + 1) & 0xFFFFF))
+        return instr
+
     def execute_instruction(self, address: int) -> InstructionEvalInfo:
+        if self._contract_poisoned is not None:
+            raise RuntimeError(
+                "SC62015 CPU facade is poisoned after a backend contract "
+                f"violation; reset required: {self._contract_poisoned}"
+            )
         if self.backend == "python":
             return self._impl.execute_instruction(address)
 
-        instr = self.decode_instruction(address)
+        # Native execution owns the architectural instruction fetch. The
+        # Python decoder is used only to render/analyze the result, so feed it
+        # the same side-effect-free peek contract as scheduling preflight
+        # instead of reading callback-backed code a second time.
+        peek_method = getattr(self.memory, "peek_byte_for_preflight", None)
+        if not callable(peek_method):
+            raise RuntimeError(
+                "SC62015 LLAMA facade decode requires memory.peek_byte_for_preflight"
+            )
+
+        def peek(byte_address: int) -> int:
+            return int(peek_method(byte_address, address & 0xFFFFF)) & 0xFF
+
+        instr = self.decode_instruction(address, read_fn=peek)
         info = InstructionInfo()
         instr.analyze(info, address)
 
         opcode, length = cast(Tuple[int, int], self._impl.execute_instruction(address))
         declared_length = int(info.length) if info.length is not None else None
-        if (
-            declared_length is not None
-            and declared_length != length
-            and self.backend == "python"
-        ):
-            raise RuntimeError(
+        if declared_length is not None and declared_length != length:
+            mismatch = (
                 f"Decoded length ({declared_length}) disagrees with runtime ({length}) "
                 f"for opcode 0x{opcode:02X} at {address:#06X}"
             )
+            if self._contract_poisoned is None:
+                self._contract_poisoned = mismatch
+            raise RuntimeError(mismatch)
 
         return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
     def power_on_reset(self) -> None:
         self._impl.power_on_reset()
+        self._contract_poisoned = None
 
     def snapshot_registers(self) -> CPURegistersSnapshot:
         if self.backend == "python":
@@ -238,8 +382,11 @@ class CPU:
             return
         rust_impl = cast(Any, self._impl)
         notifier = getattr(rust_impl, "notify_host_write", None)
-        if callable(notifier):
-            notifier(int(address) & 0xFFFFFF, int(value) & 0xFF)
+        if not callable(notifier):
+            raise RuntimeError(
+                "LLAMA backend does not expose the required notify_host_write hook"
+            )
+        notifier(int(address) & 0xFFFFFF, int(value) & 0xFF)
 
     def apply_snapshot(self, snapshot: CPURegistersSnapshot) -> None:
         if self.backend == "python":
@@ -262,19 +409,6 @@ class CPU:
             backend=self.backend,
         )
         return stepper.step(registers, memory_image)
-
-
-def _decode_instruction(memory, address: int) -> Instruction:
-    """Decode an instruction using the shared Python decoder."""
-
-    def _fetch(offset: int) -> int:
-        return memory.read_byte(address + offset)
-
-    if USE_CACHED_DECODER and CachedFetchDecoder is not None:
-        decoder = CachedFetchDecoder(_fetch, ADDRESS_SPACE_SIZE)  # type: ignore[arg-type]
-    else:
-        decoder = FetchDecoder(_fetch, ADDRESS_SPACE_SIZE)
-    return decode(decoder, address, OPCODES)  # type: ignore[arg-type]
 
 
 class _RustRegisterProxy:
@@ -335,6 +469,14 @@ class _RustStateProxy:
     def halted(self, value: bool) -> None:
         self._backend.halted = bool(value)
 
+    @property
+    def power_state(self) -> str:
+        return str(self._backend.power_state)
+
+    @power_state.setter
+    def power_state(self, value: str) -> None:
+        self._backend.power_state = str(value)
+
 
 __all__ = [
     "CPU",
@@ -342,21 +484,3 @@ __all__ = [
     "available_backends",
     "select_backend",
 ]
-
-
-class _PlaceholderInstruction:
-    def __init__(self, opcode: int, length: int = 1) -> None:
-        self._opcode = opcode & 0xFF
-        self._length = max(1, length)
-
-    def name(self) -> str:
-        return f"UNK_{self._opcode:02X}"
-
-    def length(self) -> int:
-        return self._length
-
-    def analyze(self, info, addr: int) -> None:
-        info.length += self._length
-
-    def render(self):
-        return []

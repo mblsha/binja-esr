@@ -482,6 +482,16 @@ class KeyboardMatrix:
             "repeat_delay": self.repeat_delay,
             "repeat_interval": self.repeat_interval,
             "columns_active_high": self.columns_active_high,
+            # Native-only keyboard policy knobs are persisted explicitly so
+            # cross-backend snapshots cannot silently inherit a different
+            # matrix configuration. The Python model implements these fixed
+            # values directly in its scan path.
+            "keyi_on_any_press": False,
+            "raw_kil": False,
+            "emit_events": True,
+            "repeat_enabled": True,
+            "keyi_latch": self._head != self._tail,
+            "kil_read_count": 0,
         }
 
     def load_state(self, state: Dict[str, object]) -> None:
@@ -543,8 +553,10 @@ class KeyboardMatrix:
             self.column_histogram = [int(val) for val in hist]
         self.irq_count = _get_int("irq_count", self.irq_count)
 
-        # Recompute derived latch to keep KIL consistent with restored state.
-        self._kil_latch = self._compute_kil(allow_pending=True)
+        # Recompute the cached hardware latch using the same debounced-state
+        # rule as live strobe/scan updates. Snapshot validation compares this
+        # canonical value with the serialized latch before committing it.
+        self._kil_latch = self._compute_kil()
 
     # ------------------------------------------------------------------ #
     # ------------------------------------------------------------------ #

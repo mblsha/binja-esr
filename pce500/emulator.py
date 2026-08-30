@@ -1,7 +1,9 @@
 """Simplified PC-E500 emulator combining machine and emulator functionality."""
 
 import json
+import operator
 import os
+import tempfile
 import time
 import zipfile
 from collections import deque
@@ -11,7 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 
 # Import the SC62015 emulator
-from sc62015.pysc62015 import CPU, RegisterName
+from sc62015.pysc62015 import CPU, RegisterName, Registers
 from sc62015.pysc62015.instr.instructions import (
     CALL,
     RetInstruction,
@@ -41,7 +43,7 @@ MTI_PERIOD_CYCLES_DEFAULT = DEFAULT_CPU_HZ // 1000 * 2  # 2 ms tick
 STI_PERIOD_CYCLES_DEFAULT = DEFAULT_CPU_HZ // 2  # 0.5 s tick
 
 SNAPSHOT_MAGIC = "pc-e500.snapshot"
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 _SNAPSHOT_REGISTER_LAYOUT = (
     ("pc", 3),
     ("ba", 2),
@@ -80,6 +82,90 @@ def _unpack_register_bytes(payload: bytes) -> Dict[str, int]:
         )
         offset += width
     return values
+
+
+def _snapshot_json_object_pairs(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    """Reject duplicate JSON members instead of accepting the last value."""
+
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"snapshot JSON contains duplicate member {key!r}")
+        result[key] = value
+    return result
+
+
+def _snapshot_mapping(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise TypeError(f"snapshot {label} must be an object")
+    return value
+
+
+def _snapshot_list(value: object, label: str) -> list[object]:
+    if not isinstance(value, list):
+        raise TypeError(f"snapshot {label} must be an array")
+    return value
+
+
+def _snapshot_bool(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"snapshot {label} must be a boolean")
+    return value
+
+
+def _snapshot_int(
+    value: object,
+    label: str,
+    *,
+    minimum: int = 0,
+    maximum: int = (1 << 64) - 1,
+) -> int:
+    """Extract an exact JSON integer without accepting booleans or floats."""
+
+    if isinstance(value, bool):
+        raise TypeError(f"snapshot {label} must be an integer")
+    try:
+        result = operator.index(value)
+    except TypeError as exc:
+        raise TypeError(f"snapshot {label} must be an integer") from exc
+    if not minimum <= result <= maximum:
+        raise ValueError(f"snapshot {label} must be between {minimum} and {maximum}")
+    return result
+
+
+def _snapshot_range(value: object, label: str) -> tuple[int, int]:
+    if isinstance(value, dict):
+        mapping = _snapshot_mapping(value, label)
+        if set(mapping) != {"start", "size"}:
+            raise ValueError(f"snapshot {label} must contain exactly start and size")
+        start = _snapshot_int(mapping["start"], f"{label}.start", maximum=0xFFFFFF)
+        size = _snapshot_int(mapping["size"], f"{label}.size", maximum=0x1000000)
+        return start, size
+    items = _snapshot_list(value, label)
+    if len(items) != 2:
+        raise ValueError(f"snapshot {label} must contain exactly two integers")
+    return (
+        _snapshot_int(items[0], f"{label}[0]", maximum=0xFFFFFF),
+        _snapshot_int(items[1], f"{label}[1]", maximum=0x1000000),
+    )
+
+
+def _snapshot_ranges(value: object, label: str) -> tuple[tuple[int, int], ...]:
+    result: list[tuple[int, int]] = []
+    for index, item in enumerate(_snapshot_list(value, label)):
+        pair = _snapshot_list(item, f"{label}[{index}]")
+        if len(pair) != 2:
+            raise ValueError(
+                f"snapshot {label}[{index}] must contain exactly two addresses"
+            )
+        start = _snapshot_int(pair[0], f"{label}[{index}][0]", maximum=0xFFFFFF)
+        end = _snapshot_int(pair[1], f"{label}[{index}][1]", maximum=0xFFFFFF)
+        if end < start:
+            raise ValueError(f"snapshot {label}[{index}] has an inverted range")
+        result.append((start, end))
+    return tuple(result)
 
 
 class IRQSource(Enum):
@@ -135,7 +221,7 @@ def _trace_probe_pc_and_opcode(emu):
     opcode = None
     if pc is not None and hasattr(emu, "memory"):
         try:
-            opcode = emu.memory.read_byte(pc) & 0xFF
+            opcode = emu.memory.peek_byte_for_preflight(pc, pc) & 0xFF
         except Exception:
             pass
     return pc, opcode
@@ -279,22 +365,15 @@ class PCE500Emulator:
         # Note: LCC overlay not needed for the keyboard handler
 
         backend = os.getenv("SC62015_CPU_BACKEND")
-        try:
-            self.cpu = CPU(
-                self.memory,
-                reset_on_init=True,
-                backend=backend,
-                timer_scale=self._timer_scale,
-            )
-        except RuntimeError as exc:
-            # Fall back to the legacy backend if the requested one is unavailable.
-            print(f"[pce500] Falling back to python CPU backend: {exc}")
-            self.cpu = CPU(
-                self.memory,
-                reset_on_init=True,
-                backend="python",
-                timer_scale=self._timer_scale,
-            )
+        # An explicit backend request is part of the validation contract.  In
+        # particular, a missing LLAMA extension must not turn a Python-vs-Rust
+        # parity run into Python-vs-Python while still reporting success.
+        self.cpu = CPU(
+            self.memory,
+            reset_on_init=True,
+            backend=backend,
+            timer_scale=self._timer_scale,
+        )
 
         self.memory.set_cpu(self.cpu)
         cpu_backend = getattr(self.cpu, "backend", None)
@@ -315,12 +394,12 @@ class PCE500Emulator:
         )
         # Ensure strobing is active in LLAMA path even when overlays are disabled.
         self.keyboard.force_strobe_enabled = True
-        try:
-            self.keyboard.set_bridge_cpu(
-                self.cpu if disable_keyboard_overlay else None, disable_keyboard_overlay
-            )
-        except Exception:
-            pass
+        # Even with Python KIO overlays enabled, ON-key mutations must go
+        # through LLAMA's transactional native keyboard path.  Matrix-key
+        # forwarding remains controlled independently by ``enable_overlay``.
+        self.keyboard.set_bridge_cpu(
+            self.cpu if cpu_backend == "llama" else None, disable_keyboard_overlay
+        )
 
         # Keep LCD overlays enabled so Python snapshots and traces stay in sync with LLAMA.
         disable_overlay = False
@@ -445,6 +524,11 @@ class PCE500Emulator:
             sti_period=max(1, int(STI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)),
         )
         self._irq_source: Optional["IRQSource"] = None
+        # Pending-IRQ delivery mutates host memory before all later reads and
+        # register writes can be proven to succeed.  If one of those operations
+        # fails, only a full reset is safe; retrying step() could otherwise push
+        # a second, overlapping interrupt frame.
+        self._poisoned: Optional[str] = None
         # Fast mode: minimize step() overhead to run many instructions
         self.fast_mode = False
 
@@ -603,10 +687,12 @@ class PCE500Emulator:
 
     @perf_trace("System")
     def load_rom(self, rom_data: bytes, start_address: Optional[int] = None) -> None:
-        if start_address is None:
-            start_address = self.INTERNAL_ROM_START
-        if start_address in (self.INTERNAL_ROM_START, 0xC0000):
-            self.memory.load_rom(rom_data)
+        if start_address is None or start_address in (
+            self.INTERNAL_ROM_START,
+            0xC0000,
+            0xE0000,
+        ):
+            self.memory.load_rom(rom_data, start_address=start_address)
         else:
             self.memory.add_rom(start_address, rom_data, "Loaded ROM")
 
@@ -655,60 +741,113 @@ class PCE500Emulator:
             }
         except Exception:
             pass
+        # A failed native callback can leave host writes queued after they have
+        # already changed Python memory.  Only discard them once every reset
+        # component above has succeeded; until then the original poison and its
+        # recovery evidence remain authoritative.
+        self.memory.discard_deferred_llama_host_writes()
+        # Clear wrapper poison only after the complete machine reset succeeds.
+        # If any operation above raises, the prior poison remains authoritative.
+        self._poisoned = None
+
+    def _execute_instruction_and_flush(self, pc: int):
+        """Execute once, then reconcile deferred LLAMA callback writes."""
+
+        try:
+            eval_info = self.cpu.execute_instruction(pc)
+        except Exception as exc:
+            if getattr(self.cpu, "backend", None) == "llama" and self._poisoned is None:
+                self._poisoned = (
+                    f"native instruction execution failed: {type(exc).__name__}: {exc}"
+                )
+            raise
+
+        try:
+            self.memory.flush_deferred_llama_host_writes()
+        except Exception as exc:
+            if getattr(self.cpu, "backend", None) == "llama" and self._poisoned is None:
+                self._poisoned = (
+                    "native deferred host-write flush failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            raise
+        return eval_info
 
     @perf_trace("Emulation", include_op_num=True)
     def step(self) -> bool:
+        if self._poisoned is not None:
+            raise RuntimeError(
+                "PCE500 emulator is poisoned after a failed pre-instruction "
+                f"side effect; reset required: {self._poisoned}"
+            )
+
         trace_snapshot: Optional[Dict[str, Any]] = None
         pc = self.cpu.regs.get(RegisterName.PC)
+        was_halted = bool(getattr(self.cpu.state, "halted", False))
+        if not was_halted:
+            # Validate the current PC before keyboard latches, IRQ sampling, or
+            # timer state can change. Interrupt delivery may replace this PC,
+            # so the selected handler is validated again below.
+            self.cpu.validate_before_scheduling(pc)
         # Reassert latched KEY/ONK interrupts even when timers are disabled so
         # firmware ISR clearing does not drop pending keyboard events.
         if self._key_irq_latched and not getattr(self, "_in_interrupt", False):
-            try:
-                isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                isr_val = self.memory.read_byte(isr_addr) & 0xFF
-                if (isr_val & int(ISRFlag.KEYI)) == 0:
-                    self._set_isr_bits(int(ISRFlag.KEYI))
-                    self._irq_pending = True
-                    if getattr(self, "_irq_source", None) not in (
-                        IRQSource.KEY,
-                        IRQSource.ONK,
-                    ):
-                        self._irq_source = IRQSource.KEY
-            except Exception:
-                pass
-        # Honor HALT: do not execute instructions while halted. Any ISR bit cancels HALT.
-        try:
-            if getattr(self.cpu.state, "halted", False):
-                # Mirror Rust: tick timers while halted to allow ISR bits to wake the CPU.
+            isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+            isr_val = self.memory.read_byte(isr_addr) & 0xFF
+            if (isr_val & int(ISRFlag.KEYI)) == 0:
+                self._set_isr_bits(int(ISRFlag.KEYI))
+                self._irq_pending = True
+                if getattr(self, "_irq_source", None) not in (
+                    IRQSource.KEY,
+                    IRQSource.ONK,
+                ):
+                    self._irq_source = IRQSource.KEY
+        # Honor low-power state without collapsing OFF into HALT.  The current
+        # model allows any asserted ISR source to wake HALT, but only ONKI to
+        # wake OFF.  Exact silicon wake policy remains hardware-trace work.
+        if getattr(self.cpu.state, "halted", False):
+            power_state = getattr(self.cpu.state, "power_state", "halted")
+            is_off = power_state == "off"
+            # Mirror Rust: tick timers while halted to allow ISR bits to wake the CPU.
+            if (
+                not is_off
+                and self._timer_enabled
+                and not getattr(self, "_in_interrupt", False)
+            ):
                 try:
-                    if self._timer_enabled and not getattr(
-                        self, "_in_interrupt", False
-                    ):
-                        self._tick_timers()
-                except Exception:
-                    pass
-                # Scan keyboard while halted so key presses can wake the CPU.
-                self._scan_keyboard_per_instruction()
-                isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
-                if isr_val_chk != 0:
-                    # Cancel HALT and arm a pending interrupt; infer a plausible source
-                    self.cpu.state.halted = False
-                    self._irq_source = _highest_pending_irq_source(isr_val_chk)
-                    setattr(self, "_irq_pending", True)
-                    _log_irq_debug(
-                        f"HALT wake IRQ pending (ISR=0x{isr_val_chk:02X}) source={self._irq_source}"
+                    self._tick_timers()
+                except Exception as exc:
+                    self._poisoned = (
+                        f"low-power timer tick failed: {type(exc).__name__}: {exc}"
                     )
-                else:
-                    # Remain halted; model passage of one cycle of time
-                    try:
-                        # Model one cycle of idle time while halted; no instruction executed.
-                        self.cycle_count += 1
-                    except Exception:
-                        pass
-                    return True
-        except Exception:
-            pass
+                    raise
+            # Scan keyboard while halted so key presses can wake the CPU.  Any
+            # peripheral failure propagates while the CPU remains stopped; it
+            # must never become implicit permission to execute the next opcode.
+            self._scan_keyboard_per_instruction()
+            isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+            isr_val_chk = self.memory.read_byte(isr_addr_chk) & 0xFF
+            wake_isr = isr_val_chk & int(ISRFlag.ONKI) if is_off else isr_val_chk
+            if wake_isr != 0:
+                # Cancel the low-power state and arm a pending interrupt.
+                self.cpu.state.halted = False
+                self.cpu.state.power_state = "running"
+                self._irq_source = _highest_pending_irq_source(wake_isr)
+                setattr(self, "_irq_pending", True)
+                _log_irq_debug(
+                    f"{power_state.upper()} wake IRQ pending "
+                    f"(ISR=0x{isr_val_chk:02X}) source={self._irq_source}"
+                )
+            else:
+                # Model one idle cycle while remaining stopped; no instruction
+                # was executed.
+                self.cycle_count += 1
+                return True
+            # Waking only changes the power/IRQ state; the pending instruction
+            # has not yet been scheduled. Validate it before proceeding into
+            # IRQ sampling or delivery.
+            pc = self.cpu.regs.get(RegisterName.PC)
+            self.cpu.validate_before_scheduling(pc)
         # Emit a focused diagnostic instant around the IRQ stub split to understand
         # branch/return flow differences (e.g., PC≈0xF205C → 0xF1769 vs 0xF1FB5).
         if new_tracer.enabled and (
@@ -813,48 +952,64 @@ class PCE500Emulator:
                 if pending_src is not None:
                     self._irq_source = pending_src
                 if self.perfetto_enabled or new_tracer.enabled:
+                    try:
+                        self._trace_irq_instant(
+                            "IRQ_PendingArm",
+                            pending_src,
+                            {
+                                "pc": pc_for_irq,
+                                "imr": imr_probe,
+                                "isr": isr_probe,
+                                "pending_src": pending_src.name
+                                if pending_src
+                                else None,
+                            },
+                        )
+                    except Exception:
+                        pass
+
+            if self.perfetto_enabled or new_tracer.enabled:
+                try:
                     self._trace_irq_instant(
-                        "IRQ_PendingArm",
+                        "IRQ_Check",
                         pending_src,
                         {
                             "pc": pc_for_irq,
                             "imr": imr_probe,
                             "isr": isr_probe,
+                            "pending_flag": bool(getattr(self, "_irq_pending", False)),
+                            "in_interrupt": bool(getattr(self, "_in_interrupt", False)),
                             "pending_src": pending_src.name if pending_src else None,
                         },
                     )
-
-            if self.perfetto_enabled or new_tracer.enabled:
-                self._trace_irq_instant(
-                    "IRQ_Check",
-                    pending_src,
-                    {
-                        "pc": pc_for_irq,
-                        "imr": imr_probe,
-                        "isr": isr_probe,
-                        "pending_flag": bool(getattr(self, "_irq_pending", False)),
-                        "in_interrupt": bool(getattr(self, "_in_interrupt", False)),
-                        "pending_src": pending_src.name if pending_src else None,
-                    },
-                )
-        except Exception:
-            pass
+                except Exception:
+                    pass
+        except Exception as exc:
+            # These reads feed functional pending-IRQ state, not just tracing.
+            # A failed sample cannot become permission to execute an opcode.
+            raise RuntimeError("failed to sample pending IRQ state") from exc
         # Check for pending synthetic interrupt before executing next instruction
         if getattr(self, "_irq_pending", False) and not getattr(
             self, "_in_interrupt", False
         ):
+            irq_delivery_started = False
             try:
                 # Respect IMR/ISR masks: deliver only if IRM=1 and (IMR & ISR)!=0
                 imr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.IMR
                 isr_addr_chk = INTERNAL_MEMORY_START + IMEMRegisters.ISR
                 imr_val_chk = self.memory.read_byte(imr_addr_chk, cpu_pc=pc) & 0xFF
                 isr_val_chk = self.memory.read_byte(isr_addr_chk, cpu_pc=pc) & 0xFF
-                kil_val_chk = (
-                    self.memory.read_byte(
-                        INTERNAL_MEMORY_START + IMEMRegisters.KIL, cpu_pc=pc
+                try:
+                    kil_val_chk = (
+                        self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.KIL, cpu_pc=pc
+                        )
+                        & 0xFF
                     )
-                    & 0xFF
-                )
+                except Exception:
+                    # KIL is included only as diagnostic context; it is not part
+                    # of the interrupt-delivery decision.
+                    kil_val_chk = None
                 # Capture a second IMR read via CPU regs (LLAMA) to spot divergence.
                 imr_reg_val = None
                 try:
@@ -885,27 +1040,22 @@ class PCE500Emulator:
                     self._irq_source = pending_src
                 # Trace unexpected IMR=0 reads to spot masking.
                 if imr_val_chk == 0:
-                    self._trace_irq_instant(
-                        "IMR_ReadZero",
-                        pending_src,
-                        {
-                            "pc": self.cpu.regs.get(RegisterName.PC),
-                            "isr": isr_val_chk,
-                        },
-                    )
+                    try:
+                        self._trace_irq_instant(
+                            "IMR_ReadZero",
+                            pending_src,
+                            {
+                                "pc": self.cpu.regs.get(RegisterName.PC),
+                                "isr": isr_val_chk,
+                            },
+                        )
+                    except Exception:
+                        pass
                 _log_irq_debug(
                     f"pending IRQ check pc=0x{self.cpu.regs.get(RegisterName.PC):06X} "
                     f"imr=0x{imr_val_chk:02X} isr=0x{isr_val_chk:02X} in_interrupt={self._in_interrupt}"
                 )
                 irm_enabled = (imr_val_chk & int(IMRFlag.IRM)) != 0
-                # If a level-triggered KEY/ONK request is pending while IRM is
-                # still masked, treat IRM as enabled so the event is not lost
-                # before the ROM flips IMR into its runtime state.
-                if not irm_enabled and (
-                    isr_val_chk & (int(ISRFlag.KEYI) | int(ISRFlag.ONKI))
-                ):
-                    irm_enabled = True
-
                 if not irm_enabled or (imr_val_chk & isr_val_chk) == 0:
                     # Keep pending; CPU continues executing normal flow
                     _log_irq_debug(
@@ -916,31 +1066,43 @@ class PCE500Emulator:
                     # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
                     cur_pc = self.cpu.regs.get(RegisterName.PC)
                     s = self.cpu.regs.get(RegisterName.S)
+                    # Resolve and statically preflight the handler before the
+                    # interrupt frame changes architectural state. Data-backed
+                    # checks (for example POPS F) are repeated after delivery,
+                    # against the post-frame stack pointer.
+                    vector_addr = self.memory.read_long(0xFFFFA)
+                    if vector_addr & 0xF00000:
+                        raise NotImplementedError(
+                            "SC62015 interrupt-vector high-nibble behavior "
+                            "requires real-hardware tracing"
+                        )
+                    self.cpu.validate_before_scheduling(
+                        vector_addr, validate_data_dependent=False
+                    )
                     _log_irq_debug(
                         f"Delivering IRQ src={self._irq_source} pc=0x{cur_pc:06X} s=0x{s:06X}"
                     )
-                    # Require a valid, initialized stack pointer; defer IRQ until firmware sets SP
-                    if not isinstance(s, int) or s < 5:
-                        raise RuntimeError(
-                            "IRQ deferred: stack pointer not initialized"
-                        )
                     if self._irq_source == IRQSource.KEY:
-                        self._trace_irq_instant(
-                            "KeyDeliver",
-                            self._irq_source,
-                            {
-                                "from": cur_pc,
-                                "imr": imr_val_chk,
-                                "isr": isr_val_chk,
-                                "s": s,
-                            },
-                        )
+                        try:
+                            self._trace_irq_instant(
+                                "KeyDeliver",
+                                self._irq_source,
+                                {
+                                    "from": cur_pc,
+                                    "imr": imr_val_chk,
+                                    "isr": isr_val_chk,
+                                    "s": s,
+                                },
+                            )
+                        except Exception:
+                            pass
                     if IRQ_STACK_TRACE_ENABLED:
                         print(
                             f"[irq-stack] deliver start pc=0x{cur_pc:06X} s=0x{s:06X} f=0x{int(self.cpu.regs.get(RegisterName.F)) & 0xFF:02X} imr=0x{imr_val_chk:02X}"
                         )
                     # push PC (little-endian 3 bytes)
-                    s_new = s - 3
+                    s_new = (s - 3) & 0xFFFFF
+                    irq_delivery_started = True
                     self.memory.write_bytes(3, s_new, cur_pc)
                     if IRQ_STACK_TRACE_ENABLED:
                         print(
@@ -949,7 +1111,7 @@ class PCE500Emulator:
                     self.cpu.regs.set(RegisterName.S, s_new)
                     # push F (1 byte)
                     f_val = self.cpu.regs.get(RegisterName.F)
-                    s_new = self.cpu.regs.get(RegisterName.S) - 1
+                    s_new = (self.cpu.regs.get(RegisterName.S) - 1) & 0xFFFFF
                     self.memory.write_bytes(1, s_new, f_val)
                     if IRQ_STACK_TRACE_ENABLED:
                         print(
@@ -959,7 +1121,7 @@ class PCE500Emulator:
                     # push IMR (1 byte) and clear IRM bit 7
                     imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
                     imr_val = self.memory.read_byte(imr_addr)
-                    s_new = self.cpu.regs.get(RegisterName.S) - 1
+                    s_new = (self.cpu.regs.get(RegisterName.S) - 1) & 0xFFFFF
                     self.memory.write_bytes(1, s_new, imr_val)
                     if IRQ_STACK_TRACE_ENABLED:
                         print(
@@ -975,34 +1137,39 @@ class PCE500Emulator:
                         )
                     # ISR status was set by the triggering source (device/timer)
                     # Do not modify ISR here; only deliver the interrupt.
-                    # Jump to interrupt vector (0xFFFFA little-endian 3 bytes)
-                    vector_addr = self.memory.read_long(0xFFFFA)
+                    # Jump to the already validated interrupt vector candidate.
                     if self._irq_source == IRQSource.KEY:
                         # Mark keyboard IRQ delivery explicitly on irq.key track.
+                        try:
+                            self._trace_irq_instant(
+                                "KeyDeliver",
+                                self._irq_source,
+                                {
+                                    "from": cur_pc,
+                                    "vector": vector_addr,
+                                    "imr": imr_val_chk,
+                                    "isr": isr_val_chk,
+                                    "s": s_new,
+                                },
+                            )
+                        except Exception:
+                            pass
+                    try:
                         self._trace_irq_instant(
-                            "KeyDeliver",
+                            "IRQ_Enter",
                             self._irq_source,
                             {
                                 "from": cur_pc,
                                 "vector": vector_addr,
-                                "imr": imr_val_chk,
+                                "imr_before": imr_val_chk,
+                                "imr_after": imr_val & 0xFF,
                                 "isr": isr_val_chk,
-                                "s": s_new,
+                                "y": self.cpu.regs.get(RegisterName.Y),
+                                "s": s,
                             },
                         )
-                    self._trace_irq_instant(
-                        "IRQ_Enter",
-                        self._irq_source,
-                        {
-                            "from": cur_pc,
-                            "vector": vector_addr,
-                            "imr_before": imr_val_chk,
-                            "imr_after": imr_val & 0xFF,
-                            "isr": isr_val_chk,
-                            "y": self.cpu.regs.get(RegisterName.Y),
-                            "s": s,
-                        },
-                    )
+                    except Exception:
+                        pass
                     self.cpu.regs.set(RegisterName.PC, vector_addr)
                     self._in_interrupt = True
                     self._irq_pending = False
@@ -1054,17 +1221,30 @@ class PCE500Emulator:
                         self._kb_irq_count += 1
                     except Exception:
                         pass
-            except Exception:
-                pass
+            except Exception as exc:
+                if irq_delivery_started:
+                    self._poisoned = f"IRQ delivery failed: {type(exc).__name__}: {exc}"
+                raise
+
+        # Interrupt delivery above may replace the opcode which was about to
+        # execute, so preflight the final PC here.  Quarantined behavior (for
+        # example counted instructions with I=0 or TCL) must fail before the
+        # per-instruction timer tick mutates scheduler/ISR state.
+        scheduled_pc = self.cpu.regs.get(RegisterName.PC)
+        self.cpu.validate_before_scheduling(scheduled_pc)
 
         # Tick rough timers after pending IRQ delivery check to match Rust ordering.
-        try:
-            if self._timer_enabled:
-                # Hardware timers continue advancing while an interrupt handler
-                # runs; delivery remains deferred by the interrupt-state checks.
+        if self._timer_enabled:
+            # Hardware timers continue advancing while an interrupt handler
+            # runs; delivery remains deferred by the interrupt-state checks.
+            try:
                 self._tick_timers()
-        except Exception:
-            pass
+            except Exception as exc:
+                # Timer advancement may already have updated the scheduler or
+                # ISR before a later host operation fails.  Require reset rather
+                # than retrying a partially completed tick and then executing.
+                self._poisoned = f"timer tick failed: {type(exc).__name__}: {exc}"
+                raise
 
         pc = self.cpu.regs.get(RegisterName.PC)
         self._last_pc, self._current_pc = self._current_pc, pc
@@ -1103,7 +1283,7 @@ class PCE500Emulator:
             # Always simulate WAIT loops to advance timers, regardless of tracing.
             wait_sim_count = 0
             try:
-                opcode_peek = self.memory.read_byte(pc) & 0xFF
+                opcode_peek = self.memory.peek_byte_for_preflight(pc, pc) & 0xFF
                 if opcode_peek == 0xEF:  # WAIT
                     i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
                     if i_before > 0:
@@ -1120,7 +1300,7 @@ class PCE500Emulator:
                 # Clear current instruction accesses before execution
                 self._reset_instruction_access_log()
 
-                eval_info = self.cpu.execute_instruction(pc)
+                eval_info = self._execute_instruction_and_flush(pc)
                 if PYTHON_PC_TRACE_ENABLED:
                     print(f"[python-pc] PC=0x{pc:06X}")
                 _log_stack_snapshot_emulator(self, pc)
@@ -1159,9 +1339,14 @@ class PCE500Emulator:
                     )
             else:
                 # Decode instruction first to get opcode name for tracing
-                instr = self.cpu.decode_instruction(pc)
+                instr = self.cpu.decode_instruction(
+                    pc,
+                    read_fn=lambda address: self.memory.peek_byte_for_preflight(
+                        address, pc
+                    ),
+                )
                 opcode = (
-                    self.memory.read_byte(pc)
+                    int(instr.opcode) & 0xFF
                     if (self.perfetto_enabled or self._new_trace_enabled)
                     else None
                 )
@@ -1183,11 +1368,11 @@ class PCE500Emulator:
                             "op_num": self.instruction_count,
                         },
                     ):
-                        eval_info = self.cpu.execute_instruction(pc)
+                        eval_info = self._execute_instruction_and_flush(pc)
                         if PYTHON_PC_TRACE_ENABLED:
                             print(f"[python-pc] PC=0x{pc:06X}")
                 else:
-                    eval_info = self.cpu.execute_instruction(pc)
+                    eval_info = self._execute_instruction_and_flush(pc)
                     if PYTHON_PC_TRACE_ENABLED:
                         print(f"[python-pc] PC=0x{pc:06X}")
                 _log_stack_snapshot_emulator(self, pc)
@@ -1363,13 +1548,13 @@ class PCE500Emulator:
         if not callable(exporter):
             return
         metadata, payload = exporter()
-        if metadata and payload:
-            try:
-                self.lcd.load_snapshot(metadata, payload)
-            except Exception as exc:  # pragma: no cover - diagnostic path
-                print(
-                    f"WARNING: failed to apply LCD snapshot from LLAMA backend: {exc}"
-                )
+        if metadata is None and payload is None:
+            return
+        if metadata is None or payload is None:
+            raise RuntimeError(
+                "LLAMA LCD snapshot returned incomplete metadata/payload"
+            )
+        self.lcd.load_snapshot(metadata, payload)
 
     def _capture_lcd_snapshot(self) -> Tuple[Dict[str, object], bytes]:
         self._sync_lcd_from_backend()
@@ -1394,6 +1579,8 @@ class PCE500Emulator:
                     "y_address": chip_snap.y_address,
                     "instruction_count": chip_snap.instruction_count,
                     "data_write_count": chip_snap.data_write_count,
+                    "data_read_count": chip_snap.data_read_count,
+                    "on_off_count": chip_snap.on_off_count,
                 }
             )
             for page in chip_snap.vram:
@@ -1408,46 +1595,282 @@ class PCE500Emulator:
             return
         self.lcd.load_snapshot(metadata, payload)
 
+    def _capture_keyboard_snapshot_metadata(self) -> dict[str, object]:
+        state = self.keyboard.snapshot_state()
+        matrix = state.get("matrix")
+        if not isinstance(matrix, dict):
+            raise RuntimeError("keyboard snapshot is missing matrix state")
+        matrix["kil_read_count"] = int(getattr(self, "_kil_read_count", 0))
+        return state
+
+    def _capture_scheduler_snapshot_metadata(
+        self,
+        imem_bytes: bytes,
+        *,
+        delivered_masks: object = None,
+        native_timer: object = None,
+        native_interrupts: object = None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Capture the host-authoritative timer and IRQ state exactly."""
+
+        if len(imem_bytes) != 0x100:
+            raise ValueError("internal memory snapshot must contain exactly 256 bytes")
+        timer_info: dict[str, object] = {
+            "enabled": bool(self._timer_enabled),
+            "mti_period": int(self._timer_mti_period),
+            "sti_period": int(self._timer_sti_period),
+            "next_mti": int(self._timer_next_mti),
+            "next_sti": int(self._timer_next_sti),
+            "kb_irq_enabled": bool(getattr(self, "_kb_irq_enabled", True)),
+            # Python snapshots are taken at an instruction boundary. Native
+            # snapshots overwrite these with TimerContext's exact phase state.
+            "instruction_start_cycle": int(self.cycle_count),
+            "last_mti_fire_cycle": None,
+            "last_sti_fire_cycle": None,
+            "fired_mti_since_boundary": False,
+            "fired_sti_since_boundary": False,
+            "preserve_phase": True,
+        }
+        if isinstance(native_timer, dict):
+            for key in (
+                "enabled",
+                "mti_period",
+                "sti_period",
+                "next_mti",
+                "next_sti",
+                "kb_irq_enabled",
+            ):
+                if key not in native_timer:
+                    raise RuntimeError(
+                        f"LLAMA snapshot timer metadata is missing {key!r}"
+                    )
+                if native_timer[key] != timer_info[key]:
+                    raise RuntimeError(
+                        f"LLAMA native and PCE host timer fields disagree: {key}"
+                    )
+            for key in (
+                "instruction_start_cycle",
+                "last_mti_fire_cycle",
+                "last_sti_fire_cycle",
+                "fired_mti_since_boundary",
+                "fired_sti_since_boundary",
+                "preserve_phase",
+            ):
+                if key not in native_timer:
+                    raise RuntimeError(
+                        f"LLAMA snapshot timer metadata is missing {key!r}"
+                    )
+                timer_info[key] = native_timer[key]
+        irq_source_name = self._irq_source.name if self._irq_source else None
+        last_fired = None
+        if isinstance(native_interrupts, dict):
+            if "last_fired" not in native_interrupts:
+                raise RuntimeError(
+                    "LLAMA snapshot interrupt metadata is missing 'last_fired'"
+                )
+            last_fired = native_interrupts["last_fired"]
+        interrupts: dict[str, object] = {
+            "pending": bool(getattr(self, "_irq_pending", False)),
+            "in_interrupt": bool(getattr(self, "_in_interrupt", False)),
+            "key_irq_latched": bool(getattr(self, "_key_irq_latched", False)),
+            "source": irq_source_name,
+            "last_fired": last_fired,
+            "stack": list(self._interrupt_stack),
+            "next_id": int(self._next_interrupt_id),
+            "imr": int(imem_bytes[IMEMRegisters.IMR.value]),
+            "isr": int(imem_bytes[IMEMRegisters.ISR.value]),
+            "irq_counts": dict(self.irq_counts),
+            "last_irq": dict(self.last_irq),
+            "irq_bit_watch": self.irq_bit_watch,
+            "delivered_masks": (
+                list(delivered_masks) if isinstance(delivered_masks, list) else []
+            ),
+        }
+        for source in ("mti", "sti"):
+            fired = bool(timer_info[f"fired_{source}_since_boundary"])
+            fire_cycle = timer_info[f"last_{source}_fire_cycle"]
+            if fired != (fire_cycle is not None):
+                raise ValueError(
+                    f"snapshot {source.upper()} phase flag/fire cycle disagree"
+                )
+        if self.cpu.backend != "llama" and (
+            timer_info["instruction_start_cycle"] != self.cycle_count
+            or timer_info["last_mti_fire_cycle"] is not None
+            or timer_info["last_sti_fire_cycle"] is not None
+            or timer_info["fired_mti_since_boundary"]
+            or timer_info["fired_sti_since_boundary"]
+            or not timer_info["preserve_phase"]
+        ):
+            raise ValueError(
+                "Python backend cannot exactly restore transient native timer phase"
+            )
+        return timer_info, interrupts
+
+    def _synchronize_llama_snapshot_shadow(self, llama_impl: object) -> None:
+        """Copy host-owned peripheral state into LLAMA before serialization.
+
+        The PCE facade advances timers, scans the keyboard, and delivers IRQs.
+        LLAMA's duplicate TimerContext/KeyboardMatrix fields are therefore a
+        bridge shadow in this integration, not a second source of truth.  The
+        native helper validates all candidates before committing any of them.
+        """
+
+        synchronizer = getattr(llama_impl, "synchronize_host_snapshot_state", None)
+        if not callable(synchronizer):
+            raise RuntimeError(
+                "LLAMA backend lacks atomic host snapshot-state synchronization"
+            )
+        imem_bytes = self.memory.get_internal_memory_bytes()
+        timer_info, interrupts = self._capture_scheduler_snapshot_metadata(imem_bytes)
+        keyboard_state = self._capture_keyboard_snapshot_metadata()
+        synchronizer(
+            timer_info,
+            interrupts,
+            keyboard_state,
+            int(self.instruction_count),
+            int(self.cycle_count),
+            int(self.memory_read_count),
+            int(self.memory_write_count),
+        )
+
     def _patch_llama_snapshot_metadata(self, target: Path) -> None:
         """Add Python-only metadata fields to a LLAMA-authored snapshot."""
 
         try:
             with zipfile.ZipFile(target, "r") as zf:
                 entries = {name: zf.read(name) for name in zf.namelist()}
-        except Exception as exc:  # pragma: no cover - diagnostic path
-            print(f"[snapshot] Unable to post-process LLAMA snapshot: {exc}")
-            return
+        except Exception as exc:
+            raise RuntimeError(
+                f"unable to read LLAMA snapshot for metadata patch: {target}"
+            ) from exc
 
         try:
             raw_meta = entries.get("snapshot.json", b"{}")
             metadata = json.loads(raw_meta.decode("utf-8"))
-        except Exception as exc:  # pragma: no cover - diagnostic path
-            print(f"[snapshot] Failed to parse snapshot metadata: {exc}")
-            return
+        except Exception as exc:
+            raise RuntimeError("failed to parse LLAMA snapshot metadata") from exc
+        if not isinstance(metadata, dict):
+            raise RuntimeError("LLAMA snapshot metadata must be a JSON object")
+
+        imem_bytes = entries.get("imem.bin")
+        if imem_bytes is None:
+            raise RuntimeError("LLAMA snapshot is missing imem.bin")
+        previous_timer = metadata.get("timer")
+        previous_interrupts = metadata.get("interrupts")
+        delivered_masks = (
+            previous_interrupts.get("delivered_masks")
+            if isinstance(previous_interrupts, dict)
+            else None
+        )
+        timer_info, interrupts = self._capture_scheduler_snapshot_metadata(
+            imem_bytes,
+            delivered_masks=delivered_masks,
+            native_timer=previous_timer,
+            native_interrupts=previous_interrupts,
+        )
+        if isinstance(previous_interrupts, dict):
+            native_latch = previous_interrupts.get("key_irq_latched")
+            if not isinstance(native_latch, bool):
+                raise RuntimeError(
+                    "LLAMA snapshot interrupt metadata is missing boolean "
+                    "key_irq_latched"
+                )
+            if native_latch != interrupts["key_irq_latched"]:
+                raise RuntimeError(
+                    "LLAMA native and PCE host keyboard IRQ latches disagree"
+                )
+            for field in (
+                "pending",
+                "in_interrupt",
+                "source",
+                "stack",
+                "next_id",
+                "imr",
+                "isr",
+                "irq_counts",
+                "last_irq",
+                "irq_bit_watch",
+            ):
+                if field not in previous_interrupts:
+                    raise RuntimeError(
+                        f"LLAMA snapshot interrupt metadata is missing {field!r}"
+                    )
+                host_value = interrupts[field]
+                if field == "irq_bit_watch":
+                    # Python keeps bit indices as integers in memory; JSON object
+                    # keys are necessarily strings in the native archive.
+                    host_value = json.loads(json.dumps(host_value))
+                if previous_interrupts[field] != host_value:
+                    raise RuntimeError(
+                        f"LLAMA native and PCE host interrupt fields disagree: {field}"
+                    )
 
         cpu_snapshot = self.cpu.snapshot_registers()
         temps = {str(k): int(v) for k, v in getattr(cpu_snapshot, "temps", {}).items()}
+        for field, host_value in (
+            ("instruction_count", int(getattr(self, "instruction_count", 0))),
+            ("cycle_count", int(getattr(self, "cycle_count", 0))),
+            ("memory_reads", int(getattr(self, "memory_read_count", 0))),
+            ("memory_writes", int(getattr(self, "memory_write_count", 0))),
+            ("pc", int(getattr(cpu_snapshot, "pc", 0)) & 0xFFFFF),
+            ("temps", temps),
+            ("power_state", str(getattr(self.cpu.state, "power_state", "running"))),
+        ):
+            if metadata.get(field) != host_value:
+                raise RuntimeError(
+                    f"LLAMA native and PCE host runtime fields disagree: {field}"
+                )
+        native_call_depth = metadata.get("call_depth")
+        native_call_sub_level = metadata.get("call_sub_level")
+        host_call_depth = int(getattr(self, "call_depth", 0))
+        host_call_sub_level = int(getattr(cpu_snapshot, "call_sub_level", 0))
+        if native_call_depth != host_call_depth:
+            raise RuntimeError("LLAMA native and PCE host call depths disagree")
+        if native_call_sub_level != host_call_sub_level:
+            raise RuntimeError("LLAMA native and PCE host call sub-levels disagree")
+        for field in ("call_stack", "call_page_stack", "call_return_widths"):
+            if not isinstance(metadata.get(field), list):
+                raise RuntimeError(f"LLAMA snapshot metadata is missing {field!r}")
         metadata.update(
             {
                 "backend": getattr(self.cpu, "backend", "llama"),
                 "instruction_count": int(getattr(self, "instruction_count", 0)),
                 "cycle_count": int(getattr(self, "cycle_count", 0)),
-                "pc": int(getattr(cpu_snapshot, "pc", 0)) & 0xFFFFFF,
-                "call_depth": int(getattr(self, "call_depth", 0)),
-                "call_sub_level": int(getattr(cpu_snapshot, "call_sub_level", 0)),
+                "pc": int(getattr(cpu_snapshot, "pc", 0)) & 0xFFFFF,
+                "call_depth": host_call_depth,
+                "call_sub_level": host_call_sub_level,
                 "temps": temps,
                 "memory_reads": int(getattr(self, "memory_read_count", 0)),
                 "memory_writes": int(getattr(self, "memory_write_count", 0)),
                 "memory_dump_pc": int(getattr(self, "MEMORY_DUMP_PC", 0)),
                 "fast_mode": bool(getattr(self, "fast_mode", False)),
+                "power_state": str(getattr(self.cpu.state, "power_state", "running")),
+                "external_interrupt_level": False,
+                "timer": timer_info,
+                "interrupts": interrupts,
             }
         )
 
-        keyboard_state = (
-            self.keyboard.snapshot_state() if hasattr(self, "keyboard") else None
-        )
-        if keyboard_state is not None:
-            metadata["keyboard"] = keyboard_state
+        keyboard_state = self._capture_keyboard_snapshot_metadata()
+        previous_keyboard = metadata.get("keyboard")
+        if not isinstance(previous_keyboard, dict):
+            raise RuntimeError("LLAMA snapshot is missing native keyboard metadata")
+        host_matrix = keyboard_state.get("matrix")
+        if not isinstance(host_matrix, dict):
+            raise RuntimeError("PCE host keyboard snapshot is missing matrix metadata")
+        for field in (
+            "keyi_on_any_press",
+            "raw_kil",
+            "emit_events",
+            "repeat_enabled",
+            "keyi_latch",
+            "kil_read_count",
+        ):
+            if previous_keyboard.get(field) != host_matrix.get(field):
+                raise RuntimeError(
+                    f"LLAMA native and PCE host keyboard fields disagree: {field}"
+                )
+        metadata["keyboard"] = keyboard_state
 
         kb_metrics = {
             "irq_count": int(getattr(self, "_kb_irq_count", 0)),
@@ -1465,16 +1888,48 @@ class PCE500Emulator:
             metadata, indent=2, sort_keys=True
         ).encode("utf-8")
 
+        temp_fd, temp_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+        )
+        os.close(temp_fd)
+        temp_path = Path(temp_name)
         try:
-            with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(
+                temp_path, "w", compression=zipfile.ZIP_DEFLATED
+            ) as zf:
                 for name, data in entries.items():
                     zf.writestr(name, data)
-        except Exception as exc:  # pragma: no cover - diagnostic path
-            print(f"[snapshot] Failed to rewrite Rust snapshot metadata: {exc}")
+            os.replace(temp_path, target)
+        except Exception as exc:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"failed to atomically rewrite LLAMA snapshot metadata: {target}"
+            ) from exc
+
+    def _reject_poisoned_snapshot_save(self) -> None:
+        """Refuse to checkpoint state which cannot safely resume execution."""
+
+        poison_sources = (
+            ("PCE500 wrapper", getattr(self, "_poisoned", None)),
+            ("SC62015 CPU facade", getattr(self.cpu, "_contract_poisoned", None)),
+            ("SC62015 CPU backend", getattr(self.cpu, "_poisoned", None)),
+        )
+        for source, reason in poison_sources:
+            if reason is not None:
+                raise RuntimeError(
+                    f"cannot save snapshot while {source} is poisoned; "
+                    f"reset required: {reason}"
+                )
 
     def save_snapshot(self, path: str | Path) -> Path:
         """Persist CPU/memory/peripheral state to a .pcsnap bundle."""
 
+        self._reject_poisoned_snapshot_save()
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1482,51 +1937,46 @@ class PCE500Emulator:
             llama_impl = self.cpu.unwrap()
             saver = getattr(llama_impl, "save_snapshot", None)
             if callable(saver):
+                is_synced = getattr(llama_impl, "is_memory_synced", None)
+                if callable(is_synced) and not is_synced():
+                    reinit = getattr(llama_impl, "_initialise_rust_memory", None)
+                    if callable(reinit):
+                        reinit()
+                self._synchronize_llama_snapshot_shadow(llama_impl)
+                # An explicitly active LLAMA backend owns its snapshot
+                # contract. Shape, callback, and write errors must reach the
+                # caller; falling through to a second serializer can turn a
+                # rejected partial image into an apparently valid snapshot.
+                temp_fd, temp_name = tempfile.mkstemp(
+                    dir=target.parent,
+                    prefix=f".{target.name}.",
+                    suffix=".native.tmp",
+                )
+                os.close(temp_fd)
+                temp_path = Path(temp_name)
                 try:
-                    is_synced = getattr(llama_impl, "is_memory_synced", None)
-                    if callable(is_synced) and not is_synced():
-                        reinit = getattr(llama_impl, "_initialise_rust_memory", None)
-                        if callable(reinit):
-                            reinit()
-                    saver(str(target))
-                    self._patch_llama_snapshot_metadata(target)
-                    return target
-                except Exception as exc:  # pragma: no cover - fallback path
-                    print(
-                        f"[snapshot] LLAMA save failed, falling back to python path: {exc}"
-                    )
+                    saver(str(temp_path))
+                    self._patch_llama_snapshot_metadata(temp_path)
+                    self._validate_snapshot_archive(temp_path)
+                    self._reject_poisoned_snapshot_save()
+                    os.replace(temp_path, target)
+                except Exception:
+                    temp_path.unlink(missing_ok=True)
+                    raise
+                return target
 
         cpu_snapshot = self.cpu.snapshot_registers()
         registers_blob = _pack_register_bytes(cpu_snapshot)
         flat_memory, fallback_ranges, readonly_ranges = self.memory.export_flat_memory()
 
-        internal_slice = self.memory.external_memory[
+        internal_slice = flat_memory[
             self.INTERNAL_RAM_START : self.INTERNAL_RAM_START + self.INTERNAL_RAM_SIZE
         ]
         imem_bytes = self.memory.get_internal_memory_bytes()
         lcd_meta, lcd_payload = self._capture_lcd_snapshot()
-        keyboard_state = (
-            self.keyboard.snapshot_state() if hasattr(self, "keyboard") else None
-        )
+        keyboard_state = self._capture_keyboard_snapshot_metadata()
 
-        timer_info = {
-            "enabled": bool(self._timer_enabled),
-            "mti_period": int(self._timer_mti_period),
-            "sti_period": int(self._timer_sti_period),
-            "next_mti": int(self._timer_next_mti),
-            "next_sti": int(self._timer_next_sti),
-        }
-        irq_source_name = self._irq_source.name if self._irq_source else None
-        interrupts = {
-            "pending": bool(getattr(self, "_irq_pending", False)),
-            "in_interrupt": bool(getattr(self, "_in_interrupt", False)),
-            "source": irq_source_name,
-            "stack": list(self._interrupt_stack),
-            "next_id": int(self._next_interrupt_id),
-            "irq_counts": dict(self.irq_counts),
-            "last_irq": dict(self.last_irq),
-            "irq_bit_watch": self.irq_bit_watch,
-        }
+        timer_info, interrupts = self._capture_scheduler_snapshot_metadata(imem_bytes)
 
         kb_metrics = {
             "irq_count": int(getattr(self, "_kb_irq_count", 0)),
@@ -1550,9 +2000,16 @@ class PCE500Emulator:
             "memory_reads": int(self.memory_read_count),
             "memory_writes": int(self.memory_write_count),
             "pc": int(cpu_snapshot.pc),
+            "power_state": str(getattr(self.cpu.state, "power_state", "running")),
+            "external_interrupt_level": False,
             "call_depth": int(self.call_depth),
             "call_sub_level": int(cpu_snapshot.call_sub_level),
-            "temps": {str(k): int(v) for k, v in cpu_snapshot.temps.items()},
+            "call_stack": [],
+            "call_page_stack": [],
+            "call_return_widths": [],
+            "temps": {
+                str(index): int(cpu_snapshot.temps.get(index, 0)) for index in range(16)
+            },
             "timer": timer_info,
             "interrupts": interrupts,
             "keyboard": keyboard_state,
@@ -1575,78 +2032,242 @@ class PCE500Emulator:
             "lcd_payload_size": len(lcd_payload),
         }
 
-        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("snapshot.json", json.dumps(metadata, indent=2, sort_keys=True))
-            zf.writestr("registers.bin", registers_blob)
-            zf.writestr("external_ram.bin", bytes(flat_memory))
-            zf.writestr("internal_ram.bin", bytes(internal_slice))
-            zf.writestr("imem.bin", imem_bytes)
-            zf.writestr("lcd_vram.bin", lcd_payload)
+        temp_fd, temp_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+        )
+        os.close(temp_fd)
+        temp_path = Path(temp_name)
+        try:
+            with zipfile.ZipFile(
+                temp_path, "w", compression=zipfile.ZIP_DEFLATED
+            ) as zf:
+                zf.writestr(
+                    "snapshot.json", json.dumps(metadata, indent=2, sort_keys=True)
+                )
+                zf.writestr("registers.bin", registers_blob)
+                zf.writestr("external_ram.bin", bytes(flat_memory))
+                zf.writestr("internal_ram.bin", bytes(internal_slice))
+                zf.writestr("imem.bin", imem_bytes)
+                zf.writestr("lcd_vram.bin", lcd_payload)
+            self._validate_snapshot_archive(temp_path)
+            self._reject_poisoned_snapshot_save()
+            os.replace(temp_path, target)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
 
         return target
 
+    def _validate_snapshot_archive(self, path: str | Path) -> None:
+        """Build every load candidate without committing it to the emulator."""
+
+        self._load_snapshot(path, backend=None, commit=False)
+
     def load_snapshot(self, path: str | Path, *, backend: Optional[str] = None) -> None:
-        """Load a snapshot created by ``save_snapshot``."""
+        """Validate a complete snapshot off-side, then commit it once."""
+
+        self._load_snapshot(path, backend=backend, commit=True)
+
+    def _load_snapshot(
+        self,
+        path: str | Path,
+        *,
+        backend: Optional[str],
+        commit: bool,
+    ) -> None:
+        """Parse and validate a snapshot, optionally committing its candidates."""
+
+        def required(mapping: dict[str, object], key: str, label: str) -> object:
+            if key not in mapping:
+                raise ValueError(f"snapshot {label} is missing required member {key!r}")
+            return mapping[key]
 
         source = Path(path)
         if not source.exists():
             raise FileNotFoundError(source)
 
+        required_entries = {
+            "snapshot.json",
+            "registers.bin",
+            "external_ram.bin",
+            "internal_ram.bin",
+            "imem.bin",
+            "lcd_vram.bin",
+        }
         with zipfile.ZipFile(source, "r") as zf:
-            metadata = json.loads(zf.read("snapshot.json"))
-            if metadata.get("magic") != SNAPSHOT_MAGIC:
-                raise ValueError("Snapshot magic mismatch")
-            if int(metadata.get("version", -1)) != SNAPSHOT_VERSION:
-                raise ValueError("Unsupported snapshot version")
+            names = zf.namelist()
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                raise ValueError(
+                    f"snapshot archive contains duplicate entries: {duplicates}"
+                )
+            missing = sorted(required_entries - set(names))
+            if missing:
+                raise ValueError(f"snapshot archive is missing entries: {missing}")
+            unexpected = sorted(set(names) - required_entries)
+            if unexpected:
+                raise ValueError(
+                    f"snapshot archive contains unexpected entries: {unexpected}"
+                )
+            metadata = json.loads(
+                zf.read("snapshot.json"),
+                object_pairs_hook=_snapshot_json_object_pairs,
+            )
             registers_blob = zf.read("registers.bin")
             flat_memory = zf.read("external_ram.bin")
-            imem_bytes = zf.read("imem.bin") if "imem.bin" in zf.namelist() else b""
-            lcd_payload = (
-                zf.read("lcd_vram.bin") if "lcd_vram.bin" in zf.namelist() else None
-            )
+            internal_ram = zf.read("internal_ram.bin")
+            imem_bytes = zf.read("imem.bin")
+            lcd_payload = zf.read("lcd_vram.bin")
 
-        if len(flat_memory) != len(self.memory.external_memory):
+        metadata = _snapshot_mapping(metadata, "metadata")
+        required_metadata_fields = {
+            "magic",
+            "version",
+            "backend",
+            "created",
+            "instruction_count",
+            "cycle_count",
+            "memory_reads",
+            "memory_writes",
+            "pc",
+            "power_state",
+            "external_interrupt_level",
+            "call_depth",
+            "call_sub_level",
+            "call_stack",
+            "call_page_stack",
+            "call_return_widths",
+            "temps",
+            "timer",
+            "interrupts",
+            "keyboard",
+            "kb_metrics",
+            "fallback_ranges",
+            "readonly_ranges",
+            "internal_ram",
+            "imem",
+            "memory_dump_pc",
+            "fast_mode",
+            "memory_image_size",
+            "lcd_payload_size",
+            "lcd",
+        }
+        if required_metadata_fields - set(metadata) or set(metadata) - (
+            required_metadata_fields | {"device_model"}
+        ):
+            raise ValueError("snapshot metadata has an unexpected top-level shape")
+        if "device_model" in metadata and metadata["device_model"] not in (
+            None,
+            "pc-e500",
+            "pc-e500-jp",
+        ):
+            raise ValueError("snapshot device model is not a PC-E500 variant")
+        if required(metadata, "magic", "metadata") != SNAPSHOT_MAGIC:
+            raise ValueError("Snapshot magic mismatch")
+        version = _snapshot_int(
+            required(metadata, "version", "metadata"),
+            "version",
+            maximum=(1 << 32) - 1,
+        )
+        if version != SNAPSHOT_VERSION:
+            raise ValueError("Unsupported snapshot version")
+        snapshot_backend = required(metadata, "backend", "metadata")
+        if snapshot_backend not in ("python", "llama"):
+            raise ValueError(f"snapshot backend is unsupported: {snapshot_backend!r}")
+        if not isinstance(required(metadata, "created", "metadata"), str):
+            raise TypeError("snapshot created must be a string")
+
+        memory_size = len(self.memory.external_memory)
+        if len(flat_memory) != memory_size:
             raise ValueError("external_ram.bin size mismatch")
-        self.memory.external_memory[:] = flat_memory
+        if (
+            _snapshot_int(
+                required(metadata, "memory_image_size", "metadata"),
+                "memory_image_size",
+                maximum=0x1000000,
+            )
+            != memory_size
+        ):
+            raise ValueError("snapshot memory_image_size mismatch")
+        if len(internal_ram) != self.INTERNAL_RAM_SIZE:
+            raise ValueError("internal_ram.bin size mismatch")
+        expected_internal = flat_memory[
+            self.INTERNAL_RAM_START : self.INTERNAL_RAM_START + self.INTERNAL_RAM_SIZE
+        ]
+        if internal_ram != expected_internal:
+            raise ValueError("internal_ram.bin disagrees with external_ram.bin")
+        if len(imem_bytes) != 0x100:
+            raise ValueError("imem.bin size mismatch")
+        if _snapshot_range(
+            required(metadata, "internal_ram", "metadata"), "internal_ram"
+        ) != (self.INTERNAL_RAM_START, self.INTERNAL_RAM_SIZE):
+            raise ValueError("snapshot internal RAM layout mismatch")
+        if _snapshot_range(required(metadata, "imem", "metadata"), "imem") != (
+            INTERNAL_MEMORY_START,
+            0x100,
+        ):
+            raise ValueError("snapshot internal-memory layout mismatch")
+
+        _, current_fallback, current_readonly = self.memory.export_flat_memory()
+        if _snapshot_ranges(
+            required(metadata, "fallback_ranges", "metadata"), "fallback_ranges"
+        ) != tuple(current_fallback):
+            raise ValueError(
+                "snapshot Python fallback ranges do not match this machine"
+            )
+        if _snapshot_ranges(
+            required(metadata, "readonly_ranges", "metadata"), "readonly_ranges"
+        ) != tuple(current_readonly):
+            raise ValueError("snapshot read-only ranges do not match this machine")
+
+        overlay_updates: list[tuple[bytearray, bytes]] = []
         for overlay in self.memory.overlays:
-            if overlay.data is None:
+            if overlay.data is None or overlay.start >= memory_size:
                 continue
             start = max(overlay.start, 0)
-            end = min(overlay.end + 1, len(flat_memory))
+            end = min(overlay.end + 1, memory_size)
             span = max(0, end - start)
-            if span and span <= len(overlay.data):
-                overlay.data[:span] = flat_memory[start : start + span]
-
-        if imem_bytes:
-            self.memory.external_memory[-len(imem_bytes) :] = imem_bytes
-
-        # Hardware invariant: USR bits 3/4 (TXR/TXE) come up set after reset.
-        try:
-            usr_addr = INTERNAL_MEMORY_START + IMEMRegisters.USR.value
-            usr_val = self.memory.read_byte(usr_addr) & 0xFF
-            self.memory.write_byte(usr_addr, usr_val | 0x18)
-        except Exception:
-            pass
-
-        if getattr(self.cpu, "backend", None) == "llama":
-            llama_impl = getattr(self.cpu, "_impl", None)
-            marker = getattr(llama_impl, "mark_memory_dirty", None)
-            if callable(marker):
-                try:
-                    marker()
-                except Exception:
-                    pass
-
-        self._restore_lcd_snapshot(metadata.get("lcd"), lcd_payload)
-
-        keyboard_state = metadata.get("keyboard")
-        if isinstance(keyboard_state, dict) and hasattr(self, "keyboard"):
-            self.keyboard.load_state(keyboard_state)
+            if span == 0:
+                continue
+            if span > len(overlay.data):
+                raise ValueError(
+                    f"configured overlay {overlay.name!r} has an incomplete payload"
+                )
+            payload = flat_memory[start:end]
+            if overlay.read_only:
+                if bytes(overlay.data[:span]) != payload:
+                    raise ValueError(
+                        f"snapshot attempts to replace read-only overlay {overlay.name!r}"
+                    )
+            else:
+                overlay_updates.append((overlay.data, payload))
 
         reg_values = _unpack_register_bytes(registers_blob)
-        temps = {
-            int(key): int(value) for key, value in (metadata.get("temps") or {}).items()
-        }
+        for name in ("pc", "x", "y", "u", "s"):
+            if reg_values[name] > 0xFFFFF:
+                raise ValueError(f"snapshot register {name.upper()} exceeds 20 bits")
+        temps_raw = _snapshot_mapping(required(metadata, "temps", "metadata"), "temps")
+        temps: dict[int, int] = {}
+        for key, value in temps_raw.items():
+            if not isinstance(key, str) or not key.isdecimal():
+                raise ValueError(f"snapshot temporary register key is invalid: {key!r}")
+            index = int(key)
+            if index in temps:
+                raise ValueError(f"snapshot repeats temporary register TEMP{index}")
+            if not 0 <= index < 16:
+                raise ValueError(
+                    f"snapshot contains unknown temporary register TEMP{index}"
+                )
+            temps[index] = _snapshot_int(value, f"TEMP{index}", maximum=0xFFFFFF)
+        if set(temps) != set(range(16)):
+            raise ValueError("snapshot must contain exactly TEMP0 through TEMP15")
+        call_sub_level = _snapshot_int(
+            required(metadata, "call_sub_level", "metadata"),
+            "call_sub_level",
+            maximum=(1 << 31) - 1,
+        )
         snapshot = CPURegistersSnapshot(
             pc=reg_values["pc"],
             ba=reg_values["ba"],
@@ -1657,151 +2278,840 @@ class PCE500Emulator:
             s=reg_values["s"],
             f=reg_values["f"],
             temps=temps,
-            call_sub_level=int(metadata.get("call_sub_level", 0)),
+            call_sub_level=call_sub_level,
         )
-        self.cpu.apply_snapshot(snapshot)
+        snapshot.apply_to(Registers())
 
-        snapshot_backend = metadata.get("backend")
-        if backend and snapshot_backend and backend != snapshot_backend:
+        instruction_count = _snapshot_int(
+            required(metadata, "instruction_count", "metadata"), "instruction_count"
+        )
+        cycle_count = _snapshot_int(
+            required(metadata, "cycle_count", "metadata"), "cycle_count"
+        )
+        memory_reads = _snapshot_int(
+            required(metadata, "memory_reads", "metadata"), "memory_reads"
+        )
+        memory_writes = _snapshot_int(
+            required(metadata, "memory_writes", "metadata"), "memory_writes"
+        )
+        call_depth = _snapshot_int(
+            required(metadata, "call_depth", "metadata"),
+            "call_depth",
+            maximum=(1 << 32) - 1,
+        )
+        call_stack = [
+            _snapshot_int(value, f"call_stack[{index}]", maximum=0xFFFFF)
+            for index, value in enumerate(
+                _snapshot_list(
+                    required(metadata, "call_stack", "metadata"), "call_stack"
+                )
+            )
+        ]
+        call_page_stack = [
+            _snapshot_int(value, f"call_page_stack[{index}]", maximum=0xFFFFF)
+            for index, value in enumerate(
+                _snapshot_list(
+                    required(metadata, "call_page_stack", "metadata"),
+                    "call_page_stack",
+                )
+            )
+        ]
+        if any(page & 0xFFFF for page in call_page_stack):
+            raise ValueError("snapshot call_page_stack contains a noncanonical page")
+        call_return_widths = [
+            _snapshot_int(value, f"call_return_widths[{index}]", maximum=24)
+            for index, value in enumerate(
+                _snapshot_list(
+                    required(metadata, "call_return_widths", "metadata"),
+                    "call_return_widths",
+                )
+            )
+        ]
+        if len(call_stack) != len(call_return_widths):
+            raise ValueError(
+                "snapshot call stack and return-width stack have different lengths"
+            )
+        if any(width not in (0, 16, 24) for width in call_return_widths):
+            raise ValueError(
+                "snapshot call_return_widths contains an unsupported width"
+            )
+        native_call_metrics = bool(call_stack or call_page_stack or call_return_widths)
+        if snapshot_backend == "python" and native_call_metrics:
+            raise ValueError(
+                "Python snapshot cannot restore native call-metrics stacks"
+            )
+        if self.cpu.backend == "python" and native_call_metrics:
+            raise ValueError(
+                "Python destination cannot restore native call-metrics stacks"
+            )
+        current_pc = _snapshot_int(
+            required(metadata, "pc", "metadata"), "pc", maximum=0xFFFFF
+        )
+        if current_pc != snapshot.pc:
+            raise ValueError("snapshot metadata PC disagrees with registers.bin")
+        power_state = required(metadata, "power_state", "metadata")
+        if power_state not in ("running", "halted", "off"):
+            raise ValueError(f"snapshot power_state is invalid: {power_state!r}")
+        if _snapshot_bool(
+            required(metadata, "external_interrupt_level", "metadata"),
+            "external_interrupt_level",
+        ):
+            raise ValueError(
+                "PCE500Emulator cannot exactly restore an asserted external IRQ level"
+            )
+
+        timer_raw = _snapshot_mapping(required(metadata, "timer", "metadata"), "timer")
+        expected_timer_fields = {
+            "enabled",
+            "mti_period",
+            "sti_period",
+            "next_mti",
+            "next_sti",
+            "kb_irq_enabled",
+            "instruction_start_cycle",
+            "last_mti_fire_cycle",
+            "last_sti_fire_cycle",
+            "fired_mti_since_boundary",
+            "fired_sti_since_boundary",
+            "preserve_phase",
+        }
+        if set(timer_raw) != expected_timer_fields:
+            raise ValueError("snapshot timer metadata has an unexpected shape")
+
+        def optional_timer_cycle(name: str) -> int | None:
+            value = required(timer_raw, name, "timer")
+            if value is None:
+                return None
+            return _snapshot_int(
+                value,
+                f"timer.{name}",
+                maximum=(1 << 64) - 1,
+            )
+
+        timer_info: dict[str, object] = {
+            "enabled": _snapshot_bool(
+                required(timer_raw, "enabled", "timer"), "timer.enabled"
+            ),
+            "mti_period": _snapshot_int(
+                required(timer_raw, "mti_period", "timer"),
+                "timer.mti_period",
+                minimum=1,
+                maximum=(1 << 63) - 1,
+            ),
+            "sti_period": _snapshot_int(
+                required(timer_raw, "sti_period", "timer"),
+                "timer.sti_period",
+                minimum=1,
+                maximum=(1 << 63) - 1,
+            ),
+            "next_mti": _snapshot_int(
+                required(timer_raw, "next_mti", "timer"),
+                "timer.next_mti",
+                maximum=(1 << 64) - 1,
+            ),
+            "next_sti": _snapshot_int(
+                required(timer_raw, "next_sti", "timer"),
+                "timer.next_sti",
+                maximum=(1 << 64) - 1,
+            ),
+            "kb_irq_enabled": _snapshot_bool(
+                required(timer_raw, "kb_irq_enabled", "timer"),
+                "timer.kb_irq_enabled",
+            ),
+            "instruction_start_cycle": _snapshot_int(
+                required(timer_raw, "instruction_start_cycle", "timer"),
+                "timer.instruction_start_cycle",
+                maximum=(1 << 64) - 1,
+            ),
+            "last_mti_fire_cycle": optional_timer_cycle("last_mti_fire_cycle"),
+            "last_sti_fire_cycle": optional_timer_cycle("last_sti_fire_cycle"),
+            "fired_mti_since_boundary": _snapshot_bool(
+                required(timer_raw, "fired_mti_since_boundary", "timer"),
+                "timer.fired_mti_since_boundary",
+            ),
+            "fired_sti_since_boundary": _snapshot_bool(
+                required(timer_raw, "fired_sti_since_boundary", "timer"),
+                "timer.fired_sti_since_boundary",
+            ),
+            "preserve_phase": _snapshot_bool(
+                required(timer_raw, "preserve_phase", "timer"),
+                "timer.preserve_phase",
+            ),
+        }
+
+        interrupts_raw = _snapshot_mapping(
+            required(metadata, "interrupts", "metadata"), "interrupts"
+        )
+        if set(interrupts_raw) != {
+            "pending",
+            "in_interrupt",
+            "key_irq_latched",
+            "source",
+            "last_fired",
+            "stack",
+            "next_id",
+            "imr",
+            "isr",
+            "irq_counts",
+            "last_irq",
+            "irq_bit_watch",
+            "delivered_masks",
+        }:
+            raise ValueError("snapshot interrupt metadata has an unexpected shape")
+        source_name = required(interrupts_raw, "source", "interrupts")
+        if source_name is not None and source_name not in IRQSource.__members__:
+            raise ValueError(
+                f"snapshot interrupt source is not representable: {source_name!r}"
+            )
+        last_fired_name = required(interrupts_raw, "last_fired", "interrupts")
+        if last_fired_name is not None and last_fired_name not in {
+            "RX",
+            "EX",
+            "TX",
+            "ONK",
+            "KEY",
+            "STI",
+            "MTI",
+            "IR",
+            "IRQ",
+        }:
+            raise ValueError(
+                "snapshot last-fired interrupt source is not representable: "
+                f"{last_fired_name!r}"
+            )
+        irq_pending = _snapshot_bool(
+            required(interrupts_raw, "pending", "interrupts"),
+            "interrupts.pending",
+        )
+        if irq_pending and source_name is None:
+            raise ValueError("snapshot pending interrupt has no source")
+        in_interrupt = _snapshot_bool(
+            required(interrupts_raw, "in_interrupt", "interrupts"),
+            "interrupts.in_interrupt",
+        )
+        key_irq_latched = _snapshot_bool(
+            required(interrupts_raw, "key_irq_latched", "interrupts"),
+            "interrupts.key_irq_latched",
+        )
+        interrupt_stack = [
+            _snapshot_int(
+                value,
+                f"interrupts.stack[{index}]",
+                maximum=(1 << 32) - 1,
+            )
+            for index, value in enumerate(
+                _snapshot_list(
+                    required(interrupts_raw, "stack", "interrupts"),
+                    "interrupts.stack",
+                )
+            )
+        ]
+        next_interrupt_id = _snapshot_int(
+            required(interrupts_raw, "next_id", "interrupts"),
+            "interrupts.next_id",
+            maximum=(1 << 32) - 1,
+        )
+        if interrupt_stack and next_interrupt_id <= max(interrupt_stack):
+            raise ValueError(
+                "snapshot next interrupt id must exceed every active flow id"
+            )
+        imr = _snapshot_int(
+            required(interrupts_raw, "imr", "interrupts"),
+            "interrupts.imr",
+            maximum=0xFF,
+        )
+        isr = _snapshot_int(
+            required(interrupts_raw, "isr", "interrupts"),
+            "interrupts.isr",
+            maximum=0xFF,
+        )
+        if imr != imem_bytes[IMEMRegisters.IMR.value]:
+            raise ValueError("snapshot interrupt IMR disagrees with imem.bin")
+        if isr != imem_bytes[IMEMRegisters.ISR.value]:
+            raise ValueError("snapshot interrupt ISR disagrees with imem.bin")
+        if irq_pending and isr == 0:
+            raise ValueError("snapshot cannot be IRQ-pending with ISR == 0")
+        if irq_pending and not in_interrupt and source_name is not None:
+            source_mask = 1 << IRQSource[source_name].value
+            if isr & source_mask == 0:
+                raise ValueError("snapshot pending interrupt source disagrees with ISR")
+
+        counts_raw = _snapshot_mapping(
+            required(interrupts_raw, "irq_counts", "interrupts"),
+            "interrupts.irq_counts",
+        )
+        if set(counts_raw) != {"total", "KEY", "MTI", "STI"}:
+            raise ValueError("snapshot irq_counts has an unexpected shape")
+        irq_counts = {
+            key: _snapshot_int(
+                counts_raw[key], f"interrupts.irq_counts.{key}", maximum=(1 << 32) - 1
+            )
+            for key in ("total", "KEY", "MTI", "STI")
+        }
+        last_irq_raw = _snapshot_mapping(
+            required(interrupts_raw, "last_irq", "interrupts"),
+            "interrupts.last_irq",
+        )
+        if set(last_irq_raw) != {"src", "pc", "vector"}:
+            raise ValueError("snapshot last_irq has an unexpected shape")
+        last_irq_src = last_irq_raw["src"]
+        if last_irq_src is not None and not isinstance(last_irq_src, str):
+            raise TypeError("snapshot interrupts.last_irq.src must be a string or null")
+        last_irq = {
+            "src": last_irq_src,
+            "pc": (
+                None
+                if last_irq_raw["pc"] is None
+                else _snapshot_int(
+                    last_irq_raw["pc"], "interrupts.last_irq.pc", maximum=0xFFFFF
+                )
+            ),
+            "vector": (
+                None
+                if last_irq_raw["vector"] is None
+                else _snapshot_int(
+                    last_irq_raw["vector"],
+                    "interrupts.last_irq.vector",
+                    maximum=0xFFFFF,
+                )
+            ),
+        }
+        watch_raw = _snapshot_mapping(
+            required(interrupts_raw, "irq_bit_watch", "interrupts"),
+            "interrupts.irq_bit_watch",
+        )
+        if set(watch_raw) != {"IMR", "ISR"}:
+            raise ValueError("snapshot irq_bit_watch has an unexpected shape")
+        irq_bit_watch: dict[str, dict[int, dict[str, list[int]]]] = {}
+        for register_name in ("IMR", "ISR"):
+            bits_raw = _snapshot_mapping(
+                watch_raw[register_name], f"interrupts.irq_bit_watch.{register_name}"
+            )
+            normalized_bits: dict[int, dict[str, list[int]]] = {}
+            for bit in range(8):
+                raw_key = str(bit)
+                if raw_key not in bits_raw:
+                    raise ValueError(
+                        f"snapshot irq_bit_watch.{register_name} is missing bit {bit}"
+                    )
+                actions = _snapshot_mapping(
+                    bits_raw[raw_key],
+                    f"interrupts.irq_bit_watch.{register_name}.{bit}",
+                )
+                if set(actions) != {"set", "clear"}:
+                    raise ValueError("snapshot IRQ bit history has an unexpected shape")
+                normalized_bits[bit] = {
+                    action: [
+                        _snapshot_int(
+                            pc,
+                            f"interrupts.irq_bit_watch.{register_name}.{bit}.{action}[{index}]",
+                            maximum=0xFFFFF,
+                        )
+                        for index, pc in enumerate(
+                            _snapshot_list(
+                                actions[action],
+                                f"interrupts.irq_bit_watch.{register_name}.{bit}.{action}",
+                            )
+                        )
+                    ]
+                    for action in ("set", "clear")
+                }
+            if set(bits_raw) != {str(bit) for bit in range(8)}:
+                raise ValueError(
+                    f"snapshot irq_bit_watch.{register_name} contains unknown bits"
+                )
+            irq_bit_watch[register_name] = normalized_bits
+        delivered_masks = [
+            _snapshot_int(value, f"interrupts.delivered_masks[{index}]", maximum=0xFF)
+            for index, value in enumerate(
+                _snapshot_list(
+                    required(interrupts_raw, "delivered_masks", "interrupts"),
+                    "interrupts.delivered_masks",
+                )
+            )
+        ]
+        native_timer_phase = bool(
+            timer_info["instruction_start_cycle"] != cycle_count
+            or timer_info["last_mti_fire_cycle"] is not None
+            or timer_info["last_sti_fire_cycle"] is not None
+            or timer_info["fired_mti_since_boundary"]
+            or timer_info["fired_sti_since_boundary"]
+            or not timer_info["preserve_phase"]
+        )
+        native_scheduler_state = bool(
+            native_timer_phase or last_fired_name is not None or delivered_masks
+        )
+        if snapshot_backend == "python" and native_scheduler_state:
+            raise ValueError("Python snapshot contains native-only scheduler state")
+        if self.cpu.backend == "python" and native_scheduler_state:
+            raise ValueError(
+                "Python destination cannot restore native-only scheduler state"
+            )
+        interrupts: dict[str, object] = {
+            "pending": irq_pending,
+            "in_interrupt": in_interrupt,
+            "key_irq_latched": key_irq_latched,
+            "source": source_name,
+            "last_fired": last_fired_name,
+            "stack": interrupt_stack,
+            "next_id": next_interrupt_id,
+            "imr": imr,
+            "isr": isr,
+            "irq_counts": irq_counts,
+            "last_irq": last_irq,
+            "irq_bit_watch": irq_bit_watch,
+            "delivered_masks": delivered_masks,
+        }
+
+        keyboard_state = _snapshot_mapping(
+            required(metadata, "keyboard", "metadata"), "keyboard"
+        )
+        expected_keyboard_fields = {
+            "matrix",
+            "last_kol",
+            "last_koh",
+            "last_kil",
+            "scan_enabled",
+            "on_key_pressed",
+        }
+        if set(keyboard_state) != expected_keyboard_fields:
+            raise ValueError("snapshot keyboard metadata has an unexpected shape")
+        keyboard_last_kol = _snapshot_int(
+            keyboard_state["last_kol"], "keyboard.last_kol", maximum=0xFF
+        )
+        keyboard_last_koh = _snapshot_int(
+            keyboard_state["last_koh"], "keyboard.last_koh", maximum=0x0F
+        )
+        _snapshot_int(keyboard_state["last_kil"], "keyboard.last_kil", maximum=0xFF)
+        keyboard_scan_enabled = _snapshot_bool(
+            keyboard_state["scan_enabled"], "keyboard.scan_enabled"
+        )
+        on_key_pressed = _snapshot_bool(
+            keyboard_state["on_key_pressed"], "keyboard.on_key_pressed"
+        )
+        if on_key_pressed != bool(imem_bytes[IMEMRegisters.SSR.value] & 0x08):
+            raise ValueError("snapshot ON-key state disagrees with SSR.ONK")
+        matrix_state = _snapshot_mapping(keyboard_state["matrix"], "keyboard.matrix")
+        expected_matrix_fields = {
+            "kol",
+            "koh",
+            "kil_latch",
+            "scan_enabled",
+            "pressed_keys",
+            "key_states",
+            "fifo",
+            "head",
+            "tail",
+            "strobe_count",
+            "column_histogram",
+            "irq_count",
+            "press_threshold",
+            "release_threshold",
+            "repeat_delay",
+            "repeat_interval",
+            "columns_active_high",
+            "keyi_on_any_press",
+            "raw_kil",
+            "emit_events",
+            "repeat_enabled",
+            "keyi_latch",
+            "kil_read_count",
+        }
+        if set(matrix_state) != expected_matrix_fields:
+            raise ValueError("snapshot keyboard matrix has an unexpected shape")
+        for key, maximum in (
+            ("kol", 0xFF),
+            ("koh", 0x0F),
+            ("kil_latch", 0xFF),
+            ("head", 7),
+            ("tail", 7),
+            ("irq_count", (1 << 32) - 1),
+            ("strobe_count", (1 << 32) - 1),
+            ("press_threshold", 0xFF),
+            ("release_threshold", 0xFF),
+            ("repeat_delay", 0xFF),
+            ("repeat_interval", 0xFF),
+        ):
+            minimum = 1 if key in ("press_threshold", "release_threshold") else 0
+            _snapshot_int(
+                required(matrix_state, key, "keyboard.matrix"),
+                f"keyboard.matrix.{key}",
+                minimum=minimum,
+                maximum=maximum,
+            )
+        for key in (
+            "columns_active_high",
+            "scan_enabled",
+            "keyi_on_any_press",
+            "raw_kil",
+            "emit_events",
+            "repeat_enabled",
+            "keyi_latch",
+        ):
+            _snapshot_bool(
+                required(matrix_state, key, "keyboard.matrix"),
+                f"keyboard.matrix.{key}",
+            )
+        if keyboard_last_kol != matrix_state["kol"]:
+            raise ValueError("snapshot keyboard KOL mirrors disagree")
+        if keyboard_last_koh != matrix_state["koh"]:
+            raise ValueError("snapshot keyboard KOH mirrors disagree")
+        if keyboard_scan_enabled != matrix_state["scan_enabled"]:
+            raise ValueError("snapshot keyboard scan-enable mirrors disagree")
+        if (
+            matrix_state["keyi_on_any_press"]
+            or matrix_state["raw_kil"]
+            or not matrix_state["emit_events"]
+            or not matrix_state["repeat_enabled"]
+        ):
+            raise ValueError(
+                "snapshot keyboard policy is not representable by the PCE host matrix"
+            )
+        matrix_kil_read_count = _snapshot_int(
+            required(matrix_state, "kil_read_count", "keyboard.matrix"),
+            "keyboard.matrix.kil_read_count",
+            maximum=(1 << 32) - 1,
+        )
+        fifo = _snapshot_list(
+            required(matrix_state, "fifo", "keyboard.matrix"), "keyboard.matrix.fifo"
+        )
+        if len(fifo) != 8:
+            raise ValueError("snapshot keyboard FIFO must contain exactly eight bytes")
+        for index, value in enumerate(fifo):
+            _snapshot_int(value, f"keyboard.matrix.fifo[{index}]", maximum=0xFF)
+        fifo_head = int(matrix_state["head"])
+        fifo_tail = int(matrix_state["tail"])
+        if bool(matrix_state["keyi_latch"]) != (fifo_head != fifo_tail):
+            raise ValueError(
+                "snapshot keyboard KEYI latch disagrees with FIFO occupancy"
+            )
+        histogram = _snapshot_list(
+            required(matrix_state, "column_histogram", "keyboard.matrix"),
+            "keyboard.matrix.column_histogram",
+        )
+        if len(histogram) != 16:
+            raise ValueError("snapshot keyboard column histogram must have 16 entries")
+        for index, value in enumerate(histogram):
+            _snapshot_int(
+                value,
+                f"keyboard.matrix.column_histogram[{index}]",
+                maximum=(1 << 32) - 1,
+            )
+        pressed_keys = _snapshot_list(
+            required(matrix_state, "pressed_keys", "keyboard.matrix"),
+            "keyboard.matrix.pressed_keys",
+        )
+        if any(not isinstance(key, str) for key in pressed_keys):
+            raise TypeError("snapshot keyboard pressed_keys must contain only strings")
+        if len(set(pressed_keys)) != len(pressed_keys):
+            raise ValueError("snapshot keyboard pressed_keys contains duplicates")
+        key_states = _snapshot_mapping(
+            required(matrix_state, "key_states", "keyboard.matrix"),
+            "keyboard.matrix.key_states",
+        )
+        expected_key_names = set(self.keyboard._matrix._key_states)
+        if (
+            set(key_states) != expected_key_names
+            or not set(pressed_keys) <= expected_key_names
+        ):
+            raise ValueError("snapshot keyboard key map does not match this machine")
+        physically_pressed: set[str] = set()
+        for key_name, raw_state in key_states.items():
+            key_state = _snapshot_mapping(
+                raw_state, f"keyboard.matrix.key_states.{key_name}"
+            )
+            if set(key_state) != {
+                "pressed",
+                "debounced",
+                "press_ticks",
+                "release_ticks",
+                "repeat_ticks",
+            }:
+                raise ValueError(
+                    f"snapshot keyboard state for {key_name} is incomplete"
+                )
+            if _snapshot_bool(
+                key_state["pressed"], f"keyboard.matrix.key_states.{key_name}.pressed"
+            ):
+                physically_pressed.add(key_name)
+            _snapshot_bool(
+                key_state["debounced"],
+                f"keyboard.matrix.key_states.{key_name}.debounced",
+            )
+            for counter in ("press_ticks", "release_ticks", "repeat_ticks"):
+                _snapshot_int(
+                    key_state[counter],
+                    f"keyboard.matrix.key_states.{key_name}.{counter}",
+                    maximum=0xFF,
+                )
+        if set(pressed_keys) != physically_pressed:
+            raise ValueError("snapshot pressed_keys disagrees with per-key state")
+        keyboard_candidate = KeyboardHandler(
+            None,
+            columns_active_high=bool(matrix_state["columns_active_high"]),
+        )
+        keyboard_candidate.load_state(keyboard_state)
+        candidate_matrix = keyboard_candidate.snapshot_state()["matrix"]
+        if not isinstance(candidate_matrix, dict):
+            raise ValueError("restored keyboard candidate is missing matrix state")
+        if candidate_matrix["kil_latch"] != matrix_state["kil_latch"]:
+            raise ValueError("snapshot keyboard KIL latch is not exactly representable")
+
+        lcd_metadata = _snapshot_mapping(required(metadata, "lcd", "metadata"), "lcd")
+        chips = _snapshot_list(required(lcd_metadata, "chips", "lcd"), "lcd.chips")
+        if len(chips) != len(self.lcd.chips):
+            raise ValueError("snapshot LCD chip count does not match this machine")
+        chip_count = _snapshot_int(
+            required(lcd_metadata, "chip_count", "lcd"), "lcd.chip_count", maximum=16
+        )
+        if chip_count != len(chips):
+            raise ValueError("snapshot LCD chip_count disagrees with chips")
+        current_lcd = self.lcd.get_snapshot()
+        expected_pages = len(current_lcd.chips[0].vram)
+        expected_width = len(current_lcd.chips[0].vram[0])
+        pages = _snapshot_int(
+            required(lcd_metadata, "pages", "lcd"), "lcd.pages", minimum=1
+        )
+        width = _snapshot_int(
+            required(lcd_metadata, "width", "lcd"), "lcd.width", minimum=1
+        )
+        if (pages, width) != (expected_pages, expected_width):
+            raise ValueError("snapshot LCD geometry does not match this machine")
+        if len(lcd_payload) != len(chips) * pages * width:
+            raise ValueError("lcd_vram.bin size mismatch")
+        if _snapshot_int(
+            required(metadata, "lcd_payload_size", "metadata"),
+            "lcd_payload_size",
+            maximum=0x1000000,
+        ) != len(lcd_payload):
+            raise ValueError("snapshot lcd_payload_size mismatch")
+        for index, raw_chip in enumerate(chips):
+            chip = _snapshot_mapping(raw_chip, f"lcd.chips[{index}]")
+            _snapshot_bool(required(chip, "on", "LCD chip"), f"lcd.chips[{index}].on")
+            for key, maximum in (
+                ("start_line", 0x3F),
+                ("page", pages - 1),
+                ("y_address", width - 1),
+                ("instruction_count", (1 << 32) - 1),
+                ("data_write_count", (1 << 32) - 1),
+                ("data_read_count", (1 << 32) - 1),
+                ("on_off_count", (1 << 32) - 1),
+            ):
+                _snapshot_int(
+                    required(chip, key, f"lcd.chips[{index}]"),
+                    f"lcd.chips[{index}].{key}",
+                    maximum=maximum,
+                )
+        for key in ("cs_both_count", "cs_left_count", "cs_right_count"):
+            _snapshot_int(
+                required(lcd_metadata, key, "lcd"),
+                f"lcd.{key}",
+                maximum=(1 << 32) - 1,
+            )
+        lcd_candidate = HD61202Controller()
+        lcd_candidate.load_snapshot(lcd_metadata, lcd_payload)
+
+        kb_metrics_raw = _snapshot_mapping(
+            required(metadata, "kb_metrics", "metadata"), "kb_metrics"
+        )
+        kb_irq_count = _snapshot_int(
+            required(kb_metrics_raw, "irq_count", "kb_metrics"),
+            "kb_metrics.irq_count",
+        )
+        kb_strobe_count = _snapshot_int(
+            required(kb_metrics_raw, "strobe_count", "kb_metrics"),
+            "kb_metrics.strobe_count",
+        )
+        kb_hist_raw = _snapshot_list(
+            required(kb_metrics_raw, "column_hist", "kb_metrics"),
+            "kb_metrics.column_hist",
+        )
+        if len(kb_hist_raw) != len(self._kb_col_hist):
+            raise ValueError("snapshot keyboard metric histogram has wrong length")
+        kb_hist = [
+            _snapshot_int(value, f"kb_metrics.column_hist[{index}]")
+            for index, value in enumerate(kb_hist_raw)
+        ]
+        last_columns = [
+            _snapshot_int(value, f"kb_metrics.last_cols[{index}]", maximum=15)
+            for index, value in enumerate(
+                _snapshot_list(
+                    required(kb_metrics_raw, "last_cols", "kb_metrics"),
+                    "kb_metrics.last_cols",
+                )
+            )
+        ]
+        if len(set(last_columns)) != len(last_columns):
+            raise ValueError("snapshot kb_metrics.last_cols contains duplicates")
+        last_kol = _snapshot_int(
+            required(kb_metrics_raw, "last_kol", "kb_metrics"),
+            "kb_metrics.last_kol",
+            maximum=0xFF,
+        )
+        last_koh = _snapshot_int(
+            required(kb_metrics_raw, "last_koh", "kb_metrics"),
+            "kb_metrics.last_koh",
+            maximum=0x0F,
+        )
+        kil_reads = _snapshot_int(
+            required(kb_metrics_raw, "kil_reads", "kb_metrics"),
+            "kb_metrics.kil_reads",
+        )
+        if kil_reads != matrix_kil_read_count:
+            raise ValueError("snapshot keyboard KIL-read counters disagree")
+        kb_irq_enabled = _snapshot_bool(
+            required(kb_metrics_raw, "kb_irq_enabled", "kb_metrics"),
+            "kb_metrics.kb_irq_enabled",
+        )
+        if kb_irq_enabled != timer_info["kb_irq_enabled"]:
+            raise ValueError("snapshot keyboard IRQ-enable fields disagree")
+        memory_dump_pc = _snapshot_int(
+            required(metadata, "memory_dump_pc", "metadata"),
+            "memory_dump_pc",
+            maximum=0xFFFFF,
+        )
+        fast_mode = _snapshot_bool(
+            required(metadata, "fast_mode", "metadata"), "fast_mode"
+        )
+
+        llama_impl = None
+        native_hooks: dict[str, Any] = {}
+        if self.cpu.backend == "llama":
+            llama_impl = self.cpu.unwrap()
+            for name in (
+                "validate_keyboard_snapshot",
+                "validate_scheduler_snapshot",
+                "validate_runtime_snapshot",
+                "restore_keyboard_snapshot",
+                "restore_scheduler_snapshot",
+                "restore_runtime_snapshot",
+                "_initialise_rust_memory",
+                "set_perf_instr_counter",
+            ):
+                hook = getattr(llama_impl, name, None)
+                if not callable(hook):
+                    raise RuntimeError(
+                        f"LLAMA backend is missing required snapshot hook {name}"
+                    )
+                native_hooks[name] = hook
+            native_hooks["validate_keyboard_snapshot"](keyboard_state)
+            native_hooks["validate_scheduler_snapshot"](
+                timer_info, interrupts, cycle_count
+            )
+            native_hooks["validate_runtime_snapshot"](
+                cycle_count,
+                memory_reads,
+                memory_writes,
+                call_depth,
+                call_sub_level,
+                call_stack,
+                call_page_stack,
+                call_return_widths,
+                power_state,
+            )
+
+        if not commit:
+            return
+
+        if backend and backend != snapshot_backend:
             print(
                 f"[snapshot] Warning: snapshot backend {snapshot_backend} "
                 f"!= requested {backend}"
             )
-        elif snapshot_backend and snapshot_backend != self.cpu.backend:
+        elif snapshot_backend != self.cpu.backend:
             print(
                 f"[snapshot] Warning: emulator backend {self.cpu.backend} "
                 f"!= snapshot backend {snapshot_backend}"
             )
 
-        self.instruction_count = int(metadata.get("instruction_count", 0))
-        self.cycle_count = int(metadata.get("cycle_count", 0))
-        self.memory_read_count = int(metadata.get("memory_reads", 0))
-        self.memory_write_count = int(metadata.get("memory_writes", 0))
-        self.call_depth = int(metadata.get("call_depth", 0))
-        self._current_pc = int(metadata.get("pc", snapshot.pc)) & 0xFFFFFF
-        self._last_pc = self._current_pc
-        self._trace_instr_count = self.instruction_count
-        self._active_trace_instruction = None
-        self._trace_substep = 0
-        self.start_time = time.time()
+        # No validation below this line: every fallible parser and native
+        # candidate builder has already succeeded. Unexpected integration
+        # failures poison the wrapper so a partial commit cannot be executed.
+        commit_started = False
+        try:
+            commit_started = True
+            self.memory.external_memory[:] = flat_memory
+            self.memory.external_memory[-len(imem_bytes) :] = imem_bytes
+            for overlay_data, payload in overlay_updates:
+                overlay_data[: len(payload)] = payload
+            self.lcd.load_snapshot(lcd_metadata, lcd_payload)
+            self.keyboard.load_state(keyboard_state)
+            self.cpu.apply_snapshot(snapshot)
 
-        timer_info = metadata.get("timer", {})
-        self._timer_enabled = bool(timer_info.get("enabled", True))
-        self._timer_mti_period = int(
-            timer_info.get("mti_period", self._timer_mti_period)
-        )
-        self._timer_sti_period = int(
-            timer_info.get("sti_period", self._timer_sti_period)
-        )
-        # If requested, rescale timers for LLAMA backend regardless of snapshot metadata.
-        effective_timer_scale = (
-            self._timer_scale if getattr(self.cpu, "backend", None) == "llama" else 1.0
-        )
-        if (
-            effective_timer_scale != 1.0
-            and getattr(self.cpu, "backend", None) == "llama"
-        ):
-            self._timer_mti_period = max(
-                1, int(MTI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)
-            )
-            self._timer_sti_period = max(
-                1, int(STI_PERIOD_CYCLES_DEFAULT * effective_timer_scale)
-            )
+            self.instruction_count = instruction_count
+            self.cycle_count = cycle_count
+            self.memory_read_count = memory_reads
+            self.memory_write_count = memory_writes
+            self.call_depth = call_depth
+            self._current_pc = current_pc
+            self._last_pc = current_pc
+            self._trace_instr_count = instruction_count
+            self._active_trace_instruction = None
+            self._trace_substep = 0
+            self.start_time = time.time()
 
-        # Capture persisted next-fire offsets before resetting the scheduler. Using
-        # locals avoids losing the snapshot values when reset() recomputes based on
-        # the current cycle count.
-        next_mti = int(
-            timer_info.get("next_mti", self.cycle_count + self._timer_mti_period)
-        )
-        next_sti = int(
-            timer_info.get("next_sti", self.cycle_count + self._timer_sti_period)
-        )
-        # Keep scheduler in sync with restored/scaled periods.
-        self._scheduler.mti_period = int(self._timer_mti_period)
-        self._scheduler.sti_period = int(self._timer_sti_period)
-        self._scheduler.reset(cycle_base=self.cycle_count)
-        # Restore persisted next-fire offsets so cadence matches the snapshot.
-        self._scheduler.next_mti = next_mti
-        self._scheduler.next_sti = next_sti
-        self._scheduler.enabled = bool(self._timer_enabled)
-
-        interrupts = metadata.get("interrupts", {})
-        self._irq_pending = bool(interrupts.get("pending", False))
-        self._in_interrupt = bool(interrupts.get("in_interrupt", False))
-        source_name = interrupts.get("source")
-        self._irq_source = IRQSource[source_name] if source_name else None
-        self._interrupt_stack = list(interrupts.get("stack", []))
-        self._next_interrupt_id = int(interrupts.get("next_id", 1))
-        irq_counts = interrupts.get("irq_counts")
-        if isinstance(irq_counts, dict):
-            self.irq_counts = {key: int(val) for key, val in irq_counts.items()}
-        last_irq = interrupts.get("last_irq")
-        if isinstance(last_irq, dict):
+            self._scheduler.mti_period = int(timer_info["mti_period"])
+            self._scheduler.sti_period = int(timer_info["sti_period"])
+            self._scheduler.next_mti = int(timer_info["next_mti"])
+            self._scheduler.next_sti = int(timer_info["next_sti"])
+            self._scheduler.enabled = bool(timer_info["enabled"])
+            self._irq_pending = irq_pending
+            self._in_interrupt = in_interrupt
+            self._key_irq_latched = key_irq_latched
+            self._irq_source = IRQSource[source_name] if source_name else None
+            self._interrupt_stack = interrupt_stack
+            self._next_interrupt_id = next_interrupt_id
+            self.irq_counts = irq_counts
             self.last_irq = last_irq
-        irq_watch = interrupts.get("irq_bit_watch")
-        if isinstance(irq_watch, dict):
-            self.irq_bit_watch = irq_watch
+            self.irq_bit_watch = irq_bit_watch
 
-        kb_metrics = metadata.get("kb_metrics", {})
-        self._kb_irq_count = int(kb_metrics.get("irq_count", 0))
-        self._kb_strobe_count = int(kb_metrics.get("strobe_count", 0))
-        hist = kb_metrics.get("column_hist")
-        if isinstance(hist, list) and hist:
-            self._kb_col_hist = [int(val) for val in hist]
-        last_cols = kb_metrics.get("last_cols")
-        if isinstance(last_cols, list):
-            self._last_kil_columns = [int(val) for val in last_cols]
-        self._last_kol = int(kb_metrics.get("last_kol", self._last_kol)) & 0xFF
-        self._last_koh = int(kb_metrics.get("last_koh", self._last_koh)) & 0xFF
-        self._kil_read_count = int(kb_metrics.get("kil_reads", self._kil_read_count))
-        self._kb_irq_enabled = bool(kb_metrics.get("kb_irq_enabled", True))
+            self._kb_irq_count = kb_irq_count
+            self._kb_strobe_count = kb_strobe_count
+            self._kb_col_hist = kb_hist
+            self._last_kil_columns = last_columns
+            self._last_kol = last_kol
+            self._last_koh = last_koh
+            self._kil_read_count = kil_reads
+            self._kb_irq_enabled = kb_irq_enabled
+            self.MEMORY_DUMP_PC = memory_dump_pc
+            self.fast_mode = fast_mode
+            # Python stores the compatibility ``halted`` flag separately.
+            # Set it first so HALT/OFF snapshots cannot resume by executing an
+            # opcode; setting power_state last preserves OFF in the native
+            # proxy, where ``halted = True`` selects HALT.
+            self.cpu.state.halted = power_state != "running"
+            self.cpu.state.power_state = power_state
 
-        self.MEMORY_DUMP_PC = int(metadata.get("memory_dump_pc", self.MEMORY_DUMP_PC))
-        self.fast_mode = bool(
-            metadata.get("fast_mode", getattr(self, "fast_mode", False))
-        )
+            self.instruction_history.clear()
+            self.memory.clear_imem_access_tracking()
 
-        self.instruction_history.clear()
-        self.memory.clear_imem_access_tracking()
+            if llama_impl is not None:
+                native_hooks["_initialise_rust_memory"]()
+                native_hooks["restore_keyboard_snapshot"](keyboard_state)
+                native_hooks["restore_scheduler_snapshot"](
+                    timer_info, interrupts, cycle_count
+                )
+                native_hooks["restore_runtime_snapshot"](
+                    cycle_count,
+                    memory_reads,
+                    memory_writes,
+                    call_depth,
+                    call_sub_level,
+                    call_stack,
+                    call_page_stack,
+                    call_return_widths,
+                    power_state,
+                )
+                native_hooks["set_perf_instr_counter"](instruction_count)
 
-        if self.cpu.backend == "llama":
-            llama_impl = self.cpu.unwrap()
-            reinit = getattr(llama_impl, "_initialise_rust_memory", None)
-            if callable(reinit):
-                try:
-                    setattr(llama_impl, "_memory_synced", False)
-                except Exception:
-                    pass
-                reinit()
-            sync_irq = getattr(llama_impl, "set_interrupt_state", None)
-            if callable(sync_irq):
-                try:
-                    sync_irq(
-                        bool(self._irq_pending),
-                        int(
-                            self.memory.read_byte(
-                                INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                            )
-                        )
-                        & 0xFF,
-                        int(
-                            self.memory.read_byte(
-                                INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                            )
-                        )
-                        & 0xFF,
-                        int(self._scheduler.next_mti),
-                        int(self._scheduler.next_sti),
-                        self._irq_source.name if self._irq_source else None,
-                        bool(self._in_interrupt),
-                        list(self._interrupt_stack),
-                        int(self._next_interrupt_id),
-                    )
-                except Exception:
-                    pass
-
-        self.memory.set_cpu(self.cpu)
+            self.memory.set_cpu(self.cpu)
+        except Exception as exc:
+            if commit_started and self._poisoned is None:
+                self._poisoned = (
+                    "snapshot commit failed after validation: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            raise
 
     def stop_tracing(self) -> None:
         if self.perfetto_enabled:
@@ -1855,10 +3165,7 @@ class PCE500Emulator:
         for _ in range(int(cycles)):
             self.cycle_count += 1
             if self._timer_enabled and not getattr(self, "_in_interrupt", False):
-                try:
-                    self._tick_timers()
-                except Exception:
-                    pass
+                self._tick_timers()
 
     def _build_register_annotations(self) -> Dict[str, Any]:
         state = self.get_cpu_state()
@@ -1886,7 +3193,7 @@ class PCE500Emulator:
         if pc is None:
             return None
         try:
-            opcode = self.memory.read_byte(pc) & 0xFF
+            opcode = self.memory.peek_byte_for_preflight(pc, pc) & 0xFF
         except Exception:
             opcode = None
 
@@ -1915,7 +3222,12 @@ class PCE500Emulator:
         mnemonic: Optional[str] = None
         if isinstance(pc, int):
             try:
-                mnemonic = self.cpu.decode_instruction(pc).name()
+                mnemonic = self.cpu.decode_instruction(
+                    pc,
+                    read_fn=lambda address: self.memory.peek_byte_for_preflight(
+                        address, pc
+                    ),
+                ).name()
             except Exception:
                 mnemonic = None
         if isinstance(pc, int) and isinstance(mnemonic, str) and mnemonic:
@@ -2234,19 +3546,12 @@ class PCE500Emulator:
             )
 
     def press_key(self, key_code: str) -> bool:
-        # Special-case the ON key: not part of the matrix; set ISR.ONKI and arm IRQ
-        if key_code == "KEY_ON":
-            try:
-                self._set_isr_bits(int(ISRFlag.ONKI))
-                setattr(self, "_irq_pending", True)
-                self._irq_source = IRQSource.ONK
-            except Exception:
-                pass
-            if new_tracer.enabled:
-                new_tracer.instant("I/O", "KeyPress", {"key": key_code})
-            return True
-
         result = self.keyboard.press_key(key_code) if self.keyboard else False
+        # The handler commits SSR.ONK and ISR.ONKI first (transactionally in
+        # LLAMA).  Do not advertise a pending host IRQ if that mutation fails.
+        if result and key_code == "KEY_ON":
+            self._irq_pending = True
+            self._irq_source = IRQSource.ONK
         # Optional debug: make a visible mark on LCD to confirm key handling
         try:
             if result and getattr(self, "debug_draw_on_key", False):
@@ -2283,22 +3588,25 @@ class PCE500Emulator:
             except Exception:
                 pass
             # Emit a dedicated marker when KEYI is asserted so trace diffing can spot it.
-            self._trace_irq_instant(
-                "KEYI_Set",
-                IRQSource.KEY,
-                {
-                    "pc": self.cpu.regs.get(RegisterName.PC),
-                    "prev": val,
-                    "value": new_val,
-                    "imr": self.memory.read_byte(
-                        INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                    )
-                    & 0xFF,
-                    "still_set": bool(
-                        self.memory.read_byte(isr_addr) & int(ISRFlag.KEYI)
-                    ),
-                },
-            )
+            try:
+                self._trace_irq_instant(
+                    "KEYI_Set",
+                    IRQSource.KEY,
+                    {
+                        "pc": self.cpu.regs.get(RegisterName.PC),
+                        "prev": val,
+                        "value": new_val,
+                        "imr": self.memory.read_byte(
+                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                        )
+                        & 0xFF,
+                        "still_set": bool(
+                            self.memory.read_byte(isr_addr) & int(ISRFlag.KEYI)
+                        ),
+                    },
+                )
+            except Exception:
+                pass
             if False:
                 print(
                     f"[keyi-debug] pc=0x{int(self.cpu.regs.get(RegisterName.PC)) & 0xFFFFFF:06X} prev=0x{val:02X} new=0x{new_val:02X} imr=0x{self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) & 0xFF:02X}"
@@ -2306,15 +3614,18 @@ class PCE500Emulator:
         else:
             # Log when KEYI would not be set but was previously set.
             if (val & int(ISRFlag.KEYI)) and not (new_val & int(ISRFlag.KEYI)):
-                self._trace_irq_instant(
-                    "KEYI_Clear",
-                    IRQSource.KEY,
-                    {
-                        "pc": self.cpu.regs.get(RegisterName.PC),
-                        "prev": val,
-                        "value": new_val,
-                    },
-                )
+                try:
+                    self._trace_irq_instant(
+                        "KEYI_Clear",
+                        IRQSource.KEY,
+                        {
+                            "pc": self.cpu.regs.get(RegisterName.PC),
+                            "prev": val,
+                            "value": new_val,
+                        },
+                    )
+                except Exception:
+                    pass
         if IRQ_DEBUG_ENABLED:
             pc = self.cpu.regs.get(RegisterName.PC)
             _log_irq_debug(
@@ -2335,21 +3646,24 @@ class PCE500Emulator:
                 self._set_isr_bits(int(ISRFlag.MTI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.MTI
-                self._trace_irq_instant(
-                    "TimerFired",
-                    self._irq_source,
-                    {
-                        "cycle": self.cycle_count,
-                        "imr": self.memory.read_byte(
-                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                        )
-                        & 0xFF,
-                        "isr": self.memory.read_byte(
-                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                        )
-                        & 0xFF,
-                    },
-                )
+                try:
+                    self._trace_irq_instant(
+                        "TimerFired",
+                        self._irq_source,
+                        {
+                            "cycle": self.cycle_count,
+                            "imr": self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                            )
+                            & 0xFF,
+                            "isr": self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                            )
+                            & 0xFF,
+                        },
+                    )
+                except Exception:
+                    pass
                 if IRQ_DEBUG_ENABLED:
                     _log_irq_debug(
                         f"timer fired source=MTI cycle={self.cycle_count} next_mti={self._scheduler.next_mti}"
@@ -2358,21 +3672,24 @@ class PCE500Emulator:
                 self._set_isr_bits(int(ISRFlag.STI))
                 self._irq_pending = True
                 self._irq_source = IRQSource.STI
-                self._trace_irq_instant(
-                    "TimerFired",
-                    self._irq_source,
-                    {
-                        "cycle": self.cycle_count,
-                        "imr": self.memory.read_byte(
-                            INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                        )
-                        & 0xFF,
-                        "isr": self.memory.read_byte(
-                            INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                        )
-                        & 0xFF,
-                    },
-                )
+                try:
+                    self._trace_irq_instant(
+                        "TimerFired",
+                        self._irq_source,
+                        {
+                            "cycle": self.cycle_count,
+                            "imr": self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.IMR
+                            )
+                            & 0xFF,
+                            "isr": self.memory.read_byte(
+                                INTERNAL_MEMORY_START + IMEMRegisters.ISR
+                            )
+                            & 0xFF,
+                        },
+                    )
+                except Exception:
+                    pass
                 if IRQ_DEBUG_ENABLED:
                     _log_irq_debug(
                         f"timer fired source=STI cycle={self.cycle_count} next_sti={self._scheduler.next_sti}"
@@ -2618,12 +3935,14 @@ class PCE500Emulator:
             0xE51C3: "sub_e51c3_display_write",
             0xE0D0C: "sub_e0d0c_draw_string",
             0xAC60: "sub_ac60_keyboard_decode",
-            0xF2E24: "sub_f2e24_screen_write",
+            0xF299C: "lcd_stream_write_data_byte_f299c",
+            0xF2E24: "lcd_write_clear_sequences_f2e24",
             0xF2E50: "sub_f2e50_screen_blit",
             0xF2E9E: "sub_f2e9e_screen_fill",
             0xF2DA5: "sub_f2da5_buffer_copy",
             0xF29B8: "sub_f29b8_draw_menu",
-            0x02E24: "sub_f2e24_screen_write",
+            0x0299C: "lcd_stream_write_data_byte_f299c",
+            0x02E24: "lcd_write_clear_sequences_f2e24",
             0x02E50: "sub_f2e50_screen_blit",
             0x02E9E: "sub_f2e9e_screen_fill",
             0x02DA5: "sub_f2da5_buffer_copy",
@@ -2892,8 +4211,21 @@ class PCE500Emulator:
             pass
 
     def release_key(self, key_code: str):
+        pending_source: Optional[IRQSource] = None
+        if key_code == "KEY_ON":
+            # Validate the post-release bookkeeping before asking the handler
+            # to commit.  The fields below are changed only after the Python or
+            # native keyboard mutation succeeds. Physical release clears only
+            # SSR.ONK; ISR.ONKI stays latched until firmware acknowledges it.
+            isr = (
+                self.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
+            )
+            pending_source = _highest_pending_irq_source(isr)
         if self.keyboard:
             self.keyboard.release_key(key_code)
+        if key_code == "KEY_ON":
+            self._irq_pending = pending_source is not None
+            self._irq_source = pending_source
         if new_tracer.enabled:
             new_tracer.instant("I/O", "KeyRelease", {"key": key_code})
 

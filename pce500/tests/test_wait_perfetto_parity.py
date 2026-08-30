@@ -23,6 +23,7 @@ def _run_wait_once(
     perfetto: bool,
     trace_path: Path | None,
     monkeypatch: pytest.MonkeyPatch,
+    fast_mode: bool = False,
 ) -> int:
     monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
     if os.environ.get("FORCE_BINJA_MOCK") != "1":
@@ -40,6 +41,7 @@ def _run_wait_once(
         **trace_kw,
     )
     try:
+        emu.fast_mode = fast_mode
         emu.load_rom(bytes([WAIT_OPCODE]), start_address=0x0000)
         emu.cpu.regs.set(RegisterName.PC, 0x0000)
         emu.cpu.regs.set(RegisterName.I, WAIT_CYCLES)
@@ -49,6 +51,43 @@ def _run_wait_once(
         return int(
             emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
         )
+    finally:
+        emu.close()
+
+
+def _run_wait_then_read_native_isr(
+    *, backend: str, fast_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> tuple[int, int]:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
+    if os.environ.get("FORCE_BINJA_MOCK") != "1":
+        monkeypatch.setenv("FORCE_BINJA_MOCK", "1")
+
+    emu = PCE500Emulator(
+        trace_enabled=False,
+        perfetto_trace=False,
+        save_lcd_on_exit=False,
+    )
+    try:
+        emu.fast_mode = fast_mode
+        # WAIT; PRE (n), MV A,(ISR).  The second instruction reads the native
+        # LLAMA mirror, making a missing post-WAIT deferred-write flush visible.
+        emu.load_rom(bytes.fromhex("EF3080FC"), start_address=0x0000)
+        emu.cpu.regs.set(RegisterName.PC, 0x0000)
+        emu.cpu.regs.set(RegisterName.I, WAIT_CYCLES)
+        emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+
+        emu.step()
+        host_isr = int(
+            emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) & 0xFF
+        )
+        assert host_isr & 0x01
+
+        # Keep the read instruction from independently ticking/synchronizing
+        # the timer state we are trying to observe.
+        emu._timer_enabled = False  # type: ignore[attr-defined]
+        emu._irq_pending = False  # type: ignore[attr-defined]
+        emu.step()
+        return host_isr, int(emu.cpu.regs.get(RegisterName.A) & 0xFF)
     finally:
         emu.close()
 
@@ -68,6 +107,21 @@ def test_wait_side_effects_match_without_tracing(
     )
     assert isr_py == isr_ll
     assert isr_py & 0x01, "WAIT should advance timers enough to raise MTI at least once"
+
+
+@pytest.mark.parametrize("fast_mode", [False, True], ids=["normal", "fast"])
+def test_wait_host_writes_reach_native_mirror_after_execute(
+    monkeypatch: pytest.MonkeyPatch, fast_mode: bool
+) -> None:
+    assert "llama" in available_backends(), (
+        "LLAMA backend must be available for parity tests"
+    )
+
+    host_isr, native_read = _run_wait_then_read_native_isr(
+        backend="llama", fast_mode=fast_mode, monkeypatch=monkeypatch
+    )
+
+    assert native_read == host_isr
 
 
 def test_wait_perfetto_trace_matches(

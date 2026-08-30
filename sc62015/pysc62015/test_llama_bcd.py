@@ -21,6 +21,11 @@ def _make_memory_from_raw(raw: bytearray) -> Memory:
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
     return memory
 
 
@@ -75,7 +80,7 @@ def _run_backend(
 @pytest.mark.parametrize("backend", ["python", "llama"])
 def test_dadl_imem_reg_a_single_byte_sets_flags(backend: str) -> None:
     dst_offset = 0x12
-    program = [0x32, 0xC5, dst_offset]  # PRE32 (N,N), DADL (m),A
+    program = [0x30, 0xC5, dst_offset]  # PRE30 (N), DADL (m),A
     template = _build_template(program, dst_offset, [0x99])
 
     result = _run_backend(

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from binja_test_mocks.eval_llil import Memory
 
-from sc62015.pysc62015 import CPU, RegisterName
+from sc62015.pysc62015 import CPU, RegisterName, available_backends
 from sc62015.pysc62015.constants import ADDRESS_SPACE_SIZE
 from sc62015.pysc62015.stepper import CPURegistersSnapshot
 
@@ -27,6 +29,11 @@ def _make_memory(*bytes_seq: int) -> Memory:
 
     memory = Memory(read, write)
     setattr(memory, "_raw", raw)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
     return memory
 
 
@@ -35,10 +42,7 @@ def test_cpu_facade_executes_nop(cpu_backend: str) -> None:
 
     memory = _make_memory(0x00)  # NOP
 
-    try:
-        cpu = CPU(memory, reset_on_init=False, backend=cpu_backend)
-    except RuntimeError as exc:
-        pytest.skip(str(exc))
+    cpu = CPU(memory, reset_on_init=False, backend=cpu_backend)
 
     cpu.regs.set(RegisterName.PC, 0x0000)
     info = cpu.execute_instruction(0x0000)
@@ -51,10 +55,7 @@ def test_cpu_stepper_round_trip(cpu_backend: str) -> None:
 
     memory = _make_memory(0x08, 0x5A)  # MV A,n
 
-    try:
-        cpu = CPU(memory, reset_on_init=False, backend=cpu_backend)
-    except RuntimeError as exc:
-        pytest.skip(str(exc))
+    cpu = CPU(memory, reset_on_init=False, backend=cpu_backend)
 
     cpu.regs.set(RegisterName.PC, 0x0000)
     cpu.regs.set(RegisterName.A, 0x00)
@@ -63,3 +64,10 @@ def test_cpu_stepper_round_trip(cpu_backend: str) -> None:
     result = cpu.step_snapshot(snapshot, {0x0000: 0x08, 0x0001: 0x5A})
 
     assert result.registers.ba & 0xFF == 0x5A
+
+
+@pytest.mark.skipif(not os.environ.get("CI"), reason="CI backend-availability guard")
+def test_ci_parity_requires_llama_backend() -> None:
+    assert "llama" in available_backends(), (
+        "CI parity tests require the built LLAMA backend; absence must not become a skip"
+    )

@@ -98,7 +98,9 @@ def test_reti_restores_interrupt_frame_without_acknowledging_isr(
 
     sp = 0x0100
     mem.write_byte(sp, 0x84)
-    mem.write_byte(sp + 1, 0x7C)
+    # F is a byte-wide frame slot, but only C/Z (0x03) are currently modeled.
+    # Upper bits remain hardware-trace work and are deliberately rejected.
+    mem.write_byte(sp + 1, 0x03)
     mem.write_byte(sp + 2, 0x12)
     mem.write_byte(sp + 3, 0x34)
     mem.write_byte(sp + 4, 0x05)
@@ -287,3 +289,57 @@ def test_keyi_pending_respects_imr(backend: str) -> None:
     emu.memory.write_byte(imr_addr, int(IMRFlag.IRM) | int(IMRFlag.KEY))
     emu.step()
     assert emu._irq_pending or emu.cpu.regs.get(RegisterName.PC) != 0x0000
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    ("mask", "status", "source"),
+    [
+        (IMRFlag.KEYM, ISRFlag.KEYI, IRQSource.KEY),
+        (IMRFlag.ONKM, ISRFlag.ONKI, IRQSource.ONK),
+    ],
+)
+def test_key_on_irq_delivery_waits_for_irm(
+    backend: str,
+    mask: IMRFlag,
+    status: ISRFlag,
+    source: IRQSource,
+) -> None:
+    """A latched KEY/ON request is not permission to bypass the master mask."""
+    if backend == "llama" and "llama" not in available_backends():
+        pytest.skip("LLAMA backend not available")
+
+    with _backend(backend if backend != "python" else None):
+        emu = Emulator()
+
+    emu._timer_enabled = False
+    emu._in_interrupt = False
+    emu._irq_pending = True
+    emu._irq_source = source
+    emu.cpu.regs.set(RegisterName.PC, 0x0000)
+    emu.cpu.regs.set(RegisterName.S, 0x0200)
+    emu.memory.write_byte(0x0000, 0x00)
+    emu.memory.write_byte(0x0001, 0x00)
+
+    imr_addr = INTERNAL_MEMORY_START + IMEMRegisters.IMR
+    isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
+    emu.memory.write_byte(imr_addr, int(mask))
+    emu.memory.write_byte(isr_addr, int(status))
+
+    emu.step()
+
+    assert emu.cpu.regs.get(RegisterName.PC) == 0x0001
+    assert emu.cpu.regs.get(RegisterName.S) == 0x0200
+    assert emu._irq_pending is True
+    assert emu._in_interrupt is False
+    assert emu.memory.read_byte(isr_addr) & int(status)
+
+    emu.memory.write_byte(imr_addr, int(IMRFlag.IRM | mask))
+    emu.step()
+
+    assert emu._irq_pending is False
+    assert emu._in_interrupt is True
+    assert emu.cpu.regs.get(RegisterName.S) == 0x01FB
+    assert emu.last_irq["src"] == source.name
+    assert emu.last_irq["pc"] == 0x0001
+    assert emu.memory.read_byte(isr_addr) & int(status)

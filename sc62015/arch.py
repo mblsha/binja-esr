@@ -4,11 +4,18 @@ from binaryninja import (
     IntrinsicInfo,
     InstructionInfo,
     CallingConvention,
+    Type,
 )
 from binaryninja.enums import Endianness, FlagRole
 from binaryninja.log import log_error
 
-from .pysc62015.instr import decode, encode, OPCODES
+from .pysc62015.instr import (
+    OPCODES,
+    PRE,
+    UnknownInstruction,
+    decode,
+    encode,
+)
 from .pysc62015.instr.opcodes import InvalidInstruction
 from binja_test_mocks.tokens import asm
 
@@ -59,15 +66,40 @@ class SC62015(Architecture):
     }
 
     intrinsics = {
+        "WAIT": IntrinsicInfo(inputs=[], outputs=[]),
         "TCL": IntrinsicInfo(inputs=[], outputs=[]),
         "HALT": IntrinsicInfo(inputs=[], outputs=[]),
         "OFF": IntrinsicInfo(inputs=[], outputs=[]),
         "RESET": IntrinsicInfo(inputs=[], outputs=[]),
+        "VALIDATE_F": IntrinsicInfo(inputs=[Type.int(1, False)], outputs=[]),
+        "VALIDATE_EXP_HIGH_NIBBLE": IntrinsicInfo(
+            inputs=[Type.int(3, False), Type.int(3, False)], outputs=[]
+        ),
+        "VALIDATE_I_COUNT": IntrinsicInfo(inputs=[Type.int(2, False)], outputs=[]),
     }
+
+    @staticmethod
+    def _decode_canonical(data, addr):
+        """Decode an executable instruction, rejecting reserved and partial forms."""
+
+        decoded = decode(data, addr, OPCODES)
+        if decoded is None or isinstance(decoded, (PRE, UnknownInstruction)):
+            return None
+
+        encoded = bytes(data[: decoded.length()])
+        recoded = bytes(encode(decoded, addr))
+        if encoded != recoded:
+            # Every accepted raw alias (currently the documented ED/FD selector
+            # aliases and the exact boundary-backed PRE23/SUB pair) is preserved
+            # by the decoder's operand objects. Any mismatch here is therefore
+            # a malformed form or an implementation defect, not permission to
+            # broaden an alias.
+            return None
+        return decoded
 
     def get_instruction_info(self, data, addr):
         try:
-            if decoded := decode(data, addr, OPCODES):
+            if decoded := self._decode_canonical(data, addr):
                 info = InstructionInfo()
                 decoded.analyze(info, addr)
                 return info
@@ -80,13 +112,7 @@ class SC62015(Architecture):
 
     def get_instruction_text(self, data, addr):
         try:
-            if decoded := decode(data, addr, OPCODES):
-                encoded = data[: decoded.length()]
-                recoded = encode(decoded, addr)
-                if encoded != recoded:
-                    # Roundtrip failed - this can happen with consecutive PRE instructions
-                    # or other invalid encodings. Treat as data.
-                    return None
+            if decoded := self._decode_canonical(data, addr):
                 return asm(decoded.render()), decoded.length()
         except (AssertionError, InvalidInstruction):
             # Invalid instruction encoding, return None to mark as data
@@ -97,7 +123,7 @@ class SC62015(Architecture):
 
     def get_instruction_low_level_il(self, data, addr, il):
         try:
-            if decoded := decode(data, addr, OPCODES):
+            if decoded := self._decode_canonical(data, addr):
                 decoded.lift(il, addr)
                 return decoded.length()
         except (AssertionError, InvalidInstruction):

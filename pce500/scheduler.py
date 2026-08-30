@@ -43,13 +43,13 @@ class TimerScheduler:
         fired: List[TimerSource] = []
 
         if cycle_count >= self._next_mti and self.mti_period > 0:
-            while cycle_count >= self._next_mti:
-                self._next_mti += self.mti_period
+            elapsed = cycle_count - self._next_mti
+            self._next_mti += (elapsed // self.mti_period + 1) * self.mti_period
             fired.append(TimerSource.MTI)
 
         if cycle_count >= self._next_sti and self.sti_period > 0:
-            while cycle_count >= self._next_sti:
-                self._next_sti += self.sti_period
+            elapsed = cycle_count - self._next_sti
+            self._next_sti += (elapsed // self.sti_period + 1) * self.sti_period
             fired.append(TimerSource.STI)
 
         return fired

@@ -228,15 +228,21 @@ assembler_test_cases: List[AssemblerTestCase] = [
             MV (BP+PX), (BP+0x30)
         """,
         # Should generate PRE=0x24, then MV=0xC8, then operands.
-        # Note: (BP+PX) has no operand byte.
+        # The first operand byte is present but ignored by BP+PX.
         expected_ti="""
             @0000
-            24 C8 30
+            24 C8 00 30
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="mv_imem_imem_invalid_combo", asm_code="MV (BP+PX), (BP+PY)"
+        test_id="mv_imem_imem_pre25",
+        asm_code="MV (BP+PX), (BP+PY)",
+        expected_ti="""
+            @0000
+            25 C8 00 00
+            q
+        """,
     ),
     AssemblerTestCase(
         test_id="mv_reg_imm_8bit",
@@ -270,7 +276,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV A, (0x10)",
         expected_ti="""
             @0000
-            80 10
+            30 80 10
             q
         """,
     ),
@@ -279,7 +285,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV (0x10), A",
         expected_ti="""
             @0000
-            A0 10
+            30 A0 10
             q
         """,
     ),
@@ -288,7 +294,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV (0x20), 0x55",
         expected_ti="""
             @0000
-            CC 20 55
+            30 CC 20 55
             q
         """,
     ),
@@ -434,7 +440,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW (0x30), (0x40)",
         expected_ti="""
             @0000
-            C9 30 40
+            32 C9 30 40
             q
         """,
     ),
@@ -443,16 +449,16 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW (0x30), 0x1122",
         expected_ti="""
             @0000
-            CD 30 22 11
+            30 CD 30 22 11
             q
         """,
     ),
     AssemblerTestCase(
         test_id="mvp_imem_imm",
-        asm_code="MVP (0x20), 0x112233",
+        asm_code="MVP (0x20), 0x12233",
         expected_ti="""
             @0000
-            DC 20 33 22 11
+            30 DC 20 33 22 01
             q
         """,
     ),
@@ -461,7 +467,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV (0x10), [0x12345]",
         expected_ti="""
             @0000
-            D0 10 45 23 01
+            30 D0 10 45 23 01
             q
         """,
     ),
@@ -470,7 +476,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV [0x12345], (0x20)",
         expected_ti="""
             @0000
-            D8 45 23 01 20
+            30 D8 45 23 01 20
             q
         """,
     ),
@@ -479,7 +485,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW (0x30), [0x12345]",
         expected_ti="""
             @0000
-            D1 30 45 23 01
+            30 D1 30 45 23 01
             q
         """,
     ),
@@ -488,7 +494,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV (0x20), [X]",
         expected_ti="""
             @0000
-            E0 04 20
+            30 E0 04 20
             q
         """,
     ),
@@ -497,7 +503,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV [X], (0x20)",
         expected_ti="""
             @0000
-            E8 04 20
+            30 E8 04 20
             q
         """,
     ),
@@ -506,7 +512,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW (0x20), [X]",
         expected_ti="""
             @0000
-            E1 04 20
+            30 E1 04 20
             q
         """,
     ),
@@ -515,7 +521,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW [X], (0x20)",
         expected_ti="""
             @0000
-            E9 04 20
+            30 E9 04 20
             q
         """,
     ),
@@ -524,7 +530,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVP (0x20), [X]",
         expected_ti="""
             @0000
-            E2 04 20
+            30 E2 04 20
             q
         """,
     ),
@@ -533,7 +539,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVP [X], (0x20)",
         expected_ti="""
             @0000
-            EA 04 20
+            30 EA 04 20
             q
         """,
     ),
@@ -542,7 +548,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV (0x30), [(0x40)]",
         expected_ti="""
             @0000
-            F0 00 30 40
+            32 F0 00 30 40
             q
         """,
     ),
@@ -551,7 +557,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MV [(0x40)], (0x30)",
         expected_ti="""
             @0000
-            F8 00 40 30
+            32 F8 00 40 30
             q
         """,
     ),
@@ -560,7 +566,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW (0x30), [(0x40)]",
         expected_ti="""
             @0000
-            F1 00 30 40
+            32 F1 00 30 40
             q
         """,
     ),
@@ -569,7 +575,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="MVW [(0x40)], (0x30)",
         expected_ti="""
             @0000
-            F9 00 40 30
+            32 F9 00 40 30
             q
         """,
     ),
@@ -585,8 +591,8 @@ assembler_test_cases: List[AssemblerTestCase] = [
         """,
         expected_ti="""
             @0000
-            70 55 71 10 01 72 45 23 01 02 73 20 77 30 32 76
-            40 50
+            70 55 30 71 10 01 72 45 23 01 02 30 73 20 30 77
+            30 32 76 40 50
             q
         """,
     ),
@@ -594,11 +600,11 @@ assembler_test_cases: List[AssemblerTestCase] = [
         test_id="call_and_callf",
         asm_code="""
             CALL 0xAABB
-            CALLF 0xAABBCC
+            CALLF 0xABBCC
         """,
         expected_ti="""
             @0000
-            04 BB AA 05 CC BB AA
+            04 BB AA 05 CC BB 0A
             q
         """,
     ),
@@ -616,7 +622,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="INC (0x10)",
         expected_ti="""
             @0000
-            6D 10
+            30 6D 10
             q
         """,
     ),
@@ -625,7 +631,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="INC (PX+0xEC)",
         expected_ti="""
             @0000
-            36 6D EC
+            34 6D EC
             q
         """,
     ),
@@ -643,7 +649,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DEC (0x20)",
         expected_ti="""
             @0000
-            7D 20
+            30 7D 20
             q
         """,
     ),
@@ -662,7 +668,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADD (0x10), 0x02",
         expected_ti="""
             @0000
-            41 10 02
+            30 41 10 02
             q
         """,
     ),
@@ -671,7 +677,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADD A, (0x20)",
         expected_ti="""
             @0000
-            42 20
+            30 42 20
             q
         """,
     ),
@@ -680,7 +686,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADD A, (BP+0x50)",
         expected_ti="""
             @0000
-            22 42 50
+            42 50
             q
         """,
     ),
@@ -689,7 +695,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADD (0x30), A",
         expected_ti="""
             @0000
-            43 30
+            30 43 30
             q
         """,
     ),
@@ -735,7 +741,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SUB (0x10), 0x02",
         expected_ti="""
             @0000
-            49 10 02
+            30 49 10 02
             q
         """,
     ),
@@ -744,7 +750,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SUB A, (0x20)",
         expected_ti="""
             @0000
-            4A 20
+            30 4A 20
             q
         """,
     ),
@@ -753,7 +759,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SUB (0x30), A",
         expected_ti="""
             @0000
-            4B 30
+            30 4B 30
             q
         """,
     ),
@@ -799,7 +805,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADC (0x10), 0x02",
         expected_ti="""
             @0000
-            51 10 02
+            30 51 10 02
             q
         """,
     ),
@@ -808,7 +814,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADC A, (0x20)",
         expected_ti="""
             @0000
-            52 20
+            30 52 20
             q
         """,
     ),
@@ -817,7 +823,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADC (0x30), A",
         expected_ti="""
             @0000
-            53 30
+            30 53 30
             q
         """,
     ),
@@ -836,7 +842,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SBC (0x10), 0x02",
         expected_ti="""
             @0000
-            59 10 02
+            30 59 10 02
             q
         """,
     ),
@@ -845,7 +851,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SBC A, (0x20)",
         expected_ti="""
             @0000
-            5A 20
+            30 5A 20
             q
         """,
     ),
@@ -854,7 +860,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SBC (0x30), A",
         expected_ti="""
             @0000
-            5B 30
+            30 5B 30
             q
         """,
     ),
@@ -873,7 +879,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ADCL (0x30), A",
         expected_ti="""
             @0000
-            55 30
+            30 55 30
             q
         """,
     ),
@@ -892,7 +898,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SBCL (0x60), A",
         expected_ti="""
             @0000
-            5D 60
+            30 5D 60
             q
         """,
     ),
@@ -911,7 +917,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DADL (0x30), A",
         expected_ti="""
             @0000
-            C5 30
+            30 C5 30
             q
         """,
     ),
@@ -930,7 +936,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DSBL (0x60), A",
         expected_ti="""
             @0000
-            D5 60
+            30 D5 60
             q
         """,
     ),
@@ -940,7 +946,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DSLL (0x10)",
         expected_ti="""
             @0000
-            EC 10
+            30 EC 10
             q
         """,
     ),
@@ -949,7 +955,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="DSRL (0x20)",
         expected_ti="""
             @0000
-            FC 20
+            30 FC 20
             q
         """,
     ),
@@ -959,7 +965,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (0x10)",
         expected_ti="""
             @0000
-            E5 10
+            30 E5 10
             q
         """,
     ),
@@ -968,7 +974,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (BP+0x10)",
         expected_ti="""
             @0000
-            22 E5 10
+            E5 10
             q
         """,
     ),
@@ -977,43 +983,33 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROR (PX+0x10)",
         expected_ti="""
             @0000
-            36 E5 10
+            34 E5 10
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="ror_imem_py_n",
+        test_id="ror_imem_py_n_invalid",
         asm_code="ROR (PY+0x10)",
-        expected_ti="""
-            @0000
-            33 E5 10
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="ror_imem_bp_px",
         asm_code="ROR (BP+PX)",
         expected_ti="""
             @0000
-            26 E5
+            24 E5 00
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="ror_imem_bp_py",
+        test_id="ror_imem_bp_py_invalid",
         asm_code="ROR (BP+PY)",
-        expected_ti="""
-            @0000
-            31 E5
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="rol_imem_n",
         asm_code="ROL (0x11)",
         expected_ti="""
             @0000
-            E7 11
+            30 E7 11
             q
         """,
     ),
@@ -1022,7 +1018,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (BP+0x11)",
         expected_ti="""
             @0000
-            22 E7 11
+            E7 11
             q
         """,
     ),
@@ -1031,43 +1027,33 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="ROL (PX+0x11)",
         expected_ti="""
             @0000
-            36 E7 11
+            34 E7 11
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="rol_imem_py_n",
+        test_id="rol_imem_py_n_invalid",
         asm_code="ROL (PY+0x11)",
-        expected_ti="""
-            @0000
-            33 E7 11
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="rol_imem_bp_px",
         asm_code="ROL (BP+PX)",
         expected_ti="""
             @0000
-            26 E7
+            24 E7 00
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="rol_imem_bp_py",
+        test_id="rol_imem_bp_py_invalid",
         asm_code="ROL (BP+PY)",
-        expected_ti="""
-            @0000
-            31 E7
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="shr_imem_n",
         asm_code="SHR (0x12)",
         expected_ti="""
             @0000
-            F5 12
+            30 F5 12
             q
         """,
     ),
@@ -1076,7 +1062,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (BP+0x12)",
         expected_ti="""
             @0000
-            22 F5 12
+            F5 12
             q
         """,
     ),
@@ -1085,43 +1071,33 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHR (PX+0x12)",
         expected_ti="""
             @0000
-            36 F5 12
+            34 F5 12
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="shr_imem_py_n",
+        test_id="shr_imem_py_n_invalid",
         asm_code="SHR (PY+0x12)",
-        expected_ti="""
-            @0000
-            33 F5 12
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="shr_imem_bp_px",
         asm_code="SHR (BP+PX)",
         expected_ti="""
             @0000
-            26 F5
+            24 F5 00
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="shr_imem_bp_py",
+        test_id="shr_imem_bp_py_invalid",
         asm_code="SHR (BP+PY)",
-        expected_ti="""
-            @0000
-            31 F5
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="shl_imem_n",
         asm_code="SHL (0x13)",
         expected_ti="""
             @0000
-            F7 13
+            30 F7 13
             q
         """,
     ),
@@ -1130,7 +1106,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (BP+0x13)",
         expected_ti="""
             @0000
-            22 F7 13
+            F7 13
             q
         """,
     ),
@@ -1139,36 +1115,26 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="SHL (PX+0x13)",
         expected_ti="""
             @0000
-            36 F7 13
+            34 F7 13
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="shl_imem_py_n",
+        test_id="shl_imem_py_n_invalid",
         asm_code="SHL (PY+0x13)",
-        expected_ti="""
-            @0000
-            33 F7 13
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="shl_imem_bp_px",
         asm_code="SHL (BP+PX)",
         expected_ti="""
             @0000
-            26 F7
+            24 F7 00
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="shl_imem_bp_py",
+        test_id="shl_imem_bp_py_invalid",
         asm_code="SHL (BP+PY)",
-        expected_ti="""
-            @0000
-            31 F7
-            q
-        """,
     ),
     # --- JP/JR Instruction Tests ---
     AssemblerTestCase(
@@ -1194,7 +1160,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="JP (0x10)",
         expected_ti="""
             @0000
-            10 10
+            30 10 10
             q
         """,
     ),
@@ -1339,7 +1305,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="PMDF (0x70), 0x03",
         expected_ti="""
             @0000
-            47 70 03
+            30 47 70 03
             q
         """,
     ),
@@ -1348,7 +1314,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="PMDF (0x80), A",
         expected_ti="""
             @0000
-            57 80
+            30 57 80
             q
         """,
     ),
@@ -1367,7 +1333,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="OR (0x10), 0x01",
         expected_ti="""
             @0000
-            79 10 01
+            30 79 10 01
             q
         """,
     ),
@@ -1385,7 +1351,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="OR (0x20), A",
         expected_ti="""
             @0000
-            7B 20
+            30 7B 20
             q
         """,
     ),
@@ -1394,7 +1360,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="OR A, (0x30)",
         expected_ti="""
             @0000
-            7F 30
+            30 7F 30
             q
         """,
     ),
@@ -1422,7 +1388,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="XOR (0x10), 0x01",
         expected_ti="""
             @0000
-            69 10 01
+            30 69 10 01
             q
         """,
     ),
@@ -1440,7 +1406,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="XOR (0x20), A",
         expected_ti="""
             @0000
-            6B 20
+            30 6B 20
             q
         """,
     ),
@@ -1449,7 +1415,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="XOR A, (0x30)",
         expected_ti="""
             @0000
-            6F 30
+            30 6F 30
             q
         """,
     ),
@@ -1532,7 +1498,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="CMP (0x10), 0x02",
         expected_ti="""
             @0000
-            61 10 02
+            30 61 10 02
             q
         """,
     ),
@@ -1550,18 +1516,13 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="CMP (0x30), A",
         expected_ti="""
             @0000
-            63 30
+            30 63 30
             q
         """,
     ),
     AssemblerTestCase(
-        test_id="cmp_bp_py_a",
+        test_id="cmp_bp_py_a_invalid",
         asm_code="CMP (BP+PY), A",
-        expected_ti="""
-            @0000
-            31 63
-            q
-        """,
     ),
     AssemblerTestCase(
         test_id="cmp_imem_imem",
@@ -1577,7 +1538,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="CMPW (0x10), (0x20)",
         expected_ti="""
             @0000
-            C6 10 20
+            32 C6 10 20
             q
         """,
     ),
@@ -1586,7 +1547,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="CMPW (0x30), BA",
         expected_ti="""
             @0000
-            D6 02 30
+            30 D6 02 30
             q
         """,
     ),
@@ -1595,7 +1556,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="CMPP (0x10), (0x20)",
         expected_ti="""
             @0000
-            C7 10 20
+            32 C7 10 20
             q
         """,
     ),
@@ -1604,7 +1565,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="CMPP (0x40), X",
         expected_ti="""
             @0000
-            D7 04 40
+            30 D7 04 40
             q
         """,
     ),
@@ -1623,7 +1584,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="TEST (0x10), 0x01",
         expected_ti="""
             @0000
-            65 10 01
+            30 65 10 01
             q
         """,
     ),
@@ -1641,7 +1602,7 @@ assembler_test_cases: List[AssemblerTestCase] = [
         asm_code="TEST (0x20), A",
         expected_ti="""
             @0000
-            67 20
+            30 67 20
             q
         """,
     ),
@@ -1715,7 +1676,13 @@ def test_assembler_e2e(case: AssemblerTestCase) -> None:
     if "invalid" in case.test_id:
         with pytest.raises(AssemblerError) as exc_info:
             assembler.assemble(source_code)
-        assert "Invalid addressing mode combination" in str(exc_info.value)
+        assert any(
+            message in str(exc_info.value)
+            for message in (
+                "Invalid addressing mode combination",
+                "cannot be encoded as the single IMEM selector",
+            )
+        )
         return
 
     try:

@@ -35,6 +35,41 @@ class TraceEvent:
     annotations: Dict[str, object]
 
 
+REQUIRED_INSTRUCTION_FIELDS = frozenset(
+    {"pc", "opcode", "op_index", "mem_imr", "mem_isr"}
+)
+INSTRUCTION_TRACKS = frozenset({"Instructions", "InstructionTrace"})
+
+
+def _validate_instruction_event(
+    event: TraceEvent, *, expected_index: int | None = None
+) -> int:
+    """Validate the minimum cross-backend instruction-trace contract."""
+
+    missing = sorted(REQUIRED_INSTRUCTION_FIELDS - event.annotations.keys())
+    if missing:
+        raise ValueError(
+            f"instruction trace event {event.name!r} is missing required fields: "
+            f"{', '.join(missing)}"
+        )
+
+    op_index = event.annotations["op_index"]
+    if isinstance(op_index, bool) or not isinstance(op_index, int):
+        raise TypeError(
+            f"instruction trace event {event.name!r} has non-integer op_index"
+        )
+    if op_index < 0:
+        raise ValueError(
+            f"instruction trace event {event.name!r} has negative op_index {op_index}"
+        )
+    if expected_index is not None and op_index != expected_index:
+        raise ValueError(
+            f"instruction trace map key {expected_index} disagrees with event "
+            f"op_index {op_index}"
+        )
+    return op_index
+
+
 def _annotation_value(annotation: perfetto_pb2.DebugAnnotation) -> object | None:
     """Extract the user-supplied value from a DebugAnnotation."""
 
@@ -106,20 +141,31 @@ def _load_trace(path: Path) -> List[TraceEvent]:
 
 
 def _index_instruction_events(events: Sequence[TraceEvent]) -> Dict[int, TraceEvent]:
-    """Map op_index -> TraceEvent for per-instruction events."""
+    """Map op_index -> TraceEvent for validated per-instruction events."""
 
     indexed: Dict[int, TraceEvent] = {}
-    fallback_index = 0
     for evt in events:
-        if evt.track not in {"Instructions", "InstructionTrace"}:
+        # The emulator also emits a legacy ``Execution`` instant containing an
+        # opcode/register dump but no parity index or IMR/ISR sample.  Treating
+        # that diagnostic packet as a canonical instruction used to make strict
+        # validation depend on whichever extra tracing modes were enabled.
+        if evt.track not in INSTRUCTION_TRACKS:
             continue
-        op_index = evt.annotations.get("op_index")
-        if op_index is None:
-            # Fallback: assign sequential index when op_index annotation is missing.
-            op_index = fallback_index
-            fallback_index += 1
-        if isinstance(op_index, int):
-            indexed[op_index] = evt
+        # Slice-end and diagnostic packets may share either canonical track. An
+        # opcode or architectural register snapshot identifies the actual
+        # instruction packet; once selected, its complete schema is mandatory.
+        if "opcode" not in evt.annotations and not any(
+            key.startswith("reg_") for key in evt.annotations
+        ):
+            continue
+        op_index = _validate_instruction_event(evt)
+        if op_index in indexed:
+            previous = indexed[op_index]
+            raise ValueError(
+                f"duplicate instruction op_index {op_index}: "
+                f"{previous.name!r} and {evt.name!r}"
+            )
+        indexed[op_index] = evt
     return indexed
 
 
@@ -225,10 +271,15 @@ def compare_instruction_traces(
 ) -> Tuple[Optional[int], Optional[TraceEvent], Optional[TraceEvent], List[str]]:
     """Return earliest differing op_index and the associated events."""
 
-    all_indices = sorted(set(lhs.keys()) & set(rhs.keys()))
-    # Always compare PC + opcode, plus IMR/ISR snapshots so WAIT/timer parity regressions
-    # show up directly at the divergent instruction.
-    keys_of_interest = {"pc", "opcode", "mem_imr", "mem_isr"}
+    for index, event in lhs.items():
+        _validate_instruction_event(event, expected_index=index)
+    for index, event in rhs.items():
+        _validate_instruction_event(event, expected_index=index)
+
+    all_indices = sorted(set(lhs.keys()) | set(rhs.keys()))
+    # IMR/ISR are required so WAIT/timer parity regressions show up directly at
+    # the divergent instruction instead of being silently omitted by both sides.
+    keys_of_interest = REQUIRED_INSTRUCTION_FIELDS
 
     for index in all_indices:
         evt_a = lhs.get(index)
@@ -236,35 +287,15 @@ def compare_instruction_traces(
         if evt_a is None or evt_b is None:
             return index, evt_a, evt_b, ["missing-event"]
 
-        ann_a = dict(evt_a.annotations)
-        ann_b = dict(evt_b.annotations)
-
-        # Fallback: parse pc/opcode/op_index from event name when annotations are missing.
-        def _parse_name_into(ann: Dict[str, object], name: str) -> None:
-            if "pc" in ann and "opcode" in ann and "op_index" in ann:
-                return
-            if name.startswith("Exec@0x"):
-                try:
-                    parts = name.split("/")
-                    pc_part = parts[0].split("@")[1]
-                    ann.setdefault("pc", int(pc_part, 16))
-                    for part in parts[1:]:
-                        if part.startswith("op="):
-                            ann.setdefault("opcode", int(part.split("=", 1)[1], 16))
-                        if part.startswith("idx="):
-                            ann.setdefault("op_index", int(part.split("=", 1)[1]))
-                except Exception:
-                    pass
-
-        _parse_name_into(ann_a, evt_a.name if evt_a else "")
-        _parse_name_into(ann_b, evt_b.name if evt_b else "")
+        ann_a = evt_a.annotations
+        ann_b = evt_b.annotations
         fields = set(ann_a.keys()) | set(ann_b.keys())
         reg_fields = {f for f in fields if f.startswith("reg_")}
         compare_fields = keys_of_interest | reg_fields | {"op_index"}
 
         mismatches: List[str] = []
         for key in sorted(compare_fields):
-            if key in ann_a and key in ann_b and ann_a.get(key) != ann_b.get(key):
+            if ann_a.get(key) != ann_b.get(key):
                 mismatches.append(key)
 
         if mismatches:
