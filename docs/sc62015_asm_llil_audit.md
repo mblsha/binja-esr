@@ -82,7 +82,7 @@ parity-only result is promoted to an ISA fact.
 | LLIL operand widths and masks | The mock evaluator accepted mixed-width near jumps, returns, dynamic IMEM addresses, `MV IL`, ROM-valid `FD 24`/`FD 42`, and `ED` exchanges that real Binary Ninja rejects; some control/address consumers retained unmodeled high bits | Emit explicit unsigned `ZERO_EXT`/`LOW_PART` conversions, snapshot both exchange directions, and apply the 8-bit IMEM or 20-bit external/control mask at every consumer; verify through a width-strict LLIL facade |
 | Control/address immediate high byte | Text assembly could turn an out-of-range literal into a self-fulfilling raw alias; table bytes at PC-E500 `F003A` were incorrectly treated as executed `CALLF` evidence | Keep `JPF`/`CALLF`, direct external addresses, and synthetic vectors canonical pending targeted hardware evidence; this restriction does not apply to `MV X/Y/U/S,lmn`, whose register consumer discards bits 23-20 |
 | Reset-vector selection | Python read the interrupt vector at `FFFFA` | Read the distinct reset-vector slot at `FFFFD`; whether software opcode `FF` exactly matches external/power-on reset, including stack and register effects, stays model-only |
-| Vector-transfer failure ordering | Software `IR`, RESET, and synthetic IRQ paths could push a frame, clear `IMR.IRM`, reset SFRs, or clear wrapper state before discovering a noncanonical vector, rejected destination, failed bus read, volatile mismatch, or late observer failure | Require explicit callback-free metadata for each vector transfer selected on the current scheduling pass, bind the one matching architectural vector fetch plus target length and memory provenance into a non-forgeable, one-shot prepared operation, and consume it before any stack, SFR, RAM, LCD, trace, or IRQ-delivery metadata mutation. HALT/OFF wake, masked pending status, an active handler, and a timer-only pass do not touch the IRQ vector because none can deliver on that pass; a newly armed IRQ is proved on the next pass before delivery. Machine reset is stricter: the reset-vector and decoded target bytes must be declared immutable before RAM/LCD reset can begin. Destination `I`, stack, and other data-dependent checks remain the destination instruction's job, and vector targets that are themselves `IR`/RESET do not recurse during preflight |
+| Vector-transfer failure ordering | Software `IR`, RESET, and synthetic IRQ paths could push a frame, clear `IMR.IRM`, reset SFRs, or clear wrapper state before discovering a noncanonical vector, rejected destination, failed bus read, volatile mismatch, or late observer failure | For software `IR`, RESET, and Python/PCE synthetic delivery, require explicit callback-free metadata for each selected transfer, bind the one matching architectural vector fetch plus target length and memory provenance into a non-forgeable, one-shot prepared operation, and consume it before transfer mutation. The Python/PCE wrapper does not inspect the IRQ vector for HALT/OFF wake, masked status, an active handler, or a timer-only pass. Generic Rust `CoreRuntime` applies the narrower no-speculative-vector gate and defers a source first armed after that gate; this does not establish identical dormant-PC fetch or same-pass/next-pass ordering. Machine reset is stricter: the reset-vector and decoded target bytes must be declared immutable before RAM/LCD reset can begin. Destination `I`, stack, and other data-dependent checks remain the destination instruction's job, and vector targets that are themselves `IR`/RESET do not recurse during preflight |
 | Software interrupt `IR` | The saved PC pointed after the opcode | Save the `IR` opcode address; the ROM dispatcher tests `FE` there and advances the saved frame |
 | Stacked `F` byte | Rust preserved six opaque upper bits while Python modeled only carry/zero; `POPS F` advanced `S` before its lazy validation node | Keep the one-byte stack layout and accept only the modeled `C`/`Z` image (`0..3`); snapshot and reject raw images with bits 2-7 before `S`, flags, or PC can mutate |
 | `TEST` | Some LLIL paths used a 24-bit operation for a byte instruction | Use byte-width logic |
@@ -190,6 +190,17 @@ same instruction identity and interrupt-image fields; duplicate indices and
 missing events are errors.  These guarantees make failures visible, but a
 matching trace still establishes only cross-implementation agreement.
 
+IRQ-boundary parity remains a separate emulator-integrity follow-up. The
+narrowed generic Rust `CoreRuntime` gate proves that a step whose entry state
+cannot select an IRQ transfer does not speculatively inspect the IRQ vector,
+and that a source first armed after that gate is left for a later step. It does
+not prove that Python/PCE and `CoreRuntime` agree on HALT/OFF wake versus
+dormant-PC fetch or execution, on an entry-pending unmasked IRQ versus the
+current opcode, or on the acceptance boundary for key, ON-key, external, SIO,
+and timer sources. Those cases need small cross-runtime traces before scheduler
+lockstep is claimed; real-hardware traces are still required to promote the
+resulting model to silicon behavior.
+
 ## Explicit model contracts
 
 These behaviors are deliberately testable, but a passing test must not be
@@ -204,12 +215,12 @@ described as silicon proof:
   only the distinct reset-vector slot is established here.
 - HALT and OFF register mutations and wake sources are provisional.  The two
   power states must remain distinguishable even where a host API exposes a
-  common `halted` boolean.  The current model preserves pending status that is
-  not a wake source; OFF wakes only for ONKI, while HALT may wake for any
+  common `halted` boolean.  The Python/PCE model preserves pending status that
+  is not a wake source; OFF wakes only for ONKI, while HALT may wake for any
   already asserted ISR source even if it is masked or host-side generation of
-  that source is disabled. Wake is modeled as an idle-step boundary: it changes
-  power/IRQ state without fetching the dormant PC, and an already-unmasked IRQ
-  may replace that saved PC on the next scheduling pass.
+  that source is disabled. In that wrapper, wake is an idle-step boundary: it
+  changes power/IRQ state without fetching the dormant PC, and an
+  already-unmasked IRQ may replace that saved PC on the next scheduling pass.
 - Multi-byte overlapping writes are ordered low byte first in the current
   emulator contract, with the full destination and source snapshotted before
   the first byte is written.

@@ -1172,6 +1172,67 @@ impl CoreRuntime {
         });
     }
 
+    /// Decide whether the IRQ transfer is already selected at this scheduling
+    /// boundary using only side-effect-free state. Sources asserted later by a
+    /// timer or device remain pending for the next boundary.
+    fn irq_transfer_selected_at_step_entry(&self) -> bool {
+        if self.state.is_off() || self.state.is_halted() || self.timer.in_interrupt {
+            return false;
+        }
+
+        let imr = self
+            .memory
+            .read_internal_byte_silent(IMEM_IMR_OFFSET)
+            .unwrap_or(0);
+        if (imr & IMR_MASTER) == 0 {
+            return false;
+        }
+
+        let asserted_isr = self
+            .memory
+            .read_internal_byte_silent(IMEM_ISR_OFFSET)
+            .unwrap_or(0);
+        let key_will_reassert = self.keyboard.is_some() && self.timer.key_irq_latched;
+        let sio_rx_will_assert = self.sio.is_some()
+            && (imr & IMR_RX) != 0
+            && (self
+                .memory
+                .read_internal_byte_silent(IMEM_USR_OFFSET)
+                .unwrap_or(0)
+                & USR_RX_READY)
+                != 0;
+
+        let mut predicted_isr = asserted_isr;
+        if key_will_reassert {
+            predicted_isr |= ISR_KEYI;
+        }
+        if self.onk_level {
+            predicted_isr |= ISR_ONKI;
+        }
+        if self.external_interrupt_level {
+            predicted_isr |= ISR_EXI;
+        }
+        if sio_rx_will_assert {
+            predicted_isr |= ISR_RXI;
+        }
+
+        // A bare KEYI only arms the host keyboard source when generation is
+        // enabled. An existing pending source or synchronous re-latch still
+        // makes the complete ISR image eligible for the delivery selector.
+        let mut armable_isr = asserted_isr;
+        if !self.timer.kb_irq_enabled {
+            armable_isr &= !ISR_KEYI;
+        }
+        let pending_or_will_reassert = self.timer.irq_pending
+            || key_will_reassert
+            || self.onk_level
+            || self.external_interrupt_level
+            || sio_rx_will_assert
+            || (armable_isr & ISR_KNOWN_MASK) != 0;
+
+        pending_or_will_reassert && (predicted_isr & imr & ISR_KNOWN_MASK) != 0
+    }
+
     pub fn load_rom(&mut self, blob: &[u8], start: usize) {
         let end = (start + blob.len()).min(self.memory.external_len());
         if start < end {
@@ -1523,6 +1584,7 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
             // Reject quarantined/invalid encodings before level re-latching,
             // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
             // advancement. A halted core with no current wake source does not
@@ -1651,26 +1713,32 @@ impl CoreRuntime {
                     None
                 };
 
-                // Next prove the asynchronous IRQ vector and destination using
-                // only silent reads. Neither proof may be masked by the one
-                // architectural opcode fetch below.
-                let (irq_target, irq_target_len) =
-                    crate::llama::eval::validate_vector_transfer_with_length(
-                        INTERRUPT_VECTOR_ADDR,
-                        &self.state,
-                        &mut bus,
-                    )
-                    .map_err(|error| CoreError::Other(format!("IRQ vector preflight: {error}")))?;
-                if (0..3).any(|offset| {
-                    !bus.instruction_byte_is_stable(
-                        INTERRUPT_VECTOR_ADDR.wrapping_add(offset) & ADDRESS_MASK,
-                    )
-                }) || (0..u32::from(irq_target_len)).any(|offset| {
-                    !bus.instruction_byte_is_stable(irq_target.wrapping_add(offset) & ADDRESS_MASK)
-                }) {
-                    return Err(CoreError::Other(
-                        "IRQ vector preflight: callback-backed vector/target".to_string(),
-                    ));
+                if irq_transfer_selected {
+                    // Prove the asynchronous IRQ vector and destination only
+                    // when this scheduling boundary can actually deliver it.
+                    // The final transfer performs its own one-shot validation.
+                    let (irq_target, irq_target_len) =
+                        crate::llama::eval::validate_vector_transfer_with_length(
+                            INTERRUPT_VECTOR_ADDR,
+                            &self.state,
+                            &mut bus,
+                        )
+                        .map_err(|error| {
+                            CoreError::Other(format!("IRQ vector preflight: {error}"))
+                        })?;
+                    if (0..3).any(|offset| {
+                        !bus.instruction_byte_is_stable(
+                            INTERRUPT_VECTOR_ADDR.wrapping_add(offset) & ADDRESS_MASK,
+                        )
+                    }) || (0..u32::from(irq_target_len)).any(|offset| {
+                        !bus.instruction_byte_is_stable(
+                            irq_target.wrapping_add(offset) & ADDRESS_MASK,
+                        )
+                    }) {
+                        return Err(CoreError::Other(
+                            "IRQ vector preflight: callback-backed vector/target".to_string(),
+                        ));
+                    }
                 }
 
                 if let Some(silent_opcode) = silent_prepared_opcode {
@@ -1897,7 +1965,9 @@ impl CoreRuntime {
                         // Reassert KEYI latch only when enabled, mirroring Python HALT wake behavior.
                         self.refresh_key_irq_latch();
                     }
-                    self.deliver_pending_irq()?;
+                    if irq_transfer_selected {
+                        self.deliver_pending_irq()?;
+                    }
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
                         tracer.update_counters(
@@ -2144,7 +2214,9 @@ impl CoreRuntime {
                         irq_source: irq_source_before,
                     });
                 }
-                self.deliver_pending_irq()?;
+                if irq_transfer_selected {
+                    self.deliver_pending_irq()?;
+                }
                 let mut guard = PERFETTO_TRACER.enter();
                 guard.with_some(|tracer| {
                     tracer.update_counters(
@@ -2926,6 +2998,14 @@ mod tests {
     use crate::llama::opcodes::RegName;
     use crate::perfetto::perfetto_test_guard;
     use std::fs;
+
+    fn install_noncanonical_irq_vector(rt: &mut CoreRuntime) {
+        rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x78);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x56);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0xF4);
+    }
 
     #[test]
     fn binary_snapshot_registers_are_exactly_the_eight_core_fields() {
@@ -4407,39 +4487,131 @@ mod tests {
     }
 
     #[test]
-    fn halted_irq_vector_rejects_before_latch_or_idle_tick_mutation() {
+    fn halt_wake_does_not_preflight_irq_vector() {
         let mut rt = CoreRuntime::new();
         rt.state.set_halted(true);
-        rt.state.set_pc(0x01234);
-        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
-        rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x78);
+        rt.state.set_pc(0);
+        rt.memory.write_external_byte(0, 0x00);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
         rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x56);
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+        install_noncanonical_irq_vector(&mut rt);
+
+        rt.step(1)
+            .expect("HALT wake must not inspect a vector it cannot deliver on entry");
+
+        assert!(!rt.state.is_halted());
+        assert!(rt.timer.irq_pending);
+    }
+
+    #[test]
+    fn ordinary_step_does_not_preflight_irq_vector() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0);
+        rt.memory.write_external_byte(0, 0x00);
+        install_noncanonical_irq_vector(&mut rt);
+
+        rt.step(1)
+            .expect("ordinary execution must not inspect an unselected IRQ vector");
+
+        assert_eq!(rt.state.pc(), 1);
+        assert_eq!(rt.metadata.instruction_count, 1);
+    }
+
+    #[test]
+    fn masked_pending_irq_defers_vector_preflight_until_unmasked() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory.write_external_slice(0, &[0x00, 0x00]);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, IMR_KEY);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+        install_noncanonical_irq_vector(&mut rt);
+
+        rt.step(1).expect("masked IRQ must not inspect its vector");
+        assert_eq!(rt.state.pc(), 1);
+        assert!(rt.timer.irq_pending);
+
         rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0xF4);
-        rt.timer.key_irq_latched = true;
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
         let pc_before = rt.state.pc();
-        let halted_before = rt.state.is_halted();
-        let irq_pending_before = rt.timer.irq_pending;
-        let irq_source_before = rt.timer.irq_source.clone();
-        let key_latched_before = rt.timer.key_irq_latched;
-        let internal_before = rt.memory.internal_slice().to_vec();
+        let sp_before = rt.state.get_reg(RegName::S);
         let cycle_before = rt.metadata.cycle_count;
+        let instruction_before = rt.metadata.instruction_count;
 
         let error = rt
             .step(1)
-            .expect_err("malformed IRQ vector must reject before HALT wake work");
+            .expect_err("unmasked deliverable IRQ must validate its vector");
 
         assert!(error
             .to_string()
             .contains(crate::llama::eval::VECTOR_UPPER_NIBBLE_ERROR));
         assert_eq!(rt.state.pc(), pc_before);
-        assert_eq!(rt.state.is_halted(), halted_before);
-        assert_eq!(rt.timer.irq_pending, irq_pending_before);
-        assert_eq!(rt.timer.irq_source, irq_source_before);
-        assert_eq!(rt.timer.key_irq_latched, key_latched_before);
-        assert_eq!(rt.memory.internal_slice(), internal_before);
+        assert_eq!(rt.state.get_reg(RegName::S), sp_before);
         assert_eq!(rt.metadata.cycle_count, cycle_before);
+        assert_eq!(rt.metadata.instruction_count, instruction_before);
+        assert!(!rt.timer.in_interrupt);
+        assert!(rt.timer.irq_pending);
+    }
+
+    #[test]
+    fn active_interrupt_handler_does_not_preflight_irq_vector() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0);
+        rt.memory.write_external_byte(0, 0x00);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_MTI);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        rt.timer.irq_pending = true;
+        rt.timer.in_interrupt = true;
+        rt.timer.irq_source = Some("MTI".to_string());
+        install_noncanonical_irq_vector(&mut rt);
+
+        rt.step(1)
+            .expect("active handler must not inspect a nested IRQ vector");
+
+        assert_eq!(rt.state.pc(), 1);
+        assert!(rt.timer.in_interrupt);
+        assert!(rt.timer.irq_pending);
+    }
+
+    #[test]
+    fn timer_armed_irq_defers_vector_preflight_until_next_step() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::S, 0x0200);
+        rt.memory.write_external_slice(0, &[0x00, 0x00]);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+        *rt.timer = TimerContext::new(true, 1, 0);
+        install_noncanonical_irq_vector(&mut rt);
+
+        rt.step(1)
+            .expect("timer armed during this step must not use an unproved vector");
+        assert_eq!(rt.state.pc(), 1);
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_MTI,
+            0
+        );
+        assert!(rt.timer.irq_pending);
+
+        let pc_before = rt.state.pc();
+        let cycle_before = rt.metadata.cycle_count;
+        let instruction_before = rt.metadata.instruction_count;
+        let error = rt
+            .step(1)
+            .expect_err("next boundary must validate the now-selected IRQ vector");
+
+        assert!(error
+            .to_string()
+            .contains(crate::llama::eval::VECTOR_UPPER_NIBBLE_ERROR));
+        assert_eq!(rt.state.pc(), pc_before);
+        assert_eq!(rt.metadata.cycle_count, cycle_before);
+        assert_eq!(rt.metadata.instruction_count, instruction_before);
     }
 
     #[test]
@@ -4987,7 +5159,9 @@ mod tests {
         rt.timer.mti_period = 1;
         rt.timer.next_mti = 0;
 
-        rt.step(1).expect("tick timer and deliver MTI");
+        rt.step(1).expect("tick timer and arm MTI");
+        rt.step(1)
+            .expect("validate and deliver MTI at the next scheduling boundary");
 
         // Flush perfetto trace to disk before reading.
         if let Some(tracer) = PERFETTO_TRACER.enter().take() {
@@ -5560,14 +5734,6 @@ mod tests {
                 ((target >> 16) & 0x0F) as u8,
             );
             rt.memory.write_external_byte(target, 0x00);
-            // Keep the always-validated asynchronous IRQ destination stable
-            // and distinct from both the RESET source and destination.
-            rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
-            rt.memory
-                .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x01);
-            rt.memory
-                .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
-            rt.memory.write_external_byte(0x00100, 0x00);
             if dynamic_vector {
                 rt.memory.set_python_ranges(vec![(
                     crate::pce500::ROM_RESET_VECTOR_ADDR,
