@@ -48,7 +48,7 @@ class _SideEffectingNative:
 def _facade_with_fake_native(native: _SideEffectingNative) -> CPU:
     cpu = CPU.__new__(CPU)
     cpu._impl = native
-    cpu._legacy_decoder = _LegacyDecoder()
+    setattr(cpu, "_legacy_decoder", _LegacyDecoder())
     cpu.memory = _PreflightMemory()
     cpu.backend = "llama"
     cpu._contract_poisoned = None

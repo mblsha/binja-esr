@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 from binja_test_mocks.coding import Decoder, Encoder
 from binaryninja import RegisterName  # type: ignore
@@ -120,7 +122,7 @@ def test_emem_imem_offset_arity_is_exact(composite: bool, missing: bool) -> None
 def test_imm20_encoder_rejects_value_high_nibble_disagreement() -> None:
     instr = _decode("03341205")
     (target,) = tuple(instr.operands())
-    target.value = 0x61234
+    setattr(target, "value", 0x61234)
     with pytest.raises(InvalidInstruction, match="disagrees with encoded high byte"):
         encode(instr, 0)
 
@@ -128,14 +130,14 @@ def test_imm20_encoder_rejects_value_high_nibble_disagreement() -> None:
 def test_reg3_encoder_rejects_semantic_selector_disagreement() -> None:
     instr = _decode("1104")
     (target,) = tuple(instr.operands())
-    target.reg = RegisterName("Y")
+    setattr(target, "reg", RegisterName("Y"))
     with pytest.raises(InvalidInstruction, match="encodes X but operand names Y"):
         encode(instr, 0)
 
 
 def test_regpair_encoder_rejects_semantic_selector_disagreement() -> None:
     instr = _decode("4545")
-    pair = instr._operands[0]
+    pair: Any = instr._operands[0]
     pair.reg1.reg = RegisterName("Y")
     with pytest.raises(InvalidInstruction, match="but operand names Y,Y"):
         encode(instr, 0)
