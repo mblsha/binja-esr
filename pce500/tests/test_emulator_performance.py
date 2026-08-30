@@ -12,6 +12,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from pce500.run_pce500 import run_emulator
 
 
+ROM_PATH = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
+
+
+def _require_boot_rom() -> Path:
+    if not ROM_PATH.exists():
+        pytest.skip(f"ROM file not found at {ROM_PATH}")
+    return ROM_PATH
+
+
 class TestEmulatorPerformance:
     """Test emulator performance and correct initialization."""
 
@@ -25,10 +34,7 @@ class TestEmulatorPerformance:
         4. LCD controller statistics are within expected ranges
         5. Memory operation counts are reasonable
         """
-        # Check if ROM file exists
-        rom_path = Path(__file__).parent.parent.parent / "data" / "pc-e500-en.bin"
-        if not rom_path.exists():
-            pytest.skip(f"ROM file not found at {rom_path}")
+        rom_path = _require_boot_rom()
 
         # Record start time
         start_time = time.time()
@@ -42,6 +48,7 @@ class TestEmulatorPerformance:
             save_lcd=False,  # Don't save PNG files
             print_stats=False,  # Quiet mode
             timeout_secs=0.0,  # Measure full completion, not the Python default timeout.
+            rom_path=rom_path,
         )
 
         # Check execution time
@@ -98,9 +105,14 @@ class TestEmulatorPerformance:
 
     def test_emulator_lcd_statistics_detail(self):
         """Test detailed LCD statistics after boot."""
+        rom_path = _require_boot_rom()
         # Run emulator for fewer steps to be faster
         emu = run_emulator(
-            num_steps=5000, perfetto_trace=False, save_lcd=False, print_stats=False
+            num_steps=5000,
+            perfetto_trace=False,
+            save_lcd=False,
+            print_stats=False,
+            rom_path=rom_path,
         )
 
         stats = emu.lcd.get_chip_statistics()

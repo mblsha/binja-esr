@@ -173,6 +173,10 @@ class TestSimplifiedEmulator:
         rom_data[0x3FFFE] = 0x12  # Middle byte
         rom_data[0x3FFFF] = 0x00  # High byte
         emu.load_rom(bytes(rom_data))
+        # RESET requires both its vector and destination instruction to be
+        # immutable.  Keep this deliberately low synthetic target, but model
+        # it as ROM instead of relying on writable flat-memory contents.
+        emu.memory.add_rom(0x1234, b"\x00", "synthetic_reset_target")
 
         # Write some data to RAM
         emu.memory.write_byte(0xB8000, 0xFF)

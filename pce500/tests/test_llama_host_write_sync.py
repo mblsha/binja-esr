@@ -5,6 +5,7 @@ import pytest
 from pce500.emulator import PCE500Emulator
 from pce500.memory import INTERNAL_MEMORY_START, PCE500Memory
 from pce500.memory_bus import MemoryOverlay
+from pce500.tests.vector_fixtures import install_static_machine_vectors
 from sc62015.pysc62015.emulator import RegisterName
 
 
@@ -170,6 +171,7 @@ def test_failed_native_execute_poison_is_cleared_only_by_complete_reset(
 ) -> None:
     monkeypatch.setenv("SC62015_CPU_BACKEND", "python")
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    install_static_machine_vectors(emu)
     emu._timer_enabled = False  # type: ignore[attr-defined]
     emu.memory.write_byte(0x1000, 0x00)
     emu.cpu.regs.set(RegisterName.PC, 0x1000)
