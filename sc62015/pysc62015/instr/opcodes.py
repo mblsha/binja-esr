@@ -178,6 +178,17 @@ SINGLE_OPERAND_PRE_LOOKUP: Dict[AddressingMode, int] = {
     or 0x24,
 }
 
+# Exact one-selector PRE aliases exercised on a real PC-E500. The second latch
+# is not consulted when the opcode has only one addressable IMEM operand.
+# Keep the encoder canonical; this table exists only for decoding/lifting raw
+# silicon-accepted byte streams.
+SILICON_PROVEN_SINGLE_PRE_ALIASES: Dict[AddressingMode, frozenset[int]] = {
+    AddressingMode.BP_N: frozenset({0x22}),
+    AddressingMode.N: frozenset({0x30, 0x31, 0x32, 0x33}),
+    AddressingMode.PX_N: frozenset({0x34, 0x36}),
+    AddressingMode.BP_PX: frozenset({0x24, 0x26}),
+}
+
 
 # No ignored-PRE pair currently has a proved executable boundary. PC-E500
 # 0xF0002 was previously accepted as PRE23; SUB A,3F, but fresh decoding from
@@ -209,8 +220,6 @@ HALTIntrinsic = IntrinsicName("HALT")
 OFFIntrinsic = IntrinsicName("OFF")
 RESETIntrinsic = IntrinsicName("RESET")
 ValidateFIntrinsic = IntrinsicName("VALIDATE_F")
-ValidateICountIntrinsic = IntrinsicName("VALIDATE_I_COUNT")
-ValidateExpHighNibbleIntrinsic = IntrinsicName("VALIDATE_EXP_HIGH_NIBBLE")
 ValidateVectorTransferIntrinsic = IntrinsicName("VALIDATE_VECTOR_TRANSFER")
 
 # Use distinct temporary registers for various operations in order to avoid
@@ -231,6 +240,9 @@ TempLoopByteResult = LLIL_TEMP(12)
 TempBcdDigitCarry = LLIL_TEMP(13)
 TempWideMemoryValue = LLIL_TEMP(14)
 TempWideMemoryAddress = LLIL_TEMP(15)
+# Counted instructions cannot also execute a wide-memory helper inside their
+# LLIL, so TEMP15 is safe to reuse for the initial-I snapshot.
+TempInitialICount = TempWideMemoryAddress
 # IR does not execute exchange logic, so this per-instruction temporary can be
 # safely reused without expanding the public snapshot/native-register layout.
 TempVectorTarget = TempExchange
@@ -1348,6 +1360,20 @@ class RegisterImm20(Imm20):
         encoder.unsigned_byte((self.value >> 16) & 0x0F)
 
 
+class FarControlImm20(RegisterImm20):
+    """JPF/CALLF target whose encoded upper nibble is ignored by silicon.
+
+    PC-E500 HW-009 pairs executed otherwise-identical JPF and CALLF opcodes
+    with high operand bytes ``0x01`` and ``0x81``. Both variants transferred
+    to ``0x101E0``; CALLF also produced the same return frame and RETF path.
+    Decode therefore consumes all 24 encoded bits but retains bits 19-0.
+    Fresh assembly remains canonical through :class:`RegisterImm20.encode`.
+
+    This policy is intentionally opcode-specific. It does not relax vector
+    decoding or unmeasured 20-bit operand families.
+    """
+
+
 # Raw three-byte immediate encoded as `n m l`.  Unlike Imm20, every bit is
 # data: opcode DC uses this operand to seed an internal-memory triple, and real
 # ROM/hardware examples rely on the upper nibble of `l` being preserved.
@@ -1919,8 +1945,7 @@ class IMem16(IMem8):
 # Read three bytes from internal memory. ``IMem20`` is a historical name, not
 # a declaration that every consumer truncates the loaded bytes. A register or
 # external-address consumer explicitly keeps bits 19-0; MVP copies all three
-# bytes; CMPP currently performs the documented three-byte comparison; and EXP
-# rejects nonzero bits 23-20 pending a dedicated hardware trace.
+# bytes; CMPP compares three-byte values; and EXP exchanges all three bytes.
 class IMem20(IMem8):
     def width(self) -> int:
         return 3
@@ -2080,7 +2105,7 @@ class RegF(Reg):
         il: LowLevelILFunction,
         value: ExpressionIndex,
     ) -> None:
-        """Assign a byte already checked by ``VALIDATE_F``.
+        """Assign a byte already checked or normalized to modeled C/Z bits.
 
         Stack pops need validation to occur before the stack pointer advances.
         Keeping the flag writes separate avoids either validating twice or
@@ -2254,6 +2279,81 @@ class EMemAddr(Imm20, Pointer):
             value,
             address_mask=PC_MASK,
         )
+
+
+class DirectReadAbsoluteAddr(EMemAddr):
+    """Absolute data address used by opcodes 88-8F.
+
+    Paired PC-E500 HW-009 captures exercised every direct-register load width
+    with canonical high byte ``01`` and raw high byte ``81``. Both forms
+    consumed all three address bytes and read the same one-, two-, or
+    three-byte value at 0x101F0. Decode therefore ignores bits 23-20 for this
+    direct-read block. Re-encoding stays canonical, and the policy does not
+    extend to control flow, vectors, or other absolute-memory opcode families.
+    """
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        lo = decoder.unsigned_byte()
+        mid = decoder.unsigned_byte()
+        raw_hi = decoder.unsigned_byte()
+        self.extra_hi = raw_hi & 0x0F
+        self.value = lo | (mid << 8) | (self.extra_hi << 16)
+
+
+class DirectWriteAbsoluteAddr(EMemAddr):
+    """Absolute data address used by opcodes A8-AF.
+
+    A paired PC-E500 HW-009 matrix captured every A8-AF register width with
+    encoded high bytes ``04`` and ``84``. Both forms consumed all three
+    address bytes and emitted the same one-, two-, or three-byte CE1 write
+    sequence at 0x406D0. Decode therefore ignores bits 23-20 for these direct
+    stores. Encoding remains canonical and this policy does not extend to
+    control flow, vectors, or other absolute-memory opcode families.
+    """
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        lo = decoder.unsigned_byte()
+        mid = decoder.unsigned_byte()
+        raw_hi = decoder.unsigned_byte()
+        self.extra_hi = raw_hi & 0x0F
+        self.value = lo | (mid << 8) | (self.extra_hi << 16)
+
+
+class AbsoluteByteOpAddr(EMemAddr):
+    """Absolute byte address used by opcodes 62/66/6A/72/7A.
+
+    Paired PC-E500 HW-009 captures used high bytes ``04`` and ``84`` for CMP,
+    TEST, XOR, AND, and OR at 0x406D0. Both forms consumed the complete
+    five-byte instruction. CMP/TEST emitted the same one-byte read; the three
+    identity read/modify/write cases emitted the same read then write address.
+    Decode therefore ignores bits 23-20 only for this measured opcode family.
+    """
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        lo = decoder.unsigned_byte()
+        mid = decoder.unsigned_byte()
+        raw_hi = decoder.unsigned_byte()
+        self.extra_hi = raw_hi & 0x0F
+        self.value = lo | (mid << 8) | (self.extra_hi << 16)
+
+
+class AbsoluteTransferAddr(EMemAddr):
+    """Absolute data address used by opcodes D0-D3 and D8-DB.
+
+    Paired PC-E500 HW-009 captures exercised fixed one-, two-, and three-byte
+    moves plus I=3 MVL in both directions. Encoded high bytes 01/81 selected
+    the same experiment-ROM source for D0-D3; 04/84 emitted the same bounded
+    CE1 destination sequence for D8-DB. Decode therefore ignores bits 23-20
+    only for these eight measured transfer opcodes. Encoding remains
+    canonical and control-flow/vector operands remain strict.
+    """
+
+    def decode(self, decoder: Decoder, addr: int) -> None:
+        lo = decoder.unsigned_byte()
+        mid = decoder.unsigned_byte()
+        raw_hi = decoder.unsigned_byte()
+        self.extra_hi = raw_hi & 0x0F
+        self.value = lo | (mid << 8) | (self.extra_hi << 16)
 
 
 class EMemValueOffsetHelper(OperandHelper, Pointer):
@@ -3095,26 +3195,18 @@ class RegPair(HasOperands, Reg3):
 
 @contextmanager
 def lift_loop(il: LowLevelILFunction) -> Generator[None, None, None]:
-    if_true = LowLevelILLabel()
-    if_false = LowLevelILLabel()
+    loop_label = LowLevelILLabel()
+    exit_label = LowLevelILLabel()
 
     loop_reg = Reg("I")
     width = loop_reg.width()
 
-    # If I is zero, skip the loop entirely
-    il.append(
-        il.if_expr(
-            il.compare_equal(width, loop_reg.lift(il), il.const(width, 0)),
-            if_true,
-            if_false,
-        )
-    )
-    il.mark_label(if_false)
-
-    # loop iteration
+    # PC-E500 HW-002 establishes a 16-bit do-while countdown: an initial
+    # I=0 wraps through 0xffff and performs 65,536 iterations.
+    il.mark_label(loop_label)
     yield
 
     loop_reg.lift_assign(il, il.sub(width, loop_reg.lift(il), il.const(width, 1)))
     cond = il.compare_equal(width, loop_reg.lift(il), il.const(width, 0))
-    il.append(il.if_expr(cond, if_true, if_false))
-    il.mark_label(if_true)
+    il.append(il.if_expr(cond, exit_label, loop_label))
+    il.mark_label(exit_label)

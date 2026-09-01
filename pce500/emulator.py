@@ -1124,9 +1124,9 @@ class PCE500Emulator:
                     IRQSource.ONK,
                 ):
                     self._irq_source = IRQSource.KEY
-        # Honor low-power state without collapsing OFF into HALT.  The current
-        # model allows any asserted ISR source to wake HALT, but only ONKI to
-        # wake OFF.  Exact silicon wake policy remains hardware-trace work.
+        # Honor low-power state without collapsing OFF into HALT. Device traces
+        # verify STI wake for HALT and ONKI wake for firmware-prepared OFF; the
+        # remaining source combinations are peripheral integration policy.
         if getattr(self.cpu.state, "halted", False):
             power_state = getattr(self.cpu.state, "power_state", "halted")
             is_off = power_state == "off"
@@ -1152,8 +1152,9 @@ class PCE500Emulator:
             wake_isr = isr_val_chk & int(ISRFlag.ONKI) if is_off else isr_val_chk
             if wake_isr != 0:
                 # Cancel the low-power state and arm a pending interrupt. Wake
-                # is an idle-step boundary: the dormant PC is saved as-is and
-                # is not fetched or decoded until the next scheduling pass.
+                # is an idle step. On the next scheduling pass, hardware
+                # fetches the fall-through opcode before any unmasked IRQ frame
+                # replaces it; that fetch is implemented in the delivery path.
                 self.cpu.state.halted = False
                 self.cpu.state.power_state = "running"
                 self._irq_source = _highest_pending_irq_source(wake_isr)
@@ -1393,6 +1394,17 @@ class PCE500Emulator:
                     # Push PC (3 bytes), then F (1), then IMR (1), clear IMR.IRM
                     cur_pc = self.cpu.regs.get(RegisterName.PC)
                     s = self.cpu.regs.get(RegisterName.S)
+                    # Real PC-E500 WAIT/HALT captures show one architectural
+                    # fetch at the saved/fall-through PC before frame writes
+                    # and vector reads. The fetched opcode is not executed when
+                    # this IRQ replaces it. Do not decode operands or turn an
+                    # invalid discarded byte into permission to skip delivery.
+                    try:
+                        self.memory.read_byte(cur_pc, cpu_pc=cur_pc)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            "failed architectural pre-IRQ opcode fetch"
+                        ) from exc
                     # Resolve and statically preflight the handler silently,
                     # then perform exactly one architectural vector fetch and
                     # require it to match before the frame changes.  This
@@ -1552,10 +1564,9 @@ class PCE500Emulator:
                     self._poisoned = f"IRQ delivery failed: {type(exc).__name__}: {exc}"
                 raise
 
-        # Interrupt delivery above may replace the opcode which was about to
-        # execute, so preflight the final PC here.  Quarantined behavior (for
-        # example counted instructions with I=0 or TCL) must fail before the
-        # per-instruction timer tick mutates scheduler/ISR state.
+        # Interrupt delivery above may replace the opcode which was fetched at
+        # the boundary but was not about to execute, so preflight the final
+        # handler PC here.
         scheduled_pc = self.cpu.regs.get(RegisterName.PC)
         if scheduled_pc in self.breakpoints:
             return False
@@ -1634,8 +1645,9 @@ class PCE500Emulator:
                 opcode_peek = self.memory.peek_byte_for_preflight(pc, pc) & 0xFF
                 if opcode_peek == 0xEF:  # WAIT
                     i_before = self.cpu.regs.get(RegisterName.I) & 0xFFFF
-                    if i_before > 0:
-                        wait_sim_count = i_before
+                    # HW-002: WAIT is a 16-bit do-while countdown, so zero
+                    # denotes 65,536 idle cycles and wraps back to zero.
+                    wait_sim_count = i_before if i_before != 0 else 0x10000
                 opcode = opcode_peek
             except Exception:
                 pass

@@ -43,6 +43,67 @@ def _run(cpu: CPU, addr: int = 0) -> None:
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    ("program", "expected_offset"),
+    [
+        (bytes.fromhex("30 A0 05"), 0x05),
+        (bytes.fromhex("31 A0 05"), 0x05),
+        (bytes.fromhex("32 A0 05"), 0x05),
+        (bytes.fromhex("33 A0 05"), 0x05),
+        (bytes.fromhex("34 A0 05"), 0x25),
+        (bytes.fromhex("36 A0 05"), 0x25),
+        (bytes.fromhex("24 A0 05"), 0x30),
+        (bytes.fromhex("26 A0 05"), 0x30),
+        (bytes.fromhex("22 A0 05"), 0x15),
+        (bytes.fromhex("30 31 A0 05"), 0x05),
+    ],
+)
+def test_hw008_measured_pre_aliases_match_between_backends(
+    backend: str, program: bytes, expected_offset: int
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[: len(program)] = program
+    raw[INTERNAL_MEMORY_START + IMEMRegisters.BP] = 0x10
+    raw[INTERNAL_MEMORY_START + IMEMRegisters.PX] = 0x20
+    memory = _make_memory(raw)
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.A, 0xD7)
+
+    _run(cpu)
+
+    assert memory._raw[INTERNAL_MEMORY_START + expected_offset] == 0xD7
+    assert cpu.regs.get(RegisterName.PC) == len(program)
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    "program", [bytes.fromhex("65 12 07"), bytes.fromhex("22 65 12 07")]
+)
+def test_hw008_redundant_pre22_test_flags_match_between_backends(
+    backend: str, program: bytes
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[: len(program)] = program
+    raw[INTERNAL_MEMORY_START + IMEMRegisters.BP] = 0x10
+    raw[INTERNAL_MEMORY_START + 0x22] = 0x80
+    memory = _make_memory(raw)
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.F, 0x01)
+
+    _run(cpu)
+
+    assert cpu.regs.get(RegisterName.FC) == 1
+    assert cpu.regs.get(RegisterName.FZ) == 1
+    assert cpu.regs.get(RegisterName.PC) == len(program)
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
 def test_il_write_clears_ih(backend: str) -> None:
     if backend == "llama":
         assert "llama" in available_backends(), "LLAMA backend not available"
@@ -90,6 +151,285 @@ def test_mvld_decrements_addresses(backend: str) -> None:
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    ("program", "i_seed", "expected_i", "expected_imem", "expected_external_reads"),
+    [
+        (
+            bytes.fromhex("32 F3 00 40 40"),
+            3,
+            0,
+            bytes.fromhex("FF 00 00 00 FF"),
+            [0x40680, 0x40681, 0x40682],
+        ),
+        (
+            bytes.fromhex("32 F3 00 3F 40"),
+            3,
+            0,
+            bytes.fromhex("00 00 00 04 FF"),
+            [0x40680, 0x40681, 0x40682],
+        ),
+        (
+            bytes.fromhex("32 F3 00 41 40"),
+            2,
+            0,
+            bytes.fromhex("FF 80 00 00 FF"),
+            [0x40680, 0x40681],
+        ),
+        (
+            bytes.fromhex("32 F3 80 40 40 10"),
+            3,
+            0,
+            bytes.fromhex("FF 00 00 00 FF"),
+            [0x40690, 0x40691, 0x40692],
+        ),
+        (
+            bytes.fromhex("32 F3 C0 40 40 10"),
+            3,
+            0,
+            bytes.fromhex("FF 00 00 00 FF"),
+            [0x40670, 0x40671, 0x40672],
+        ),
+        (
+            bytes.fromhex("32 F1 00 40 40"),
+            0x5AA5,
+            0x5AA5,
+            bytes.fromhex("FF 00 00 04 FF"),
+            [0x40680, 0x40681],
+        ),
+        (
+            bytes.fromhex("32 F2 00 40 40"),
+            0x5AA5,
+            0x5AA5,
+            bytes.fromhex("FF 00 00 00 FF"),
+            [0x40680, 0x40681, 0x40682],
+        ),
+        (
+            bytes.fromhex("32 F1 80 40 40 10"),
+            0x5AA5,
+            0x5AA5,
+            bytes.fromhex("FF 00 00 04 FF"),
+            [0x40690, 0x40691],
+        ),
+        (
+            bytes.fromhex("32 F1 C0 40 40 10"),
+            0x5AA5,
+            0x5AA5,
+            bytes.fromhex("FF 00 00 04 FF"),
+            [0x40670, 0x40671],
+        ),
+        (
+            bytes.fromhex("32 F2 80 40 40 10"),
+            0x5AA5,
+            0x5AA5,
+            bytes.fromhex("FF 00 00 00 FF"),
+            [0x40690, 0x40691, 0x40692],
+        ),
+        (
+            bytes.fromhex("32 F2 C0 40 40 10"),
+            0x5AA5,
+            0x5AA5,
+            bytes.fromhex("FF 00 00 00 FF"),
+            [0x40670, 0x40671, 0x40672],
+        ),
+    ],
+)
+def test_hw007_external_pointer_moves_snapshot_before_overlapping_writes(
+    backend: str,
+    program: bytes,
+    i_seed: int,
+    expected_i: int,
+    expected_imem: bytes,
+    expected_external_reads: list[int],
+) -> None:
+    """Match the decisive PC-E500 CE1 pointer-overlap matrices."""
+
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    # The pointer at IMEM 40..42 initially contains 0x40680 and overlaps the
+    # destination writes. Programs include the canonical PRE32 (N,N).
+    raw[: len(program)] = program
+    raw[INTERNAL_MEMORY_START + 0x3F : INTERNAL_MEMORY_START + 0x44] = bytes.fromhex(
+        "FF 80 06 04 FF"
+    )
+    external_reads: list[int] = []
+
+    def read(addr: int) -> int:
+        if 0x40000 <= addr <= 0x7FFFF:
+            external_reads.append(addr)
+        return raw[addr]
+
+    def write(addr: int, value: int) -> None:
+        raw[addr] = value & 0xFF
+
+    memory = Memory(read, write)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.I, i_seed)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 1)
+
+    _run(cpu)
+
+    assert external_reads == expected_external_reads
+    assert (
+        raw[INTERNAL_MEMORY_START + 0x3F : INTERNAL_MEMORY_START + 0x44]
+        == expected_imem
+    )
+    assert cpu.regs.get(RegisterName.I) == expected_i
+    assert cpu.regs.get(RegisterName.F) == 0x03
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    ("program", "i_seed", "expected_i", "expected_external_writes"),
+    [
+        (
+            bytes.fromhex("32 F8 00 40 60"),
+            0x5AA5,
+            0x5AA5,
+            [(0x406A0, 0xA5)],
+        ),
+        (
+            bytes.fromhex("32 F9 00 40 60"),
+            0x5AA5,
+            0x5AA5,
+            [(0x406A0, 0xA5), (0x406A1, 0x5A)],
+        ),
+        (
+            bytes.fromhex("32 FA 00 40 60"),
+            0x5AA5,
+            0x5AA5,
+            [(0x406A0, 0xA5), (0x406A1, 0x5A), (0x406A2, 0x3C)],
+        ),
+        (
+            bytes.fromhex("32 FB 00 40 60"),
+            4,
+            0,
+            [
+                (0x406A0, 0xA5),
+                (0x406A1, 0x5A),
+                (0x406A2, 0x3C),
+                (0x406A3, 0xC3),
+            ],
+        ),
+        (
+            bytes.fromhex("32 F8 80 40 60 10"),
+            0x5AA5,
+            0x5AA5,
+            [(0x406B0, 0xA5)],
+        ),
+        (
+            bytes.fromhex("32 F8 C0 40 60 10"),
+            0x5AA5,
+            0x5AA5,
+            [(0x40690, 0xA5)],
+        ),
+        (
+            bytes.fromhex("32 F9 80 40 60 10"),
+            0x5AA5,
+            0x5AA5,
+            [(0x406B0, 0xA5), (0x406B1, 0x5A)],
+        ),
+        (
+            bytes.fromhex("32 F9 C0 40 60 10"),
+            0x5AA5,
+            0x5AA5,
+            [(0x40690, 0xA5), (0x40691, 0x5A)],
+        ),
+        (
+            bytes.fromhex("32 FA 80 40 60 10"),
+            0x5AA5,
+            0x5AA5,
+            [(0x406B0, 0xA5), (0x406B1, 0x5A), (0x406B2, 0x3C)],
+        ),
+        (
+            bytes.fromhex("32 FA C0 40 60 10"),
+            0x5AA5,
+            0x5AA5,
+            [(0x40690, 0xA5), (0x40691, 0x5A), (0x40692, 0x3C)],
+        ),
+        (
+            bytes.fromhex("32 FB 80 40 60 10"),
+            4,
+            0,
+            [
+                (0x406B0, 0xA5),
+                (0x406B1, 0x5A),
+                (0x406B2, 0x3C),
+                (0x406B3, 0xC3),
+            ],
+        ),
+        (
+            bytes.fromhex("32 FB C0 40 60 10"),
+            4,
+            0,
+            [
+                (0x40690, 0xA5),
+                (0x40691, 0x5A),
+                (0x40692, 0x3C),
+                (0x40693, 0xC3),
+            ],
+        ),
+    ],
+)
+def test_hw007_external_pointer_destinations_emit_hardware_write_address_order(
+    backend: str,
+    program: bytes,
+    i_seed: int,
+    expected_i: int,
+    expected_external_writes: list[tuple[int, int]],
+) -> None:
+    """Pin all F8-FB write addresses; current FT hardware cannot validate data."""
+
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[: len(program)] = program
+    raw[INTERNAL_MEMORY_START + 0x40 : INTERNAL_MEMORY_START + 0x43] = bytes.fromhex(
+        "A0 06 04"
+    )
+    raw[INTERNAL_MEMORY_START + 0x60 : INTERNAL_MEMORY_START + 0x64] = bytes.fromhex(
+        "A5 5A 3C C3"
+    )
+    external_writes: list[tuple[int, int]] = []
+
+    def read(addr: int) -> int:
+        return raw[addr]
+
+    def write(addr: int, value: int) -> None:
+        raw[addr] = value & 0xFF
+        if 0x40000 <= addr <= 0x7FFFF:
+            external_writes.append((addr, value & 0xFF))
+
+    memory = Memory(read, write)
+    setattr(
+        memory,
+        "peek_byte_for_preflight",
+        lambda address, _pc=None: raw[address & 0xFFFFFF],
+    )
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.I, i_seed)
+    cpu.regs.set(RegisterName.FC, 1)
+    cpu.regs.set(RegisterName.FZ, 1)
+
+    _run(cpu)
+
+    # The connected PC-E500/FT600 capture proves only the address count and
+    # low-to-high order. Values remain the ISA/emulator contract because this
+    # known gateware image sampled and read every CE1 write as zero.
+    assert external_writes == expected_external_writes
+    assert cpu.regs.get(RegisterName.I) == expected_i
+    assert cpu.regs.get(RegisterName.F) == 0x03
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
 def test_dsll_shifts_left_digits(backend: str) -> None:
     if backend == "llama":
         assert "llama" in available_backends(), "LLAMA backend not available"
@@ -116,8 +456,8 @@ def test_dsll_shifts_left_digits(backend: str) -> None:
     assert cpu.regs.get(RegisterName.FZ) == 0
 
 
-def test_cmpp_imem_reg_uses_20_bit_width_between_backends() -> None:
-    """Distinguish D7's 20-bit comparison from C7's raw three-byte form."""
+def test_cmpp_imem_reg_uses_raw24_memory_between_backends() -> None:
+    """Pin D7's raw memory image versus zero-extended register contract."""
 
     assert "llama" in available_backends(), "LLAMA backend not available"
 
@@ -125,8 +465,8 @@ def test_cmpp_imem_reg_uses_20_bit_width_between_backends() -> None:
         raw = bytearray(ADDRESS_SPACE_SIZE)
         # D7 04 10: CMPP (BP+10), X (no PRE byte; IMem defaults to BP+N).
         raw[0:3] = bytes([0xD7, 0x04, 0x10])
-        # The raw memory image is 0xF00080. D7 masks it to 0x00080 before
-        # comparing with the 20-bit X register, so the operands are equal.
+        # The raw memory image is 0xF00080. D7 compares all of it with the
+        # zero-extended 20-bit X register, so the operands are unequal.
         raw[INTERNAL_MEMORY_START + 0x10 : INTERNAL_MEMORY_START + 0x13] = (
             b"\x80\x00\xf0"
         )
@@ -147,7 +487,7 @@ def test_cmpp_imem_reg_uses_20_bit_width_between_backends() -> None:
     llama_state = run_case("llama")
 
     assert llama_state == python_state
-    assert python_state == (3, 0, 1)
+    assert python_state == (3, 0, 0)
 
 
 def test_wait_invokes_wait_cycles_llama() -> None:
@@ -310,71 +650,66 @@ def test_reg_imem_offset_imem_selector_uses_pre1(backend: str) -> None:
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
 @pytest.mark.parametrize(
-    ("mnemonic", "program"),
+    ("mnemonic", "program", "expected_fz"),
     [
-        ("ADCL", bytes.fromhex("541020")),
-        ("SBCL", bytes.fromhex("5C1020")),
-        ("DADL", bytes.fromhex("C41020")),
-        ("DSBL", bytes.fromhex("D41020")),
-        ("MVL", bytes.fromhex("E33720")),
-        ("MVLD", bytes.fromhex("CF1020")),
-        ("EXL", bytes.fromhex("C31020")),
-        ("DSLL", bytes.fromhex("EC10")),
-        ("DSRL", bytes.fromhex("FC10")),
-        ("WAIT", bytes.fromhex("EF")),
+        ("ADCL", bytes.fromhex("541020"), 0),
+        ("SBCL", bytes.fromhex("5C1020"), 1),
+        ("DADL", bytes.fromhex("C41020"), 0),
+        ("DSBL", bytes.fromhex("D41020"), 1),
+        ("MVL", bytes.fromhex("CB1020"), 1),
+        ("MVLD", bytes.fromhex("CF1020"), 1),
+        ("EXL", bytes.fromhex("C31020"), 1),
+        ("DSLL", bytes.fromhex("EC10"), 0),
+        ("DSRL", bytes.fromhex("FC10"), 0),
     ],
 )
-def test_i_zero_counted_instructions_fail_atomically_across_backends(
-    backend: str, mnemonic: str, program: bytes
+def test_hw002_i_zero_counted_instructions_match_hardware_across_backends(
+    backend: str, mnemonic: str, program: bytes, expected_fz: int
 ) -> None:
     if backend == "llama":
         assert "llama" in available_backends(), "LLAMA backend not available"
 
     raw = bytearray(ADDRESS_SPACE_SIZE)
     raw[: len(program)] = program
-    raw[INTERNAL_MEMORY_START + 0x10] = 0x12
-    raw[INTERNAL_MEMORY_START + 0x20] = 0x34
-    raw[INTERNAL_MEMORY_START + IMEMRegisters.BP] = 0x40
-    raw[INTERNAL_MEMORY_START + IMEMRegisters.PX] = 0x50
-    raw[INTERNAL_MEMORY_START + IMEMRegisters.PY] = 0x60
     memory = _make_memory(raw)
-    spins = {"cycles": 0}
-
-    def wait_cycles(cycles: int) -> None:
-        spins["cycles"] += int(cycles)
-
-    setattr(memory, "wait_cycles", wait_cycles)
     cpu = CPU(memory, reset_on_init=False, backend=backend)
-    initial_pc = 0x34567
-    cpu.regs.set(RegisterName.PC, initial_pc)
+    cpu.regs.set(RegisterName.I, 0)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.regs.set(RegisterName.FZ, 1)
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == len(program), mnemonic
+    assert cpu.regs.get(RegisterName.I) == 0
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == expected_fz
+    assert raw[INTERNAL_MEMORY_START + 0x10] == 0
+    assert raw[INTERNAL_MEMORY_START + 0x20] == 0
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+def test_hw002_wait_i_zero_consumes_65536_cycles_and_wraps(backend: str) -> None:
+    """Match PC-E500 run 20260830-232830-0064 without fake memory reads."""
+
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[0] = 0xEF
+    memory = _make_memory(raw)
+    calls: list[int] = []
+    setattr(memory, "wait_cycles", calls.append)
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
     cpu.regs.set(RegisterName.I, 0)
     cpu.regs.set(RegisterName.FC, 1)
-    cpu.regs.set(RegisterName.FZ, 0)
-    initial_pointers = {
-        RegisterName.X: 0x12345,
-        RegisterName.Y: 0x23456,
-        RegisterName.U: 0x34567,
-        RegisterName.S: 0x45678,
-    }
-    for register, value in initial_pointers.items():
-        cpu.regs.set(register, value)
+    cpu.regs.set(RegisterName.FZ, 1)
 
-    expected_error = RuntimeError if backend == "llama" else NotImplementedError
-    with pytest.raises(expected_error, match=r"I=0.*real-hardware"):
-        cpu.execute_instruction(0)
+    cpu.execute_instruction(0)
 
-    assert cpu.regs.get(RegisterName.PC) == initial_pc
+    assert calls == [0x10000]
     assert cpu.regs.get(RegisterName.I) == 0
-    assert cpu.regs.get(RegisterName.FC) == 1
-    assert cpu.regs.get(RegisterName.FZ) == 0
-    for register, value in initial_pointers.items():
-        assert cpu.regs.get(register) == value
-    assert spins["cycles"] == 0, mnemonic
-    assert raw[INTERNAL_MEMORY_START + 0x10] == 0x12
-    assert raw[INTERNAL_MEMORY_START + 0x20] == 0x34
-    assert raw[INTERNAL_MEMORY_START + IMEMRegisters.BP] == 0x40
-    assert raw[INTERNAL_MEMORY_START + IMEMRegisters.PX] == 0x50
-    assert raw[INTERNAL_MEMORY_START + IMEMRegisters.PY] == 0x60
+    assert cpu.regs.get(RegisterName.F) == 0x03
+    assert cpu.regs.get(RegisterName.PC) == 1
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])

@@ -80,14 +80,18 @@ This table defines the hexadecimal value of the `PRE` (Prefix) byte required for
 
 ### System Initialization and Data Retainment for HALT/OFF/RESET
 
-This table is the current manual-derived emulator contract; exact retention,
-clock, and wake behavior remains pending hardware trace validation.
+This table combines the documented retention contract with connected-PC-E500
+traces. Hardware now verifies HALT's documented `USR`/`SSR` result and STI
+fall-through wake, firmware-prepared OFF fall-through wake from one ON/BREAK
+press, and software RESET's low-first `FFFFD..FFFFF` vector fetch with no
+interrupt frame. Unobservable RESET SFR retention and untested wake sources
+remain explicitly manual/peripheral contracts.
 
 | | HALT | OFF | RESET |
 | :--- | :--- | :--- | :--- |
 | **Registers** | All retained. | All retained. | The PC read the reset vector.<br>Others than the PC are all retained. |
-| **Flag (C/Z)** | Undefined. | Undefined. | Retained. |
-| **Internal memory** | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. | ACM (FEH) bit 7, UCR (F7H), USR (F8H) bits 0 to 2/5, ISR (FCH), SCR (FDH), and SSR (FFH) bit 2 are reset (to "0").<br>USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained. |
+| **Flag (C/Z)** | Preserved by the emulator; hardware preserved tested `F=03`. | Preserved by the emulator; the manual does not define a new value. | Retained (manual-derived). |
+| **Internal memory** | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained.<br>Hardware observed `USR=18H`, `SSR=04H`. | USR (F8H) bits 0 to 2/5 are reset (to "0").<br>SSR (FFH) bit 2 and USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained.<br>Detailed retention remains manual-derived because ROM preparation/restoration surrounds `OFF`. | ACM (FEH) bit 7, UCR (F7H), USR (F8H) bits 0 to 2/5, ISR (FCH), SCR (FDH), and SSR (FFH) bit 2 are reset (to "0").<br>USR (F8H) bits 3 and 4 are set (to "1").<br>Others than the above are all retained.<br>Detailed SFR retention remains manual-derived because reset ROM initialization begins immediately. |
 
 ### Internal Memory Map (IMEMRegisters, defined in opcodes.py)
 
@@ -147,34 +151,42 @@ Common composites (little-endian layout):
 - `(dx)` is the 16-bit value at `DH:DL` (`0xD9:0xD8`)
 - IOCS workspace base pointer (PC-E500 ROM convention): `(E6)` → `IOCS_WS` (aliases `E6`/`E7`/`E8`) at `0xE6..0xE8`, typically used as `[(E6)+offset]`
 
-### Zero-count quarantine
+### Zero-count block semantics
 
-The emulator rejects `I=0` for every `I`-counted instruction: `ADCL`, `SBCL`,
-`DADL`, `DSBL`, `MVL`, `MVLD`, `EXL`, `DSLL`, `DSRL`, and `WAIT`. The error is
-raised before PC, `I`, pointers, flags, memory, or timing callbacks can change.
-Neither the stock ROMs nor existing hardware traces establish whether silicon
-treats zero as an empty block, a wrapped count, or something else. Nonzero
-`WAIT` still consumes exactly `I` cycles, clears `I`, and fails closed without
-a callable `memory.wait_cycles` hook.
+Connected-PC-E500 matrices establish that initial `I=0` means 65,536 do-while
+iterations for `ADCL`, `SBCL`, `DADL`, `DSBL`, `MVL`, `MVLD`, `EXL`, `DSLL`,
+`DSRL`, and `WAIT`. Both cores implement that effective count without an
+unbounded host loop. WAIT requires a callable `memory.wait_cycles` hook, clears
+I, and preserves the architectural C/Z image. Exact 4,096- and 65,535-unit
+timer probes show that a pending IRQ is not accepted inside WAIT; delivery
+occurs at the following boundary after the fall-through fetch. Mapping the
+host timing unit to oscillator time remains machine timing rather than another
+instruction semantic.
 
 ### Three-byte containers, 20-bit registers, and raw data
 
 `X`, `Y`, `U`, `S`, and `PC` are 20-bit architectural registers even though
-their instruction and stack representations occupy three bytes. The third
-byte contributes only its low nibble. Reported PC-E500 captures demonstrate this
-directly for the observable X/Y load-to-push path: after fetching
-`MV X/Y,0x3C5AA5`, a following push writes `A5 5A 0C`, not `A5 5A 3C`. The
-capture does not isolate whether silicon masks at load or push; the architectural
-emulator model normalizes at register write. The emulator applies the same
-register-class rule to U and S. Dedicated U/S and upper-bit-sensitive ALU probes
-remain useful confirmations, but neither register is modeled as 24-bit.
+their instruction and stack representations occupy three bytes. The third byte
+contributes only its low nibble. Archived PC-E500 probes cover all four
+registers with a raw `0x3C5AA5` load. Each compares equal to raw memory
+`0C5AA5` and unequal to `3C5AA5`; X/Y serialize directly and U/S serialize
+through a register copy as `0C 5A A5`. X/Y/U/S are therefore observationally
+equivalent to low-20-bit registers across the tested comparison and
+copy/serialization consumers. The captures cannot reveal the physical point
+at which bits 23-20 disappear; the architectural emulator model normalizes at
+register write.
 
-For an encoded `lmn` **address**, the high byte must currently be `00..0F` and
-must match the target's high nibble. Text assembly accepts only address values
-`0..FFFFF` and emits that canonical byte; executable decode rejects bits 7-4
-until a dedicated hardware trace establishes their behavior. The PC-E500 bytes
-`05 3A 07 7C` at `F003A` are dispatch-table data with no analyzed code entry,
-so they are not evidence that silicon executes an upper-nibble `CALLF` alias.
+For an encoded `lmn` **address**, text assembly accepts only values
+`0..FFFFF` and emits a canonical high byte `00..0F`. Raw executable decode is
+instruction-specific. A guarded PC-E500 probe establishes that opcode `88`
+with raw encoded address `8100FD` consumes all four bytes and reads low-20-bit
+`100FD`, matching canonical `0100FD`. Later matrices cover the remaining
+88-8F reads, A8-AF writes, 62/66/6A/72/7A byte operations, and D0-D3/D8-DB
+transfers for tested upper nibble `8`. A guarded JPF/CALLF matrix covers every
+upper nibble `1..F`; each uses the low-20-bit target. Untested absolute-memory
+families and synthetic vectors remain fail-closed rather than being promoted
+by analogy. The PC-E500 bytes `05 3A 07 7C` at `F003A` are dispatch-table data,
+not the evidence for the now separately measured CALLF behavior.
 
 Opcode `DC`, `MVP (k),lmn`, is deliberately different: its `lmn` operand is a
 raw three-byte value, not an external address. It accepts `0..FFFFFF` and
@@ -187,13 +199,13 @@ An internal-memory operand used by a three-byte instruction is a neutral
 three-byte container, not automatically a 20-bit register and not
 automatically a 24-bit address. `MVP` copies all three bytes; this is confirmed
 by ROM use and a real-device round trip. `C7 CMPP (m),(n)` compares all three
-bytes, while `D7 CMPP (m),r3` masks the memory image to the 20-bit register
-width. Neither upper-nibble flag result has been isolated on hardware; the
-split is independently corroborated only by the baseline emulator's best-guess.
-`EXP` is stricter: because no executed ROM site or hardware probe establishes
-bits 23-20, the emulator rejects a nonzero upper nibble before either write. A
-consumer that creates an external address or loads `X/Y/U/S` explicitly applies
-the 20-bit mask.
+bytes as a raw 24-bit value. `D7 CMPP (m),r3` instead compares that raw 24-bit
+memory image with the zero-extended 20-bit register; masking the memory operand
+is incorrect. Discriminating PC-E500 comparisons establish both rules. A
+separate device probe establishes that `EXP` swaps both complete raw 24-bit
+triples; `F=03` was preserved in the tested case, although that one case is not
+a complete flag matrix. A consumer that creates an external address or loads
+`X/Y/U/S` explicitly applies the 20-bit mask.
 
 ---
 
@@ -324,13 +336,41 @@ the 20-bit mask.
 | `MV r₂,r'₂`          | `r₂ ← r'₂`                                                                                                   | `- -`       | 2     | 2            | `1111 1101` / `FD` <br> `0r 0r'` / `XX`               | `rr'`        |
 | `MV r₃,r'₃`          | `r₃ ← r'₃`                                                                                                   | `- -`       | 2     | 2            | `1111 1101` / `FD` <br> `0r 0r'` / `XX`               | `rr'`        |
 
+For the BA/I pair, PC-E500 probes verify selectors `01`, `03`, `21`, and `23`
+as matching `FD` move selectors in the tested BA/I state. The same selectors
+match for `ED` exchange in that state; both families preserved the seeded
+`F=03` and had matching observed bus/event shape within their family.
+
+Overlap evidence is instruction-specific. An isolated PC-E500 matrix seeded
+`A1 B2 C3 D4 E5` and covered exact aliases plus both ±1 directions. `MVW` and
+`MVP` final states are snapshot-equivalent, although direction-specific byte
+traversal can produce the same observations. I=3 `MVL`/`MVLD` cases expose
+direction-specific cascades; both ±1 `EXL` cases rotate to
+`B2 C3 D4 A1 E5`, consistent with sequential pairwise exchange. Both ±1
+`EXP` cases produce the same rotation, which contradicts whole-triple snapshot
+behavior and is sequential-byte-exchange-equivalent. Exact aliases are
+unchanged, counted I clears, fixed-width I and seeded `F=03` survive, and
+comparative total-run timing matches within one tick. Final state does not
+reveal invisible IMEM micro-order. A BP-relative companion verifies
+snapshot-equivalent source and initial-destination selection for tested
+`MVW`/`MVP` even when the first write overwrites BP. Counted companions fix the
+tested initial BP, PX, and BP+PX destination bases and PY source base before
+iteration. Other valid relative modes, external variants, and observable bus
+order/partial visibility remain untested.
+
+Separate PC-E500 captures verify read-side boundary behavior for the tested
+forms: `MVW`/`MVP` map IMEM bytes across `FF -> 00 -> 01`; the external bus
+sequence crosses logical `FFFFF -> 00000 -> 00001`, while `[X++]` wraps and
+advances X from `FFFFF` to `00001`. Invisible IMEM temporal order, write-side
+ordering, and partial visibility remain model contracts.
+
 ### Exchange Instructions (EX, EXW, EXP, EXL)
 
 | Mnemonic        | Function (`↔` denotes exchange)                                                                     | Flags (C Z) | Bytes | Cycles | Opcode (Bin / Hex)                               | Operand Type |
 | :-------------- | :-------------------------------------------------------------------------------------------------- | :---------- | :---- | :------- | :----------------------------------------------- | :----------- |
 | `EX (m),(n)`    | `(m) ↔ (n)` (Internal memory byte exchange)                                                         | `- -`       | 3     | 7        | `1100 0000` / `C0` <br> `m` <br> `n`              | `m,n`        |
 | `EXW (m),(n)`   | `(m,m+1) ↔ (n,n+1)` (Word exchange)                                                                 | `- -`       | 3     | 10       | `1100 0001` / `C1` <br> `m` <br> `n`              | `m,n`        |
-| `EXP (m),(n)`   | `(m..m+2) ↔ (n..n+2)` (three-byte exchange; upper-nibble behavior is quarantined)                    | `- -`       | 3     | 13       | `1100 0010` / `C2` <br> `m` <br> `n`              | `m,n`        |
+| `EXP (m),(n)`   | Raw 24-bit exchange; overlapping final states contradict whole-triple snapshot behavior and are sequential-byte-exchange-equivalent, without proving invisible micro-order | `- -`       | 3     | 13       | `1100 0010` / `C2` <br> `m` <br> `n`              | `m,n`        |
 | `EXL (m),(n)`   | Loop `I` times: `(m++) ↔ (n++)` (Block exchange)                                                    | `- -`       | 3     | 5+3×I    | `1100 0011` / `C3` <br> `m` <br> `n`              | `m,n`        |
 | `EX A,B`        | `A ↔ B`                                                                                             | `- -`       | 1     | 3        | `1101 1101` / `DD`                               |              |
 | `EX r₂,r'₂`     | `r₂ ↔ r'₂`                                                                                          | `- -`       | 2     | 4        | `1110 1101` / `ED` <br> `0r 0r'` / `XX`          | `rr'`        |
@@ -375,6 +415,10 @@ the 20-bit mask.
 | `PMDF (m),n`    | Pointer modify: `(m) ← (m)+n` (8-bit wrapping binary add)                                            | `- -`       | 3     | 4        | `0100 0111` / `47` <br> `m` <br> `n`              | `m,n`        |
 | `PMDF (n),A`    | Pointer modify: `(n) ← (n)+A` (8-bit wrapping binary add)                                            | `- -`       | 2     | 4        | `0101 0111` / `57` <br> `n`                       | `n`          |
 
+Real-device zero, wrap, non-wrap, and register-source cases verify that `PMDF`
+uses ordinary 8-bit binary addition and preserves the incoming `C` and `Z`
+bits, even when those bits contradict the arithmetic result.
+
 ### Logical Instructions (AND, OR, XOR, TEST, SWAP)
 
 | Mnemonic        | Function                                                               | Flags (C Z) | Bytes | Cycles | Opcode (Bin / Hex)                               | Operand Type |
@@ -414,8 +458,8 @@ the 20-bit mask.
 | `CMP (m),(n)`   | `(m) - (n)`                                                           | `○ ○`       | 3     | 6        | `1011 0111` / `B7` <br> `m` <br> `n`              | `m,n`        |
 | `CMPW (m),(n)`  | `(m..m+1) - (n..n+1)` (Word compare)                                  | `○ ○`       | 3     | 8        | `1100 0110` / `C6` <br> `m` <br> `n`              | `m,n`        |
 | `CMPW (m),r2`   | `(m..m+1) - r2`                                                       | `○ ○`       | 3     | 7        | `1101 0110` / `D6` <br> `0r` <br> `m`             | `m` (r in op)|
-| `CMPP (m),(n)`  | `(m..m+2) - (n..n+2)` (three-byte compare; upper-nibble flags need hardware confirmation) | `○ ○`       | 3     | 10       | `1100 0111` / `C7` <br> `m` <br> `n`              | `m,n`        |
-| `CMPP (m),r3`   | `((m..m+2) & FFFFF) - r3` (20-bit pointer comparison; upper-nibble flags need hardware confirmation) | `○ ○`       | 3     | 9        | `1101 0111` / `D7` <br> `0r` <br> `m`             | `m` (r in op)|
+| `CMPP (m),(n)`  | `raw24(m..m+2) - raw24(n..n+2)` (24-bit compare, including both upper nibbles) | `○ ○`       | 3     | 10       | `1100 0111` / `C7` <br> `m` <br> `n`              | `m,n`        |
+| `CMPP (m),r3`   | `raw24(m..m+2) - zero_extend_20(r3)` (24-bit compare; memory is not masked) | `○ ○`       | 3     | 9        | `1101 0111` / `D7` <br> `0r` <br> `m`             | `m` (r in op)|
 
 ### Shift and Rotate Instructions
 
@@ -463,7 +507,7 @@ the 20-bit mask.
 | `CALLF lmn`     | `S ← S-3`, `[S] ← PC+4`, `PS ← 1`, `PC ← lmn`                                                        | `- -`       | 4     | 8        | `0000 0101` / `05` <br> `n` <br> `m` <br> `l`          | `n,m,l`      |
 | `RET`           | `PC ← [S]`, `S ← S+2`                                                                                | `- -`       | 1     | 4        | `0000 0110` / `06`                                   |              |
 | `RETF`          | `PS ← [S+2]`, `PC ← [S]`, `S ← S+3`                                                                  | `- -`       | 1     | 5        | `0000 0111` / `07`                                   |              |
-| `RETI`          | `IMR ← [S]`, `F ← [S+1]`, `PC ← [S+2]`, `PS ← [S+4]`, `S ← S+5`                                       | C Z restore | 1     | 7        | `0000 0001` / `01`                                   |              |
+| `RETI`          | `IMR ← [S]`, `F ← [S+1] & 03`, `PC ← [S+2]`, `PS ← [S+4]`, `S ← S+5`; ISR unchanged                 | C Z restore | 1     | 7        | `0000 0001` / `01`                                   |              |
 
 ### Stack Instructions (PUSH, POP)
 
@@ -477,10 +521,16 @@ the 20-bit mask.
 | `POPU r₁`       | `r₁ ← [U]`, `U ← U+1`                                                                      | `- -`       | 1     | A:2/IL:3 | `0011 1rr0` / `38/39`                            | `r₁`         |
 | `POPU r₂`       | `r₂ ← [U]`, `U ← U+2`                                                                      | `- -`       | 1     | 3        | `0011 1rr0` / `3A/3B`                            | `r₂`         |
 | `POPU r₄`       | `r₄ ← [U]`, `U ← U+3` (X,Y)                                                                | `- -`       | 1     | 4        | `0011 1rr0` / `3C/3D`                            | `r₄`         |
-| `POPU F`        | `F ← [U]`, `U ← U+1`                                                                       | C Z restore | 1     | 2        | `0011 1110` / `3E`                               |              |
+| `POPU F`        | `F ← [U] & 03`, `U ← U+1`                                                                  | C Z restore | 1     | 2        | `0011 1110` / `3E`                               |              |
 | `POPU IMR`      | `IMR ← [U]`, `U ← U+1`                                                                     | `- -`       | 1     | 2        | `0011 1111` / `3F`                               |              |
 | `PUSHS F`       | `S ← S-1`, `[S] ← F`                                                                       | `- -`       | 1     | 3        | `0100 1111` / `4F`                               |              |
-| `POPS F`        | `F ← [S]`, `S ← S+1`                                                                       | C Z restore | 1     | 2        | `0101 1111` / `5F`                               |              |
+| `POPS F`        | `F ← [S] & 03`, `S ← S+1`                                                                  | C Z restore | 1     | 2        | `0101 1111` / `5F`                               |              |
+
+PC-E500 user-, system-stack, and RETI matrices with bytes `00`, `03`, `04`,
+`A5`, `FC`, and `FF` establish that every restore path keeps only the low
+`C`/`Z` bits; none traps or preserves bits 2-7. The following pushes and normal
+interrupt frames therefore emit the normalized byte. A separate ISR matrix
+establishes that RETI does not acknowledge or clear ISR.
 
 ### Miscellaneous Instructions
 
@@ -496,8 +546,11 @@ the 20-bit mask.
 | `IR`            | Software Interrupt                                                         | `- -`       | 1     | Note 2   | `1111 1110` / `FE`                               |              |
 | `RESET`         | Software Reset                                                             | `- -`       | 1     | Note 2   | `1111 1111` / `FF`                               |              |
 
-*Note 1: HALT/OFF cycle count is effectively "until interrupt/resume".*
+*Note 1: HALT/OFF cycle count is effectively "until wake/resume". Device
+capture verifies exact fall-through resume for both instructions; HALT accepted
+STI, while firmware-prepared OFF resumed from one ON/BREAK press.*
 *Note 2: IR creates a system frame and fetches the interrupt vector. RESET
-fetches the distinct reset vector and applies provisional register/SFR model
-side effects; no RESET stack operation is asserted here. Exact cycles and
-silicon RESET side effects require hardware tracing.*
+fetches the distinct reset vector and applies manual-derived register/SFR model
+side effects. Device capture verifies low-first reads at `FFFFD..FFFFF`, no
+RESET stack frame, and the first target fetch. Exact asynchronous timing and
+detailed silicon SFR retention are not claimed.*

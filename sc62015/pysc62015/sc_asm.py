@@ -18,7 +18,13 @@ from .instr import (
     Imm16,
     ImmOperand,
     Imm20,
+    FarControlImm20,
     RegisterImm20,
+    EMemAddr,
+    AbsoluteTransferAddr,
+    AbsoluteByteOpAddr,
+    DirectWriteAbsoluteAddr,
+    DirectReadAbsoluteAddr,
     ImmOffset,
     EMemReg,
     RegIMemOffset,
@@ -309,11 +315,28 @@ class Assembler:
                         and not isinstance(t_op, ImmOffset)
                     ):
                         # The grammar deliberately has one 20-bit immediate
-                        # syntax node. RegisterImm20 is an opcode-specific
-                        # decode policy for raw bytes, not a distinct source
-                        # language. Fresh text assembly remains canonical.
-                        if type(p_op) is type(t_op) or (
-                            isinstance(t_op, RegisterImm20) and type(p_op) is Imm20
+                        # syntax node. RegisterImm20 and FarControlImm20 are
+                        # opcode-specific decode policies for raw bytes, not
+                        # distinct source-language forms. Fresh text assembly
+                        # remains canonical.
+                        if (
+                            type(p_op) is type(t_op)
+                            or (
+                                isinstance(t_op, (RegisterImm20, FarControlImm20))
+                                and type(p_op) is Imm20
+                            )
+                            or (
+                                isinstance(
+                                    t_op,
+                                    (
+                                        AbsoluteByteOpAddr,
+                                        AbsoluteTransferAddr,
+                                        DirectReadAbsoluteAddr,
+                                        DirectWriteAbsoluteAddr,
+                                    ),
+                                )
+                                and type(p_op) is EMemAddr
+                            )
                         ):
                             continue
                     if isinstance(t_op, RegPair) and isinstance(p_op, RegPair):

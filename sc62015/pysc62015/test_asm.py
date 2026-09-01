@@ -1716,6 +1716,22 @@ def test_assembler_fails_on_ambiguous_instruction() -> None:
     assert bin_file.as_ti_txt().strip() == "@0000\n08 42\nq"
 
 
+def test_mnemonic_prefixed_labels_do_not_emit_phantom_instructions() -> None:
+    assembler = Assembler()
+    bin_file = assembler.assemble(
+        """
+        .ORG 0x0100
+        ir_opcode:
+        ir_resume:
+        reset_target:
+        wait_loop:
+        reti_path: NOP
+        """
+    )
+
+    assert bin_file.as_ti_txt().strip() == "@0100\n00\nq"
+
+
 NEAR_CONTROL_FLOW_SAME_PAGE_CASES = [
     ("CALL", "04"),
     ("JP", "02"),

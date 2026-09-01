@@ -1393,17 +1393,22 @@ def test_cmp_with_pre() -> None:
     ]
 
 
-def test_redundant_pre_on_single_memory_operand_is_invalid() -> None:
-    # TEST's only PRE-sensitive operand already uses the no-prefix BP+n mode.
-    # PRE22 changes only the unused second latch and is therefore noncanonical.
-    with pytest.raises(InvalidInstruction, match="Noncanonical PRE22"):
-        decode(bytearray([0x22, 0x65, 0x12, 0x07]), 0x2000)
-    # PRE25's second BP+PY latch is irrelevant to this one-address form;
-    # canonical BP+PX uses PRE24, and its ignored selector must be zero.
+def test_silicon_proven_single_operand_pre_aliases_decode() -> None:
+    # PRE22 changes only TEST's unused second latch; silicon executes it with
+    # the ordinary BP+n first-latch semantics.
+    test_instr = decode(bytearray([0x22, 0x65, 0x12, 0x07]), 0x2000)
+    assert asm_str(test_instr.render()) == "TEST  (BP+12), 07"
+    assert test_instr._pre == 0x22
+    assert test_instr.length() == 4
+
+    # PRE25's unused second latch was not in the hardware matrix.
     with pytest.raises(InvalidInstruction, match="Noncanonical PRE25"):
         decode(bytearray([0x25, 0xCC, 0x00, 0x00]), 0xF0102)
-    with pytest.raises(InvalidInstruction, match="Nonzero ignored selector"):
-        decode(bytearray([0x24, 0xCC, 0xFB, 0x00]), 0xF0102)
+
+    # BP+PX ignores the carried selector byte, including nonzero values.
+    nonzero = decode(bytearray([0x24, 0xCC, 0xFB, 0x00]), 0xF0102)
+    assert asm_str(nonzero.render()) == "MV    (BP+PX), 00"
+    assert nonzero._pre == 0x24
 
     instr = decode(bytearray([0x24, 0xCC, 0x00, 0x00]), 0xF0102)
     assert asm_str(instr.render()) == "MV    (BP+PX), 00"
@@ -1456,10 +1461,7 @@ def test_wait_lifts_to_timing_intrinsic() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0x1234)
 
-    assert [getattr(node, "name", None) for node in il.ils] == [
-        "VALIDATE_I_COUNT",
-        "WAIT",
-    ]
+    assert [getattr(node, "name", None) for node in il.ils] == ["WAIT"]
 
 
 def test_ir_lifts_vector_validation_before_stack_mutation() -> None:
@@ -1481,7 +1483,7 @@ def test_ir_lifts_vector_validation_before_stack_mutation() -> None:
     assert "LOAD" not in repr(il.ils[-1])
 
 
-def test_mvl_predec_source_continuation_uses_unsigned_i() -> None:
+def test_mvl_predec_source_continues_until_final_wrapped_iteration() -> None:
     # PRE34 is the canonical single-operand PX+n prefix here; the external
     # source uses its own encoded pre-decrement mode.
     instr = decode(bytearray.fromhex("34E33720"), 0x1234)
@@ -1489,7 +1491,8 @@ def test_mvl_predec_source_continuation_uses_unsigned_i() -> None:
     instr.lift(il, 0x1234)
 
     lifted = repr(il.ils)
-    assert "CMP_UGT.w" in lifted
+    assert "CMP_NE.w" in lifted
+    assert "CMP_UGT" not in lifted
     assert "CMP_SGT" not in lifted
 
 

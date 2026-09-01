@@ -323,6 +323,19 @@ class PCE500Memory:
 
         self._card_present = bool(present)
 
+    def clear_timer_phases(self, clear_sti: bool, clear_mti: bool) -> None:
+        """Apply the silicon-verified TCL phase reset at the current cycle."""
+
+        emulator = self._emulator
+        scheduler = getattr(emulator, "_scheduler", None)
+        if emulator is None or scheduler is None:
+            raise RuntimeError("TCL timer scheduler is unavailable")
+        cycle = int(getattr(emulator, "cycle_count", 0))
+        if clear_mti:
+            scheduler.next_mti = cycle + int(scheduler.mti_period)
+        if clear_sti:
+            scheduler.next_sti = cycle + int(scheduler.sti_period)
+
     def load_memory_card(
         self,
         card_data: bytes,

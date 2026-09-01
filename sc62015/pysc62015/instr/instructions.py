@@ -1,5 +1,5 @@
 from .opcodes import *  # noqa: F401,F403
-from .opcodes import _lift_wrapped_memory_load, _resize_unsigned
+from .opcodes import _lift_wrapped_memory_load, _low_byte, _resize_unsigned
 from binaryninja.enums import BranchType  # noqa: F401
 from .traits import HasWidth
 from typing import Callable
@@ -44,37 +44,59 @@ def _resize_for_operand(
     return resized
 
 
+def _lift_stack_push(
+    il: LowLevelILFunction,
+    pointer: RegisterName,
+    width: int,
+    value: ExpressionIndex,
+) -> None:
+    """Push one value with the byte sequence measured on the PC-E500.
+
+    Silicon snapshots the value, then pre-decrements the 20-bit pointer once
+    per byte and writes from the most-significant byte down to the least. The
+    final memory image is little-endian at the final stack pointer, but the
+    observable bus order runs from the old pointer toward lower addresses.
+    """
+    value_snapshot = TempReg(TempWideMemoryValue, width=width)
+    value_snapshot.lift_assign(il, value)
+    for byte_index in reversed(range(width)):
+        il.append(
+            il.set_reg(
+                3,
+                pointer,
+                il.and_expr(
+                    3,
+                    il.sub(3, il.reg(3, pointer), il.const(3, 1)),
+                    il.const(3, REG3_20BIT_MASK),
+                ),
+            )
+        )
+        part = value_snapshot.lift(il)
+        if byte_index:
+            part = il.logical_shift_right(width, part, il.const(1, byte_index * 8))
+        il.append(il.store(1, il.reg(3, pointer), _low_byte(il, width, part)))
+
+
 def _lift_s_push(il: LowLevelILFunction, width: int, value: ExpressionIndex) -> None:
-    """Push to S with 20-bit pointer and per-byte external-bus wrapping."""
-    old_s = TempReg(TempIncDecHelper, width=3)
-    old_s.lift_assign(il, il.reg(3, RegisterName("S")))
-    new_s = il.and_expr(
-        3,
-        il.sub(3, old_s.lift(il), il.const(3, width)),
-        il.const(3, REG3_20BIT_MASK),
-    )
-    il.append(il.set_reg(3, RegisterName("S"), new_s))
-    EMemHelper(width, Reg("S")).lift_assign(il, value)
+    _lift_stack_push(il, RegisterName("S"), width, value)
 
 
 def _lift_s_pop(
     il: LowLevelILFunction,
     width: int,
     *,
-    validate_f: bool = False,
+    normalize_f: bool = False,
 ) -> ExpressionIndex:
     """Pop from S with 20-bit pointer and per-byte external-bus wrapping."""
     old_s = TempReg(TempIncDecHelper, width=3)
     old_s.lift_assign(il, il.reg(3, RegisterName("S")))
     value = EMemHelper(width, old_s).lift(il)
-    if validate_f:
-        # Force the lazy memory read into a temporary, then validate the raw
-        # byte before S or either modeled flag can change.  CPU transaction
-        # rollback used to hide the opposite ordering from direct LLIL users.
+    if normalize_f:
+        # Force the lazy memory read into a temporary before advancing S, then
+        # normalize the raw byte exactly as measured on real hardware.
         raw_f = TempReg(TempRegF, width=1)
         raw_f.lift_assign(il, value)
-        value = raw_f.lift(il)
-        il.append(il.intrinsic([], ValidateFIntrinsic, [value]))
+        value = il.and_expr(1, raw_f.lift(il), il.const(1, 0x03))
     il.append(
         il.set_reg(
             3,
@@ -87,13 +109,6 @@ def _lift_s_pop(
         )
     )
     return value
-
-
-def _lift_validate_nonzero_count(il: LowLevelILFunction) -> None:
-    """Quarantine I=0 before a counted instruction performs any setup."""
-
-    loop_reg = Reg("I")
-    il.append(il.intrinsic([], ValidateICountIntrinsic, [loop_reg.lift(il)]))
 
 
 class NOP(Instruction):
@@ -275,8 +290,9 @@ class RETF(RetInstruction):
 class RETI(RetInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # Snapshot the complete frame before the first architectural write.
-        # This both validates F before touching IMR and prevents a later host
-        # read failure from being discovered only after part of RETI commits.
+        # This prevents a later host read failure from being discovered only
+        # after part of RETI commits. Real-device traces show that the stacked
+        # F byte is accepted in full and normalized to the modeled C/Z bits.
         old_s = TempReg(TempIncDecHelper, width=3)
         old_s.lift_assign(il, il.reg(3, RegisterName("S")))
 
@@ -301,11 +317,12 @@ class RETI(RetInstruction):
                 address_mask=REG3_20BIT_MASK,
             ),
         )
-        il.append(il.intrinsic([], ValidateFIntrinsic, [f_value.lift(il)]))
-
         imr, *_rest = RegIMR().operands()
         imr.lift_assign(il, imr_value.lift(il))
-        RegF().lift_assign(il, f_value.lift(il))
+        RegF().lift_assign(
+            il,
+            il.and_expr(1, f_value.lift(il), il.const(1, 0x03)),
+        )
         il.append(
             il.set_reg(
                 3,
@@ -394,8 +411,6 @@ class MVL(MoveInstruction):
         dst, src = self.operands()
         assert isinstance(dst, Pointer), f"Expected Pointer, got {type(dst)}"
         assert isinstance(src, Pointer), f"Expected Pointer, got {type(src)}"
-        _lift_validate_nonzero_count(il)
-
         # 0xCB and 0xCF variants use IMem8, IMem8
         dst_reg = TempReg(TempMvlDst)
         dst_mode = get_addressing_mode(self._pre, 1)
@@ -466,13 +481,10 @@ class MVL(MoveInstruction):
             self._update_address_with_wrap(il, dst_reg, dst_func, dst)
 
             if is_predec_src:
-                # For pre-decrement sources, check if we need to continue
-                # Only update if there are more bytes to copy (I > 1)
+                # Only update if there are more bytes to copy. I=0 is the
+                # measured 65,536-iteration encoding, so it must continue.
                 loop_reg = Reg("I")
-                # I is an unsigned 16-bit byte count.  A signed comparison
-                # makes pre-decrement sources stop advancing after the first
-                # byte whenever I has bit 15 set.
-                continue_cond = il.compare_unsigned_greater_than(
+                continue_cond = il.compare_not_equal(
                     loop_reg.width(), loop_reg.lift(il), il.const(loop_reg.width(), 1)
                 )
 
@@ -510,7 +522,13 @@ class PRE(Instruction):
 
     def fuse(self, sister: "Instruction") -> Optional["Instruction"]:
         if isinstance(sister, PRE):
-            return None
+            # Hardware treats the second consecutive PRE as the active latch.
+            # The measured contract covers exactly two prefixes; keep longer
+            # chains invalid rather than extrapolating.
+            if self.length() != 1:
+                return None
+            sister.set_length(self.length() + sister.length())
+            return sister
 
         operands = tuple(sister.operands())
         pre_operand_indexes = [
@@ -541,7 +559,12 @@ class PRE(Instruction):
         else:
             canonical_pre = REVERSE_PRE_TABLE.get((dst_mode, src_mode))
 
-        if canonical_pre != self.opcode:
+        alias_is_proven = len(
+            pre_operand_indexes
+        ) == 1 and self.opcode in SILICON_PROVEN_SINGLE_PRE_ALIASES.get(
+            effective_mode, frozenset()
+        )
+        if canonical_pre != self.opcode and not alias_is_proven:
             canonical_text = (
                 "no prefix" if canonical_pre is None else f"PRE{canonical_pre:02X}"
             )
@@ -550,14 +573,12 @@ class PRE(Instruction):
                 f"use {canonical_text}"
             )
 
-        # BP+PX/BP+PY addressing ignores the encoded selector byte.  Those
-        # aliases are not documented and make byte-level round trips appear
-        # meaningful when execution discards the byte, so accept only the
-        # canonical zero encoding pending hardware traces.
+        # The real-device matrix confirms that BP+PX discards its encoded
+        # selector byte. BP+PY was not part of that matrix and remains strict.
         modes = (dst_mode, src_mode)
         for operand_index in pre_operand_indexes:
             mode = modes[0 if operand_index == 0 else 1]
-            if mode not in (AddressingMode.BP_PX, AddressingMode.BP_PY):
+            if mode != AddressingMode.BP_PY:
                 continue
             operand = operands[operand_index]
             selector: Optional[int] = None
@@ -608,7 +629,7 @@ class StackPopInstruction(StackInstruction):
         r = self.reg()
         assert isinstance(r, HasWidth), f"Expected HasWidth, got {type(r)}"
         if isinstance(r, RegF):
-            value = _lift_s_pop(il, r.width(), validate_f=True)
+            value = _lift_s_pop(il, r.width(), normalize_f=True)
             r.lift_assign_validated(il, value)
             return
         r.lift_assign(il, _lift_s_pop(il, r.width()))
@@ -618,17 +639,7 @@ class PUSHU(StackInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         r = self.reg()
         assert isinstance(r, HasWidth)
-        size = r.width()
-        # save the original U so the store uses the pre-decremented value
-        old_u = TempReg(TempIncDecHelper, width=3)
-        old_u.lift_assign(il, il.reg(3, RegisterName("U")))
-        new_u = il.and_expr(
-            3,
-            il.sub(3, old_u.lift(il), il.const(3, size)),
-            il.const(3, REG3_20BIT_MASK),
-        )
-        il.append(il.set_reg(3, RegisterName("U"), new_u))
-        EMemHelper(size, Reg("U")).lift_assign(il, r.lift(il))
+        _lift_stack_push(il, RegisterName("U"), r.width(), r.lift(il))
         if isinstance(r, RegIMR):
             r.lift_assign(il, il.and_expr(1, r.lift(il), il.const(1, 0x7F)))
 
@@ -642,7 +653,16 @@ class POPU(StackInstruction):
         # the original U value
         old_u = TempReg(TempIncDecHelper, width=3)
         old_u.lift_assign(il, il.reg(3, RegisterName("U")))
-        r.lift_assign(il, EMemHelper(size, old_u).lift(il))
+        value = EMemHelper(size, old_u).lift(il)
+        if isinstance(r, RegF):
+            # Hardware masks a raw user-stack F byte to the modeled C/Z bits.
+            # POPS and RETI use the same device-verified normalization.
+            raw_f = TempReg(TempRegF, width=1)
+            raw_f.lift_assign(il, value)
+            normalized_f = il.and_expr(1, raw_f.lift(il), il.const(1, 0x03))
+            r.lift_assign_validated(il, normalized_f)
+        else:
+            r.lift_assign(il, value)
         il.append(
             il.set_reg(
                 3,
@@ -1046,7 +1066,8 @@ def lift_multi_byte(
     reg_source_first_byte_only: bool = False,
 ) -> None:
     assert isinstance(op1, HasWidth), f"Expected HasWidth, got {type(op1)}"
-    _lift_validate_nonzero_count(il)
+    initial_i = TempReg(TempInitialICount, width=2)
+    initial_i.lift_assign(il, Reg("I").lift(il))
 
     dst_mode = get_addressing_mode(pre, 1)
     src_mode = get_addressing_mode(pre, 2)
@@ -1194,12 +1215,19 @@ def lift_multi_byte(
         adv1()
         adv2()
 
-    # After loop, set the final Zero flag based on the accumulator
-    il.append(
-        il.set_flag(
-            ZFlag, il.compare_equal(w, overall_zero_acc_reg.lift(il), il.const(w, 0))
+    zero_result = il.compare_equal(w, overall_zero_acc_reg.lift(il), il.const(w, 0))
+    if not subtract:
+        # HW-002 measured both binary and BCD additions with an all-zero
+        # 256-byte ring. Their I=0 (65,536-iteration) form clears Z even
+        # though every stored result is zero. Subtract forms retain Z.
+        zero_result = il.and_expr(
+            1,
+            zero_result,
+            il.compare_not_equal(2, initial_i.lift(il), il.const(2, 0)),
         )
-    )
+
+    # After loop, set the final Zero flag based on the measured aggregate rule.
+    il.append(il.set_flag(ZFlag, zero_result))
     # The Carry flag (FC) will hold the carry/borrow from the last byte's operation.
 
 
@@ -1326,17 +1354,14 @@ class CMPP(CMP):
             super().lift(il, addr)
             return
 
-        # D7 compares an internal-memory pointer image with X/Y/U/S. The
-        # register class is 20-bit, and the baseline emulator independently
-        # models this form with its 20-bit IMEM reader/flag width. Mask both
-        # operands explicitly while retaining a three-byte LLIL container.
-        # This remains a best-guess pending an upper-nibble hardware probe.
+        # D7 retains all 24 bits of its internal-memory operand and compares
+        # them with a zero-extended 20-bit X/Y/U/S register. Real-device cases
+        # F00080 vs X=000080 and 3C5AA5 vs X=0C5AA5 were both unequal.
         dst_mode = get_addressing_mode(self._pre, 1)
         src_mode = get_addressing_mode(self._pre, 2)
         first, second = self.operands()
-        mask = il.const(3, PC_MASK)
-        lhs = il.and_expr(3, first.lift(il, dst_mode), mask)
-        rhs = il.and_expr(3, second.lift(il, src_mode), mask)
+        lhs = first.lift(il, dst_mode)
+        rhs = il.and_expr(3, second.lift(il, src_mode), il.const(3, PC_MASK))
         il.append(il.sub(3, lhs, rhs, CZFlag))
 
 
@@ -1387,7 +1412,8 @@ class DecimalShiftInstruction(Instruction):
         assert isinstance(imem_op, IMem8), (
             f"{self.__class__.__name__} operand should be IMem8, got {type(imem_op)}"
         )
-        _lift_validate_nonzero_count(il)
+        initial_i = TempReg(TempInitialICount, width=2)
+        initial_i.lift_assign(il, Reg("I").lift(il))
 
         current_addr_reg = TempReg(TempMultiByte1, width=3)
         mode = get_addressing_mode(self._pre, 1)
@@ -1451,10 +1477,16 @@ class DecimalShiftInstruction(Instruction):
                 ),
             )
 
+        # HW-002 measured Z=0 for the I=0 full-ring form even with all-zero
+        # input, while an ordinary one-byte zero result sets Z.
         il.append(
             il.set_flag(
                 ZFlag,
-                il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0)),
+                il.and_expr(
+                    1,
+                    il.compare_equal(1, overall_zero_acc_reg.lift(il), il.const(1, 0)),
+                    il.compare_not_equal(2, initial_i.lift(il), il.const(2, 0)),
+                ),
             )
         )
         # FC is not affected.
@@ -1547,8 +1579,9 @@ class ExchangeInstruction(Instruction):
         assert isinstance(second, HasWidth), f"Expected HasWidth, got {type(second)}"
         first_mode, second_mode = self._addressing_modes()
 
-        # Snapshot both values before the first write.  This is required for
-        # mixed-width ED forms and also makes an EXP quarantine check atomic.
+        # Snapshot both values before the first write. This is required for
+        # mixed-width ED forms and ordinary fixed-width EX/EXW. EXP bypasses
+        # this helper for its hardware-measured pairwise byte sequence.
         first_value = TempReg(TempExchange, width=first.width())
         first_value.lift_assign(
             il,
@@ -1569,15 +1602,6 @@ class ExchangeInstruction(Instruction):
                 side_effects=False,
             ),
         )
-
-        if self.name() == "EXP":
-            il.append(
-                il.intrinsic(
-                    [],
-                    ValidateExpHighNibbleIntrinsic,
-                    [first_value.lift(il), second_value.lift(il)],
-                )
-            )
 
         first.lift_assign(
             il,
@@ -1622,6 +1646,48 @@ class ExchangeInstruction(Instruction):
 
 class EX(ExchangeInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        if self.opcode == 0xC2:
+            first, second = self.operands()
+            assert isinstance(first, IMem20), f"Expected IMem20, got {type(first)}"
+            assert isinstance(second, IMem20), f"Expected IMem20, got {type(second)}"
+            first_mode, second_mode = self._addressing_modes()
+            first_addr = TempReg(TempMultiByte1, width=3)
+            second_addr = TempReg(TempMultiByte2, width=3)
+            first_addr.lift_assign(
+                il, first.lift_current_addr(il, pre=first_mode, side_effects=False)
+            )
+            second_addr.lift_assign(
+                il, second.lift_current_addr(il, pre=second_mode, side_effects=False)
+            )
+
+            def advance_imem_addr(reg: TempReg) -> None:
+                next_addr = il.add(3, reg.lift(il), il.const(3, 1))
+                offset = il.sub(3, next_addr, il.const(3, INTERNAL_MEMORY_START))
+                wrapped_offset = il.and_expr(3, offset, il.const(3, 0xFF))
+                reg.lift_assign(
+                    il,
+                    il.add(3, il.const(3, INTERNAL_MEMORY_START), wrapped_offset),
+                )
+
+            # PC-E500 overlap captures establish that EXP performs three
+            # sequential byte exchanges. In particular, both one-byte overlap
+            # directions rotate A1/B2/C3/D4 to B2/C3/D4/A1; snapshotting whole
+            # triples before either write produces different final images.
+            for _ in range(3):
+                first_mem = IMemHelper(width=1, value=first_addr)
+                second_mem = IMemHelper(width=1, value=second_addr)
+                tmp = TempReg(TempExchange, width=1)
+                tmp.lift_assign(il, first_mem.lift(il, pre=AddressingMode.N))
+                first_mem.lift_assign(
+                    il,
+                    second_mem.lift(il, pre=AddressingMode.N),
+                    pre=AddressingMode.N,
+                )
+                second_mem.lift_assign(il, tmp.lift(il), pre=AddressingMode.N)
+                advance_imem_addr(first_addr)
+                advance_imem_addr(second_addr)
+            return
+
         self.lift_single_exchange(il, addr)
 
 
@@ -1631,8 +1697,6 @@ class EXL(ExchangeInstruction):
         first, second = self.operands()
         assert isinstance(first, IMem8), f"Expected IMem8, got {type(first)}"
         assert isinstance(second, IMem8), f"Expected IMem8, got {type(second)}"
-        _lift_validate_nonzero_count(il)
-
         first_mode = get_addressing_mode(self._pre, 1)
         second_mode = get_addressing_mode(self._pre, 2)
         first_addr = TempReg(TempMultiByte1, width=3)
@@ -1676,7 +1740,8 @@ class WAIT(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # The intrinsic preserves exact cycle accounting for direct LLIL
         # evaluation; the decoded executor uses an equivalent fast path.
-        _lift_validate_nonzero_count(il)
+        # HW-002 establishes I=0 as a 65,536-cycle do-while countdown, so WAIT
+        # intentionally does not use the other counted instructions' guard.
         il.append(il.intrinsic([], WAITIntrinsic, []))
 
 
@@ -1684,8 +1749,8 @@ class PMDF(MiscInstruction):
     # The stock ROM uses complementary immediates such as F5/0B and FF/01 on
     # BP/PY to move frame pointers backward/forward.  That strongly supports
     # 8-bit wrapping binary pointer addition and rules out the old "packed
-    # BCD" implementation.  Not requesting flag writes remains a
-    # manual-derived model contract pending hardware trace.
+    # BCD" implementation.  Real-device discriminating cases additionally
+    # establish that PMDF preserves the incoming C/Z image.
     def lift_operation2(
         self, il: LowLevelILFunction, il_arg1: ExpressionIndex, il_arg2: ExpressionIndex
     ) -> ExpressionIndex:
@@ -1721,8 +1786,9 @@ class TCL(MiscInstruction):
         il.append(il.intrinsic([], TCLIntrinsic, []))
 
 
-# System Clock Stop: halts main-CG of CPU
-# Execution can continue past HALT: ON, IRQ, KI pins
+# System Clock Stop: halts main-CG of CPU.  The connected PC-E500 resumed at
+# the exact fall-through PC and then accepted an independently clocked STI.
+# Other documented wake sources remain device/peripheral policy.
 # USR resets bits 0 to 2/5 to 0
 # SSR bit 2 and USR 3 and 4 are set to 1
 class HALT(MiscInstruction):
@@ -1730,8 +1796,10 @@ class HALT(MiscInstruction):
         il.append(il.intrinsic([], HALTIntrinsic, []))
 
 
-# System Clock Stop; Sub Clock Stop: main-CG and sub-CG of CPU are stopped
-# Execution can continue past OFF: ON, IRQ, KI pins
+# System Clock Stop; Sub Clock Stop: main-CG and sub-CG of CPU are stopped.
+# The connected PC-E500, after the ROM's required power preparation, resumed at
+# the exact fall-through PC on one ordinary ON/BREAK press.  Do not infer the
+# same wake-source policy as HALT for other sources.
 class OFF(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         il.append(il.intrinsic([], OFFIntrinsic, []))
@@ -1786,9 +1854,11 @@ class IR(MiscInstruction):
         il.append(il.jump(vector_target.lift(il)))
 
 
-# RESET vector selection is ROM-grounded.  The register mutations performed by
-# the emulator intrinsic (including preserving IMR and the arithmetic flags)
-# remain an explicit model/manual-derived contract pending hardware tracing.
+# Device capture establishes software RESET's low-first FFFFD..FFFFF vector
+# fetch, absence of an interrupt frame, and first target fetch.  The register
+# mutations performed by the emulator intrinsic (including preserving IMR and
+# the arithmetic flags) remain the explicit manual-derived contract because
+# reset ROM code immediately begins overwriting SFRs.
 class RESET(MiscInstruction):
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         super().analyze(info, addr)

@@ -7,6 +7,7 @@ tests.
 
 | Evidence level | What it establishes | Representative coverage |
 | --- | --- | --- |
+| Real-device-derived | Encodes a claim derived from a deliberately executed physical-PC-E500 probe whose source, raw FT600 capture, execution window, and hashes are archived in the paired private evidence repository. The raw capture carries the device evidence; passing the regression test is not a new hardware observation. The claim is limited to the tested operands and observations. | Regressions derived from wrapping/flag-preserving `PMDF`; zero-WAIT's 65,536-count wrap; nonzero-WAIT I clearing and architectural C/Z preservation; tested-state BA/I `ED`/`FD` aliases; raw-width `C7`, `D7`, and `EXP`; isolated internal-direct overlap final states plus I/F observations, tested BP-relative source/destination selection, and tested counted-base selection; tested upper-address aliases for 62/66/6A/72/7A, 88-8F reads, A8-AF writes, and D0-D3/D8-DB absolute transfers; low-two-bit `POPU F`/`POPS F` normalization; read-side boundary wrapping; and X/Y/U/S 20-bit consumer behavior |
 | ROM-grounded | Executes stock ROM instructions and asserts their observable state changes. The external ROM fixture must be present. | `pce500/tests/test_keyboard_interrupt_rom.py` |
 | Architecture/ISA contract | Pins documented instruction or register semantics without depending on a particular ROM. | Interrupt-bit layout and 20-bit register-width tests in `pce500/tests/test_memory_alias_and_irq.py`, `sc62015/pysc62015/test_llama_raw24.py`, and `sc62015/core/src/lib.rs` |
 | Cross-backend parity | Shows that two implementations agree. Agreement alone does not prove either implementation matches hardware. | CPU backend and WAIT/Perfetto parity tests |
@@ -20,6 +21,29 @@ checks.  They prove that tables agree and that canonical encodings are stable;
 they do not prove instruction semantics.  Cross-backend LLIL parity has the
 same limitation.  See `sc62015_asm_llil_audit.md` for the current fail-closed
 policy and the real-hardware trace queue.
+
+The 2026-08-30 raw campaign record and follow-up are
+`docs/pc-e500/en/analysis/sc62015_hardware_campaign_2026-08-30.md` in the
+paired private repository, with the follow-up at
+`sc62015_hardware_followup_2026-08-30.md`; later dated notes preserve the
+WAIT-F, zero-count WAIT, overlap/base-selection, and upper-address matrices,
+including the corrected D0-D3/D8-DB transfer capture.
+The zero-count result is recorded in
+`sc62015_hardware_zero_wait_2026-08-30.md`. Together they
+verify complete HW-005, HW-010, HW-012, and observable HW-015 claims, and
+partial subcases for zero and nonzero `WAIT`, overlap final states and base
+selection, read-side boundary wrapping, and explicit user/system-stack F
+normalization.
+Public regression tests derived from those
+results may be called real-device-derived, but a passing test without its
+paired capture is not new hardware evidence. In particular, the captures do
+not settle WAIT timer phase, complete countdown/bus interpretation, or
+interrupt acceptance; invisible IMEM micro-order or untested relative/external
+overlap modes; write-side boundaries; or interrupt-entry/RETI F images. The
+connected unit's hardware revision was not recorded, so do not generalize the
+results across revisions. The tools were invoked from a relocated path, but their
+private-recorded hashes match
+byte-identical files at tracked legacy paths in the gateware base.
 
 Snapshot round trips are implementation-integrity tests. Version 4 rejects
 legacy v3 outright, requires an exact schema, rejects duplicate or wrong-typed

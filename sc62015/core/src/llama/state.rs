@@ -113,8 +113,9 @@ impl LlamaState {
                 self.regs.insert(RegName::I, i & mask_for(RegName::I));
             }
             RegName::F => {
-                // Callers that ingest a raw byte must validate it first. State
-                // itself stores only the two modeled flag aliases.
+                // Raw callers validate unless an instruction explicitly
+                // normalizes its input. POPU F and POPS F are measured
+                // exceptions.
                 self.regs.insert(RegName::F, masked);
                 self.regs.insert(RegName::FC, masked & 0x1);
                 self.regs.insert(RegName::FZ, (masked >> 1) & 0x1);

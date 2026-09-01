@@ -43,70 +43,6 @@ def eval_intrinsic_validate_f(
     return None, None
 
 
-def eval_intrinsic_validate_exp_high_nibble(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    """Quarantine unverified EXP behavior above the 20-bit pointer range."""
-
-    from binja_test_mocks.eval_llil import evaluate_llil
-
-    params = getattr(llil, "params", ())
-    if len(params) != 2:
-        raise RuntimeError("VALIDATE_EXP_HIGH_NIBBLE requires two pointer inputs")
-    values = []
-    for param in params:
-        value, _flags = evaluate_llil(
-            param,
-            regs,
-            memory,
-            state,
-            get_flag=get_flag,
-            set_flag=set_flag,
-        )
-        if value is None:
-            raise RuntimeError("VALIDATE_EXP_HIGH_NIBBLE input did not produce a value")
-        values.append(value)
-    if any(value & 0xF00000 for value in values):
-        raise NotImplementedError(
-            "SC62015 EXP high-nibble behavior requires real-hardware tracing"
-        )
-    return None, None
-
-
-def eval_intrinsic_validate_i_count(
-    llil: MockLLIL,
-    size: Optional[int],
-    regs: RegistersLike,
-    memory: Memory,
-    state: State,
-    get_flag: FlagGetter,
-    set_flag: FlagSetter,
-) -> Tuple[None, Optional[ResultFlags]]:
-    """Reject the hardware-unverified I=0 counted-instruction edge case."""
-
-    from binja_test_mocks.eval_llil import evaluate_llil
-
-    params = getattr(llil, "params", ())
-    if len(params) != 1:
-        raise RuntimeError("VALIDATE_I_COUNT requires exactly one word input")
-    value, _flags = evaluate_llil(
-        params[0], regs, memory, state, get_flag=get_flag, set_flag=set_flag
-    )
-    if value is None:
-        raise RuntimeError("VALIDATE_I_COUNT input did not produce a value")
-    if value & 0xFFFF == 0:
-        raise NotImplementedError(
-            "SC62015 I=0 counted-instruction semantics require real-hardware tracing"
-        )
-    return None, None
-
-
 def eval_intrinsic_validate_vector_transfer(
     llil: MockLLIL,
     size: Optional[int],
@@ -164,14 +100,13 @@ def eval_intrinsic_wait(
 ) -> Tuple[None, Optional[ResultFlags]]:
     """Account for WAIT cycles, clear I, and preserve C/Z.
 
-    I=0 is deliberately rejected because the 65,536-iteration interpretation
-    remains unverified on real hardware.
+    PC-E500 HW-002 establishes that the instruction is a 16-bit do-while
+    countdown: an initial ``I=0`` consumes 65,536 idle cycles and wraps back
+    to zero.  Those idle cycles are timing events, not architectural memory
+    reads, so they remain delegated to the existing scheduler hook.
     """
-    wait_cycles = regs.get_by_name("I") & 0xFFFF
-    if wait_cycles == 0:
-        raise NotImplementedError(
-            "SC62015 I=0 counted-instruction semantics require real-hardware tracing"
-        )
+    initial_i = regs.get_by_name("I") & 0xFFFF
+    wait_cycles = initial_i if initial_i != 0 else 0x10000
 
     wait_hook = getattr(memory, "wait_cycles", None)
     if not callable(wait_hook):
@@ -186,12 +121,12 @@ def eval_intrinsic_wait(
 
 
 def _enter_low_power_state(memory: Memory, state: State, mode: str) -> None:
-    """Apply the current manual-derived HALT/OFF register model.
+    """Apply the documented HALT/OFF register model.
 
     ``State`` only standardises a ``halted`` boolean, so retain a lightweight
     mode tag as well.  Consumers must not silently treat OFF as HALT: their
-    wake sources differ in the emulator model and still require hardware
-    validation.
+    wake sources differ. Device capture verifies fall-through resume for both
+    states, STI wake after HALT, and ON/BREAK wake after firmware-prepared OFF.
     """
 
     usr_addr = INTERNAL_MEMORY_START + IMEMRegisters.USR
@@ -218,16 +153,18 @@ def eval_intrinsic_tcl(
     get_flag: FlagGetter,
     set_flag: FlagSetter,
 ) -> Tuple[None, Optional[ResultFlags]]:
-    """Reject TCL until its timer-clear side effects are modeled.
+    """Reset the timer phases selected by ``LCC.STCL``/``LCC.MTCL``.
 
-    TCL conditionally resets the sub/main clock-generator timer phases based
-    on ``LCC.STCL`` and ``LCC.MTCL``.  Treating it as a no-op fabricates timer
-    behavior, so execution is deliberately quarantined pending a timer hook
-    and real-hardware trace validation.
+    Real-device traces establish that bit 0 independently restarts the main
+    timer and bit 1 independently restarts the sub timer.  TCL does not clear
+    LCC or the already-latched interrupt status bits.
     """
-    raise NotImplementedError(
-        "TCL timer-clear side effects are not implemented; hardware trace required"
-    )
+    clear_timer_phases = getattr(memory, "clear_timer_phases", None)
+    if not callable(clear_timer_phases):
+        raise NotImplementedError("TCL requires a timer-phase-clear memory hook")
+    lcc = memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC) & 0xFF
+    clear_timer_phases(bool(lcc & 0x02), bool(lcc & 0x01))
+    return None, None
 
 
 def eval_intrinsic_halt(
@@ -241,8 +178,8 @@ def eval_intrinsic_halt(
 ) -> Tuple[None, Optional[ResultFlags]]:
     """Evaluate the HALT intrinsic.
 
-    The register mutations below are the current manual-derived emulator
-    contract, not hardware-trace evidence:
+    The connected PC-E500 trace observes the resulting ``USR=0x18`` and
+    ``SSR=0x04`` after STI wake, matching the documented mutations:
     - USR (F8H) bits 0 to 2/5 are reset to 0
     - SSR (FFH) bit 2 is set to 1
     - USR (F8H) bits 3 and 4 are set to 1
@@ -262,13 +199,15 @@ def eval_intrinsic_off(
 ) -> Tuple[None, Optional[ResultFlags]]:
     """Evaluate the OFF intrinsic.
 
-    The register mutations below are the current manual-derived emulator
-    contract, not hardware-trace evidence:
+    The register mutations remain the documented emulator contract; the
+    connected PC-E500 trace directly verifies firmware-prepared ON/BREAK wake
+    and exact fall-through resume:
     - USR (F8H) bits 0 to 2/5 are reset to 0
     - SSR (FFH) bit 2 is set to 1
     - USR (F8H) bits 3 and 4 are set to 1
     OFF is tagged separately from HALT so device runtimes cannot silently give
-    it HALT's wake policy.  Exact clock and wake behavior needs hardware trace.
+    it HALT's wake policy. Other wake sources and asynchronous latency remain
+    peripheral-policy questions.
     """
     _enter_low_power_state(memory, state, "off")
     return None, None
@@ -285,9 +224,11 @@ def eval_intrinsic_reset(
 ) -> Tuple[None, Optional[ResultFlags]]:
     """Evaluate the RESET intrinsic.
 
-    The reset-vector location is corroborated by the stock ROM vectors.  The
-    remaining register writes/retention rules below are the current
-    manual-derived emulator contract pending targeted hardware tracing:
+    Real-device capture verifies the low-first vector read at
+    ``0xFFFFD..0xFFFFF``, no interrupt-frame write, and the first target fetch.
+    The remaining register writes/retention rules below are the current
+    manual-derived emulator contract because the reset ROM immediately starts
+    overwriting SFRs:
     - LCC (FEH) bit 7 is reset to 0 (documented as ACM bit 7)
     - UCR (F7H) is reset to 0
     - USR (F8H) bits 0 to 2/5 are reset to 0
@@ -377,10 +318,6 @@ def register_sc62015_intrinsics() -> None:
     register_intrinsic("OFF", eval_intrinsic_off)
     register_intrinsic("RESET", eval_intrinsic_reset)
     register_intrinsic("VALIDATE_F", eval_intrinsic_validate_f)
-    register_intrinsic(
-        "VALIDATE_EXP_HIGH_NIBBLE", eval_intrinsic_validate_exp_high_nibble
-    )
-    register_intrinsic("VALIDATE_I_COUNT", eval_intrinsic_validate_i_count)
     register_intrinsic(
         "VALIDATE_VECTOR_TRANSFER", eval_intrinsic_validate_vector_transfer
     )

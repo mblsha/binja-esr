@@ -164,7 +164,7 @@ def test_tcl_fails_closed_until_timer_clear_is_modeled() -> None:
     cpu, _raw, _reads, writes = _make_cpu_and_mem(0x100, {}, bytes([0xCE]))
     cpu.regs.set(RegisterName.PC, 0)
 
-    with pytest.raises(NotImplementedError, match="timer-clear side effects"):
+    with pytest.raises(NotImplementedError, match="timer-phase-clear memory hook"):
         cpu.execute_instruction(0)
 
     assert cpu.regs.get(RegisterName.PC) == 0
@@ -1623,89 +1623,52 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
 
 
 @pytest.mark.parametrize(
-    ("mnemonic", "instr_bytes"),
+    ("mnemonic", "instr_bytes", "expected_fz", "write_multiplier"),
     [
-        ("ADCL", bytes.fromhex("541020")),
-        ("ADCL", bytes.fromhex("5510")),
-        ("SBCL", bytes.fromhex("5C1020")),
-        ("SBCL", bytes.fromhex("5D10")),
-        ("DADL", bytes.fromhex("C41020")),
-        ("DADL", bytes.fromhex("C510")),
-        ("DSBL", bytes.fromhex("D41020")),
-        ("DSBL", bytes.fromhex("D510")),
-        ("MVL", bytes.fromhex("56841234")),
-        ("MVL", bytes.fromhex("5E84ABCD")),
-        ("MVL", bytes.fromhex("CB1020")),
-        ("MVL", bytes.fromhex("D300000000")),
-        ("MVL", bytes.fromhex("DB00000000")),
-        ("MVL", bytes.fromhex("E33720")),
-        ("MVL", bytes.fromhex("EB3720")),
-        ("MVL", bytes.fromhex("F300ABCD")),
-        ("MVL", bytes.fromhex("FB00ABCD")),
-        ("MVLD", bytes.fromhex("CF1020")),
-        ("EXL", bytes.fromhex("C31020")),
-        ("DSLL", bytes.fromhex("EC10")),
-        ("DSRL", bytes.fromhex("FC10")),
-        ("WAIT", bytes.fromhex("EF")),
+        ("ADCL", bytes.fromhex("541020"), 0, 1),
+        ("SBCL", bytes.fromhex("5C1020"), 1, 1),
+        ("DADL", bytes.fromhex("C41020"), 0, 1),
+        ("DSBL", bytes.fromhex("D41020"), 1, 1),
+        ("MVL", bytes.fromhex("CB1020"), 1, 1),
+        ("MVLD", bytes.fromhex("CF1020"), 1, 1),
+        ("EXL", bytes.fromhex("C31020"), 1, 2),
+        ("DSLL", bytes.fromhex("EC10"), 0, 1),
+        ("DSRL", bytes.fromhex("FC10"), 0, 1),
     ],
     ids=lambda value: value if isinstance(value, str) else None,
 )
-@pytest.mark.parametrize(("initial_fc", "initial_fz"), [(0, 1), (1, 0)])
-def test_zero_counted_instruction_fails_atomically(
+def test_hw002_zero_counted_instruction_executes_full_16bit_ring(
     mnemonic: str,
     instr_bytes: bytes,
-    initial_fc: int,
-    initial_fz: int,
+    expected_fz: int,
+    write_multiplier: int,
 ) -> None:
-    """Every hardware-unverified I=0 counted form is quarantined."""
-    initial_memory = {
-        imem(0x10): 0x12,
-        imem(0x20): 0x34,
-        imem(IMEMRegisters.BP): 0x40,
-        imem(IMEMRegisters.PX): 0x50,
-        imem(IMEMRegisters.PY): 0x60,
-    }
-    cpu, raw, _reads, writes = _make_cpu_and_mem(
-        ADDRESS_SPACE_SIZE, initial_memory, instr_bytes
-    )
-    initial_pc = 0x34567
-    initial_pointers = {
-        RegisterName.X: 0x12345,
-        RegisterName.Y: 0x23456,
-        RegisterName.U: 0x34567,
-        RegisterName.S: 0x45678,
-    }
-    cpu.regs.set(RegisterName.PC, initial_pc)
+    """Hardware says I=0 is 65,536 do-while iterations for all families."""
+    cpu, raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
     cpu.regs.set(RegisterName.I, 0)
-    cpu.regs.set(RegisterName.FC, initial_fc)
-    cpu.regs.set(RegisterName.FZ, initial_fz)
-    for register, value in initial_pointers.items():
-        cpu.regs.set(register, value)
-    wait_calls: List[int] = []
-    setattr(cpu.memory, "wait_cycles", wait_calls.append)
+    cpu.regs.set(RegisterName.FC, 0)
+    cpu.regs.set(RegisterName.FZ, 1)
 
     decoded = cpu.decode_instruction(0)
     assert decoded is not None
     assert asm_str(decoded.render()).split()[0] == mnemonic
 
-    with pytest.raises(NotImplementedError, match=r"I=0.*real-hardware"):
-        cpu.execute_instruction(0)
+    cpu.execute_instruction(0)
 
     assert cpu.regs.get(RegisterName.I) == 0
-    assert cpu.regs.get(RegisterName.FC) == initial_fc
-    assert cpu.regs.get(RegisterName.FZ) == initial_fz
-    assert cpu.regs.get(RegisterName.PC) == initial_pc
-    for register, value in initial_pointers.items():
-        assert cpu.regs.get(register) == value
-    assert writes == []
-    assert wait_calls == []
-    for address, value in initial_memory.items():
-        assert raw[address] == value
+    assert cpu.regs.get(RegisterName.FC) == 0
+    assert cpu.regs.get(RegisterName.FZ) == expected_fz
+    assert cpu.regs.get(RegisterName.PC) == len(instr_bytes)
+    assert len(writes) == 0x10000 * write_multiplier
+    assert raw[imem(0x10)] == 0
+    assert raw[imem(0x20)] == 0
 
 
-def test_wait_dispatch_uses_decoded_instruction_and_exact_cycle_count() -> None:
+@pytest.mark.parametrize(("initial_i", "expected_cycles"), [(3, 3), (0, 0x10000)])
+def test_hw002_wait_dispatch_uses_16bit_do_while_count(
+    initial_i: int, expected_cycles: int
+) -> None:
     instr_bytes = bytes.fromhex("EF")
-    initial_i = 3
     cpu, _raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
     cpu.regs.set(RegisterName.I, initial_i)
     cpu.regs.set(RegisterName.FC, 1)
@@ -1716,7 +1679,7 @@ def test_wait_dispatch_uses_decoded_instruction_and_exact_cycle_count() -> None:
     info = cpu.execute_instruction(0)
 
     assert asm_str(info.instruction.render()) == "WAIT"
-    assert wait_calls == [initial_i]
+    assert wait_calls == [expected_cycles]
     assert cpu.regs.get(RegisterName.I) == 0
     assert cpu.regs.get(RegisterName.FC) == 1
     assert cpu.regs.get(RegisterName.FZ) == 0
@@ -1724,8 +1687,10 @@ def test_wait_dispatch_uses_decoded_instruction_and_exact_cycle_count() -> None:
     assert writes == []
 
 
-def test_wait_direct_llil_intrinsic_accounts_cycles() -> None:
-    initial_i = 3
+@pytest.mark.parametrize(("initial_i", "expected_cycles"), [(3, 3), (0, 0x10000)])
+def test_hw002_wait_direct_llil_intrinsic_uses_16bit_do_while_count(
+    initial_i: int, expected_cycles: int
+) -> None:
     cpu, _raw, _reads, writes = _make_cpu_and_mem(
         ADDRESS_SPACE_SIZE, {}, bytes.fromhex("EF")
     )
@@ -1738,14 +1703,11 @@ def test_wait_direct_llil_intrinsic_accounts_cycles() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0)
 
-    assert [getattr(node, "name", None) for node in il.ils] == [
-        "VALIDATE_I_COUNT",
-        "WAIT",
-    ]
+    assert [getattr(node, "name", None) for node in il.ils] == ["WAIT"]
     for node in il.ils:
         cpu.evaluate(node)
 
-    assert wait_calls == [initial_i]
+    assert wait_calls == [expected_cycles]
     assert cpu.regs.get(RegisterName.I) == 0
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == 1
@@ -1781,60 +1743,13 @@ def test_wait_direct_intrinsic_without_timing_hook_preserves_i_and_flags() -> No
     il = MockLowLevelILFunction()
     instr.lift(il, 0)
 
-    cpu.evaluate(il.ils[0])
     with pytest.raises(NotImplementedError, match=r"memory\.wait_cycles"):
-        cpu.evaluate(il.ils[1])
+        cpu.evaluate(il.ils[0])
 
     assert cpu.regs.get(RegisterName.I) == 7
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == 1
     assert writes == []
-
-
-@pytest.mark.parametrize(
-    "instr_bytes",
-    [
-        bytes.fromhex("541020"),  # ADCL
-        bytes.fromhex("5C1020"),  # SBCL
-        bytes.fromhex("C41020"),  # DADL
-        bytes.fromhex("D41020"),  # DSBL
-        bytes.fromhex("E33720"),  # MVL, pre-decrement source
-        bytes.fromhex("CF1020"),  # MVLD
-        bytes.fromhex("C31020"),  # EXL
-        bytes.fromhex("EC10"),  # DSLL
-        bytes.fromhex("FC10"),  # DSRL
-        bytes.fromhex("EF"),  # WAIT
-    ],
-)
-def test_zero_count_direct_llil_validation_fails_before_mutation(
-    instr_bytes: bytes,
-) -> None:
-    initial_memory = {imem(0x10): 0x12, imem(0x20): 0x34}
-    cpu, raw, _reads, writes = _make_cpu_and_mem(
-        ADDRESS_SPACE_SIZE, initial_memory, instr_bytes
-    )
-    cpu.regs.set(RegisterName.I, 0)
-    cpu.regs.set(RegisterName.FC, 1)
-    cpu.regs.set(RegisterName.FZ, 0)
-    cpu.regs.set(RegisterName.S, 0x45678)
-    wait_calls: List[int] = []
-    setattr(cpu.memory, "wait_cycles", wait_calls.append)
-    instr = cpu.decode_instruction(0)
-    il = MockLowLevelILFunction()
-    instr.lift(il, 0)
-
-    assert getattr(il.ils[0], "name", None) == "VALIDATE_I_COUNT"
-    with pytest.raises(NotImplementedError, match=r"I=0.*real-hardware"):
-        cpu.evaluate(il.ils[0])
-
-    assert cpu.regs.get(RegisterName.I) == 0
-    assert cpu.regs.get(RegisterName.FC) == 1
-    assert cpu.regs.get(RegisterName.FZ) == 0
-    assert cpu.regs.get(RegisterName.S) == 0x45678
-    assert writes == []
-    assert wait_calls == []
-    for address, value in initial_memory.items():
-        assert raw[address] == value
 
 
 @pytest.mark.parametrize("instr_bytes", [bytes.fromhex("CE")])
@@ -1843,7 +1758,7 @@ def test_tcl_quarantine_uses_decoded_instruction(instr_bytes: bytes) -> None:
     cpu.regs.set(RegisterName.FC, 1)
     cpu.regs.set(RegisterName.FZ, 0)
 
-    with pytest.raises(NotImplementedError, match="hardware trace required"):
+    with pytest.raises(NotImplementedError, match="timer-phase-clear memory hook"):
         cpu.execute_instruction(0)
 
     assert cpu.regs.get(RegisterName.PC) == 0
@@ -1861,16 +1776,7 @@ def test_tcl_quarantine_uses_decoded_instruction(instr_bytes: bytes) -> None:
         bytes.fromhex("30DE"),  # PRE + HALT
         bytes.fromhex("30DF"),  # PRE + OFF
         bytes.fromhex("30FF"),  # PRE + RESET
-        bytes.fromhex("22651207"),  # PRE22 default mode on lone TEST memory operand
-        bytes.fromhex("32A005"),  # PRE32 alias for canonical PRE30 single (n)
-        bytes.fromhex("22A005"),  # redundant PRE22 for default single (BP+n)
-        bytes.fromhex("36A005"),  # PRE36 alias for canonical PRE34 single (PX+n)
-        bytes.fromhex("26A000"),  # PRE26 alias for canonical PRE24 single (BP+PX)
-        bytes.fromhex("26A005"),  # same alias with a nonzero ignored selector
-        bytes.fromhex("328005"),  # PRE32 alias for canonical PRE30 single (n)
-        bytes.fromhex("338005"),  # PRE33 alias for canonical PRE30 single (n)
-        bytes.fromhex("318005"),  # PRE31 alias for canonical PRE30 single (n)
-        bytes.fromhex("303100"),  # consecutive PRE bytes
+        bytes.fromhex("303132A005"),  # only two consecutive PRE bytes are proven
         bytes.fromhex("211100"),  # PRE followed by reserved JP selector
         bytes.fromhex("21E31000"),  # PRE followed by malformed E3 mode
         bytes.fromhex("257C01"),  # EFE2B is mid-instruction, not a code entry
@@ -1887,6 +1793,21 @@ def test_noncanonical_and_malformed_pre_prefixes_fail_closed(
 
     assert cpu.regs.get(RegisterName.PC) == 0
     assert writes == []
+
+
+def test_two_consecutive_pre_prefixes_use_the_second_latch() -> None:
+    cpu, raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, {}, bytes.fromhex("3031A005")
+    )
+    cpu.regs.set(RegisterName.A, 0xE0)
+
+    result = cpu.execute_instruction(0)
+
+    assert result.instruction._pre == 0x31
+    assert result.instruction.length() == 4
+    assert cpu.regs.get(RegisterName.PC) == 4
+    assert raw[INTERNAL_MEMORY_START + 0x05] == 0xE0
+    assert writes[-1] == (INTERNAL_MEMORY_START + 0x05, 0xE0)
 
 
 def test_host_write_failure_rolls_back_registers_and_poison_requires_reset() -> None:
@@ -1967,22 +1888,6 @@ def test_failed_recovery_reset_preserves_first_poison_reason() -> None:
     with pytest.raises(RuntimeError, match="first host-write fault") as poisoned:
         cpu.execute_instruction(0)
     assert "later reset fault" not in str(poisoned.value)
-
-
-def test_unproven_imm20_upper_nibble_alias_fails_closed() -> None:
-    cpu, _raw, _reads, writes = _make_cpu_and_mem(
-        ADDRESS_SPACE_SIZE,
-        {},
-        bytes.fromhex("053A077C"),  # PC-E500 F003A is dispatch-table data
-    )
-    cpu.regs.set(RegisterName.S, 0x100)
-
-    with pytest.raises(InvalidInstruction, match="Invalid, reserved"):
-        cpu.execute_instruction(0)
-
-    assert cpu.regs.get(RegisterName.PC) == 0
-    assert cpu.regs.get(RegisterName.S) == 0x100
-    assert writes == []
 
 
 def test_wide_imem_access_wraps_each_byte_at_ff() -> None:
@@ -2260,7 +2165,7 @@ def test_pushs_pops() -> None:
     assert cpu.regs.get(RegisterName.FC) == 0
 
 
-def test_pops_f_direct_llil_validates_before_stack_or_flag_mutation() -> None:
+def test_pops_f_direct_llil_normalizes_before_advancing_stack() -> None:
     cpu, raw, _reads, writes = _make_cpu_and_mem(
         ADDRESS_SPACE_SIZE,
         {0x100: 0x80},
@@ -2273,37 +2178,36 @@ def test_pops_f_direct_llil_validates_before_stack_or_flag_mutation() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0)
 
-    validate_index = next(
+    raw_f_index = next(
         index
         for index, node in enumerate(il.ils)
-        if getattr(node, "name", None) == "VALIDATE_F"
+        if node.op == "SET_REG.b" and getattr(node.ops[0], "name", None) == "TEMP0"
     )
     s_write_index = next(
         index
         for index, node in enumerate(il.ils)
         if node.op == "SET_REG.l" and getattr(node.ops[0], "name", None) == "S"
     )
-    assert validate_index < s_write_index
+    assert raw_f_index < s_write_index
 
-    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
-        for node in il.ils:
-            cpu.evaluate(node)
+    for node in il.ils:
+        cpu.evaluate(node)
 
-    assert cpu.regs.get(RegisterName.S) == 0x100
-    assert cpu.regs.get(RegisterName.F) == 0x01
+    assert cpu.regs.get(RegisterName.S) == 0x101
+    assert cpu.regs.get(RegisterName.F) == 0x00
     assert cpu.regs.get(RegisterName.PC) == 0
     assert raw[0x100] == 0x80
     assert writes == []
 
 
-def test_exp_high_nibble_direct_llil_fails_before_memory_mutation() -> None:
+def test_exp_high_nibble_direct_llil_exchanges_raw24_and_preserves_flags() -> None:
     initial = {
         imem(0x20): 0x11,
         imem(0x21): 0x22,
         imem(0x22): 0xA8,
         imem(0x30): 0x33,
         imem(0x31): 0x44,
-        imem(0x32): 0x09,
+        imem(0x32): 0xB9,
     }
     cpu, raw, _reads, writes = _make_cpu_and_mem(
         ADDRESS_SPACE_SIZE,
@@ -2313,15 +2217,23 @@ def test_exp_high_nibble_direct_llil_fails_before_memory_mutation() -> None:
     instr = cpu.decode_instruction(0)
     il = MockLowLevelILFunction()
     instr.lift(il, 0)
+    cpu.regs.set(RegisterName.F, 0x03)
 
-    with pytest.raises(NotImplementedError, match="EXP high-nibble behavior"):
-        for node in il.ils:
-            cpu.evaluate(node)
+    for node in il.ils:
+        cpu.evaluate(node)
 
     assert cpu.regs.get(RegisterName.PC) == 0
-    assert writes == []
-    for address, value in initial.items():
-        assert raw[address] == value
+    assert raw[imem(0x20) : imem(0x23)] == bytes.fromhex("3344B9")
+    assert raw[imem(0x30) : imem(0x33)] == bytes.fromhex("1122A8")
+    assert cpu.regs.get(RegisterName.F) == 0x03
+    assert writes == [
+        (imem(0x20), 0x33),
+        (imem(0x30), 0x11),
+        (imem(0x21), 0x44),
+        (imem(0x31), 0x22),
+        (imem(0x22), 0xB9),
+        (imem(0x32), 0xA8),
+    ]
 
 
 def test_pushu_popu() -> None:
@@ -2382,7 +2294,7 @@ def test_pushu_popu_r2() -> None:
     cpu.regs.set(RegisterName.U, 0x8000)
     _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.U) == 0x7FFE
-    assert writes == [(0x7FFE, 0x34), (0x7FFF, 0x12)]
+    assert writes == [(0x7FFF, 0x12), (0x7FFE, 0x34)]
     writes.clear()
 
     raw[0] = 0x3A  # POPU BA
@@ -2405,7 +2317,7 @@ def test_pushu_popu_wide_access_wraps_at_20bit_boundary() -> None:
     cpu.execute_instruction(instr_addr)
 
     assert cpu.regs.get(RegisterName.U) == 0xFFFFF
-    assert writes == [(0xFFFFF, 0x34), (0x00000, 0x12)]
+    assert writes == [(0x00000, 0x12), (0xFFFFF, 0x34)]
     assert raw[0xFFFFF] == 0x34
     assert raw[0x00000] == 0x12
     assert raw[imem(0x00)] == 0x99
@@ -2428,6 +2340,29 @@ def test_pushu_popu_wide_access_wraps_at_20bit_boundary() -> None:
     assert writes == []
 
 
+@pytest.mark.parametrize("upper_nibble", range(16))
+@pytest.mark.parametrize(("opcode", "mnemonic"), [(0x03, "JPF"), (0x05, "CALLF")])
+def test_hw009_far_control_masks_every_encoded_upper_nibble(
+    upper_nibble: int, opcode: int, mnemonic: str
+) -> None:
+    encoded_high = upper_nibble << 4
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        0x40, {}, bytes((opcode, 0x20, 0x00, encoded_high))
+    )
+    cpu.regs.set(RegisterName.S, 0x30)
+
+    assert asm_str(cpu.decode_instruction(0).render()) == f"{mnemonic:<6}00020"
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.PC) == 0x20
+    if opcode == 0x03:
+        assert cpu.regs.get(RegisterName.S) == 0x30
+        assert writes == []
+    else:
+        assert cpu.regs.get(RegisterName.S) == 0x2D
+        assert writes == [(0x2F, 0x00), (0x2E, 0x00), (0x2D, 0x04)]
+
+
 def test_call_ret() -> None:
     cpu, raw, _reads, writes = _make_cpu_and_mem(0x10000, {}, bytes.fromhex("042000"))
     raw[0x20] = 0x06
@@ -2438,7 +2373,7 @@ def test_call_ret() -> None:
     _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.PC) == 0x20
     assert cpu.regs.get(RegisterName.S) == 0x6FFE
-    assert writes == [(0x6FFE, 0x03), (0x6FFF, 0x00)]
+    assert writes == [(0x6FFF, 0x00), (0x6FFE, 0x03)]
     writes.clear()
 
     _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
@@ -2472,7 +2407,7 @@ def test_call_llil_call_writes_exactly_one_architectural_frame(
     assert cpu.regs.get(RegisterName.PC) == target
     assert cpu.regs.get(RegisterName.S) == expected_s
     assert writes == [
-        (expected_s + offset, value) for offset, value in enumerate(frame)
+        (expected_s + offset, frame[offset]) for offset in reversed(range(len(frame)))
     ]
 
 
@@ -2491,7 +2426,7 @@ def test_callf_retf_stack_wraps_at_20bit_boundary() -> None:
 
     assert cpu.regs.get(RegisterName.PC) == target_addr
     assert cpu.regs.get(RegisterName.S) == 0xFFFFF
-    assert writes == [(0xFFFFF, 0x04), (0x00000, 0x01), (0x00001, 0x00)]
+    assert writes == [(0x00001, 0x00), (0x00000, 0x01), (0xFFFFF, 0x04)]
     assert raw[imem(0x00)] == 0x99
     writes.clear()
 
@@ -2518,7 +2453,7 @@ def test_call_ret_high_page() -> None:
     _ = cpu.execute_instruction(0x30000)
     assert cpu.regs.get(RegisterName.PC) == 0x30020
     assert cpu.regs.get(RegisterName.S) == 0x2E
-    assert writes == [(0x2E, 0x03), (0x2F, 0x00)]
+    assert writes == [(0x2F, 0x00), (0x2E, 0x03)]
     writes.clear()
 
     _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
@@ -2537,7 +2472,7 @@ def test_callf_retf() -> None:
     _ = cpu.execute_instruction(0x00)
     assert cpu.regs.get(RegisterName.PC) == 0x20
     assert cpu.regs.get(RegisterName.S) == 0x2D
-    assert writes == [(0x2D, 0x04), (0x2E, 0x00), (0x2F, 0x00)]
+    assert writes == [(0x2F, 0x00), (0x2E, 0x00), (0x2D, 0x04)]
     writes.clear()
 
     _ = cpu.execute_instruction(cpu.regs.get(RegisterName.PC))
@@ -2743,12 +2678,9 @@ def get_pre_test_cases() -> List[PreTestCase]:
             expected_A_val_after=OPERAND_MEM_VAL,
         ),
     ]
-    # Only PRE30 is the canonical encoding among these historical fixtures.
-    # The seven aliases are now explicit fail-closed cases above instead of
-    # executable success oracles.
-    return [
-        case for case in STATIC_PRE_TEST_CASES if case.expected_pre_val_in_instr == 0x30
-    ]
+    # These are exactly the one-selector aliases established by the PC-E500
+    # matrix. Source assembly still emits only canonical prefixes.
+    return STATIC_PRE_TEST_CASES
 
 
 @pytest.mark.parametrize(
@@ -3976,7 +3908,7 @@ def test_decode_all_opcodes() -> None:
             "DSRL",
             "DSLL",
             "WAIT",
-            "TCL",  # quarantined until LCC timer-clear side effects are modeled
+            "TCL",  # requires the timer-phase hook supplied by focused tests
             "PRE",  # standalone prefixes are deliberately not executable
             # Skip indirect addressing instructions that require proper memory setup
             "[(",  # Indirect addressing through internal memory

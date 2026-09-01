@@ -1760,14 +1760,13 @@ impl StandaloneBus {
         ) {
             let bytes = bits.div_ceil(8);
             let mask = mask_for(reg);
-            let sp = state.get_reg(reg) & mask;
-            let new_sp = sp.wrapping_sub(bytes as u32) & mask;
-            for i in 0..bytes {
+            let mut sp = state.get_reg(reg) & mask;
+            for i in (0..bytes).rev() {
+                sp = sp.wrapping_sub(1) & mask;
                 let byte = ((value >> (8 * i)) & 0xFF) as u8;
-                let address = new_sp.wrapping_add(i as u32) & mask;
-                let _ = memory.store(address, 8, byte as u32);
+                let _ = memory.store(sp, 8, byte as u32);
             }
-            state.set_reg(reg, new_sp);
+            state.set_reg(reg, sp);
         }
 
         let pc = state.pc() & ADDRESS_MASK;
@@ -2879,6 +2878,19 @@ impl LlamaBus for StandaloneBus {
 
     fn supports_wait_cycles(&self) -> bool {
         true
+    }
+
+    fn supports_timer_phase_clear(&self) -> bool {
+        true
+    }
+
+    fn clear_timer_phases(&mut self, clear_sti: bool, clear_mti: bool) {
+        if clear_mti {
+            self.timer.next_mti = self.cycle_count.wrapping_add(self.timer.mti_period);
+        }
+        if clear_sti {
+            self.timer.next_sti = self.cycle_count.wrapping_add(self.timer.sti_period);
+        }
     }
 
     fn wait_cycles(&mut self, cycles: u32) {
@@ -5467,7 +5479,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_i_preflight_rejects_before_timer_tick() {
+    fn hw002_zero_i_wait_passes_side_effect_free_preflight() {
         let mut bus = test_standalone_bus();
         bus.cycle_count = 7;
         bus.timer.enabled = true;
@@ -5478,10 +5490,11 @@ mod tests {
         let executor = AsyncLlamaExecutor::new();
         let isr_before = bus.memory.read_internal_byte(IMEM_ISR_OFFSET);
 
-        let error = preflight_and_tick_instruction(&executor, 0xEF, &state, &mut bus, true, false)
-            .expect_err("WAIT I=0 must fail before scheduler mutation");
+        let transfer =
+            preflight_and_tick_instruction(&executor, 0xEF, &state, &mut bus, false, false)
+                .expect("HW-002 WAIT I=0 must pass scheduler preflight");
 
-        assert_eq!(error, sc62015_core::llama::eval::ZERO_I_COUNT_ERROR);
+        assert!(transfer.is_none());
         assert_eq!(bus.cycle_count, 7);
         assert_eq!(bus.timer.next_mti, 0);
         assert_eq!(bus.timer.next_sti, 0);
@@ -5490,7 +5503,7 @@ mod tests {
     }
 
     #[test]
-    fn tcl_preflight_rejects_before_timer_tick() {
+    fn tcl_preflight_accepts_without_timer_mutation() {
         let mut bus = test_standalone_bus();
         bus.cycle_count = 9;
         bus.timer.enabled = true;
@@ -5500,10 +5513,11 @@ mod tests {
         let executor = AsyncLlamaExecutor::new();
         let isr_before = bus.memory.read_internal_byte(IMEM_ISR_OFFSET);
 
-        let error = preflight_and_tick_instruction(&executor, 0xCE, &state, &mut bus, true, false)
-            .expect_err("TCL must fail before scheduler mutation");
+        let transfer =
+            preflight_and_tick_instruction(&executor, 0xCE, &state, &mut bus, false, false)
+                .expect("TCL is supported by the standalone timer bus");
 
-        assert_eq!(error, sc62015_core::llama::eval::TCL_UNIMPLEMENTED_ERROR);
+        assert!(transfer.is_none());
         assert_eq!(bus.cycle_count, 9);
         assert_eq!(bus.timer.next_mti, 0);
         assert_eq!(bus.timer.next_sti, 0);
@@ -5605,8 +5619,8 @@ mod tests {
     }
 
     #[test]
-    fn operand_and_stack_preflight_reject_before_timer_tick() {
-        for opcode in [0x11, 0xE3, 0xEB, 0xC2, 0x3E, 0x5F, 0x01] {
+    fn malformed_operand_preflight_rejects_before_timer_tick() {
+        for opcode in [0x11, 0xE3, 0xEB] {
             let mut bus = test_standalone_bus();
             bus.cycle_count = 13;
             bus.timer.enabled = true;
@@ -5620,24 +5634,9 @@ mod tests {
                 0x11 => &[0x11, 0x00],
                 0xE3 => &[0xE3, 0x10, 0x00],
                 0xEB => &[0xEB, 0x10, 0x00],
-                0xC2 => &[0xC2, 0x20, 0x30],
-                0x3E => &[0x3E],
-                0x5F => &[0x5F],
-                0x01 => &[0x01],
                 _ => unreachable!(),
             };
             bus.memory.write_external_slice(0, bytes);
-            match opcode {
-                0xC2 => {
-                    bus.memory.write_internal_byte(0x20, 0x11);
-                    bus.memory.write_internal_byte(0x21, 0x22);
-                    bus.memory.write_internal_byte(0x22, 0xA3);
-                }
-                0x3E => bus.memory.write_external_byte(0x180, 0xFC),
-                0x5F => bus.memory.write_external_byte(0x190, 0xFC),
-                0x01 => bus.memory.write_external_byte(0x191, 0xFC),
-                _ => {}
-            }
             let executor = AsyncLlamaExecutor::new();
             let reads_before = bus.memory.memory_read_count();
             let writes_before = bus.memory.memory_write_count();
@@ -5665,6 +5664,61 @@ mod tests {
             assert_eq!(bus.memory.memory_read_count(), reads_before);
             assert_eq!(bus.memory.memory_write_count(), writes_before);
         }
+    }
+
+    #[test]
+    fn hw011_pop_f_images_pass_side_effect_free_preflight() {
+        for (opcode, stack_reg, stack_addr) in
+            [(0x3E, RegName::U, 0x180), (0x5F, RegName::S, 0x190)]
+        {
+            let mut bus = test_standalone_bus();
+            bus.memory.write_external_byte(0, opcode);
+            bus.memory.write_external_byte(stack_addr, 0xFC);
+            let mut state = LlamaState::new();
+            state.set_reg(stack_reg, stack_addr);
+            state.set_reg(RegName::F, 0x03);
+            let executor = AsyncLlamaExecutor::new();
+            let reads_before = bus.memory.memory_read_count();
+            let writes_before = bus.memory.memory_write_count();
+
+            let transfer =
+                preflight_and_tick_instruction(&executor, opcode, &state, &mut bus, false, false)
+                    .expect("HW-011 POPU/POPS F upper bits normalize during execution");
+
+            assert!(transfer.is_none(), "opcode {opcode:02X}");
+            assert_eq!(state.get_reg(stack_reg), stack_addr, "opcode {opcode:02X}");
+            assert_eq!(state.get_reg(RegName::F), 0x03, "opcode {opcode:02X}");
+            assert_eq!(bus.memory.memory_read_count(), reads_before);
+            assert_eq!(bus.memory.memory_write_count(), writes_before);
+        }
+    }
+
+    #[test]
+    fn hw011_reti_f_image_passes_side_effect_free_preflight() {
+        let mut bus = test_standalone_bus();
+        bus.memory.write_external_byte(0, 0x01);
+        bus.memory.write_external_byte(0x190, 0xA5);
+        bus.memory.write_external_byte(0x191, 0xFC);
+        bus.memory.write_external_byte(0x192, 0x00);
+        bus.memory.write_external_byte(0x193, 0x02);
+        bus.memory.write_external_byte(0x194, 0x00);
+        bus.memory.write_external_byte(0x200, 0x00);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x190);
+        state.set_reg(RegName::F, 0x03);
+        let executor = AsyncLlamaExecutor::new();
+        let reads_before = bus.memory.memory_read_count();
+        let writes_before = bus.memory.memory_write_count();
+
+        let transfer =
+            preflight_and_tick_instruction(&executor, 0x01, &state, &mut bus, false, false)
+                .expect("HW-011 RETI upper F bits normalize during execution");
+
+        assert!(transfer.is_none());
+        assert_eq!(state.get_reg(RegName::S), 0x190);
+        assert_eq!(state.get_reg(RegName::F), 0x03);
+        assert_eq!(bus.memory.memory_read_count(), reads_before);
+        assert_eq!(bus.memory.memory_write_count(), writes_before);
     }
 
     #[test]

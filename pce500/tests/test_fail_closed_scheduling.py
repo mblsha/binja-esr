@@ -1,4 +1,4 @@
-"""Machine-wrapper scheduling must not run ahead of quarantined opcodes."""
+"""Machine-wrapper scheduling must not run ahead of invalid opcodes."""
 
 from __future__ import annotations
 
@@ -17,47 +17,66 @@ from sc62015.pysc62015.instr.opcodes import IMEMRegisters, INTERNAL_MEMORY_START
 
 @pytest.mark.parametrize("backend", available_backends())
 @pytest.mark.parametrize(
-    ("opcode", "i_value", "error"),
+    ("lcc", "clear_mti", "clear_sti"),
     (
-        (0xEF, 0, "I=0 counted-instruction semantics require real-hardware tracing"),
-        (0xCE, 1, "TCL timer-clear side effects are not implemented"),
+        (0x00, False, False),
+        (0x01, True, False),
+        (0x02, False, True),
+        (0x03, True, True),
     ),
 )
-def test_quarantined_opcode_rejects_before_pce_timer_mutation(
+def test_hw001_tcl_restarts_selected_pce_timer_phases(
     backend: str,
-    opcode: int,
-    i_value: int,
-    error: str,
+    lcc: int,
+    clear_mti: bool,
+    clear_sti: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
     try:
-        emu.memory.write_byte(0, opcode)
+        emu.memory.write_byte(0, 0xCE)
         emu.cpu.regs.set(RegisterName.PC, 0)
-        emu.cpu.regs.set(RegisterName.I, i_value)
         emu._timer_enabled = True
-        emu._timer_next_mti = 0
-        emu._timer_next_sti = 0
-        emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0)
-        before = (
-            emu.cycle_count,
-            emu._timer_next_mti,
-            emu._timer_next_sti,
-            emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR),
-        )
+        emu._timer_next_mti = 12345
+        emu._timer_next_sti = 23456
+        emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC, lcc)
+        emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0xA5)
 
-        with pytest.raises(NotImplementedError, match=error):
-            emu.step()
+        emu.step()
 
-        assert emu.cpu.regs.get(RegisterName.PC) == 0
-        assert emu.cpu.regs.get(RegisterName.I) == i_value
-        assert (
-            emu.cycle_count,
-            emu._timer_next_mti,
-            emu._timer_next_sti,
-            emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR),
-        ) == before
+        assert emu.cpu.regs.get(RegisterName.PC) == 1
+        assert emu._timer_next_mti == (emu._timer_mti_period if clear_mti else 12345)
+        assert emu._timer_next_sti == (emu._timer_sti_period if clear_sti else 23456)
+        assert emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.LCC) == lcc
+        assert emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR) == 0xA5
+    finally:
+        emu.close()
+
+
+@pytest.mark.parametrize("backend", available_backends())
+def test_hw002_wait_zero_passes_preflight_and_advances_scheduler(
+    backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    try:
+        emu.memory.write_byte(0, 0xEF)
+        emu.cpu.regs.set(RegisterName.PC, 0)
+        emu.cpu.regs.set(RegisterName.I, 0)
+        emu.cpu.regs.set(RegisterName.F, 0x03)
+        emu._timer_enabled = False
+
+        # The machine wrapper performs its side-effect-free preflight before
+        # executing WAIT. HW-002 establishes that I=0 is valid, not a
+        # quarantine: one opcode cycle plus 65,536 idle cycles must elapse.
+        emu.step()
+
+        assert emu.instruction_count == 1
+        assert emu.cycle_count == 0x10001
+        assert emu.cpu.regs.get(RegisterName.PC) == 1
+        assert emu.cpu.regs.get(RegisterName.I) == 0
+        assert emu.cpu.regs.get(RegisterName.F) == 0x03
     finally:
         emu.close()
 
@@ -115,75 +134,90 @@ def test_malformed_pre_rejects_before_pce_scheduler_mutation(
 
 
 @pytest.mark.parametrize("backend", available_backends())
-@pytest.mark.parametrize(
-    ("program", "stack_register", "error"),
-    (
-        (
-            bytes.fromhex("32C22030"),
-            None,
-            "EXP high-nibble behavior requires real-hardware tracing",
-        ),
-        (bytes.fromhex("3E"), RegisterName.U, "bits 2-7 require real-hardware"),
-        (bytes.fromhex("5F"), RegisterName.S, "bits 2-7 require real-hardware"),
-        (bytes.fromhex("01"), RegisterName.S, "bits 2-7 require real-hardware"),
-    ),
-)
-def test_data_dependent_quarantine_rejects_before_pce_scheduler_mutation(
+def test_hw011_reti_f_upper_bits_normalize_through_pce_scheduler(
     backend: str,
-    program: bytes,
-    stack_register: RegisterName | None,
-    error: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
     try:
-        for address, value in enumerate(program):
-            emu.memory.write_byte(address, value)
+        emu.memory.write_byte(0, 0x01)
         emu.cpu.regs.set(RegisterName.PC, 0)
         emu.cpu.regs.set(RegisterName.F, 0x01)
-        if program[0] == 0x32:  # PRE32; EXP (20),(30), both direct.
-            for index, value in enumerate(bytes.fromhex("1122A8334409")):
-                selector = 0x20 + index if index < 3 else 0x30 + index - 3
-                emu.memory.write_byte(INTERNAL_MEMORY_START + selector, value)
-        else:
-            assert stack_register is not None
-            emu.cpu.regs.set(stack_register, 0x100)
-            f_offset = 1 if program[0] == 0x01 else 0
-            emu.memory.write_byte(0x100 + f_offset, 0x80)
+        emu.cpu.regs.set(RegisterName.S, 0x100)
+        emu.memory.write_byte(0x100, 0xA5)
+        emu.memory.write_byte(0x101, 0x80)
+        emu.memory.write_byte(0x102, 0x45)
+        emu.memory.write_byte(0x103, 0x23)
+        emu.memory.write_byte(0x104, 0x01)
 
         emu._timer_enabled = True
-        emu._timer_next_mti = 0
-        emu._timer_next_sti = 0
+        emu._timer_next_mti = 100
+        emu._timer_next_sti = 200
         emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0)
-        before = (
-            emu.cycle_count,
-            emu.instruction_count,
-            emu._timer_next_mti,
-            emu._timer_next_sti,
-            emu.memory.peek_byte_for_preflight(
-                INTERNAL_MEMORY_START + IMEMRegisters.ISR
-            ),
-            emu.cpu.regs.get(RegisterName.PC),
-            emu.cpu.regs.get(RegisterName.F),
-            emu.cpu.regs.get(stack_register) if stack_register is not None else None,
-        )
 
-        with pytest.raises((RuntimeError, NotImplementedError), match=error):
-            emu.step()
+        emu.step()
 
-        assert (
-            emu.cycle_count,
-            emu.instruction_count,
-            emu._timer_next_mti,
-            emu._timer_next_sti,
-            emu.memory.peek_byte_for_preflight(
-                INTERNAL_MEMORY_START + IMEMRegisters.ISR
-            ),
-            emu.cpu.regs.get(RegisterName.PC),
-            emu.cpu.regs.get(RegisterName.F),
-            emu.cpu.regs.get(stack_register) if stack_register is not None else None,
-        ) == before
+        assert emu.cycle_count == 1
+        assert emu.instruction_count == 1
+        assert emu._timer_next_mti == 100
+        assert emu._timer_next_sti == 200
+        assert emu.cpu.regs.get(RegisterName.PC) == 0x12345
+        assert emu.cpu.regs.get(RegisterName.F) == 0
+        assert emu.cpu.regs.get(RegisterName.S) == 0x105
+        assert emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR) == 0xA5
+    finally:
+        emu.close()
+
+
+@pytest.mark.parametrize("backend", available_backends())
+@pytest.mark.parametrize("case", ["popu_f", "pops_f", "exp_raw24"])
+def test_hardware_resolved_data_paths_execute_through_pce_scheduler(
+    backend: str, case: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    try:
+        emu.cpu.regs.set(RegisterName.PC, 0)
+        emu.cpu.regs.set(RegisterName.F, 0x03)
+        if case == "popu_f":
+            emu.memory.write_byte(0, 0x3E)
+            emu.cpu.regs.set(RegisterName.U, 0x100)
+            emu.memory.write_byte(0x100, 0xFC)
+        elif case == "pops_f":
+            # HW-011: POPS F consumes the raw byte and keeps only C/Z.
+            emu.memory.write_byte(0, 0x5F)
+            emu.cpu.regs.set(RegisterName.S, 0x100)
+            emu.memory.write_byte(0x100, 0x80)
+        else:
+            for address, value in enumerate(bytes.fromhex("32C22030")):
+                emu.memory.write_byte(address, value)
+            for index, value in enumerate(bytes.fromhex("1122F0334410")):
+                selector = 0x20 + index if index < 3 else 0x30 + index - 3
+                emu.memory.write_byte(INTERNAL_MEMORY_START + selector, value)
+
+        emu.step()
+
+        assert emu.instruction_count == 1
+        if case == "popu_f":
+            assert emu.cpu.regs.get(RegisterName.PC) == 1
+            assert emu.cpu.regs.get(RegisterName.U) == 0x101
+            assert emu.cpu.regs.get(RegisterName.F) == 0
+        elif case == "pops_f":
+            assert emu.cpu.regs.get(RegisterName.PC) == 1
+            assert emu.cpu.regs.get(RegisterName.S) == 0x101
+            assert emu.cpu.regs.get(RegisterName.F) == 0
+        else:
+            assert emu.cpu.regs.get(RegisterName.PC) == 4
+            assert bytes(
+                emu.memory.read_byte(INTERNAL_MEMORY_START + 0x20 + index)
+                for index in range(3)
+            ) == bytes.fromhex("334410")
+            assert bytes(
+                emu.memory.read_byte(INTERNAL_MEMORY_START + 0x30 + index)
+                for index in range(3)
+            ) == bytes.fromhex("1122F0")
+            assert emu.cpu.regs.get(RegisterName.F) == 0x03
     finally:
         emu.close()
 
@@ -230,7 +264,7 @@ def test_invalid_pending_pc_rejects_before_key_latch_or_irq_state_mutation(
     monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
     try:
-        emu.memory.write_byte(0, 0xCE)  # TCL
+        emu.memory.write_byte(0, 0x20)  # reserved opcode
         emu.cpu.regs.set(RegisterName.PC, 0)
         emu.cpu.regs.set(RegisterName.S, 0x300)
         emu._key_irq_latched = True
@@ -246,7 +280,7 @@ def test_invalid_pending_pc_rejects_before_key_latch_or_irq_state_mutation(
             ),
         )
 
-        with pytest.raises(NotImplementedError, match="TCL timer-clear"):
+        with pytest.raises(InvalidInstruction, match="0x20"):
             emu.step()
 
         assert (
@@ -277,7 +311,7 @@ def test_invalid_irq_handler_rejects_before_interrupt_frame_mutation(
         emu._irq_source = IRQSource.KEY
         emu._in_interrupt = False
         emu.memory.write_byte(0x1000, 0x00)  # pending NOP
-        emu.memory.write_byte(handler, 0xCE)  # quarantined TCL handler
+        emu.memory.write_byte(handler, 0x20)  # invalid reserved handler
         # Keep the external vector distinct from the compact internal-RAM
         # backing used by this test memory shim.
         emu.memory.add_rom(0xFFFFA, handler.to_bytes(3, "little"), "test_irq_vector")
@@ -297,7 +331,7 @@ def test_invalid_irq_handler_rejects_before_interrupt_frame_mutation(
             INTERNAL_MEMORY_START + IMEMRegisters.IMR
         )
 
-        with pytest.raises(NotImplementedError, match="TCL timer-clear"):
+        with pytest.raises(InvalidInstruction, match="0x20"):
             emu.step()
 
         assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
@@ -492,14 +526,14 @@ def _install_static_vector_rom(
         ("off", ISRFlag.ONKI, IMRFlag.ONKM),
     ),
 )
-def test_low_power_wake_is_idle_boundary_before_dormant_pc_fetch(
+def test_low_power_wake_fetches_fallthrough_before_irq_replaces_it(
     backend: str,
     power_state: str,
     isr_flag: ISRFlag,
     imr_flag: IMRFlag,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A deliverable wake IRQ may replace an unfetched dormant PC."""
+    """Hardware fetches the fall-through opcode before wake IRQ delivery."""
 
     monkeypatch.setenv("SC62015_CPU_BACKEND", backend)
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
@@ -509,7 +543,7 @@ def test_low_power_wake_is_idle_boundary_before_dormant_pc_fetch(
 
     def dormant_read(address: int, _pc: int | None) -> int:
         normal_reads.append(address)
-        return 0xCE  # quarantined TCL if this dormant PC were executed
+        return 0x20  # invalid reserved opcode if this dormant PC were executed
 
     try:
         _install_static_vector_rom(emu, 0xFFFFA, handler)
@@ -534,7 +568,7 @@ def test_low_power_wake_is_idle_boundary_before_dormant_pc_fetch(
         emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, int(isr_flag))
         before = (emu.cycle_count, emu.instruction_count)
 
-        # Wake is its own idle step; it does not fetch/decode the dormant PC.
+        # Wake is its own idle step and does not fetch the fall-through PC yet.
         assert emu.step() is True
         assert emu.cpu.state.halted is False
         assert emu.cpu.state.power_state == "running"
@@ -543,12 +577,13 @@ def test_low_power_wake_is_idle_boundary_before_dormant_pc_fetch(
         assert (emu.cycle_count, emu.instruction_count) == (before[0] + 1, before[1])
         assert normal_reads == []
 
-        # The next scheduling pass takes the already-unmasked interrupt and
-        # executes its valid handler without ever reading the replaced PC.
+        # The next scheduling pass performs the measured fall-through opcode
+        # fetch, then takes the already-unmasked interrupt without executing or
+        # operand-decoding that discarded byte.
         assert emu.step() is True
         assert emu._in_interrupt is True
         assert emu.cpu.regs.get(RegisterName.PC) == handler + 1
-        assert normal_reads == []
+        assert normal_reads == [dormant_pc]
     finally:
         emu.close()
 

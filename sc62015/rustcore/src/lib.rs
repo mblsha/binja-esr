@@ -988,6 +988,7 @@ struct LlamaPyBus {
     lcd_hook: Option<Py<PyAny>>,
     kio_trace_hook: Option<Py<PyAny>>,
     irq_trace_hook: Option<Py<PyAny>>,
+    timer_phase_clear_hook: Option<Py<PyAny>>,
     memory_reads: u64,
     memory_writes: u64,
     has_wait_cycles: bool,
@@ -1170,6 +1171,7 @@ impl LlamaPyBus {
         let lcd_hook = optional_callable_attr(py, memory, "_llama_lcd_write")?;
         let kio_trace_hook = optional_callable_attr(py, memory, "trace_kio_from_rust")?;
         let irq_trace_hook = optional_callable_attr(py, memory, "trace_irq_from_rust")?;
+        let timer_phase_clear_hook = optional_callable_attr(py, memory, "clear_timer_phases")?;
         let _ = python_vector_provenance(py, memory)?;
         Ok(Self {
             memory: memory.clone_ref(py),
@@ -1183,6 +1185,7 @@ impl LlamaPyBus {
             lcd_hook,
             kio_trace_hook,
             irq_trace_hook,
+            timer_phase_clear_hook,
             memory_reads: 0,
             memory_writes: 0,
             has_wait_cycles,
@@ -1389,6 +1392,20 @@ impl LlamaPyBus {
 impl LlamaBus for LlamaPyBus {
     fn supports_wait_cycles(&self) -> bool {
         true
+    }
+
+    fn supports_timer_phase_clear(&self) -> bool {
+        self.timer_phase_clear_hook.is_some()
+    }
+
+    fn clear_timer_phases(&mut self, clear_sti: bool, clear_mti: bool) {
+        let Some(hook) = self.timer_phase_clear_hook.as_ref() else {
+            return;
+        };
+        let result = Python::with_gil(|py| hook.bind(py).call1((clear_sti, clear_mti)).map(|_| ()));
+        if let Err(err) = result {
+            self.record_callback_error(err);
+        }
     }
 
     fn load(&mut self, addr: u32, bits: u8) -> u32 {
